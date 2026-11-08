@@ -401,13 +401,19 @@ fn native_moved(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     let cache_id = egui::Id::unique("dock-native-moved-frame");
     let frame = ctx.cumulative_frame_nr();
     ctx.data_mut(|data| {
-        if let Some((at, moved)) = data.get_temp::<(u64, bool)>(cache_id)
-            && at == frame
-        {
-            return moved;
+        // Keep any movement seen earlier in the frame, but still compare the bounds now: the
+        // docking UI can update them after persist_pending's early check, and the later dock save
+        // must not trust a stale `false`.
+        let cached = match data.get_temp::<(u64, bool)>(cache_id) {
+            Some((at, moved)) if at == frame => Some(moved),
+            _ => None,
+        };
+        let previous = data.get_temp::<Vec<(u64, [f32; 4])>>(places_id);
+        let changed = previous.as_ref().is_some_and(|last| last != &places);
+        let moved = cached.unwrap_or(false) || changed;
+        if changed || previous.is_none() {
+            data.insert_temp(places_id, places);
         }
-        let moved = data.get_temp::<Vec<(u64, [f32; 4])>>(places_id).is_some_and(|last| last != places);
-        data.insert_temp(places_id, places);
         data.insert_temp(cache_id, (frame, moved));
         moved
     })
@@ -445,6 +451,12 @@ fn set_panels_pending(ctx: &egui::Context, pending: bool) {
 /// Retries a toolbar-side save that was deferred while geometry was moving; called every frame so
 /// the save happens once the geometry is stable even when the dock and toolbar were not drawn.
 pub(crate) fn persist_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // If the dock-edge layout stopped rendering (Shift+Tab hides the dock mid-drag), its stored
+    // drag start cannot be cleared by the panel; drop it so deferred saves can resume.
+    let rendered = ctx.data(|data| data.get_temp::<u64>(egui::Id::unique("dock-edge-rendered-frame")));
+    if rendered.is_none_or(|at| at + 1 < ctx.cumulative_frame_nr()) {
+        crate::panels::clear_dock_edge_drag(ctx);
+    }
     if !app.session.prefs().workspace.remember_workspace_changes {
         set_panels_pending(ctx, false);
         return;

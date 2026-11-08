@@ -23,6 +23,9 @@ pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// canvas and the dock. The canvas is drawn separately afterwards. Keeping the rail inside this
 /// panel means the toolbox cannot cover it when it is one column wide.
 pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // Lets the frame tick expire a drag start if this panel stops rendering (dock hidden).
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("dock-edge-rendered-frame"), frame));
     let t = Tokens::get(ui.ctx());
     let (rail_w, _) = if t.pro { (36.0, 28.0) } else { (44.0, 32.0) };
     let rail_shown = app.ui.panels.rail;
@@ -168,6 +171,11 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// arrive with no pointer button down, but the in-progress dock width must not be persisted.
 pub(crate) fn dock_edge_drag_active(ctx: &egui::Context) -> bool {
     ctx.data(|data| data.get_temp::<(f32, f32)>(egui::Id::unique("dock-edge-drag")).is_some())
+}
+
+/// Drops a dock-edge drag start that can no longer be completed (its panel stopped rendering).
+pub(crate) fn clear_dock_edge_drag(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.remove::<(f32, f32)>(egui::Id::unique("dock-edge-drag")));
 }
 
 /// The width the dock column took in the last frame (tests: an iconic-only dock must take its

@@ -1160,6 +1160,16 @@ fn setting_the_current_dock_width_keeps_the_legacy_layout() {
     assert!(app.ui.docking.is_none(), "the app starts on the native dock");
     set_dock_width(&mut app, current);
     assert!(app.ui.docking.is_none(), "a same-width request must not create a workspace");
+
+    // The next legacy operation must still take the legacy path: selecting a tab in a collapsed
+    // group selects it without expanding the group or customizing the workspace.
+    app.ui.dock.set_collapsed(crate::dock::Group::Properties, true);
+    let ctx = egui::Context::default();
+    let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dockTabs": {"properties": 1}}));
+    crate::control::handle(&mut app, &ctx, &req);
+    assert_eq!(app.ui.dock_tabs.properties, 1, "the requested tab is selected");
+    assert!(app.ui.dock.is_collapsed(crate::dock::Group::Properties), "the collapsed group stays collapsed");
+    assert!(app.ui.docking.is_none(), "tab selection still did not customize the workspace");
 }
 
 /// `ui.set {dockWidth}` sets the whole end dock, scaling every column rather than only the outer
