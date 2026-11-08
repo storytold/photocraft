@@ -103,3 +103,37 @@ fn action_dropped_on_trash_while_recording_is_not_deleted() {
     assert!(names(h.state()).contains(&"Second".to_string()));
     assert!(names(h.state()).contains(&"First".to_string()));
 }
+
+fn rename_open_on(app: &mut PhotocraftApp, index: usize, text: &str) {
+    app.ui.actions.renaming = Some(RenameAction { index, text: text.into(), focused: true });
+}
+
+fn renaming(app: &PhotocraftApp) -> Option<(usize, String)> {
+    app.ui.actions.renaming.as_ref().map(|r| (r.index, r.text.clone()))
+}
+
+#[test]
+fn an_open_name_field_stays_on_its_action_when_another_is_deleted_or_copied() {
+    let mut h = harness();
+    let app = h.state_mut();
+    // Deleting the action above moves the field up with its action.
+    rename_open_on(app, 1, "Second renamed");
+    assert!(delete_row(app, 0, None));
+    assert_eq!(renaming(app), Some((0, "Second renamed".into())));
+    // Deleting the action being renamed closes the field.
+    assert!(delete_row(app, 0, None));
+    assert_eq!(renaming(app), None);
+
+    let mut h = harness();
+    let app = h.state_mut();
+    // A copy inserted above moves the field down with its action; one below leaves it.
+    rename_open_on(app, 1, "Second renamed");
+    duplicate_row(app, 0, None).unwrap();
+    assert_eq!(renaming(app), Some((2, "Second renamed".into())));
+    duplicate_row(app, 2, None).unwrap();
+    assert_eq!(renaming(app), Some((2, "Second renamed".into())));
+    // Deleting or copying a step leaves it alone.
+    assert!(delete_row(app, 0, Some(0)));
+    duplicate_row(app, 0, Some(0)).unwrap();
+    assert_eq!(renaming(app), Some((2, "Second renamed".into())));
+}

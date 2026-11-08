@@ -1720,6 +1720,10 @@ fn duplicate_row(app: &mut PhotocraftApp, action: usize, step: Option<usize>) ->
         if index <= app.ui.actions.expanded.len() {
             app.ui.actions.expanded.insert(index, expanded);
         }
+        // A name field open on an action at or after the copy moves down with that action.
+        if let Some(r) = app.ui.actions.renaming.as_mut().filter(|r| r.index >= index) {
+            r.index += 1;
+        }
     } else {
         app.ui.actions.expanded.resize(count, false);
         if let Some(expanded) = app.ui.actions.expanded.get_mut(index) {
@@ -1768,8 +1772,20 @@ fn delete_row(app: &mut PhotocraftApp, action: usize, step: Option<usize>) -> bo
         },
         _ => {}
     }
-    if step.is_none() && action < ui.expanded.len() {
-        ui.expanded.remove(action);
+    if step.is_none() {
+        if action < ui.expanded.len() {
+            ui.expanded.remove(action);
+        }
+        // A name field open on the deleted action closes; one on a later action moves up with it.
+        match ui.renaming.as_ref().map(|r| r.index) {
+            Some(i) if i == action => ui.renaming = None,
+            Some(i) if i > action => {
+                if let Some(r) = ui.renaming.as_mut() {
+                    r.index = i - 1;
+                }
+            }
+            _ => {}
+        }
     }
     true
 }
