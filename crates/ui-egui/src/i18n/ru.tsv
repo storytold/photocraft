@@ -523,7 +523,7 @@
 	Last Filter	Последний фильтр
 	Filter Gallery…	Галерея фильтров…
 	Liquify…	Пластичность…
-	Camera Raw Filter…	Фильтр Camera Raw…
+	RAW Develop Filter…	Фильтр Обработка RAW…
 	Adaptive Wide Angle…	Адаптивный широкий угол…
 	Lens Correction…	Коррекция дисторсии…
 	Vanishing Point…	Точка схода…
@@ -1055,8 +1055,8 @@
 	Luminance Smoothness	Световая сглаженность
 	Vignetting	Виньетирование
 	White Balance: As Shot	Баланс белого: как снято
-	Camera Raw…	Camera Raw…
-	Camera Raw isn't open	Camera Raw не открыт
+	RAW Defaults…	Настройки RAW по умолчанию…
+	RAW Develop isn't open	Обработка RAW не открыт
 	Dehaze	Устранение дымки
 	Texture	Текстура
 	Focal Length	Фокусное расстояние
@@ -1872,8 +1872,8 @@
 	Load Settings…	Загрузить настройки…
 	Save these settings as a Camera Raw .xmp file	Сохранить эти настройки в файл Camera Raw .xmp
 	Load settings from a Camera Raw .xmp file	Загрузить настройки из файла Camera Raw .xmp
-	Loaded Camera Raw settings from {file}	Настройки Camera Raw загружены из {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Настройки Camera Raw загружены из {file} (не поддерживается: {n})
+	Loaded RAW Develop settings from {file}	Настройки Обработка RAW загружены из {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Настройки Обработка RAW загружены из {file} (не поддерживается: {n})
 	After (X)	После (X)
 	Original	Оригинал
 	Current	Текущий
@@ -2443,7 +2443,7 @@
 	CPU (no GPU acceleration)	ЦП (без ускорения GPU)
 	Cache levels	Уровни кэша
 	Cache tile size	Размер блока кэша
-	Camera Raw Defaults	Значения Camera Raw по умолчанию
+	RAW Defaults	Настройки RAW по умолчанию
 	Canvas border	Рамка холста
 	Show canvas dots	Показывать точки холста
 	Clip thumbnails to layer bounds	Обрезать миниатюры по границам слоя
@@ -2675,8 +2675,8 @@
 	Tone Histogram	Тональная гистограмма
 	Show Selected Region	Показать выделенную область
 cameraRaw	Light	Свет
-	Camera Raw Filter ({layer})	Фильтр Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Фильтр Обработка RAW ({layer})
+	RAW Develop ({name})	Обработка RAW ({name})
 	Aqua	Голубой
 cameraRaw	Amount	Интенсивность
 cameraRaw	Blacks	Чёрные
@@ -3532,8 +3532,8 @@ curves	Smooth	Сгладить
 	Brush Type	Тип кисти
 	Burlap	Мешковина
 	Calculations	Вычисления
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Фильтр Camera Raw
+	RAW Develop	Обработка RAW
+	RAW Develop Filter	Фильтр Обработка RAW
 	Cancel transform	Отменить трансформирование
 	Candle Light	Свет свечи
 	Canvas Size	Размер холста
@@ -4801,7 +4801,7 @@ shape	Appearance	Оформление
 	Show layer bounds on hover	Показывать границы слоя при наведении
 	Expand layer group on click	Раскрывать группу слоёв по щелчку
 	Show hover bounds from Layers	Показывать границы при наведении из панели «Слои»
-	Saved Camera Raw settings to {file}	Настройки Camera Raw сохранены в {file}
+	Saved RAW Develop settings to {file}	Настройки Обработка RAW сохранены в {file}
 	Save the settings to each raw's sidecar without opening it	Сохранить настройки в сопроводительный файл каждого raw, не открывая его
 	No settings saved: these raws can't keep a sidecar here	Ничего не сохранено: у этих raw здесь не может быть сопроводительного файла
 	Some settings could not be saved; the raws stay open	Не удалось сохранить некоторые настройки; raw остаются открытыми

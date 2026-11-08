@@ -350,7 +350,7 @@
 	Last Filter	Seneste filter
 	Filter Gallery…	Filtergalleri…
 	Liquify…	Gør flydende…
-	Camera Raw Filter…	Camera Raw-filter…
+	RAW Develop Filter…	RAW-fremkaldelse-filter…
 	Adaptive Wide Angle…	Adaptiv vidvinkel…
 	Lens Correction…	Objektivkorrektion…
 	Vanishing Point…	Forsvindingspunkt…
@@ -905,8 +905,8 @@
 	Luminance Smoothness	Luminansglathed
 	Vignetting	Vignettering
 	White Balance: As Shot	Hvidbalance: Som fotograferet
-	Camera Raw…	Camera Raw…
-	Camera Raw isn't open	Camera Raw er ikke åben
+	RAW Defaults…	RAW-standarder…
+	RAW Develop isn't open	RAW-fremkaldelse er ikke åben
 	Dehaze	Fjern dis
 	Texture	Tekstur
 	Focal Length	Brændvidde
@@ -1760,8 +1760,8 @@
 	Load Settings…	Indlæs indstillinger…
 	Save these settings as a Camera Raw .xmp file	Gem disse indstillinger som en Camera Raw .xmp-fil
 	Load settings from a Camera Raw .xmp file	Indlæs indstillinger fra en Camera Raw .xmp-fil
-	Loaded Camera Raw settings from {file}	Indlæste Camera Raw-indstillinger fra {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Indlæste Camera Raw-indstillinger fra {file} ({n} understøttes ikke)
+	Loaded RAW Develop settings from {file}	Indlæste RAW-fremkaldelse-indstillinger fra {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Indlæste RAW-fremkaldelse-indstillinger fra {file} ({n} understøttes ikke)
 	After (X)	Efter (X)
 	Original	Original
 	Current	Aktuel
@@ -2348,7 +2348,7 @@
 	CPU (no GPU acceleration)	CPU (ingen GPU-acceleration)
 	Cache levels	Cacheniveauer
 	Cache tile size	Flisestørrelse for cache
-	Camera Raw Defaults	Camera Raw-standarder
+	RAW Defaults	RAW-standarder
 	Canvas border	Lærredskant
 	Show canvas dots	Vis lærredsprikker
 	Clip thumbnails to layer bounds	Klip miniaturer til laggrænser
@@ -2582,8 +2582,8 @@
 	Show Selected Region	Vis markeret område
 cameraRaw	Light	Lys
 # Camera Raw: contextual controls and window title
-	Camera Raw Filter ({layer})	Camera Raw-filter ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	RAW-fremkaldelse-filter ({layer})
+	RAW Develop ({name})	RAW-fremkaldelse ({name})
 	Aqua	Turkis
 cameraRaw	Amount	Mængde
 cameraRaw	Blacks	Sorte
@@ -3505,8 +3505,8 @@ curves	Smooth	Udjævn
 	Brush Type	Penseltype
 	Burlap	Sækkelærred
 	Calculations	Beregninger
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw-filter
+	RAW Develop	RAW-fremkaldelse
+	RAW Develop Filter	RAW-fremkaldelse-filter
 	Cancel transform	Annullér transformering
 	Candle Light	Stearinlys
 	Canvas Size	Lærredsstørrelse
@@ -4753,9 +4753,9 @@ shape	Appearance	Udseende
 @plural	{n} document|{n} documents	{n} dokument|{n} dokumenter
 @plural	{n} pixel|{n} pixels	{n} pixel|{n} pixels
 cameraRaw	Before (Y)	Før (Y)
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Camera Raw-filter ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw er ikke åben
+cameraRaw	RAW Develop ({name})	RAW-fremkaldelse ({name})
+cameraRaw	RAW Develop Filter ({layer})	RAW-fremkaldelse-filter ({layer})
+cameraRaw	RAW Develop isn't open	RAW-fremkaldelse er ikke åben
 cameraRaw	Cancel	Annullér
 cameraRaw	Canceled opening {name}	Annullerede åbning af {name}
 cameraRaw	Canceled {label}	Annullerede {label}
@@ -4767,7 +4767,7 @@ cameraRaw	Highlight Clipping Warning (O)	Advarsel om højlysklipning (O)
 cameraRaw	Highlight Priority	Højlysprioritet
 cameraRaw	Load Settings…	Indlæs indstillinger…
 cameraRaw	Load settings from a Camera Raw .xmp file	Indlæs indstillinger fra en Camera Raw .xmp-fil
-cameraRaw	Loaded Camera Raw settings from {file}	Indlæste Camera Raw-indstillinger fra {file}
+cameraRaw	Loaded RAW Develop settings from {file}	Indlæste RAW-fremkaldelse-indstillinger fra {file}
 cameraRaw	Noise Reduction	Støjreduktion
 cameraRaw	OK	OK
 cameraRaw	Open	Åbn
@@ -4830,3 +4830,6 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Auto-size Canvas	Tilpas lærredsstørrelse automatisk
 	Keep Relative Position During Layer Reordering	Bevar relativ placering ved omorganisering af lag
 	Shrinkwrap Canvas on Save	Beskær lærredet til indholdet ved lagring
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	RAW-fremkaldelsesindstillinger gemt i {file}

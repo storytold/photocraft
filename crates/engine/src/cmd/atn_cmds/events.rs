@@ -616,7 +616,7 @@ pub(super) const EVENTS: &[Event] = &[
     Event { code: "GEfc", name: "filterGallery", label: "Filter Gallery", ids: GALLERY_IDS, from: gallery_from, to: gallery_to },
     // What Photoshop needs in a written step (process version, the full settings set) is
     // unverified, so only an imported step saves back, as its recorded descriptor while unedited.
-    Event { code: "", name: "Adobe Camera Raw Filter", label: "Camera Raw Filter", ids: &[crate::lens_cmds::RAW], from: camera_raw_from, to: camera_raw_to },
+    Event { code: "", name: "Adobe Camera Raw Filter", label: "RAW Develop Filter", ids: &[crate::lens_cmds::RAW], from: camera_raw_from, to: camera_raw_to },
     // Video, Other, Average and matting (#10607).
     Event {
         code: "Dntr",

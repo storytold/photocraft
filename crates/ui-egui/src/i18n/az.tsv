@@ -307,7 +307,7 @@
 	Last Filter	Son Filtr
 	Filter Gallery…	Qalereya filtri…
 	Liquify…	Likvidləşdirin…
-	Camera Raw Filter…	Camera Raw filtri…
+	RAW Develop Filter…	RAW emalı filtri…
 	Adaptive Wide Angle…	Uyğunlaşan Geniş Bucaq…
 	Lens Correction…	Lens korreksiyası…
 	Vanishing Point…	Ufuq Nöqtəsi…
@@ -832,8 +832,8 @@
 	Luminance Smoothness	Parlaqlıq Hamarlığı
 	Vignetting	Vinyetləmə
 	White Balance: As Shot	Ağ Balans: Çəkiliş kimi
-	Camera Raw…	Kamera Raw…
-	Camera Raw isn't open	Camera Raw açıq deyil
+	RAW Defaults…	RAW ilkin ayarları…
+	RAW Develop isn't open	RAW emalı açıq deyil
 	Dehaze	Dehaze
 	Texture	Tekstura
 	Focal Length	Fokus Uzunluğu
@@ -1646,8 +1646,8 @@
 	Load Settings…	Parametrləri yükləyin…
 	Save these settings as a Camera Raw .xmp file	Bu parametrləri Camera Raw .xmp faylı kimi yadda saxlayın
 	Load settings from a Camera Raw .xmp file	Camera Raw .xmp faylından parametrləri yükləyin
-	Loaded Camera Raw settings from {file}	{file} -dən Camera Raw parametrləri yükləndi
-	Loaded Camera Raw settings from {file} ({n} not supported)	{file} -dən yüklənmiş Camera Raw parametrləri ( {n} dəstəklənmir)
+	Loaded RAW Develop settings from {file}	{file} -dən RAW emalı parametrləri yükləndi
+	Loaded RAW Develop settings from {file} ({n} not supported)	{file} -dən yüklənmiş RAW emalı parametrləri ( {n} dəstəklənmir)
 	After (X)	Sonra (X)
 	Original	Orijinal
 	Current	Cari
@@ -2212,7 +2212,7 @@
 	CPU (no GPU acceleration)	CPU (GPU sürətləndirilməsi yoxdur)
 	Cache levels	Keş səviyyələri
 	Cache tile size	Keş kafel ölçüsü
-	Camera Raw Defaults	Camera Raw ilkin ayarları
+	RAW Defaults	RAW ilkin ayarları
 	Canvas border	Kətan haşiyəsi
 	Show canvas dots	Kətan nöqtələrini göstərin
 	Clip thumbnails to layer bounds	Miniatürləri qat sərhədlərinə kəsin
@@ -2440,8 +2440,8 @@
 	Tone Histogram	Ton histoqramı
 	Show Selected Region	Seçilmiş Bölgəni göstərin
 cameraRaw	Light	İşıq
-	Camera Raw Filter ({layer})	Kamera Raw Filtri ( {layer} )
-	Camera Raw ({name})	Kamera Raw ( {name} )
+	RAW Develop Filter ({layer})	RAW emalı Filtri ( {layer} )
+	RAW Develop ({name})	RAW emalı ( {name} )
 	Aqua	Su
 cameraRaw	Amount	Miqdar
 cameraRaw	Blacks	Qara sahələr
@@ -3283,8 +3283,8 @@ curves	Smooth	Hamarlama
 	Brush Type	Fırça növü
 	Burlap	Çuval bezi
 	Calculations	Hesablamalar
-	Camera Raw	Kamera Raw
-	Camera Raw Filter	Camera Raw filtri
+	RAW Develop	RAW emalı
+	RAW Develop Filter	RAW emalı filtri
 	Cancel transform	Çevrilməni ləğv edin
 	Candle Light	Şam işığı
 	Canvas Size	Kətan Ölçüsü
@@ -4516,9 +4516,9 @@ shape	Appearance	Görünüş
 @plural	{n} document|{n} documents	{n} sənəd|{n} sənəd
 @plural	{n} pixel|{n} pixels	{n} piksel|{n} piksel
 cameraRaw	Before (Y)	Əvvəl (Y)
-cameraRaw	Camera Raw ({name})	Kamera Raw ( {name} )
-cameraRaw	Camera Raw Filter ({layer})	Kamera Raw Filtri ( {layer} )
-cameraRaw	Camera Raw isn't open	Camera Raw açıq deyil
+cameraRaw	RAW Develop ({name})	RAW emalı ( {name} )
+cameraRaw	RAW Develop Filter ({layer})	RAW emalı Filtri ( {layer} )
+cameraRaw	RAW Develop isn't open	RAW emalı açıq deyil
 cameraRaw	Cancel	Ləğv et
 cameraRaw	Cancelled opening {name}	{name} açılışı ləğv edildi
 cameraRaw	Cancelled {label}	Ləğv edildi {label}
@@ -4530,7 +4530,7 @@ cameraRaw	Highlight Clipping Warning (O)	Vurğulanan Kəsmə Xəbərdarlığı (
 cameraRaw	Highlight Priority	Prioriteti vurğulayın
 cameraRaw	Load Settings…	Parametrləri yükləyin…
 cameraRaw	Load settings from a Camera Raw .xmp file	Camera Raw .xmp faylından parametrləri yükləyin
-cameraRaw	Loaded Camera Raw settings from {file}	{file} -dən Camera Raw parametrləri yükləndi
+cameraRaw	Loaded RAW Develop settings from {file}	{file} -dən RAW emalı parametrləri yükləndi
 cameraRaw	Noise Reduction	Səs-küyün azaldılması
 cameraRaw	OK	Oldu
 cameraRaw	Open	Aç
@@ -4633,3 +4633,6 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Auto-size Canvas	Kətanın ölçüsünü avtomatik təyin edin
 	Keep Relative Position During Layer Reordering	Qatları yenidən sıralayarkən nisbi mövqeyi saxlayın
 	Shrinkwrap Canvas on Save	Saxlayarkən kətanı məzmuna sıxın
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	RAW emalı ayarları {file} faylında saxlanıldı

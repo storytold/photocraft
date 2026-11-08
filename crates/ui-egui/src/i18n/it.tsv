@@ -342,7 +342,7 @@
 	Plugins…	Plug-in…
 	Type…	Testo…
 	Enhanced Controls…	Controlli avanzati…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Predefiniti RAW…
 	Raw Defaults…	Predefiniti Raw…
 	Integrations…	Integrazioni…
 	AI Integrations…	Integrazioni IA…
@@ -674,7 +674,7 @@
 	Last Filter	Ultimo filtro
 	Filter Gallery…	Galleria filtri…
 	Adaptive Wide Angle…	Grandangolo adattivo…
-	Camera Raw Filter…	Filtro Camera Raw…
+	RAW Develop Filter…	Filtro Sviluppo RAW…
 	Liquify…	Fluidifica…
 	Vanishing Point…	Punto di fuga…
 	Blur	Sfocatura
@@ -1026,8 +1026,8 @@
 	Load Settings…	Carica impostazioni…
 	Save these settings as a Camera Raw .xmp file	Salva queste impostazioni come file .xmp di Camera Raw
 	Load settings from a Camera Raw .xmp file	Carica le impostazioni da un file .xmp di Camera Raw
-	Loaded Camera Raw settings from {file}	Impostazioni Camera Raw caricate da {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Impostazioni Camera Raw caricate da {file} ({n} non supportate)
+	Loaded RAW Develop settings from {file}	Impostazioni Sviluppo RAW caricate da {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Impostazioni Sviluppo RAW caricate da {file} ({n} non supportate)
 	Begin recording	Inizia registrazione
 	Bend:	Curvatura:
 	Bicubic	Bicubica
@@ -1055,7 +1055,7 @@
 	Brush Reconstruct Options	Opzioni ricostruzione pennello
 	Brush Tool Options	Opzioni strumento Pennello
 	Cache Level:	Livello cache:
-	Camera Raw isn't open	Camera Raw non è aperto
+	RAW Develop isn't open	Sviluppo RAW non è aperto
 	Cancel	Annulla
 	Reset	Ripristina
 	Cancel (Esc)	Annulla (Esc)
@@ -2029,7 +2029,7 @@
 	Brush preview color	Colore anteprima pennello
 	Cache levels	Livelli cache
 	Cache tile size	Dimensione tile cache
-	Camera Raw Defaults	Predefiniti Camera Raw
+	RAW Defaults	Predefiniti RAW
 	Canvas border	Bordo quadro
 	Show canvas dots	Mostra punti del quadro
 	Clip thumbnails to layer bounds	Ritaglia le miniature ai limiti del livello
@@ -2480,8 +2480,8 @@
 	Tone Histogram	Istogramma tonale
 	Show Selected Region	Mostra regione selezionata
 cameraRaw	Light	Luce
-	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Filtro Sviluppo RAW ({layer})
+	RAW Develop ({name})	Sviluppo RAW ({name})
 cameraRaw	Lights	Toni chiari
 cameraRaw	Darks	Toni scuri
 cameraRaw	Red	Rossi
@@ -3899,8 +3899,8 @@ layerLabel	No Color	Nessun colore
 	Border	Bordo
 	Box Blur	Sfocatura casella
 	Calculations	Calcoli
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Filtro Camera Raw
+	RAW Develop	Sviluppo RAW
+	RAW Develop Filter	Filtro Sviluppo RAW
 	Channel1	Canale 1
 	Channel2	Canale 2
 	Channel3	Canale 3
@@ -4715,7 +4715,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostra i limiti del livello al passaggio del mouse
 	Expand layer group on click	Espandi il gruppo di livelli al clic
 	Show hover bounds from Layers	Mostra i limiti al passaggio dal pannello Livelli
-	Saved Camera Raw settings to {file}	Impostazioni Camera Raw salvate in {file}
+	Saved RAW Develop settings to {file}	Impostazioni Sviluppo RAW salvate in {file}
 	Save the settings to each raw's sidecar without opening it	Salva le impostazioni nel file sidecar di ogni raw senza aprirlo
 	No settings saved: these raws can't keep a sidecar here	Nulla salvato: questi raw non possono avere un file sidecar qui
 	Some settings could not be saved; the raws stay open	Alcune impostazioni non sono state salvate; i raw restano aperti
