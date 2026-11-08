@@ -149,7 +149,7 @@ fn queue_identity_targets_an_inactive_raw_without_changing_the_active_document()
     app.session.set_active(0);
     assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
     queue_open_dialog(&mut app, raw.document, &raw.name, raw.path.as_deref(), raw.bytes.as_deref().map(Vec::as_slice), &[]).unwrap();
-    let queued = app.pending_raw_open.as_ref().expect("the explicitly named RAW was queued");
+    let queued = app.raw_shelf.first().map(|h| &h.raw).expect("the explicitly named RAW was queued");
     assert_eq!(queued.document, raw.document);
     assert_eq!((&queued.name, &queued.path, &queued.bytes), (&raw.name, &raw.path, &raw.bytes));
     assert_eq!(app.session.active().unwrap().doc.id, control.doc.id, "queueing does not activate the target");
@@ -160,12 +160,12 @@ fn queue_identity_targets_an_inactive_raw_without_changing_the_active_document()
 fn queue_identity_rejects_a_missing_document_without_replacing_the_pending_review() {
     let (mut app, raw, control) = identity_app();
     queue_open_dialog(&mut app, raw.document, &raw.name, raw.path.as_deref(), raw.bytes.as_deref().map(Vec::as_slice), &[]).unwrap();
-    let pending = app.pending_raw_open.as_ref().unwrap().clone();
+    let pending = app.raw_shelf.first().map(|h| &h.raw).unwrap().clone();
     app.session.set_active(0);
     let missing = photocraft_doc::DocId::fresh();
     assert!(!app.session.documents().iter().any(|state| state.doc.id == missing));
     assert!(queue_open_dialog(&mut app, missing, "missing.dng", Some("missing.dng"), Some(&[1, 2, 3]), &[]).is_err());
-    let queued = app.pending_raw_open.as_ref().expect("the existing review is preserved");
+    let queued = app.raw_shelf.first().map(|h| &h.raw).expect("the existing review is preserved");
     assert_eq!(queued.document, pending.document);
     assert_eq!((&queued.name, &queued.path, &queued.bytes), (&pending.name, &pending.path, &pending.bytes));
     assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
