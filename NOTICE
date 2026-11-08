@@ -12,6 +12,10 @@ Third-party material
 This product bundles third-party material under its own licenses, listed below. The per-file
 list (author, source, license) is in ATTRIBUTION.md.
 
+The Windows DX12 window-presentation fix uses wgpu-hal 30.0.1 from craft-libs,
+MIT OR Apache-2.0. The shared vendored source, upstream licenses, archive SHA-256,
+exact patch and verification command are in craft-libs/vendor/wgpu-hal/CRAFT-PATCH.md.
+
 Inter font (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
 JetBrains Mono font (assets/fonts/JetBrainsMono-Regular.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-JetBrainsMono.txt.
 Lucide icons (assets/icons/*.svg, except slice-knife.svg) — ISC; icons derived from Feather also MIT. See assets/icons/LICENSE-lucide.txt.
