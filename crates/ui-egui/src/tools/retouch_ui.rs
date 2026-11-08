@@ -29,9 +29,9 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     let o = &app.ui.tool_options;
     // The options bar's Mode is the tool's own brush's.
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label()});
+    // View › Pattern Preview: both tools carry a stroke on across the canvas edges (#8883).
+    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
     if app.ui.tool == Tool::CloneStamp {
-        p["wrap"] = json!(app.ui.view.pattern_preview);
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
     }
@@ -50,7 +50,11 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 /// History Brush params for the live preview and the commit (without `points` and `target`): the
 /// options bar's Mode, which is the tool's own brush's.
 pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
-    json!({"mode": app.session.tools.brush.mode.label()})
+    json!({
+        "mode": app.session.tools.brush.mode.label(),
+        "opacity": app.session.tools.brush.opacity * 100.0,
+        "flow": app.session.tools.brush.flow * 100.0,
+    })
 }
 
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
@@ -132,7 +136,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
                 remove_pending_add(app, points);
                 return true;
             }
-            ("paint.remove", remove_params(&o))
+            ("paint.remove", remove_params(&o, crate::canvas::paint_target(app).as_str() == Some("pixels")))
         }
         Tool::MixerBrush => ("paint.mixerBrush", json!({})),
         Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
@@ -158,6 +162,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
                 "style": o.art_history_style,
                 "area": o.art_history_area,
                 "tolerance": o.art_history_tolerance,
+                "opacity": app.session.tools.brush.opacity * 100.0,
             }),
         ),
         Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
@@ -198,8 +203,8 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 }
 
 /// `paint.remove` params from the options bar (without the strokes).
-fn remove_params(o: &crate::state::ToolOptions) -> Value {
-    json!({"sampleAllLayers": o.sample_all.remove, "newLayer": o.remove_new_layer})
+fn remove_params(o: &crate::state::ToolOptions, composite: bool) -> Value {
+    json!({"sampleAllLayers": o.sample_all.remove, "newLayer": o.remove_new_layer && composite})
 }
 
 /// The selection a queued Remove stroke was drawn against. A later selection must not
@@ -228,9 +233,13 @@ pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
         app.remove_trail = None;
         app.remove_pending_target = Some(target);
     }
-    let diameter = app.session.tools.brush.size;
-    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size)).feed_stroke(points, diameter);
-    app.remove_pending.push(points.to_vec());
+    // The brush it was drawn with goes with it: the tint shows it, the removal uses it, however
+    // the brush changes before ↩.
+    let b = &app.session.tools.brush;
+    let entry = json!({"points": points, "size": b.size, "hardness": b.hardness * 100.0, "spacing": b.spacing * 100.0});
+    let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &entry);
+    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size)).feed_stroke_reach(points, brush);
+    app.remove_pending.push(entry);
     app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
     app.ui.status_error = false;
 }
@@ -244,7 +253,7 @@ pub fn remove_pending_commit(app: &mut PhotocraftApp) -> bool {
     let strokes = std::mem::take(&mut app.remove_pending);
     app.remove_trail = None;
     app.remove_pending_target = None;
-    let mut p = remove_params(&app.ui.tool_options);
+    let mut p = remove_params(&app.ui.tool_options, crate::canvas::paint_target(app).as_str() == Some("pixels"));
     p["strokes"] = json!(strokes);
     p["target"] = crate::canvas::paint_target(app);
     app.ui.status.clear();
@@ -302,6 +311,41 @@ pub fn patch_drags_selection(app: &PhotocraftApp, at: [f64; 2], mods: egui::Modi
     }
     let Some(sel) = app.session.active().and_then(|st| st.doc.selection.as_ref()) else { return false };
     sel.sample_channel(at[0].floor() as i32, at[1].floor() as i32, 0) > 0.0
+}
+
+/// A Patch or Content-Aware Move lasso that makes a new selection is being drawn: the selection it
+/// replaces is hidden from the press on, as in Photoshop, rather than shown beside the new outline
+/// until the release (#11024). Adding, subtracting and intersecting keep it visible. A drag pressed
+/// on another document hides nothing, even before `cancel_stale` drops it (the active document can
+/// change between `sync_views` and the canvas paint).
+pub fn patch_replaces_selection(app: &PhotocraftApp) -> bool {
+    app.drag.as_ref().is_some_and(|d| {
+        matches!(d.tool, Tool::Patch | Tool::ContentAwareMove)
+            && d.document.as_ref().is_none_or(|doc| doc.is_active(app))
+            && !patch_drags_selection(app, d.start, d.modifiers)
+            && crate::canvas::selection_mode(app, d.modifiers) == "replace"
+    })
+}
+
+/// A Patch or Content-Aware Move drag belongs to the document it was pressed on: once another one
+/// is active it is dropped, so it neither hides that document's selection nor lassos or patches it
+/// on release, and its own document shows its selection again (#11024). A document reopened with
+/// the same ID is another one too.
+pub fn cancel_stale(app: &mut PhotocraftApp) {
+    if app.drag.as_ref().is_some_and(|d| matches!(d.tool, Tool::Patch | Tool::ContentAwareMove) && d.document.as_ref().is_some_and(|doc| !doc.is_active(app))) {
+        app.drag = None;
+    }
+}
+
+/// Where a Patch drag ends: with ⇧ pressed after the press (⇧ at the press adds to the selection
+/// instead, so this never sees it) the end is held to the dominant axis from the start, 0 or 90
+/// degrees only (#12129). Other tools, and a drag without ⇧, end at `end`.
+pub fn patch_end(d: &crate::canvas::Drag, end: [f64; 2]) -> [f64; 2] {
+    if d.tool != Tool::Patch || !d.live.shift {
+        return end;
+    }
+    let (dx, dy) = (end[0] - d.start[0], end[1] - d.start[1]);
+    if dx.abs() >= dy.abs() { [end[0], d.start[1]] } else { [d.start[0], end[1]] }
 }
 
 /// Whole-pixel offset for a drag from `start` to `end`, limited so the dragged outline stays on the
@@ -499,6 +543,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     {
         return false;
     }
+    let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
@@ -516,7 +561,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             // Photoshop's options bar: Sample All Layers, Create a new layer, Remove after each
             // stroke; with strokes waiting, ✓ applies them and ⊘ drops them.
             crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample All Layers"));
-            crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create a new layer"));
+            ui.add_enabled_ui(composite, |ui| crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create a new layer")));
             crate::widgets::checkbox(ui, &mut o.remove_after_each_stroke, tl!("Remove after each stroke"));
             if !app.remove_pending.is_empty() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -532,8 +577,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::Patch => {
-            // Photoshop's options bar: Patch: Normal (Source / Destination) or Content-Aware
-            // (Structure, Color, Sample All Layers).
+            // Photoshop's options bar: the lasso's selection mode, then Patch: Normal (Source /
+            // Destination) or Content-Aware (Structure, Color, Sample All Layers).
+            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+            crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Patch:"));
             let kinds = [("normal".to_string(), tl!("Normal")), ("contentAware".to_string(), tl!("Content-Aware"))];
             let mut kind = if o.patch_content_aware { "contentAware" } else { "normal" }.to_string();
@@ -557,6 +604,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Lasso around an area, then drag the selection"));
         }
         Tool::ContentAwareMove => {
+            // The lasso's selection mode leads, as on the Patch tool's bar (#11024).
+            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+            crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Mode:"));
             let modes = [("move".to_string(), tl!("Move")), ("extend".to_string(), tl!("Extend"))];
             crate::widgets::dropdown(ui, "cam-mode", tl!("Mode"), &mut o.cam_mode, &modes, 90.0);
@@ -660,7 +710,28 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
             crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
         }
-        Tool::HistoryBrush => opt(ui, tl!("Paints from the History panel's source state")),
+        Tool::HistoryBrush => {
+            let label = app.session.active().and_then(|st| match photocraft_engine::history_source_cmds::source(st)? {
+                photocraft_engine::history_source_cmds::HistorySource::Snapshot(id) => {
+                    let s = st.snapshots.iter().find(|s| s.id == id)?;
+                    Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &s.name)]))
+                }
+                photocraft_engine::history_source_cmds::HistorySource::State(idx) => {
+                    let entries = st.history.entries();
+                    let name =
+                        if idx < entries.len() { entries.get(idx).cloned() } else { st.history.redo_labels().nth(idx - entries.len()).map(str::to_string) }?;
+                    if idx == 0 && name == "Open" {
+                        Some(tl!("Paints from the document's opening state").to_string())
+                    } else {
+                        Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &name)]))
+                    }
+                }
+            });
+            match label {
+                Some(text) => opt(ui, &text),
+                None => opt(ui, tl!("The History Brush source was deleted: set a new source in the History panel")),
+            }
+        }
         Tool::ArtHistoryBrush => {
             opt(ui, tl!("Style"));
             let styles = [

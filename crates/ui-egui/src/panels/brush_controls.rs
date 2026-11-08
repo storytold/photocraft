@@ -1,24 +1,13 @@
-use super::*;
-
-/// Photoshop's brush preset picker chip: a soft/hard round tip preview with the size underneath.
-/// Draw a round brush tip preview (hard core fading to a soft edge).
-fn brush_tip(p: &egui::Painter, c: egui::Pos2, rad: f32, hardness: f32, color: Color32) {
-    let inner = rad * hardness.clamp(0.05, 1.0);
-    let steps = 8;
-    for k in (0..=steps).rev() {
-        let f = k as f32 / steps as f32;
-        let rr = inner + (rad - inner) * f;
-        let a = if hardness >= 0.99 { 1.0 } else { (1.0 - f).powf(1.5) };
-        p.circle_filled(c, rr, color.gamma_multiply(a));
-    }
-}
+use super::{Align2, BlendMode, Color32, PhotocraftApp, Rect, Sense, Stroke, StrokeKind, Tokens, c32, icons, json, pos2, starts_blend_group, vec2, widgets};
 
 /// A painting tool's Mode dropdown over `modes` (`None` is Clear); the wheel over it steps the
-/// mode. Returns the mode picked this frame.
+/// mode. Returns the mode picked this frame. A list of every blend mode draws the Layers panel's
+/// group lines (#5532; Clear starts none); a short one (the Healing Brush's) draws none.
 pub(super) fn tool_mode_dropdown(ui: &mut egui::Ui, id: &str, modes: &[Option<BlendMode>], current: Option<BlendMode>) -> Option<Option<BlendMode>> {
     let opts: Vec<(Option<BlendMode>, &str)> = modes.iter().map(|m| (*m, m.map_or("Clear", BlendMode::label))).collect();
+    let grouped = BlendMode::LAYER_MODES.iter().all(|m| modes.contains(&Some(*m)));
     let mut mode = current;
-    let chosen = widgets::dropdown_wheel_hovered(ui, id, tl!("Mode"), &mut mode, &opts, 96.0).0;
+    let chosen = widgets::dropdown_wheel_grouped(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, |m| grouped && m.is_some_and(starts_blend_group)).0;
     chosen.last().copied()
 }
 
@@ -26,40 +15,110 @@ pub(super) fn tool_mode_dropdown(ui: &mut egui::Ui, id: &str, modes: &[Option<Bl
 /// after Dissolve (#3439). Clear erases with the brush (`clear`); it shows while chosen, or while
 /// `~` is held (`held`). The wheel over it steps the mode, as over the Layers panel's (#2061).
 pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraft_engine::BrushSettings, clear: &mut bool, held: bool) {
-    let mut opts: Vec<(Option<BlendMode>, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (Some(*m), m.label())).collect();
-    let at = opts.iter().position(|o| o.0 == Some(BlendMode::Dissolve)).map_or(opts.len(), |i| i + 1);
-    opts.insert(at, (None, "Clear"));
-    let mut mode = if *clear || held { None } else { Some(b.mode) };
-    if !widgets::dropdown_wheel_hovered(ui, id, tl!("Mode"), &mut mode, &opts, 96.0).0.is_empty() {
-        *clear = mode.is_none();
-        if let Some(m) = mode {
+    let opts = crate::brush_mode_menu::choices();
+    let mut mode = if *clear || held {
+        (None, false)
+    } else if b.behind {
+        (None, true)
+    } else {
+        (Some(b.mode), false)
+    };
+    if !widgets::dropdown_wheel_grouped(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, |m| m.0.is_some_and(starts_blend_group)).0.is_empty() {
+        *clear = mode == (None, false);
+        b.behind = mode.1;
+        if mode.1 {
+            b.mode = BlendMode::Normal;
+        }
+        if let Some(m) = mode.0 {
             b.mode = m;
         }
     }
 }
 
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
-pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) {
+pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> egui::Response {
     let mut sm = (b.smoothing.amount * 100.0).round();
-    if widgets::value_field_named(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, "%", width).changed() {
+    let r = widgets::value_field_named(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, "%", width);
+    if r.changed() {
         b.smoothing.enabled = true;
         b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);
     }
+    r
 }
 
 /// Options-bar gear beside Smoothing: Photoshop's smoothing options popup, edited on the brush
 /// like the Smoothing % (so they stay per tool and reach the live stroke and the commit).
-pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) {
+/// `brush` adds the Brush's "Smoothing Options" title (#11813); the Eraser keeps its popup as it was.
+pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, brush: bool) {
     let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
     let resp = crate::brush_picker::named(resp, "Set additional smoothing options");
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let s = &mut b.smoothing;
-        widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
-        widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
-        widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
-        widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
+        if brush {
+            ui.label(egui::RichText::new(tl!("Smoothing Options")).strong());
+        }
+        // At 0 % there is no smoothing to tune: the four are greyed and keep their values, as in
+        // the reference application (#11939). Rounded like the Smoothing field, so a value that
+        // shows as 0 % greys them too.
+        let on = (s.amount * 100.0).round() > 0.0;
+        ui.add_enabled_ui(on, |ui| {
+            widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
+            widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
+            widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
+            widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
+        });
     });
 }
+
+/// A Useful mixer brush combinations entry: its label and the Wet, Load and Mix it sets.
+type MixerCombination = (&'static str, Option<(f32, f32, f32)>);
+
+/// The Mixer Brush's Useful mixer brush combinations, in the reference's order: each entry's label
+/// and the Wet, Load and Mix (0..1) it sets. Custom, the first, sets nothing.
+pub(crate) const MIXER_COMBINATIONS: [MixerCombination; 13] = [
+    ("Custom", None),
+    ("Dry", Some((0.0, 0.5, 0.0))),
+    ("Dry, Light Load", Some((0.0, 0.05, 0.0))),
+    ("Dry, Heavy Load", Some((0.0, 1.0, 0.0))),
+    ("Moist", Some((0.1, 0.05, 0.5))),
+    ("Moist, Light Mix", Some((0.1, 0.05, 0.0))),
+    ("Moist, Heavy Mix", Some((0.1, 0.05, 1.0))),
+    ("Wet", Some((0.5, 0.5, 0.5))),
+    ("Wet, Light Mix", Some((0.5, 0.5, 0.0))),
+    ("Wet, Heavy Mix", Some((0.5, 0.5, 1.0))),
+    ("Very Wet", Some((1.0, 0.5, 0.5))),
+    ("Very Wet, Light Mix", Some((1.0, 0.5, 0.0))),
+    ("Very Wet, Heavy Mix", Some((1.0, 0.5, 1.0))),
+];
+
+/// The entries of [`MIXER_COMBINATIONS`] a separator line goes above: Dry, Moist, Wet, Very Wet.
+const MIXER_COMBINATION_GROUPS: [usize; 4] = [1, 4, 7, 10];
+
+/// Mixer Brush: the Useful mixer brush combinations dropdown (#11946). Picking an entry sets Wet,
+/// Load and Mix together (Flow stays) and keeps showing it, also after a value is typed; Custom
+/// sets nothing. `picked` is the entry shown.
+pub(super) fn mixer_combination_dropdown(
+    ui: &mut egui::Ui,
+    picked: &mut usize,
+    m: &mut photocraft_engine::paint::mixer::MixerSettings,
+) -> Option<egui::Response> {
+    const ID: &str = "mixer-combination";
+    let opts: Vec<(usize, &str)> = MIXER_COMBINATIONS.iter().enumerate().map(|(i, (label, _))| (i, *label)).collect();
+    let mut shown = (*picked).min(MIXER_COMBINATIONS.len() - 1);
+    let chosen =
+        widgets::dropdown_wheel_grouped(ui, ID, tl!("Useful mixer brush combinations"), &mut shown, &opts, 132.0, |i| MIXER_COMBINATION_GROUPS.contains(i)).0;
+    if let Some(&i) = chosen.last() {
+        *picked = i;
+        if let Some((wet, load, mix)) = MIXER_COMBINATIONS[i].1 {
+            (m.wet, m.load, m.mix) = (wet, load, mix);
+        }
+    }
+    ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new(ID)))
+}
+
+#[cfg(test)]
+#[path = "../mixer_blend_combination_tests.rs"]
+mod mixer_blend_combination_tests;
 
 /// Mixer Brush: the Current Brush Load swatch shows the paint the next stroke starts with (an
 /// empty swatch when the brush is clean). Its menu holds Load Brush and Clean Brush.
@@ -114,11 +173,21 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
     let c = pos2(r.left() + 14.0, r.top() + 11.0);
     // Photoshop's white tip vanishes on light chrome; light themes use their icon colour.
     let tip = if t.dark() { Color32::WHITE } else { t.icon };
-    brush_tip(ui.painter(), c, 7.0, b.hardness, tip);
+    // The brush's own tip, as the Brush Preset picker's thumbnails draw it: the engine's falloff
+    // for its hardness, its angle and roundness, a sampled tip's shape.
+    let tex = crate::brush_preview::tip_texture(ui.ctx(), "options-bar-chip", &b.tip, (b.hardness, b.angle, b.roundness), 32, tip);
+    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    ui.painter().image(tex.id(), Rect::from_center_size(c, vec2(14.0, 14.0)), uv, Color32::WHITE);
     ui.painter().text(pos2(c.x, r.bottom() - 5.0), Align2::CENTER_CENTER, format!("{}", b.size.round() as i64), egui::FontId::proportional(9.5), t.text_dim);
     icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, c.y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Brush Preset picker")));
-    if resp.on_hover_text(tl!("Brush Preset picker")).clicked() {
+    // The Brush's and the Background Eraser's own text (#11813, #11909); the other tools keep theirs.
+    let tip = if matches!(state.tool, crate::state::Tool::Brush | crate::state::Tool::BackgroundEraser) {
+        tl!("Click to open the Brush Preset picker")
+    } else {
+        tl!("Brush Preset picker")
+    };
+    if resp.on_hover_text(tip).clicked() {
         if state.brush_picker.is_some() {
             crate::brush_picker::close(state);
         } else {
@@ -126,3 +195,7 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../smoothing_options_greyed_tests.rs"]
+mod smoothing_options_greyed_tests;
