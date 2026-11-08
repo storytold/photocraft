@@ -377,18 +377,23 @@ fn mixer_press_failed(app: &mut PhotocraftApp, message: String) {
     }
 }
 
-/// Tool state machine. Shared by mouse input and automation.
 /// A Magic Wand click at document `(x, y)`; one that leaves nothing selected says so, as the
-/// reference does (#11781).
+/// reference does (#11781). With nothing selected, an options-bar Subtract or Intersect click
+/// makes a new selection there, as the reference's does (measured), rather than warning.
 fn magic_wand_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
     let o = app.ui.tool_options.clone();
-    let mode = selection_mode(app, mods);
+    let selected = app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|s| !s.content_bounds().is_empty());
+    let mode = match selection_mode(app, mods) {
+        "subtract" | "intersect" if !selected => "replace",
+        m => m,
+    };
     let r = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
     if r.is_ok_and(|v| v["selected"] == json!(false)) {
         crate::wand_no_pixels::warn(app);
     }
 }
 
+/// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     if consumes_cancelled_vector_event(app, ev) {
         return;

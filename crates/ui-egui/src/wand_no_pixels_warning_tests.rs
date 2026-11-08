@@ -29,7 +29,7 @@ fn click(app: &mut PhotocraftApp, x: f64, mods: Modifiers) {
 }
 
 fn warned(app: &PhotocraftApp) -> bool {
-    app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some("No pixels are selected."))
+    app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(crate::wand_no_pixels::message()))
 }
 
 fn selected(app: &PhotocraftApp) -> bool {
@@ -72,4 +72,25 @@ fn the_command_reports_the_empty_result_without_a_dialog() {
     let r = app.run("select.magicWand", json!({"x": 40, "y": 40, "mode": "subtract"})).unwrap();
     assert_eq!(r["selected"], json!(false));
     assert!(!warned(&app));
+}
+
+#[test]
+fn options_bar_subtract_or_intersect_with_nothing_selected_selects_without_warning() {
+    for bar in [2, 3] {
+        let mut app = app();
+        app.ui.selection_mode = bar;
+        click(&mut app, 40.0, Modifiers::NONE);
+        assert!(selected(&app), "bar mode {bar}: a new selection, as in the reference");
+        assert!(!warned(&app), "bar mode {bar}");
+    }
+}
+
+#[test]
+fn a_second_empty_result_while_the_warning_is_open_adds_no_second_one() {
+    let mut app = app();
+    click(&mut app, 40.0, Modifiers::NONE);
+    click(&mut app, 40.0, Modifiers::ALT);
+    crate::wand_no_pixels::warn(&mut app);
+    let n = app.ui.dialogs.iter().filter(|d| d.fields.get("message").and_then(|m| m.as_str()) == Some(crate::wand_no_pixels::message())).count();
+    assert_eq!(n, 1);
 }
