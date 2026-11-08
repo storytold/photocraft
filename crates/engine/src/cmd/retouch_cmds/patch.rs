@@ -211,16 +211,39 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
     apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal)
 }
 
+/// Whether `sel` is a hard-edged rectangle exactly filling `area` (the only Destination selection
+/// measured to move with the patch).
+fn is_hard_rect(sel: &Surface, area: Rect) -> bool {
+    sel.default_pixel().first().copied().unwrap_or(0.0) <= 0.0 && sel.content_bounds() == area && coverage(sel, area).iter().all(|c| *c >= 1.0)
+}
+
 pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
     if flag(p, "contentAware", false) {
         return patch_content_aware(s, p);
     }
     let plan = plan(s, p)?;
     let label = if plan.destination { "Patch (Destination)" } else { "Patch" };
-    let dmg = run_stroke(s, label, plan.id, p, |pre, surf, _, lock| {
-        let sel = pre.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
-        Ok(patch_surface(surf, sel, &plan, lock, 1))
-    })?;
+    let dmg = if plan.destination {
+        // Destination: a plain rectangular selection moves with the patch, in the same history state.
+        let dmg = s.edit(label, |doc, _| {
+            let pre = doc.clone();
+            let (surf, lock) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
+            let sel = pre.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
+            let dmg = patch_surface(surf, sel, &plan, lock, 1);
+            if is_hard_rect(sel, plan.area) {
+                let (dx, dy) = plan.offset;
+                doc.selection = Some(sel.translated(dx, dy, sel.content_bounds()));
+            }
+            Ok(dmg)
+        })?;
+        s.hint_damage(dmg);
+        dmg
+    } else {
+        run_stroke(s, label, plan.id, p, |pre, surf, _, lock| {
+            let sel = pre.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
+            Ok(patch_surface(surf, sel, &plan, lock, 1))
+        })?
+    };
     Ok(json!({ "damage": damage_json(dmg), "offset": [plan.offset.0, plan.offset.1] }))
 }
 
@@ -303,3 +326,7 @@ fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
         },
     )
 }
+
+#[cfg(test)]
+#[path = "patch_destination_selection_tests.rs"]
+mod patch_destination_selection_tests;
