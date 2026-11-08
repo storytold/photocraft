@@ -16,6 +16,9 @@ use crate::retouch::{Footprint, Region, alpha_index, apply_dab_stroke};
 #[serde(default, rename_all = "camelCase")]
 pub struct BgEraseSettings {
     pub sampling: Sampling,
+    /// Which matching pixels are erased. [`Limits::FindEdges`] grades the erase over the Tolerance
+    /// like [`Limits::Contiguous`] in this tool (#11904), unlike Color Replacement, where it turns
+    /// the soft falloff off.
     pub limits: Limits,
     /// 0..1: how far from the sampled colour a colour is still partly erased. The distance is the
     /// largest increase plus the largest decrease over the colour channels (`dist`); an exact
