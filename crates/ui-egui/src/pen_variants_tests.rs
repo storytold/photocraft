@@ -556,3 +556,36 @@ fn a_targeted_vector_mask_carries_on_its_open_path() {
     crate::vector_ui::pen_commit(&mut app, false);
     assert_eq!(mask(&app), [3], "the same subpath, extended");
 }
+
+/// #9396 review: on a short open path whose two ends are both within reach of the pointer (as
+/// when zoomed out), the press under the continue-path pointer carries the nearer end on and never
+/// closes the path, which it did when the other end was its first anchor.
+#[test]
+fn a_press_in_reach_of_both_ends_carries_the_nearer_one_on_and_does_not_close() {
+    let mut app = app(Tool::Pen);
+    assert_eq!(app.point_zoom(), 1.0, "a 6 px reach in document pixels");
+    // The ends sit beside the first segment, which Auto Add/Delete would put an anchor on.
+    app.ui.tool_options.pen_auto_add_delete = false;
+    for (x, y) in [(20.0, 20.0), (60.0, 20.0), (60.0, 40.0), (26.0, 22.0)] {
+        click(&mut app, x, y);
+    }
+    crate::vector_ui::pen_commit(&mut app, false);
+    let ends = |app: &PhotocraftApp| {
+        let pen = app.ui.pen.as_ref().expect("a resumed draft");
+        assert!(pen.resumes.is_some(), "{pen:?}");
+        pen.knots.last().map(|k| k[0])
+    };
+    // (24, 22): 2 px from the last anchor, 4.5 px from the first.
+    assert!(crate::vector_ui::continues_path_at(&app, Tool::Pen, 24.0, 22.0));
+    click(&mut app, 24.0, 22.0);
+    assert!(!work_path(&app).subpaths[0].closed, "the press carried the path on, it did not close it");
+    assert_eq!(ends(&app), Some([26.0, 22.0]), "from the nearer, last anchor");
+    click(&mut app, 100.0, 100.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    let sub = &work_path(&app).subpaths[0];
+    assert!(!sub.closed && sub.knots.len() == 5 && sub.knots[4].anchor.x == 100.0, "{sub:?}");
+    // (21, 20): 1 px from the first anchor, 5.4 px from the last: carried on from the first.
+    click(&mut app, 21.0, 20.0);
+    assert!(!work_path(&app).subpaths[0].closed);
+    assert_eq!(ends(&app), Some([20.0, 20.0]), "from the nearer, first anchor");
+}
