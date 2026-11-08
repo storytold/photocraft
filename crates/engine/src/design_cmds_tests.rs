@@ -1271,7 +1271,46 @@ fn a_suppressed_step_edited_to_another_pattern_keeps_its_version() {
     s.execute("design.suppress", json!({"step": fill})).unwrap();
     s.execute("design.editStep", json!({"step": fill, "params": {"contents": "pattern", "pattern": b}})).unwrap();
     s.execute("pattern.delete", json!({"pattern": b})).unwrap();
+    // Saved while it is suppressed, and opened where the library has no B.
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
     s.execute("design.unsuppress", json!({"step": fill})).unwrap();
     assert_eq!(state(&mut s, 2), "ok");
     assert_eq!(s.active().unwrap().doc.layers[1].surface().unwrap().pixel(1, 1), vec![0.0, 0.0, 1.0, 1.0], "painted with B");
+    let want = doc(&s);
+    let mut r = Session::new();
+    r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
+    r.execute("design.unsuppress", json!({"step": fill})).unwrap();
+    assert_eq!(state(&mut r, 2), "ok");
+    assert_eq!(doc(&r), want, "after a save and load too");
+}
+
+/// A step whose own command takes a pattern from the library (here a deletion) leaves the
+/// version an earlier step brought in for the steps after it.
+#[test]
+fn a_library_change_by_a_step_leaves_later_steps_their_versions() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let id = s.execute("edit.definePattern", json!({"name": "Mine"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": id})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": id})).unwrap();
+    let want = doc(&s);
+    // A step that deletes the pattern goes in between the fills, as editing another one into it could.
+    let st = s.active_mut().unwrap();
+    let mut d = (*st.doc).clone();
+    let mut tl = (**d.design_timeline.as_ref().unwrap()).clone();
+    let mut delete = tl.steps[5].clone();
+    (delete.step, delete.command, delete.params, delete.prelude, delete.patterns) =
+        (999, "pattern.delete".into(), json!({"pattern": id}), Vec::new(), Vec::new());
+    (delete.created, delete.changed, delete.baked) = (Vec::new(), Vec::new(), None);
+    tl.steps.insert(5, delete);
+    d.design_timeline = Some(std::sync::Arc::new(tl));
+    st.doc = std::sync::Arc::new(d);
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(commands(&mut s)[4..], ["edit.fill", "pattern.delete", "select.rect", "edit.fill"]);
+    assert_eq!(state(&mut s, 7), "ok");
+    assert_eq!(doc(&s).layers, want.layers);
 }
