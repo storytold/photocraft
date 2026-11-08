@@ -2149,7 +2149,7 @@ mod streamed_tests {
         let png = crate::encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
         assert!(png.windows(4).any(|w| w == b"iCCP"), "the file carries the chunk the readers must skip");
         // Both read their headers and answer, rather than inflating the profile on the way.
-        assert_eq!(has_additional_images(&png).unwrap(), false, "not an animation");
+        assert!(!has_additional_images(&png).unwrap(), "not an animation");
         assert_eq!(palette(&png).unwrap(), None, "not a palette image");
         // Every decoder in this file is told to skip it, so none of them can be the one that
         // inflates it: the count is the guard against a new one being added without the flag.
