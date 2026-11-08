@@ -199,8 +199,9 @@ fn brush_settings_are_remembered_between_uses() {
 }
 
 /// The reference application's Liquify has Twirl Clockwise only: no Twirl Counterclockwise
-/// tool on the strip or a shortcut, and a script or saved setting naming it is refused with a
-/// clear error instead of selecting it (Alt with Twirl Clockwise twirls counterclockwise).
+/// tool on the strip or a shortcut. A script naming it is refused with a clear error (Alt with
+/// Twirl Clockwise twirls counterclockwise); a setting saved by an older version opens on Twirl
+/// Clockwise.
 #[test]
 fn the_tool_strip_has_no_twirl_counterclockwise() {
     assert!(!LiquifyTool::ALL.contains(&LiquifyTool::TwirlCcw));
@@ -218,12 +219,18 @@ fn the_tool_strip_has_no_twirl_counterclockwise() {
     let err = control(&mut app, &json!({"tool": "twirlCcw"})).unwrap_err();
     assert!(err.contains("twirlCw") && err.contains("Alt"), "{err}");
     assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, LiquifyTool::Pucker, "the tool stays");
-    // A preference saved by an older version that names it opens, and on another tool.
+    // Actions that are not tools are refused too, without the Alt hint that fits twirlCcw only.
+    for action in ["reconstructAll", "freezeAll", "thawAll", "invertFreeze"] {
+        let err = control(&mut app, &json!({ "tool": action })).unwrap_err();
+        assert!(err.contains("not a Liquify tool") && !err.contains("Alt"), "{action}: {err}");
+    }
+    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, LiquifyTool::Pucker, "the tool stays");
+    // A preference saved by an older version that names it opens on Twirl Clockwise.
     cancel(&mut app);
     app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), json!({"tool": "twirlCcw", "density": 70})));
     open(&mut app, &ctx).unwrap();
     let o = &app.distort.liquify.as_ref().unwrap().opts;
-    assert_ne!(o.tool, LiquifyTool::TwirlCcw);
+    assert_eq!(o.tool, LiquifyTool::TwirlCw, "the saved twirl keeps its tool");
     assert_eq!(o.density, 70.0, "the rest of the saved settings still apply");
 }
 
@@ -1301,40 +1308,48 @@ fn displaced_nonuniform_managed_previews_interpolate_before_display_encoding() {
         open(&mut app, &ctx).unwrap();
         let d = app.distort.liquify.as_mut().unwrap();
         d.field.d.fill([0.25, 0.5]);
-        d.dirty = Some([0, 0, 300, 24]);
-        d.render_dirty();
-        d.upload(&ctx);
+        let warped = d.field.clone();
         d.zoom = 2.0;
-        d.update_view_preview(&ctx, ERect::from_min_size(Pos2::ZERO, vec2(600.0, 48.0)));
-        assert_eq!(d.view_bounds, Some(d.canvas));
-        for (x, y) in [(5, 5), (255, 10), (256, 10), (298, 22)] {
-            // Independently apply the known fractional displacement to native source samples.
-            // Preserve destination green/opacity for a selected-component edit.
-            let taps = [(x, y, 0.375), (x + 1, y, 0.125), (x, y + 1, 0.375), (x + 1, y + 1, 0.125)];
-            let alpha: f32 = taps.iter().map(|(x, y, w)| d.source.pixel(*x, *y)[3] * w).sum();
-            let dest = d.source.pixel(x, y);
-            let mut straight = [0.0; 4];
-            for (k, channel) in straight[..3].iter_mut().enumerate() {
-                *channel = if component && k == 1 {
-                    dest[k]
-                } else {
-                    taps.iter()
-                        .map(|(x, y, w)| {
-                            let p = d.source.pixel(*x, *y);
-                            p[k] * p[3] * w
-                        })
-                        .sum::<f32>()
-                        / alpha
-                };
-            }
-            straight[3] = if component { dest[3] } else { alpha };
-            let image = d.display.as_ref().unwrap().to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), straight));
-            let a = image.pixels[3];
-            let expected = [0, 1, 2].map(|k| ((u16::from(image.pixels[k]) * u16::from(a) + 127) / 255) as u8);
-            for output in [&d.out, &d.view_out] {
-                let got = output[(y * 300 + x) as usize];
-                assert_eq!(got[3], a);
-                assert!(got[..3].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "component={component} ({x},{y}): {got:?} != {expected:?}");
+        let area = ERect::from_min_size(Pos2::ZERO, vec2(600.0, 48.0));
+        for preview in [false, true] {
+            d.set_preview(preview);
+            d.upload(&ctx);
+            d.update_view_preview(&ctx, area);
+            assert_eq!(d.view_bounds, Some(d.canvas));
+            assert_eq!(d.field, warped, "toggling Preview keeps the live warp");
+            for (x, y) in [(5, 5), (255, 10), (256, 10), (298, 22)] {
+                // Independently sample the identity or the known fractional displacement.
+                // Preserve destination green/opacity for a selected-component edit.
+                let [tl, tr, bl, br] = if preview { [0.375, 0.125, 0.375, 0.125] } else { [1.0, 0.0, 0.0, 0.0] };
+                let taps = [(x, y, tl), (x + 1, y, tr), (x, y + 1, bl), (x + 1, y + 1, br)];
+                let alpha: f32 = taps.iter().map(|(x, y, w)| d.source.pixel(*x, *y)[3] * w).sum();
+                let dest = d.source.pixel(x, y);
+                let mut straight = [0.0; 4];
+                for (k, channel) in straight[..3].iter_mut().enumerate() {
+                    *channel = if component && k == 1 {
+                        dest[k]
+                    } else {
+                        taps.iter()
+                            .map(|(x, y, w)| {
+                                let p = d.source.pixel(*x, *y);
+                                p[k] * p[3] * w
+                            })
+                            .sum::<f32>()
+                            / alpha
+                    };
+                }
+                straight[3] = if component { dest[3] } else { alpha };
+                let image = d.display.as_ref().unwrap().to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), straight));
+                let a = image.pixels[3];
+                let expected = [0, 1, 2].map(|k| ((u16::from(image.pixels[k]) * u16::from(a) + 127) / 255) as u8);
+                for output in [&d.out, &d.view_out] {
+                    let got = output[(y * 300 + x) as usize];
+                    assert_eq!(got[3], a);
+                    assert!(
+                        got[..3].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1),
+                        "component={component} preview={preview} ({x},{y}): {got:?} != {expected:?}"
+                    );
+                }
             }
         }
     }
@@ -1443,4 +1458,132 @@ fn open_liquify_refreshes_proxy_detail_and_backdrop_for_display_changes() {
         assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
         assert_eq!(history, app.session.active().unwrap().history.past_len());
     }
+}
+
+/// Preview off shows the image unwarped while strokes still change the field, and P turns it back
+/// on, as Photoshop's Liquify Preview checkbox does (#7905). Each opening starts with it on.
+#[test]
+fn preview_off_shows_the_original_and_p_toggles_it() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    let render = |d: &LiquifyDialog, field: &LiquifyField| {
+        let mut out = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+        d.proxy.render(field, [0, 0, d.proxy.w, d.proxy.h], &mut out);
+        out
+    };
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.preview && d.describe()["preview"] == json!(true), "Liquify opens with Preview on");
+    let original = render(d, &LiquifyField::new(d.canvas, d.cell));
+    let stroke = |app: &mut PhotocraftApp, y: f64| {
+        for ev in [ToolEvent::Down { x: 35.0, y, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y, pressure: 1.0 }, ToolEvent::Up { x: 60.0, y }] {
+            pointer(app, ev, egui::Modifiers::NONE);
+        }
+    };
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 40})).unwrap();
+    stroke(&mut app, 40.0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_ne!(d.out, original, "the warp shows");
+
+    let r = control(&mut app, &json!({"preview": false})).unwrap();
+    assert_eq!(r["preview"], json!(false));
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_eq!(d.out, original, "Preview off: the image as it was");
+    // A stroke with Preview off still warps the field, unseen.
+    stroke(&mut app, 30.0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_eq!(d.strokes.len(), 2);
+    assert_eq!(d.out, original, "still unwarped while Preview is off");
+    {
+        let d = app.distort.liquify.as_mut().unwrap();
+        d.zoom = 2.0;
+        d.view_bounds = Some(Rect::new(0, 0, 20, 20));
+        d.view_dirty = None;
+    }
+
+    // P turns it back on, with both strokes.
+    let mut input = egui::RawInput::default();
+    input.events.push(egui::Event::Key { key: egui::Key::P, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    ctx.begin_pass(input);
+    keys(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.preview);
+    assert_eq!(d.out, render(d, &d.field), "Preview on: the warp of both strokes");
+    assert_eq!(d.view_dirty, d.view_bounds, "the zoomed preview is redrawn too");
+}
+
+/// A forward-warp stroke across the test layer, at row `y`.
+fn warp_stroke(app: &mut PhotocraftApp, y: f64) {
+    for ev in [ToolEvent::Down { x: 35.0, y, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y, pressure: 1.0 }, ToolEvent::Up { x: 60.0, y }] {
+        pointer(app, ev, egui::Modifiers::NONE);
+    }
+}
+
+/// The active layer's pixels over the whole document.
+fn layer_pixels(app: &PhotocraftApp) -> Vec<f32> {
+    let st = app.session.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 120, 80))
+}
+
+/// With Preview off, a stroke changes the displacement field but the display stays the original
+/// image (#7905).
+#[test]
+fn a_stroke_with_preview_off_changes_the_field_but_not_the_display() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 40, "preview": false})).unwrap();
+    let d = app.distort.liquify.as_ref().unwrap();
+    let (field_before, shown_before) = (d.field.clone(), d.out.clone());
+    assert_eq!(d.field.max_displacement(), 0.0);
+    warp_stroke(&mut app, 40.0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_ne!(d.field, field_before, "the stroke changes the field");
+    assert!(d.field.max_displacement() > 3.0);
+    assert_eq!(d.out, shown_before, "the display does not change");
+}
+
+/// OK with Preview off applies the warp: the layer ends up exactly as it does when the same stroke
+/// is committed with Preview on.
+#[test]
+fn ok_with_preview_off_applies_the_warp() {
+    let ctx = egui::Context::default();
+    let commit_with = |preview: bool| {
+        let mut app = app_with_layer();
+        let before = layer_pixels(&app);
+        open(&mut app, &ctx).unwrap();
+        control(&mut app, &json!({"tool": "forwardWarp", "size": 40, "preview": preview})).unwrap();
+        warp_stroke(&mut app, 40.0);
+        let past = app.session.active().unwrap().history.past_len();
+        control(&mut app, &json!({"commit": true})).unwrap();
+        assert!(app.distort.liquify.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), past + 1, "one Liquify step");
+        (before, layer_pixels(&app))
+    };
+    let (before, unpreviewed) = commit_with(false);
+    assert_ne!(unpreviewed, before, "OK with Preview off warps the layer");
+    assert_eq!(unpreviewed, commit_with(true).1, "the same warp as with Preview on");
+}
+
+/// The identity field (as large as the image's field) exists only while Preview is off: turning
+/// Preview back on frees it, and closing the dialog drops it.
+#[test]
+fn the_identity_field_exists_only_while_preview_is_off() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    let identity = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().identity.is_some();
+    assert!(!identity(&app), "not made while Preview is on");
+    control(&mut app, &json!({"preview": false})).unwrap();
+    assert!(identity(&app));
+    control(&mut app, &json!({"preview": true})).unwrap();
+    assert!(!identity(&app), "freed when Preview is turned back on");
+    control(&mut app, &json!({"preview": false})).unwrap();
+    assert!(identity(&app), "made again when Preview is turned off again");
+    control(&mut app, &json!({"cancel": true})).unwrap();
+    assert!(app.distort.liquify.is_none(), "closing drops the dialog and its identity field");
+    open(&mut app, &ctx).unwrap();
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.preview && d.identity.is_none(), "a new opening starts with Preview on and no identity field");
 }
