@@ -445,14 +445,21 @@ fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>,
             let resp = resp.on_hover_text(name);
             // The double-click chooses the brush its first click picked, even if the row has
             // moved between the clicks (the pointer left it and came back). Two quick clicks on
-            // neighbouring tiles are two clicks, not a double-click.
+            // neighbouring tiles are two clicks, not a double-click. A click older than the
+            // double-click delay began no double-click: one begun off the tiles chooses this tile.
             let first_click = picker_id().with("recent-first-click");
-            let first = if resp.double_clicked() { ui.ctx().data_mut(|d| d.remove_temp::<(String, egui::Pos2)>(first_click)) } else { None };
-            if resp.double_clicked() && first.as_ref().is_none_or(|(_, at)| r.contains(*at)) {
-                picks.push(Pick::List(Action::Choose(first.map_or_else(|| name.clone(), |(first, _)| first))));
+            let now = ui.input(|i| i.time);
+            let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+            let first = if resp.double_clicked() {
+                ui.ctx().data_mut(|d| d.remove_temp::<(String, egui::Pos2, f64)>(first_click)).filter(|(_, _, t)| now - t <= delay)
+            } else {
+                None
+            };
+            if resp.double_clicked() && first.as_ref().is_none_or(|(_, at, _)| r.contains(*at)) {
+                picks.push(Pick::List(Action::Choose(first.map_or_else(|| name.clone(), |(first, _, _)| first))));
             } else if resp.clicked() || resp.double_clicked() {
                 let at = resp.interact_pointer_pos().unwrap_or_else(|| r.center());
-                ui.ctx().data_mut(|d| d.insert_temp(first_click, (name.clone(), at)));
+                ui.ctx().data_mut(|d| d.insert_temp(first_click, (name.clone(), at, now)));
                 picks.push(Pick::List(Action::Select(name.clone())));
             }
         }

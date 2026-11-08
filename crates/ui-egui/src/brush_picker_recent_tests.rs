@@ -302,3 +302,40 @@ fn quick_clicks_on_two_neighbouring_tiles_pick_the_second() {
     assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(n[3].as_str()), "the second click picks its own brush");
     assert!(h.state().ui.brush_picker.is_some(), "clicks on two brushes keep the picker open");
 }
+
+#[test]
+fn a_double_click_begun_beside_a_tile_chooses_that_tile_not_an_older_click() {
+    // A tile clicked earlier moves to the front once the pointer leaves, so another brush is now
+    // where it was. A double-click whose first press lands in the gap beside that brush is a
+    // double-click on it for egui: it chooses the brush under the pointer, not the one the
+    // earlier click picked.
+    let mut app = app();
+    let n = names(&app);
+    pick(&mut app, &n[3]);
+    pick(&mut app, &n[1]);
+    let mut h = harness(app);
+    let p = h.get_by_label(&tile(&n[3])).rect().center();
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(2);
+    let below = h.get_by_label("Brush Preset Options").rect().center() + egui::vec2(0.0, 200.0);
+    h.hover_at(below);
+    h.run_steps(40);
+    assert_eq!(recent(h.state()), [n[3].clone(), n[1].clone()], "the clicked brush went to the front");
+    let r = h.get_by_label(&tile(&n[1])).rect();
+    assert!(r.contains(p), "the other brush is now where the first click was");
+    let (gap, on) = (egui::pos2(r.min.x - 1.5, r.center().y), egui::pos2(r.min.x + 1.0, r.center().y));
+    for at in [gap, on] {
+        h.hover_at(at);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(n[1].as_str()), "the brush under the double-click");
+    assert!(h.state().ui.brush_picker.is_none(), "a double-click closes the picker");
+}
