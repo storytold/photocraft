@@ -183,7 +183,7 @@ fn fill_samples(row: &mut [f32], raw: impl Iterator<Item = [u16; 3]>, table: &[[
 }
 
 /// Grey-world neutral (camera-space R, G, B) from unclipped mid-range samples.
-fn grey_world(s: &Sensor, sc: &Scale) -> [f64; 3] {
+pub(crate) fn grey_world(s: &Sensor, sc: &Scale) -> [f64; 3] {
     let c = s.crop;
     let step = (c.height / 512).max(1);
     let rows: Vec<usize> = (0..c.height).step_by(step).collect();

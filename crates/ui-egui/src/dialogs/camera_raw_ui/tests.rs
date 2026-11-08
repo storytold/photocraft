@@ -482,6 +482,26 @@ fn the_preview_of_a_raw_stage_setting_matches_what_open_develops() {
     }
 }
 
+/// The proxy of a raw too small to bin develops with the demosaic method the raw was opened
+/// with, so the Before view and the settings it was opened with show the document's own pixels.
+#[test]
+fn an_unbinned_proxy_uses_the_demosaic_method_the_raw_was_opened_with() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("prefs.set", json!({"path": "rawDefaults.demosaic", "value": "bilinear"})).unwrap();
+    app.open_bytes("IMG_0007.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let d = app.camera_raw.as_ref().unwrap();
+    assert!(d.raw_proxy, "the proxy is the raw's own develop");
+    let st = app.session.active().unwrap();
+    let surf = st.doc.layers.iter().find_map(|l| l.surface()).unwrap();
+    let (area, w, h) = super::convert::preview_area(st.doc.bounds(), surf).unwrap();
+    let (doc_proxy, ..) = super::convert::box_proxy(surf, area, w, h);
+    let (mean, max) = proxy_difference(&d.proxy, &doc_proxy);
+    assert!(max < 1e-4, "the proxy is the document as developed: {mean} {max}");
+}
+
 #[test]
 fn shadows_of_a_raw_open_act_on_the_raw_data_and_the_preview_shows_it() {
     let (mut app, dng) = raw_app();

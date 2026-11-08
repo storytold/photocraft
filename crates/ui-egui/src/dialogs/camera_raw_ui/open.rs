@@ -91,7 +91,7 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: R
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     let canvas = app.session.active().ok_or("no document")?.doc.bounds();
-    let source = Source { raw: raw_source(&raw, canvas, &surf), surf };
+    let source = Source { raw: raw_source(&raw, canvas, &surf).map(|s| (s, raw.developed_with)), surf };
     if let Some((params, original)) = kept {
         open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
         if let Some(d) = app.camera_raw.as_mut() {
@@ -151,9 +151,9 @@ fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
         // Without the sensor data, the preview retones the developed pixels with it.
-        let curve = d.raw_source.as_ref().map(|s| std::sync::Arc::new(s.tone_curve().to_vec()));
+        let curve = d.raw_source.as_ref().map(|(s, _)| std::sync::Arc::new(s.tone_curve().to_vec()));
         d.detail.raw_curve = curve.clone();
-        d.detail.raw = d.raw_source.clone().map(|s| (s, raw.developed_with));
+        d.detail.raw = d.raw_source.clone();
         d.raw_curve = curve;
         d.raw_open = Some(raw);
     }

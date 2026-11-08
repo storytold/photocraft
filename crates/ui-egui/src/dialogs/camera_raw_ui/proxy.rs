@@ -9,7 +9,9 @@ pub(super) struct ProxyJob {
     pub(super) proxy: std::sync::Arc<Vec<[f32; 4]>>,
     pub(super) selection: Option<std::sync::Arc<Vec<f32>>>,
     pub(super) raw_curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
-    pub(super) raw_source: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    /// The raw being opened, when the proxy is its binned frame, and the demosaic method it
+    /// was developed with.
+    pub(super) raw_source: Option<crate::camera_raw_detail_ui::RawDetail>,
     pub(super) params: CameraRaw,
     pub(super) float: bool,
     pub(super) size: (usize, usize),
@@ -41,14 +43,21 @@ impl ProxyJob {
         // Open develops them from the whole frame: highlights the default develop clipped keep
         // their colour at a lower exposure. Without the sensor data it re-tones the proxy.
         // Otherwise the GPU reads the proxy as it is and uploads it once.
-        let tuning = raw_tuning(&p, Default::default());
-        let developed = self.raw_source.as_ref().filter(|_| tuning != Default::default()).and_then(|raw| raw_proxy(raw, &tuning, pw, ph));
+        // If that develop fails, the retone is the fallback.
+        let develop_start = crate::gpu_canvas::now_ms();
+        let raw_develop = self
+            .raw_source
+            .as_ref()
+            .map(|(raw, method)| (raw, raw_tuning(&p, *method), *method))
+            .filter(|(_, tuning, method)| *tuning != photocraft_io::raw::RawTuning { demosaic: *method, ..Default::default() });
+        let developed = raw_develop.as_ref().and_then(|(raw, tuning, _)| raw_proxy(raw, tuning, pw, ph));
         let retoned = match developed {
             Some((px, white_balance)) => {
                 p = after_raw_stage(&p, white_balance);
                 Some(px)
             }
-            None if self.raw_source.is_some() => None,
+            // At the settings it was developed with, the proxy is already the develop.
+            None if self.raw_source.is_some() && raw_develop.is_none() => None,
             None => self.raw_curve.as_ref().map(|curve| {
                 let mut px = self.proxy.to_vec();
                 photocraft_io::raw::retone(&mut px, pw, ph, curve, raw_stage(&p));
@@ -58,7 +67,6 @@ impl ProxyJob {
         if retoned.is_some() {
             (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
         }
-        let develop_start = crate::gpu_canvas::now_ms();
         let key = retoned.is_none().then_some(self.source_key);
         let input = retoned.as_deref().unwrap_or(&self.proxy);
         let (mut px, backend) = match self.gpu.as_ref().and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
