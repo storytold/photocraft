@@ -1037,21 +1037,34 @@ fn a_stroke_in_a_document_without_a_timeline_is_no_tool_setting() {
     assert!(!last_prelude(&s).contains(&"paint.pencil".to_string()), "{:?}", last_prelude(&s));
 }
 
-/// A pattern rename made while a document without a timeline is active still reaches the next
-/// step of one that has a timeline: it renames the shared library too.
+/// A pattern rename reaches the next step of every other timeline, whether the document it ran in
+/// has a timeline (it records a step there) or not: it renames the shared library too, and a
+/// later step can name the pattern by its new name.
 #[test]
-fn a_pattern_rename_is_a_tool_setting_wherever_it_runs() {
-    let mut s = started();
-    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
-    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
-    let pattern = s.execute("edit.definePattern", json!({"name": "Red"})).unwrap()["pattern"].as_str().unwrap().to_string();
-    s.execute("layer.newFillLayer.pattern", json!({"pattern": pattern})).unwrap();
-    let before = s.active().unwrap().doc.clone();
-    s.execute("pattern.rename", json!({"pattern": pattern, "name": "Crimson"})).unwrap();
-    assert!(!std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc), "it renamed the document's copy too");
-    s.set_active(0);
-    s.execute("layer.new.layer", json!({})).unwrap();
-    assert!(last_prelude(&s).contains(&"pattern.rename".to_string()), "{:?}", last_prelude(&s));
+fn a_pattern_rename_is_a_tool_setting_for_the_other_timelines() {
+    for tracked in [false, true] {
+        let mut s = started();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        let pattern = s.execute("edit.definePattern", json!({"name": "Red"})).unwrap()["pattern"].as_str().unwrap().to_string();
+        s.execute("layer.newFillLayer.pattern", json!({"pattern": pattern})).unwrap();
+        if tracked {
+            s.execute("design.start", json!({})).unwrap();
+        }
+        let before = s.active().unwrap().doc.clone();
+        s.execute("pattern.rename", json!({"pattern": pattern, "name": "Crimson"})).unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc), "it renamed the document's copy too");
+        s.set_active(0);
+        s.execute("edit.fill", json!({"contents": "pattern", "pattern": "Crimson"})).unwrap();
+        assert!(last_prelude(&s).contains(&"pattern.rename".to_string()), "tracked {tracked}: {:?}", last_prelude(&s));
+        let want = doc(&s);
+        // Renamed again: the replay renames it back first, so the fill still finds it.
+        s.execute("pattern.rename", json!({"pattern": pattern, "name": "Scarlet"})).unwrap();
+        s.execute("design.replay", json!({})).unwrap();
+        assert_eq!(state(&mut s, 1), "ok", "tracked {tracked}");
+        assert_eq!(doc(&s), want, "tracked {tracked}");
+    }
 }
 
 /// A timeline doesn't start while a job runs: one started before it could edit the document

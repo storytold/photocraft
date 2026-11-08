@@ -217,8 +217,10 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
     }
     // Each document's prelude runs from its own last step: one recorded elsewhere leaves it be.
     // A tool command that changed a document (a stroke) is that document's step, no setting.
-    // Pattern commands manage the shared library, whichever documents' copies they also edit.
-    let tool = PRELUDE.iter().any(|p| id.starts_with(p)) && took.iter().all(|t| t.1.is_none()) && (!edited_untracked || id.starts_with("pattern."));
+    // Pattern commands manage the shared library, whichever documents' copies they also edit (and
+    // record a step in): the other timelines take them as a setting.
+    let library = id.starts_with("pattern.");
+    let tool = library || (PRELUDE.iter().any(|p| id.starts_with(p)) && took.iter().all(|t| t.1.is_none()) && !edited_untracked);
     for (doc, n) in took {
         let pending = s.timeline_prelude.entry(doc).or_default();
         match n {
