@@ -292,8 +292,10 @@ pub fn warp_patches_surface(
         let (x, y) = f(x0 + sw * u, y0 + sh * v);
         [x, y]
     };
-    // An envelope is cut as the reference application cuts one (see `warp_tess`).
-    let envelope = (facets == Facets::Envelope).then(|| crate::warp_tess::envelope_mesh(&at)).flatten();
+    // An envelope, or a full mesh of one patch, is cut as the reference application cuts one (see
+    // `warp_tess`).
+    let one_patch = cuts_u.iter().chain(cuts_v).all(|&c| c <= 1e-9 || c >= 1.0 - 1e-9);
+    let envelope = (facets == Facets::Envelope || one_patch).then(|| crate::warp_tess::envelope_mesh(&at, facets != Facets::Envelope)).flatten();
     let (verts, tris) = match envelope {
         Some(m) => {
             let verts = m.uv.iter().zip(&m.pos).map(|(p, &d)| (d, [x0 + sw * p[0], y0 + sh * p[1]])).collect();

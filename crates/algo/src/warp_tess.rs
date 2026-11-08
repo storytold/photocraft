@@ -1,9 +1,10 @@
-//! How the reference application cuts an envelope warp (a preset's mesh, stored with fewer than
-//! four control points along a side) into flat triangles. Derived from coordinate probes of its
-//! warps (observation only).
+//! How the reference application cuts a one-patch warp into flat triangles: an envelope (a
+//! preset's mesh, stored with fewer than four control points along a side) or a full 4 × 4 mesh.
+//! Derived from coordinate probes of its warps (observation only).
 //!
 //! The surface is cut as a quadtree in the frame the envelope was stored in (a mesh stored with
-//! more control points down than across is cut with the axes swapped), starting from 4 × 4 cells:
+//! more control points down than across is cut with the axes swapped), starting from 4 × 4 cells;
+//! a full mesh is cut by its cubic net (even where it is flatter), starting from 2 × 2 cells:
 //!
 //! * a cell splits across (`u`) while one of its two rows, restricted to the cell and taken at its
 //!   stored degree, has an inner control point at least [`PERP_TOL`] off the chord sideways, or its
@@ -13,8 +14,9 @@
 //!   `P00 − P10 − P01 + P11` of its stored-degree net) by more than [`TWIST_TOL`] splits along its
 //!   longer side (a square cell: down the document);
 //! * a first-level cell that splits across also splits down, and a down split anywhere on the
-//!   first level splits every first-level cell down; a twist of [`LEVEL_TWIST`] anywhere on a level
-//!   splits every cell of that level down.
+//!   first level splits every first-level cell down;
+//! * for a mesh that is cubic in one direction, a cell split down for its columns' curvature splits
+//!   every cell of its row (the cells of that level beside it) down.
 //!
 //! Each cell becomes two triangles, split from its top-left corner, cut across at the vertices its
 //! left and right neighbours put on its sides. A vertex inside a bigger cell's edge sits on that
@@ -33,11 +35,11 @@ const PERP_TOL: f64 = 1.0;
 const TANG_TOL: f64 = 0.5;
 /// Twist of a cell's control net (document px) past which it splits.
 const TWIST_TOL: f64 = 1.0;
-/// Twist anywhere on a level that splits the whole level down.
-const LEVEL_TWIST: f64 = 2.0;
-/// Cells per side the surface starts as.
+/// Cells per side an envelope starts as.
 const START: usize = 4;
-/// Cells this narrow (normalised) are not split again: six halvings of a first-level cell.
+/// Cells per side a full 4 × 4 mesh starts as.
+const START_FULL: usize = 2;
+/// Cells this narrow (normalised) are not split again: six halvings of an envelope's first cells.
 const MIN_CELL: f64 = 1.0 / 64.0;
 /// Comparisons allow this much rounding.
 const EPS: f64 = 1e-6;
@@ -277,20 +279,21 @@ fn level(t: f64) -> u32 {
     }).unwrap_or(12)
 }
 
-/// Tessellates the envelope warp whose map from normalised source coordinates to the document is
-/// `at`. `None` when the map isn't finite at the corners.
-pub(crate) fn envelope_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMesh> {
+/// Tessellates the one-patch warp whose map from normalised source coordinates to the document is
+/// `at`: an envelope, or (`full`) a full 4 × 4 mesh. `None` when the map isn't finite at the
+/// corners.
+pub(crate) fn envelope_mesh(at: &dyn Fn(f64, f64) -> P, full: bool) -> Option<EnvelopeMesh> {
     let corners = [at(0.0, 0.0), at(1.0, 0.0), at(0.0, 1.0), at(1.0, 1.0)];
     if corners.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
         return None;
     }
-    let stored = stored_net(&cubic_net(at));
+    let stored = net_of(at, full);
     // Cut in the frame the mesh was stored in: more points down than across swaps the axes.
     let swap = stored.nv > stored.nu;
     let net = if swap { stored.transposed() } else { stored };
     let surf = |u: f64, v: f64| if swap { at(v, u) } else { at(u, v) };
     let twisty = net.nu.max(net.nv) == 4;
-    let (leaves, log) = cells(&net, twisty, swap);
+    let (leaves, log) = cells(&net, twisty, swap, if full { START_FULL } else { START });
     let mesh = triangulate(&net, &surf, &leaves, &log);
     Some(if swap {
         EnvelopeMesh {
@@ -303,26 +306,36 @@ pub(crate) fn envelope_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMesh> 
     })
 }
 
+/// The control net the reference application cuts by: an envelope's at the degree it was stored at
+/// (recovered from the map), a full mesh's cubic both ways, even where it is flatter.
+fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
+    let cubic = cubic_net(at);
+    if full { cubic } else { stored_net(&cubic) }
+}
+
 /// The leaf cells and the record of splits, in the stored frame.
-fn cells(net: &Net, twisty: bool, swap: bool) -> (Vec<Cell>, Vec<Split>) {
-    let first = 1.0 / START as f64;
-    let mut level_cells: Vec<Cell> = (0..START * START).map(|k| {
-        let (i, j) = ((k / START) as f64, (k % START) as f64);
+fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<Split>) {
+    let first = 1.0 / start as f64;
+    let mut level_cells: Vec<Cell> = (0..start * start).map(|k| {
+        let (i, j) = ((k / start) as f64, (k % start) as f64);
         [i * first, (i + 1.0) * first, j * first, (j + 1.0) * first]
     }).collect();
     let (mut leaves, mut log) = (Vec::new(), Vec::new());
     while !level_cells.is_empty() {
         let mut decisions = Vec::with_capacity(level_cells.len());
-        let mut level_twist = false;
+        // Rows (by their top and bottom) with a cell split down for its curvature.
+        let mut curved_rows: Vec<(f64, f64)> = Vec::new();
         for &c in &level_cells {
             let [u0, u1, v0, v1] = c;
             let fu = need(&segment(&net.row(v0), u0, u1)).max(need(&segment(&net.row(v1), u0, u1)));
             let fv = need(&segment(&net.col(u0), v0, v1)).max(need(&segment(&net.col(u1), v0, v1)));
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
             let curved_across = across;
+            if twisty && down {
+                curved_rows.push((v0, v1));
+            }
             if twisty {
                 let tw = net.sub(c).twist();
-                level_twist |= tw >= LEVEL_TWIST - EPS;
                 if tw > TWIST_TOL + EPS {
                     let (lu, lv) = (u1 - u0, v1 - v0);
                     if lu > lv + EPS || (lu > lv - EPS && swap) {
@@ -341,8 +354,13 @@ fn cells(net: &Net, twisty: bool, swap: bool) -> (Vec<Cell>, Vec<Split>) {
             decisions.push((across, down));
         }
         let first_level = level_cells.first().is_some_and(|c| (c[3] - c[2] - first).abs() < EPS);
-        if (first_level && decisions.iter().any(|d| d.1)) || (twisty && level_twist) {
+        if first_level && decisions.iter().any(|d| d.1) {
             for d in &mut decisions {
+                d.1 = true;
+            }
+        }
+        for (c, d) in level_cells.iter().zip(&mut decisions) {
+            if curved_rows.iter().any(|&(a, b)| (a - c[2]).abs() < EPS && (b - c[3]).abs() < EPS) {
                 d.1 = true;
             }
         }
@@ -497,9 +515,62 @@ mod tests {
     #[test]
     fn a_flat_map_stays_at_sixteen_cells() {
         let at = |u: f64, v: f64| [10.0 + 100.0 * u, 20.0 + 50.0 * v];
-        let m = envelope_mesh(&at).expect("finite");
+        let m = envelope_mesh(&at, false).expect("finite");
         assert_eq!(m.quads.len(), 16);
         assert_eq!(m.uv.len(), 25);
+    }
+
+    /// A full mesh keeps its cubic net where its rows are only quadratic (an arch drawn by hand), so
+    /// the twist test still applies to it; the same map as an envelope is stored quadratic.
+    #[test]
+    fn a_full_mesh_is_cut_at_cubic_degree() {
+        let at = |u: f64, v: f64| [128.0 * u, 128.0 * v - 30.0 * 4.0 * u * (1.0 - u) * (1.0 - 2.0 * v)];
+        let full = net_of(&at, true);
+        assert_eq!((full.nu, full.nv), (4, 4));
+        let env = net_of(&at, false);
+        assert_eq!((env.nu, env.nv), (3, 2));
+    }
+
+    /// A full mesh starts as 2 × 2 cells: a flat one stays at four.
+    #[test]
+    fn a_flat_full_mesh_stays_at_four_cells() {
+        let at = |u: f64, v: f64| [10.0 + 100.0 * u, 20.0 + 50.0 * v];
+        let m = envelope_mesh(&at, true).expect("finite");
+        assert_eq!(m.quads.len(), 4);
+    }
+
+    /// The reference application's cells for a 128 px square with one handle (the top-left
+    /// corner's, along the top) dragged 40 px down, read from its coordinate probe: the far,
+    /// nearly flat quarter stays as two cells half wide and a quarter tall. A down split for
+    /// curvature carries along its row; a twist elsewhere on the level does not.
+    #[test]
+    fn a_full_mesh_splits_rows_not_levels() {
+        let mut p = [[0.0f64; 2]; 16];
+        for (k, q) in p.iter_mut().enumerate() {
+            *q = [128.0 * (k % 4) as f64 / 3.0, 128.0 * (k / 4) as f64 / 3.0];
+        }
+        p[1][1] = 40.0;
+        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
+        let at = |u: f64, v: f64| {
+            let (bu, bv) = (b(u), b(v));
+            let mut o = [0.0; 2];
+            for (j, wv) in bv.iter().enumerate() {
+                for (i, wu) in bu.iter().enumerate() {
+                    o[0] += wu * wv * p[j * 4 + i][0];
+                    o[1] += wu * wv * p[j * 4 + i][1];
+                }
+            }
+            o
+        };
+        let m = envelope_mesh(&at, true).expect("finite");
+        let mut far: Vec<[f64; 4]> = m
+            .quads
+            .iter()
+            .map(|&[tl, _, _, br]| [m.uv[tl][0], m.uv[br][0], m.uv[tl][1], m.uv[br][1]])
+            .filter(|c| c[0] >= 0.5 - 1e-9 && c[2] >= 0.5 - 1e-9)
+            .collect();
+        far.sort_by(|a, b| a[2].total_cmp(&b[2]));
+        assert_eq!(far, vec![[0.5, 1.0, 0.5, 0.75], [0.5, 1.0, 0.75, 1.0]]);
     }
 
     #[test]
@@ -558,6 +629,7 @@ mod tests {
 
     #[test]
     fn a_non_finite_map_is_refused() {
-        assert!(envelope_mesh(&|_, _| [f64::NAN, 0.0]).is_none());
+        assert!(envelope_mesh(&|_, _| [f64::NAN, 0.0], false).is_none());
+        assert!(envelope_mesh(&|_, _| [f64::NAN, 0.0], true).is_none());
     }
 }
