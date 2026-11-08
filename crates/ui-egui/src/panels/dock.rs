@@ -51,6 +51,8 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 },
             );
         }
+        // The dock became empty: a drag start from before this transition can never finish.
+        crate::panels::clear_dock_edge_drag(ui.ctx());
         crate::panel_docking::show_dock(app, ui);
         crate::dock::persist(app, ui.ctx());
         crate::color_panel_ui::persist(app);
@@ -61,7 +63,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let iconic = crate::panel_docking::dock_iconic_only(app);
     let min_visible = if iconic { 1.0 } else { min_dock };
     // An empty dock takes no width: the standard layout gives it 0 rather than a blank column.
-    let stored = if empty {
+    let mut stored = if empty {
         0.0
     } else {
         let width = crate::panel_docking::dock_width(app);
@@ -78,6 +80,9 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let dx = if crate::direction::is_rtl() { pointer - start_x } else { start_x - pointer };
         let final_w = (start_w + dx).clamp(min_visible + rw, max_dock + rw);
         crate::panel_docking::set_end_dock_total(app, (final_w - rw).clamp(min_visible, max_dock));
+        // This frame has no drag value any more: draw the panel at the width just stored, so the
+        // panel and toolbar match the release instead of the previous frame.
+        stored = final_w - rw;
         drag = None;
         ui.ctx().data_mut(|d| d.remove::<(f32, f32)>(drag_id));
     }

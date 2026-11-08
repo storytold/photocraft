@@ -1031,6 +1031,21 @@ fn dock_only_guard_restores_the_previous_flag_on_drop_and_unwind() {
     }));
     assert!(unwound.is_err());
     assert!(!DOCK_ONLY.with(|flag| flag.get()), "unwinding must restore the flag");
+
+    // A nested guard that finds the flag set restores true, rather than clearing it.
+    DOCK_ONLY.with(|flag| flag.set(true));
+    {
+        let previous = DOCK_ONLY.with(|flag| {
+            let previous = flag.get();
+            flag.set(true);
+            previous
+        });
+        let guard = DockOnlyGuard(previous);
+        assert!(DOCK_ONLY.with(|flag| flag.get()));
+        drop(guard);
+    }
+    assert!(DOCK_ONLY.with(|flag| flag.get()), "an inner guard must not clear a flag found set");
+    DOCK_ONLY.with(|flag| flag.set(false));
 }
 
 /// The toolbar lands on the requested physical side in every interface theme.
@@ -1237,6 +1252,40 @@ fn ui_set_dock_width_scales_every_column() {
     };
     assert!(widths.iter().all(|width| *width < 250.0), "every column is scaled below the total: {widths:?}");
     assert!(widths[1] < 180.0, "the second column must scale too: {widths:?}");
+}
+
+/// `ui.set {dockWidth}` travels through the queued request and the rendered dock pass, scaling a
+/// multi-column dock to the requested total.
+#[test]
+fn ui_set_dock_width_queues_and_scales_every_column_when_drawn() {
+    let mut app = app();
+    let mut layout = legacy(&app);
+    let used: std::collections::HashSet<String> = layout.panels().into_iter().map(|panel| panel.to_string()).collect();
+    let extra = PANELS.iter().map(|(id, _, _)| *id).find(|id| !used.contains(*id)).expect("a free panel id");
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
+    }
+    app.ui.docking = Some(Workspace::new(layout));
+    let mut h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::ProMedium);
+    crate::panels::request_dock_width(&h.ctx, 420.0);
+    h.run_steps(2);
+    let root = h.state().ui.docking.as_ref().expect("a workspace").layout.root.as_ref().expect("root");
+    let dock = match root {
+        Node::Split { second, .. } => second.as_ref(),
+        _ => root,
+    };
+    let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+    let widths: Vec<f32> = columns.iter().map(|column| column.width).collect();
+    assert_eq!(widths.len(), 2, "both columns are kept");
+    assert!(widths.iter().all(|width| *width > 0.0), "every column keeps a positive width: {widths:?}");
+    let total: f32 = widths.iter().sum();
+    assert!((total - 420.0).abs() < 1.0, "the queued request sets the whole dock to 420 points, got {total} from {widths:?}");
 }
 
 /// An empty dock must still run the docking pass, because Studio draws its floating Properties
