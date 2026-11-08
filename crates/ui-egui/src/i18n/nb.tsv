@@ -4493,7 +4493,7 @@ curves	Smooth	Jevn ut
 	The file could not be saved.	Filen kunne ikke lagres.
 	Thickness	Tykkelse
 	This Layer:	Dette laget:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Dette smartobjektet må rasteriseres før du fortsetter. Innholdet kan da ikke lenger redigeres. Rasterisere smartobjektet?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Dette smartobjektet må rasteriseres før du fortsetter. Innholdet kan da ikke lenger redigeres. Rasterisere smartobjektet?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Denne justeringen ({key}) beholdes som importert og kan ikke redigeres ennå.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Dette fyllaget må rasteriseres før du fortsetter. Fyllinnholdet kan da ikke lenger redigeres. Rasterisere laget?
 	This layer must be rasterized before proceeding.	Dette laget må rasteriseres før du fortsetter.
@@ -4813,6 +4813,7 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	Pick a different document for each channel.	Velg et annet dokument for hver kanal.
 	A picked document is no longer open.	Et av de valgte dokumentene er ikke lenger åpent.
 	A picked document is no longer a grayscale document of the same size.	Et av de valgte dokumentene er ikke lenger et dokument i gråtoner av samme størrelse.
+	Netscape Gray	Netscape-grå
 # Move tool options bar (#11381)
 	Align top edges	Juster øverste kanter
 	Align vertical centers	Juster loddrette midtpunkter

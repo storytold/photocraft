@@ -675,6 +675,7 @@ cameraRaw	Yellow	पीला
 	Pick a different document for each channel.	हर चैनल के लिए अलग डॉक्यूमेंट चुनें।
 	A picked document is no longer open.	चुना गया एक डॉक्यूमेंट अब खुला नहीं है।
 	A picked document is no longer a grayscale document of the same size.	चुना गया एक डॉक्यूमेंट अब उसी आकार का ग्रेस्केल डॉक्यूमेंट नहीं है।
+	Netscape Gray	Netscape धूसर
 # Move tool options bar (#11381)
 	Align top edges	ऊपरी किनारे संरेखित करें
 	Align vertical centers	ऊर्ध्वाधर केंद्र संरेखित करें

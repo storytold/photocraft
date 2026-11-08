@@ -276,8 +276,10 @@ use tools::align_bar;
 pub use tools::analysis_ui;
 pub use tools::anchor_tools;
 pub use tools::artboard_tool;
+pub use tools::bg_eraser_popup;
 pub(crate) use tools::brush_cursor;
 pub use tools::brush_picker;
+pub use tools::brush_refusal;
 pub use tools::brush_resize;
 use tools::cam_transform;
 pub use tools::cas_transform;
@@ -775,9 +777,13 @@ impl SyntheticTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod background_eraser_tolerance_field_tests;
+#[cfg(test)]
 mod brush_options_tooltips_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
+#[cfg(test)]
+mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod shape_bounds_box_tests;
 
@@ -864,6 +870,9 @@ mod transform_reference_point_tests;
 
 #[cfg(test)]
 mod transform_relative_position_tests;
+
+#[cfg(test)]
+mod star_tool_tests;
 
 #[cfg(test)]
 mod transform_several_tests;
@@ -980,6 +989,8 @@ mod status_bar_tests;
 mod stroke_timing_tests;
 
 #[cfg(test)]
+mod patch_tool_history_names_tests;
+#[cfg(test)]
 mod polygon_lasso_step_snap_tests;
 #[cfg(test)]
 mod polygon_lasso_tests;
@@ -1007,12 +1018,19 @@ mod pen_path_ownership_tests;
 #[cfg(test)]
 mod artboard_options_bar_tests;
 #[cfg(test)]
+mod brush_opacity_minimum_tests;
+#[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
 mod layers_empty_area_menu_tests;
+#[cfg(test)]
+mod pencil_auto_erase_tooltip_tests;
 #[cfg(test)]
 mod preferences_submenu_tests;
 #[cfg(test)]
 mod selection_move_step_tests;
 #[cfg(test)]
 mod view_guides_submenu_tests;
+
+#[cfg(test)]
+mod background_eraser_digit_keys_tests;

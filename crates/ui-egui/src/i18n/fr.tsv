@@ -4333,7 +4333,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The file could not be saved.	Impossible d'enregistrer le fichier.
 	Thickness	Épaisseur
 	This Layer:	Ce calque :
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Cet objet intelligent doit être rastérisé pour continuer. Son contenu ne sera plus modifiable. Rastériser l'objet intelligent ?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Cet objet intelligent doit être rastérisé pour continuer. Son contenu ne sera plus modifiable. Rastériser l'objet intelligent ?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Cet ajustement ({key}) est conservé tel qu'il a été importé et ne peut pas encore être modifié.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Ce calque de remplissage doit être rastérisé pour continuer. Son contenu de remplissage ne sera plus modifiable. Rastériser le calque ?
 	This layer must be rasterized before proceeding.	Ce calque doit être rastérisé pour continuer.
@@ -4629,6 +4629,7 @@ shape	Appearance	Apparence
 	Pick a different document for each channel.	Choisissez un document différent pour chaque canal.
 	A picked document is no longer open.	Un des documents choisis n'est plus ouvert.
 	A picked document is no longer a grayscale document of the same size.	Un des documents choisis n'est plus un document en niveaux de gris de même taille.
+	Netscape Gray	Gris Netscape
 # Move tool options bar (#11381)
 	Align top edges	Aligner les bords supérieurs
 	Align vertical centers	Aligner les centres verticaux

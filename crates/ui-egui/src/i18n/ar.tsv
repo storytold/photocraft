@@ -3601,6 +3601,7 @@ curves	Smooth	تنعيم
 	Pick a different document for each channel.	اختر مستندًا مختلفًا لكل قناة.
 	A picked document is no longer open.	أحد المستندات المختارة لم يعد مفتوحًا.
 	A picked document is no longer a grayscale document of the same size.	أحد المستندات المختارة لم يعد مستندًا بتدرج الرمادي بالحجم نفسه.
+	Netscape Gray	رمادي Netscape
 # Move tool options bar (#11381)
 	Align top edges	محاذاة الحواف العلوية
 	Align vertical centers	محاذاة المراكز الرأسية

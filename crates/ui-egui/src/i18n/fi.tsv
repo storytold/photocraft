@@ -4494,7 +4494,7 @@ curves	Smooth	Tasoita
 	The file could not be saved.	Tiedostoa ei voitu tallentaa.
 	Thickness	Paksuus
 	This Layer:	Tämä taso:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Tämä älykäs objekti on rasteroitava ennen jatkamista. Sen sisältöä ei voi enää muokata. Rasteroidaanko älykäs objekti?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Tämä älykäs objekti on rasteroitava ennen jatkamista. Sen sisältöä ei voi enää muokata. Rasteroidaanko älykäs objekti?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Tämä säätö ({key}) säilytetään tuotuna, eikä sitä voi vielä muokata.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Tämä täyttötaso on rasteroitava ennen jatkamista. Sen täyttösisältöä ei voi enää muokata. Rasteroidaanko taso?
 	This layer must be rasterized before proceeding.	Tämä taso on rasteroitava ennen jatkamista.
@@ -4814,6 +4814,7 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Pick a different document for each channel.	Valitse jokaiselle kanavalle eri asiakirja.
 	A picked document is no longer open.	Yksi valituista asiakirjoista ei ole enää auki.
 	A picked document is no longer a grayscale document of the same size.	Yksi valituista asiakirjoista ei ole enää samankokoinen harmaasävyasiakirja.
+	Netscape Gray	Netscape-harmaa
 # Move tool options bar (#11381)
 	Align top edges	Tasaa yläreunat
 	Align vertical centers	Tasaa pystykeskikohdat
