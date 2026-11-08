@@ -276,6 +276,7 @@ use tools::align_bar;
 pub use tools::analysis_ui;
 pub use tools::anchor_tools;
 pub use tools::artboard_tool;
+pub use tools::bg_eraser_popup;
 pub(crate) use tools::brush_cursor;
 pub use tools::brush_picker;
 pub use tools::brush_resize;
