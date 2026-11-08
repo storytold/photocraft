@@ -397,3 +397,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod patch_history_names_tests;
