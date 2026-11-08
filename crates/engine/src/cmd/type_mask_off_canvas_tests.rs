@@ -192,8 +192,9 @@ fn replace_and_intersect_drop_an_off_canvas_previous_selection() {
     }
 }
 
-/// Adding to an unusual earlier selection (not 8-bit grey) keeps its format; when its buffers over
-/// the text can't be had, that's an error that changes nothing, not an abort.
+/// Adding to an unusual earlier selection (not 8-bit grey) keeps its format; when the buffers that
+/// combining makes over the text can't be had, for any selection, that's an error that changes
+/// nothing, not an abort.
 #[test]
 fn an_unusual_earlier_selection_keeps_its_format_or_fails_cleanly() {
     use photocraft_color::{PixelFormat, SampleType};
@@ -218,10 +219,15 @@ fn an_unusual_earlier_selection_keeps_its_format_or_fails_cleanly() {
     assert_eq!(now.format(), format);
     assert_eq!(now.read_region(earlier), old.read_region(earlier), "the earlier part stays, past the canvas too");
 
-    // The third attempt is that check: an 8-bit grey earlier selection needs none, so the same
-    // failure point is never reached and the mask goes through.
-    let mut s = session(600, 400);
-    s.execute("select.rect", json!({"x": 10, "y": 50, "width": 100, "height": 70})).unwrap();
-    crate::allocation::fail_after_for_test(2);
-    s.execute(super::CMD, text).unwrap();
+    // An 8-bit grey earlier selection, in every mode, gets the same check for its new tiles.
+    for operation in ["add", "subtract", "new", "intersect"] {
+        let mut s = session(600, 400);
+        s.execute("select.rect", json!({"x": 10, "y": 50, "width": 100, "height": 70})).unwrap();
+        let (before, steps) = (selection(&s), s.active().unwrap().history.entries().len());
+        crate::allocation::fail_after_for_test(2);
+        let err = s.execute(super::CMD, json!({"text": "I", "x": 400, "y": 300, "size": 48, "operation": operation})).unwrap_err().to_string();
+        assert!(err.contains("not enough memory for the Type Mask selection"), "{operation}: {err}");
+        assert_eq!(selection(&s), before, "{operation}: unchanged");
+        assert_eq!(s.active().unwrap().history.entries().len(), steps, "{operation}: no history step");
+    }
 }
