@@ -46,8 +46,11 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     {
         authorize(id, &params)?;
     }
-    // A held Type box handle applies its box before anything but a view command runs.
-    if !super::UI_COMMANDS.iter().any(|c| c.0 == id) {
+    // A held Type box handle applies its box before any command that may read the document runs.
+    // `UI_COMMANDS` is every command the shell carries out itself, not only view ones: it holds
+    // `edit.freeTransform` and `file.save`, which must see the dragged box. So only commands that
+    // cannot read the layer (view, window and help ones) leave the drag going.
+    if !["view.", "window.", "help."].iter().any(|prefix| id.starts_with(prefix)) {
         crate::type_box_preview::end_drag(app);
     }
     if crate::discard_ui::intercept(app, id, &params) {

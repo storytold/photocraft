@@ -1025,8 +1025,11 @@ fn box_size(t: &TextLayer) -> (f32, f32) {
 fn a_huge_box_keeps_a_finite_size() {
     let mut s = session();
     let id = s.execute("type.create", json!({"text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    // Ok or a clean error are both fine; a panic is not.
-    let _ = s.execute("type.edit", json!({"layer": id, "box": [0, 0, 1e300, 1e300]}));
+    // Ok or a clean error are both fine; a panic is not. On success the box must have been applied.
+    let result = s.execute("type.edit", json!({"layer": id, "box": [0, 0, 1e300, 1e300]}));
+    if result.is_ok() {
+        assert!(matches!(text_layer(&s, id).shape, TextShape::Box { .. }), "a successful box edit makes a box");
+    }
     if let TextShape::Box { .. } = text_layer(&s, id).shape {
         let (w, h) = box_size(&text_layer(&s, id));
         assert!(w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0, "{w} x {h}");

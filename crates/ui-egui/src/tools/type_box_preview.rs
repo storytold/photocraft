@@ -708,6 +708,23 @@ mod tests {
         assert!(sync.ui.text_edit.as_ref().unwrap().resize.is_some(), "a sync drag is left going");
     }
 
+    /// `edit.freeTransform` is a shell command (in `UI_COMMANDS`), yet it captures the document,
+    /// so it must see the dragged box like any other command does.
+    #[test]
+    fn free_transform_mid_drag_sees_the_dragged_box() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        let ctx = egui::Context::default();
+        press(&mut app);
+        to(&mut app, 560.0);
+        assert_eq!(height(&session_layer(&app, id)), 180.0, "not applied yet");
+        // Whether Free Transform opens here does not matter: the box is applied before it runs.
+        let _ = crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({}));
+        assert_eq!(height(&session_layer(&app, id)), 260.0, "applied before Free Transform captured the document");
+        assert!(app.type_box_preview.is_none());
+        assert!(app.ui.text_edit.as_ref().is_none_or(|e| e.resize.is_none() && !e.dragging));
+    }
+
     #[test]
     fn a_stale_preview_ends_the_drag_instead_of_applying_the_press_time_box() {
         let (mut app, id) = app_with_box();
