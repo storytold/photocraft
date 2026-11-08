@@ -76,7 +76,8 @@ fn text_field_in(
     char_limit: Option<usize>,
 ) -> (Response, Rect) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::hover());
+    // CLICK without FOCUSABLE: the box adds no Tab stop of its own (#12302).
+    let (rect, frame) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::CLICK);
     surface(ui, rect, t.field, false);
     if !t.bevel {
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
@@ -111,6 +112,10 @@ fn text_field_in(
     child.spacing_mut().interact_size.y = inner.height();
     child.style_mut().visuals.selection.bg_fill = t.field_selection();
     let response = child.add(edit);
+    // A click in the padding the editor doesn't cover focuses it, as a click inside does.
+    if frame.clicked() {
+        response.request_focus();
+    }
     if let Some(b) = bounded
         && response.changed()
     {

@@ -316,6 +316,47 @@ fn text_field_caps_a_huge_paste() {
     assert_eq!(h.state().chars().count(), super::TEXT_FIELD_LIMIT);
 }
 
+/// #12302: a click in the box's padding, on any side, focuses the editor; a click inside it
+/// still places the cursor where it lands.
+#[test]
+fn text_field_padding_click_focuses_the_editor() {
+    use egui::accesskit::Role;
+    let id = egui::Id::unique("tf");
+    let mut h = Harness::new_ui_state(move |ui, s: &mut String| drop(super::text_field(ui, id, s, "Value", 140.0, false)), "abcdefghij".to_string());
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run();
+    let editor = h.get_by_role(Role::TextInput).rect();
+    let c = editor.center();
+    // The outer half point of the 6 pt side padding: past egui's 5 pt interact radius around the editor.
+    let pads = [
+        ("left", egui::pos2(editor.min.x - 5.5, c.y)),
+        ("right", egui::pos2(editor.max.x + 5.5, c.y)),
+        ("top", egui::pos2(c.x, editor.min.y - 1.5)),
+        ("bottom", egui::pos2(c.x, editor.max.y + 1.5)),
+    ];
+    for (side, pos) in pads {
+        h.ctx.memory_mut(|m| m.surrender_focus(id));
+        h.run();
+        h.event(egui::Event::PointerMoved(pos));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run();
+        }
+        assert!(h.ctx.memory(|m| m.has_focus(id)), "a click in the {side} padding focuses the editor");
+    }
+    h.ctx.memory_mut(|m| m.surrender_focus(id));
+    h.run();
+    let pos = egui::pos2(editor.min.x + 1.0, c.y);
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run();
+    }
+    assert!(h.ctx.memory(|m| m.has_focus(id)));
+    let cursor = egui::text_edit::TextEditState::load(&h.ctx, id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index);
+    assert_eq!(cursor, Some(egui::text::CharIndex(0)), "a click at the editor's left edge puts the cursor before the first letter");
+}
+
 /// #2150: a value already past the limit is laid out only up to it, and stays the caller's
 /// until the field is edited, which keeps the bounded copy.
 #[test]
