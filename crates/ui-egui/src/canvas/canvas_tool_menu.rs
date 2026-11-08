@@ -51,6 +51,15 @@ pub struct CanvasToolMenu {
     /// the menu is the selected tool's own.
     #[serde(default)]
     pub over: Option<Tool>,
+    /// The Color Sampler menu's sampler: the one under the pointer when it opened (its index),
+    /// `None` off a sampler, where every row is greyed.
+    #[serde(default)]
+    pub sampler: Option<usize>,
+    /// Where that sampler was when the menu opened: the active document's index and the sampler's
+    /// position. Once a control command deletes, moves or renumbers samplers, or another document
+    /// becomes active, the index may name a different sampler, so the menu closes and Delete greys.
+    #[serde(default)]
+    pub sampler_at: Option<(usize, [f64; 2])>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -309,6 +318,8 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         spelling: None,
         crop: Some(users),
         over: None,
+        sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -451,7 +462,50 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
 
-/// Tools whose plain canvas right-click offers selection actions.
+/// The Color Sampler menu's Delete row: removes the sampler the menu opened on.
+pub const SAMPLER_DELETE: &str = "view.colorSamplers.delete";
+
+/// The Color Sampler's canvas menu (#11733), in the reference application's order: Delete, then
+/// the readout modes for the sampler under the pointer. The readout rows are this menu's own ids
+/// and stay greyed until samplers have their own readout mode.
+pub const SAMPLER_MENU: &[Row] = &[
+    Some(("Delete", SAMPLER_DELETE)),
+    None,
+    Some(("Actual Color", "colorSampler.readout.actual")),
+    Some(("Proof Color", "colorSampler.readout.proof")),
+    None,
+    Some(("Grayscale", "colorSampler.readout.gray")),
+    Some(("RGB Color", "colorSampler.readout.rgb")),
+    Some(("Web Color", "colorSampler.readout.web")),
+    Some(("HSB Color", "colorSampler.readout.hsb")),
+    Some(("HSL Color", "colorSampler.readout.hsl")),
+    Some(("CMYK Color", "colorSampler.readout.cmyk")),
+    Some(("Lab Color", "colorSampler.readout.lab")),
+    None,
+    Some(("Grayscale 16 bit", "colorSampler.readout.gray16")),
+    Some(("RGB 16 bit", "colorSampler.readout.rgb16")),
+    Some(("CMYK 16 bit", "colorSampler.readout.cmyk16")),
+    Some(("Lab 16 bit", "colorSampler.readout.lab16")),
+    None,
+    Some(("Total Ink", "colorSampler.readout.totalInk")),
+];
+
+/// Does the Color Sampler menu's index still name the sampler it opened on, in the same document?
+/// `true` off a sampler, where there is nothing to go stale.
+fn sampler_current(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    let Some(i) = menu.sampler else { return true };
+    let now = app.session.active_index().zip(app.session.active().and_then(|d| d.color_samplers.get(i).copied()));
+    now.is_some() && now == menu.sampler_at
+}
+
+/// Is `menu` the Color Sampler's own menu (not the pasteboard, guide or transform menu opened
+/// with it)?
+fn sampler_menu(menu: &CanvasToolMenu) -> bool {
+    menu.tool == Tool::ColorSampler && !menu.transform && !menu.pasteboard && !menu.guide && menu.crop.is_none() && menu.anchor.is_none()
+}
+
+/// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the path
+/// menu and the Color Sampler's.
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -467,6 +521,7 @@ pub fn applies(tool: Tool) -> bool {
             // Its brush is set from the options bar's chip; the canvas right-click is the
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
+            | Tool::ColorSampler
     ) || path_menu(tool)
 }
 
@@ -516,6 +571,8 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         TYPE_LAYER_MENU
     } else if path_menu(menu.tool) {
         PEN_MENU
+    } else if sampler_menu(menu) {
+        SAMPLER_MENU
     } else {
         selection_rows(menu.has_selection)
     }
@@ -656,6 +713,8 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         spelling: None,
         crop: None,
         over: None,
+        sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -680,6 +739,9 @@ pub fn engine_call(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) ->
             GUIDE_CLEAR => ("view.deleteGuide".into(), selected.map_or(json!({}), |(v, i)| crate::guide_select::delete_params(v, i))),
             _ => (command.into(), json!({})),
         };
+    }
+    if sampler_menu(menu) {
+        return (command.into(), menu.sampler.map_or(json!({}), |i| json!({"index": i})));
     }
     match pasteboard_choice(command) {
         Some(c) if menu.pasteboard => ("prefs.set".into(), json!({"values": {"interface.canvasColor": c.name()}})),
@@ -737,6 +799,8 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         // Space's Hand keeps the menu over the selected tool (#11271); a held zoom key's goes with
         // the key, as before.
         over: (tool == Tool::Hand && tool != app.ui.tool).then_some(app.ui.tool),
+        sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -769,6 +833,8 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         spelling: None,
         crop: None,
         over: None,
+        sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -820,6 +886,10 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     }
     if menu.type_layer {
         return TYPE_LAYER_MENU.iter().flatten().any(|(_, id)| *id == command) && crate::menus::is_enabled(app, command);
+    }
+    // Off a sampler every row is greyed. The readout rows wait for per-sampler readout modes.
+    if sampler_menu(menu) {
+        return command == SAMPLER_DELETE && menu.sampler.is_some() && sampler_current(app, menu);
     }
     if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
@@ -881,6 +951,8 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
+    let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
+    let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
         tool,
@@ -896,6 +968,8 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         spelling,
         crop: None,
         over: None,
+        sampler,
+        sampler_at,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -924,6 +998,8 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         spelling: None,
         crop: None,
         over: (tool != app.ui.tool).then_some(app.ui.tool),
+        sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -977,6 +1053,9 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         choose_type(app, ctx, command)
     } else if path_menu(menu.tool) && !menu.transform {
         choose_pen(app, ctx, &menu, command)
+    } else if sampler_menu(&menu) {
+        let (id, params) = engine_call(app, &menu, command);
+        app.run(&id, params).map(|_| ())
     } else if command == "select.toWorkPath" {
         // Photoshop's Make Work Path… asks for the tolerance first.
         spec_dialog(app, command, "Make Work Path", r##"{"tolerance":0.5..10=2}"##, serde_json::Map::new());
@@ -1168,6 +1247,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         || (menu.text && app.ui.text_edit.is_none())
         || (menu.type_layer && app.ui.text_edit.is_some())
         || (menu.crop.is_some() && !crate::crop_ui::pending(app))
+        || (sampler_menu(&menu) && !sampler_current(app, &menu))
     {
         app.ui.canvas_tool_menu = None;
         return;
