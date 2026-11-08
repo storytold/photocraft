@@ -133,8 +133,9 @@ impl DetailPreview {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 develop(&source, raw_curve.as_deref().map(Vec::as_slice), raw.as_ref(), area, &params, &coverage)
             }))
-            .map(|surface| (revision, surface))
-            .map_err(|_| "Camera Raw detail preview failed; the proxy remains available".into());
+            .map_err(|_| "Camera Raw detail preview failed; the proxy remains available".to_string())
+            .and_then(|developed| developed)
+            .map(|surface| (revision, surface));
             if !cancel.load(Ordering::Relaxed) {
                 let _ = tx.send(result);
                 ctx.request_repaint();
@@ -338,8 +339,27 @@ fn with_pixels(source: &Surface, area: PixelRect, px: impl Fn(usize) -> [f32; 4]
     out
 }
 
-/// The open-time dialog's raw file and the demosaic method the document was developed with.
-pub(crate) type RawDetail = (Arc<photocraft_io::raw::RawSource>, photocraft_io::raw::Demosaic);
+/// The open-time dialog's raw file, the demosaic method the document was developed with, and the
+/// conversion from the develop's ProPhoto RGB to the document's profile when the Color Settings
+/// open policy converted it (`None`: the document keeps the develop's colours).
+#[derive(Clone)]
+pub(crate) struct RawDetail {
+    pub(crate) source: Arc<photocraft_io::raw::RawSource>,
+    pub(crate) demosaic: photocraft_io::raw::Demosaic,
+    pub(crate) to_document: Option<Arc<photocraft_cms::Transform>>,
+}
+
+impl RawDetail {
+    /// A develop's 16-bit RGB as straight RGBA in the document's colours.
+    pub(crate) fn document_pixels(&self, rgb: &[u16]) -> Vec<[f32; 4]> {
+        let mut px: Vec<[f32; 4]> =
+            rgb.as_chunks::<3>().0.iter().map(|p| [f32::from(p[0]) / 65535.0, f32::from(p[1]) / 65535.0, f32::from(p[2]) / 65535.0, 1.0]).collect();
+        if let Some(t) = &self.to_document {
+            t.apply(px.as_flattened_mut(), 4);
+        }
+        px
+    }
+}
 
 /// The full-size result of `params` over `area`. For a raw being opened (`raw`), the raw-stage
 /// settings (Temperature, Tint, Exposure, Shadows, Highlights, Clarity, Texture, Dehaze) are
@@ -348,21 +368,31 @@ pub(crate) type RawDetail = (Arc<photocraft_io::raw::RawSource>, photocraft_io::
 /// Without the sensor data but with the raw's tone `curve`, the raw-stage sliders retone the
 /// developed pixels ([`photocraft_io::raw::retone`]), which differs from Open in the deepest
 /// shadows, as `retone` documents.
-fn develop(source: &Surface, curve: Option<&[[f32; 2]]>, raw: Option<&RawDetail>, area: PixelRect, params: &CameraRaw, coverage: &Coverage) -> Surface {
+fn develop(
+    source: &Surface,
+    curve: Option<&[[f32; 2]]>,
+    raw: Option<&RawDetail>,
+    area: PixelRect,
+    params: &CameraRaw,
+    coverage: &Coverage,
+) -> Result<Surface, String> {
     let (w, h) = (area.width() as usize, area.height() as usize);
-    let developed = raw.and_then(|(raw, demosaic)| {
-        let tuning = crate::camera_raw_ui::raw_tuning(params, *demosaic);
-        let as_opened = photocraft_io::raw::RawTuning { demosaic: *demosaic, ..Default::default() };
-        if tuning == as_opened {
-            return None;
+    let mut developed = None;
+    if let Some(raw) = raw {
+        let tuning = crate::camera_raw_ui::raw_tuning(params, raw.demosaic);
+        let as_opened = photocraft_io::raw::RawTuning { demosaic: raw.demosaic, ..Default::default() };
+        if tuning != as_opened {
+            // A develop that fails (out of memory for the frame, say) is reported: Open would
+            // fail the same way, and the retone would show something else.
+            let dev = raw.source.develop_full(&tuning).map_err(|e| format!("Full-resolution raw develop failed: {e}"))?;
+            // A frame of another size (a canvas changed since) keeps the retone.
+            if (dev.width, dev.height) == (w, h) {
+                let px = raw.document_pixels(&dev.rgb);
+                let surface = with_pixels(source, area, |i| px.get(i).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]));
+                developed = Some((surface, crate::camera_raw_ui::after_raw_stage(params, dev.white_balance)));
+            }
         }
-        let dev = raw.develop_full(&tuning).ok().filter(|d| (d.width, d.height) == (w, h))?;
-        let px = |i: usize| match dev.rgb.get(i * 3..i * 3 + 3) {
-            Some(p) => [f32::from(p[0]) / 65535.0, f32::from(p[1]) / 65535.0, f32::from(p[2]) / 65535.0, 1.0],
-            None => [0.0, 0.0, 0.0, 1.0],
-        };
-        Some((with_pixels(source, area, px), crate::camera_raw_ui::after_raw_stage(params, dev.white_balance)))
-    });
+    }
     let tone = photocraft_io::raw::Tone {
         shadows: params.shadows,
         highlights: params.highlights,
@@ -385,7 +415,7 @@ fn develop(source: &Surface, curve: Option<&[[f32; 2]]>, raw: Option<&RawDetail>
     let base = retoned.as_ref().unwrap_or(source);
     let mut result = photocraft_engine::lens_cmds::camera_raw_surface(base, area, &params);
     if matches!(coverage, Coverage::None) {
-        return result;
+        return Ok(result);
     }
     let width = area.width() as usize;
     let channels = source.channels();
@@ -409,7 +439,7 @@ fn develop(source: &Surface, curve: Option<&[[f32; 2]]>, raw: Option<&RawDetail>
         }
         result.write_region(rect, &row);
     }
-    result
+    Ok(result)
 }
 
 fn visible_pixels(image: Rect, viewport: Rect, area: PixelRect, max_side: usize) -> Option<PixelRect> {
@@ -494,9 +524,9 @@ mod tests {
         source.write_region(area, &values);
         let params = CameraRaw { exposure: 0.5, texture: 15.0, grain_amount: 30.0, ..Default::default() };
         let expected = photocraft_engine::lens_cmds::camera_raw_surface(&source, area, &params);
-        assert_eq!(develop(&source, None, None, area, &params, &Coverage::None), expected);
+        assert_eq!(develop(&source, None, None, area, &params, &Coverage::None).unwrap(), expected);
         let mask = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
-        assert_eq!(develop(&source, None, None, area, &params, &Coverage::Selection(mask)), source);
+        assert_eq!(develop(&source, None, None, area, &params, &Coverage::Selection(mask)).unwrap(), source);
     }
     #[test]
     fn a_raw_open_refines_raw_stage_sliders_from_the_whole_frame() {
@@ -512,7 +542,7 @@ mod tests {
         source.write_region(area, &values);
         let curve = [[0.01, 0.01], [0.05, 0.12], [0.3, 0.6], [1.0, 1.0]];
         let params = CameraRaw { shadows: 80.0, exposure: 0.25, ..Default::default() };
-        let refined = develop(&source, Some(&curve), None, area, &params, &Coverage::None);
+        let refined = develop(&source, Some(&curve), None, area, &params, &Coverage::None).unwrap();
         let mut px = vec![[0.0f32; 4]; 96 * 64];
         source.read_rgba_into(area, &mut px);
         let tone = photocraft_io::raw::Tone { shadows: 80.0, ..Default::default() };
@@ -531,7 +561,7 @@ mod tests {
             retoned.rgba(10, 30)
         );
         // Without a raw curve Shadows is the filter's.
-        let filter = develop(&source, None, None, area, &params, &Coverage::None);
+        let filter = develop(&source, None, None, area, &params, &Coverage::None).unwrap();
         assert_eq!(filter, photocraft_engine::lens_cmds::camera_raw_surface(&source, area, &params));
     }
 
@@ -549,14 +579,14 @@ mod tests {
         let source = surface(&photocraft_io::raw::import_raw("bright.dng", &bytes).unwrap());
         let area = PixelRect::new(0, 0, w as i32, h as i32);
         let demosaic = photocraft_io::raw::Demosaic::default();
-        let raw: RawDetail = (Arc::new(photocraft_io::raw::RawSource::new(&bytes, 1).unwrap()), demosaic);
+        let raw = RawDetail { source: Arc::new(photocraft_io::raw::RawSource::new(&bytes, 1).unwrap()), demosaic, to_document: None };
         let params = CameraRaw { exposure: -4.0, contrast: 20.0, encoding_gamma: 1.8, ..Default::default() };
-        let got = develop(&source, Some(raw.0.tone_curve()), Some(&raw), area, &params, &Coverage::None);
+        let got = develop(&source, Some(raw.source.tone_curve()), Some(&raw), area, &params, &Coverage::None).unwrap();
         let tuning = crate::camera_raw_ui::raw_tuning(&params, demosaic);
         let (open, wb) = photocraft_io::raw::import_raw_tuned("bright.dng", &bytes, &tuning).unwrap();
         let rest = crate::camera_raw_ui::after_raw_stage(&params, wb);
         let expected = photocraft_engine::lens_cmds::camera_raw_surface(&surface(&open), area, &rest);
-        let old = develop(&source, Some(raw.0.tone_curve()), None, area, &params, &Coverage::None);
+        let old = develop(&source, Some(raw.source.tone_curve()), None, area, &params, &Coverage::None).unwrap();
         let (mut worst, mut old_worst) = (0.0f32, 0.0f32);
         for y in 0..h as i32 {
             for x in 0..w as i32 {
@@ -571,7 +601,10 @@ mod tests {
         assert!(old_worst > 0.03, "the default develop darkened is not what Open makes: {old_worst}");
         // At the settings it was opened with, the document's own pixels are shown.
         let neutral = CameraRaw { contrast: 20.0, encoding_gamma: 1.8, ..Default::default() };
-        assert_eq!(develop(&source, None, Some(&raw), area, &neutral, &Coverage::None), develop(&source, None, None, area, &neutral, &Coverage::None));
+        assert_eq!(
+            develop(&source, None, Some(&raw), area, &neutral, &Coverage::None).unwrap(),
+            develop(&source, None, None, area, &neutral, &Coverage::None).unwrap()
+        );
     }
 
     #[test]
@@ -613,7 +646,7 @@ mod tests {
                 }
                 source.write_region(area, &pixels);
                 let params = CameraRaw { exposure: 0.5, sharpen_amount: 20.0, grain_amount: 30.0, ..Default::default() };
-                let full = develop(&source, None, None, area, &params, &Coverage::None);
+                let full = develop(&source, None, None, area, &params, &Coverage::None).unwrap();
                 let expected = photocraft_engine::lens_cmds::camera_raw_surface(&source, area, &params);
                 assert_eq!(full, expected);
                 let mut preview = DetailPreview::new(source, area, Coverage::None);
