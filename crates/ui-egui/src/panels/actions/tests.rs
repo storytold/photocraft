@@ -119,6 +119,50 @@ fn stale_same_caption_selection_does_not_follow_a_compacted_slot() {
     assert!(duplicate_selection(&mut app).is_err());
 }
 
+/// The selected path and held replacement bytes need current authorization.
+#[test]
+fn replace_picker_checks_selected_source_and_rechecks_payload_on_confirm() {
+    use crate::file_dialog::{FileDialogAnswer, fake};
+    use std::{cell::Cell, rc::Rc};
+    let (file_dialog, _) = fake(vec![
+        Some(FileDialogAnswer::Paths(vec!["blocked-actions.atn".into()])),
+        Some(FileDialogAnswer::Contents("replacement.atn".into(), action_set_bytes("Replacement", "Invert"))),
+    ]);
+    let permit_data = Rc::new(Cell::new(true));
+    let policy = Rc::clone(&permit_data);
+    let automation_command = Box::new(move |id: &str, p: &Value| -> Result<(), String> {
+        if id != "actions.replace" {
+            return Ok(());
+        }
+        if p.get("path").is_some() {
+            return Err("path denied by policy".into());
+        }
+        if p.get("data").is_some() && policy.get() { Ok(()) } else { Err("payload denied by policy".into()) }
+    });
+    let mut app = PhotocraftApp::new(
+        photocraft_engine::Session::new(),
+        crate::Services { file_dialog: Some(file_dialog), automation_command: Some(automation_command), ..Default::default() },
+    );
+    app.run("actions.newSet", json!({"name":"Keep"})).unwrap();
+    let ctx = egui::Context::default();
+    for attempt in 0..2 {
+        app.automation_input = true;
+        assert!(library::open(&mut app, library::Kind::Replace).is_ok());
+        app.automation_input = false;
+        app.poll_file_dialog(&ctx, None);
+        app.poll_file_dialog(&ctx, None);
+        if attempt == 0 {
+            assert!(app.ui.status.contains("path denied by policy"), "{}", app.ui.status);
+            assert!(app.held_actions_library.is_none());
+        }
+    }
+    let dialog = app.ui.dialogs.iter().find(|dialog| library::owns(&dialog.fields)).unwrap().id;
+    permit_data.set(false);
+    assert!(crate::dialogs::confirm(&mut app, dialog).is_err());
+    assert_eq!(app.session.actions.sets, ["Keep"]);
+    assert!(app.session.actions.set_rows.is_empty());
+}
+
 #[test]
 fn replace_picker_holds_validated_bytes_until_confirmed() {
     use crate::file_dialog::{FileDialogAnswer, fake};
