@@ -82,3 +82,32 @@ fn the_cursor_is_the_os_arrow_with_its_badge() {
         assert!(texts.iter().any(|t| t == label), "badge {label} drawn: {texts:?}");
     }
 }
+
+#[test]
+fn the_badge_halo_surrounds_the_digits_on_all_eight_sides() {
+    // White copies one point off in every direction, diagonals too, so the dark digits read on
+    // dark and busy pixels.
+    let ctx = egui::Context::default();
+    let mut o = ctx.run_ui(egui::RawInput::default(), |ui| {
+        count(ui.ctx(), egui::pos2(100.0, 60.0), CountCursor::Add);
+    });
+    o.textures_delta.clear();
+    let texts: Vec<(egui::Pos2, egui::Color32)> = o
+        .shapes
+        .into_iter()
+        .filter_map(|c| match c.shape {
+            egui::Shape::Text(t) => Some((t.pos, t.fallback_color)),
+            _ => None,
+        })
+        .collect();
+    let digits = texts.iter().find(|(_, c)| *c == egui::Color32::BLACK).expect("the dark digits").0;
+    for dx in [-1.0, 0.0, 1.0] {
+        for dy in [-1.0, 0.0, 1.0] {
+            if (dx, dy) == (0.0, 0.0) {
+                continue;
+            }
+            let want = digits + egui::vec2(dx, dy);
+            assert!(texts.iter().any(|&(p, c)| c == egui::Color32::WHITE && p == want), "a halo copy at {dx},{dy}: {texts:?}");
+        }
+    }
+}

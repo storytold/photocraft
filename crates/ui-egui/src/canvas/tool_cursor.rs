@@ -123,7 +123,8 @@ pub(crate) fn count(ctx: &egui::Context, at: Pos2, kind: CountCursor) -> CursorI
     // would be invisible on the frame it first appears.
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-count-cursor")));
     let font = egui::FontId::proportional(11.0);
-    for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+    // The halo: a white copy one point off on every side, diagonals too.
+    for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
         painter.text(pos + vec2(dx, dy), egui::Align2::LEFT_TOP, kind.label(), font.clone(), egui::Color32::WHITE);
     }
     painter.text(pos, egui::Align2::LEFT_TOP, kind.label(), font, egui::Color32::BLACK);
