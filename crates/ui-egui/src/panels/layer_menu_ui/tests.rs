@@ -56,7 +56,11 @@ fn mask_toggle_context_menu_follows_the_clicked_layer_and_existing_translations(
     use egui_kittest::{Harness, kittest::Queryable};
 
     for language in ["en", "fr"] {
-        let lang = crate::i18n::Lang::from_pref(language);
+        // English runs in every build; French needs the craft-i18n catalogs.
+        if language != "en" && !crate::i18n::needs_catalogs() {
+            continue;
+        }
+        let lang = crate::i18n::Lang::from_code(language).expect("registered language");
         let _language = crate::i18n::language_scope(lang);
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
