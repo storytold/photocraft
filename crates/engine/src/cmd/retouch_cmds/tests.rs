@@ -1406,10 +1406,12 @@ fn content_aware_move_samples_all_layers_onto_an_empty_layer() {
     paint_layer(&mut s, with_object(20, 26));
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 16, "y": 22, "width": 20, "height": 20})).unwrap();
-    // Without Sample All Layers the empty layer has nothing to move.
-    s.execute("paint.contentAwareMove", json!({"offset": [70, 0]})).unwrap();
+    // Without Sample All Layers the empty layer is refused: nothing is written and no History step.
+    let steps = s.active().unwrap().history.past_len();
+    let err = s.execute("paint.contentAwareMove", json!({"offset": [70, 0]})).unwrap_err().to_string();
+    assert_eq!(err, super::content_aware_move::REFUSAL_EMPTY);
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
     assert!(rgba(&s, 95, 31)[3] < 0.01);
-    s.execute("edit.undo", json!({})).unwrap();
     s.execute("paint.contentAwareMove", json!({"offset": [70, 0], "sampleAllLayers": true})).unwrap();
     assert!(is_object(rgba(&s, 95, 31)), "the object is painted onto the empty layer: {:?}", rgba(&s, 95, 31));
     let fill = rgba(&s, 25, 31);

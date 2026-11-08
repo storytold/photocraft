@@ -41,6 +41,16 @@ use super::{
 
 const CMD: &str = "paint.contentAwareMove";
 
+/// Photoshop's alert when the selection covers only transparent pixels and Sample All Layers is off.
+pub(super) const REFUSAL_EMPTY: &str = "Could not use the Content-Aware Move tool because the selected area is empty.";
+/// Photoshop's alert when the target layer's pixels are locked.
+pub(super) const REFUSAL_LOCKED: &str = "Could not use the Content-Aware Move tool because the layer is locked.";
+/// Photoshop's alert when the target layer (or a group around it, including a hidden Background) is hidden.
+pub(super) const REFUSAL_HIDDEN: &str = "Could not use the Content-Aware Move tool because the target layer is hidden.";
+/// Photoshop's alert for an Indexed Color document. Bitmap, Duotone and Multichannel keep today's path.
+pub(super) const REFUSAL_INDEXED: &str =
+    "Could not use the Content-Aware Move tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+
 /// Largest selection, in pixels of its bounding box (as the Patch Tool's). Each fill window is the
 /// selection plus a margin; at this size one window holds about 37 M pixels and the completion's
 /// working set stays within a few GB.
@@ -230,7 +240,50 @@ fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     }
     let dest = landing(map.as_ref(), area, (dx, dy), canvas)?;
     let all_layers = flag(p, "sampleAllLayers", false) && targets_pixels(p);
+    // Before any fill starts: an unusable pixel target is an alert, and nothing is recorded.
+    // A mask, channel, smart object or adjustment target is not one of the measured cases.
+    refuse_unusable(&d.doc, p, id, sel, area)?;
     Ok(Plan { target: Target { id, all_layers }, canvas, area, offset: (dx, dy), map, dest, mode, structure, color, margin })
+}
+
+/// The four measured refusals for a pixel-layer target. Anything else (a mask or channel, a smart
+/// object, an adjustment, Bitmap, Duotone, Multichannel) keeps today's behaviour.
+fn refuse_unusable(doc: &Document, p: &Value, id: Option<LayerId>, sel: &Surface, area: Rect) -> Result<()> {
+    if !targets_pixels(p) {
+        return Ok(());
+    }
+    let Some(id) = id else { return Ok(()) };
+    let Some(layer) = doc.layer(id) else { return Ok(()) };
+    if !matches!(layer.content, LayerContent::Raster(_)) {
+        return Ok(());
+    }
+    if doc.mode == photocraft_doc::ColorMode::Indexed {
+        return Err(EngineError::Other(REFUSAL_INDEXED.into()));
+    }
+    if !doc.path_of(id).is_some_and(|path| doc.shown_at(&path)) {
+        return Err(EngineError::Other(REFUSAL_HIDDEN.into()));
+    }
+    let locks = doc.effective_locks(id);
+    if locks.pixels || locks.all {
+        return Err(EngineError::Other(REFUSAL_LOCKED.into()));
+    }
+    // Sample All Layers reads the composite, so an empty active layer is not a refusal.
+    if !flag(p, "sampleAllLayers", false) && !selection_holds_pixels(layer, sel, area) {
+        return Err(EngineError::Other(REFUSAL_EMPTY.into()));
+    }
+    Ok(())
+}
+
+/// Whether any selected pixel of `layer` has opacity. A format with no alpha is opaque.
+fn selection_holds_pixels(layer: &photocraft_doc::Layer, sel: &Surface, area: Rect) -> bool {
+    let Some(surf) = layer.surface() else { return true };
+    let Some(ai) = alpha_index(&surf.format()) else { return true };
+    let n = surf.channels().max(1);
+    let data = surf.read_region(area);
+    coverage(sel, area)
+        .iter()
+        .enumerate()
+        .any(|(i, c)| *c > 0.0 && i.checked_mul(n).and_then(|b| b.checked_add(ai)).and_then(|idx| data.get(idx)).is_some_and(|a| *a > 0.0))
 }
 
 /// Where the content of `area` lands on `canvas`: moved by `offset`, or (Transform On Drop) the
@@ -718,6 +771,10 @@ fn run_scaled(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, scale: 
     }
     Ok(damage)
 }
+
+#[cfg(test)]
+#[path = "content_aware_move_refusal_tests.rs"]
+mod refusal_tests;
 
 #[cfg(test)]
 mod tests {

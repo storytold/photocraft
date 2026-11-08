@@ -420,9 +420,27 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
     }
     let p = content_aware_move_params(app, [i64::from(off[0]), i64::from(off[1])]);
     if let Err(e) = app.run("paint.contentAwareMove", p) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+        if content_aware_move_alert(&e) {
+            // One OK button. Other engine errors (empty selection, too large, a zero offset that
+            // reached the command) stay on the status bar.
+            let params = json!({ "message": e }).as_object().cloned().unwrap_or_default();
+            app.ui.open_dialog(crate::state::DialogKind::Error, params);
+        } else {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
+}
+
+/// The four alerts `paint.contentAwareMove` returns word for word (#12181).
+fn content_aware_move_alert(message: &str) -> bool {
+    matches!(
+        message,
+        "Could not use the Content-Aware Move tool because the selected area is empty."
+            | "Could not use the Content-Aware Move tool because the layer is locked."
+            | "Could not use the Content-Aware Move tool because the target layer is hidden."
+            | "Could not use the Content-Aware Move tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit)."
+    )
 }
 
 /// `paint.contentAwareMove`'s params for a drag by `offset`, from the options bar.
@@ -544,6 +562,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return false;
     }
     let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
+    let indexed = app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed);
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
@@ -614,7 +633,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::value_field(ui, &mut o.cam_structure, 1.0..=7.0, "", 40.0);
             opt(ui, tl!("Color:"));
             crate::widgets::value_field(ui, &mut o.cam_color, 0.0..=10.0, "", 40.0);
-            crate::widgets::checkbox(ui, &mut o.sample_all.content_aware_move, tl!("Sample All Layers"));
+            ui.add_enabled_ui(!indexed, |ui| {
+                crate::widgets::checkbox(ui, &mut o.sample_all.content_aware_move, tl!("Sample All Layers"));
+            });
             crate::widgets::checkbox(ui, &mut o.cam_transform_on_drop, tl!("Transform On Drop"));
             crate::widgets::vline(ui, 22.0);
             if crate::cam_transform::active(app) {
