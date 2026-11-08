@@ -441,16 +441,36 @@ fn skin_smooth_checks_icc_before_editing_at_every_depth() {
             assert_eq!(s.active().unwrap().revision, revision);
         }
         Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(Builtin::Srgb.profile().to_bytes());
+        let mut full_strength = Session::new();
+        let mut full_doc = (*s.active().unwrap().doc).clone();
+        full_doc.selection.as_mut().unwrap().fill_rect(Rect::new(4, 4, 30, 20), &[1.0]);
+        full_strength.add_document(full_doc, None);
+        full_strength.select_layer(s.active().unwrap().active_layer.unwrap()).unwrap();
+        full_strength.execute(RUN, params.clone()).unwrap();
+        let full_strength = pixels(&full_strength);
+        let tolerance = match depth {
+            8 => 1.0 / 255.0,
+            16 => 1.0 / 65535.0,
+            _ => 1e-6,
+        };
         s.execute(RUN, params).unwrap();
         let after = pixels(&s);
         assert_ne!(after, before);
+        let mut largest_change = 0.0_f32;
         for (i, (original, filtered)) in before.chunks_exact(4).zip(after.chunks_exact(4)).enumerate() {
             assert_eq!(original[3], filtered[3]);
             let (x, y) = (i % 40, i / 40);
             if !(4..30).contains(&x) || !(4..20).contains(&y) {
                 assert_eq!(original, filtered, "{depth}: pixel {x},{y} outside selection");
+            } else if y < 9 {
+                for channel in 0..3 {
+                    largest_change = largest_change.max((full_strength[i * 4 + channel] - original[channel]).abs());
+                    let expected = original[channel] * 0.6 + full_strength[i * 4 + channel] * 0.4;
+                    assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: 40% selection at {x},{y}, channel {channel}");
+                }
             }
         }
+        assert!(largest_change > 4.0 * tolerance, "{depth}: the full-strength fractional region must change, delta={largest_change}");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(pixels(&s), before);
         s.execute("edit.redo", json!({})).unwrap();

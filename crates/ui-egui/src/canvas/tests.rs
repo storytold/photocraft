@@ -277,6 +277,61 @@ fn plugin_preview_review_regression_keeps_canonical_region_across_views() {
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "previewing never edits the document");
 }
 
+/// Canvas-produced document regions must cover the visible proxy pixels before and after panning.
+#[test]
+fn panned_plugin_preview_matches_full_preview_at_factor_four() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = false;
+    app.run("file.new", json!({"width": 6000, "height": 4000, "background": "#204060"})).unwrap();
+    app.session
+        .edit("pattern", |doc, active| {
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surface.fill_rect(DRect::new(1600, 1000, 2000, 1400), &[0.2, 0.7, 0.3, 1.0]);
+            surface.fill_rect(DRect::new(4000, 2400, 4400, 3000), &[0.8, 0.2, 0.4, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.run("plugin.install", json!({"path": concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id": "org.photocraft.example.invert", "__preview": true}).as_object().unwrap().clone(),
+    );
+    app.ui.extras.rulers = false;
+    let original = app.session.active().unwrap().doc.clone();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let full = crate::filter_dialog::preview_document(&original, Some(layer), "plugin.run", &json!({"id": "org.photocraft.example.invert"}), 4).unwrap();
+    let expected = full.layer(layer).unwrap().surface().unwrap();
+    let proxy = crate::proxy::proxy_document(&original, 4);
+    let ctx = egui::Context::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 128.0));
+    for (center, region, visible) in [
+        ([1800.0, 1200.0], [1024, 0, 3072, 2048], DRect::new(322, 236, 578, 364)),
+        ([4200.0, 2700.0], [3072, 2048, 5120, 3072], DRect::new(922, 611, 1178, 739)),
+    ] {
+        let view = View { zoom: 0.25, center, doc_size: [6000, 4000], fit_pending: false, ..Default::default() };
+        app.ui.views[0] = view.clone();
+        ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
+            canvas_view(&mut app, ui, 0, rect, view.clone(), true);
+        })
+        .textures_delta
+        .clear();
+        let preview = app.filter_preview.as_ref().unwrap();
+        assert_eq!(preview.key.k, 4);
+        assert_eq!(preview.key.params["__previewRegion"], json!(region), "document coordinates at {center:?}");
+        let result = preview.result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap();
+        assert_ne!(expected.pixel(visible.x0, visible.y0), proxy.layer(layer).unwrap().surface().unwrap().pixel(visible.x0, visible.y0));
+        for y in visible.y0..visible.y1 {
+            for x in visible.x0..visible.x1 {
+                assert_eq!(result.pixel(x, y), expected.pixel(x, y), "visible proxy pixel {x},{y} at {center:?}");
+            }
+        }
+    }
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "previewing never edits the document");
+}
+
 /// #6326: a filter's live preview is never coarser than the screen. On a document big enough
 /// for a reduced proxy, the view at 100 % previews at full resolution, and only a view zoomed
 /// out far enough uses the proxy. Through `ensure_filter_preview`, so the factor the canvas
