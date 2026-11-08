@@ -155,32 +155,41 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
 
 /// Removes stroked glyphs that duplicate a fill at the same place, marking that glyph fake bold.
 fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>, ctl: &Interrupt) -> Result<(), EditableError> {
+    // Index fills by the exact attributes a stroke must match, so each stroke only compares
+    // against candidates at its own paint order/font/text instead of the whole page.
+    let mut index: HashMap<(usize, u128, String), Vec<usize>> = HashMap::new();
+    for (at, glyph) in glyphs.iter().enumerate() {
+        index.entry((glyph.order, glyph.font.key, glyph.text.clone())).or_default().push(at);
+    }
+    let mut paired = vec![false; glyphs.len()];
     let mut checks = 0usize;
     for stroke in strokes {
-        let mut matched = false;
-        for (index, glyph) in glyphs.iter_mut().enumerate() {
-            if index % 256 == 0 && ctl.check().is_err() {
-                return Err(EditableError::Cancelled);
-            }
-            if checks == MAX_PAIR_CHECKS {
-                return Err(EditableError::Unsupported("too much stroked text"));
-            }
-            checks += 1;
-            let tolerance = 0.01 * glyph.size_px + 0.01;
-            if glyph.text == stroke.text
-                && glyph.font.key == stroke.font.key
-                && glyph.order == stroke.order
-                && (glyph.origin.x - stroke.origin.x).abs() <= tolerance
-                && (glyph.origin.y - stroke.origin.y).abs() <= tolerance
-            {
-                glyph.fake_bold = true;
-                matched = true;
-                break;
+        let mut found = None;
+        if let Some(candidates) = index.get(&(stroke.order, stroke.font.key, stroke.text.clone())) {
+            for &at in candidates {
+                if paired[at] {
+                    continue;
+                }
+                if checks == MAX_PAIR_CHECKS {
+                    return Err(EditableError::Unsupported("too much stroked text"));
+                }
+                if checks.is_multiple_of(256) && ctl.check().is_err() {
+                    return Err(EditableError::Cancelled);
+                }
+                checks += 1;
+                let glyph = &glyphs[at];
+                let tolerance = 0.01 * glyph.size_px + 0.01;
+                if (glyph.origin.x - stroke.origin.x).abs() <= tolerance && (glyph.origin.y - stroke.origin.y).abs() <= tolerance {
+                    found = Some(at);
+                    break;
+                }
             }
         }
-        if !matched {
+        let Some(at) = found else {
             return Err(EditableError::Unsupported("stroked text"));
-        }
+        };
+        glyphs[at].fake_bold = true;
+        paired[at] = true;
     }
     Ok(())
 }
@@ -781,7 +790,7 @@ fn space_camel(name: &str) -> String {
 /// The bounds of a path that is one axis-aligned rectangle, else `None`.
 fn axis_aligned_rect(path: &BezPath) -> Option<(f64, f64, f64, f64)> {
     let elements = path.elements();
-    if elements.len() != 5 {
+    if !(5..=6).contains(&elements.len()) {
         return None;
     }
     let mut points = Vec::with_capacity(4);
@@ -793,7 +802,12 @@ fn axis_aligned_rect(path: &BezPath) -> Option<(f64, f64, f64, f64)> {
         }
     }
     if points.len() != 4 {
-        return None;
+        // An explicitly closed rectangle uses four LineTo points plus the duplicate start.
+        if points.len() == 5 && (points[0].0 - points[4].0).abs() < 1.0e-6 && (points[0].1 - points[4].1).abs() < 1.0e-6 {
+            points.pop();
+        } else {
+            return None;
+        }
     }
     let x0 = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
     let x1 = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
@@ -1513,6 +1527,18 @@ mod tests {
     }
 
     #[test]
+    fn an_explicitly_closed_rectangle_is_a_no_op_clip() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((200.0, 0.0));
+        path.line_to((200.0, 100.0));
+        path.line_to((0.0, 100.0));
+        path.line_to((0.0, 0.0));
+        path.close_path();
+        assert_eq!(axis_aligned_rect(&path), Some((0.0, 0.0, 200.0, 100.0)));
+    }
+
+    #[test]
     fn a_dashed_zero_length_line_falls_back() {
         let bytes = pdf("[1 1] 0 d 10 10 m 20 20 l 30 30 m h S");
         let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
@@ -1522,6 +1548,15 @@ mod tests {
             "{:?}",
             imported.warnings
         );
+    }
+
+    #[test]
+    fn a_solid_zero_length_line_stays_editable() {
+        let bytes = pdf("10 10 m 20 20 l 30 30 m h S");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("solid.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
+        let layers = children(&imported.document);
+        assert!(layers.iter().any(|layer| matches!(layer.content, LayerContent::Shape(_))), "{:?}", imported.warnings);
     }
 
     #[test]
