@@ -1085,14 +1085,16 @@ pub fn clear_notes_body(ui: &mut egui::Ui) {
     ui.label(tl!("Are you sure you want to delete all notes?"));
 }
 
-/// OK: every note goes in one step and nothing stays selected, so the options bar shows the
-/// tool's values again.
+/// OK: every note goes in one step, nothing stays selected, and the options bar shows the tool
+/// defaults again (a selected note had put its author and colour there).
 pub fn confirm_clear_notes(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
     if app.session.active().map(|s| s.doc.id.0) != fields.get("document").and_then(Value::as_u64) {
         return Err(tl!("The document changed. Please choose Clear All again.").into());
     }
     let result = app.run("notes.delete", json!({"all": true}))?;
-    app.ui.analysis.note_selected = None;
+    let defaults = AnalysisUi::default();
+    let a = &mut app.ui.analysis;
+    (a.note_selected, a.note_author, a.note_color) = (None, defaults.note_author, defaults.note_color);
     Ok(result)
 }
 /// Its "Don't show again", kept with the other dialog preferences.

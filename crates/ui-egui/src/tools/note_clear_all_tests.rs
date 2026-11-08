@@ -187,3 +187,17 @@ fn enter_is_ok_and_escape_is_cancel() {
         assert_eq!(steps(h.state()), before + usize::from(left == 0), "{key:?}: history");
     }
 }
+
+#[test]
+fn ok_brings_back_the_tool_defaults_in_the_options_bar() {
+    let mut app = app();
+    app.run("notes.set", json!({"index": 1, "color": "#3366cc"})).unwrap();
+    // Clicking the note shows its author and colour in the options bar (#7940).
+    show_note_options(&mut app, 1);
+    assert_eq!(app.ui.analysis.note_author, "B");
+    let mut h = harness(app);
+    let id = clear_all(&mut h);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let (defaults, a) = (AnalysisUi::default(), &h.state().ui.analysis);
+    assert_eq!((a.note_author.as_str(), a.note_color), (defaults.note_author.as_str(), defaults.note_color), "the tool defaults after OK");
+}
