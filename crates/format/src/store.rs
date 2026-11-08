@@ -815,7 +815,6 @@ fn flush_bundle_dir(dir: &Path, written: &Path) -> std::io::Result<()> {
 /// is in place, but may not survive a power loss or crash (#4968).
 #[cfg(not(windows))]
 fn confirm_flushed(dir: &Path, written: &Path, identity: Option<u128>) -> Result<()> {
-    use crate::atomic::AtomicFs;
     crate::atomic::dir_synced(flush_bundle_dir(dir, written), dir, identity, &crate::atomic::RealFs).map_err(|e| {
         FormatError::Io(std::io::Error::new(
             e.kind(),
