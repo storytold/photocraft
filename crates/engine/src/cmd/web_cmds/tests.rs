@@ -715,6 +715,7 @@ fn generator_naming_grammar() {
 fn image_assets_needs_the_generator_preference() {
     let dir = tmp("generator_pref");
     let mut s = session(8);
+    let doc = s.active().unwrap().doc.id;
     let id = s.active().unwrap().active_layer.unwrap();
     s.execute("layer.renameLayer", json!({"layer": id.0, "name": "logo.png"})).unwrap();
     assert!(!s.prefs().plug_ins.generator_enabled, "off by default, as in Photoshop");
@@ -725,19 +726,20 @@ fn image_assets_needs_the_generator_preference() {
     assert!(s.is_enabled("file.generate.imageAssets"));
     assert_eq!(s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap()["enabled"], true);
     s.active_mut().unwrap().path = Some(format!("{dir}/doc.psd"));
-    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_some(), "assets are written on save");
+    assert!(crate::automate_cmds::document_saved(&mut s, doc).is_some(), "assets are written on save");
 
     // Turning it off again takes the menu item away and stops the export, even for a document
     // left switched on.
     s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": false})).unwrap();
     assert!(!s.is_enabled("file.generate.imageAssets"));
-    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_none(), "no assets while Generator is off");
+    assert!(crate::automate_cmds::document_saved(&mut s, doc).is_none(), "no assets while Generator is off");
 }
 
 #[test]
 fn image_assets_are_generated_now_and_on_save() {
     let dir = tmp("assets");
     let mut s = session(8);
+    let doc = s.active().unwrap().doc.id;
     // Preferences ▸ Plug-ins ▸ Enable Generator: the feature is opt-in.
     s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
@@ -752,12 +754,12 @@ fn image_assets_are_generated_now_and_on_save() {
     // On save: written to <name>-assets next to the file.
     let saved = format!("{dir}/doc.psd");
     s.active_mut().unwrap().path = Some(saved.clone());
-    let r = crate::automate_cmds::document_saved(&mut s, 0).unwrap();
+    let r = crate::automate_cmds::document_saved(&mut s, doc).unwrap();
     assert_eq!(r["dir"], json!(format!("{dir}/doc-assets")));
     assert!(std::path::Path::new(&format!("{dir}/doc-assets/logo.png")).is_file());
     // Off: nothing on save.
     assert_eq!(s.execute("file.generate.imageAssets", json!({})).unwrap()["enabled"], false);
-    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_none());
+    assert!(crate::automate_cmds::document_saved(&mut s, doc).is_none());
     // A default layer adds variants.
     let s2 = session(8);
     let doc = s2.active().unwrap().doc.clone();
@@ -772,6 +774,82 @@ fn image_assets_are_generated_now_and_on_save() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(files.iter().map(|p| std::path::PathBuf::from(p.as_str())).collect::<Vec<_>>(), vec![std::path::Path::new(&dir).join("icon@2x.png")]);
     assert_eq!(decode(&files[0]).dimensions(), (128, 80));
+}
+
+/// A Save Document script that closes an earlier clean tab (#11121): the asset generation that
+/// follows re-resolves the saved document's identity, so the shifted list neither skips A's
+/// outputs nor exports some other tab's.
+#[test]
+fn a_save_script_closing_another_tab_still_generates_the_saved_documents_assets() {
+    let dir = tmp("script_close_tab");
+    let mut s = Session::new();
+    // Document B first (tab 0), then document A with an eligible layer (tab 1, active).
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "b"})).unwrap();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "a"})).unwrap();
+    let a = s.active().unwrap().doc.id;
+    s.edit("logo", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("logo.png", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 12, 12), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let id = doc.insert_above(None, l);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
+    s.active_mut().unwrap().path = Some(format!("{dir}/a.psd"));
+    s.execute("file.scripts.scriptEventsManager", json!({"enabled": true, "add": {"event": "saveDocument", "steps": [["file.close", {"document": 0}]]}}))
+        .unwrap();
+
+    let r = crate::automate_cmds::document_saved(&mut s, a).expect("A survived the script, so its assets generate");
+    assert_eq!(r["files"].as_array().unwrap().len(), 1, "{r}");
+    assert!(std::path::Path::new(&format!("{dir}/a-assets/logo.png")).is_file(), "A's asset is written although the script closed B");
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(s.documents()[0].doc.id, a, "the survivor is A, and A's own assets were written");
+}
+
+/// The sibling condition (#11121): when the script closes the saved document itself, the
+/// continuation must generate nothing — least of all the replacement tab's assets.
+#[test]
+fn a_save_script_closing_the_saved_document_generates_no_replacement_assets() {
+    let dir = tmp("script_close_saved");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "a"})).unwrap();
+    let a = s.active().unwrap().doc.id;
+    s.edit("logo", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("logo.png", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 12, 12), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let id = doc.insert_above(None, l);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    s.active_mut().unwrap().path = Some(format!("{dir}/a.psd"));
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "b"})).unwrap();
+    s.edit("logo2", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("logo2.png", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 12, 12), &photocraft_raster::from_rgba(&fmt, [0.0, 1.0, 0.0, 1.0]));
+        let id = doc.insert_above(None, l);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    s.active_mut().unwrap().path = Some(format!("{dir}/b.psd"));
+    s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
+    // Both tabs have a path and an eligible layer: whichever tab the continuation mistakes the
+    // saved one for would produce a file.
+    // The script closes the saved document (A, tab 0); B shifts up into its place.
+    s.execute("file.scripts.scriptEventsManager", json!({"enabled": true, "add": {"event": "saveDocument", "steps": [["file.close", {"document": 0}]]}}))
+        .unwrap();
+
+    assert!(crate::automate_cmds::document_saved(&mut s, a).is_none(), "the saved document is gone, so nothing generates");
+    assert!(!std::path::Path::new(&format!("{dir}/a-assets")).exists());
+    assert!(!std::path::Path::new(&format!("{dir}/b-assets/logo2.png")).exists(), "the replacement tab's assets are not exported");
 }
 
 /// Photoshop's Generator exports an artboard named like an asset at the board's size, transparent
@@ -1316,4 +1394,192 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
         s.execute("file.export.saveForWebLegacy", json!({"format": format, "embedIcc": false, "path": off})).unwrap();
         assert_eq!(profile(&off), None, "{format}");
     }
+}
+
+/// #5305: `folder` writes the whole image there under the document's own name, so an action
+/// recorded with the suggested name saves each document it is played on under that name; it is
+/// a destination, never a remembered setting.
+#[test]
+fn folder_saves_under_the_documents_own_name() {
+    let dir = tmp("folder_own_name");
+    let mut s = session(8);
+    let r = s.execute("file.export.saveForWebLegacy", json!({"folder": dir, "format": "png24"})).unwrap();
+    let first = format!("{dir}/web.png");
+    assert_eq!(r["files"], json!([first]));
+    assert_eq!(decode(&first).dimensions(), (64, 48));
+    assert!(s.prefs().dialogs.get("file.export.saveForWebLegacy").is_some_and(|m| m.get("folder").is_none()));
+    s.execute("file.new", json!({"width": 8, "height": 4, "name": "second.psd"})).unwrap();
+    let r = s.execute("file.export.saveForWebLegacy", json!({"folder": dir, "format": "jpeg"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/second.jpg")]));
+    assert_eq!(decode(&format!("{dir}/second.jpg")).dimensions(), (8, 4));
+    // A `path` wins over `folder`.
+    let r = s.execute("file.export.saveForWebLegacy", json!({"path": format!("{dir}/named.png"), "folder": dir, "format": "png24"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/named.png")]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn selected_slices_keep_their_place_in_the_html_table() {
+    // CodeRabbit review on PR #10557: exporting only the right of two slices put its image in
+    // the table's first column, on the left. Unexported slices stay as empty cells.
+    let dir = tmp("selected-html");
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+    s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+    let right = photocraft_doc::slices::resolve(&s.active().unwrap().doc).iter().find(|r| r.name == "right").unwrap().number;
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "html": true, "numbers": [right]})).unwrap();
+    let files: Vec<&str> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap()).collect();
+    assert_eq!(files, ["right.png"]);
+    let page = std::fs::read_to_string(r["html"].as_str().unwrap()).unwrap();
+    let row = &page[page.find("<tr>").unwrap()..page.find("</tr>").unwrap()];
+    let cells: Vec<&str> = row.split("<td").skip(1).collect();
+    assert!(cells.len() >= 2, "{row}");
+    assert!(!cells[0].contains("images/right.png"), "the right slice is in column 0:\n{row}");
+    assert!(cells[1].contains("images/right.png"), "column 1:\n{row}");
+}
+
+/// Two side-by-side user slices, `left` and `right`, and their numbers.
+fn two_slices() -> (Session, u64, u64) {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+    s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+    let all = photocraft_doc::slices::resolve(&s.active().unwrap().doc);
+    let number = |name: &str| all.iter().find(|r| r.name == name).unwrap().number as u64;
+    (s, number("left"), number("right"))
+}
+
+/// A refused slice export writes and remembers nothing, and (called directly, as the platform
+/// writer is) leaves a floating move in place.
+fn assert_refused(s: &mut Session, dir: &str, p: Value, expect: &str) {
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
+    s.execute("select.float", json!({"dx": 32})).unwrap();
+    let mut written = Vec::new();
+    let err = save_for_web_with_writer(s, &p, &mut |path, _| {
+        written.push(path.to_string());
+        Ok(())
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains(expect), "{p}: {err}");
+    assert_eq!(written, Vec::<String>::new(), "{p}: nothing written");
+    assert!(s.file_menu.last_web.is_none(), "{p}: nothing remembered");
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{p}: the floating move is not committed");
+    let err = s.execute("file.export.saveForWebLegacy", p.clone()).unwrap_err().to_string();
+    assert!(err.contains(expect), "{p}: {err}");
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 0, "{p}: nothing written");
+}
+
+#[test]
+fn slice_numbers_that_do_not_exist_are_refused() {
+    // FredApps review on PR #10557: a number naming no slice was dropped, so an export of only
+    // missing numbers "succeeded" with no files and a page of empty cells. Photoshop's dialog
+    // can only select existing slices; a script naming others is refused.
+    let dir = tmp("missing-numbers");
+    let (mut s, left, right) = two_slices();
+    let count = photocraft_doc::slices::resolve(&s.active().unwrap().doc).len() as u64;
+    let (gone, also_gone) = (count + 1, count + 7);
+    assert_refused(&mut s, &dir, json!({"format": "png24", "dir": dir, "html": true, "numbers": [gone]}), &format!("no slice numbered {gone}"));
+    // Partly missing: the dialog builds `numbers` from slices it shows, so every number it sends
+    // exists; one that doesn't is a stale or mistyped script and the export is refused whole.
+    let err = s
+        .execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "html": true, "numbers": [left, also_gone, right, gone]}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains(&format!("no slices numbered {gone}, {also_gone}")), "{err}");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing written");
+    // Slice numbers start at 1.
+    let err = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "numbers": [0]})).unwrap_err().to_string();
+    assert!(err.contains("no slice numbered 0"), "{err}");
+    // Existing numbers still export exactly those slices.
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "numbers": [right, left]})).unwrap();
+    let mut files: Vec<&str> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap()).collect();
+    files.sort_unstable();
+    assert_eq!(files, ["left.png", "right.png"]);
+}
+
+#[test]
+fn slice_modes_are_validated() {
+    // FredApps review on PR #10557: any `slices` value but "user" exported every slice,
+    // including the dialog's "selected" without `numbers`.
+    let dir = tmp("slice-modes");
+    let (mut s, left, right) = two_slices();
+    for (p, expect) in [
+        (json!({"slices": "selcted"}), "unknown slices `selcted` (all|user|selected)"),
+        (json!({"slices": 2}), "unknown slices `2` (all|user|selected)"),
+        (json!({"slices": "selected"}), "no slices are selected"),
+        (json!({"slices": "selected", "numbers": []}), "numbers must be a list of slice numbers"),
+        (json!({"numbers": ["1"]}), "numbers must be a list of slice numbers"),
+        (json!({"numbers": 1}), "numbers must be a list of slice numbers"),
+    ] {
+        let mut p = p;
+        p["format"] = json!("png24");
+        p["dir"] = json!(dir);
+        assert_refused(&mut s, &dir, p, expect);
+    }
+    // Every valid call still works.
+    let count = photocraft_doc::slices::resolve(&s.active().unwrap().doc).len();
+    let names = |r: &Value| r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap().to_string()).collect::<Vec<_>>();
+    for (mode, expect) in [(json!(null), count), (json!("all"), count), (json!("user"), 2)] {
+        let out = tmp("slice-modes-ok");
+        let mut p = json!({"format": "png24", "dir": out});
+        if !mode.is_null() {
+            p["slices"] = mode.clone();
+        }
+        assert_eq!(names(&s.execute("file.export.saveForWebLegacy", p).unwrap()).len(), expect, "{mode}");
+    }
+    let out = tmp("slice-modes-selected");
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": out, "slices": "selected", "numbers": [right]})).unwrap();
+    assert_eq!(names(&r), ["right.png"]);
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": out, "slices": "user", "numbers": [left]})).unwrap();
+    assert_eq!(names(&r), ["left.png"], "numbers choose the slices whatever the mode");
+    // A document without slices exports the whole image as one, whatever the dialog's Slices
+    // choice: the dialog sends "selected" without numbers then (`web_params`).
+    let mut s = session(8);
+    for mode in ["all", "user", "selected"] {
+        let out = tmp("slice-modes-none");
+        if mode != "user" {
+            let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": out, "slices": mode})).unwrap();
+            assert_eq!(names(&r), ["web.png"], "{mode}");
+            assert_eq!(decode(r["files"][0].as_str().unwrap()).dimensions(), (64, 48), "{mode}");
+        }
+        let path = format!("{out}/whole.png");
+        s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": path, "slices": mode})).unwrap();
+        assert_eq!(decode(&path).dimensions(), (64, 48), "{mode}");
+    }
+}
+
+#[test]
+fn a_whole_image_path_with_slice_numbers_is_refused() {
+    // CodeRabbit review on PR #10557: `path` alone writes the whole image as one file, so slice
+    // `numbers` with it were ignored and every slice came out in that file. It is refused; `dir`
+    // exports the chosen slices.
+    let dir = tmp("path-numbers");
+    let (mut s, left, right) = two_slices();
+    let path = format!("{dir}/web.png");
+    assert_refused(&mut s, &dir, json!({"format": "png24", "path": path, "numbers": [right]}), "use `dir`");
+    assert_refused(&mut s, &dir, json!({"format": "png24", "path": path, "dir": "", "numbers": [left, right]}), "use `dir`");
+    // `folder` alone is the whole image under the document's name (#5305): refused the same way.
+    assert_refused(&mut s, &dir, json!({"format": "png24", "folder": dir, "numbers": [right]}), "use `dir`");
+    // An explicit null `slices` is the default mode, as if absent.
+    assert_refused(&mut s, &dir, json!({"format": "png24", "path": path, "slices": null, "numbers": [right]}), "use `dir`");
+    // Valid calls still work: `path` alone is the whole image; with `slices`, the chosen slices
+    // go next to it; `dir` with `numbers` writes those slices.
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": path})).unwrap();
+    assert_eq!(r["files"], json!([path]));
+    assert_eq!(decode(&path).dimensions(), (64, 48));
+    let names = |r: &Value| r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap().to_string()).collect::<Vec<_>>();
+    let out = tmp("path-numbers-selected");
+    let r = s
+        .execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": format!("{out}/web.png"), "slices": "selected", "numbers": [right]}))
+        .unwrap();
+    assert_eq!(names(&r), ["right.png"]);
+    let out = tmp("path-numbers-dir");
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": format!("{out}/web.png"), "dir": out, "numbers": [left]})).unwrap();
+    assert_eq!(names(&r), ["left.png"]);
+    // A document without slices is one image: its only slice number is the whole image.
+    let mut s = session(8);
+    let out = tmp("path-numbers-none");
+    let whole = format!("{out}/whole.png");
+    s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": whole, "numbers": [1]})).unwrap();
+    assert_eq!(decode(&whole).dimensions(), (64, 48));
 }
