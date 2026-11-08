@@ -1429,6 +1429,13 @@ fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context
         }
         return true;
     }
+    // A plain Move right-click on a note: the notes menu, before layer picking (#11789).
+    if app.ui.tool == crate::state::Tool::Move && g.mods.is_none() && crate::analysis_ui::note_at(app, [x, y]).is_some() {
+        if down {
+            crate::canvas_tool_menu::open_at(app, ctx, app.ui.tool, screen_point(app, x, y), Some([x, y]));
+        }
+        return true;
+    }
     // Right-click with the Move tool, or ⌘/Ctrl+right-click: list the layers there.
     if crate::layer_pick_ui::is_gesture(app.ui.tool, g.mods) {
         if down {

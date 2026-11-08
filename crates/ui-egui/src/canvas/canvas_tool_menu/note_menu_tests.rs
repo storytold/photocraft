@@ -216,3 +216,111 @@ fn a_menu_for_another_document_acts_on_none_of_this_ones_notes() {
     choose(&mut app, &ctx, NOTE_NEW);
     assert_eq!(notes(&app), 1, "New Note adds nothing here");
 }
+
+// The Move tool's right-click goes to layer picking: on a note, a plain right-click opens the
+// notes menu before it (#11789). A miss, the pasteboard and ⌘/Ctrl+right-click keep today's
+// menus, as do the other tools.
+
+/// A Move right-click at document point `at` over `ui.pointer`, with the flags in `modifiers`.
+fn pointer_right_click(app: &mut PhotocraftApp, ctx: &egui::Context, at: [f64; 2], modifiers: Value) {
+    app.ui.canvas_tool_menu = None;
+    app.ui.layer_menu = None;
+    let events = json!([{"kind": "down", "x": at[0], "y": at[1]}, {"kind": "up", "x": at[0], "y": at[1]}]);
+    let r = call(app, ctx, "ui.pointer", json!({"button": "secondary", "modifiers": modifiers, "events": events}));
+    assert_eq!(r["ok"], true, "{r}");
+}
+
+fn notes_menu_on(app: &PhotocraftApp) -> Option<Option<usize>> {
+    app.ui.canvas_tool_menu.as_ref().and_then(|m| m.notes.as_ref()).map(|n| n.note)
+}
+
+#[test]
+fn ui_pointer_move_right_click_on_a_note_opens_the_notes_menu() {
+    let (mut app, ctx) = app();
+    app.ui.tool = Tool::Move;
+    pointer_right_click(&mut app, &ctx, [124.0, 55.0], json!({}));
+    assert_eq!(notes_menu_on(&app), Some(Some(1)), "the notes menu, on note 1");
+    assert!(app.ui.layer_menu.is_none(), "no layer list over it");
+}
+
+#[test]
+fn ui_pointer_move_right_click_off_the_notes_lists_the_layers() {
+    let (mut app, ctx) = app();
+    app.ui.tool = Tool::Move;
+    pointer_right_click(&mut app, &ctx, [80.0, 80.0], json!({}));
+    assert!(app.ui.layer_menu.is_some(), "layer picking, as before");
+    assert_eq!(notes_menu_on(&app), None);
+}
+
+#[test]
+fn ui_pointer_command_right_click_on_a_note_lists_the_layers() {
+    for tool in [Tool::Move, Tool::Note] {
+        let (mut app, ctx) = app();
+        app.ui.tool = tool;
+        pointer_right_click(&mut app, &ctx, [124.0, 55.0], json!({"command": true}));
+        assert!(app.ui.layer_menu.is_some(), "{tool:?}: ⌘/Ctrl+right-click on a note keeps layer picking");
+        assert_eq!(notes_menu_on(&app), None, "{tool:?}");
+    }
+}
+
+/// The app drawing its document area, so a right-click goes through the canvas.
+fn canvas_harness(tool: Tool) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let (mut a, _) = app();
+    a.ui.tool = tool;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        a,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    h.run_steps(4);
+    h
+}
+
+/// A right-click on the canvas at document point `at`, moved `nudge` screen pixels into the note icon.
+fn canvas_right_click(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, at: [f32; 2], nudge: [f32; 2], modifiers: egui::Modifiers) {
+    h.state_mut().ui.canvas_tool_menu = None;
+    h.state_mut().ui.layer_menu = None;
+    let p = crate::canvas::ViewXform::active(h.state()).unwrap().to_screen(at[0], at[1]) + egui::vec2(nudge[0], nudge[1]);
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers });
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(2);
+}
+
+#[test]
+fn canvas_move_right_click_on_a_note_opens_the_notes_menu() {
+    let mut h = canvas_harness(Tool::Move);
+    canvas_right_click(&mut h, [120.0, 50.0], [4.0, 5.0], egui::Modifiers::NONE);
+    assert_eq!(notes_menu_on(h.state()), Some(Some(1)), "the notes menu, on note 1");
+    assert!(h.state().ui.layer_menu.is_none(), "no layer list over it");
+}
+
+#[test]
+fn canvas_move_right_click_off_the_notes_keeps_layer_picking_and_the_pasteboard_menu() {
+    let mut h = canvas_harness(Tool::Move);
+    canvas_right_click(&mut h, [80.0, 80.0], [0.0, 0.0], egui::Modifiers::NONE);
+    assert!(h.state().ui.layer_menu.is_some(), "layer picking, as before");
+    assert_eq!(notes_menu_on(h.state()), None);
+    canvas_right_click(&mut h, [-20.0, 40.0], [0.0, 0.0], egui::Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "the pasteboard colour menu, as before");
+}
+
+#[test]
+fn canvas_command_right_click_on_a_note_keeps_layer_picking() {
+    for tool in [Tool::Move, Tool::Note] {
+        let mut h = canvas_harness(tool);
+        canvas_right_click(&mut h, [120.0, 50.0], [4.0, 5.0], egui::Modifiers::COMMAND);
+        assert!(h.state().ui.layer_menu.is_some(), "{tool:?}: ⌘/Ctrl+right-click on a note keeps layer picking");
+        assert_eq!(notes_menu_on(h.state()), None, "{tool:?}");
+    }
+}
