@@ -392,6 +392,11 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
         let cap = keep_cap(app, doc);
         app.kept.store(k, &r.doc, cap);
     }
+    // A whole canvas redrawn here is as good as a full GPU refresh: a block sweep that failed
+    // (and fell back to this) may run again on later edits.
+    if r.blocks.iter().map(|b| b.size().area()).sum::<u64>() >= r.doc.bounds().size().area() {
+        crate::canvas::sweep::full_refresh_landed(app, doc);
+    }
     let ms = crate::gpu_canvas::now_ms() - r.started_ms;
     app.perf.record("background", r.drawn, ms, 0.0);
     app.perf.record_gpu_attempt(r.gpu_attempt_ms);
