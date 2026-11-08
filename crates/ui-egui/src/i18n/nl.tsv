@@ -373,8 +373,8 @@
 	Artboard…	Tekengebied…
 	Artboard from Group…	Tekengebied uit groep…
 	Artboard from Layers…	Tekengebied uit lagen…
-	Layer via Copy	Laag via kopiëren
-	Layer via Cut	Laag via knippen
+	Layer Via Copy	Laag via kopiëren
+	Layer Via Cut	Laag via knippen
 	Layer From Background…	Laag uit achtergrond…
 	Layer from Background…	Laag uit achtergrond…
 	Background From Layer	Achtergrond uit laag
@@ -4362,6 +4362,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Kies voor elk kanaal een ander document.
 	A picked document is no longer open.	Een gekozen document is niet meer geopend.
 	A picked document is no longer a grayscale document of the same size.	Een gekozen document is geen grijswaardendocument van hetzelfde formaat meer.
+	Netscape Gray	Netscape-grijs
 # Move tool options bar (#11381)
 	Align top edges	Bovenranden uitlijnen
 	Align vertical centers	Verticale middens uitlijnen

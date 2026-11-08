@@ -441,8 +441,8 @@
 	Artboard…	アートボード…
 	Artboard from Group…	グループからアートボード…
 	Artboard from Layers…	レイヤーからアートボード…
-	Layer via Copy	コピーしたレイヤー
-	Layer via Cut	切り取ったレイヤー
+	Layer Via Copy	コピーしたレイヤー
+	Layer Via Cut	切り取ったレイヤー
 	Layer From Background…	背景からレイヤーへ…
 	Layer from Background…	背景からレイヤーへ…
 	Background From Layer	レイヤーから背景
@@ -4279,6 +4279,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	チャンネルごとに別のドキュメントを選択してください。
 	A picked document is no longer open.	選択したドキュメントの一つが開かれていません。
 	A picked document is no longer a grayscale document of the same size.	選択したドキュメントの一つが、同じサイズのグレースケールのドキュメントではなくなりました。
+	Netscape Gray	Netscape グレー
 # Move tool options bar (#11381)
 	Align top edges	上端を揃える
 	Align vertical centers	垂直方向中央を揃える
