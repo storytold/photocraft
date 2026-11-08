@@ -2,7 +2,6 @@
 
 pub(crate) mod asset_browser;
 pub(crate) mod browser_actions;
-pub(crate) mod browser_gestures;
 pub(crate) mod browser_interaction;
 pub(crate) mod context_menu;
 pub(crate) mod data;
@@ -16,4 +15,5 @@ pub(crate) mod identity;
 pub(crate) mod items;
 pub(crate) mod panel_menu;
 pub(crate) mod path_identity_model;
+pub(crate) mod popup_dialogs;
 pub(crate) mod projection;

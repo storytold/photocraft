@@ -44,6 +44,7 @@ pub(crate) fn picker_context_menu(
     groups: &[GroupView],
     selection_actions: &[BrowserAction],
     delete_actions: &[BrowserAction],
+    selection: &crate::pickers::state::BrowserSelectionSummary,
     events: &mut Vec<BrowserAction>,
 ) {
     let Some((asset, plural, supports_append, supports_import, supports_export)) = (match panel {
@@ -68,6 +69,11 @@ pub(crate) fn picker_context_menu(
         _ => None,
     });
     let selected_items: Vec<String> = rename_items.into_iter().flatten().map(|(_, item)| item.key.clone()).collect();
+    let export_items: Vec<String> = if selection.contains_card {
+        selection.cards.iter().map(|(_, key)| key.clone()).collect()
+    } else {
+        selected_items.clone()
+    };
     let delete_items: Vec<_> = delete_actions.iter().filter(|action| matches!(action, BrowserAction::DeleteItem { .. })).collect();
     let delete_groups: Vec<_> =
         delete_actions.iter().filter(|action| matches!(action, BrowserAction::DeleteGroup(_) | BrowserAction::DeleteNestedGroup { .. })).collect();
@@ -85,8 +91,8 @@ pub(crate) fn picker_context_menu(
         events.push(BrowserAction::Import);
         ui.close();
     }
-    if crate::menu_keys::menu_item_button(ui, &format!("Export Selected {plural}…"), supports_export && has_item_selection).clicked() {
-        events.push(BrowserAction::ExportSelected(selected_items));
+    if crate::menu_keys::menu_item_button(ui, &format!("Export Selected {plural}…"), supports_export && !export_items.is_empty()).clicked() {
+        events.push(BrowserAction::ExportSelected(export_items));
         ui.close();
     }
     let rename_label = if show_group_actions {
@@ -283,20 +289,22 @@ pub(crate) fn begin_item_rename(state: &mut PresetUi, panel: &str, targets: &[(S
 }
 
 /// Standard item-menu policy shared by preset panels and specialised adapters.
-pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, _state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
+pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
     let ItemContextMenuArgs { panel, item, group, group_names, selected_items } = args;
     let targets = item_context_targets(item, group, selected_items);
     let selected = vec![BrowserAction::BeginRenameItems(targets.clone())];
     let deletions = delete_item_actions(&targets);
     let groups: Vec<GroupView> = group_names.iter().map(|name| GroupView { name: name.clone(), root_only: false, items: Vec::new() }).collect();
-    picker_context_menu(ui, panel, &groups, &selected, &deletions, events);
+    let selection = state.browser_selection_summary.get(panel).cloned().unwrap_or_default();
+    picker_context_menu(ui, panel, &groups, &selected, &deletions, &selection, events);
 }
 
 /// Standard group-menu policy shared by preset panels and specialised adapters.
-pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, _state: &mut PresetUi, panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
+pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
     let selected = vec![BrowserAction::BeginRenameGroup(group.name.clone())];
     let deletions = vec![BrowserAction::DeleteGroup(group.name.clone())];
-    picker_context_menu(ui, panel, std::slice::from_ref(group), &selected, &deletions, events);
+    let selection = state.browser_selection_summary.get(panel).cloned().unwrap_or_default();
+    picker_context_menu(ui, panel, std::slice::from_ref(group), &selected, &deletions, &selection, events);
 }
 
 /// Attach a consumer-provided context menu to an egui response.
@@ -320,20 +328,26 @@ mod tests {
             GroupView { name: "Basics".into(), root_only: false, items: Vec::new() },
             GroupView { name: "Grays".into(), root_only: false, items: Vec::new() },
         ];
-        let items = vec![
-            ("Basics".into(), ItemView { key: "one".into(), name: "One".into(), group_path: Vec::new() }),
-            ("Basics".into(), ItemView { key: "two".into(), name: "Two".into(), group_path: Vec::new() }),
-        ];
+        let items = vec![("Basics".into(), ItemView { key: "one".into(), name: "One".into(), group_path: Vec::new() })];
         let selection = vec![BrowserAction::BeginRenameItems(items)];
-        let deletions = vec![
-            BrowserAction::DeleteItem { group: "Basics".into(), group_path: Vec::new(), key: "one".into() },
-            BrowserAction::DeleteItem { group: "Basics".into(), group_path: Vec::new(), key: "two".into() },
-        ];
+        let deletions = vec![BrowserAction::DeleteItem { group: "Basics".into(), group_path: Vec::new(), key: "one".into() }];
         let events = Rc::new(RefCell::new(Vec::new()));
         let captured = Rc::clone(&events);
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
-                picker_context_menu(ui, "gradients", &groups, &selection, &deletions, &mut captured.borrow_mut());
+                picker_context_menu(
+                    ui,
+                    "gradients",
+                    &groups,
+                    &selection,
+                    &deletions,
+                    &crate::pickers::state::BrowserSelectionSummary {
+                        contains_card: true,
+                        cards: vec![("Basics".into(), "one".into())],
+                        ..Default::default()
+                    },
+                    &mut captured.borrow_mut(),
+                );
             });
         });
         crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
@@ -345,8 +359,8 @@ mod tests {
             "Append Default Gradients…",
             "Import Gradients…",
             "Export Selected Gradients…",
-            "Rename Gradients…",
-            "Delete Gradients…",
+            "Rename Gradient…",
+            "Delete Gradient…",
             "New Gradient Preset…",
             "New Gradient Group…",
         ];
@@ -361,7 +375,7 @@ mod tests {
         let move_rect = harness.get_by_label("Move to").rect();
         assert!(move_rect.top() >= previous_bottom.unwrap(), "Move to must be the final action");
         let row_gap = harness.get_by_label("Import Gradients…").rect().top() - harness.get_by_label("Append Default Gradients…").rect().bottom();
-        let section_gap = harness.get_by_label("New Gradient Preset…").rect().top() - harness.get_by_label("Delete Gradients…").rect().bottom();
+        let section_gap = harness.get_by_label("New Gradient Preset…").rect().top() - harness.get_by_label("Delete Gradient…").rect().bottom();
         assert!(section_gap > row_gap, "creation actions must follow a separator");
         let move_gap = move_rect.top() - harness.get_by_label("New Gradient Group…").rect().bottom();
         assert!(move_gap > row_gap, "Move to must follow a separator");
@@ -397,7 +411,7 @@ mod tests {
         let deletions = vec![BrowserAction::DeleteGroup("Basics".into()), BrowserAction::DeleteGroup("Grays".into())];
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
-                picker_context_menu(ui, "gradients", &groups, &selection, &deletions, &mut Vec::new());
+                picker_context_menu(ui, "gradients", &groups, &selection, &deletions, &Default::default(), &mut Vec::new());
             });
         });
         crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
@@ -416,7 +430,7 @@ mod tests {
         let deletions = vec![BrowserAction::DeleteGroup("Basics".into())];
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
-                picker_context_menu(ui, "gradients", &groups, &selection, &deletions, &mut Vec::new());
+                picker_context_menu(ui, "gradients", &groups, &selection, &deletions, &Default::default(), &mut Vec::new());
             });
         });
         crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);

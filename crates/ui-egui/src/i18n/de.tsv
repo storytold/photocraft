@@ -3235,3 +3235,20 @@ curves	Smooth	Glätten
 	Show Search Bar	Suchleiste anzeigen
 	Show recents	Zuletzt verwendete anzeigen
 	List	Liste
+
+# Picker delete confirmation: each count form is a complete sentence so translators can
+# control word order, grammatical case, and agreement. No numeric count is shown to the user.
+@plural	Delete group "{name}" and its gradients?|Delete the selected groups and their gradients?	Soll die Gruppe "{name}" einschließlich ihrer Verläufe gelöscht werden?|Sollen die ausgewählten Gruppen einschließlich ihrer Verläufe gelöscht werden?
+@plural	Delete gradient "{name}"?|Delete the selected gradients?	Soll der Verlauf "{name}" gelöscht werden?|Sollen die ausgewählten Verläufe gelöscht werden?
+@plural	Delete swatch "{name}"?|Delete the selected swatches?	Soll das Farbfeld "{name}" gelöscht werden?|Sollen die ausgewählten Farbfelder gelöscht werden?
+@plural	Delete pattern "{name}"?|Delete the selected patterns?	Soll das Muster "{name}" gelöscht werden?|Sollen die ausgewählten Muster gelöscht werden?
+@plural	Delete style "{name}"?|Delete the selected styles?	Soll der Stil "{name}" gelöscht werden?|Sollen die ausgewählten Stile gelöscht werden?
+@plural	Delete shape "{name}"?|Delete the selected shapes?	Soll die Form "{name}" gelöscht werden?|Sollen die ausgewählten Formen gelöscht werden?
+@plural	Delete brush "{name}"?|Delete the selected brushes?	Soll der Pinsel "{name}" gelöscht werden?|Sollen die ausgewählten Pinsel gelöscht werden?
+@plural	Delete tool preset "{name}"?|Delete the selected tool presets?	Soll die Werkzeugvorgabe "{name}" gelöscht werden?|Sollen die ausgewählten Werkzeugvorgaben gelöscht werden?
+@plural	Delete clone source "{name}"?|Delete the selected clone sources?	Soll die Klonquelle "{name}" gelöscht werden?|Sollen die ausgewählten Klonquellen gelöscht werden?
+@plural	Delete item "{name}"?|Delete the selected items?	Soll das Element "{name}" gelöscht werden?|Sollen die ausgewählten Elemente gelöscht werden?
+	Group Name	Gruppenname
+	Rename Group	Gruppe umbenennen
+	Swatch	Farbfeld
+	Tool Preset	Werkzeugvorgabe

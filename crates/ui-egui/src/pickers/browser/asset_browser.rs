@@ -7,10 +7,9 @@ use std::collections::BTreeSet;
 
 use egui::{Align2, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
-use crate::pickers::browser::browser_gestures::apply_browser_item_gesture;
 use crate::pickers::browser::browser_interaction::{
-    AssetDrag, BrowserDeleteContext, BrowserDragGhostSource, GroupDragGhost, ItemDragGhost, NestedGroupDragGhost, asset_browser_header_drag_source_with_id,
-    browser_drag_ghost_rect, draw_context_menu_target, draw_rename_row, item_row_edge_targets, replace_selected_delete_actions,
+    AssetDrag, BrowserDeleteContext, BrowserDragGhostSource, GroupDragGhost, ItemDragGhost, NestedGroupDragGhost, apply_browser_item_gesture,
+    asset_browser_header_drag_source_with_id, browser_drag_ghost_rect, draw_context_menu_target, item_row_edge_targets, replace_selected_delete_actions,
 };
 pub(crate) use crate::pickers::browser::browser_interaction::{
     begin_item_rename, delete_item_actions, item_context_targets, move_item_actions, standard_group_context_menu, standard_item_context_menu,
@@ -143,11 +142,11 @@ pub(crate) enum BrowserAction {
         key: String,
         text: String,
     },
-    /// Begin in-place renaming for the supplied item occurrences.
+    /// Open the shared card-rename dialog for the supplied item occurrences.
     BeginRenameItems(Vec<(String, ItemView)>),
-    /// Begin in-place renaming of a top-level group.
+    /// Open the shared group-rename dialog for a top-level group.
     BeginRenameGroup(String),
-    /// Begin in-place renaming of multiple top-level groups, one after another.
+    /// Open the shared group-rename dialog for multiple top-level groups, one after another.
     BeginRenameGroups(Vec<String>),
     DeleteItem {
         group: String,
@@ -171,6 +170,8 @@ pub(crate) enum BrowserAction {
     },
     /// Request creation of a new group.
     NewGroup,
+    /// Create a group after the user confirms its name in the New Group dialog.
+    CreateGroup(String),
     /// Request creation of a new item.
     New,
     /// Append the picker's built-in defaults to its current library.
@@ -980,16 +981,50 @@ pub(crate) fn browser_with_root_sequence(
     let display_mode = st.display_mode(panel);
     let list = display_mode.uses_list_layout();
     let wrap_list = st.wrap_list_enabled(panel) && display_mode != crate::pickers::state::PickerDisplayMode::TextOnly;
-    // The rename row is included in the browser allocation, not added above it. Keep its
-    // measured height out of the scroll area's minimum so the shell-owned footer stays in place.
-    let (rename_row_height, ev) = draw_rename_row(ui, st, panel, browser_ctx.tokens);
-    let scroll_height = (allocated_height - rename_row_height).max(0.0);
+    // Renaming is handled by the shared popup dialogs; the browser owns the full allocated area.
+    let scroll_height = allocated_height;
     let mut drag_state = BrowserDragState::default();
     let mut expanded_groups = BTreeSet::new();
     let Some(mut projection) = BrowserProjection::build(&browser_ctx, st, &query, all_groups_open, domain_root_sequence, &mut picker_ids) else {
-        return ev;
+        st.browser_selection_summary.remove(panel);
+        return Vec::new();
     };
-    let mut sink = BrowserSink::new(st, ev);
+    let selection = st.browser_selection.get(panel);
+    let selected_group_names: BTreeSet<String> = selection
+        .into_iter()
+        .flat_map(|selection| projection.hierarchy_identities.iter())
+        .filter_map(|(id, identity)| match identity {
+            PickerNodeIdentity::Group(group) if selection.is_some_and(|selection| selection.contains(id)) => Some(group.clone()),
+            _ => None,
+        })
+        .collect();
+    let contains_group = !selected_group_names.is_empty();
+    let selected_item_keys: BTreeSet<(String, String, Vec<String>)> = projection
+        .selected_items
+        .iter()
+        .map(|(group, item)| (group.clone(), item.key.clone(), item.group_path.clone()))
+        .collect();
+    let cards: Vec<(String, String)> = groups
+        .iter()
+        .flat_map(|group| {
+            group.items.iter().filter_map(|item| {
+                (selected_group_names.contains(&group.name)
+                    || selected_item_keys.contains(&(group.name.clone(), item.key.clone(), item.group_path.clone())))
+                    .then(|| (group.name.clone(), item.key.clone()))
+            })
+        })
+        .collect();
+    let contains_card = !cards.is_empty();
+    st.browser_selection_summary.insert(
+        panel.to_owned(),
+        crate::pickers::state::BrowserSelectionSummary {
+            contains_card,
+            contains_group,
+            cards,
+            groups: selected_group_names.into_iter().collect(),
+        },
+    );
+    let mut sink = BrowserSink::new(st, Vec::new());
     // Retain the shell's horizontal clip for hierarchy hit arbitration; drag-ghost movement uses
     // the narrower ScrollArea viewport captured inside the closure below.
     let browser_parent_clip = ui.clip_rect();
@@ -1022,7 +1057,16 @@ pub(crate) fn browser_with_root_sequence(
                     let delete_actions = ui
                         .ctx()
                         .data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-delete-selection", panel))).unwrap_or_default());
-                    crate::pickers::browser::context_menu::picker_context_menu(ui, panel, groups, &selection_actions, &delete_actions, events);
+                    let selection = state.browser_selection_summary.get(panel).cloned().unwrap_or_default();
+                    crate::pickers::browser::context_menu::picker_context_menu(
+                        ui,
+                        panel,
+                        groups,
+                        &selection_actions,
+                        &delete_actions,
+                        &selection,
+                        events,
+                    );
                     let _ = state;
                 });
             });

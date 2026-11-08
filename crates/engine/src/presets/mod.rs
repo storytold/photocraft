@@ -192,7 +192,9 @@ impl Session {
             swatches: take(&mut m, "swatches"),
         };
         let st = &mut self.presets;
-        if let Some(g) = p.gradients {
+        let mut gradient_names_changed = false;
+        if let Some(mut g) = p.gradients {
+            gradient_names_changed = gradients::make_gradient_names_unique(&mut g);
             st.gradients = g;
         }
         if let Some(g) = p.gradient {
@@ -230,7 +232,12 @@ impl Session {
             crate::swatch_cmds::cap_library(&mut g);
             self.presets.swatches = g;
         }
-        self.presets.rev += 1;
+        if gradient_names_changed {
+            // Persist the one-time compatibility repair so subsequent launches see stable names.
+            self.presets_changed();
+        } else {
+            self.presets.rev += 1;
+        }
     }
 
     /// Record a preset change: bumps the panel revision and marks the preferences document dirty

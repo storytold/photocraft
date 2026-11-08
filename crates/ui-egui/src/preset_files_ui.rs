@@ -113,6 +113,11 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
     let stem = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Imported").into());
     let mut p = source(name, bytes);
     p["group"] = json!(stem);
+    if what == "gradients" {
+        // Picker imports should add a library group, never replace an existing group just
+        // because the selected file happens to share its basename.
+        p["replace"] = json!(false);
+    }
     if what == "brushes" {
         p["select"] = json!(true);
     }

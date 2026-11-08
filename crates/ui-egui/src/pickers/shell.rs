@@ -100,7 +100,11 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
             ui.ctx().request_repaint();
         }
     }
-    events
+    let mut events = events;
+    crate::pickers::browser::popup_dialogs::show_new_group_dialog(ui, &panel, adapter.groups, &mut events);
+    crate::pickers::browser::popup_dialogs::show_rename_group_dialog(ui, &panel, &mut events);
+    crate::pickers::browser::popup_dialogs::show_rename_card_dialog(ui, &panel, adapter.groups, &mut events, adapter.paint_item);
+    crate::pickers::browser::popup_dialogs::confirm_deletions(ui, &panel, adapter.groups, events)
 }
 
 /// Shared shell layout for consumers with a specialised browser renderer.

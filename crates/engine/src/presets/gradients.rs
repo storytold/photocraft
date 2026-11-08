@@ -9,7 +9,7 @@ use photocraft_doc::{Color, Fill, Layer, LayerContent};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Group, Named, always, bad, edit_groups, find, group_index, req_str, str_param, unique_name};
+use super::{Group, Named, always, bad, edit_groups, find, group_index, req_str, str_param};
 use crate::commands::CommandSpec;
 use crate::{Result, Session};
 
@@ -619,7 +619,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
 fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "gradient.presets.new";
     let mut g = if p.get("stops").is_some() { GradientPreset::from_params("", p, CMD)? } else { s.presets.gradient.clone() };
-    g.name = unique_name(&s.presets.gradients, str_param(p, "name").unwrap_or("Custom"));
+    g.name = unique_gradient_name(&s.presets.gradients, str_param(p, "name").unwrap_or("Custom"));
     let gi = group_index(&mut s.presets.gradients, str_param(p, "group"));
     s.presets.gradients[gi].items.push(g.clone());
     let group = s.presets.gradients[gi].name.clone();
@@ -652,6 +652,50 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn unique_group<T>(groups: &[Group<T>], base: &str) -> String {
     let taken = |n: &str| groups.iter().any(|g| g.name == n);
     if !taken(base) { base.to_string() } else { (1..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_default() }
+}
+
+/// Gradient presets are addressed by name throughout the current storage and command APIs, so
+/// names must be unique across the entire library. Keep the original name when available; on a
+/// collision append `_1`, `_2`, etc. (case-insensitively).
+pub(crate) fn unique_gradient_name(groups: &[Group<GradientPreset>], base: &str) -> String {
+    let names: Vec<String> = groups.iter().flat_map(|group| group.items.iter().map(|item| item.name.clone())).collect();
+    unique_gradient_name_from_names(&names, base)
+}
+
+pub(crate) fn unique_gradient_name_from_names(taken: &[String], base: &str) -> String {
+    let used = |name: &str| taken.iter().any(|existing| existing.eq_ignore_ascii_case(name));
+    if !used(base) {
+        return base.to_string();
+    }
+    (1..).map(|index| format!("{base}_{index}")).find(|name| !used(name)).unwrap_or_else(|| base.to_string())
+}
+
+/// Repair legacy libraries that contain duplicate gradient names. The first occurrence keeps
+/// its name; subsequent occurrences receive the next available numeric suffix.
+pub(crate) fn make_gradient_names_unique(groups: &mut [Group<GradientPreset>]) -> bool {
+    // Reserve every original name up front. Otherwise a generated `Name_1` could steal the
+    // original name of a later card and needlessly rename that card as well.
+    let reserved: Vec<String> = groups.iter().flat_map(|group| group.items.iter().map(|item| item.name.clone())).collect();
+    let mut taken = Vec::<String>::new();
+    let mut changed = false;
+    for group in groups {
+        for item in &mut group.items {
+            if taken.iter().any(|name| name.eq_ignore_ascii_case(&item.name)) {
+                let base = item.name.clone();
+                let unique = (1..)
+                    .map(|index| format!("{base}_{index}"))
+                    .find(|candidate| {
+                        !taken.iter().any(|name| name.eq_ignore_ascii_case(candidate))
+                            && !reserved.iter().any(|name| name.eq_ignore_ascii_case(candidate))
+                    })
+                    .unwrap_or(base);
+                item.name = unique;
+                changed = true;
+            }
+            taken.push(item.name.clone());
+        }
+    }
+    changed
 }
 
 pub fn specs() -> Vec<CommandSpec> {

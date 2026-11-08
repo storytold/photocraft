@@ -227,7 +227,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Gradients…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".grd file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true (replace a group of the same name)}"##,
+            params: r##"{"path":".grd file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true (replace a group of the same name; false creates a uniquely named group)}"##,
             enabled: always,
             run: import_grd,
             journal: true,
@@ -290,7 +290,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
     use crate::presets::{Group, gradients::GradientPreset};
     let cmd = "gradient.presets.importGrd";
     let (bytes, stem) = file_bytes(p, cmd, ".grd file")?;
-    let group = match p.get("group") {
+    let requested_group = match p.get("group") {
         Some(v) => v.as_str().map(str::trim).filter(|g| !g.is_empty()).ok_or_else(|| bad(cmd, "`group` must be a non-empty string"))?.to_string(),
         None if !stem.is_empty() => stem,
         None => "Imported Gradients".to_string(),
@@ -324,12 +324,23 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
     if items.is_empty() {
         return Err(bad(cmd, "the file holds no gradients PhotoCraft can use (noise gradients only)"));
     }
-    let names: Vec<String> = items.iter().map(|g| g.name.clone()).collect();
     let st = &mut s.presets;
-    if p.get("replace").and_then(Value::as_bool).unwrap_or(true) {
-        st.gradients.retain(|g| g.name != group);
-    }
-    st.gradients.push(Group::new(&group, items));
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(true);
+    let group = if replace {
+        st.gradients.retain(|g| g.name != requested_group);
+        requested_group
+    } else {
+        crate::presets::gradients::unique_group(&st.gradients, &requested_group)
+    };
+    // The current gradient store addresses cards by name, not by stable IDs. Resolve collisions
+    // against the whole library and all original names in this file before adding the group.
+    let mut merged = st.gradients.clone();
+    merged.push(Group::new(&group, items));
+    crate::presets::gradients::make_gradient_names_unique(&mut merged);
+    let imported = merged.pop().expect("the imported gradient group was just appended");
+    let names: Vec<String> = imported.items.iter().map(|g| g.name.clone()).collect();
+    st.gradients = merged;
+    st.gradients.push(imported);
     s.presets_changed();
     Ok(json!({"group": group, "imported": names, "count": names.len(), "warnings": warnings}))
 }
@@ -440,6 +451,13 @@ mod tests {
         let n = s.presets.gradients.len();
         s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire"})).unwrap();
         assert_eq!(s.presets.gradients.len(), n);
+        // A non-replacing import preserves the existing group and chooses a unique name.
+        let existing_fire = s.presets.gradients.iter().find(|g| g.name == "Fire").unwrap().items.clone();
+        let r = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire", "replace": false})).unwrap();
+        assert_eq!(r["group"], "Fire 1");
+        assert_eq!(r["imported"], json!(["Ember_1"]));
+        assert_eq!(s.presets.gradients.iter().find(|g| g.name == "Fire").unwrap().items, existing_fire);
+        assert!(s.presets.gradients.iter().any(|g| g.name == "Fire 1"));
         for p in [json!({}), json!({"data": "@@"}), json!({"data": photocraft_paint::tile::b64_encode(b"8BGR\0\x03")}), json!({"path": "/nope.grd"})] {
             assert!(s.execute("gradient.presets.importGrd", p.clone()).is_err(), "{p}");
         }

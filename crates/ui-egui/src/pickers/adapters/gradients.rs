@@ -205,7 +205,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn export_selected_gradients_dialog(app: &mut PhotocraftApp, names: &[String]) {
+pub(crate) fn export_selected_gradients_dialog(app: &mut PhotocraftApp, names: &[String]) {
     use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop};
     let gradients: Vec<_> = app
         .session
@@ -286,7 +286,7 @@ pub(crate) fn new_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::
 }
 
 /// Contribute the Gradients-specific actions to the shared docking header menu.
-pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &crate::pickers::state::PresetUi) {
     if crate::menu_keys::menu_item_button(ui, tl!("Append Default Gradients…"), true).clicked() {
         run(app, "gradient.presets.reset", json!({"append": true}));
         ui.close();
@@ -295,6 +295,16 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::preset_files_ui::import_gradients_dialog(app);
         ui.close();
     }
+    let selection = state.browser_selection_summary.get("gradients").cloned().unwrap_or_default();
+    let selected_names = selected_gradient_names(&selection);
+    if crate::menu_keys::menu_item_button(ui, tl!("Export Selected Gradients…"), !selected_names.is_empty()).clicked() {
+        export_selected_gradients_dialog(app, &selected_names);
+        ui.close();
+    }
+}
+
+fn selected_gradient_names(selection: &crate::pickers::state::BrowserSelectionSummary) -> Vec<String> {
+    selection.cards.iter().map(|(_, key)| key.clone()).collect()
 }
 
 #[cfg(test)]
@@ -303,10 +313,21 @@ mod tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
-    use super::{ROOT_ITEMS_GROUP, gradients_panel};
+    use super::{ROOT_ITEMS_GROUP, gradients_panel, selected_gradient_names};
     use crate::PhotocraftApp;
     use crate::pickers::browser::asset_browser::last_group_headers;
     use crate::pickers::state::HierarchyOrderEntry;
+
+    #[test]
+    fn export_selection_includes_cards_from_selected_groups_and_mixed_selections() {
+        let selection = crate::pickers::state::BrowserSelectionSummary {
+            contains_card: true,
+            contains_group: true,
+            cards: vec![("Basics".into(), "Blue 01".into()), ("Blues".into(), "Blue 02".into())],
+            groups: vec!["Basics".into()],
+        };
+        assert_eq!(selected_gradient_names(&selection), ["Blue 01", "Blue 02"]);
+    }
 
     #[test]
     fn creating_a_gradient_with_no_groups_places_the_card_at_root_without_a_visible_backing_group() {

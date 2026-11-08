@@ -159,11 +159,12 @@ pub(crate) fn generic_with_state(
                 false
             }
         }
-        BrowserAction::NewGroup => {
+        BrowserAction::NewGroup => false,
+        BrowserAction::CreateGroup(name) => {
             let (command, params) = if prefix == "swatches" {
-                ("swatches.newGroup".to_owned(), json!({"name": "Group"}))
+                ("swatches.newGroup".to_owned(), json!({"name": name}))
             } else {
-                (edit.clone(), json!({"action": "newGroup", "name": "Group"}))
+                (edit.clone(), json!({"action": "newGroup", "name": name}))
             };
             if let Some(r) = run(app, &command, params) {
                 let g = r["group"].as_str().unwrap_or_default().to_string();

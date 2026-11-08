@@ -69,6 +69,17 @@ pub(crate) struct ItemRenameState {
     pub(crate) text: String,
 }
 
+/// Asset-neutral facts about the current multi-selection, derived by the shared browser.
+/// Adapters and menu consumers use this instead of interpreting picker node identities.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BrowserSelectionSummary {
+    pub(crate) contains_card: bool,
+    pub(crate) contains_group: bool,
+    /// Explicitly selected cards plus cards covered by selected groups, in browser order.
+    pub(crate) cards: Vec<(String, String)>,
+    pub(crate) groups: Vec<String>,
+}
+
 /// Panel state (serde, so the control channel can read and drive it).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -112,6 +123,8 @@ pub struct PresetUi {
     /// the active preset used by commands; these identities describe only the visible UI selection.
     #[serde(skip)]
     pub(crate) browser_selection: BTreeMap<String, std::collections::BTreeSet<crate::pickers::browser::path_identity_model::PickerId>>,
+    #[serde(skip)]
+    pub(crate) browser_selection_summary: BTreeMap<String, BrowserSelectionSummary>,
     #[serde(skip)]
     pub(crate) browser_selection_anchor: BTreeMap<String, crate::pickers::browser::path_identity_model::PickerId>,
     /// Tool Presets: Current Tool Only.

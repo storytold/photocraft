@@ -717,6 +717,7 @@ pub(crate) fn picker_browser(
     };
     paint_brush_hierarchy_drag_label(ui, PANEL, egui::Id::new(("brush-drag-label", PANEL)));
 
+    let browser_actions = crate::pickers::browser::popup_dialogs::confirm_deletions(ui, PANEL, &groups, browser_actions);
     let mut actions = browser_actions_to_actions(presets, browser_actions);
     actions.extend(hierarchy_actions);
     actions
@@ -754,6 +755,7 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
             BrowserAction::DeleteNestedGroup { group, group_path } => Some(Action::DeleteGroup { group: group_key(presets, &group), folder: group_path }),
             BrowserAction::Drop(_, _)
             | BrowserAction::NewGroup
+            | BrowserAction::CreateGroup(_)
             | BrowserAction::New
             | BrowserAction::AppendDefault
             | BrowserAction::Import

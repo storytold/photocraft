@@ -61,6 +61,28 @@ fn gradient_builtins_and_listing() {
 }
 
 #[test]
+fn duplicate_gradient_names_are_migrated_with_incrementing_underscore_suffixes() {
+    use crate::presets::{Group, gradients::{GradientPreset, make_gradient_names_unique}};
+
+    let mut groups = vec![
+        Group::new("Browns", vec![GradientPreset::new("Brown 01", &["#000000", "#ffffff"])]),
+        Group::new(
+            "Imported",
+            vec![
+                GradientPreset::new("Brown 01", &["#111111", "#eeeeee"]),
+                GradientPreset::new("Brown 01", &["#222222", "#dddddd"]),
+                GradientPreset::new("Brown 01_1", &["#333333", "#cccccc"]),
+            ],
+        ),
+    ];
+
+    assert!(make_gradient_names_unique(&mut groups));
+    assert_eq!(groups[0].items[0].name, "Brown 01");
+    assert_eq!(groups[1].items.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(), ["Brown 01_2", "Brown 01_3", "Brown 01_1"]);
+    assert!(!make_gradient_names_unique(&mut groups), "the migration is idempotent");
+}
+
+#[test]
 fn rainbow_gradient_presets() {
     let mut s = session(8);
     let v = s.execute("gradient.presets.list", json!({})).unwrap();

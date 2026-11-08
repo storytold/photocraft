@@ -1,14 +1,15 @@
 //! Shared hit testing and interaction semantics for asset browsers.
 //!
-//! This module owns pointer hit testing, low-level interaction semantics, inline rename, and
+//! This module owns pointer hit testing, low-level interaction semantics, and
 //! drag-ghost capture/presentation. Context-menu policy lives in `context_menu`,
 //! while hierarchy target arbitration and release resolution live in `dragging`.
 
 use egui::{Pos2, Rect, pos2};
 
 use crate::PhotocraftApp;
-use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemPaintState, Painters};
+use crate::pickers::browser::asset_browser::{BrowserAction, BrowserCtx, BrowserSink, GroupView, ItemPaintState, PaintedCell, Painters};
 use crate::pickers::browser::path_identity_model::PickerId;
+#[cfg(test)]
 use crate::pickers::state::PresetUi;
 use crate::theme::Tokens;
 
@@ -196,86 +197,7 @@ impl Painters<'_, '_> {
     }
 }
 
-/// Draw the browser's inline rename row and return the resulting generic actions.
-pub(crate) fn draw_rename_row(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, tokens: &Tokens) -> (f32, Vec<BrowserAction>) {
-    let row_top = ui.cursor().top();
-    advance_item_rename(state, panel);
-    let item_rename = state.item_renaming.clone().filter(|rename| rename.panel == panel);
-    let nested_group_rename = state.group_renaming.clone().filter(|rename| rename.panel == panel);
-    let has_rename_row = item_rename.is_some() || nested_group_rename.is_some() || state.renaming.as_ref().is_some_and(|r| r.0 == panel);
-    let mut actions = Vec::new();
-
-    if let Some(mut rename) = item_rename {
-        if state.renaming.as_ref().is_some_and(|r| r.0 == panel) {
-            state.renaming = None;
-        }
-        let mut text = rename.text.clone();
-        let done = inline_name_editor(ui, &mut text, tokens);
-        rename.text = text.clone();
-        state.item_renaming = Some(rename.clone());
-        if let Some(confirm) = done {
-            state.item_renaming = None;
-            if confirm && !text.trim().is_empty() {
-                actions.push(BrowserAction::RenameItem { group: rename.group, group_path: rename.group_path, key: rename.key, text: text.trim().to_owned() });
-            }
-        }
-    } else if let Some(mut rename) = nested_group_rename {
-        // The typed nested-group target is authoritative while this editor is active. Remove any stale
-        // legacy target for the same panel so it cannot reappear after commit or cancellation.
-        if state.renaming.as_ref().is_some_and(|r| r.0 == panel) {
-            state.renaming = None;
-        }
-        let mut text = rename.text.clone();
-        let done = inline_name_editor(ui, &mut text, tokens);
-        rename.text = text.clone();
-        state.group_renaming = Some(rename.clone());
-        if let Some(confirm) = done {
-            state.group_renaming = None;
-            if confirm && !text.trim().is_empty() {
-                actions.push(BrowserAction::RenameNestedGroup { group: rename.group, group_path: rename.group_path, text: text.trim().to_owned() });
-            }
-        }
-    } else if let Some((panel_name, key, mut text)) = state.renaming.clone().filter(|rename| rename.0 == panel) {
-        // Starting a regular item/group rename supersedes any pending nested-group target for this panel.
-        if state.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
-            state.group_renaming = None;
-        }
-        let done = inline_name_editor(ui, &mut text, tokens);
-        state.renaming = Some((panel_name, key.clone(), text.clone()));
-        if let Some(confirm) = done {
-            state.renaming = None;
-            if confirm && !text.trim().is_empty() {
-                let text = text.trim().to_owned();
-                match key.strip_prefix("group:") {
-                    Some(group) => actions.push(BrowserAction::RenameGroup(group.to_owned(), text)),
-                    None => actions.push(BrowserAction::Rename(key, text)),
-                }
-            }
-            if let Some(index) = state.group_rename_queue.iter().position(|rename| rename.0 == panel) {
-                state.renaming = Some(state.group_rename_queue.remove(index));
-            }
-        }
-    }
-
-    let height = if has_rename_row { (ui.cursor().top() - row_top).max(0.0) } else { 0.0 };
-    (height, actions)
-}
-
-fn inline_name_editor(ui: &mut egui::Ui, text: &mut String, tokens: &Tokens) -> Option<bool> {
-    let mut done = None;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Name:")).color(tokens.text_dim).size(11.5));
-        let response = ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width() - 4.0));
-        if !response.has_focus() && !response.lost_focus() {
-            response.request_focus();
-        }
-        if response.lost_focus() {
-            done = Some(ui.input(|input| input.key_pressed(egui::Key::Enter)));
-        }
-    });
-    done
-}
-
+#[cfg(test)]
 pub(crate) fn advance_item_rename(st: &mut PresetUi, panel: &str) {
     if st.item_renaming.is_none()
         && let Some(index) = st.item_rename_queue.iter().position(|rename| rename.panel == panel)
@@ -348,6 +270,37 @@ pub(crate) fn asset_browser_item_gesture(response: &egui::Response, selection: b
     let activated = activation && response.double_clicked();
     let selected = selection && !activated && response.clicked();
     (selected, activated)
+}
+
+/// Apply shared click/double-click selection semantics and emit the corresponding browser action.
+pub(super) fn apply_browser_item_gesture(
+    ui: &egui::Ui,
+    painted: &PaintedCell<'_>,
+    ctx: &BrowserCtx<'_>,
+    sink: &mut BrowserSink<'_>,
+    visible_selection_order: &[PickerId],
+) -> egui::Response {
+    let group = painted.item.group;
+    let item = painted.item.item;
+    let response = painted.response.clone();
+    let BrowserCtx { panel, capabilities, .. } = *ctx;
+    let hover = if item.group_path.is_empty() { item.name.clone() } else { format!("{} / {}", item.group_path.join(" / "), item.name) };
+    let response = response.on_hover_text(hover);
+    let (selected, activated) = asset_browser_item_gesture(&response, capabilities.selection, capabilities.activation);
+    if selected && let Some(id) = painted.node_id.as_ref() {
+        let modifiers = ui.input(|input| input.modifiers);
+        if modifiers.shift {
+            sink.select_range(panel, visible_selection_order, id);
+        } else {
+            sink.select_node(panel, id.clone(), modifiers.ctrl);
+        }
+    }
+    if activated {
+        sink.emit(BrowserAction::ActivateItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
+    } else if selected {
+        sink.emit(BrowserAction::SelectItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
+    }
+    response
 }
 
 #[cfg(test)]

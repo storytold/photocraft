@@ -47,7 +47,7 @@ fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut 
         ui.close();
     }
     if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Group…"), true).clicked() {
-        crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, &BrowserAction::NewGroup, serde_json::json!({}));
+        crate::pickers::browser::popup_dialogs::request_new_group(ui.ctx(), panel);
         ui.close();
     }
     ui.separator();
@@ -58,27 +58,34 @@ fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut 
     if show_group_actions {
         if crate::menu_keys::menu_item_button(ui, &rename_group_label, has_selection && rename_groups.is_some()).clicked() {
             if let Some(action) = rename_groups {
-                crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, action, serde_json::json!({}));
+                crate::pickers::browser::popup_dialogs::request_rename_group(ui.ctx(), panel, action.clone());
             }
             ui.close();
         }
     } else if crate::menu_keys::menu_item_button(ui, &rename_item_label, has_selection && rename_items.is_some()).clicked() {
         if let Some(action) = rename_items {
-            crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, action, serde_json::json!({}));
+            crate::pickers::browser::popup_dialogs::request_rename_cards(ui.ctx(), panel, action.clone());
         }
         ui.close();
     }
     let delete_item_label = format!("Delete {}{}…", asset, if delete_items.len() > 1 { "s" } else { "" });
     let delete_group_label = format!("Delete Group{}…", if delete_groups.len() > 1 { "s" } else { "" });
+    let mut requested_deletions = Vec::new();
     if show_group_actions {
         if crate::menu_keys::menu_item_button(ui, &delete_group_label, has_selection && !delete_groups.is_empty()).clicked() {
-            for action in delete_groups {
-                crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, action, serde_json::json!({}));
-            }
-            ui.close();
+            requested_deletions.extend(delete_groups.into_iter().cloned());
         }
     } else if crate::menu_keys::menu_item_button(ui, &delete_item_label, has_selection && !delete_items.is_empty()).clicked() {
-        for action in delete_items {
+        requested_deletions.extend(delete_items.into_iter().cloned());
+    }
+    if !requested_deletions.is_empty() {
+        // The confirmation is a separate modal; dismiss this popup immediately so it does not
+        // remain open underneath the dialog.
+        ui.close();
+    }
+    let confirmed = crate::pickers::browser::popup_dialogs::confirm_deletions(ui, panel, &[], requested_deletions);
+    if !confirmed.is_empty() {
+        for action in &confirmed {
             crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, action, serde_json::json!({}));
         }
         ui.close();
@@ -103,7 +110,7 @@ pub(crate) fn shared_picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, pan
     let mut trailing = |ui: &mut egui::Ui, state: &mut crate::pickers::state::PresetUi, _panel: &str| {
         let mut app = app_cell.borrow_mut();
         match panel {
-            "gradients" => crate::pickers::adapters::gradients::panel_menu(&mut app, ui),
+            "gradients" => crate::pickers::adapters::gradients::panel_menu(&mut app, ui, state),
             "patterns" => crate::pickers::adapters::patterns::panel_menu(&mut app, ui),
             "swatches" => crate::pickers::adapters::swatches::panel_menu(&mut app, ui, state),
             _ => {}
@@ -120,7 +127,7 @@ pub(crate) fn shared_picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, pan
 mod tests {
     use super::{browser_actions_menu, shared_picker_menu};
     use crate::PhotocraftApp;
-    use crate::pickers::browser::asset_browser::{BrowserAction, ItemView};
+    use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemView};
     use crate::pickers::state::PresetUi;
     use egui::vec2;
     use egui_kittest::{
@@ -159,6 +166,7 @@ mod tests {
             "Show Recents",
             "Append Default Gradients…",
             "Import Gradients…",
+            "Export Selected Gradients…",
         ];
         let mut previous_bottom = None;
         for label in labels {
@@ -185,8 +193,39 @@ mod tests {
         for label in ["Rename Gradient…", "Delete Gradient…"] {
             assert!(harness.get_by_label(label).accesskit_node().is_disabled(), "{label} is disabled without a selection");
         }
+        assert!(harness.get_by_label("Export Selected Gradients…").accesskit_node().is_disabled(), "export is disabled without a selection");
         assert!(harness.query_by_label("Rename Group…").is_none(), "only the last-selected asset kind is shown");
         assert!(harness.query_by_label("Delete Group…").is_none(), "only the last-selected asset kind is shown");
+    }
+
+    #[test]
+    fn gradients_panel_menu_enables_export_for_selected_items() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let target = ItemView { key: "Sunset".into(), name: "Sunset".into(), group_path: Vec::new() };
+        let mut harness = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                app.ui.presets_ui.browser_selection.insert(
+                    "gradients".into(),
+                    std::collections::BTreeSet::from([crate::pickers::browser::path_identity_model::PickerId::item("Basics", "Sunset")]),
+                );
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::new(("preset-browser-selection-actions", "gradients")),
+                        vec![BrowserAction::BeginRenameItems(vec![("Basics".into(), target.clone())])],
+                    );
+                });
+                crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    assert!(shared_picker_menu(app, ui, "gradients"));
+                });
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+
+        assert!(!harness.get_by_label("Export Selected Gradients…").accesskit_node().is_disabled());
     }
 
     #[test]
@@ -270,6 +309,12 @@ mod tests {
                 crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
                     browser_actions_menu(app, ui, state, "gradients");
                 });
+                let groups = [GroupView { name: "Basics".into(), root_only: false, items: targets.iter().map(|(_, item)| item.clone()).collect() }];
+                let mut actions = Vec::new();
+                let mut paint = |ui: &egui::Ui, rect: egui::Rect, _: usize, _: usize, _: crate::pickers::browser::asset_browser::ItemPaintState| {
+                    ui.painter().rect_filled(rect, 0.0, egui::Color32::WHITE);
+                };
+                crate::pickers::browser::popup_dialogs::show_rename_card_dialog(ui, "gradients", &groups, &mut actions, &mut paint);
             },
             (app, state),
         );
@@ -280,9 +325,9 @@ mod tests {
         harness.get_by_label("Rename Gradients…").click();
         harness.run_steps(2);
 
-        assert_eq!(harness.state().1.item_renaming.as_ref().map(|rename| rename.key.as_str()), Some("one"));
-        assert_eq!(harness.state().1.item_rename_queue.len(), 1);
-        assert_eq!(harness.state().1.item_rename_queue[0].key, "two");
+        assert!(harness.query_by_label("Name").is_some(), "card rename uses the popup name field");
+        assert!(harness.state().1.item_renaming.is_none(), "card rename no longer uses the old inline rename column");
+        assert!(harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Gradient Name")));
     }
 
     #[test]
@@ -308,6 +353,8 @@ mod tests {
                 crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
                     browser_actions_menu(app, ui, state, "gradients");
                 });
+                let mut actions = Vec::new();
+                crate::pickers::browser::popup_dialogs::show_rename_group_dialog(ui, "gradients", &mut actions);
             },
             (app, state),
         );
@@ -320,7 +367,8 @@ mod tests {
 
         assert!(harness.query_by_label("Rename Gradient…").is_none(), "group selection hides card rename");
         assert!(harness.query_by_label("Delete Gradient…").is_none(), "group selection hides card delete");
-        assert_eq!(harness.state().1.renaming.as_ref().map(|rename| rename.1.as_str()), Some("group:Basics"));
-        assert_eq!(harness.state().1.group_rename_queue, [("gradients".into(), "group:Grays".into(), "Grays".into())]);
+        assert!(harness.query_by_label("Name").is_some(), "group rename uses the popup name field");
+        assert!(harness.state().1.renaming.is_none(), "group rename no longer uses the old inline rename column");
+        assert!(harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Rename Group")));
     }
 }
