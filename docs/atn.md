@@ -90,7 +90,7 @@ row; the action still adds only one Undo entry.
 | `Btch` | batch | Batch (supported folder and naming forms) | `file.automate.batch` |
 | `CrtD` | (no string ID) | Create Droplet (destination Folder with Override Action "Save As"; other forms stay kept steps) | `file.automate.createDroplet` |
 | (string ID only) | packageFile | Package | `file.package` |
-| (string ID only) | importAnnots | Import Notes | `file.import.notes` |
+| (string ID only) | importAnnots | Import Notes (`.psd`, `.psb` and `.pcraft` sources; PDF and FDF stay kept steps) | `file.import.notes` |
 | (string ID only) | apply | Apply Data Set (`dataSetClass` by name) | `image.applyDataSet` |
 | (string ID only) | shapeBlur | Shape Blur (custom shape by installed ID) | `filter.blur.shapeBlur` |
 | (string ID only) | cafWorkspace | Content-Aware Fill | `edit.contentAwareFill` |
