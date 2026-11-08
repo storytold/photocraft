@@ -229,8 +229,8 @@ fn mixer_prepared_commit_uses_displayed_pixels_and_rejects_stale_documents() {
 }
 
 /// Load and clean affect tool state without dropping a floating selection or creating document
-/// history; a sample keeps the floating selection and the pixels and adds one "Mixer Brush"
-/// history state (#11954).
+/// history; a sample drops the floating selection as its own state and adds one "Mixer Brush"
+/// history state after it (#11954).
 #[test]
 fn mixer_load_commands_preserve_floating_selection_and_history() {
     let mut s = fixture(PixelFormat::RGBA8);
@@ -238,17 +238,16 @@ fn mixer_load_commands_preserve_floating_selection_and_history() {
     s.execute("select.float", json!({"dx":8,"dy":0,"copy":true})).unwrap();
     let doc = s.active().unwrap().doc.clone();
     let steps = s.active().unwrap().history.past_len();
-    s.execute("brush.mixer.sample", json!({"points":[[96,48]],"size":24})).unwrap();
-    assert!(*doc == *s.active().unwrap().doc);
-    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
-    assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
-    let doc = s.active().unwrap().doc.clone();
     for (command, params) in [("brush.mixer.load", json!({})), ("brush.mixer.clean", json!({}))] {
         s.execute(command, params).unwrap();
         assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
         assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
     }
+    s.execute("brush.mixer.sample", json!({"points":[[96,48]],"size":24})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 2, "the move, then the load");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Mixer Brush"));
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_none());
 }
 
 /// Malformed reservoir input is rejected and automatic reload follows the selected setting.

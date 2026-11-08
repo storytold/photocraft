@@ -67,3 +67,24 @@ fn a_failed_sample_adds_no_state() {
     assert!(sample(&mut s, 50.0, 24.0).is_err());
     assert_eq!(steps(&s), before);
 }
+
+/// A load while a moved selection floats comes after the move in History: the move is dropped
+/// as its own state first, so the first Undo removes the "Mixer Brush" state and keeps the moved
+/// pixels, and the second undoes the move (CodeRabbit review on mixer_live.rs:455).
+#[test]
+fn a_load_over_a_floating_selection_is_undone_before_the_move() {
+    let mut s = session();
+    let before = steps(&s);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
+    s.execute("select.float", json!({"dx": 8, "dy": 0})).unwrap();
+    sample(&mut s, 16.0, 24.0).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.history.past_len(), before + 3, "the selection, the move and the load");
+    assert_eq!(st.history.undo_label(), Some("Mixer Brush"));
+    let moved = pixels(&mut s);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(steps(&s), before + 2, "Undo removes the load's state first");
+    assert_eq!(pixels(&mut s), moved, "the moved pixels stay");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(steps(&s), before + 1, "the next Undo removes the move");
+}

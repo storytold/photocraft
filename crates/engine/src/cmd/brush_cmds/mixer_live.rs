@@ -447,13 +447,10 @@ pub(super) fn sample(s: &mut Session, p: &Value) -> Result<Value> {
         average[k] /= average[3];
     }
     average[3] = 1.0;
-    // The state keeps a floating selection, as the load did before it added one.
-    let floating = s.active().and_then(crate::float_cmds::floating).cloned();
+    // A floating selection's move is dropped as its own state first, so the load's state comes
+    // after it and Undo steps back over the load before the move.
+    crate::float_cmds::drop_floating(s)?;
     s.edit("Mixer Brush", |_, _| Ok(()))?;
-    if let (Some(mut f), Some(st)) = (floating, s.active_mut()) {
-        f.revision = st.revision;
-        st.floating = Some(f);
-    }
     s.tools.mixer.load(average);
     s.tools.mixer.spatial = Some(load);
     s.tools.mixer.pickup = None;
