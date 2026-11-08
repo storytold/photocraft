@@ -457,6 +457,7 @@ fn skin_smooth_checks_icc_before_editing_at_every_depth() {
         let after = pixels(&s);
         assert_ne!(after, before);
         let mut largest_change = 0.0_f32;
+        let mut full_change = 0.0_f32;
         for (i, (original, filtered)) in before.chunks_exact(4).zip(after.chunks_exact(4)).enumerate() {
             assert_eq!(original[3], filtered[3]);
             let (x, y) = (i % 40, i / 40);
@@ -468,9 +469,15 @@ fn skin_smooth_checks_icc_before_editing_at_every_depth() {
                     let expected = original[channel] * 0.6 + full_strength[i * 4 + channel] * 0.4;
                     assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: 40% selection at {x},{y}, channel {channel}");
                 }
+            } else {
+                assert_eq!(&filtered[..3], &full_strength[i * 4..i * 4 + 3], "{depth}: 100% selection at {x},{y}");
+                for channel in 0..3 {
+                    full_change = full_change.max((filtered[channel] - original[channel]).abs());
+                }
             }
         }
         assert!(largest_change > 4.0 * tolerance, "{depth}: the full-strength fractional region must change, delta={largest_change}");
+        assert!(full_change > 4.0 * tolerance, "{depth}: the fully selected region must change, delta={full_change}");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(pixels(&s), before);
         s.execute("edit.redo", json!({})).unwrap();
