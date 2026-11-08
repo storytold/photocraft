@@ -71,6 +71,7 @@ pub(crate) fn idle(app: &PhotocraftApp, command: &str) -> Result<(), String> {
         || app.session.actions.playing > 0
         || super::playback::pending(app)
         || app.paused_playbacks.paused.values().any(|paused| paused.menu_editor.is_some())
+        || app.ui.type_panels.spell.as_ref().and_then(|spell| spell.resume).is_some_and(|token| app.paused_playbacks.paused.contains_key(&token))
     {
         return Err(tl!("Stop recording or playback before changing the Actions library.").into());
     }

@@ -626,6 +626,41 @@ fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
 }
 
 #[test]
+fn saving_preferences_waits_for_the_actions_write_only_for_its_shortcuts() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let old = "actions.playById:00112233445566778899aabbccddeeff";
+    let new = "actions.playById:ffeeddccbbaa99887766554433221100";
+    let (mut app, store) = app_with_saved(Some(json!({"shortcuts": {(old): "F2"}, "alternateShortcuts": {(old): ["F3"]}}).to_string()));
+    let pending = Arc::new(AtomicBool::new(false));
+    let observed = pending.clone();
+    app.services.actions_write_pending = Some(Box::new(move || observed.load(Ordering::Relaxed)));
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+
+    pending.store(true, Ordering::Relaxed);
+    app.session.edit_prefs(|prefs| {
+        prefs.shortcuts.remove(old);
+        prefs.shortcuts.insert(new.into(), "F2".into());
+        prefs.alternate_shortcuts.remove(old);
+        prefs.file_handling.recent_file_count = 12;
+    });
+    tick(&mut app, &ctx);
+    let before_commit = stored(&store);
+    assert_eq!(before_commit["fileHandling"]["recentFileCount"], 12);
+    assert_eq!(before_commit["shortcuts"][old], "F2");
+    assert_eq!(before_commit["alternateShortcuts"][old], json!(["F3"]));
+    assert!(before_commit["shortcuts"].get(new).is_none());
+
+    pending.store(false, Ordering::Relaxed);
+    tick(&mut app, &ctx);
+    let after_commit = stored(&store);
+    assert!(after_commit["shortcuts"].get(old).is_none());
+    assert!(after_commit["alternateShortcuts"].get(old).is_none());
+    assert_eq!(after_commit["shortcuts"][new], "F2");
+}
+
+#[test]
 fn a_wrongly_typed_value_resets_only_itself_and_is_repaired_on_disk() {
     // #6611: one bad value used to reset every preference, on every launch.
     let saved = json!({

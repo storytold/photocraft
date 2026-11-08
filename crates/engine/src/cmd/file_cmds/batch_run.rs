@@ -685,8 +685,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
-    let list = match p.get("calledActions") {
-        None | Some(Value::Null) => s.actions.list.clone(),
+    let embedded = p.get("calledActions").filter(|value| !value.is_null());
+    let list = match embedded {
+        None => s.actions.list.clone(),
         // A droplet brings the actions it calls (#2794) and runs with those alone.
         Some(v) => {
             let list: Vec<crate::actions_cmds::Action> =
@@ -705,8 +706,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         // The caller selects the source; calledActions supplies only its internal namespace.
         let index = batch_action(&s.actions.list, p)?;
-        let (action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
-        called_target = Some(crate::actions_cmds::PlaybackTarget::from(&action));
+        let (row, action, _) = crate::actions_cmds::playback_plan_at(s, &json!({"action": index}))?;
+        called_target = Some(crate::actions_cmds::PlaybackTarget::at(s, row, &action));
         action.enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
     };
     let action_name = s
@@ -780,6 +781,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         list,
         playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },
         playback_stack,
+        playback_namespace: s.actions.playback_namespace + usize::from(embedded.is_some()),
         playback_steps,
         script_depth: s.actions.script_depth,
         script_steps: s.actions.script_steps,
@@ -789,7 +791,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let save = SaveOpts::from_params(s, p, cmd)?;
         // A caller's recording index belongs to its original library, not an embedded namespace.
         // As in ordinary named playback, suspend it while executing and restore the Batch owner.
-        let previous_recording = if named {
+        let previous_recording = if named || embedded.is_some() {
             crate::actions_cmds::flush_recording(s)?;
             s.actions.recording.take()
         } else {
@@ -799,7 +801,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
         let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
         let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
-        let previous_list = p.get("calledActions").is_some_and(|value| !value.is_null()).then(|| std::mem::replace(&mut s.actions.list, actions.list));
+        let previous_namespace = std::mem::replace(&mut s.actions.playback_namespace, actions.playback_namespace);
+        let previous_list = embedded.is_some().then(|| std::mem::replace(&mut s.actions.list, actions.list));
         let owns_history = s.action_history.is_none() && s.prefs().actions.create_single_history_state;
         if owns_history {
             crate::actions_cmds::begin_document_history(s, &action_name);
@@ -810,13 +813,14 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
         s.actions.playing = previous_playing;
         s.actions.playback_stack = previous_stack;
+        s.actions.playback_namespace = previous_namespace;
         if let Some(previous) = previous_list {
             s.actions.list = previous;
         }
         if previous_playing == 0 {
             s.actions.playback_steps = previous_steps;
         }
-        if named {
+        if named || embedded.is_some() {
             s.actions.recording = previous_recording;
         }
         return result;

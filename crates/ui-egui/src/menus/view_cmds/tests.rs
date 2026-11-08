@@ -459,6 +459,34 @@ fn batch_menu_runs_the_selected_sets_action_among_same_named_ones() {
     assert_eq!((image.size.width, image.size.height), (1, 2), "set B's action (a rotation) ran");
 }
 
+#[test]
+fn batch_menu_keeps_the_selected_same_name_and_set_occurrence() {
+    let (mut app, ctx) = app_with(0);
+    app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
+    for _ in 0..2 {
+        app.session.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
+    }
+    app.session.actions.list[2].steps = vec![("image.imageRotation.90cw".into(), json!({}))];
+    app.ui.actions.selected = Some(2);
+    let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
+    assert_eq!((&fields["action"], &fields["set"]), (&json!("Invert Colors"), &json!("PhotoCraft Basics")));
+    fields.insert("source".into(), json!("open"));
+    fields.remove("output");
+    let result = crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    let size = app.session.active().unwrap().doc.size;
+    assert_eq!((size.width, size.height), (1, 2), "the later occurrence rotated the document");
+
+    let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
+    fields.insert("source".into(), json!("open"));
+    fields.remove("output");
+    app.run("actions.move", json!({"action": 2, "to": 1})).unwrap();
+    assert!(crate::dialogs::confirm(&mut app, dialog).unwrap_err().contains("selected action changed"));
+    assert_eq!(app.session.active().unwrap().doc.size, size);
+}
+
 /// Choosing a different action changes the output; cancelled or deleted choices write nothing.
 #[test]
 fn batch_menu_runs_the_action_chosen_in_the_form() {

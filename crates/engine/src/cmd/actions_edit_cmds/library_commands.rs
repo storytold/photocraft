@@ -28,6 +28,7 @@ pub struct LibraryUndo {
     alternates: Alternates,
     after_shortcuts: Shortcuts,
     after_alternates: Alternates,
+    replaced_before_attachment: bool,
 }
 
 pub(crate) fn enabled(s: &Session) -> std::result::Result<(), String> {
@@ -101,6 +102,7 @@ pub(crate) fn publish_library(
 ) -> Result<()> {
     let shortcuts = action_bindings(&s.prefs().shortcuts);
     let alternates = action_bindings(&s.prefs().alternate_shortcuts);
+    let replacing = new_shortcuts.is_some();
     let (after_shortcuts, after_alternates) = match new_shortcuts {
         Some(keys) => (keys, Alternates::new()),
         None => {
@@ -135,7 +137,11 @@ pub(crate) fn publish_library(
         alternates,
         after_shortcuts,
         after_alternates,
+        replaced_before_attachment: s.actions.replaced_before_attachment,
     };
+    if replacing && s.preset_store.is_none() {
+        s.actions.replaced_before_attachment = true;
+    }
     s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
     s.actions.touch();
     s.actions.library_undo = Some(Box::new(undo));
@@ -145,7 +151,12 @@ pub(crate) fn publish_library(
 pub(super) fn clear(s: &mut Session, p: &Value) -> Result<Value> {
     confirmed_idle(s, p, "actions.clearAll")?;
     let count = s.actions.list.len();
-    if count != 0 || !s.actions.sets.is_empty() || !s.actions.set_rows.is_empty() {
+    let prefs = s.prefs();
+    if count != 0
+        || !s.actions.sets.is_empty()
+        || !s.actions.set_rows.is_empty()
+        || prefs.shortcuts.keys().chain(prefs.alternate_shortcuts.keys()).any(|id| is_action_key(id))
+    {
         publish_library(s, Vec::new(), Vec::new(), Vec::new(), Some(Shortcuts::new()), "Undo Clear All Actions", "actions.clearAll")?;
     }
     Ok(json!({"cleared":count}))
@@ -205,6 +216,9 @@ pub(super) fn undo(s: &mut Session, _: &Value) -> Result<Value> {
     s.actions.list = undo.list;
     s.actions.sets = undo.sets;
     s.actions.set_rows = undo.rows;
+    if s.preset_store.is_none() {
+        s.actions.replaced_before_attachment = undo.replaced_before_attachment;
+    }
     s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
     replace_bindings(s, undo.shortcuts, undo.alternates);
     s.actions.touch();

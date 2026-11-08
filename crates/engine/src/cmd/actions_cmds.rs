@@ -102,23 +102,28 @@ impl Action {
     }
 }
 
-/// The name is used for display and as the identity of a legacy action.
+/// Active playback identity. Registered legacy rows are scoped to their current library.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackTarget {
     pub name: String,
     pub id: Option<String>,
+    pub(crate) position: Option<(usize, usize)>,
 }
 
 impl From<&Action> for PlaybackTarget {
     fn from(action: &Action) -> Self {
-        Self { name: action.name.clone(), id: action.action_id.clone().filter(|id| identity::valid_action_id(id)) }
+        Self { name: action.name.clone(), id: action.action_id.clone().filter(|id| identity::valid_action_id(id)), position: None }
     }
 }
 
 impl PlaybackTarget {
-    fn matches(&self, action: &Action) -> bool {
+    pub(crate) fn at(s: &Session, row: usize, action: &Action) -> Self {
+        Self { position: Some((s.actions.playback_namespace, row)), ..Self::from(action) }
+    }
+
+    fn matches(&self, s: &Session, row: usize, action: &Action) -> bool {
         match (self.id.as_deref(), action.action_id.as_deref().filter(|id| identity::valid_action_id(id))) {
-            (None, None) => self.name == action.name,
+            (None, None) => self.position.map_or_else(|| self.name == action.name, |position| position == (s.actions.playback_namespace, row)),
             (left, right) => left == right,
         }
     }
@@ -154,6 +159,9 @@ pub struct ActionState {
     /// Active action occurrences, for cycle detection in engine and desktop playback.
     #[serde(skip)]
     pub playback_stack: Vec<PlaybackTarget>,
+    /// Depth of embedded Batch libraries in this synchronous playback tree.
+    #[serde(skip)]
+    pub playback_namespace: usize,
     /// Number of steps executed by the current top-level playback tree.
     #[serde(skip)]
     pub playback_steps: u64,
@@ -175,6 +183,9 @@ pub struct ActionState {
     /// The latest destructive panel edit, separate from document History.
     #[serde(skip)]
     pub library_undo: Option<Box<crate::actions_edit_cmds::LibraryUndo>>,
+    /// An explicit replacement of the in-memory library before its preset store arrived.
+    #[serde(skip)]
+    pub(crate) replaced_before_attachment: bool,
     /// Bumped whenever `list` changes, so the preset store can skip unchanged writes.
     #[serde(skip)]
     pub rev: u64,
@@ -319,19 +330,24 @@ pub fn shell_view_command(id: &str) -> bool {
 
 /// Shared validation for headless and shell playback. Does not start playback.
 pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
+    playback_plan_at(s, p).map(|(_, action, from)| (action, from))
+}
+
+/// Resolve the row once so playback, Batch and a dialog can preserve its occurrence.
+pub fn playback_plan_at(s: &Session, p: &Value) -> Result<(usize, Action, usize)> {
     if s.actions.playing > 0 && s.actions.playback_stack.is_empty() {
         return Err(bad("actions.play", "an action is already playing"));
     }
     let idx = resolve_play_target(&s.actions.list, p, "actions.play")?;
     let action = s.actions.list.get(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
-    if s.actions.playback_stack.iter().any(|target| target.matches(&action)) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
+    if s.actions.playback_stack.iter().any(|target| target.matches(s, idx, &action)) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
         return Err(bad("actions.play", format!("recursive action call to `{}`", action.name)));
     }
     if s.actions.playback_stack.len() >= 16 {
         return Err(bad("actions.play", "action nesting exceeds 16 levels"));
     }
     let from = from_step(p, action.steps.len())?;
-    Ok((action, from))
+    Ok((idx, action, from))
 }
 
 /// Visit calls in the current namespace, leaving embedded inline Batch scopes untouched.
@@ -854,14 +870,33 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
 /// for diagnostics, but record just the named call in the parent action.
 pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
     flush_recording(s)?;
+    Ok(push_playback(s, PlaybackTarget::from(action)))
+}
+
+/// Begin a resolved library row. A recorded call to a later same-name row needs a durable ID.
+pub fn begin_playback_at(s: &mut Session, row: usize, action: &mut Action) -> Result<Option<(usize, usize)>> {
+    if s.actions.list.get(row) != Some(&*action) {
+        return Err(bad("actions.play", "action selection changed"));
+    }
+    flush_recording(s)?;
+    if s.actions.recording.is_some() && s.actions.list.iter().position(|other| other.name == action.name) != Some(row) {
+        let id = prepare_action_id(&s.actions.list, row)?;
+        commit_action_id(s, row, id.clone())?;
+        action.action_id = Some(id);
+    }
+    let target = PlaybackTarget::at(s, row, action);
+    Ok(push_playback(s, target))
+}
+
+fn push_playback(s: &mut Session, target: PlaybackTarget) -> Option<(usize, usize)> {
     if s.actions.playing == 0 {
-        history::begin(s, &action.name);
+        history::begin(s, &target.name);
         s.actions.playback_steps = 0;
     }
     let recording = s.actions.recording.take();
     s.actions.playing = s.actions.playing.saturating_add(1);
-    s.actions.playback_stack.push(PlaybackTarget::from(action));
-    Ok(recording)
+    s.actions.playback_stack.push(target);
+    recording
 }
 
 /// Unwind the playback stack and finish grouping only at the outer boundary, then restore suspended recording.
@@ -885,7 +920,7 @@ pub fn restore_recording(s: &mut Session, idx: usize, params: Value) {
 
 pub fn recorded_target(s: &Session, action: &Action, from: usize) -> Value {
     let mut params = json!({"action": action.name});
-    if let Some(id) = &action.action_id
+    if let Some(id) = action.action_id.as_deref().filter(|id| resolve_action_id(&s.actions.list, id).is_some())
         && s.actions.list.iter().filter(|other| other.name == action.name).take(2).count() > 1
     {
         params["actionId"] = json!(id);
@@ -944,8 +979,8 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 }
 
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
-    let (action, from) = playback_plan(s, p)?;
-    let recording = begin_playback(s, &action)?;
+    let (row, mut action, from) = playback_plan_at(s, p)?;
+    let recording = begin_playback_at(s, row, &mut action)?;
     let (ran, failed) = run_recorded(s, &action, from);
     finish_playback(s, recording, &action, from);
     Ok(match failed {

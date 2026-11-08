@@ -986,6 +986,50 @@ fn play_refuses_recursion() {
 }
 
 #[test]
+fn legacy_occurrences_distinguish_a_sibling_from_a_cycle() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for _ in 0..2 {
+        s.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
+    }
+    s.actions.list[0].steps = vec![("actions.play".into(), json!({"action": 2}))];
+    assert_eq!(s.actions.list[0].name, s.actions.list[2].name);
+    assert!(s.actions.list[0].action_id.is_none() && s.actions.list[2].action_id.is_none());
+    let sibling = s.execute("actions.play", json!({"action": 0})).unwrap();
+    assert_eq!(sibling["ran"], 1, "{sibling}");
+    assert!(sibling.get("failed").is_none());
+    s.actions.list[2].steps = vec![("actions.play".into(), json!({"action": 0}))];
+    let cycle = s.execute("actions.play", json!({"action": 0})).unwrap();
+    assert!(cycle["failed"]["error"].as_str().unwrap().contains("recursive action"), "{cycle}");
+    assert_eq!(s.actions.playing, 0);
+    assert!(s.actions.playback_stack.is_empty());
+}
+
+#[test]
+fn recording_a_later_legacy_occurrence_persists_its_id_and_step() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for _ in 0..2 {
+        s.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
+    }
+    s.actions.list[2].steps.push(("layer.new.layer".into(), json!({"name": "later occurrence"})));
+    s.execute("actions.record", json!({"name": "Recorder"})).unwrap();
+    let live = s.execute("actions.play", json!({"action": 2, "from": 1})).unwrap();
+    assert_eq!(live["ran"], 1, "{live}");
+    s.execute("actions.stop", json!({})).unwrap();
+    let id = s.actions.list[2].action_id.clone().unwrap();
+    assert_eq!(s.actions.list[4].steps, [("actions.play".to_string(), json!({"action": "Invert Colors", "actionId": id, "from": 1}))]);
+    s.execute("actions.move", json!({"action": 2, "to": 3})).unwrap();
+    let saved = serde_json::to_string(&s.actions.list).unwrap();
+    let mut replay = Session::new();
+    replay.actions.list = serde_json::from_str(&saved).unwrap();
+    replay.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let result = replay.execute("actions.play", json!({"action": "Recorder"})).unwrap();
+    assert_eq!(result["ran"], 1, "{result}");
+    assert!(replay.active().unwrap().doc.layers.iter().any(|layer| layer.name == "later occurrence"));
+}
+
+#[test]
 fn play_checks_each_step_with_the_authorize_hook() {
     fn deny_file(id: &str, _: &Value) -> Result<()> {
         if id.starts_with("file.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }

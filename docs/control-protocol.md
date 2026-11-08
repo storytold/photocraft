@@ -691,8 +691,9 @@ then each set as a collapsible folder (`ui.actions.collapsedSets`); dropping an 
 another set's rows moves it into that set. When recording a new action or assigning it to a folder,
 pass the caption and its zero-based `setSlot` from `setRows` to select a particular occurrence.
 Omitting `setSlot` infers a physical folder only if the caption identifies one occurrence and no
-legacy group shares it. Explicit null keeps name-only assignment. Duplicate uses a physical
-folder only when given its `setSlot`. Each step has Photoshop's two toggles: the check
+legacy group shares it. Explicit null keeps name-only assignment. For Duplicate, a numeric
+`setSlot` selects one physical folder, null selects the implicit group, and omission selects by
+caption. Each step has Photoshop's two toggles: the check
 (`actions.toggle`, skipped when off) and the **dialog** toggle (`actions.dialog`). Playing a
 step with its dialog on opens that command's dialog seeded with the recorded values and pauses:
 the play result carries `paused: {step, id, dialog}`, OK runs the dialog's values and continues

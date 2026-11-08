@@ -134,8 +134,9 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, "select a set or an action step, not both"));
         }
         let name = set.as_str().ok_or_else(|| bad(cmd, "set must be a name"))?;
-        let slot = if p.get("setSlot").is_none_or(Value::is_null) { None } else { set_slot(s, p, Some(name), cmd)? };
-        return duplicate_set(s, name, slot);
+        let slot = set_slot(s, p, Some(name), cmd)?;
+        // Omitted selects by caption, null selects the implicit group, and a number selects one physical folder.
+        return duplicate_set(s, name, p.get("setSlot").map(|_| slot));
     }
     let idx = resolve(&s.actions.list, p, cmd)?;
     if let Some(step) = index(p, "step", cmd)? {
@@ -178,7 +179,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Copy a physical folder occurrence or the legacy named group, including empty folders.
-fn duplicate_set(s: &mut Session, source: &str, source_slot: Option<usize>) -> Result<Value> {
+fn duplicate_set(s: &mut Session, source: &str, slot_filter: Option<Option<usize>>) -> Result<Value> {
     let cmd = "actions.duplicate";
     if s.actions.recording.is_some() {
         return Err(bad(cmd, "stop recording before duplicating a set"));
@@ -188,8 +189,8 @@ fn duplicate_set(s: &mut Session, source: &str, source_slot: Option<usize>) -> R
         return Err(bad(cmd, "the selected set no longer exists"));
     }
     let name = crate::atn_cmds::UniqueNames::new(sets).claim(&format!("{source} copy"));
-    let copy_slot = source_slot.map(|slot| slot + 1);
-    let belongs = |action: &crate::actions_cmds::Action| action.set.as_deref() == Some(source) && source_slot.is_none_or(|slot| action.set_slot == Some(slot));
+    let copy_slot = slot_filter.flatten().map(|slot| slot + 1);
+    let belongs = |action: &crate::actions_cmds::Action| action.set.as_deref() == Some(source) && slot_filter.is_none_or(|slot| action.set_slot == slot);
     let first = s.actions.list.iter().position(belongs);
     // The panel groups a folder's actions even when they are interleaved in the underlying list.
     let at = first.map(|first| first + s.actions.list[first..].iter().take_while(|action| belongs(action)).count());
@@ -224,8 +225,14 @@ fn duplicate_set(s: &mut Session, source: &str, source_slot: Option<usize>) -> R
         }
         result["setSlot"] = json!(slot);
     } else if at.is_none() {
-        let at = s.actions.sets.iter().position(|set| set == source).ok_or_else(|| bad(cmd, "the selected set no longer exists"))? + 1;
-        s.actions.sets.insert(at, name);
+        if let Some(at) = s.actions.sets.iter().position(|set| set == source) {
+            s.actions.sets.insert(at + 1, name);
+        } else if slot_filter.is_none() {
+            // The caption can identify an empty imported folder with no legacy row to insert after.
+            s.actions.sets.push(name);
+        } else {
+            return Err(bad(cmd, "the selected set no longer exists"));
+        }
     }
     if let Some(at) = at {
         s.actions.list.splice(at..at, copies);
@@ -279,7 +286,7 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     let set = match p.get("set") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) if p.get("setSlot").and_then(Value::as_u64).is_some() => Some(n.clone()),
-        Some(Value::String(n)) if n.trim() != n.as_str() && assignment_slot(s, p, Some(n), cmd)?.is_some() => Some(n.clone()),
+        Some(Value::String(n)) if set_names(s).contains(n) => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(Value::String(_)) => return Err(bad(cmd, "`set` is empty; pass null to take the action out of its set")),
         Some(_) => return Err(bad(cmd, "`set` must be a name or null")),
@@ -539,7 +546,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Duplicate Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index,"step":index?} or {"set":name,"setSlot":index?} → {action?,index?,step?,steps?,set?,setSlot?,actions?}. Copy an action, step or set below the source. Copies retain settings and flags, and leave shortcuts with the originals."##,
+            params: r##"{"action":name|index,"step":index?} or {"set":name,"setSlot":index|null?} → {action?,index?,step?,steps?,set?,setSlot?,actions?}. Copy an action, step or set below the source. A null setSlot selects the implicit set; omission selects by caption. Copies retain settings and flags, and leave shortcuts with the originals."##,
             enabled: always,
             run: duplicate,
             journal: false,

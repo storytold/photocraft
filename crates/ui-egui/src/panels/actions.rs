@@ -82,6 +82,8 @@ pub struct ActionsUi {
     /// The action whose name is being edited in place (double-click on its name).
     #[serde(skip)]
     renaming: Option<RenameAction>,
+    #[serde(skip)]
+    batch_dialog_targets: std::collections::BTreeMap<u64, ActionOccurrence>,
 }
 
 impl ActionsUi {
@@ -115,9 +117,52 @@ pub(crate) fn label_of(id: &str) -> String {
 /// The selected action, else the first action of the selected set (Batch and Create Droplet start
 /// on the panel's selection), else the first one.
 pub fn selected_action(app: &PhotocraftApp) -> Option<&Action> {
+    app.session.actions.list.get(selected_action_row(app)?)
+}
+
+pub(crate) fn selected_action_row(app: &PhotocraftApp) -> Option<usize> {
+    let len = app.session.actions.list.len();
+    app.ui.actions.selected.filter(|&row| row < len).or_else(|| selected_set_actions(app).first().copied()).or_else(|| (len > 0).then_some(0))
+}
+
+pub(crate) fn bind_batch_dialog(app: &mut PhotocraftApp, dialog: u64, row: usize) {
+    let dialogs = &app.ui.dialogs;
+    let targets = &mut app.ui.actions.batch_dialog_targets;
+    targets.retain(|id, _| dialogs.iter().any(|dialog| dialog.id == *id));
+    if let Some(target) = ActionOccurrence::capture(&app.session, row) {
+        targets.insert(dialog, target);
+    }
+}
+
+pub(crate) fn cancel_batch_dialog(app: &mut PhotocraftApp, dialog: u64) {
+    app.ui.actions.batch_dialog_targets.remove(&dialog);
+}
+
+pub(crate) fn batch_dialog_params(app: &mut PhotocraftApp, dialog: u64, params: &mut Value) -> Result<(), String> {
+    let Some(target) = app.ui.actions.batch_dialog_targets.remove(&dialog) else { return Ok(()) };
+    let set = params.get("set").filter(|v| !v.is_null());
+    if params.get("actionId").is_some()
+        || params.get("action").and_then(Value::as_str) != Some(target.action.name.as_str())
+        || set != target.action.set.as_ref().map(|name| json!(name)).as_ref()
+    {
+        // An explicit edit still uses the existing named/set or actionId command API.
+        return Ok(());
+    }
+    let row = target.resolve(&app.session).ok_or("the selected action changed while Batch was open")?;
     let list = &app.session.actions.list;
-    let idx = app.ui.actions.selected.filter(|i| *i < list.len());
-    idx.and_then(|i| list.get(i)).or_else(|| selected_set_actions(app).first().and_then(|i| list.get(*i))).or_else(|| list.first())
+    let first = list.iter().position(|action| action.name == target.action.name && (set.is_none() || action.set == target.action.set));
+    if first == Some(row) {
+        return Ok(());
+    }
+    if let Some(id) = actions_cmds::PlaybackTarget::from(&target.action).id {
+        params["actionId"] = json!(id);
+    } else if app.session.actions.recording.is_some() {
+        return Err("recording this Batch selection requires a stable action ID".into());
+    } else {
+        params["action"] = json!(row);
+        params.as_object_mut().expect("dialog params are an object").remove("set");
+    }
+    Ok(())
 }
 
 /// The Set and Action dropdowns of the Batch and Create Droplet dialogs, as in the reference
@@ -173,6 +218,62 @@ fn playback_targets(app: &PhotocraftApp) -> Vec<usize> {
     playback_selection(app).into_iter().collect()
 }
 
+/// Identity for a dialog or timer, held only while the UI can outlive a library edit.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ActionOccurrence {
+    row: usize,
+    rev: u64,
+    unique_name: bool,
+    action: Action,
+}
+
+impl ActionOccurrence {
+    pub(crate) fn capture(s: &photocraft_engine::Session, row: usize) -> Option<Self> {
+        let action = s.actions.list.get(row)?.clone();
+        let unique_name = s.actions.list.iter().filter(|other| other.name == action.name).take(2).count() == 1;
+        Some(Self { row, rev: s.actions.rev, unique_name, action })
+    }
+
+    fn capture_pending(s: &photocraft_engine::Session, rows: &[usize]) -> Vec<Self> {
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        let list = &s.actions.list;
+        let mut unique_names = std::collections::HashMap::new();
+        for action in list {
+            unique_names.entry(action.name.as_str()).and_modify(|unique| *unique = false).or_insert(true);
+        }
+        rows.iter()
+            .filter_map(|&row| {
+                let action = list.get(row)?.clone();
+                let unique_name = unique_names[action.name.as_str()];
+                Some(Self { row, rev: s.actions.rev, unique_name, action })
+            })
+            .collect()
+    }
+
+    fn identity_row(&self, s: &photocraft_engine::Session) -> Option<usize> {
+        let list = &s.actions.list;
+        if actions_cmds::PlaybackTarget::from(&self.action).id.is_some() {
+            return actions_cmds::playback_row(list, &self.action);
+        }
+        if self.rev == s.actions.rev && list.get(self.row) == Some(&self.action) {
+            return Some(self.row);
+        }
+        if self.unique_name {
+            let mut names = list.iter().enumerate().filter(|(_, action)| action.name == self.action.name);
+            let (row, _) = names.next()?;
+            return names.next().is_none().then_some(row);
+        }
+        None
+    }
+
+    pub(crate) fn resolve(&self, s: &photocraft_engine::Session) -> Option<usize> {
+        let row = self.identity_row(s)?;
+        (s.actions.list.get(row) == Some(&self.action)).then_some(row)
+    }
+}
+
 /// Play `targets` one after another, stopping at the first that fails or can't start. One that
 /// pauses for a step dialog of its own hands the rest to that dialog, which plays them after its OK
 /// (Cancel stops them all, as it stops one action), also from inside an action it calls: that one
@@ -193,10 +294,8 @@ fn play_targets(app: &mut PhotocraftApp, targets: &[usize], before: u64) -> Resu
         }
         last = Some(v);
         if let Some(dialog) = paused.filter(|_| !failed) {
-            // As they are now, not by index: the list can be reordered while the dialog is open
-            // (`actions.move`), and one deleted and made again under its name isn't the same action.
-            let list = &app.session.actions.list;
-            let rest: Vec<Action> = targets.get(n + 1..).unwrap_or_default().iter().filter_map(|i| list.get(*i).cloned()).collect();
+            // The list can be reordered while the dialog is open; retain each occurrence and its definition.
+            let rest = ActionOccurrence::capture_pending(&app.session, &targets[n + 1..]);
             let token = paused_token(app, &dialog);
             if let Some(entry) = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t))
                 && name.as_deref() == Some(entry.outermost())
@@ -250,21 +349,33 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
     let previous = list[index].action_id.is_none().then(|| (prefs.shortcuts.clone(), prefs.alternate_shortcuts.clone()));
     let pending = app.services.preset_store.is_some() && app.session.preset_store.is_none();
     let legacy_owner = !pending && actions_cmds::shortcut_row(list, &legacy) == Some(index);
-    let mut set = serde_json::Map::new();
     // Retain the old key as a fallback if an asynchronous store never commits the ID.
     // A live ID-based override shadows it, including an explicit "None" assignment.
-    for (other, assigned) in &prefs.shortcuts {
-        if actions_cmds::is_action_key(other)
-            && other != &id
-            && assigned == shortcut
-            && !shortcut.is_empty()
-            && !(other.starts_with(actions_cmds::PLAY_SHORTCUT_PREFIX) && (pending || (legacy_owner && other == &legacy)))
-        {
-            set.insert(other.clone(), json!(""));
+    let can_clear = |other: &str| {
+        actions_cmds::is_action_key(other)
+            && other != id.as_str()
+            && !(other.starts_with(actions_cmds::PLAY_SHORTCUT_PREFIX) && (pending || (legacy_owner && other == legacy.as_str())))
+    };
+    let mut set = serde_json::Map::new();
+    let mut alternates = serde_json::Map::new();
+    if let Some(key) = photocraft_engine::prefs::normalize_shortcut(shortcut) {
+        for (other, assigned) in &prefs.shortcuts {
+            if assigned == &key && can_clear(other) {
+                set.insert(other.clone(), json!(""));
+            }
+        }
+        for (other, assigned) in &prefs.alternate_shortcuts {
+            if can_clear(other) {
+                let remaining: Vec<_> =
+                    assigned.iter().filter(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned).as_ref() != Some(&key)).collect();
+                if remaining.len() != assigned.len() {
+                    alternates.insert(other.clone(), json!(remaining));
+                }
+            }
         }
     }
     set.insert(id, json!(shortcut));
-    let result = app.run("edit.keyboardShortcuts", json!({"set": set, "allowUnknown": true, "removeConflicts": false}))?;
+    let result = app.run("edit.keyboardShortcuts", json!({"set": set, "alternates": alternates, "allowUnknown": true, "removeConflicts": false}))?;
     if let Err(error) = actions_cmds::commit_action_id(&mut app.session, index, action_id) {
         if let Some((shortcuts, alternate_shortcuts)) = previous {
             app.session.edit_prefs(|prefs| {
@@ -350,19 +461,15 @@ fn end_at(c: Called, ran: &mut u64, failed: &mut Option<Value>, paused: &mut Opt
 /// A resumed playback goes on in the action this one called (`inner`, see [`play_owned`]) inside
 /// this one's playback frame, so its recursion checks still see this caller; the call was step
 /// `from - 1`. `None` when there is nothing to replay.
-fn resume_target(action: &Action, from: usize) -> Value {
-    let mut params = json!({"action": action.name, "from": from});
-    if let Some(id) = actions_cmds::PlaybackTarget::from(action).id {
-        params["actionId"] = json!(id);
-    }
-    params
+fn resume_target(row: usize, from: usize) -> Value {
+    json!({"action": row, "from": from})
 }
 
-fn replay_inner(app: &mut PhotocraftApp, caller: &str, from: usize, inner: &[(&Action, usize)]) -> Option<Called> {
-    let ((action, child_from), rest) = inner.split_first()?;
+fn replay_inner(app: &mut PhotocraftApp, caller: &str, from: usize, inner: &[(usize, usize)]) -> Option<Called> {
+    let ((row, child_from), rest) = inner.split_first()?;
     let step = from.saturating_sub(1);
     let target = app.session.active().map(|d| d.doc.id);
-    Some(match play_owned(app, &resume_target(action, *child_from), None, rest) {
+    Some(match play_owned(app, &resume_target(*row, *child_from), None, rest) {
         Ok(value) => called(app, caller, step, "actions.play", &value, target),
         Err(error) => Called::Failed(json!({"step": step, "id": "actions.play", "error": error})),
     })
@@ -498,8 +605,8 @@ fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &
 /// back, with that named call journaled, only when the whole call ends. `inner` are the called
 /// actions a resumed playback replays first, outermost first, each `(action, from)`: the first is
 /// the one this action's step before `from` called ([`resume`]).
-fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>, inner: &[(&Action, usize)]) -> Result<Value, String> {
-    let (action, from) = match actions_cmds::playback_plan(&app.session, params) {
+fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>, inner: &[(usize, usize)]) -> Result<Value, String> {
+    let (row, mut action, from) = match actions_cmds::playback_plan_at(&app.session, params) {
         Ok(plan) => plan,
         Err(e) => {
             actions_cmds::finish_pending_history(&mut app.session);
@@ -507,7 +614,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
             return Err(e.to_string());
         }
     };
-    let recording = match actions_cmds::begin_playback(&mut app.session, &action) {
+    let recording = match actions_cmds::begin_playback_at(&mut app.session, row, &mut action) {
         Ok(r) => r,
         Err(e) => {
             actions_cmds::finish_pending_history(&mut app.session);
@@ -644,15 +751,16 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         // Paused for a dialog: the call goes on after it, so recording stays suspended.
         Some(dialog) if failed.is_none() => {
             let token = paused_token(app, &dialog);
+            let occurrence = ActionOccurrence::capture(&app.session, row);
             let entry = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t));
-            match entry {
-                Some(p) => {
+            match (entry, occurrence) {
+                (Some(p), Some(occurrence)) => {
                     p.record = owner;
                     p.history = history;
-                    // Innermost first: each frame of the paused call adds the action it played.
-                    p.played.push(action.clone());
+                    // Innermost first: each frame adds the exact action occurrence it played.
+                    p.played.push(occurrence);
                 }
-                // No continuation to carry the recording: the call ends here.
+                // No valid continuation to carry the recording: the call ends here.
                 _ => {
                     drop(history);
                     restore_recording(app, owner.as_ref());
@@ -1261,7 +1369,7 @@ pub(crate) struct PausedPlayback {
     history: Option<actions_cmds::ActionHistoryContinuation>,
     /// The actions still to play after this one, as they were when Play started a whole set.
     /// The whole action also guards against edits while the dialog is open.
-    then: Vec<Action>,
+    then: Vec<ActionOccurrence>,
     /// The steps that Play ran before this pause (earlier actions of the set, and this one's
     /// steps before the dialog), so the final count covers the whole Play.
     ran: u64,
@@ -1285,7 +1393,7 @@ pub(crate) struct PausedPlayback {
     timed: bool,
     /// The paused action and each of its callers as they were when it paused, innermost first.
     /// The continuation checks these snapshots before resuming any remaining steps.
-    played: Vec<Action>,
+    played: Vec<ActionOccurrence>,
 }
 
 /// The longest caller chain a paused playback keeps; [`actions_cmds::playback_plan`] refuses deeper
@@ -1509,12 +1617,11 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     }
     let saved = app.session.authorize;
     let service = if app.automation_input { app.services.automation_authorize } else { None };
-    let list = &app.session.actions.list;
     let remaining = !paused.then.is_empty()
         || !paused.callers.is_empty()
-        || paused.played.first().is_some_and(|action| {
-            let live = actions_cmds::playback_row(list, action).and_then(|row| list.get(row));
-            action.enabled_steps().any(|(i, _)| i >= paused.from) || live.is_some_and(|action| action.enabled_steps().any(|(i, _)| i >= paused.from))
+        || paused.played.first().is_some_and(|occurrence| {
+            let live = occurrence.identity_row(&app.session).and_then(|row| app.session.actions.list.get(row));
+            occurrence.action.enabled_steps().any(|(i, _)| i >= paused.from) || live.is_some_and(|action| action.enabled_steps().any(|(i, _)| i >= paused.from))
         });
     let gate =
         if remaining { continuation_gate(saved, service).and_then(|live| continuation_gate(paused.gate, live)) } else { Ok(saved.or(service).or(paused.gate)) };
@@ -1530,7 +1637,8 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
         }
     };
     // Verify each live occurrence against the exact definition that paused.
-    if remaining && paused.played.iter().any(|a| actions_cmds::playback_row(list, a).and_then(|row| list.get(row)) != Some(a)) {
+    let rows: Option<Vec<usize>> = paused.played.iter().rev().map(|occurrence| occurrence.resolve(&app.session)).collect();
+    if remaining && rows.is_none() {
         let error = "the action changed while it was paused";
         actions_cmds::finish_pending_history(&mut app.session);
         restore_recording(app, owner.as_ref());
@@ -1542,15 +1650,21 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     // The paused action goes on, then each action that called it, inside its callers' frames:
     // replay starts at the outermost, which replays the inner ones first.
     let positions = paused.callers.iter().rev().map(|(_, from)| *from).chain(std::iter::once(paused.from));
-    let frames: Vec<_> = paused.played.iter().rev().zip(positions).collect();
-    let Some(((outer, outer_from), inner)) = frames.split_first() else {
+    if paused.played.is_empty() {
         return Err("this dialog doesn't belong to a paused action".into());
-    };
-    let params = resume_target(outer, *outer_from);
+    }
+    let frames: Vec<_> = rows.into_iter().flatten().zip(positions).collect();
     // A dialog's own step runs on its confirm; a paced wait's step already ran and was counted.
     let own = u64::from(!paused.timed);
     app.session.authorize = gate;
-    let mut played = play_owned(app, &params, owner, inner);
+    let mut played = if let Some(((outer, outer_from), inner)) = frames.split_first() {
+        play_owned(app, &resume_target(*outer, *outer_from), owner, inner)
+    } else {
+        // A completed dialog with no remaining work never replays a different action.
+        actions_cmds::finish_pending_history(&mut app.session);
+        restore_recording(app, owner.as_ref());
+        Ok(json!({"action": paused.outermost(), "ran": 0}))
+    };
     // Paused again at a later dialog of the same call: that dialog carries the rest of the set.
     if let Ok(v) = &played
         && let Some(dialog) = v.get("paused").and_then(waiting_dialog)
@@ -1577,8 +1691,7 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
         && v.get("paused").is_none()
         && v.get("stopped").is_none()
     {
-        let list = &app.session.actions.list;
-        let rest: Vec<usize> = paused.then.iter().map_while(|then| list.iter().position(|a| a == then)).collect();
+        let rest: Vec<usize> = paused.then.iter().map_while(|then| then.resolve(&app.session)).collect();
         match play_targets(app, &rest, ran) {
             Ok(Some(r)) => played = Ok(r),
             Ok(None) => {}

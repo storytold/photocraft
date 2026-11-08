@@ -70,12 +70,14 @@ pub(super) fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
             return Some(due - now);
         }
     }
-    let ours = app.session.prefs_value();
+    let (ours, deferred) = persistable_preferences(app);
     // A change that was undone (or set a value to what it already was) leaves nothing to write.
     let written = if app.prefs_rt.saved_value.as_ref() == Some(&ours) { Ok(()) } else { write_prefs(app, &ours) };
     match written {
         Ok(()) => {
-            app.prefs_rt.saved_rev = rev;
+            if !deferred {
+                app.prefs_rt.saved_rev = rev;
+            }
             app.prefs_rt.saved_value = Some(ours);
             let r = std::mem::take(&mut app.prefs_rt.save_retry);
             if r.failures > 0 {
@@ -107,6 +109,34 @@ pub(super) fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
             Some(delay)
         }
     }
+}
+
+/// Hold only Action shortcut changes while the library's separate browser transaction is
+/// pending. Keep saving other preferences against the same three-way merge base.
+fn persistable_preferences(app: &PhotocraftApp) -> (Value, bool) {
+    let mut ours = app.session.prefs_value();
+    if !app.services.actions_write_pending.as_ref().is_some_and(|pending| pending()) {
+        return (ours, false);
+    }
+    let base = app.prefs_rt.saved_value.as_ref();
+    let mut deferred = false;
+    for section in ["shortcuts", "alternateShortcuts"] {
+        let saved = base.and_then(|value| value.get(section)).and_then(Value::as_object);
+        let bindings = ours[section].as_object_mut().expect("serialized shortcut map");
+        let is_action = |key: &str| photocraft_engine::actions_cmds::is_action_key(key);
+        bindings.retain(|key, _| {
+            let keep = !is_action(key) || saved.is_some_and(|map| map.contains_key(key));
+            deferred |= !keep;
+            keep
+        });
+        for (key, value) in saved.into_iter().flatten().filter(|(key, _)| is_action(key)) {
+            if bindings.get(key) != Some(value) {
+                deferred = true;
+                bindings.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    (ours, deferred)
 }
 
 /// Write `ours` over the stored preferences, keeping what another instance (a second browser
@@ -183,9 +213,11 @@ pub(super) fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
 /// need the result immediately. The pending revision stays unsaved when the write fails.
 pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
     let rev = app.session.prefs.rev();
-    let ours = app.session.prefs_value();
+    let (ours, deferred) = persistable_preferences(app);
     write_prefs(app, &ours)?;
-    app.prefs_rt.saved_rev = rev;
+    if !deferred {
+        app.prefs_rt.saved_rev = rev;
+    }
     app.prefs_rt.saved_value = Some(ours);
     if let Some(id) = std::mem::take(&mut app.prefs_rt.save_retry).notice {
         app.ui.notices.retain(|n| n.id != id);

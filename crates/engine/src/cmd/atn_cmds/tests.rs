@@ -3,6 +3,31 @@ use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
 use photocraft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
 
+#[test]
+fn id_bound_atn_calls_require_distinct_imported_names() {
+    let prefix = "a".repeat(MAX_NAME_CHARS);
+    let id = "112233445566778899aabbccddeeff00";
+    let mut target = Action::new(format!("{prefix} target"), vec![]);
+    target.action_id = Some(id.into());
+    let decoy = Action::new(format!("{prefix} decoy"), vec![]);
+    let caller = Action::new(
+        "Caller",
+        vec![("actions.play".into(), json!({"actionId": id})), ("actions.conditional".into(), json!({"if": "always", "thenActionId": id}))],
+    );
+
+    let (bytes, skipped) = export("Set", &[&caller, &target], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let loaded = import(&bytes).unwrap();
+    assert_eq!(loaded.actions[1].name, prefix);
+    assert_eq!(loaded.actions[0].steps[0].1["action"], prefix);
+    assert_eq!(loaded.actions[0].steps[1].1["then"], prefix);
+
+    assert!(export("Set", &[&caller, &decoy, &target], &[], false).is_err());
+    let (bytes, skipped) = export("Set", &[&caller, &decoy, &target], &[], true).unwrap();
+    assert_eq!(skipped.iter().map(|step| step.id.as_str()).collect::<Vec<_>>(), ["actions.play", "actions.conditional"]);
+    assert!(import(&bytes).unwrap().actions[0].steps.is_empty());
+}
+
 /// A wire key has one mapper; distinct wire aliases may still name the same command.
 #[test]
 fn event_wire_keys_are_unique() {

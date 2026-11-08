@@ -18,6 +18,7 @@ struct State {
     bytes: u64,
     dirty: BTreeSet<String>,
     writing: bool,
+    writing_actions: bool,
     error: Option<String>,
     rejected: BTreeMap<String, String>,
     preserve_tips: bool,
@@ -81,6 +82,7 @@ impl Bridge {
             return None;
         }
         s.writing = true;
+        s.writing_actions = s.dirty.contains(ACTIONS_FILE);
         Some(
             std::mem::take(&mut s.dirty)
                 .into_iter()
@@ -95,6 +97,7 @@ impl Bridge {
     pub fn finish(&self, batch: Batch, result: Result<(), String>) {
         let mut s = self.state();
         s.writing = false;
+        s.writing_actions = false;
         if let Err(e) = result {
             // Requeue names, never old bytes: edits/deletes made during the failed write win.
             s.dirty.extend(batch.into_keys());
@@ -113,6 +116,11 @@ impl Bridge {
     pub fn error(&self) -> Option<String> {
         let s = self.state();
         s.rejected.values().next().cloned().or_else(|| s.error.clone())
+    }
+
+    pub fn actions_write_pending(&self) -> bool {
+        let s = self.state();
+        s.writing_actions || s.dirty.contains(ACTIONS_FILE) || s.rejected.contains_key(ACTIONS_FILE)
     }
 
     pub fn unsaved(&self) -> bool {
@@ -183,6 +191,25 @@ mod tests {
     use super::*;
     use photocraft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
     use serde_json::json;
+
+    #[test]
+    fn action_write_remains_pending_until_its_browser_commit_succeeds() {
+        let bridge = Bridge::default();
+        assert!(!bridge.actions_write_pending());
+        bridge.write(ACTIONS_FILE, b"new library").unwrap();
+        assert!(bridge.actions_write_pending());
+        let batch = bridge.begin().unwrap();
+        assert!(bridge.actions_write_pending());
+        bridge.finish(batch, Err("transaction failed".into()));
+        assert!(bridge.actions_write_pending());
+        bridge.retry();
+        let batch = bridge.begin().unwrap();
+        bridge.write(ACTIONS_FILE, b"newer library").unwrap();
+        bridge.finish(batch, Ok(()));
+        assert!(bridge.actions_write_pending());
+        bridge.finish(bridge.begin().unwrap(), Ok(()));
+        assert!(!bridge.actions_write_pending());
+    }
 
     fn import(s: &mut Session) {
         let abr = write_v12(

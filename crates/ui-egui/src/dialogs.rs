@@ -973,8 +973,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         crate::actions::abandoned(app, &d.fields);
         return Err("dialog has no command".into());
     };
-    let params = crate::filter_dialog::params_of(&d.fields);
-    if let Err(error) = crate::actions::authorize_panel_preview(app, d.id, &d.fields, &cmd, &params) {
+    let mut params = crate::filter_dialog::params_of(&d.fields);
+    let exact = if cmd == "file.automate.batch" { crate::actions::batch_dialog_params(app, d.id, &mut params) } else { Ok(()) };
+    if let Err(error) = exact.and_then(|()| crate::actions::authorize_panel_preview(app, d.id, &d.fields, &cmd, &params)) {
         app.filter_preview = None;
         crate::actions::abandoned(app, &d.fields);
         return Err(error);
@@ -1186,6 +1187,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     }
     app.ui.dialogs.retain(|d| !pickers.contains(&d.id));
     crate::actions::record_again::cancel(app, id);
+    crate::actions::cancel_batch_dialog(app, id);
     crate::actions::menu_item::cancel(app, id);
     crate::actions::stopped(app, &closed.fields);
     crate::actions::library::cancel(app, id);

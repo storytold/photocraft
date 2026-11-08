@@ -106,13 +106,15 @@ pub fn action_shortcut(s: &Session, index: usize) -> Option<&str> {
     let list = &s.actions.list;
     let action = list.get(index)?;
     let keys = &s.prefs().shortcuts;
-    if let Some(id) = action.action_id.as_deref().filter(|id| resolve_action_id(list, id) == Some(index))
+    if let Some(id) = action.action_id.as_deref()
         && let Some(key) = keys.get(&occurrence_key(id))
+        && resolve_action_id(list, id) == Some(index)
     {
         return Some(key.as_str());
     }
     let legacy = format!("{PLAY_SHORTCUT_PREFIX}{}", action.name);
-    (shortcut_row(list, &legacy) == Some(index)).then(|| keys.get(&legacy)).flatten().map(String::as_str)
+    let key = keys.get(&legacy)?;
+    (shortcut_row(list, &legacy) == Some(index)).then_some(key.as_str())
 }
 
 pub(crate) fn has_legacy_shortcut(s: &Session, name: &str) -> bool {

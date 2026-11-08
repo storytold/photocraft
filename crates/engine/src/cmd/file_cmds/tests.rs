@@ -20,7 +20,7 @@ fn batch_resolves_action_by_name_and_detects_recursion() {
         p["output"] = json!(out);
         assert!(s.execute("file.automate.batch", p).is_err());
     }
-    s.actions.playback_stack.push(crate::actions_cmds::PlaybackTarget { name: "Scale".into(), id: None });
+    s.actions.playback_stack.push(crate::actions_cmds::PlaybackTarget { name: "Scale".into(), id: None, position: None });
     let err = s.execute("file.automate.batch", json!({"action":"Scale","input":[input],"output":out})).unwrap_err();
     assert!(err.to_string().contains("recursive action call"), "{err}");
 }
@@ -532,7 +532,7 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
             crate::actions_cmds::Action::new("Leaf", vec![("actions.play".into(), json!({"action":0}))]),
         ];
         let definitions = s.actions.list[1..].to_vec();
-        s.actions.playback_stack = vec![crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None }];
+        s.actions.playback_stack = vec![crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None, position: None }];
         s.actions.recording = Some((s.journal.len(), 0));
         let take = s.actions.take;
         s.authorize = Some(gate);
@@ -540,7 +540,7 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
         let result = batch(&mut s, &json!({"source":"open","action":"Loop A"})).unwrap();
         assert!(result["errors"][0]["error"].as_str().unwrap().contains("recursive action"), "{result}");
         assert!(CALLS.load(Ordering::SeqCst) <= 2, "the cycle check must beat the finite sentinel");
-        assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None }]);
+        assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None, position: None }]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
         assert_eq!(&s.actions.list[1..], definitions.as_slice());
@@ -549,11 +549,49 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
         let result = batch(&mut s, &json!({"source":"open","action":"Leaf","calledActions":embedded})).unwrap();
         assert_eq!(result["errors"], json!([]), "{result}");
         assert_eq!(doc(&s).walk().len(), before + 1);
-        assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None }]);
+        assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None, position: None }]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
         assert_eq!(&s.actions.list[1..], definitions.as_slice());
     }
+}
+
+#[test]
+fn batch_legacy_rows_in_embedded_libraries_do_not_alias_the_caller() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("batch-legacy-occurrence");
+    let input = png(&dir, "red.png", 8, 8, "#ff0000");
+    let embedded = vec![Action::new("Shared", vec![("layer.new.layer".into(), json!({"name": "embedded leaf"}))])];
+    let play = ("actions.play".to_string(), json!({"action": 0}));
+    for source in ["open", "folder"] {
+        let mut s = Session::new();
+        if source == "open" {
+            s.execute("file.openAs", json!({"path": input})).unwrap();
+        }
+        s.actions.list.push(Action::new("Shared", vec![play.clone()]));
+        let result = s
+            .execute(
+                "file.automate.batch",
+                json!({
+                    "source": source, "input": [input], "output": join(&dir, source),
+                    "format": "png", "action": 0, "calledActions": embedded,
+                }),
+            )
+            .unwrap();
+        assert_eq!(result["errors"], json!([]), "{result}");
+        assert_eq!(s.actions.playback_namespace, 0);
+        assert!(s.actions.playback_stack.is_empty());
+    }
+
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("actions.record", json!({"name": "Recorder"})).unwrap();
+    let params = json!({"source": "open", "steps": [play], "calledActions": embedded});
+    let result = s.execute("file.automate.batch", params.clone()).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert!(doc(&s).layers.iter().any(|layer| layer.name == "embedded leaf"));
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].steps, [("file.automate.batch".to_string(), params)]);
 }
 
 /// Named live-document playback must normalize recorded targets and percentage coordinates,
@@ -2778,7 +2816,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         }
         s.actions.list.push(Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
         s.actions.playing = 16;
-        s.actions.playback_stack = (0..16).map(|i| crate::actions_cmds::PlaybackTarget { name: format!("Parent{i}"), id: None }).collect();
+        s.actions.playback_stack = (0..16).map(|i| crate::actions_cmds::PlaybackTarget { name: format!("Parent{i}"), id: None, position: None }).collect();
         let before = s.actions.clone();
         let error = s.execute("file.automate.batch", params.clone()).unwrap_err();
         assert!(error.to_string().contains("nesting exceeds 16"), "{error}");
@@ -2834,14 +2872,14 @@ fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
         Action::new("Leaf", vec![("select.deselect".into(), json!({})); 2]),
     ];
     s.actions.playing = 1;
-    s.actions.playback_stack = vec![crate::actions_cmds::PlaybackTarget { name: "Parent".into(), id: None }];
+    s.actions.playback_stack = vec![crate::actions_cmds::PlaybackTarget { name: "Parent".into(), id: None, position: None }];
     s.actions.playback_steps = MAX_PLAYBACK_STEPS - 4;
     let result = s.execute("file.automate.batch", json!({"action": "Outer", "input": [input, input], "output": output, "naming": "{serial}"})).unwrap();
     assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
     assert!(result["errors"][0]["error"].as_str().unwrap().contains("step limit"), "{result}");
     assert_eq!(s.actions.playback_steps, MAX_PLAYBACK_STEPS);
     assert_eq!(s.actions.playing, 1);
-    assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Parent".into(), id: None }]);
+    assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Parent".into(), id: None, position: None }]);
 }
 
 /// Nested named batches honor the caller's authorization and preserve its action state.

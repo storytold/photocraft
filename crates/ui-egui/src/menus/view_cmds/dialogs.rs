@@ -550,9 +550,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             json!({"format": ["jpg", "png", "psd", "tiff", "webp"]}),
         ),
         "file.automate.batch" => {
-            let Some(action) = crate::actions::selected_action(app) else {
+            let Some(row) = crate::actions::selected_action_row(app) else {
                 return Some(Err("record an action in the Actions panel first".into()));
             };
+            let action = &app.session.actions.list[row];
             let (name, set) = (action.name.clone(), action.set.clone());
             let (names, sets) = crate::actions::action_form_choices(app);
             let mut fields = json!({
@@ -567,7 +568,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             if let Some(set) = set {
                 fields["set"] = json!(set);
             }
-            dialog(app, fields, json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]}))
+            let choices = json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]});
+            let dialog = form(app, id, label, fields, choices);
+            crate::actions::bind_batch_dialog(app, dialog, row);
+            Some(Ok(json!({"dialog": dialog})))
         }
         // Channel workflow dialogs (see channels_panel.rs for the channel references).
         "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => {

@@ -1198,9 +1198,11 @@ impl Session {
         }
         self.preset_store = Some(store);
         self.actions.set_rows_revision = self.actions.set_rows_revision.wrapping_add(1);
-        // An empty session takes the disk list without rewriting it. Otherwise, keep the
-        // in-memory first match while retaining disk rows that own shortcuts or recorded calls.
-        if self.actions.list.is_empty() && self.actions.sets.is_empty() && self.actions.set_rows.is_empty() && self.actions.library_undo.is_none() {
+        // A replacement made before attachment is already the whole library. Keep its
+        // undo snapshot and let the ordinary sync write the chosen definitions.
+        if std::mem::take(&mut self.actions.replaced_before_attachment) {
+            self.actions.rev = self.actions.rev.max(1);
+        } else if self.actions.list.is_empty() && self.actions.sets.is_empty() && self.actions.set_rows.is_empty() && self.actions.library_undo.is_none() {
             self.actions.list = disk;
             self.actions.sets = action_sets;
             self.actions.set_rows = action_set_rows;

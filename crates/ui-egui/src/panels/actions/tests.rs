@@ -26,7 +26,7 @@ fn library_dialog_cancel_stale_and_undo_leave_document_history_untouched() {
     assert_eq!(app.session.active().unwrap().history.past_len(), history);
     assert!(app.session.actions.sets.is_empty(), "the newer document edit was undone first");
     assert_eq!(library::edit_undo_label(&app), Some("Undo Clear All Actions"));
-    crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
+    app.run("edit.undo", json!({})).unwrap();
     assert_eq!(app.session.actions.sets, ["Keep", "Newer"]);
     assert_eq!(app.session.active().unwrap().history.past_len(), history);
 }
@@ -379,6 +379,21 @@ fn paused_spelling_repeated_changes_and_errors_keep_one_owned_history() {
     }
 }
 
+#[test]
+fn spelling_playback_blocks_library_edits_until_done() {
+    let (mut app, _, _) = paused_history_spelling(false, None);
+    assert_eq!(app.session.actions.playing, 0);
+    let error = app.run("actions.clearAll", json!({"confirm": true})).unwrap_err();
+    assert_eq!(app.ui.status, error);
+    assert!(app.ui.status_error);
+    assert_eq!(app.session.actions.list[0].name, "Spell");
+    crate::type_panels_ui::close_spelling(&mut app);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "Tail");
+    app.run("actions.clearAll", json!({"confirm": true})).unwrap();
+    assert!(app.session.actions.list.is_empty());
+}
+
 fn deny_second_spelling_change(id: &str, params: &Value) -> photocraft_engine::Result<()> {
     if id == "edit.checkSpelling" && params["word"] == "brwon" { Err(photocraft_engine::EngineError::Other("original spelling gate".into())) } else { Ok(()) }
 }
@@ -606,6 +621,22 @@ fn actions_list_grows_with_panel_and_keeps_footer_visible() {
     };
     assert!(bottom(700.0) - bottom(300.0) > 350.0, "list uses the additional panel height instead of stopping at 320 px");
     assert!(crate::dock::Group::History.scrolls_itself(1));
+}
+
+#[test]
+fn assigning_an_action_shortcut_clears_only_conflicting_action_alternates() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.actions.list = vec![Action::new("First", Vec::new()), Action::new("Second", Vec::new())];
+    let id = "0123456789abcdef0123456789abcdef";
+    app.session.actions.list[1].action_id = Some(id.into());
+    app.session.edit_prefs(|prefs| {
+        prefs.alternate_shortcuts.insert("actions.play:First".into(), vec!["F6".into(), "F7".into()]);
+        prefs.alternate_shortcuts.insert("file.save".into(), vec!["F6".into(), "F8".into()]);
+    });
+    assign_shortcut(&mut app, 1, "F6").unwrap();
+    assert_eq!(app.session.prefs().shortcuts[&actions_cmds::occurrence_key(id)], "F6");
+    assert_eq!(app.session.prefs().alternate_shortcuts["actions.play:First"], ["F7"]);
+    assert_eq!(app.session.prefs().alternate_shortcuts["file.save"], ["F6", "F8"]);
 }
 
 /// #7646: an action's function key can take Shift and Command, as in Photoshop's Action
@@ -2316,6 +2347,35 @@ fn a_bound_same_name_call_resumes_the_selected_occurrence() {
     let dialog = playback["paused"]["dialog"].as_u64().expect("the selected occurrence's blur dialog");
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     assert_eq!(layer_names(&app), ["Suffix", "caller tail"]);
+}
+
+#[test]
+fn paused_legacy_duplicate_resumes_its_row_and_refuses_a_move() {
+    for moved in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 6, "background": "#203040"})).unwrap();
+        for _ in 0..2 {
+            app.session.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
+        }
+        let list = &mut app.session.actions.list;
+        list[0].steps = vec![("actions.play".into(), json!({"action": 2})), ("layer.new.layer".into(), json!({"name": "caller tail"}))];
+        list[2].steps = vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1.5})), ("layer.new.layer".into(), json!({"name": "later occurrence"}))];
+        list[2].dialogs.insert(0);
+        let playback = play(&mut app, &json!({"action": 0})).unwrap();
+        let dialog = playback["paused"]["dialog"].as_u64().expect("the sibling's blur dialog");
+        if moved {
+            app.run("actions.move", json!({"action": 2, "to": 1})).unwrap();
+        }
+        let result = crate::dialogs::confirm(&mut app, dialog);
+        if moved {
+            assert!(result.unwrap_err().contains("the action changed"));
+            assert!(layer_names(&app).is_empty());
+        } else {
+            result.unwrap();
+            assert_eq!(layer_names(&app), ["later occurrence", "caller tail"]);
+        }
+        assert!(app.session.actions.playback_stack.is_empty());
+    }
 }
 
 #[test]

@@ -35,6 +35,25 @@ pub(super) fn pin_disk_targets(s: &mut Session, disk: &mut [Action], warnings: &
     }
     block_unknown_ids(&mut s.actions.list);
     block_unknown_ids(disk);
+    // Appending disk rows cannot move an existing memory index, but it can fill a missing one.
+    for row in 0..s.actions.list.len() {
+        let mut steps = std::mem::take(&mut s.actions.list[row].steps);
+        let memory = &s.actions.list;
+        visit_calls(&mut steps, &mut |command, params, _| {
+            if params.get("actionId").is_some() || !params.get("action").is_some_and(Value::is_number) {
+                return;
+            }
+            let resolved = match command {
+                "actions.play" => resolve_play_target(memory, params, command),
+                "file.automate.batch" => crate::file_cmds::batch_action(memory, params),
+                _ => return,
+            };
+            if resolved.is_err() {
+                params["actionId"] = Value::Null;
+            }
+        });
+        s.actions.list[row].steps = steps;
+    }
     let memory = &s.actions.list;
 
     // Saved preferences predate the asynchronous attachment. Keep their legacy key, and
