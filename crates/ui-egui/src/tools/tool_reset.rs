@@ -1,5 +1,6 @@
 //! Reset Tool and Reset All Tools (#2825), as in Photoshop: right-click the tool icon at the far
-//! left of the options bar. Reset Tool puts the current tool's options back to their defaults;
+//! left of the options bar. Reset Tool puts the current tool's options back to their defaults
+//! (all but the few it keeps, [`kept_by_reset_tool`]);
 //! Reset All Tools asks first ("Reset all tools to their default settings?"), then resets every
 //! tool's options.
 //!
@@ -147,14 +148,13 @@ fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
 /// Put `tool`'s fields of `o` back to their defaults, except those Reset Tool keeps.
 pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     let kept = kept_by_reset_tool(tool);
-    let keys: Vec<&str> = option_keys(tool).iter().copied().filter(|k| !kept.contains(k)).collect();
-    if keys.is_empty() {
+    if option_keys(tool).is_empty() {
         return;
     }
     let (Ok(Value::Object(mut cur)), Ok(Value::Object(d))) = (serde_json::to_value(&*o), serde_json::to_value(ToolOptions::default())) else {
         return;
     };
-    for k in &keys {
+    for k in option_keys(tool).iter().filter(|k| !kept.contains(k)) {
         if let Some(v) = d.get(*k) {
             cur.insert((*k).to_string(), v.clone());
         }
@@ -180,8 +180,8 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
     m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
 }
 
-/// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets and
-/// what a tool preset made with + stores (#7356).
+/// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets
+/// (less [`kept_by_reset_tool`]) and what a tool preset made with + stores (#7356).
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
     macro_rules! reset {
@@ -317,6 +317,17 @@ mod tests {
         }
         for k in listed {
             assert!(all.contains_key(k), "{k} is not a ToolOptions field");
+        }
+    }
+
+    /// What Reset Tool keeps is the tool's own option, by a name that exists: a renamed or
+    /// misspelt field would otherwise silently be reset again (#12127, #12183).
+    #[test]
+    fn kept_options_are_the_tools_own() {
+        for t in Tool::ALL {
+            for k in kept_by_reset_tool(t) {
+                assert!(option_keys(t).contains(k), "{k} is not an option of {t:?}");
+            }
         }
     }
 

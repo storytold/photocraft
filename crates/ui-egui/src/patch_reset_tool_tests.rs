@@ -47,9 +47,10 @@ fn reset_all_tools_still_gives_structure_4_and_color_0() {
 }
 
 #[test]
-fn content_aware_move_reset_tool_is_unchanged() {
+fn content_aware_move_reset_tool_resets_its_own_structure_and_color() {
     let mut app = app();
     app.ui.tool = Tool::ContentAwareMove;
+    app.ui.tool_options.cam_mode = "extend".into();
     app.ui.tool_options.cam_structure = 7.0;
     app.ui.tool_options.cam_color = 5.0;
     app.ui.tool_options.patch_structure = 7.0;
@@ -58,6 +59,7 @@ fn content_aware_move_reset_tool_is_unchanged() {
     let o = &app.ui.tool_options;
     assert_eq!((o.cam_structure, o.cam_color), (d.cam_structure, d.cam_color));
     assert_eq!(o.patch_structure, 7.0, "another tool's option stays");
+    assert_eq!(o.cam_mode, "extend", "Reset Tool keeps the Content-Aware Move Mode (#12183)");
 }
 
 #[test]
