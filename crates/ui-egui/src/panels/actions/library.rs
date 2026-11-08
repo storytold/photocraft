@@ -57,7 +57,11 @@ pub(crate) fn idle(app: &PhotocraftApp, command: &str) -> Result<(), String> {
     if app.services.preset_store.is_some() {
         return Err(tl!("Wait for the Actions library to load.").into());
     }
-    if app.session.actions.recording.is_some() || app.session.actions.playing > 0 || super::playback::pending(app) {
+    if app.session.actions.recording.is_some()
+        || app.session.actions.playing > 0
+        || super::playback::pending(app)
+        || app.paused_playbacks.paused.values().any(|paused| paused.menu_editor.is_some())
+    {
         return Err(tl!("Stop recording or playback before changing the Actions library.").into());
     }
     Ok(())
