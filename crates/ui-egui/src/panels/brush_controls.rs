@@ -64,6 +64,56 @@ pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::Br
     });
 }
 
+/// A Useful mixer brush combinations entry: its label and the Wet, Load and Mix it sets.
+type MixerCombination = (&'static str, Option<(f32, f32, f32)>);
+
+/// The Mixer Brush's Useful mixer brush combinations, in the reference's order: each entry's label
+/// and the Wet, Load and Mix (0..1) it sets. Custom, the first, sets nothing.
+pub(crate) const MIXER_COMBINATIONS: [MixerCombination; 13] = [
+    ("Custom", None),
+    ("Dry", Some((0.0, 0.5, 0.0))),
+    ("Dry, Light Load", Some((0.0, 0.05, 0.0))),
+    ("Dry, Heavy Load", Some((0.0, 1.0, 0.0))),
+    ("Moist", Some((0.1, 0.05, 0.5))),
+    ("Moist, Light Mix", Some((0.1, 0.05, 0.0))),
+    ("Moist, Heavy Mix", Some((0.1, 0.05, 1.0))),
+    ("Wet", Some((0.5, 0.5, 0.5))),
+    ("Wet, Light Mix", Some((0.5, 0.5, 0.0))),
+    ("Wet, Heavy Mix", Some((0.5, 0.5, 1.0))),
+    ("Very Wet", Some((1.0, 0.5, 0.5))),
+    ("Very Wet, Light Mix", Some((1.0, 0.5, 0.0))),
+    ("Very Wet, Heavy Mix", Some((1.0, 0.5, 1.0))),
+];
+
+/// The entries of [`MIXER_COMBINATIONS`] a separator line goes above: Dry, Moist, Wet, Very Wet.
+const MIXER_COMBINATION_GROUPS: [usize; 4] = [1, 4, 7, 10];
+
+/// Mixer Brush: the Useful mixer brush combinations dropdown (#11946). Picking an entry sets Wet,
+/// Load and Mix together (Flow stays) and keeps showing it, also after a value is typed; Custom
+/// sets nothing. `picked` is the entry shown.
+pub(super) fn mixer_combination_dropdown(
+    ui: &mut egui::Ui,
+    picked: &mut usize,
+    m: &mut photocraft_engine::paint::mixer::MixerSettings,
+) -> Option<egui::Response> {
+    const ID: &str = "mixer-combination";
+    let opts: Vec<(usize, &str)> = MIXER_COMBINATIONS.iter().enumerate().map(|(i, (label, _))| (i, *label)).collect();
+    let mut shown = (*picked).min(MIXER_COMBINATIONS.len() - 1);
+    let chosen =
+        widgets::dropdown_wheel_grouped(ui, ID, tl!("Useful mixer brush combinations"), &mut shown, &opts, 132.0, |i| MIXER_COMBINATION_GROUPS.contains(i)).0;
+    if let Some(&i) = chosen.last() {
+        *picked = i;
+        if let Some((wet, load, mix)) = MIXER_COMBINATIONS[i].1 {
+            (m.wet, m.load, m.mix) = (wet, load, mix);
+        }
+    }
+    ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new(ID)))
+}
+
+#[cfg(test)]
+#[path = "../mixer_blend_combination_tests.rs"]
+mod mixer_blend_combination_tests;
+
 /// Mixer Brush: the Current Brush Load swatch shows the paint the next stroke starts with (an
 /// empty swatch when the brush is clean). Its menu holds Load Brush and Clean Brush.
 pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -125,8 +175,12 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
     ui.painter().text(pos2(c.x, r.bottom() - 5.0), Align2::CENTER_CENTER, format!("{}", b.size.round() as i64), egui::FontId::proportional(9.5), t.text_dim);
     icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, c.y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Brush Preset picker")));
-    // The Brush's own text (#11813); the other tools keep theirs.
-    let tip = if state.tool == crate::state::Tool::Brush { tl!("Click to open the Brush Preset picker") } else { tl!("Brush Preset picker") };
+    // The Brush's and the Background Eraser's own text (#11813, #11909); the other tools keep theirs.
+    let tip = if matches!(state.tool, crate::state::Tool::Brush | crate::state::Tool::BackgroundEraser) {
+        tl!("Click to open the Brush Preset picker")
+    } else {
+        tl!("Brush Preset picker")
+    };
     if resp.on_hover_text(tip).clicked() {
         if state.brush_picker.is_some() {
             crate::brush_picker::close(state);

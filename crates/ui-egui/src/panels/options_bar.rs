@@ -1,4 +1,6 @@
-use super::brush_controls::{brush_preset_chip, mixer_load_swatch, paint_mode_dropdown, smoothing_field, smoothing_options, tool_mode_dropdown};
+use super::brush_controls::{
+    brush_preset_chip, mixer_combination_dropdown, mixer_load_swatch, paint_mode_dropdown, smoothing_field, smoothing_options, tool_mode_dropdown,
+};
 use super::properties::{select_and_mask_button, selection_mode_buttons};
 use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Value, icons, json, starts_blend_group, vec2, widgets};
 use photocraft_paint::BrushSettings;
@@ -179,7 +181,8 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 }
             }
             ui.add_enabled_ui(!block, |ui| {
-                tip(percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0), tl!("Set opacity for stroke"));
+                // A whole number from 1 to 100, as in Photoshop: 0 paints nothing (#11812).
+                tip(whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 62.0), tl!("Set opacity for stroke"));
                 let pressure = pressure_button(ui, b.pressure_opacity, tl!("Always use pressure for opacity"), brush);
                 if tip(pressure, tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure")).clicked() {
                     b.pressure_opacity = !b.pressure_opacity;
@@ -215,7 +218,7 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             opt_label(ui, tl!("Mode"));
             let held = app.held_erase;
             paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held);
-            percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, if t.pro { 62.0 } else { 66.0 });
+            whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, if t.pro { 62.0 } else { 66.0 });
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
             widgets::vline(ui, 22.0);
@@ -248,7 +251,7 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
             let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
             ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
-            let opacity = ui.add_enabled_ui(!block, |ui| percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0)).inner;
+            let opacity = ui.add_enabled_ui(!block, |ui| whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 66.0)).inner;
             tip(opacity, tl!("Set opacity for stroke"));
             let flow = ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0)).inner;
             tip(flow, tl!("Set flow rate for stroke"));
@@ -277,6 +280,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 if icons::button(ui, icon, 24.0, *on, tip).clicked() {
                     *on = !*on;
                 }
+            }
+            if let Some(r) = mixer_combination_dropdown(ui, &mut app.ui.tool_options.mixer_combination, &mut b.mixer) {
+                r.on_hover_text(tl!("Useful mixer brush combinations"));
             }
             widgets::vline(ui, 22.0);
             for (label, value) in
@@ -833,6 +839,18 @@ fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::op
 /// `own_tip` leaves the tooltip to the caller (the Brush's own texts, #11813).
 fn pressure_button(ui: &mut egui::Ui, on: bool, name: &str, own_tip: bool) -> egui::Response {
     icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), on, name, !own_tip)
+}
+
+/// [`percent_field`] that keeps whole percents (`33.7` becomes 34 %). A value set elsewhere (a
+/// `tools.setBrush` fraction, an older saved 0) shows as the whole percent in range.
+fn whole_percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> egui::Response {
+    opt_label(ui, label);
+    let mut percent = (*value * 100.0).round().max(*range.start()).min(*range.end());
+    let r = widgets::value_field_named(ui, label, &mut percent, range.clone(), "%", width);
+    if r.changed() {
+        *value = percent.round().max(*range.start()).min(*range.end()) / 100.0;
+    }
+    r
 }
 
 fn hint(ui: &mut egui::Ui, s: &str) {

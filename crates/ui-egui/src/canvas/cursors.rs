@@ -112,10 +112,11 @@ pub(super) fn eyedropper_ring(app: &mut PhotocraftApp, painter: &egui::Painter, 
 const RING_GREY: Color32 = Color32::from_gray(127);
 
 /// Tools on which holding ⌥ (Alt) switches to the Eyedropper: a click or drag sets the
-/// foreground colour, as with the Eyedropper itself (#417, the Background Eraser #11906).
+/// foreground colour, as with the Eyedropper itself (#417, the Background Eraser #11906, the Color
+/// Replacement tool #11914).
 pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     // Control+Alt is the brush-resize drag (`brush_resize`), not sampling.
-    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::BackgroundEraser)
+    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::BackgroundEraser | Tool::ColorReplacement)
 }
 
 /// Preferences › Cursors › Other Cursors asks for the precise crosshair, or Caps Lock swaps the
@@ -289,6 +290,10 @@ pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
 #[cfg(test)]
 #[path = "../eyedropper_mask_sample_tests.rs"]
 mod eyedropper_mask_sample_tests;
+
+#[cfg(test)]
+#[path = "../color_replacement_alt_click_tests.rs"]
+mod color_replacement_alt_click_tests;
 
 #[cfg(test)]
 #[path = "../background_eraser_alt_click_tests.rs"]
