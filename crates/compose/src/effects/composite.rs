@@ -31,7 +31,8 @@ pub(crate) fn map_count(layer: &Layer) -> usize {
     let outside = usize::from(out_widths.iter().any(|&w| !stroke_outside_exact(w))) + usize::from(out_widths.iter().any(|&w| stroke_outside_exact(w)));
     let stroke = if has_stroke { 1 + outside } else { 0 };
     // An unfilled shape's vector outline: its distance fields and its estimated edge coverage.
-    let needs_vector_coverage = has_stroke && matches!(layer.content, photocraft_doc::LayerContent::Shape(_)) && crate::effect_outline(layer).is_none();
+    // Only an outside stroke reads them, so a shape with inside or centre-only strokes builds none.
+    let needs_vector_coverage = outside > 0 && matches!(layer.content, photocraft_doc::LayerContent::Shape(_)) && crate::effect_outline(layer).is_none();
     let vector_outline = if needs_vector_coverage { outside + 1 } else { 0 };
     1 + per + stroke + vector_outline
 }
@@ -89,7 +90,7 @@ pub(crate) fn build_maps_prepared(
     // Without an outline (unfilled shapes), estimate the vector outline from local coverage; it
     // picks the chamfer or the exact transform the same way.
     let outline = crate::effect_outline(layer).is_some();
-    let (vdout, vdout_exact, vcov) = if has_stroke && vector_shape && !outline {
+    let (vdout, vdout_exact, vcov) = if !out_widths.is_empty() && vector_shape && !outline {
         let lc = local_coverage(&shape);
         (chamfer_out.then(|| dist_outside_by(&lc, Metric::Chamfer)), exact_out.then(|| dist_outside_by(&lc, Metric::Euclidean)), Some(lc.v))
     } else {

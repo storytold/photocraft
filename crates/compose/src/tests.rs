@@ -2266,14 +2266,18 @@ fn the_effect_map_estimate_counts_the_maps_building_takes() {
         d.layers.push(l);
     }
     // An unfilled shape (an open line) with an outside stroke also builds the vector outline's
-    // distance field and coverage (#9659); a filled one doesn't.
-    for (fill, name) in [(None, "unfilled line"), (Some(Fill::Solid(Color::rgb(0.3, 0.6, 0.9))), "filled shape")] {
+    // distance field and coverage (#9659); a filled one doesn't, and neither does an unfilled one
+    // whose strokes are all inside (nothing reads the outline then).
+    for (fill, name, inside_only) in
+        [(None, "unfilled line", false), (Some(Fill::Solid(Color::rgb(0.3, 0.6, 0.9))), "filled shape", false), (None, "unfilled line, inside strokes", true)]
+    {
         let path = photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polyline(&[(14.0, 110.0), (30.0, 125.0), (44.0, 112.0)])]);
         let line = photocraft_doc::vector::ShapeStroke { width: 4.0, ..Default::default() };
         let mut sh = photocraft_doc::vector::ShapeLayer { path, fill, stroke: Some(line), live: None, cache: None, psd_raw: None, ..Default::default() };
         sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
         let mut l = Layer::new(name, LayerContent::Shape(sh));
-        l.effects.items = vec![stroke(2.0, StrokePosition::Outside), stroke(60.0, StrokePosition::Outside)];
+        let position = if inside_only { StrokePosition::Inside } else { StrokePosition::Outside };
+        l.effects.items = vec![stroke(2.0, position), stroke(60.0, position)];
         d.layers.push(l);
     }
     let patterns = pattern::PreparedPatterns::new(&d.patterns, pattern::PREPARED_PATTERN_BYTES);

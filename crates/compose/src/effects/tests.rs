@@ -1097,3 +1097,26 @@ fn shifting_by_hostile_distances_does_not_overflow() {
         assert_eq!(s.v.len(), 144);
     }
 }
+
+/// The edge coverage an unfilled outline's outside stroke is measured against is geometric
+/// (#9659): a line drawn at 40 % opacity covers its edge pixels by the same share as an opaque
+/// one, because each pixel is taken relative to its neighbourhood's maximum, not to full opacity.
+#[test]
+fn local_coverage_of_a_faded_line_is_that_of_an_opaque_one() {
+    use super::distance::{INSIDE_EPS, local_coverage};
+    for deg in [0.0, 17.0, 45.0, 80.0] {
+        let opaque = aa_bar(60, 40, deg, 40.0, 5.0);
+        for opacity in [0.4_f32, 0.8] {
+            let faded = Map { w: opaque.w, h: opaque.h, v: opaque.v.iter().map(|a| a * opacity).collect() };
+            let (want, got) = (local_coverage(&opaque), local_coverage(&faded));
+            for (i, (w, g)) in want.v.iter().zip(&got.v).enumerate() {
+                // A pixel the fade takes under the "inside" threshold counts as outside: it is
+                // too faint to carry an estimate either way.
+                if opaque.v[i] * opacity <= INSIDE_EPS {
+                    continue;
+                }
+                assert!((w - g).abs() < 1e-4, "bar at {deg} deg, opacity {opacity}: pixel ({}, {}) is {g}, opaque {w}", i % opaque.w, i / opaque.w);
+            }
+        }
+    }
+}
