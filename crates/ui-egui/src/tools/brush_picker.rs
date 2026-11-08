@@ -515,8 +515,8 @@ fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], 
     egui::Popup::menu(&gear).anchor(anchor).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let current = current.filter(|n| presets.iter().any(|p| p.name.eq_ignore_ascii_case(n))).map(str::to_string);
         // What a preset's card shows: a checkbox per part. At least one stays on — clicking the
-        // last checked box does nothing, since an empty card would show no brush at all.
-        let on = [st.show_name, st.show_stroke, st.show_tip].into_iter().filter(|b| *b).count();
+        // last checked box does nothing, since an empty card would show no brush at all. Counted
+        // before each box, so two clicks in one frame cannot turn off the last two parts.
         for item in GEAR_MENU {
             let Some(item) = *item else {
                 ui.separator();
@@ -525,6 +525,7 @@ fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], 
             let label = tl!(item.label());
             match item {
                 Gear::Name | Gear::Stroke | Gear::Tip => {
+                    let on = [st.show_name, st.show_stroke, st.show_tip].into_iter().filter(|b| *b).count();
                     let flag = match item {
                         Gear::Name => &mut st.show_name,
                         Gear::Stroke => &mut st.show_stroke,

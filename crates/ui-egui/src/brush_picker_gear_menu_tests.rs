@@ -187,3 +187,22 @@ fn delete_brush_still_deletes_the_selected_preset() {
     h.run_steps(3);
     assert!(!h.state().session.tools.presets.iter().any(|p| p.name == name), "{name} is deleted");
 }
+
+#[test]
+fn two_clicks_in_one_frame_still_leave_one_card_part_on() {
+    let mut h = harness();
+    open_gear(&mut h);
+    // Brush Tip is off; both remaining parts get an assistive-technology click in the same frame
+    // (kittest's own clicks each run a frame of their own, so the events go in by hand).
+    let clicks: Vec<_> = ["Brush Name", "Brush Stroke"]
+        .into_iter()
+        .map(|label| {
+            let (target_node, target_tree) = h.get_by_label(label).accesskit_node().locate();
+            egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest { target_node, target_tree, action: egui::accesskit::Action::Click, data: None })
+        })
+        .collect();
+    h.input_mut().events.extend(clicks);
+    h.run_steps(3);
+    let st = &h.state().ui.brush_picker_list;
+    assert_eq!((st.show_name, st.show_stroke, st.show_tip), (false, true, false), "the last part on stays on");
+}
