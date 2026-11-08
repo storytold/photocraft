@@ -28,12 +28,17 @@ fn a_plain_click_far_outside_accepts_transform_but_a_rotation_drag_does_not() {
     let before = app.session.active().unwrap().history.past_len();
     let t = app.ui.transform.as_mut().unwrap();
     t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
-    let outside = [44.0, 44.0];
+    // A click outside the box on the image keeps it open; only the pasteboard commits (#11100).
     let none = egui::Modifiers::NONE;
+    let on_image = [44.0, 44.0];
+    assert!(pointer(&mut app, ToolEvent::Down { x: on_image[0], y: on_image[1], pressure: 1.0 }, none));
+    assert!(pointer(&mut app, ToolEvent::Up { x: on_image[0], y: on_image[1] }, none));
+    assert!(app.ui.transform.is_some(), "a click on the image does not commit");
+    let outside = [-12.0, 44.0];
     assert!(pointer(&mut app, ToolEvent::Down { x: outside[0], y: outside[1], pressure: 1.0 }, none));
     assert!(app.ui.transform.is_some(), "press alone does not accept");
     assert!(pointer(&mut app, ToolEvent::Up { x: outside[0], y: outside[1] }, none));
-    assert!(app.ui.transform.is_none(), "a release without a drag commits");
+    assert!(app.ui.transform.is_none(), "a release without a drag on the pasteboard commits");
     assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "one undo step for the transform");
     let st = app.session.active().unwrap();
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
@@ -74,14 +79,15 @@ fn a_click_near_rotation_handles_accepts_but_drags_and_option_pivot_do_not() {
 }
 
 #[test]
-fn rotate_feedback_only_appears_just_outside_corners() {
+fn rotate_feedback_covers_the_outside_zone() {
     let mut t = session();
-    assert!(near_rotate_corner(&t, [-18.0, -18.0], 12.0));
-    assert!(!near_rotate_corner(&t, [50.0, 25.0], 12.0), "inside moves the box");
-    assert!(!near_rotate_corner(&t, [500.0, 500.0], 12.0), "far outside stays generic");
-    assert!(!near_rotate_corner(&t, [2.0, 2.0], 12.0), "corner handle resizes");
+    let rotates = |t: &TransformSession, p| near_rotate_corner(t, hit(t, p, 12.0));
+    assert!(rotates(&t, [-18.0, -18.0]));
+    assert!(!rotates(&t, [30.0, 25.0]), "inside moves the box");
+    assert!(rotates(&t, [500.0, 500.0]), "far outside also rotates");
+    assert!(!rotates(&t, [2.0, 2.0]), "corner handle resizes");
     t.mode = TransformMode::Distort;
-    assert!(!near_rotate_corner(&t, [-18.0, -18.0], 12.0));
+    assert!(!rotates(&t, [-18.0, -18.0]));
 }
 
 #[test]
@@ -324,7 +330,7 @@ fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.transform = Some(session());
     setup(&mut app);
-    let mut h = Harness::builder().with_size(vec2(900.0, 360.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(1000.0, 360.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -549,6 +555,23 @@ fn editing_the_contents_of_a_dropped_file_keeps_the_layer() {
     assert!(app.transform_preview.is_none(), "the transform preview should end");
 }
 
+/// #8492: Preferences ▸ General ▸ Skip Transform when Placing (off by default) places a file
+/// without opening Free Transform on it, as in the reference app.
+#[test]
+fn skip_transform_when_placing_leaves_the_place_without_a_box() {
+    for skip in [false, true] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": skip})).unwrap();
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.session.execute("layer.duplicate", json!({"inPlace": true})).unwrap();
+        app.sync_views();
+        let placed = app.session.active().unwrap().active_layer.unwrap();
+        begin_placed(&mut app, &egui::Context::default()).unwrap();
+        assert_eq!(app.ui.transform.is_some(), !skip, "skip {skip}: Free Transform opens only with the preference off");
+        assert!(app.session.active().unwrap().doc.layer(placed).is_some(), "skip {skip}: the placed layer stays");
+    }
+}
+
 /// Polls the app's background jobs until they have all landed.
 fn land_jobs(app: &mut PhotocraftApp) {
     let ctx = egui::Context::default();
@@ -612,20 +635,23 @@ fn another_tool_or_layer_applies_a_transform_committed_in_the_background() {
 }
 
 /// #5667: New Layer while a dropped file is in Free Transform applies the transform first. When
-/// the commit runs in the background the command is refused until it has landed, then runs: the
-/// place (which takes the move into its step) and the new layer each stay their own step, in
-/// that order.
+/// the commit runs in the background a click waits for it to land, then runs (#9974): the place
+/// (which takes the move into its step) and the new layer each stay their own step, in that
+/// order. A script is refused instead, as it needs an answer now.
 #[test]
 fn new_layer_applies_the_open_transform() {
+    let (mut script, ..) = moved_place();
+    script.automation_input = true;
+    let err = script.run("layer.new.layer", json!({})).unwrap_err();
+    assert!(err.contains("Free Transform is still being applied"), "a script is refused while the commit runs: {err}");
+
     let (mut app, placed, frame, steps) = moved_place();
     let layers = app.session.active().unwrap().doc.layers.len();
-    let err = app.run("layer.new.layer", json!({})).unwrap_err();
-    assert!(err.contains("Free Transform is still being applied"), "refused while the commit runs: {err}");
+    app.run("layer.new.layer", json!({})).unwrap();
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "no layer yet");
     land_jobs(&mut app);
     assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "the box ended");
     assert_eq!(frame_of(&app, placed), Some(frame.translate(8, 0)), "applied as it showed, not the original");
-    app.run("layer.new.layer", json!({})).unwrap();
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layers.len(), layers + 1);
     assert_eq!(st.history.past_len(), steps + 2, "the place with its move, then New Layer");
@@ -633,6 +659,26 @@ fn new_layer_applies_the_open_transform() {
     app.session.undo();
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "one undo takes back the new layer");
     assert_eq!(frame_of(&app, placed), Some(frame.translate(8, 0)), "the transform stays");
+}
+
+/// #9974: only a click waits for the commit. A control request (authorized, not automation
+/// input) needs its answer now, and a second click while one waits is refused, not queued.
+#[test]
+fn only_one_click_waits_for_the_commit() {
+    let (mut control, ..) = moved_place();
+    control.session.authorize = Some(|_, _| Ok(()));
+    let layers = control.session.active().unwrap().doc.layers.len();
+    let err = control.run("layer.new.layer", json!({})).unwrap_err();
+    assert!(err.contains("Free Transform is still being applied"), "a control request is refused: {err}");
+    land_jobs(&mut control);
+    assert_eq!(control.session.active().unwrap().doc.layers.len(), layers, "and nothing runs later");
+
+    let (mut app, ..) = moved_place();
+    let layers = app.session.active().unwrap().doc.layers.len();
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert!(app.run("layer.new.layer", json!({})).is_err(), "a second click is refused");
+    land_jobs(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the waiting click ran once");
 }
 
 /// #5665, the report's second case through the UI with background jobs on, as in the desktop
@@ -774,6 +820,11 @@ fn the_nearest_handle_wins_on_a_small_box() {
     assert_eq!(hit(&s, [8.0, -1.0], 12.0), Hit::Edge(0));
     assert_eq!(hit(&s, [8.0, 8.0], 12.0), Hit::Pivot);
     assert_eq!(hit(&s, [40.0, 40.0], 12.0), Hit::Outside);
+    // A reference point on a handle wins the press, as in the reference application (#5153).
+    s.pivot = [0.0, 0.0];
+    assert_eq!(hit(&s, [0.0, 0.0], 12.0), Hit::Pivot);
+    assert_eq!(hit(&s, [1.0, 1.0], 12.0), Hit::Pivot);
+    assert_eq!(hit(&s, [16.0, 17.0], 12.0), Hit::Corner(2));
 }
 
 #[test]
@@ -1721,7 +1772,7 @@ fn hovering_just_outside_a_corner_asks_for_the_rotate_cursor() {
     assert_eq!(cursor(&app, &xf, tl, egui::Modifiers::NONE), Some(CursorIcon::None), "the arrow is drawn instead");
     assert!(near2(rotate_cursor_dir(&app, tl), [h, h]), "{:?}", rotate_cursor_dir(&app, tl));
     assert!(near2(rotate_cursor_dir(&app, br), [-h, -h]), "bends round the bottom-right corner");
-    assert_eq!(cursor(&app, &xf, [60.0, 60.0], egui::Modifiers::NONE), Some(CursorIcon::Move));
+    assert_eq!(cursor(&app, &xf, [60.0, 60.0], egui::Modifiers::NONE), Some(CursorIcon::Default));
     assert_eq!(rotate_cursor_dir(&app, [60.0, 60.0]), None, "inside moves");
     assert_eq!(rotate_cursor_dir(&app, [32.0, 32.0]), None, "the corner handle scales");
     assert_eq!(rotate_cursor_dir(&app, [f64::NAN, 32.0]), None);
@@ -2064,6 +2115,122 @@ fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
         })
         .unwrap();
     app
+}
+
+/// `app_with_square` (A, red over 8..24) plus B (x 40..56, y 8..24) and C (x 8..24, y 40..56)
+/// over it. A and B are linked; C isn't. Only A is selected, and active: (app, A, B, C).
+fn linked_layers_app() -> (PhotocraftApp, LayerId, LayerId, LayerId) {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let a = app.session.active().unwrap().active_layer.unwrap();
+    let add = |app: &mut PhotocraftApp, fill: photocraft_geom::Rect| {
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, l| {
+                doc.layer_mut(l.unwrap()).unwrap().surface_mut().unwrap().fill_rect(fill, &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.active().unwrap().active_layer.unwrap()
+    };
+    let b = add(&mut app, photocraft_geom::Rect::new(40, 8, 56, 24));
+    let c = add(&mut app, photocraft_geom::Rect::new(8, 40, 24, 56));
+    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+    app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+    assert_eq!(app.session.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+    (app, a, b, c)
+}
+
+/// #11217: ⌥⌘T on a linked layer without a selection makes no copy in the reference application
+/// (measured): it frames and moves the whole link group, as Free Transform does. An unlinked
+/// layer still gets its copy.
+#[test]
+fn free_transform_a_copy_of_a_linked_layer_boxes_the_link_group_without_a_copy() {
+    let ctx = egui::Context::default();
+    let (mut app, a, b, c) = linked_layers_app();
+    let layers = app.session.active().unwrap().doc.layers.len();
+    crate::menus::invoke(&mut app, &ctx, "edit.freeTransformCopy", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "no copy of a linked layer");
+    let t = app.ui.transform.as_ref().unwrap();
+    assert_eq!(t.made, None, "nothing made to take back");
+    assert_eq!(t.layers, [a.0, b.0], "the box frames the link group");
+    cancel(&mut app);
+    app.session.execute("layer.select", json!({"layer": c.0})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "edit.freeTransformCopy", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "an unlinked layer is copied");
+    assert_eq!(app.ui.transform.as_ref().unwrap().made, Some(MadeLayer::Copy));
+    cancel(&mut app);
+}
+
+/// #11217: the box over one selected linked layer frames, previews and commits its whole link
+/// group, as in Photoshop. It used to frame A alone; B only moved at the commit.
+#[test]
+fn free_transform_of_a_linked_layer_boxes_its_link_group() {
+    let (mut app, a, b, c) = linked_layers_app();
+    begin(&mut app, &egui::Context::default()).unwrap();
+    let t = app.ui.transform.as_ref().unwrap();
+    assert_eq!(t.layer, a.0, "the active layer stays the session's");
+    assert_eq!(t.layers, [a.0, b.0], "a box over the link group, in stack order");
+    assert_eq!(t.rect, [8.0, 8.0, 56.0, 24.0], "framing A and B together");
+    let pv = app.transform_preview.as_ref().unwrap();
+    assert!(pv.several.as_ref().is_some_and(|sv| sv.ids == [a, b]), "the preview moves both");
+    // The moving pixels hold B's blue block where B is, beside A's red one: B moves with the box
+    // on the canvas, not only at the commit.
+    assert_eq!(moving_texel(&app, [48, 16]).0, Some(Color32::BLUE), "the linked layer's pixels are in the preview");
+    assert_eq!(moving_texel(&app, [16, 16]).0, Some(Color32::RED), "and the active layer's");
+    assert_eq!(moving_texel(&app, [16, 48]).0, None, "the unlinked layer is outside the moving pixels");
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 4.0, y]);
+    commit(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    let bounds = |id: LayerId| st.doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    assert_eq!(bounds(a), photocraft_geom::Rect::new(12, 8, 28, 24));
+    assert_eq!(bounds(b), photocraft_geom::Rect::new(44, 8, 60, 24));
+    assert_eq!(bounds(c), photocraft_geom::Rect::new(8, 40, 24, 56), "an unlinked layer stays put");
+}
+
+/// #11217: a layer without linked layers still opens the one-layer box.
+#[test]
+fn free_transform_of_an_unlinked_layer_boxes_that_layer_alone() {
+    let (mut app, _, _, c) = linked_layers_app();
+    app.session.execute("layer.select", json!({"layer": c.0})).unwrap();
+    begin(&mut app, &egui::Context::default()).unwrap();
+    let t = app.ui.transform.as_ref().unwrap();
+    assert_eq!((t.layer, t.rect), (c.0, [8.0, 40.0, 24.0, 56.0]));
+    assert!(t.layers.is_empty(), "a one-layer session");
+    assert!(app.transform_preview.as_ref().unwrap().several.is_none());
+}
+
+/// #11217 review: a layer linked to the Background opens the one-layer box: the link doesn't pull
+/// the Background into the box, as the selection doesn't either (#6501).
+#[test]
+fn free_transform_of_a_layer_linked_to_the_background_boxes_that_layer_alone() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let a = app.session.active().unwrap().active_layer.unwrap();
+    let bg = app.session.active().unwrap().doc.layers[0].id;
+    app.session.execute("layer.select", json!({"layer": bg.0})).unwrap();
+    app.session.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+    assert_eq!(app.session.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+    begin(&mut app, &egui::Context::default()).unwrap();
+    let t = app.ui.transform.as_ref().unwrap();
+    assert_eq!((t.layer, t.rect), (a.0, [8.0, 8.0, 24.0, 24.0]), "the box frames A, not the canvas-sized Background");
+    assert!(t.layers.is_empty(), "a one-layer session");
+    let pv = app.transform_preview.as_ref().unwrap();
+    assert!(pv.several.is_none());
+    assert!(pv.doc.layer(bg).unwrap().visible, "the Background stays under the box");
+}
+
+/// #11217: a locked layer in the link group refuses the box before it opens, as a locked layer
+/// among several selected ones does.
+#[test]
+fn a_locked_linked_layer_refuses_the_box_over_its_link_group() {
+    let (mut app, a, b, _) = linked_layers_app();
+    app.session.execute("layer.setProps", json!({"layer": b.0, "locks": {"position": true}})).unwrap();
+    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+    assert_eq!(begin(&mut app, &egui::Context::default()), Err(LOCKED.to_string()));
+    assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
 }
 
 /// #2439: a layer under others keeps its place in the stack while the box is open. The
@@ -3165,6 +3332,26 @@ fn mask_view_keeps_move_and_transform_available_behind_a_colour_set() {
     }
 }
 
+/// Batch 16 review: ⌥⌘T with the unlinked mask of a linked layer targeted still copies; only the
+/// layer's own pixels take the link group's box without a copy.
+#[test]
+fn free_transform_a_copy_of_a_targeted_mask_on_a_linked_layer_still_copies() {
+    let mut app = masked_app(false);
+    let a = app.session.active().unwrap().active_layer.unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    let b = app.session.active().unwrap().active_layer.unwrap();
+    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+    app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+    assert_eq!(app.session.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+    app.ui.mask_target = true;
+    let layers = app.session.active().unwrap().doc.layers.len();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransformCopy", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the layer is copied");
+    assert_eq!(app.ui.transform.as_ref().unwrap().made, Some(MadeLayer::Copy));
+    cancel(&mut app);
+}
+
 #[test]
 fn linked_mask_target_transforms_the_layer() {
     let mut app = masked_app(true);
@@ -3382,9 +3569,10 @@ fn cursor_during_drag_stays_stable() {
     // Release drag
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 60.0 }, command);
 
-    // Once released, dragging has ended: far outside returns the commit-on-click cursor,
+    // Once released, dragging has ended: far outside returns the custom rotate cursor,
     // and hovering the corner without Command restores normal resize cursor.
-    assert_eq!(cursor(&app, &xf, [200.0, 200.0], command), Some(CursorIcon::Alias));
+    assert_eq!(cursor(&app, &xf, [200.0, 200.0], command), Some(CursorIcon::None));
+    assert!(rotate_cursor_dir(&app, [200.0, 200.0]).is_some());
     assert_ne!(cursor(&app, &xf, [50.0, 60.0], egui::Modifiers::NONE), Some(CursorIcon::None));
 }
 
@@ -3493,4 +3681,23 @@ fn several_layers_reuse_the_transform_interpolation_preference() {
     let transform = app.ui.transform.as_ref().unwrap();
     assert_eq!(transform.layers.len(), 2);
     assert_eq!(transform.interpolation, "nearest");
+}
+
+/// #9974: the click waiting for the commit acts on the layer selected when it was made: no other
+/// layer can be picked while the commit runs (the engine refuses document commands meanwhile).
+#[test]
+fn a_waiting_new_layer_click_keeps_the_layer_it_was_made_on() {
+    let (mut app, placed, ..) = moved_place();
+    let below = app.session.active().unwrap().doc.layers.iter().map(|l| l.id).find(|id| *id != placed).unwrap();
+    let before: Vec<_> = app.session.active().unwrap().doc.layers.iter().map(|l| l.id).collect();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let err = app.run("layer.select", json!({"layer": below.0})).unwrap_err();
+    assert!(err.contains("still running"), "{err}");
+    land_jobs(&mut app);
+    let st = app.session.active().unwrap();
+    let order: Vec<_> = st.doc.layers.iter().map(|l| l.id).collect();
+    let new = *order.iter().find(|id| !before.contains(id)).expect("the new layer");
+    let at = |id| order.iter().position(|l| *l == id).unwrap();
+    assert_eq!(at(new), at(placed) + 1, "the new layer sits right above the layer selected at the click: {order:?}");
+    assert_eq!(st.active_layer, Some(new));
 }
