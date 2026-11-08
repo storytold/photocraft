@@ -1177,6 +1177,11 @@ fn handle_canvas_tool_stroke(
                 g.over_ruler = on_ruler;
             }
         }
+        // Perspective Crop: a release egui counts as a click doesn't move the quad, so the
+        // first click of a double-click leaves it where it was (#11806).
+        if tool == Tool::PerspectiveCrop && buttons.clicked {
+            crate::perspective_crop_ui::click_released(app);
+        }
         let p = at.map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
         if let Some(d) = p {
             tap_at_peak_pressure(app);
