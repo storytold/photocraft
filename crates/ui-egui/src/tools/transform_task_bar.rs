@@ -1,4 +1,11 @@
 //! The contextual task bar for an open Free Transform box (#11104).
+//!
+//! The active document must own the transform preview. The bar is hidden when the shared
+//! task bar is disabled, a dialog is open, or the transform is committing. Crop, Warp,
+//! Transform Selection and Content-Aware Scale keep their own controls.
+//!
+//! The bar follows the box's screen bounds on the active canvas. It uses the same placement
+//! and pin, reset and hide menu as Crop. The Window menu can show the shared bar again.
 
 use serde_json::json;
 
@@ -28,12 +35,15 @@ fn open_box(app: &PhotocraftApp) -> Option<&TransformSession> {
     app.ui.transform.as_ref().filter(|t| t.warp.is_none() && !t.selection && t.content_aware.is_none())
 }
 
-/// Whether the shared task-bar rect belongs to an open Free Transform box.
+/// Whether the inspector may report the shared task-bar rectangle for Free Transform.
+/// This checks current eligibility without changing placement or the transform.
 pub fn eligible(app: &PhotocraftApp) -> bool {
     open_box(app).is_some()
 }
 
-/// Place the shared bar below the box's current screen bounds on the active canvas tile.
+/// Draw the shared bar, persist its placement and apply the selected action before Hide.
+/// Report failed preset commands in the status bar. After the action, publish the rectangle
+/// for inspection while Free Transform remains eligible, or clear it if the action closed or hid it.
 pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
     let Some(transform) = open_box(app) else { return };
     let corners = transform.quad.map(|[x, y]| xf.to_screen(x as f32, y as f32));
