@@ -293,7 +293,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open as Smart Object…",
             &["File"],
             None,
-            r##"{"path":str} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color} (or {held, name, warnings, color, smartObject} while the profile prompt waits)"##,
+            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a prompt waits)"##,
             native,
             open_as_smart_object
         ),

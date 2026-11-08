@@ -307,7 +307,8 @@ fn track_open(app: &mut PhotocraftApp, tab: OpenTab) {
 /// Open Recent is untouched. Inline (background jobs off, or the web) it finishes at once.
 pub(crate) fn start_open_as_smart_object(app: &mut PhotocraftApp, path: &str, order: Option<OpenOrder>) -> Result<(), String> {
     let name = crate::file_open::display_name(path);
-    let params = json!({"path": path});
+    // `confirmDamage`: a damaged PSD waits for the user's answer, as in File › Open.
+    let params = json!({"path": path, "confirmDamage": true});
     let started = if app.background_jobs {
         app.session.start("file.openAsSmartObject", params).map_err(|e| e.to_string())?
     } else {

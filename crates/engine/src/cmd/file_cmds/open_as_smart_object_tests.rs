@@ -278,3 +278,59 @@ fn ask_when_opening_holds_the_document_like_file_open() {
     assert_eq!(doc.layers.len(), 1);
     assert!(matches!(doc.layers[0].content, LayerContent::Smart(_)));
 }
+
+#[test]
+fn the_reply_flags_a_smart_object_so_a_queued_document_keeps_its_history_label() {
+    let dir = tmp("flag");
+    let path = write_png(&dir, "a_test.png", 16, 12);
+    let mut s = Session::new();
+    let r = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    assert_eq!(r["smartObject"], true, "{r}");
+}
+
+#[test]
+fn a_damaged_psd_is_held_for_confirmation_when_asked_and_opens_otherwise() {
+    let dir = tmp("damaged");
+    let path = join(&dir, "d.psd");
+    std::fs::write(&path, crate::jobs::psd_open_fixture::make_psd(true)).unwrap();
+    let mut s = Session::new();
+    s.execute("edit.colorSettings", json!({"askOnMismatch": false})).unwrap();
+    let r = s.execute("file.openAsSmartObject", json!({"path": path, "confirmDamage": true})).unwrap();
+    assert_eq!(r["damaged"], true, "{r}");
+    assert_eq!(r["smartObject"], true, "{r}");
+    assert!(r["held"].is_u64(), "{r}");
+    assert!(s.documents().is_empty(), "held for the damage prompt, not admitted");
+    let r = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    assert!(r["docId"].is_u64(), "a headless caller opens the recovered content: {r}");
+}
+
+#[test]
+fn a_document_held_for_its_prompt_does_not_share_its_name_with_the_next() {
+    let dir = tmp("held-name");
+    let path = write_psd16(&dir, "a_test.psd", 20, 20);
+    let mut s = Session::new();
+    let first = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    let second = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    assert_eq!(first["name"], "a_test-1");
+    assert_eq!(second["name"], "a_test-2", "the held document's name is taken: {second}");
+    // Both held docs leave the session for the app's queue; admitting them one by one numbers each.
+    let (a, _) = s.take_held_open(first["held"].as_u64().unwrap()).unwrap();
+    let (b, _) = s.take_held_open(second["held"].as_u64().unwrap()).unwrap();
+    admit_as_smart_object(&mut s, a);
+    admit_as_smart_object(&mut s, b);
+    assert_eq!(names(&s), ["a_test-1", "a_test-2"]);
+    let mut t = Session::new();
+    let (c, _) = {
+        let r = t.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+        t.take_held_open(r["held"].as_u64().unwrap()).unwrap()
+    };
+    let (d, _) = {
+        t.execute("edit.colorSettings", json!({"askOnMismatch": true})).unwrap();
+        let r = t.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+        t.take_held_open(r["held"].as_u64().unwrap()).unwrap()
+    };
+    assert_eq!(c.name, d.name, "taken out of the session, both are named a_test-1 when read");
+    admit_as_smart_object(&mut t, c);
+    admit_as_smart_object(&mut t, d);
+    assert_eq!(names(&t), ["a_test-1", "a_test-2"], "the second takes the next free number when admitted");
+}

@@ -2148,7 +2148,7 @@ mod tests;
 
 #[cfg(test)]
 #[path = "../../io/tests/support/recovery_psd.rs"]
-mod psd_open_fixture;
+pub(crate) mod psd_open_fixture;
 
 #[cfg(test)]
 mod psd_open_confirmation_tests {
