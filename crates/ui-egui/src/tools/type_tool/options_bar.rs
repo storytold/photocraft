@@ -95,9 +95,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         },
         None => o.type_align.as_str(),
     };
-    for (align, icon, tip) in
+    // Vertical text shows Top / Center / Bottom for the same left / center / right values, after the
+    // targeted layer's orientation, or with no text targeted the Vertical Type tool's (#12059). The
+    // Type Mask tools keep the horizontal buttons (not measured).
+    let vertical = !app.ui.tool.is_type_mask()
+        && match super::defaults::target_text(app) {
+            Some(t) => t.orientation == photocraft_doc::text::Orientation::Vertical,
+            None => app.ui.tool == crate::state::Tool::VerticalType,
+        };
+    let buttons = if vertical {
+        [
+            ("left", "vertical-align-top", tl!("Top align text")),
+            ("center", "vertical-align-middle", tl!("Center text")),
+            ("right", "vertical-align-bottom", tl!("Bottom align text")),
+        ]
+    } else {
         [("left", "align-left", tl!("Left align text")), ("center", "align-center", tl!("Center text")), ("right", "align-right", tl!("Right align text"))]
-    {
+    };
+    for (align, icon, tip) in buttons {
         if crate::icons::button(ui, icon, 24.0, shown_align == align, tip).clicked() {
             app.ui.tool_options.type_align = align.into();
             apply(app, ui.ctx(), json!({"align": align}));
