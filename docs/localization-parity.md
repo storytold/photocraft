@@ -27,7 +27,7 @@ composer, and its text engine handles RTL, Devanagari and Indic scripts.
 (Arabic at 92.1%, 194 keys in English; Simplified Chinese, Spanish, French, Portuguese (Brazil), Indonesian, Japanese,
 German, Korean, Vietnamese at 93.3–93.7%, 155–164 keys each still show in English; status `partial` also
 because of the engine messages), Hindi partial (400 of 2,449, 16.3%), plus the other shipped languages below. Weighted by
-speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorded only for Italian,
+speakers, ~55% ready. Remaining: 90–143 h, plus native-speaker review (recorded only for Italian,
 2026-10-12).
 
 ## The twelve key languages
@@ -63,7 +63,7 @@ term per concept; the contested terms follow a native speaker's questionnaire an
 completed for the current UI) and Norwegian Bokmål `nb` (4,603 rows, combined from #8072 and #9025;
 `no` and `nn` locales resolve to it), all added 2026-10-29, cover the same keys with one term per
 concept; none has had a native-speaker review yet. Bosnian `bs` (4,622 rows, Latin script,
-Ijekavian, added 2026-10-30) covers the same keys; its one/few/other plurals reuse the Russian
+Ijekavian, added 2026-10-30) covers the same dynamic labels; its one/few/other plurals reuse the Russian
 rule, and Cyrillic `bs` locales read it too. It is AI-assisted, shares its wording with
 storytold/craft-i18n `locales/bs/`, and has not had a native-speaker review yet.
 
