@@ -13,7 +13,7 @@ use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons};
 
 /// (command id, icon, label). The labels are the Layer menu's, already translated.
-const ALIGN: [(&str, &str, &str); 6] = [
+pub(crate) const ALIGN: [(&str, &str, &str); 6] = [
     ("layer.align.leftEdges", "align-edge-left", "Left Edges"),
     ("layer.align.horizontalCenters", "align-edge-hcenter", "Horizontal Centers"),
     ("layer.align.rightEdges", "align-edge-right", "Right Edges"),

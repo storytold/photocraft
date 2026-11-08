@@ -600,10 +600,11 @@ fn a_selective_color_step_in_the_scalar_form_keeps_its_values() {
     assert_eq!(range(&nulled, "reds"), [35.0, 0.0, 0.0, 0.0], "{nulled}");
 }
 
-/// A setting Photoshop's event has no field for is dropped by export, and the step then plays back
+/// A setting the exported event has no field for is dropped by export, and the step then plays back
 /// as a different edit: Crystallize's `seed` (#7668), Radial Blur's centre, Minimum's and
-/// Maximum's `preserve`. Such a step is refused, as one with no equivalent event already is. So is
-/// an adjustment edit that names its layer: the event edits the active one (#8532).
+/// Maximum's `preserve`, Equalize's `selectedAreaOnly`. Such a step is refused, as one with no
+/// equivalent event already is. So is an adjustment edit that names its layer: the event edits the
+/// active one (#8532).
 #[test]
 fn a_setting_the_event_cannot_hold_is_refused() {
     for (id, params) in [
@@ -611,6 +612,10 @@ fn a_setting_the_event_cannot_hold_is_refused() {
         ("filter.blur.radialBlur", json!({"amount": 10, "centerX": 0.25, "centerY": 0.5})),
         ("filter.other.minimum", json!({"radius": 4, "preserve": "roundness"})),
         ("filter.other.maximum", json!({"radius": 4, "preserve": "roundness"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": false})),
+        // Equalize reads `selectedAreaOnly` as a boolean only and refuses the string and null.
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": "true"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": null})),
         ("layer.setAdjustment", json!({"kind": "exposure", "layer": "Target_existing", "exposure": -0.75, "offset": 0.035, "gamma": 1.37})),
         ("layer.setAdjustment", json!({"kind": "exposure", "document": 2, "exposure": -0.75})),
     ] {
@@ -645,6 +650,8 @@ fn settings_at_the_value_the_event_plays_still_export() {
         // review).
         ("filter.other.minimum", json!({"radius": 4, "preserve": "Squareness"})),
         ("filter.other.maximum", json!({"radius": 4, "preserve": "Roundness"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": true})),
+        ("image.adjustments.equalize", json!({})),
     ] {
         let mut s = Session::new();
         s.actions.list.push(Action::new("A", vec![(id.into(), params.clone())]));
@@ -734,6 +741,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
+        ("file.automate.createDroplet", json!({"path": "/d/Sharpen.pcdroplet", "action": "Sharpen", "set": "Tools", "output": "/d/out", "overrideOpen": true})),
         ("filter.distort.shear", json!({"points": [[0,0], [0.5,0.25], [1,0]], "undefinedAreas": "repeat"})),
         ("filter.distort.pinch", json!({"amount": -30})),
         ("filter.distort.polarCoordinates", json!({"mode": "polarToRectangular"})),
@@ -827,6 +835,13 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.new.layer", json!({"name": "Ink", "opacity": 0.5, "mode": "Multiply"})),
         ("type.convertToShape", json!({})),
         ("type.createWorkPath", json!({})),
+        (
+            "path.set",
+            json!({"name":"work","path":{"fillRule":"evenodd","inverted":false,"subpaths":[{"closed":false,"op":"combine","knots":[
+                {"anchor":[1,2],"in":[1,2],"out":[3,4],"smooth":false},
+                {"anchor":[8,9],"in":[6,7],"out":[8,9],"smooth":false}
+            ]}]}}),
+        ),
         ("filter.blur.shapeBlur", json!({})),
         ("filter.blur.shapeBlur", json!({"radius": 10})),
         ("layer.new.group", json!({"name": "G"})),
@@ -1106,6 +1121,10 @@ fn every_mapped_command_exports_and_imports_back() {
                 if *id == "paint.gradient" {
                     // Executable values match; independent public tests verify the source carrier.
                     back.as_object_mut().unwrap().remove("__atnClassicGradient");
+                }
+                if *id == "path.set" {
+                    // The imported step retains the original descriptor alongside its playable path.
+                    back.as_object_mut().unwrap().remove(super::steps_path::SOURCE).unwrap();
                 }
                 if *id == "edit.perspectiveWarp" {
                     back.as_object_mut().unwrap().remove("__atnPerspectiveWarp");
@@ -1400,6 +1419,7 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
             Some(desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(desc("AdjL").with("Type", D::Descriptor(desc("GdMp")))))),
         ),
         item("GsnB", "Gaussian Blur", None),
+        item("GsnB", "Gaussian Blur", Some(desc("null"))),
         // Duplicate into another open document: the `T` reference means nothing at
         // replay, so the step is kept verbatim instead of misplayed as a same-doc copy.
         item(
@@ -1421,8 +1441,11 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
     };
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     let ids: Vec<&str> = imp.actions[0].steps.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, "filter.blur.gaussianBlur", PHOTOSHOP_STEP]);
-    assert_eq!(imp.unsupported.len(), 5);
+    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, MENU_ITEM, "filter.blur.gaussianBlur", PHOTOSHOP_STEP]);
+    assert_eq!(imp.actions[0].steps[4].1["id"], "filter.blur.gaussianBlur");
+    assert_eq!(imp.actions[0].steps[4].1["eventKind"], "code");
+    assert_eq!(imp.actions[0].steps[5].1, json!({}));
+    assert_eq!(imp.unsupported.iter().map(|step| step.step).collect::<Vec<_>>(), [0, 1, 2, 3, 6]);
     assert!(imp.actions[0].disabled.is_empty(), "steps with a document effect stay on so playback reports them");
 }
 

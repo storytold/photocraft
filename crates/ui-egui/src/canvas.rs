@@ -720,6 +720,19 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     // Layer Style on a Drop or Inner Shadow page: a drag on the image moves the shadow (#5701).
     let shadow_drag =
         !picking && app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::LayerStyle && crate::layer_style::drags_shadow(&d.fields));
+    // Layer Style on a Gradient Overlay page: a drag on the image moves the gradient (#10763), as
+    // long as the dialog's layer is there to move it on.
+    let gradient_drag = !picking
+        && app.ui.dialogs.last().is_some_and(|d| {
+            d.kind == crate::state::DialogKind::LayerStyle
+                && crate::layer_style::drags_gradient(&d.fields)
+                && crate::layer_style::gradient_layer_bounds(&app.session, &d.fields).is_some()
+        });
+    // Off that page (another one chosen under a held press, say) the stored drag is over: the
+    // page chosen again starts from the offset shown.
+    if !gradient_drag && let Some(d) = app.ui.dialogs.last_mut().filter(|d| d.kind == crate::state::DialogKind::LayerStyle) {
+        crate::layer_style::end_gradient_drag(&mut d.fields);
+    }
     // ⌘/Ctrl-click with Curves open: a point at the pixel's tone (#7325), whatever the tool. The
     // press's own modifiers decide, and only the press adds: a drag would add one per frame.
     let curve_point_press = (input.primary && !input.middle && crate::adjust_dialog::curves_on_top(app))
@@ -734,7 +747,14 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         .flatten()
         .map(|m| crate::workspace_ui::sticky_mods(app, m))
         .filter(|m| m.command);
-    let dialog_hand = app.ui.tool == Tool::Hand && !picking && !range_picking && !refine_brushing && !pinning && !shadow_drag && curve_point_press.is_none();
+    let dialog_hand = app.ui.tool == Tool::Hand
+        && !picking
+        && !range_picking
+        && !refine_brushing
+        && !pinning
+        && !shadow_drag
+        && !gradient_drag
+        && curve_point_press.is_none();
     // ⌘Space / ⌥Space zoom under the dialog as they do without one, before Space pans (#6460).
     // With the Hand tool, ⌘ alone is Zoom In (#6434); under Curves that press is the dialog's
     // point (#7325), not a zoom.
@@ -769,6 +789,17 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             let total = input.xf.unmap_vec(p - origin) / (input.view.zoom / input.ppp);
             if let Some(d) = app.ui.dialogs.last_mut() {
                 crate::layer_style::drag_shadow(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)]);
+            }
+        }
+    } else if gradient_drag && !input.middle && crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {
+        input.ctx.set_cursor_icon(egui::CursorIcon::Move);
+        if let Some(p) = crate::dialogs::free_press(input.ctx, input.rect) {
+            let (start, origin) = input.ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin().unwrap_or(p)));
+            let total = input.xf.unmap_vec(p - origin) / (input.view.zoom / input.ppp);
+            // The gradient's offset is a fraction of the layer's bounds, as the renderer paints it.
+            let bounds = app.ui.dialogs.last().and_then(|d| crate::layer_style::gradient_layer_bounds(&app.session, &d.fields));
+            if let (Some(bounds), Some(d)) = (bounds, app.ui.dialogs.last_mut()) {
+                crate::layer_style::drag_gradient(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)], bounds);
             }
         }
     } else if picking && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect) {
@@ -1957,9 +1988,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         None => paint_dots(ui, rect, app.session.prefs().interface.show_canvas_dots),
     }
     let border = app.session.prefs().interface.canvas_border;
-    // Default-mode Crop changes its camera during input. Defer its image until the new camera
-    // is known; other tools keep their existing paint order and texture/outline snapshots.
+    // Default-mode Crop changes its camera during input. Live painting must also process the
+    // current pointer samples before preparing the image, or every dab appears a frame late.
+    // Under a dialog the image keeps its place below the dialog's own overlays (Refine Edge).
     let crop_camera = primary && crate::crop_mode::moves_image(app);
+    let paint_after_input = crop_camera || (primary && app.ui.dialogs.is_empty() && strokes_live(app.ui.tool));
     let paint_input = CanvasPaintInput {
         ctx: &ctx,
         rect,
@@ -1977,7 +2010,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         target_xf,
         pixel_grid,
     };
-    let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
+    let painted = if paint_after_input { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
     let img_rect = xf.doc_rect(doc.bounds());
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
@@ -1998,7 +2031,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     app.stylus.update_for_frame(ui.ctx().cumulative_frame_nr(), &ui.input(|i| i.events.clone()));
     crate::stylus::Stylus::sync_eraser_tool(app);
     // A Magnetic Lasso border left behind by a tool or document switch is dropped.
-    crate::magnetic_lasso_ui::frame(app);
+    crate::magnetic_lasso_ui::frame(app, ui.input(|i| i.pointer.primary_down()), primary);
     // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
     crate::layer_picker::prune(app);
     // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
@@ -2145,12 +2178,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ctx.request_repaint();
         }
     }
-    let xf = if crop_camera {
+    let xf = if paint_after_input {
+        // This frame's navigation input (wheel pan, pinch zoom) shows in this frame too.
+        if view.zoom != render_zoom {
+            display_view.zoom = view.zoom;
+        }
         if view.center != target_xf.center {
             display_view.center = view.center;
         }
         display_view.rotation = view.rotation;
-        ViewXform { center: display_view.center, rotation: display_view.rotation, ..xf }.pixel_aligned_for(app, ppp)
+        ViewXform { zoom: display_view.zoom / ppp, center: display_view.center, rotation: display_view.rotation, ..xf }.pixel_aligned_for(app, ppp)
     } else {
         xf
     };
@@ -2247,6 +2284,9 @@ mod layer_edges_tests;
 
 #[cfg(test)]
 mod guide_ants_tests;
+
+#[cfg(test)]
+mod live_frame_tests;
 
 #[cfg(test)]
 mod rotation_preview_isolation_tests {
