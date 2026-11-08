@@ -932,13 +932,21 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
 
-/// Every docked panel has its own icon for an iconic column, not the label's initial.
+/// Every docked panel has its own icon for an iconic column, not the label's initial, through
+/// the `DockContent::icon` craft-ui draws it from.
 #[test]
 fn every_panel_has_its_own_icon() {
+    use craft_ui::docking::DockContent;
+    let mut app = app();
+    let none = std::collections::HashSet::new();
+    let mut commands = Vec::new();
+    let content = PanelContent { app: &mut app, collapsed: &none, fillers: &none, card: &none, strip: 0.0, commands: &mut commands };
     let mut seen = std::collections::HashSet::new();
     for (panel, _, _) in PANELS {
-        let icon = panel_icon(panel).unwrap_or_else(|| panic!("{panel} has no icon"));
-        assert!(crate::icons::exists(icon), "{panel}'s icon {icon:?} is bundled");
-        assert!(seen.insert(icon), "{panel} shares the icon {icon:?}");
+        let source = content.icon(&(*panel).to_owned()).unwrap_or_else(|| panic!("{panel} has no icon"));
+        let egui::ImageSource::Bytes { uri, .. } = source else { panic!("{panel}'s icon is not embedded") };
+        assert!(seen.insert(uri.clone()), "{panel} shares the icon {uri}");
     }
+    assert!(content.icon(&"no such panel".to_owned()).is_none());
+    assert!(crate::icons::source("no-such-icon").is_none(), "a missing icon is not the fallback square");
 }
