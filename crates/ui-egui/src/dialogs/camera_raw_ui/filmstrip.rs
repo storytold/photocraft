@@ -378,10 +378,11 @@ pub(super) fn select_all(app: &mut PhotocraftApp) {
 }
 
 /// Settings that belong to one photograph and never sync to the other selected raws: the grain
-/// pattern's seed, and the preview scale and transfer curve PhotoCraft sets from each document.
-/// Camera Raw's Geometry (Upright, guides), crop, masks and spot removal would join them here;
-/// these settings have none of them yet.
-const PER_IMAGE: [&str; 3] = ["seed", "pixelScale", "encodingGamma"];
+/// pattern's seed, the preview scale and transfer curve PhotoCraft sets from each document, and
+/// Guided Upright's guides (`uprightGuides`, once Geometry lands), which are lines drawn on one
+/// picture. The Upright mode itself syncs, so each raw finds its own lines. Crop, masks and spot
+/// removal would join them here.
+const PER_IMAGE: [&str; 4] = ["seed", "pixelScale", "encodingGamma", "uprightGuides"];
 
 /// The settings Auto sets. With several raws selected Auto sets them on each from its own
 /// pixels, as Camera Raw's does, rather than copying the shown raw's.
