@@ -41,6 +41,8 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
+        // The Background Eraser starts with its own measured tip instead (#11911).
+        None if tool == Tool::BackgroundEraser => fresh_brush(tool, &current),
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
             BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, ..current }
@@ -70,14 +72,19 @@ fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettin
 /// The Brush tool's tip after Reset Tool, as the reference measures it (#11810): size, hardness
 /// and spacing of a 13 px soft round at 25 % spacing.
 const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Background Eraser's tip after Reset Tool (#11911): a 13 px hard round at 25 % spacing.
+const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
-/// [`BRUSH_TOOL_TIP`]; the other tools keep the default tip.
+/// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`]; the other tools keep the
+/// default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
-    if tool == Tool::Brush {
-        (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP;
+    match tool {
+        Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
+        Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
+        _ => {}
     }
     session_fields(current, &brush)
 }
