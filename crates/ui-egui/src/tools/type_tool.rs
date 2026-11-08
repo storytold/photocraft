@@ -144,6 +144,9 @@ mod options_tooltips_tests;
 mod tests;
 
 #[cfg(test)]
+mod mask_replace_selection_tests;
+
+#[cfg(test)]
 mod commit_tests;
 
 #[cfg(test)]
