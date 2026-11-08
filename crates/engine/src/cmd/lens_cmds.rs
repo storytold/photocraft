@@ -1032,7 +1032,7 @@ mod tests {
             let a = surf.format().channels() - 1;
             let clear = (0..120).flat_map(|x| [(x, 0), (x, 79)]).chain((0..80).flat_map(|y| [(0, y), (119, y)])).filter(|&(x, y)| surf.sample_channel(x, y, a) < 0.5).count();
             let black = (0..120).flat_map(|x| [(x, 0), (x, 79)]).filter(|&(x, y)| surf.sample_channel(x, y, a) > 0.5 && active_px(&s, x, y)[..3].iter().all(|v| *v < 0.01)).count();
-            if amount < 0 {
+            if amount > 0 {
                 assert!(clear > 0, "{amount}: nothing uncovered");
             }
             assert_eq!(black, 0, "{amount}: uncovered pixels turned opaque black");
@@ -1040,14 +1040,15 @@ mod tests {
         }
         let mut b = Session::new();
         b.execute("file.new", json!({"width": 64, "height": 48, "background": "black"})).unwrap();
-        b.execute(RAW, json!({"lensDistortion": -100})).unwrap();
+        // Raising the amount uncovers the middle of each edge; the corners never move.
+        b.execute(RAW, json!({"lensDistortion": 100})).unwrap();
         let d = b.active().unwrap();
         let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
         let fmt = surf.format();
         if fmt.alpha {
-            assert!(surf.sample_channel(0, 0, fmt.channels() - 1) < 0.01);
+            assert!(surf.sample_channel(0, 24, fmt.channels() - 1) < 0.01);
         } else {
-            assert!(surf.sample_channel(0, 0, 0) > 0.99, "uncovered Background pixels turn white");
+            assert!(surf.sample_channel(0, 24, 0) > 0.99, "uncovered Background pixels turn white");
         }
     }
 
