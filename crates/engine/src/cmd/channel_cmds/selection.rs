@@ -109,6 +109,19 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let band_matches =
         !keeps_outside || old.as_ref().is_none_or(|m| m.format() == PixelFormat::GRAY8 && m.content_bounds().intersect(&area) == m.content_bounds());
     let label_owned = label.to_string();
+    // Which thumbnails built the selection, for Paste Into Each Selected Layer: a ⌘-click
+    // starts the list, a ⌘⇧-click adds to it if the selection is still the one the list built,
+    // and any other load (subtract, intersect, a channel) forgets it.
+    let sources = match (src.transparency_layer(target.doc.id), mode) {
+        (Some(id), SelectionMode::Replace) => Some(vec![id]),
+        (Some(id), SelectionMode::Add) => target.selection_sources().map(|mut ids| {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+            ids
+        }),
+        _ => None,
+    };
     crate::jobs::run(
         s,
         label,
@@ -132,6 +145,9 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
                 doc.selection = selection;
                 Ok(doc.selection.is_some())
             })?;
+            if let Some(st) = s.active_mut() {
+                st.selection_layers = st.doc.selection.clone().zip(sources);
+            }
             Ok(json!({ "selected": selected }))
         },
     )

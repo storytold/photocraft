@@ -598,6 +598,84 @@ fn paste_into_masks_to_the_selection() {
 }
 
 #[test]
+fn paste_into_each_selected_layer_masks_one_copy_to_each_layer() {
+    let mut s = session(8);
+    // Two storyboard frames on their own layers, plus the art to place in them.
+    let first = active(&s).id;
+    paint_square(&mut s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let second = active(&s).id;
+    paint_square(&mut s, Rect::new(20, 10, 30, 20), [0.0, 1.0, 0.0, 1.0]);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint_square(&mut s, Rect::new(14, 4, 18, 8), [0.0, 0.0, 1.0, 1.0]);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let layers_before = doc(&s).layers.len();
+    let steps = s.active().unwrap().history.past_len();
+    {
+        let st = s.active_mut().unwrap();
+        st.selected_layers = vec![first, second];
+        st.active_layer = Some(second);
+    }
+    let r = s.execute("edit.pasteSpecial.pasteIntoEach", json!({})).unwrap();
+    let made: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
+    assert_eq!(made.len(), 2);
+    assert_eq!(doc(&s).layers.len(), layers_before + 2);
+    for (copy, frame, rect) in [(made[0], first, Rect::new(0, 0, 10, 10)), (made[1], second, Rect::new(20, 10, 30, 20))] {
+        let d = doc(&s);
+        let l = d.layer(copy).unwrap();
+        let m = l.mask.as_ref().expect("each copy is masked");
+        assert!(!m.linked);
+        assert_eq!(m.surface.content_bounds(), rect, "masked to its own frame's pixels");
+        // Centered on the frame, as Paste Into centers on the selection: the 4×4 art lands mid-frame.
+        let art = l.surface().unwrap().content_bounds();
+        assert_eq!(((art.x0 + art.x1) / 2, (art.y0 + art.y1) / 2), ((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2));
+        // Just above its frame.
+        let index = |id| d.layers.iter().position(|l| l.id == id).unwrap();
+        assert_eq!(index(copy), index(frame) + 1);
+    }
+    assert!(doc(&s).selection.is_none(), "nothing selected afterwards, as after Paste Into");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s).layers.len(), layers_before);
+}
+
+#[test]
+fn paste_into_each_uses_the_thumbnails_that_built_the_selection() {
+    let mut s = session(8);
+    let first = active(&s).id;
+    paint_square(&mut s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let second = active(&s).id;
+    paint_square(&mut s, Rect::new(20, 10, 30, 20), [0.0, 1.0, 0.0, 1.0]);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint_square(&mut s, Rect::new(14, 4, 18, 8), [0.0, 0.0, 1.0, 1.0]);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    // ⌘-click the first frame's thumbnail, ⌘⇧-click the second's; only the art layer is
+    // selected in the Layers panel.
+    let load = |s: &mut Session, id: LayerId, op: &str| {
+        s.execute("select.loadSelection", json!({"channel": "transparency", "layer": id.0, "operation": op})).unwrap();
+    };
+    load(&mut s, first, "new");
+    load(&mut s, second, "add");
+    assert_eq!(s.active().unwrap().selection_sources(), Some(vec![first, second]));
+    let layers_before = doc(&s).layers.len();
+    let made = s.execute("edit.pasteSpecial.pasteIntoEach", json!({})).unwrap()["layers"].as_array().unwrap().len();
+    assert_eq!(made, 2, "one copy per clicked thumbnail");
+    assert_eq!(doc(&s).layers.len(), layers_before + 2);
+
+    // Any other change to the selection forgets the thumbnails.
+    load(&mut s, first, "new");
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    assert_eq!(s.active().unwrap().selection_sources(), None);
+    load(&mut s, first, "new");
+    load(&mut s, second, "subtract");
+    assert_eq!(s.active().unwrap().selection_sources(), None, "only ⌘-click and ⌘⇧-click build the list");
+}
+
+#[test]
 fn option_click_eye_shows_one_layer_then_restores() {
     let mut s = session(8);
     s.execute("layer.new.layer", json!({})).unwrap();

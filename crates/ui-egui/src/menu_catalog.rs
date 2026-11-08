@@ -85,6 +85,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Edit"], "Paste", None, "edit.paste"),
     (&["Edit", "Paste Special"], "Paste in Place", Some("Cmd+Shift+V"), "edit.pasteSpecial.pasteInPlace"),
     (&["Edit", "Paste Special"], "Paste Into", Some("Cmd+Alt+Shift+V"), "edit.pasteSpecial.pasteInto"),
+    (&["Edit", "Paste Special"], "Paste Into Each Selected Layer", Some("Cmd+Alt+Shift+D"), "edit.pasteSpecial.pasteIntoEach"),
     (&["Edit", "Paste Special"], "Paste Outside", None, "edit.pasteSpecial.pasteOutside"),
     (&["Edit"], "Clear", None, "edit.clear"),
     (&["Edit"], "---", None, "---"),
