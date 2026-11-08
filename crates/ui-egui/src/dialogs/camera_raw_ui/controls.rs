@@ -729,8 +729,14 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     }
     // Thumbnails of raws an edit synced to, redrawn on workers once the drag ends. The dialog
     // polls them: a worker can't wake an immediate viewport's window by itself.
-    if !ctx.input(|i| i.pointer.primary_down()) && super::filmstrip::refresh_thumbnails(app, false) {
-        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    if !ctx.input(|i| i.pointer.primary_down()) {
+        if super::filmstrip::refresh_thumbnails(app, false) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
+        // The shown raw's own tile, from the preview once it has landed.
+        if super::filmstrip::refresh_shown_thumbnail(app) {
+            ctx.request_repaint();
+        }
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()

@@ -516,9 +516,29 @@ pub(super) fn refresh_thumbnails(app: &mut PhotocraftApp, wait: bool) -> bool {
     busy
 }
 
-/// Whether a filmstrip thumbnail still waits to be redrawn.
+/// Whether a filmstrip thumbnail still waits to be redrawn: another raw's, or the shown raw's
+/// while its preview hasn't caught up with an edit.
 pub(super) fn thumbnails_pending(app: &PhotocraftApp) -> bool {
-    app.raw_shelf.iter().any(|h| h.stale || h.redraw.is_some())
+    let shown_behind =
+        shown_index(app).is_some() && app.camera_raw.as_ref().is_some_and(|d| d.thumb_revision != d.preview_revision || d.dirty || d.render_pending());
+    shown_behind || app.raw_shelf.iter().any(|h| h.stale || h.redraw.is_some())
+}
+
+/// The shown raw's thumbnail follows its edits, as Camera Raw's does: from the dialog's own
+/// preview once it has caught up with the edit (no develop of its own), and only when the
+/// preview has changed since. `true` when it was redrawn (its texture loads on the next frame).
+pub(super) fn refresh_shown_thumbnail(app: &mut PhotocraftApp) -> bool {
+    let Some(i) = shown_index(app) else { return false };
+    let Some(d) = app.camera_raw.as_mut() else { return false };
+    if d.dirty || d.render_pending() || d.thumb_revision == d.preview_revision || d.processed.is_empty() {
+        return false;
+    }
+    d.thumb_revision = d.preview_revision;
+    let Some(held) = app.raw_shelf.get_mut(i) else { return false };
+    let (px, w, h) = shrink(&d.processed, d.pw, d.ph);
+    held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));
+    held.tex = None;
+    true
 }
 
 /// Everything one thumbnail redraw reads, owned, so it can run off the UI thread.
@@ -588,6 +608,7 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
     let shown = shown_index(app);
     // The shown raw's settings are the dialog's until it is left.
     let live = app.camera_raw.as_ref().map(|d| &d.params);
+    let shown_behind = app.camera_raw.as_ref().is_some_and(|d| d.thumb_revision != d.preview_revision || d.dirty || d.render_pending());
     json!(
         app.raw_shelf
             .iter()
@@ -598,7 +619,7 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
                 "selected": selected,
                 "shown": Some(i) == shown,
                 "edited": if Some(i) == shown { live.is_some_and(|p| !p.is_identity()) } else { h.kept.as_ref().is_some_and(|(p, _)| !p.is_identity()) },
-                "thumbnailPending": h.stale || h.redraw.is_some(),
+                "thumbnailPending": h.stale || h.redraw.is_some() || (Some(i) == shown && shown_behind),
             }))
             .collect::<Vec<_>>()
     )

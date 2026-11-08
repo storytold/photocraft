@@ -136,3 +136,42 @@ fn a_dragged_slider_redraws_the_other_selected_thumbnails() {
     assert!(after_other < before_other - 10.0, "the selected raw's thumbnail darkened: {before_other} → {after_other}");
     assert!((after_unselected - before_unselected).abs() < 1.0, "the unselected one didn't: {before_unselected} → {after_unselected}");
 }
+
+/// The shown raw's own tile follows an edit too, as Camera Raw's does: once the drag ends and the
+/// preview has landed, without further input.
+#[test]
+fn the_shown_raws_tile_follows_its_edit() {
+    let mut h = fixture();
+    h.run_steps(3);
+    let (before_shown, before_other) = (tile_brightness(&mut h, NAMES[0]), tile_brightness(&mut h, NAMES[1]));
+    let label = photocraft_ui_egui::i18n::tr_ctx(photocraft_ui_egui::i18n::current(), "cameraRaw", "Exposure");
+    let track = h.get_by_role_and_label(egui::accesskit::Role::Slider, label).rect();
+    let at = egui::pos2(track.center().x, track.center().y);
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    for n in 1..=6 {
+        h.event(egui::Event::PointerMoved(at + vec2(15.0 * n as f32, 0.0)));
+        h.run_steps(1);
+    }
+    let end = at + vec2(90.0, 0.0);
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    // Only the frames the dialog asks for until the preview has landed and the tile shows it.
+    h.run_steps(1);
+    for _ in 0..1000 {
+        let d = photocraft_ui_egui::control::inspect(h.state(), &h.ctx)["cameraRaw"].clone();
+        if d["previewPending"] == false && d["filmstrip"][0]["thumbnailPending"] == false {
+            break;
+        }
+        let delay = h.output().viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay);
+        assert!(delay.is_some_and(|d| d <= std::time::Duration::from_millis(50)), "the dialog keeps frames coming: {delay:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
+    h.run_steps(1);
+    let exposure = photocraft_ui_egui::control::inspect(h.state(), &h.ctx)["cameraRaw"]["params"]["exposure"].as_f64().unwrap();
+    assert!(exposure > 0.5, "the drag raised Exposure: {exposure}");
+    let (after_shown, after_other) = (tile_brightness(&mut h, NAMES[0]), tile_brightness(&mut h, NAMES[1]));
+    assert!(after_shown > before_shown + 10.0, "the shown raw's tile brightened: {before_shown} → {after_shown}");
+    assert!((after_other - before_other).abs() < 1.0, "an unselected raw's didn't: {before_other} → {after_other}");
+}

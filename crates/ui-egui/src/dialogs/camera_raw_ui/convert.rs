@@ -149,6 +149,7 @@ pub(super) fn open_pixels(
         original: params.clone(),
         synced: params.clone(),
         auto_all: false,
+        thumb_revision: 0,
         params,
         target,
         before_histogram: RgbHistogram::from_rgba(&proxy),

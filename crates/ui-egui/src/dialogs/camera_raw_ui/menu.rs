@@ -183,5 +183,6 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         return Some(Ok(super::filmstrip::done(app)));
     }
     super::filmstrip::refresh_thumbnails(app, true);
+    super::filmstrip::refresh_shown_thumbnail(app);
     Some(Ok(super::describe(app).unwrap_or(Value::Null)))
 }

@@ -127,6 +127,8 @@ pub struct CameraRawDialog {
     synced: CameraRaw,
     /// Auto was pressed: the other selected raws get their own Auto, not these values.
     auto_all: bool,
+    /// The preview revision the shown raw's filmstrip thumbnail was last taken from.
+    thumb_revision: u64,
 }
 
 impl CameraRawDialog {
