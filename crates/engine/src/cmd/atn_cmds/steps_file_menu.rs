@@ -48,14 +48,16 @@ pub(super) fn notes_to(_: &str, p: &Value) -> Option<Descriptor> {
 }
 
 /// Image › Apply Data Set: the data set is named in `null` (`dataSetClass` by name). Any other
-/// `apply`, and one with an empty name (which `apply_data_set_to` can't write back), keeps the
-/// Photoshop step.
+/// `apply`, and one with an empty name or a name that isn't valid UTF-16 (which
+/// `apply_data_set_to` can't write back), keeps the Photoshop step.
 pub(super) fn apply_data_set_from(d: &Descriptor) -> Mapped {
     if d.items.len() != 1 {
         return Mapped::Unsupported { harmless: false };
     }
     match get_ref(d, "null") {
-        Some([ReferenceItem::Name { class, name }]) if trimmed(&class.class_id) == "dataSetClass" && !name.to_string_lossy().is_empty() => {
+        Some([ReferenceItem::Name { class, name }])
+            if trimmed(&class.class_id) == "dataSetClass" && String::from_utf16(&name.0).is_ok() && !name.to_string_lossy().is_empty() =>
+        {
             step("image.applyDataSet", json!({"name": name.to_string_lossy()}))
         }
         _ => Mapped::Unsupported { harmless: false },
