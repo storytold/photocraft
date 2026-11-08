@@ -1387,7 +1387,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     if foreign_crop.is_some() {
         app.ui.crop_rect = foreign_crop;
     }
-    crate::zoom_tool::draw(ctx, painter);
+    crate::zoom_tool::draw(app, painter, xf);
     let resizing = crate::brush_resize::draw(app, painter, xf);
     draw_transform_controls(app, painter, xf);
     crate::move_hover::draw(app, painter, xf, idx, response.hover_pos());

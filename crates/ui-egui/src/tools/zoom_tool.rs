@@ -101,14 +101,20 @@ fn zoom_to_rect(view: &mut View, xf: &ViewXform, r: Rect, anchor: Pos2, out: boo
     anchor_view(view, xf, xf.rect.center(), c, zoom, ppp);
 }
 
-/// Scrubby Zoom off: the zoom rectangle being dragged, as marching ants.
-pub fn draw(ctx: &egui::Context, painter: &egui::Painter) {
+/// Scrubby Zoom off: the zoom rectangle being dragged, as marching ants, with its size in image
+/// pixels beside the pointer like the marquee's (#12086).
+pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+    let ctx = painter.ctx();
     let Some(z) = ctx.data(|d| d.get_temp::<ZoomDrag>(id())) else { return };
     let Some(to) = z.rect_to else { return };
     let r = Rect::from_two_pos(z.anchor, to);
+    let size = [0.0, 0.0, f64::from((r.width() / xf.zoom).round()), f64::from((r.height() / xf.zoom).round())];
+    crate::canvas::draw_value_readout(app, ctx, "zoom-readout", to, ["W:", "H:"], crate::canvas::size_readout(app, size));
     let r = Rect::from_min_max(r.min.round() + vec2(0.5, 0.5), r.max.round() + vec2(0.5, 0.5));
     crate::tool_feedback::draw_ants(painter, &[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true);
 }
 
+#[cfg(test)]
+mod size_readout_tests;
 #[cfg(test)]
 mod tests;
