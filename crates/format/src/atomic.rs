@@ -411,7 +411,9 @@ pub(crate) fn dir_synced(result: io::Result<()>, dir: &Path, identity: Option<u1
     match result {
         Err(e) if dir_sync_unsupported(&e) => {
             let refused_enoent = e.raw_os_error() == Some(2) && cfg!(target_vendor = "apple");
-            if refused_enoent && fs.dir_identity(dir) != identity {
+            // A missing original identity (the pre-rename lookup failed) cannot prove the
+            // folder is the same one: no fail-open on absent proof.
+            if refused_enoent && (identity.is_none() || fs.dir_identity(dir) != identity) {
                 // The folder vanished or was replaced between the rename and the flush.
                 Err(e)
             } else {

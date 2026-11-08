@@ -799,15 +799,80 @@ fn an_afp_share_that_cannot_flush_a_directory_still_saves() {
     assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
 }
 
-/// The ENOENT refusal only counts as unsupported while the folder is still there (review on
-/// #11492): a folder genuinely deleted, renamed or symlink-swapped between the rename and the
-/// flush must keep the save unconfirmed instead of counting a save into a vanished folder as
-/// durable. The real file system answers `dir_exists`, so the mock has to.
+/// The ENOENT refusal only counts as unsupported while the folder is still the one the rename
+/// went into (review on #11492): a folder genuinely deleted, moved or symlink-swapped between
+/// the rename and the flush must keep the save unconfirmed instead of counting a save into a
+/// folder the flush never knew as durable. Both mocks answer with the real folder's identity
+/// until the rename and with the changed state after it, like a file system would.
 #[cfg(target_vendor = "apple")]
-struct VanishedFolder(Faulty);
+struct FolderChangedAfterRename {
+    fault: Faulty,
+    /// The identity the folder reports after the rename: none when it vanished, a different
+    /// one when a replacement took its place.
+    after: Option<u128>,
+}
 
 #[cfg(target_vendor = "apple")]
-impl AtomicFs for VanishedFolder {
+impl FolderChangedAfterRename {
+    fn vanished() -> Self {
+        Self { fault: Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() }, after: None }
+    }
+    fn replaced() -> Self {
+        Self { fault: Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() }, after: Some(0xdead_beef) }
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+impl AtomicFs for FolderChangedAfterRename {
+    fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.fault.write_new(tmp, bytes)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.fault.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.fault.remove(path)
+    }
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        self.fault.sync_dir(dir)
+    }
+    fn dir_identity(&self, dir: &Path) -> Option<u128> {
+        if self.fault.renames.get() == 0 { RealFs.dir_identity(dir) } else { self.after }
+    }
+    fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.fault.copy_metadata(from, to)
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_vanished_folder_keeps_the_enoent_flush_a_failure() {
+    let d = TempDir::new("syncdir-afp-vanished");
+    let p = d.0.join("doc.pcraft");
+    let fs = FolderChangedAfterRename::vanished();
+    let e = atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
+    let fs = FolderChangedAfterRename { fault: Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() }, after: None };
+    assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err(), "EIO still fails");
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_replaced_folder_keeps_the_enoent_flush_a_failure() {
+    let d = TempDir::new("syncdir-afp-replaced");
+    let p = d.0.join("doc.pcraft");
+    let fs = FolderChangedAfterRename::replaced();
+    let e = atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
+}
+
+/// A failed pre-rename identity lookup is no proof either: with `None` captured, the ENOENT
+/// stays a failure instead of being swallowed as an AFP refusal.
+#[cfg(target_vendor = "apple")]
+struct NoIdentity(Faulty);
+
+#[cfg(target_vendor = "apple")]
+impl AtomicFs for NoIdentity {
     fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
         self.0.write_new(tmp, bytes)
     }
@@ -830,50 +895,10 @@ impl AtomicFs for VanishedFolder {
 
 #[cfg(target_vendor = "apple")]
 #[test]
-fn a_vanished_folder_keeps_the_enoent_flush_a_failure() {
-    let d = TempDir::new("syncdir-afp-vanished");
+fn a_failed_identity_lookup_keeps_the_enoent_flush_a_failure() {
+    let d = TempDir::new("syncdir-afp-noid");
     let p = d.0.join("doc.pcraft");
-    let fs = VanishedFolder(Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() });
-    let e = atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap_err();
-    assert!(e.to_string().contains("could not be flushed"), "{e}");
-    let fs = VanishedFolder(Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() });
-    assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err(), "EIO still fails");
-}
-
-/// A replacement folder at the same path (moved away, then recreated) also differs from the
-/// captured identity and keeps the save unconfirmed: the flush the ENOENT answered was for the
-/// folder the rename went into, not for whatever now occupies the path.
-#[cfg(target_vendor = "apple")]
-struct ReplacedFolder(Faulty);
-
-#[cfg(target_vendor = "apple")]
-impl AtomicFs for ReplacedFolder {
-    fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
-        self.0.write_new(tmp, bytes)
-    }
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        self.0.rename(from, to)
-    }
-    fn remove(&self, path: &Path) -> io::Result<()> {
-        self.0.remove(path)
-    }
-    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
-        self.0.sync_dir(dir)
-    }
-    fn dir_identity(&self, _dir: &Path) -> Option<u128> {
-        Some(0xdead_beef)
-    }
-    fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
-        self.0.copy_metadata(from, to)
-    }
-}
-
-#[cfg(target_vendor = "apple")]
-#[test]
-fn a_replaced_folder_keeps_the_enoent_flush_a_failure() {
-    let d = TempDir::new("syncdir-afp-replaced");
-    let p = d.0.join("doc.pcraft");
-    let fs = ReplacedFolder(Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() });
+    let fs = NoIdentity(Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() });
     let e = atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap_err();
     assert!(e.to_string().contains("could not be flushed"), "{e}");
 }
