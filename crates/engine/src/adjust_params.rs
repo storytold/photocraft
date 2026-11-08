@@ -798,13 +798,57 @@ pub fn levels_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
     Ok(adjustment)
 }
 
-/// The eyedropper of adjustment `kind` ("levels" or "curves"): [`levels_eyedropper`] or
-/// [`curves_eyedropper`].
+/// The eyedropper of adjustment `kind` ("levels", "curves" or "exposure"): [`levels_eyedropper`],
+/// [`curves_eyedropper`] or [`exposure_eyedropper`].
 pub fn adjustment_eyedropper(kind: &str, base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
     match kind {
         "levels" => levels_eyedropper(base, picker, sample, mode),
         "curves" => curves_eyedropper(base, picker, sample, mode),
-        _ => Err(bad(EYEDROPPER, "`eyedropper` applies to Levels and Curves only")),
+        "exposure" => exposure_eyedropper(base, picker, sample, mode),
+        _ => Err(bad(EYEDROPPER, "`eyedropper` applies to Levels, Curves and Exposure only")),
+    }
+}
+
+/// Exposure's Set Black/Gray/White Point eyedroppers (#9266), as Photoshop 2025 sets them (measured
+/// on 8-bit gray patches): the sample's value `v` (its luma, as stored) goes to black through the
+/// Offset (`offset = -v · 2^exposure`), to 18 % gray or to white through the Exposure
+/// (`exposure = log2((0.18 − offset) / v)`, `log2((1 − offset) / v)`). Gamma is left alone.
+pub fn exposure_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
+    const CMD: &str = "exposure eyedropper";
+    check_eyedropper(CMD, picker, sample, mode)?;
+    let mut adjustment = from_params("exposure", base, None, mode)?;
+    let Adjustment::Exposure { exposure, offset, .. } = &mut adjustment else {
+        return Err(bad(CMD, "expected an Exposure adjustment"));
+    };
+    // Not clamped to 1: a 32-bit sample keeps its HDR value, which Exposure maps unclipped.
+    let sample = sample.map(|v| v.max(0.0));
+    let v = if mode == ColorMode::Grayscale { (sample[0] + sample[1] + sample[2]) / 3.0 } else { rgb_luma(sample) };
+    let target = match picker {
+        CurvesEyedropper::Black => {
+            *offset = (-v * exposure.exp2()).clamp(-0.5, 0.5);
+            return Ok(adjustment);
+        }
+        CurvesEyedropper::NeutralGray => 0.18,
+        CurvesEyedropper::White => 1.0,
+    };
+    if v <= 0.0 {
+        return Err(bad(CMD, "the sample is black: no exposure brings it up"));
+    }
+    if target - *offset <= 0.0 {
+        return Err(bad(CMD, "the Offset already lifts every sample past the target: no exposure brings it down"));
+    }
+    let stops = ((target - *offset) / v).log2();
+    *exposure = if stops.is_finite() { stops.clamp(-20.0, 20.0) } else { *exposure };
+    Ok(adjustment)
+}
+
+/// The colour an Exposure pick reads (#9288 review): with one colour channel of an RGB document
+/// targeted, Exposure moves only that channel, so the pick reads that channel's value, not the
+/// sample's luma.
+pub fn exposure_pick_sample(sample: [f32; 3], colors: Option<crate::color_channels::ColorChannels>, mode: ColorMode) -> [f32; 3] {
+    match colors.filter(|c| c.len() == 1).and_then(|c| c.indices().next()) {
+        Some(i) if mode == ColorMode::Rgb => sample.get(i).map_or(sample, |&v| [v; 3]),
+        _ => sample,
     }
 }
 
@@ -865,6 +909,7 @@ pub fn eyedropper_from_params(s: &crate::Session, kind: &str, p: &Value) -> Resu
     let Some(e) = p.get("eyedropper") else { return Ok(None) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (picker, sample) = eyedropper_sample(&d.doc, None, e)?;
+    let sample = if kind == "exposure" { exposure_pick_sample(sample, crate::color_channels::target(s, p).ok().flatten(), d.doc.mode) } else { sample };
     let mut base = p.clone();
     if let Some(o) = base.as_object_mut() {
         o.remove("eyedropper");
@@ -884,7 +929,8 @@ pub fn layer_eyedropper(s: &crate::Session, layer: photocraft_doc::LayerId, p: &
     let (kind, adj) = match &l.content {
         photocraft_doc::LayerContent::Adjustment(adj @ Adjustment::Curves { .. }) => ("curves", adj),
         photocraft_doc::LayerContent::Adjustment(adj @ Adjustment::Levels { .. }) => ("levels", adj),
-        _ => return Err(bad(EYEDROPPER, "`eyedropper` applies to Levels and Curves adjustment layers only")),
+        photocraft_doc::LayerContent::Adjustment(adj @ Adjustment::Exposure { .. }) => ("exposure", adj),
+        _ => return Err(bad(EYEDROPPER, "`eyedropper` applies to Levels, Curves and Exposure adjustment layers only")),
     };
     let mut rest = p.clone();
     if let Some(o) = rest.as_object_mut() {

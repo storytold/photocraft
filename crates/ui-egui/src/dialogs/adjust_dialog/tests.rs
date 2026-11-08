@@ -406,6 +406,57 @@ fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
+/// #9266: Image › Adjustments › Exposure has the Set Black/Gray/White Point eyedroppers; on a
+/// 200-gray image White Point gives Photoshop's +0.3505 stops, Gray Point −0.4796 on 64.
+#[test]
+fn exposure_dialog_eyedroppers_match_photoshop() {
+    use egui_kittest::kittest::Queryable;
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    s.execute("edit.fill", json!({"color": "#404040"})).unwrap();
+    s.execute("select.inverse", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#c8c8c8"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "image.adjustments.exposure").unwrap();
+    h.run_steps(4);
+    for (label, x, want) in [("Set White Point", 30.0, 0.35052), ("Set Neutral Gray Point", 5.0, -0.47956)] {
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert!(picker_armed(h.state()), "{label} armed");
+        assert!(sample_at(h.state_mut(), x, 10.0));
+        h.run_steps(2);
+        let e = h.state().ui.dialogs[0].fields["exposure"].as_f64().unwrap();
+        assert!((e - want).abs() < 1e-3, "{label}: {e}");
+    }
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+}
+
+/// #9288 review: opened with only Red targeted, Exposure's White Point reads the sample's red
+/// (0.2, two and a third stops to white), not its luma.
+#[test]
+fn exposure_dialog_white_point_on_one_targeted_channel_reads_that_channel() {
+    use egui_kittest::kittest::Queryable;
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+    s.execute("edit.fill", json!({"color": [0.2, 0.8, 0.8]})).unwrap();
+    s.execute("channel.target", json!({"colors": [0]})).unwrap();
+    let app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open(h.state_mut(), "image.adjustments.exposure").unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.dialogs[0].fields["target"], json!({"colors": [0]}));
+    h.get_by_label("Set White Point").click();
+    h.run_steps(2);
+    assert!(sample_at(h.state_mut(), 10.0, 10.0));
+    let e = h.state().ui.dialogs[0].fields["exposure"].as_f64().unwrap();
+    assert!((e - 5f64.log2()).abs() < 1e-3, "{e}");
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
