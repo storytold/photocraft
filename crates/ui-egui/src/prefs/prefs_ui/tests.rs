@@ -1771,13 +1771,74 @@ fn preferences_apply_keeps_a_live_theme_change_made_while_open() {
 #[test]
 fn preferences_apply_prefers_the_dialog_edit_of_a_setting_changed_elsewhere() {
     let ctx = egui::Context::default();
-    let (mut app, _) = app_with_store();
+    let (mut app, store) = app_with_store();
     app.set_theme(&ctx, ThemeKind::Studio);
     let id = open_preferences(&mut app, "interface");
     app.set_theme(&ctx, ThemeKind::Classic);
     app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["theme"] = json!("studioLight");
     apply(&mut app, id).unwrap();
     assert_eq!(app.session.prefs().interface.theme, Theme::StudioLight);
+    // The dialog's value is the one shown (from the next frame) and saved, not only the one held.
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.theme, ThemeKind::StudioLight);
+    assert_eq!(stored(&store)["interface"]["theme"].as_str(), Some("studioLight"));
+}
+
+/// Apply makes the committed values the next base: a live change made after one Apply survives
+/// the next one too.
+#[test]
+fn preferences_apply_twice_keeps_each_live_change() {
+    let ctx = egui::Context::default();
+    let (mut app, store) = app_with_store();
+    app.set_theme(&ctx, ThemeKind::Studio);
+    let id = open_preferences(&mut app, "interface");
+    app.set_theme(&ctx, ThemeKind::Classic);
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiScale"] = json!("200");
+    apply(&mut app, id).unwrap();
+    app.set_theme(&ctx, ThemeKind::StudioLight);
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiScale"] = json!("150");
+    apply(&mut app, id).unwrap();
+    let p = app.session.prefs();
+    assert_eq!((p.interface.theme, p.interface.ui_scale), (Theme::StudioLight, prefs::UiScale::P150));
+    assert_eq!(app.ui.theme, ThemeKind::StudioLight);
+    tick(&mut app, &ctx);
+    let saved = stored(&store);
+    assert_eq!((saved["interface"]["theme"].as_str(), saved["interface"]["uiScale"].as_str()), (Some("studioLight"), Some("150")));
+}
+
+/// The merge is not about the theme: a setting changed elsewhere (History States, by command)
+/// survives Apply of a theme edited in the dialog.
+#[test]
+fn preferences_apply_keeps_a_setting_changed_elsewhere_beside_a_dialog_theme_edit() {
+    let ctx = egui::Context::default();
+    let (mut app, store) = app_with_store();
+    app.set_theme(&ctx, ThemeKind::Studio);
+    let id = open_preferences(&mut app, "interface");
+    app.run("prefs.set", json!({"path": "performance.historyStates", "value": 30})).unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["theme"] = json!("classic");
+    apply(&mut app, id).unwrap();
+    let p = app.session.prefs();
+    assert_eq!((p.interface.theme, p.performance.history_states), (Theme::Classic, 30));
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.theme, ThemeKind::Classic);
+    let saved = stored(&store);
+    assert_eq!((saved["interface"]["theme"].as_str(), saved["performance"]["historyStates"].as_u64()), (Some("classic"), Some(30)));
+}
+
+/// A Preferences dialog without `__base` (opened before it was kept) commits its draft as it is:
+/// a change made elsewhere meanwhile is not kept.
+#[test]
+fn preferences_without_a_base_commit_the_draft_as_it_is() {
+    let ctx = egui::Context::default();
+    let (mut app, _store) = app_with_store();
+    app.set_theme(&ctx, ThemeKind::Studio);
+    let id = open_preferences(&mut app, "interface");
+    app.ui.dialog_mut(id).unwrap().fields.remove("__base");
+    app.set_theme(&ctx, ThemeKind::Classic);
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiScale"] = json!("200");
+    apply(&mut app, id).unwrap();
+    let p = app.session.prefs();
+    assert_eq!((p.interface.theme, p.interface.ui_scale), (Theme::Studio, prefs::UiScale::P200), "the draft's theme");
 }
 
 #[test]
