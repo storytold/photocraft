@@ -358,16 +358,15 @@ pub(crate) fn persist_panels(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.session.prefs().workspace.remember_workspace_changes {
         return;
     }
-    // An OS window drag/resize is still settling: let the dock pass save once it stops, so this
-    // discrete click cannot record intermediate geometry.
-    if native_moved(app, ctx) {
+    // Geometry still settling (OS window move, dock-edge drag, or a held pointer): keep the
+    // toolbar-side change pending and save it once stable, even if the dock is not drawn.
+    if panels_moving(app, ctx) {
+        set_panels_pending(ctx, true);
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
         return;
     }
-    let now = snapshot(app);
-    if app.session.prefs().panel_layout != now {
-        app.session.prefs.edit(|p| p.panel_layout = now);
-    }
+    persist_panels_now(app);
+    set_panels_pending(ctx, false);
 }
 
 /// Remember the layout in the preferences once the user lets go of the mouse (Workspace ›
@@ -378,7 +377,7 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.docking.is_some() {
         app.ui.docking_kept = None;
     }
-    if !app.session.prefs().workspace.remember_workspace_changes || ctx.input(|i| i.pointer.any_down()) {
+    if !app.session.prefs().workspace.remember_workspace_changes || ctx.input(|i| i.pointer.any_down()) || crate::panels::dock_edge_drag_active(ctx) {
         return;
     }
     if native_moved(app, ctx) {
@@ -393,16 +392,72 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// A floating panel's own window has another place than last frame. A move or resize by its OS
 /// title bar or edges changes the place each frame with no button down in any of the app's
-/// windows.
+/// windows. The answer is cached for the frame so the dock pass and `persist_panels` agree even
+/// though only the first call can observe the change.
 fn native_moved(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     let places: Vec<(u64, [f32; 4])> =
         app.ui.docking.iter().flat_map(|workspace| workspace.layout.floating.iter().filter_map(|window| Some((window.id, window.native?)))).collect();
-    let id = egui::Id::unique("dock-native-places");
+    let places_id = egui::Id::unique("dock-native-places");
+    let cache_id = egui::Id::unique("dock-native-moved-frame");
+    let frame = ctx.cumulative_frame_nr();
     ctx.data_mut(|data| {
-        let moved = data.get_temp::<Vec<(u64, [f32; 4])>>(id).is_some_and(|last| last != places);
-        data.insert_temp(id, places);
+        if let Some((at, moved)) = data.get_temp::<(u64, bool)>(cache_id)
+            && at == frame
+        {
+            return moved;
+        }
+        let moved = data.get_temp::<Vec<(u64, [f32; 4])>>(places_id).is_some_and(|last| last != places);
+        data.insert_temp(places_id, places);
+        data.insert_temp(cache_id, (frame, moved));
         moved
     })
+}
+
+/// Writes the panels/layout snapshot if it changed.
+fn persist_panels_now(app: &mut PhotocraftApp) {
+    let now = snapshot(app);
+    if app.session.prefs().panel_layout != now {
+        app.session.prefs.edit(|p| p.panel_layout = now);
+    }
+}
+
+/// True while a persistence pass must not record geometry: an in-progress dock-edge drag, a
+/// pointer button down, or a native panel window that moved this frame.
+fn panels_moving(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    crate::panels::dock_edge_drag_active(ctx) || ctx.input(|i| i.pointer.any_down()) || native_moved(app, ctx)
+}
+
+fn panels_pending(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("dock-persist-panels-pending")).unwrap_or(false))
+}
+
+fn set_panels_pending(ctx: &egui::Context, pending: bool) {
+    let id = egui::Id::unique("dock-persist-panels-pending");
+    ctx.data_mut(|data| {
+        if pending {
+            data.insert_temp(id, true);
+        } else {
+            data.remove::<bool>(id);
+        }
+    });
+}
+
+/// Retries a toolbar-side save that was deferred while geometry was moving; called every frame so
+/// the save happens once the geometry is stable even when the dock and toolbar were not drawn.
+pub(crate) fn persist_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !app.session.prefs().workspace.remember_workspace_changes {
+        set_panels_pending(ctx, false);
+        return;
+    }
+    if !panels_pending(ctx) {
+        return;
+    }
+    if panels_moving(app, ctx) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        return;
+    }
+    persist_panels_now(app);
+    set_panels_pending(ctx, false);
 }
 
 /// Restore the remembered layout at launch. Unreadable parts keep their defaults.

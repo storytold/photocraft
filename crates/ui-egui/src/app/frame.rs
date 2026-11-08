@@ -75,6 +75,7 @@ impl PhotocraftApp {
         vector_ui::finish_pen_if_left(self);
         transform_tool::end_if_left(self);
         shape_stroke_ui::sync_editor(self, ctx);
+        crate::dock::persist_pending(self, ctx);
         prefs_ui::tick(self, ctx);
         updates_ui::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);

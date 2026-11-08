@@ -164,6 +164,12 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::color_panel_ui::persist(app);
 }
 
+/// True while the dock-edge resize drag has a stored start: a synthetic/accessibility click can
+/// arrive with no pointer button down, but the in-progress dock width must not be persisted.
+pub(crate) fn dock_edge_drag_active(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<(f32, f32)>(egui::Id::unique("dock-edge-drag")).is_some())
+}
+
 /// The width the dock column took in the last frame (tests: an iconic-only dock must take its
 /// narrow width and return the rest to the canvas).
 #[cfg(test)]
