@@ -19,12 +19,13 @@ fn ramp() -> Session {
     s
 }
 
+// Seed-containment assertions use crisp boundaries; the default fringe is checked separately.
 fn wand(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
-    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode})).unwrap();
+    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "antiAlias": false, "mode": mode})).unwrap();
 }
 
 fn wand_global(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
-    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "contiguous": false})).unwrap();
+    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "antiAlias": false, "mode": mode, "contiguous": false})).unwrap();
 }
 
 /// The columns of row 400 that are at least half selected: (first, end), or `None`. Every
@@ -45,6 +46,21 @@ fn ramp_selected() -> Session {
     wand(&mut s, 110, 32.0, "replace");
     assert_eq!(selected(&s), Some((100, 380)));
     s
+}
+
+#[test]
+fn default_antialias_keeps_the_near_matching_fringe() {
+    for contiguous in [true, false] {
+        let mut s = ramp();
+        // Omit antiAlias to exercise the command default, independently of the crisp helpers.
+        s.execute("select.magicWand", json!({"x": 110, "y": 400, "tolerance": 32, "contiguous": contiguous})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let row = photocraft_geom::Rect::new(379, 400, 382, 401);
+        let mask = photocraft_algo::selection::mask_from_surface(doc.selection.as_ref(), row);
+        let coverage: Vec<u8> = mask.iter().map(|v| (v * 255.0).round() as u8).collect();
+        assert_eq!(coverage, [255, 251, 0], "one near-matching fringe column, contiguous {contiguous}");
+        assert_eq!(selected(&s), Some((100, 381)));
+    }
 }
 
 #[test]
