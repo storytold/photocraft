@@ -509,9 +509,34 @@ fn indexed_counts_are_integer_json_while_dither_amounts_keep_their_decimals() {
     assert_eq!(params["amount"].as_f64(), Some(37.5));
 }
 
-/// #7400: Lens Blur's Source lists the document's alpha channels, by name, each choosable even
-/// when two share a name; `depthChannel` is set through that menu, not shown as a field, and
-/// like the other references it isn't remembered, so a remembered `channel` source opens as None.
+/// The Color Lookup dialog's own fields run the command: `fileName` used to be filled with `0`
+/// (no dialog kind for `text?`, so every OK failed) and `lutFormat` with `cube`, which made a
+/// .3dl file from the LUT folder fail to parse.
+#[test]
+fn color_lookup_dialog_defaults_run_a_3dl_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("inverse.3dl");
+    let mut lut = String::from("3DMESH\nMesh 1 12\n0 512 1023\n");
+    for r in 0..3 {
+        for g in 0..3 {
+            for b in 0..3 {
+                let v = [r, g, b].map(|c| 4095 - 4095 * c / 2);
+                lut.push_str(&format!("{} {} {}\n", v[0], v[1], v[2]));
+            }
+        }
+    }
+    std::fs::write(&path, lut).unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 4, "height": 4, "background": "#000000"})).unwrap();
+    let id = open(&mut app, COLOR_LOOKUP).unwrap();
+    let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
+    app.run(COLOR_LOOKUP, params_of(&f)).unwrap();
+    f.insert("file".into(), json!(path.to_str().unwrap()));
+    app.run(COLOR_LOOKUP, params_of(&f)).unwrap();
+    let px = app.session.active().unwrap().doc.layers[0].surface().unwrap().read_region(photocraft_geom::Rect::new(0, 0, 1, 1));
+    assert!(px[0] > 0.99 && px[1] > 0.99 && px[2] > 0.99, "black through the inverse .3dl is white: {px:?}");
+}
+
 /// #9754: Image › Adjustments › Color Lookup lists the LUT folder's files, and one picked from
 /// it is applied through `file`.
 #[test]
@@ -564,6 +589,9 @@ fn color_lookup_dialog_lists_and_applies_lut_folder_files() {
     assert_eq!(f["file"], json!(path));
 }
 
+/// #7400: Lens Blur's Source lists the document's alpha channels, by name, each choosable even
+/// when two share a name; `depthChannel` is set through that menu, not shown as a field, and
+/// like the other references it isn't remembered, so a remembered `channel` source opens as None.
 #[test]
 fn lens_blur_source_lists_the_alpha_channels() {
     let spec = photocraft_engine::commands::find(LENS_BLUR).unwrap().params;
