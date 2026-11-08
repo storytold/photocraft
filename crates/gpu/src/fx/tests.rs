@@ -317,3 +317,41 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!((bands[0].y0, bands[0].y1, bands[1].y1), (i32::MAX - 100, i32::MAX - 36, i32::MAX));
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
+
+/// #11949: the GPU blurs a Softer outer glow with Photoshop's whole-width tent
+/// (`glow_tent_kernel`), as the CPU's `glow_map` does, and an inner glow and a drop shadow with the
+/// shared `tent_kernel`; the two differ at even sizes only.
+#[test]
+fn softer_outer_glow_blurs_with_the_glow_tent() {
+    use photocraft_compose::effects::{glow_tent_kernel, tent_kernel};
+    use photocraft_doc::{FxPaint, GlowSource, GlowTechnique};
+    let light = GlobalLight::default();
+    let weights = |p: &MapProgram| -> Vec<Vec<f32>> {
+        p.stages.iter().filter(|s| s.kernel == crate::plan::Kernel::MBlur).filter_map(|s| s.lut.as_ref().map(|w| w.to_vec())).collect()
+    };
+    for size in [3.0f32, 4.0, 7.0, 10.0] {
+        let g = photocraft_doc::Glow {
+            common: FxCommon::new(BlendMode::Screen, 1.0),
+            paint: FxPaint::Color(photocraft_color::Color::WHITE),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        };
+        let outer = weights(&program(&Effect::OuterGlow(g.clone()), &light, false));
+        assert_eq!(outer, vec![glow_tent_kernel(size).1; 2], "outer glow size {size}");
+        let inner = weights(&program(&Effect::InnerGlow(g), &light, false));
+        assert_eq!(inner, vec![tent_kernel(size).1; 2], "inner glow size {size}");
+        let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
+        s.size = size;
+        s.spread = 0.0;
+        let shadow = weights(&program(&Effect::DropShadow(s), &light, false));
+        assert_eq!(shadow, vec![tent_kernel(size).1; 2], "drop shadow size {size}");
+        assert_eq!(outer == inner, size % 2.0 == 1.0, "size {size}");
+    }
+}

@@ -222,9 +222,14 @@ impl B {
     fn dilate(&mut self, src: In, dist: In, r: f32) -> In {
         self.push(stage(Kernel::MDilate, Some(src), Some(dist), [r, 0.0, 0.0, 0.0], 0))
     }
-    fn blur(&mut self, src: In, size: f32) -> In {
-        let Some(k) = blur_kernel(size) else { return src };
-        self.conv(src, k)
+    /// `compose::effects::blur` (or an outer glow's `glow_blur`): a separable convolution with
+    /// `kernel` of the effect size (`tent_kernel` or `glow_tent_kernel`); a non-finite size is the
+    /// identity, as there.
+    fn blur_with(&mut self, src: In, size: f32, kernel: fn(f32) -> (i32, Vec<f32>)) -> In {
+        if !size.is_finite() {
+            return src;
+        }
+        self.conv(src, kernel(size))
     }
     /// Separable convolution with a symmetric kernel `(radius, weights)` (two `MBlur` passes).
     fn conv(&mut self, src: In, (r, w): (i32, Vec<f32>)) -> In {
@@ -271,16 +276,6 @@ impl B {
 /// (`clamp(w + 0.5 - d)`, with `d` up to 1.5 px beyond the pixel distance).
 fn reach_for(w: f32) -> i32 {
     w.clamp(0.0, photocraft_compose::effects::MAX_REACH).ceil() as i32 + 2
-}
-
-/// `compose::effects::blur`'s kernel (a tent of the effect size): (radius, normalised weights),
-/// or None when it is the identity.
-pub(crate) fn blur_kernel(size: f32) -> Option<(i32, Vec<f32>)> {
-    if !size.is_finite() {
-        return None;
-    }
-    let k = photocraft_compose::effects::tent_kernel(size);
-    (k.0 > 0).then_some(k)
 }
 
 fn contour_lut(c: &Contour) -> Option<Vec<f32>> {

@@ -19,16 +19,17 @@ impl B {
         let angle = if s.use_global_light { light.angle } else { s.angle };
         let (dx, dy) = offset(angle, s.distance);
         let src = self.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
-        let m = self.spread_blur(src, (s.size, s.spread), inner, dx, dy);
+        let m = self.spread_blur(src, (s.size, s.spread), inner, dx, dy, fx::tent_kernel);
         self.finish(m, None, false, &s.contour, inner, 0);
         1
     }
 
-    /// `src` spread or choked by `spread` of `size`, then blurred by the rest.
-    fn spread_blur(&mut self, src: In, (size, spread): (f32, f32), inner: bool, dx: f32, dy: f32) -> In {
+    /// `src` spread or choked by `spread` of `size`, then blurred by the rest with `kernel`
+    /// (`fx::tent_kernel`, or `fx::glow_tent_kernel` for an outer glow).
+    fn spread_blur(&mut self, src: In, (size, spread): (f32, f32), inner: bool, dx: f32, dy: f32, kernel: fn(f32) -> (i32, Vec<f32>)) -> In {
         let (r, bw) = fx::spread_split(size, spread);
         if r <= 0.0 {
-            return self.blur(src, bw);
+            return self.blur_with(src, bw, kernel);
         }
         // The shifted map's distance field is the field shifted by the same whole pixels.
         let f = self.field(if inner { FieldKind::ChokeInside } else { FieldKind::StrokeOutside }, r);
@@ -38,7 +39,7 @@ impl B {
             self.push(stage(Kernel::MShift, Some(f), None, [dx, dy, if inner { -0.5 } else { 1e10 }, 0.0], dx.abs().max(dy.abs()) as i32))
         };
         let m = self.dilate(src, d, r);
-        self.blur(m, bw)
+        self.blur_with(m, bw, kernel)
     }
 
     /// Outer or Inner Glow stages, Precise or Softer. Returns the number of maps written.
@@ -55,7 +56,10 @@ impl B {
             GlowTechnique::Softer => {
                 // Inner glows spread 1 - alpha.
                 let src = if inner { self.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { In::Shape };
-                self.spread_blur(src, (g.size, g.spread), inner, 0.0, 0.0)
+                // As the CPU's `glow_map`: an outer glow falls off over Photoshop's whole-width
+                // tent (#11949), an inner glow over the shared one.
+                let kernel = if inner { fx::tent_kernel } else { fx::glow_tent_kernel };
+                self.spread_blur(src, (g.size, g.spread), inner, 0.0, 0.0, kernel)
             }
         };
         // The same transfer as the CPU's `glow_map`, reach cap included (#11361).

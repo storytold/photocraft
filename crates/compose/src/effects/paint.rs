@@ -1,4 +1,4 @@
-use super::blur::{blur, dilate};
+use super::blur::{blur, dilate, glow_blur};
 use super::distance::{dist_inside, dist_outside};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
@@ -62,10 +62,10 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
 ///   one level, with `v` the coverage of Photoshop's tent (two integer-width boxes, taps
 ///   `(w − |i|) / w²`; the Linear control row is exactly `2v` of it). That is 25/6 ≈ 4.17× the
 ///   Linear glow at Range 50 % (the reporter's "roughly 4×": exactly 4× reads 5–9 levels low on
-///   every soft pixel). Our tent's half-weight end taps at even widths add `1 / (4w²)` to that
-///   coverage and light one more faint pixel at `w` (as they do for a Linear glow), so at even
-///   sizes the soft pixels read up to `255 / (0.48·w²)` levels above Photoshop's (33 at size 4,
-///   5 at size 10); see `softer_flat_contour_glow_matches_photoshop`.
+///   every soft pixel). The outer glow is blurred with that tent at every whole width
+///   (`glow_tent_kernel`, #11949): the shared blur's half-weight end taps at even widths added
+///   `1 / (4w²)` to the coverage, 33 levels on size 4's soft pixel; see
+///   `softer_flat_contour_glow_matches_photoshop`.
 ///
 /// So:
 ///
@@ -415,7 +415,13 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
         GlowTechnique::Softer => {
             let (r, bw) = spread_split(g.size, g.spread);
             let mut m = dilate(&src, r);
-            blur(&mut m, bw);
+            // An outer glow falls off over Photoshop's whole-width tent, which differs from the
+            // shared one at even widths (#11949); inner glows keep the shared blur (unmeasured).
+            if inner {
+                blur(&mut m, bw)
+            } else {
+                glow_blur(&mut m, bw)
+            }
             m
         }
     };

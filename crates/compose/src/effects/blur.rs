@@ -62,6 +62,35 @@ pub fn tent_kernel(w: f32) -> (i32, Vec<f32>) {
     ((n as i32 - 1) / 2, t)
 }
 
+/// The whole even width `n` a blur of width `w` has, if it has one (after [`box_width`]'s clamp).
+fn even_width(w: f32) -> Option<i64> {
+    let w = box_width(w);
+    let n = w.round();
+    // `box_width` keeps `n` within 1..=MAX_REACH, so the cast is exact.
+    let n_int = n as i64;
+    ((w - n).abs() <= f32::EPSILON * n && n_int % 2 == 0).then_some(n_int)
+}
+
+/// The 1D kernel of a Softer outer glow's falloff (#11949): `(radius, weights)`.
+///
+/// Photoshop's Softer glow is two box passes of whole width `n`, taps `(n − |i|) / n²` for
+/// `|i| < n` (#11651: every measured pixel at sizes 3, 4, 6 and 10, and the Linear control row at
+/// size 10, is that tent within a level). At an odd width that is [`tent_kernel`] exactly. At an
+/// even width a centred box has no middle tap, so [`tent_kernel`]'s boxes take `n + 1` taps with
+/// half-weight ends, which is Photoshop's tent convolved with `[¼, ½, ¼]`: `1 / (4n²)` more
+/// coverage past every straight edge (33 levels on size 4's soft pixel, 5 on size 10's) and one
+/// more faint pixel at `n`. Photoshop's two boxes are off-centre instead, one half a pixel to each
+/// side, which is still a symmetric tent. Other widths (fractional, from a spread) keep
+/// [`tent_kernel`]: unmeasured. Shadows, satin, bevels and inner glows keep [`tent_kernel`] at
+/// every width: they are fitted to it, and no measurement says they are off at even sizes.
+pub fn glow_tent_kernel(w: f32) -> (i32, Vec<f32>) {
+    let Some(n) = even_width(w) else { return tent_kernel(w) };
+    let r = n - 1;
+    let nn = (n * n) as f32;
+    // `n` ≤ MAX_REACH (512), so the radius fits an i32.
+    (r as i32, (-r..=r).map(|i| (n - i.abs()) as f32 / nn).collect())
+}
+
 /// Box geometry for a (fractional) width: (`r`, end-tap weight `f`, 1 / width) — the
 /// [`box_weights`] taps are `r - 1` full ones each side of the centre plus the two end taps at `f`.
 fn box_geom(bw: f32) -> (i64, f64, f64) {
@@ -119,6 +148,67 @@ fn tent_line(src: &[f32], dst: &mut [f32], bw: f32) {
     }
 }
 
+/// One pass of a whole-width box over `src` (zero outside it) evaluated at `x0 .. x0 + dst.len()`:
+/// output `x` is the mean of `src[x + lo ..= x + lo + n − 1]`, as a running sum.
+fn whole_box_line(src: &[f64], x0: i64, dst: &mut [f64], n: i64, lo: i64) {
+    let at = |i: i64| usize::try_from(i).ok().and_then(|i| src.get(i)).copied().unwrap_or(0.0);
+    let n = n.max(1);
+    let norm = 1.0 / n as f64;
+    let first = x0 + lo;
+    let mut sum: f64 = (first..first + n).map(at).sum();
+    let mut last_covered = (first..first + n).rev().find(|&x| at(x) != 0.0).unwrap_or(i64::MIN);
+    for (k, d) in dst.iter_mut().enumerate() {
+        let start = x0 + k as i64 + lo;
+        *d = sum * norm;
+        let entering = at(start + n);
+        sum += entering - at(start);
+        if entering != 0.0 {
+            last_covered = start + n;
+        }
+        // As in `box_line`: clear the cancellation residue once the window is truly empty (#5638).
+        if last_covered < start + 1 {
+            sum = 0.0;
+        }
+    }
+}
+
+/// Two whole-width box passes along a line, exactly the convolution with [`glow_tent_kernel`] at
+/// an even width `n` (zero outside): the first box covers `−n/2 ..= n/2 − 1`, the second
+/// `−n/2 + 1 ..= n/2`, so together they span `−(n − 1) ..= n − 1`, centred.
+fn even_tent_line(src: &[f32], dst: &mut [f32], n: i64) {
+    let half = n / 2;
+    let s: Vec<f64> = src.iter().map(|v| f64::from(*v)).collect();
+    // `mid[k]` holds the first pass at position `k − half`.
+    let mut mid = vec![0.0f64; src.len() + n as usize];
+    whole_box_line(&s, -half, &mut mid, n, -half);
+    // Output `p` averages positions `p − half + 1 ..= p + half`: indices `p + 1 ..= p + n`.
+    let mut out = vec![0.0f64; src.len()];
+    whole_box_line(&mid, 0, &mut out, n, 1);
+    for (d, v) in dst.iter_mut().zip(out) {
+        *d = v as f32;
+    }
+}
+
+/// The falloff of a Softer outer glow of blur width `w`: the [`glow_tent_kernel`] along each axis
+/// (#11949). Odd and fractional widths are [`blur`].
+pub(super) fn glow_blur(m: &mut Map, w: f32) {
+    if !w.is_finite() {
+        return;
+    }
+    let Some(n) = even_width(w) else { return tent(m, w) };
+    if m.v.is_empty() {
+        return;
+    }
+    let (mw, mh) = (m.w, m.h);
+    let twice = |s: &[f32], d: &mut [f32]| even_tent_line(s, d, n);
+    let mut a = vec![0.0f32; m.v.len()];
+    rows_par(&m.v, &mut a, mw, twice);
+    let t = transpose_map(&a, mw, mh);
+    let mut b = vec![0.0f32; t.len()];
+    rows_par(&t, &mut b, mh, twice);
+    m.v = transpose_map(&b, mh, mw);
+}
+
 /// Rows of a `w`-wide row-major buffer, each through `f(src_row, dst_row)`, in parallel on
 /// scoped OS threads. Not rayon: maps can be built from inside a rayon tile, where a waiting
 /// worker steals other tiles. Map builds no longer block on each other (#276), but the blur
@@ -169,8 +259,14 @@ pub(super) fn tent(m: &mut Map, w: f32) {
 /// [`tent`] as a direct convolution with [`tent_kernel`] (the GPU's way; tests compare).
 #[cfg(test)]
 pub(super) fn tent_direct(m: &mut Map, w: f32) {
+    convolve_direct(m, tent_kernel(w));
+}
+
+/// A separable convolution with the symmetric kernel `(radius, weights)` along each axis, zero
+/// outside the map, done directly (tests compare the running sums with it).
+#[cfg(test)]
+pub(super) fn convolve_direct(m: &mut Map, (r, k): (i32, Vec<f32>)) {
     {
-        let (r, k) = tent_kernel(w);
         let (mw, mh) = (m.w as i64, m.h as i64);
         let mut tmp = vec![0.0f32; m.v.len()];
         for y in 0..mh {
