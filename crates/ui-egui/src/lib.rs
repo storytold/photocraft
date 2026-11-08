@@ -775,6 +775,8 @@ impl SyntheticTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod background_eraser_tolerance_field_tests;
+#[cfg(test)]
 mod brush_options_tooltips_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
