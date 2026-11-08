@@ -513,7 +513,6 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
             let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
             if let Some(entry) = app.paused_playbacks.paused.get_mut(&token) {
                 entry.doc = app.session.active().map(|d| d.doc.id);
-                entry.snapshot = Some(action.clone());
             }
             if let Some(d) = app.ui.type_panels.spell.as_mut() {
                 d.resume = Some(token);
@@ -1178,9 +1177,6 @@ pub(crate) struct PausedPlayback {
     /// The document a pause at Check Spelling was playing on. That dialog doesn't block the
     /// document tabs, so Done ([`resume_spelling`]) continues only on this document.
     doc: Option<photocraft_doc::DocId>,
-    /// The action as it was when a pause at Check Spelling began. That dialog leaves the Actions
-    /// panel editable, so Done continues only while the action of that name still equals it.
-    snapshot: Option<Action>,
     /// An implicit filter/adjustment step resolves this active layer at the pause. The outer Option marks
     /// that binding even when there was no active layer; explicit-layer and other dialogs omit it.
     filter_receiver: Option<Option<photocraft_doc::LayerId>>,
@@ -1238,7 +1234,6 @@ impl PausedPlaybacks {
                 then: Vec::new(),
                 ran: 0,
                 doc: None,
-                snapshot: None,
                 filter_receiver: None,
                 menu_editor: None,
                 callers: Vec::new(),
@@ -1375,21 +1370,27 @@ pub(crate) fn spelling_change(app: &mut PhotocraftApp, params: Value) -> Result<
 }
 
 /// Check Spelling's Done for the action paused at its step: the action continues when the document
-/// it was playing on is still the active one and the action is unchanged, and otherwise ends there
-/// with the reason in the status bar. Returns `Ok` when nothing failed.
+/// it was playing on is still the active one and no action of the paused call changed
+/// ([`played_changed`]), and otherwise ends there with the reason in the status bar. Returns `Ok`
+/// when nothing failed.
 pub(crate) fn resume_spelling(app: &mut PhotocraftApp, token: u64) -> Result<(), String> {
     let fields = serde_json::Map::from_iter([(RESUME.to_string(), json!(token))]);
-    let Some((from, doc, snapshot)) = app.paused_playbacks.paused.get(&token).map(|p| (p.from, p.doc, p.snapshot.clone())) else {
+    let Some((from, doc, changed)) = app.paused_playbacks.paused.get(&token).map(|p| (p.from, p.doc, played_changed(p, &app.session.actions.list))) else {
         return resume(app, &fields);
     };
-    let edited = snapshot.as_ref().is_some_and(|s| app.session.actions.list.iter().find(|a| a.name == s.name) != Some(s));
-    if !edited && (doc.is_none() || doc == app.session.active().map(|d| d.doc.id)) {
+    if !changed && (doc.is_none() || doc == app.session.active().map(|d| d.doc.id)) {
         return resume(app, &fields);
     }
     abandoned(app, &fields);
-    let error = if edited { "the paused action changed while Check Spelling was open" } else { "the active document changed while Check Spelling was open" };
+    let error = if changed { "the paused action changed while Check Spelling was open" } else { "the active document changed while Check Spelling was open" };
     report_play(app, &json!({"failed": {"step": from.saturating_sub(1), "id": "edit.checkSpelling", "error": error}}));
     Err(error.into())
+}
+
+/// Whether an action of the paused call was edited, deleted or replaced by a new one of the same
+/// name since it paused.
+fn played_changed(paused: &PausedPlayback, list: &[Action]) -> bool {
+    paused.played.iter().any(|a| list.iter().find(|b| b.name == a.name) != Some(a))
 }
 
 /// A step dialog confirmed: continue the action after it (`dialogs::confirm` calls this).
@@ -1450,8 +1451,7 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     // The rest plays by name: refuse it when an action of the paused call changed meanwhile, so a
     // new action of the same name never plays from the old one's step. With nothing left to play,
     // the call simply ends. (Another document coming to the front fails `history.resume` above.)
-    let list = &app.session.actions.list;
-    if remaining && paused.played.iter().any(|a| list.iter().find(|b| b.name == a.name) != Some(a)) {
+    if remaining && played_changed(&paused, &app.session.actions.list) {
         let error = "the action changed while it was paused";
         actions_cmds::finish_pending_history(&mut app.session);
         restore_recording(app, owner.as_ref());

@@ -1995,6 +1995,16 @@ fn check_spelling_done_after_the_waiting_action_was_edited_ends_it() {
     assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
 }
 
+/// Done after the waiting action's steps after Check Spelling were deleted, leaving nothing to
+/// play, still ends it with the reason instead of reporting a finished playback.
+#[test]
+fn check_spelling_done_after_the_waiting_actions_tail_was_deleted_ends_it() {
+    let (app, before) = spelling_done_after(|list| list[0].steps.truncate(1));
+    assert_eq!(layer_names(&app), before, "no step ran");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
 /// Changes to other actions while Check Spelling is open, including one added ahead of the waiting
 /// action, don't stop it: Done plays its remaining step.
 #[test]
