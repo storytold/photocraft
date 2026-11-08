@@ -205,8 +205,11 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
             let size = app.session.active().map(|d| d.doc.size);
             let inside = size.is_some_and(|s| (0.0..f64::from(s.width)).contains(&x) && (0.0..f64::from(s.height)).contains(&y));
             if inside && let Err(e) = app.run("view.colorSamplers.add", json!({"x": x, "y": y})) {
+                // Only the limit is a plain report; any other refusal (a failed Pen draft left in
+                // another document) stays an error.
+                let full = app.session.active().is_some_and(|d| d.color_samplers.len() >= photocraft_engine::sampler_cmds::MAX_SAMPLERS);
                 app.ui.status = e;
-                app.ui.status_error = false;
+                app.ui.status_error = !full;
             }
         }
         // While ⇧⌥ stay held after that press, moves sample nothing.

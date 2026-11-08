@@ -120,3 +120,26 @@ fn a_shift_alt_click_off_the_canvas_reports_nothing() {
         assert_eq!(app.ui.status, "Ready", "({x}, {y}): the status bar is left as it was");
     }
 }
+
+#[test]
+fn a_shift_alt_click_refused_for_another_reason_keeps_the_error_styling() {
+    // Only the limit is the Color Sampler tool's plain report. A Pen draft whose commit failed,
+    // left in another document, refuses every command until it is dealt with: that stays an error.
+    let mut app = app(Tool::Pen);
+    for x in [30.0, 1e40] {
+        tool_event(&mut app, ToolEvent::Down { x, y: 60.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x, y: 60.0 }, Modifiers::NONE);
+    }
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert!(app.ui.pen.as_ref().is_some_and(|p| p.commit_failed), "a failed Pen draft");
+    app.session.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.ui.tool = Tool::Brush;
+    click(&mut app, 200.0, 150.0, SHIFT_ALT);
+    assert!(samplers_of(&app).is_empty(), "nothing added");
+    assert!(!app.ui.status.is_empty(), "the refusal is reported");
+    assert!(app.ui.status_error, "and keeps its error styling: {:?}", app.ui.status);
+}
+
+fn samplers_of(app: &PhotocraftApp) -> Vec<[f64; 2]> {
+    app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default()
+}
