@@ -352,8 +352,12 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
     if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
-pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
+pub(super) fn begin_live_stroke(app: &mut PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // The preset store can become available after an earlier load failed. A successful retry
+    // updates the active brush before both the live renderer and cursor observe it; failure is
+    // deliberately non-destructive and the preview remains usable.
+    let _ = app.session.retry_active_brush_tips();
     let st = app.session.active()?;
     let d = app.drag.as_ref()?;
     let stroke = if d.tool == Tool::MixerBrush {
