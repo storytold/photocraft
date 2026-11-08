@@ -745,6 +745,12 @@ pub fn engine_call(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) ->
     if menu.crop.is_some() && command == CROP_COMMIT {
         return ("image.crop".into(), json!({}));
     }
+    if is_perspective_crop(menu) && command == PCROP_COMMIT {
+        // The `image.perspectiveCrop` call Enter's commit makes, with its params.
+        let mut p = json!({"corners": app.ui.perspective_crop});
+        crate::perspective_crop_ui::size_params(app, &mut p);
+        return ("image.perspectiveCrop".into(), p);
+    }
     if menu.guide {
         let selected = crate::guide_select::selected(app);
         return match command {
