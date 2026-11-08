@@ -34,15 +34,19 @@ use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::text::{CharStyle, TextRun};
 use photocraft_doc::vector::{FillRule, Knot, LineCap, LineJoin, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath};
 use photocraft_doc::{Fill, Layer, LayerContent, TextLayer};
-use photocraft_geom::{Affine, Point, Rect};
+use photocraft_geom::{Affine, Point, Rect, TILE_SIZE};
 use photocraft_raster::Interrupt;
 
 /// Most layers one editable page may create; past it the page falls back to raster.
 const MAX_LAYERS: usize = 20_000;
 /// Most path knots one editable page may hold; past it the page falls back to raster.
 const MAX_KNOTS: usize = 1_000_000;
-/// Pixel bytes of shape caches one editable page may retain before the rest render on demand.
+/// Allocated tile bytes of all shape and text caches retained by one editable page.
 const MAX_CACHE_BYTES: u64 = 256 << 20;
+/// Bound text collection before building its layers and caches, including repeated overprinting.
+const MAX_GLYPHS: usize = 100_000;
+/// The strings in collected glyph records must also fit, not just their record count.
+const MAX_GLYPH_BYTES: usize = 16 << 20;
 /// Cap on fill/stroke glyph comparisons so hostile pages cannot make pairing quadratic forever.
 const MAX_PAIR_CHECKS: usize = 1_000_000;
 /// How often the watcher copies the interrupt into craft-pdf's cancellation flag. The Device's
@@ -104,6 +108,7 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
         ctl: *ctl,
         layers: Vec::new(),
         glyphs: Vec::new(),
+        glyph_bytes: 0,
         strokes: Vec::new(),
         fonts: Vec::new(),
         font_keys: HashMap::new(),
@@ -157,8 +162,12 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
     }
     pair_fake_bold(&mut device.glyphs, device.strokes, ctl)?;
     let families = register_fonts(&device.fonts)?;
-    let mut layers = merge_text_layers(device.layers, text_layers(&device.glyphs, &families));
-    render_text_caches(&mut layers, device.dpi, device.fmt, ctl)?;
+    let texts = text_layers(&device.glyphs, &families, device.dpi, ctl)?;
+    if device.layers.len().saturating_add(texts.len()) > MAX_LAYERS {
+        return Err(EditableError::Unsupported("too many objects"));
+    }
+    let mut layers = merge_text_layers(device.layers, texts);
+    render_text_caches(&mut layers, device.dpi, device.fmt, ctl, &mut device.cached)?;
     Ok(layers)
 }
 
@@ -168,6 +177,9 @@ fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>, ctl: &Interru
     // against candidates at its own paint order/font/text instead of the whole page.
     let mut index: HashMap<(usize, u128, u64), Vec<usize>> = HashMap::new();
     for (at, glyph) in glyphs.iter().enumerate() {
+        if at.is_multiple_of(256) && ctl.check().is_err() {
+            return Err(EditableError::Cancelled);
+        }
         index.entry((glyph.order, glyph.font.key, text_hash(&glyph.text))).or_default().push(at);
     }
     let mut paired = vec![false; glyphs.len()];
@@ -188,7 +200,11 @@ fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>, ctl: &Interru
                 checks += 1;
                 let glyph = &glyphs[at];
                 let tolerance = 0.01 * glyph.size_px + 0.01;
-                if glyph.text == stroke.text && (glyph.origin.x - stroke.origin.x).abs() <= tolerance && (glyph.origin.y - stroke.origin.y).abs() <= tolerance {
+                if glyph.text == stroke.text
+                    && same_style(glyph, &stroke)
+                    && (glyph.origin.x - stroke.origin.x).abs() <= tolerance
+                    && (glyph.origin.y - stroke.origin.y).abs() <= tolerance
+                {
                     found = Some(at);
                     break;
                 }
@@ -212,10 +228,19 @@ fn text_hash(text: &str) -> u64 {
 
 /// Builds one point-text layer per line and style run, with the layer index it must be inserted
 /// at to preserve paint order relative to paths.
-fn text_layers(glyphs: &[GlyphRun], families: &std::collections::HashMap<u128, String>) -> Vec<(usize, Layer)> {
+fn text_layers(
+    glyphs: &[GlyphRun],
+    families: &std::collections::HashMap<u128, String>,
+    dpi: f64,
+    ctl: &Interrupt,
+) -> Result<Vec<(usize, Layer)>, EditableError> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < glyphs.len() {
+        ctl.check().map_err(|_| EditableError::Cancelled)?;
+        if out.len() >= MAX_LAYERS {
+            return Err(EditableError::Unsupported("too many text objects"));
+        }
         let first = &glyphs[i];
         let family = families.get(&first.font.key).cloned().unwrap_or_else(|| first.font.family.clone());
         let (dx, dy) = (first.angle.cos(), first.angle.sin());
@@ -223,6 +248,7 @@ fn text_layers(glyphs: &[GlyphRun], families: &std::collections::HashMap<u128, S
         let baseline = first.origin.x * nx + first.origin.y * ny;
         let start = i;
         let mut text = String::new();
+        let mut positions = Vec::new();
         let mut last = first;
         while i < glyphs.len() {
             let glyph = &glyphs[i];
@@ -244,19 +270,37 @@ fn text_layers(glyphs: &[GlyphRun], families: &std::collections::HashMap<u128, S
                     text.push(' ');
                 }
             }
+            positions.push((text.len(), glyph.origin));
             text.push_str(&glyph.text);
             last = glyph;
             i += 1;
         }
-        let text = text.trim().to_string();
         if !text.is_empty() && has_ink(&text) {
-            out.push((first.order, text_layer(text, first, out.len(), &family)));
+            let layer = text_layer(text, first, out.len(), &family);
+            if let LayerContent::Text(text) = &layer.content {
+                let shared = photocraft_text::shared();
+                let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
+                let layout = engine.layout(text, dpi as f32);
+                // PDF spacing is already in the glyph origins. A word-gap heuristic cannot
+                // preserve TJ, character spacing, or explicitly positioned glyphs. Keep a run
+                // editable only if the actual text layout reproduces every recorded origin.
+                let clusters: std::collections::HashMap<_, _> = layout.clusters.iter().map(|c| (c.range.start, c)).collect();
+                for (offset, expected) in positions {
+                    let cluster = clusters.get(&offset);
+                    let actual =
+                        cluster.and_then(|c| layout.lines.get(c.line).map(|line| text.transform.apply(Point::new(f64::from(c.x), f64::from(line.baseline)))));
+                    if actual.is_none_or(|at| (at.x - expected.x).abs() > 0.5 || (at.y - expected.y).abs() > 0.5) {
+                        return Err(EditableError::Unsupported("text positioning"));
+                    }
+                }
+            }
+            out.push((first.order, layer));
         }
         if i == start {
             i += 1;
         }
     }
-    out
+    Ok(out)
 }
 
 /// Whether `b` belongs to the same line and style run as `a`.
@@ -290,6 +334,8 @@ fn text_layer(text: String, run: &GlyphRun, number: usize, family: &str) -> Laye
         weight: u16::try_from(weight).unwrap_or(400),
         italic: run.font.italic,
         faux_bold: run.fake_bold,
+        // PDF positions already contain kerning; applying font kerning again moves glyphs.
+        kerning: photocraft_doc::text::Kerning::Off,
         size_pt: run.size_pt as f32,
         color: run.color,
         ..CharStyle::default()
@@ -340,7 +386,7 @@ fn register_fonts(fonts: &[(u128, String, String, FontData)]) -> Result<std::col
 }
 
 /// Renders the text caches so the page is complete before the engine refreshes it.
-fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, ctl: &Interrupt) -> Result<(), EditableError> {
+fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, ctl: &Interrupt, cached: &mut u64) -> Result<(), EditableError> {
     let shared = photocraft_text::shared();
     for layer in layers {
         if ctl.check().is_err() {
@@ -352,12 +398,28 @@ fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, ctl: &In
             // Re-lock per layer so a text-heavy import does not hold the UI's engine for the
             // whole cache-render loop.
             let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
-            let rect = engine.render_layer(text, dpi as f32, fmt);
+            let layout = engine.layout(text, dpi as f32);
+            let area = photocraft_text::render::ink_rect(&layout, &text.transform);
+            admit_cache(cached, area, fmt)?;
+            let rendered = photocraft_text::render::rasterize(&layout, &text.transform, fmt, text.antialias);
+            let rect = rendered.rect;
+            text.cache = Some(rendered.surface);
             if rect.width() == 0 || rect.height() == 0 {
                 return Err(EditableError::Unsupported("a text cache could not be rendered"));
             }
         }
     }
+    Ok(())
+}
+
+/// Reserves complete tiles before rendering: even one painted pixel allocates a whole tile.
+fn admit_cache(cached: &mut u64, area: Rect, fmt: PixelFormat) -> Result<(), EditableError> {
+    let bytes = area.tile_count().saturating_mul(TILE_SIZE as u64).saturating_mul(TILE_SIZE as u64).saturating_mul(fmt.bytes_per_pixel() as u64);
+    let total = cached.saturating_add(bytes);
+    if total > MAX_CACHE_BYTES {
+        return Err(EditableError::Unsupported("page cache budget"));
+    }
+    *cached = total;
     Ok(())
 }
 
@@ -411,6 +473,7 @@ struct PathDevice<'a> {
     layers: Vec<Layer>,
     /// Filled glyphs in content order.
     glyphs: Vec<GlyphRun>,
+    glyph_bytes: usize,
     /// Stroked glyphs, paired with a fill at the same place to recognise fake bold.
     strokes: Vec<GlyphRun>,
     /// Embedded fonts met on the page: cache key, PostScript name, derived family and bytes.
@@ -424,7 +487,7 @@ struct PathDevice<'a> {
     /// One entry per clip pushed by the interpreter: `true` for an accepted no-op clip.
     clips: Vec<bool>,
     knots: usize,
-    /// Bytes of shape caches retained so far.
+    /// Allocated tile bytes of caches retained so far.
     cached: u64,
     unsupported: Option<&'static str>,
     cancelled: bool,
@@ -501,19 +564,17 @@ impl PathDevice<'_> {
             self.unsupported("too many objects");
             return;
         }
-        let reach = stroke.as_ref().map_or(0.0, |stroke| f64::from(stroke.width));
-        let b = path_bounds(&path);
-        let area = Rect::new((b.0 - reach).floor() as i32, (b.1 - reach).floor() as i32, (b.2 + reach).ceil() as i32, (b.3 + reach).ceil() as i32)
-            .intersect(&self.clip);
-        let bytes = u64::from(area.width()).saturating_mul(u64::from(area.height())).saturating_mul(self.fmt.bytes_per_pixel() as u64);
         let mut shape = ShapeLayer { path, fill, stroke, ..ShapeLayer::default() };
+        // Use the renderer's actual ink bounds, including miter tips, and reuse the compilation.
+        // Control-point bounds expanded by one stroke width can clip acute joins.
+        let compiled = photocraft_vector::CompiledShape::new(&shape, photocraft_vector::DEFAULT_TOLERANCE, self.clip);
+        let area = compiled.bounds().unwrap_or(Rect::EMPTY).intersect(&self.clip);
         if area.width() > 0 && area.height() > 0 {
-            if self.cached.saturating_add(bytes) > MAX_CACHE_BYTES {
-                self.unsupported("shape cache budget");
+            if let Err(EditableError::Unsupported(reason)) = admit_cache(&mut self.cached, area, self.fmt) {
+                self.unsupported(reason);
                 return;
             }
-            shape.cache = Some(photocraft_vector::render_shape(&shape, self.fmt, area));
-            self.cached = self.cached.saturating_add(bytes);
+            shape.cache = Some(compiled.render(self.fmt, area));
         }
         self.layers.push(Layer::new(format!("Path {}", self.layers.len() + 1), LayerContent::Shape(shape)));
     }
@@ -619,6 +680,10 @@ impl<'a> Device<'a> for PathDevice<'_> {
             self.unsupported("text used as a clipping path");
             return;
         }
+        if self.glyphs.len().saturating_add(self.strokes.len()) >= MAX_GLYPHS {
+            self.unsupported("too many glyphs");
+            return;
+        }
         let text = match glyph.as_unicode() {
             Some(craft_pdf::interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
             Some(craft_pdf::interpret::hayro_cmap::BfString::String(s)) => s,
@@ -670,6 +735,18 @@ impl<'a> Device<'a> for PathDevice<'_> {
             self.unsupported("skewed or mirrored text");
             return;
         }
+        if let GlyphDrawMode::Stroke(stroke) = draw_mode {
+            // Only a thin, solid, same-colour outline can be approximated by faux bold.
+            // Colour equality is checked against the fill in pair_fake_bold.
+            if !stroke.line_width.is_finite()
+                || stroke.line_width < 0.0
+                || f64::from(stroke.line_width) * transform.determinant().abs().sqrt() > size_pt * 0.05
+                || !stroke.dash_array.is_empty()
+            {
+                self.unsupported("stroked text geometry");
+                return;
+            }
+        }
         let origin = self.doc.apply(Point::new(e, f));
         let size_px = size_pt * self.doc.determinant().abs().sqrt();
         let angle = b.atan2(a);
@@ -685,6 +762,12 @@ impl<'a> Device<'a> for PathDevice<'_> {
         let family = family_from_postscript(&postscript);
         if self.seen_fonts.insert(key) {
             self.fonts.push((key, postscript.clone(), family.clone(), data.data.clone()));
+        }
+        let bytes = std::mem::size_of::<GlyphRun>().saturating_add(text.len()).saturating_add(family.len()).saturating_add(postscript.len());
+        self.glyph_bytes = self.glyph_bytes.saturating_add(bytes);
+        if self.glyph_bytes > MAX_GLYPH_BYTES {
+            self.unsupported("glyph memory budget");
+            return;
         }
         let font = FontInfo { key, family, postscript, weight, italic };
         let glyph = GlyphRun { text, origin, size_pt, size_px, angle, advance, font, color, fake_bold: false, order: self.layers.len() };
@@ -887,20 +970,6 @@ fn to_color(color: &HayroColor) -> Color {
 fn knots_affine(transform: &KurboAffine) -> Affine {
     let [a, b, c, d, e, f] = transform.as_coeffs();
     Affine { m: [a, b, c, d, e, f] }
-}
-
-/// The anchor bounds of a path, used only to estimate a shape cache's size.
-fn path_bounds(path: &Path) -> (f64, f64, f64, f64) {
-    let mut b = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for knot in path.subpaths.iter().flat_map(|subpath| &subpath.knots) {
-        for point in [knot.anchor, knot.in_ctrl, knot.out_ctrl] {
-            b.0 = b.0.min(point.x);
-            b.1 = b.1.min(point.y);
-            b.2 = b.2.max(point.x);
-            b.3 = b.3.max(point.y);
-        }
-    }
-    b
 }
 
 /// A Hayro stroke as PhotoCraft's stroke: width in pixels, dashes in multiples of the width.
@@ -1126,7 +1195,11 @@ mod tests {
             "BaseFont" => Object::Name(name.as_bytes().to_vec()),
             "FirstChar" => 32,
             "LastChar" => 126,
-            "Widths" => Object::Array(vec![Object::Integer(600); 95]),
+            "Widths" => Object::Array((32..=126u8).map(|c| {
+                let Ok(face) = ttf_parser::Face::parse(font_bytes, 0) else { return Object::Integer(600); };
+                let width = face.glyph_index(char::from(c)).and_then(|id| face.glyph_hor_advance(id)).unwrap_or(0);
+                Object::Real(f32::from(width) * 1000.0 / f32::from(face.units_per_em()))
+            }).collect()),
             "FontDescriptor" => descriptor,
             "Encoding" => "WinAnsiEncoding",
         });
@@ -1442,7 +1515,7 @@ mod tests {
 
     #[test]
     fn fill_then_stroke_text_is_fake_bold_not_a_second_run() {
-        let bytes = text_pdf("BT /F1 24 Tf 2 Tr 1 0 0 rg 20 50 Td (Hi) Tj ET");
+        let bytes = text_pdf("BT /F1 24 Tf 2 Tr 1 0 0 rg 1 0 0 RG 20 50 Td (Hi) Tj ET");
         let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
         let imported = import_with_options_and_interrupt("text.pdf", &bytes, &options, &Interrupt::NONE).expect("an editable text import");
         let texts: Vec<_> = children(&imported.document)
@@ -1639,5 +1712,96 @@ mod tests {
         let ctl = Interrupt::cancel_only(&cancel);
         let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
         assert!(matches!(import_with_options_and_interrupt("paths.pdf", &bytes, &options, &ctl), Err(IoError::Cancelled)));
+    }
+    #[test]
+    fn positioned_pdf_text_is_not_silently_reflowed() {
+        let bytes = text_pdf("BT /F1 24 Tf 20 50 Td [(H) -900 (i)] TJ ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("spacing.pdf", &bytes, &options, &Interrupt::NONE).unwrap();
+        assert!(children(&imported.document).iter().all(|l| matches!(l.content, LayerContent::Raster(_))), "unrepresentable spacing must rasterise");
+        assert!(imported.warnings.iter().any(|w| w.contains("rasterised")));
+    }
+
+    #[test]
+    fn colored_text_outlines_are_not_fake_bold() {
+        let bytes = text_pdf("BT /F1 24 Tf 1 0 0 rg 0 0 1 RG 1 w 2 Tr 20 50 Td (Hi) Tj ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("outline.pdf", &bytes, &options, &Interrupt::NONE).unwrap();
+        assert!(children(&imported.document).iter().all(|l| matches!(l.content, LayerContent::Raster(_))), "a blue outline cannot become red bold text");
+    }
+
+    #[test]
+    fn a_shape_cache_keeps_the_whole_miter() {
+        let bytes = pdf("10 w 10 M 40 20 m 50 70 l 60 20 l S");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("miter.pdf", &bytes, &options, &Interrupt::NONE).unwrap();
+        let layer = children(&imported.document).first().unwrap();
+        let LayerContent::Shape(shape) = &layer.content else { panic!("expected an editable stroke") };
+        let board = Rect::from_xywh(0, 0, 200, 100);
+        let expected = photocraft_vector::render_shape(shape, imported.document.pixel_format(), board);
+        assert!(shape.cache.as_ref().unwrap().read_region(board) == expected.read_region(board), "bounds must include the pointed join");
+    }
+
+    #[test]
+    fn cache_budget_charges_full_tiles_and_preserves_the_limit() {
+        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+        let tile_bytes = TILE_SIZE as u64 * TILE_SIZE as u64 * fmt.bytes_per_pixel() as u64;
+        let mut used = MAX_CACHE_BYTES - tile_bytes;
+        admit_cache(&mut used, Rect::from_xywh(0, 0, 1, 1), fmt).unwrap();
+        assert_eq!(used, MAX_CACHE_BYTES);
+        assert_eq!(admit_cache(&mut used, Rect::from_xywh(0, 0, 1, 1), fmt), Err(EditableError::Unsupported("page cache budget")));
+        assert_eq!(used, MAX_CACHE_BYTES);
+        let mut used = 0;
+        admit_cache(&mut used, Rect::from_xywh(-1, -1, 2, 2), fmt).unwrap();
+        assert_eq!(used, 4 * tile_bytes, "a tiny rectangle may straddle four tiles");
+    }
+
+    #[test]
+    fn text_cache_respects_the_budget_already_used_by_shapes() {
+        let bytes = text_pdf("BT /F1 24 Tf 20 50 Td (Hi) Tj ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("text-budget.pdf", &bytes, &options, &Interrupt::NONE).unwrap();
+        let mut text = text_layer(&imported.document).clone();
+        text.cache = None;
+        let mut layers = vec![Layer::new("Text", LayerContent::Text(text))];
+        let mut cached = MAX_CACHE_BYTES;
+        assert_eq!(
+            render_text_caches(&mut layers, 72.0, imported.document.pixel_format(), &Interrupt::NONE, &mut cached),
+            Err(EditableError::Unsupported("page cache budget"))
+        );
+        let LayerContent::Text(text) = &layers[0].content else { panic!("text layer") };
+        assert!(text.cache.is_none(), "reject before allocating the text cache");
+    }
+
+    #[test]
+    fn multiple_text_caches_share_one_allowance() {
+        let bytes = text_pdf("BT /F1 24 Tf 20 50 Td (Hi) Tj ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("text-budget.pdf", &bytes, &options, &Interrupt::NONE).unwrap();
+        let mut text = text_layer(&imported.document).clone();
+        text.cache = None;
+        let fmt = imported.document.pixel_format();
+        let layout = photocraft_text::shared().lock().unwrap().layout(&text, 72.0);
+        let area = photocraft_text::render::ink_rect(&layout, &text.transform);
+        let mut one_cache = 0;
+        admit_cache(&mut one_cache, area, fmt).unwrap();
+        assert!(one_cache > 0);
+        let mut layers = vec![Layer::new("First", LayerContent::Text(text.clone())), Layer::new("Second", LayerContent::Text(text))];
+        let mut cached = MAX_CACHE_BYTES - one_cache;
+        assert_eq!(render_text_caches(&mut layers, 72.0, fmt, &Interrupt::NONE, &mut cached), Err(EditableError::Unsupported("page cache budget")));
+        assert_eq!(cached, MAX_CACHE_BYTES);
+        assert!(matches!(&layers[0].content, LayerContent::Text(t) if t.cache.is_some()));
+        assert!(matches!(&layers[1].content, LayerContent::Text(t) if t.cache.is_none()));
+        let mut cached = 0;
+        render_text_caches(&mut layers, 72.0, fmt, &Interrupt::NONE, &mut cached).unwrap();
+        assert_eq!(cached, one_cache * 2);
+        assert!(layers.iter().all(|l| matches!(&l.content, LayerContent::Text(t) if t.cache.is_some())));
+    }
+    #[test]
+    fn thick_text_outlines_are_not_fake_bold() {
+        let bytes = text_pdf("BT /F1 24 Tf 1 0 0 rg 1 0 0 RG 5 w 2 Tr 20 50 Td (Hi) Tj ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("thick-outline.pdf", &bytes, &options, &Interrupt::NONE).unwrap();
+        assert!(children(&imported.document).iter().all(|l| matches!(l.content, LayerContent::Raster(_))));
     }
 }
