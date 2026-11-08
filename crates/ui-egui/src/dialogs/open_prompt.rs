@@ -207,7 +207,7 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
         app.jobs.opens.clear();
         app.jobs.batches.clear();
         app.ui.dialogs.retain(|d| !owns(&d.fields) && !owns_damage(&d.fields) && !owns_memory(&d.fields));
-        app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
+        app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
         return Ok(json!({"cancelled": dropped}));
     };
@@ -309,7 +309,7 @@ pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         if let Some(pos) = app.prompt_order.iter().position(|p| *p == PromptKind::Open) {
             app.prompt_order.remove(pos);
         }
-        app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
+        app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
     }
     advance(app);
@@ -407,6 +407,10 @@ fn show_memory(app: &mut PhotocraftApp, prompt: &MemoryPrompt) {
     };
     message.push_str("\n\n");
     message.push_str(tl!("Opening this document uses more memory and may slow down your computer or other running applications."));
+    if available.is_some_and(|a| a.saturating_sub(prompt.estimated) < photocraft_io::memory::LOW_MEMORY_WARNING_MARGIN) {
+        message.push_str("\n\n");
+        message.push_str(tl!("Little memory would be left after opening this file. Close other apps first, or PhotoCraft may run out of memory."));
+    }
     if prompt.uncertain_capacity_warning {
         message.push_str("\n\n");
         message.push_str(tl!(
@@ -466,7 +470,7 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
                     }
                 }
             } else {
-                app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
+                app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
                 app.ui.status_error = false;
                 crate::jobs_ui::end_batch(app);
             }
