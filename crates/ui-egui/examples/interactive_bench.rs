@@ -12,12 +12,14 @@
 //! real latency. Without a GPU adapter the CPU compositor stands in. Zoom and pan don't
 //! recomposite (the canvas samples the composited texture's mip levels); "viewport (CPU)" times
 //! what the CPU fallback pays for one 1920×1080 view. Each row is the median of `--reps` runs
-//! (min / max shown); the first run of an operation is reported separately as "cold".
+//! (min / max shown); the first run of an operation is reported separately as "cold". Adjustment
+//! preview rows cover a plain pixel target and a clipped one, unstyled and with a Color Overlay.
 
 use std::time::Instant;
 
 use eframe::wgpu;
-use photocraft_doc::{Document, LayerContent};
+use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
+use photocraft_doc::{Document, Effect, FxCommon, Layer, LayerContent, LayerId, Size};
 use photocraft_engine::Session;
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
@@ -101,34 +103,36 @@ impl Bench {
 
     /// GPU (or CPU fallback) composite of `region` of `doc`, waited on.
     fn render(&mut self, doc: &Document, region: Rect) -> f64 {
-        if region.is_empty() {
-            return 0.0;
-        }
-        let t = Instant::now();
-        match &mut self.gpu {
-            Some(g) => {
-                if g.comp.render(&g.device, &g.queue, doc, region, |_, _| {}).is_err() {
-                    std::hint::black_box(photocraft_compose::render(doc, region));
-                }
-                let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-            }
-            None => {
-                std::hint::black_box(photocraft_compose::render(doc, region));
-            }
-        }
-        t.elapsed().as_secs_f64() * 1000.0
+        self.render_preview(doc, region).0
     }
 
     /// Times `f` (`reps` runs after a cold one); `f` returns its own breakdown-free total in ms.
     fn time(&mut self, name: &str, mut f: impl FnMut(&mut Self) -> f64) {
+        self.time_path(name, false, |b| (f(b), ""));
+    }
+
+    /// [`Self::time`] for a row that also reports the compositing path that drew it (`GPU`,
+    /// `CPU fallback` or `CPU canvas`), so a fallback is never presented as a GPU result.
+    fn time_path(&mut self, name: &str, report_path: bool, mut f: impl FnMut(&mut Self) -> (f64, &'static str)) {
         if self.only.as_ref().is_some_and(|o| !name.contains(o.as_str())) {
             f(self);
             return;
         }
         self.rss.reset();
-        let cold = f(self);
+        let (cold, _) = f(self);
         let faults0 = photocraft_testkit::perf::minor_faults();
-        let mut v: Vec<f64> = (0..self.reps).map(|_| f(self)).collect();
+        let mut v = Vec::with_capacity(self.reps);
+        let mut path = "";
+        let mut fallback = false;
+        for _ in 0..self.reps {
+            let (t, p) = f(self);
+            fallback |= p == "CPU fallback";
+            path = p;
+            v.push(t);
+        }
+        if fallback {
+            path = "CPU fallback";
+        }
         // Minor page faults per warm run: memory mapped fresh from the kernel each time (#10479).
         // Counted over the whole of `f`, so it includes untimed setup and cleanup (an undo, an
         // extra refresh), not only the work the milliseconds measure.
@@ -137,8 +141,32 @@ impl Bench {
         v.sort_by(f64::total_cmp);
         let med = v[v.len() / 2];
         let fl = faults.map_or(String::new(), |f| format!(", {f} faults/run incl. setup"));
-        println!("{name:<44} {med:>9.1} ms   (min {:>8.1}, max {:>8.1}, cold {:>8.1}{fl})", v[0], v[v.len() - 1], cold);
-        self.rows.push((name.to_string(), med, v[0], v[v.len() - 1], cold));
+        let shown = if report_path && !path.is_empty() { format!("{name} ({path})") } else { name.to_string() };
+        println!("{shown:<44} {med:>9.1} ms   (min {:>8.1}, max {:>8.1}, cold {:>8.1}{fl})", v[0], v[v.len() - 1], cold);
+        self.rows.push((shown, med, v[0], v[v.len() - 1], cold));
+    }
+
+    /// Composite `region` of `doc`, wait for the GPU, and report which path drew it.
+    fn render_preview(&mut self, doc: &Document, region: Rect) -> (f64, &'static str) {
+        if region.is_empty() {
+            return (0.0, "empty region");
+        }
+        let t = Instant::now();
+        let path = match &mut self.gpu {
+            Some(g) => {
+                let ok = g.comp.render(&g.device, &g.queue, doc, region, |_, _| {}).is_ok();
+                if !ok {
+                    std::hint::black_box(photocraft_compose::render(doc, region));
+                }
+                let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if ok { "GPU" } else { "CPU fallback" }
+            }
+            None => {
+                std::hint::black_box(photocraft_compose::render(doc, region));
+                "CPU canvas"
+            }
+        };
+        (ms(t), path)
     }
 }
 
@@ -171,6 +199,137 @@ fn exec(s: &mut Session, id: &str, p: Value) {
     if let Err(e) = s.execute(id, p) {
         panic!("{id}: {e}");
     }
+}
+
+/// A 36 MP RGB/8 document with a clipped raster target in a real clipping stack: a base, a
+/// clipped sibling below, the clipped target and a clipped sibling above. `styled` gives the
+/// target a Color Overlay: the preview wraps the target in a group, and that group's effect maps
+/// include the adjustment settings, so a slider change may rebuild them (#7487).
+fn clipped_document(w: u32, h: u32, styled: bool) -> (Document, LayerId) {
+    let mut doc = Document::new("clipped preview", Size::new(w, h), ColorMode::Rgb, SampleType::U8);
+    let fmt = doc.pixel_format();
+    let (wi, hi) = (w as i32, h as i32);
+    let region = Rect::from_xywh(wi / 4, hi / 4, w / 2, h / 2);
+    let band = Rect::from_xywh(region.x0, region.y0, region.width(), region.height() / 3);
+    let mut base = Layer::raster("clip base", fmt);
+    if let Some(s) = base.surface_mut() {
+        s.fill_rect(doc.bounds(), &[0.42, 0.5, 0.58, 1.0]);
+        s.fill_rect(Rect::from_xywh(0, 0, w / 2, h), &[0.3, 0.36, 0.44, 1.0]);
+    }
+    base.opacity = 0.9;
+    let mut below = Layer::raster("clip sibling below", fmt);
+    if let Some(s) = below.surface_mut() {
+        s.fill_rect(band, &[0.2, 0.7, 0.4, 0.6]);
+    }
+    below.clipped = true;
+    below.opacity = 0.5;
+    let mut target = Layer::raster("clipped target", fmt);
+    if let Some(s) = target.surface_mut() {
+        s.fill_rect(region, &[0.8, 0.3, 0.2, 0.9]);
+        s.fill_rect(Rect::from_xywh(region.x0, region.y0, region.width() / 3, region.height() / 2), &[0.1, 0.2, 0.9, 1.0]);
+    }
+    target.clipped = true;
+    target.opacity = 0.8;
+    target.blend = BlendMode::Multiply;
+    if styled {
+        target.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.5), color: Color::rgba(0.2, 0.8, 0.4, 1.0) });
+    }
+    let id = target.id;
+    let mut above = Layer::raster("clip sibling above", fmt);
+    if let Some(s) = above.surface_mut() {
+        s.fill_rect(band, &[0.5, 0.5, 0.9, 0.4]);
+    }
+    above.clipped = true;
+    above.opacity = 0.6;
+    doc.layers = vec![base, below, target, above];
+    (doc, id)
+}
+
+/// The old CPU path builds an adjusted proxy and flattens the whole document for each change.
+fn cpu_adjust_preview_case(b: &mut Bench, doc: &Document, target: LayerId, name: &str, k: u32) {
+    let mut v = 0;
+    b.time(name, |_| {
+        v = (v + 7) % 120;
+        let t = Instant::now();
+        let p = photocraft_ui_egui::filter_dialog::preview_document(
+            doc,
+            Some(target),
+            "image.adjustments.curves",
+            &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]}),
+            k,
+        )
+        .expect("preview");
+        std::hint::black_box(photocraft_compose::flatten(&p));
+        ms(t)
+    });
+}
+
+/// Compare CPU and layer previews, keeping session setup outside the settings-change samples.
+fn adjust_preview_case(b: &mut Bench, s: &Session, target: LayerId, name: &str, sel: &str, report_path: bool) {
+    let doc = &s.active().expect("doc").doc;
+    let (w, h) = (doc.size.width, doc.size.height);
+    let zoom = 1600.0 / w as f32 * 2.0;
+    let k = photocraft_ui_egui::adjust_preview::proxy_factor(zoom);
+    cpu_adjust_preview_case(b, doc, target, &format!("{name}, CPU proxy preview{sel}"), photocraft_ui_egui::proxy::factor(doc));
+    if report_path {
+        // Match the desktop fallback's resolution at each view. It still computes the whole
+        // document; the layer path below only redraws the visible part of the affected region.
+        cpu_adjust_preview_case(b, doc, target, &format!("{name}, CPU proxy preview 100 % view{sel}"), 1);
+        cpu_adjust_preview_case(
+            b,
+            doc,
+            target,
+            &format!("{name}, CPU proxy preview zoomed out{sel}"),
+            photocraft_ui_egui::proxy::view_factor(photocraft_ui_egui::proxy::factor(doc), zoom),
+        );
+    }
+    // Once per dialog session (the app caches both per document revision).
+    let (base, region) = {
+        let st = s.active().expect("doc");
+        let t = Instant::now();
+        let base = photocraft_ui_egui::adjust_preview::base_document(&st.doc, target).expect("base");
+        let region = photocraft_ui_egui::adjust_preview::region(&st.doc, target);
+        println!("  ({name}{sel}: layer preview session setup: {:.1} ms, region {region:?})", ms(t));
+        (base, region)
+    };
+    let mut v = 0;
+    b.time_path(&format!("{name}, layer preview{sel}"), report_path, |b| {
+        v = (v + 7) % 120;
+        let t = Instant::now();
+        let p = photocraft_ui_egui::adjust_preview::with_settings(&base, "curves", &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]})).expect("preview");
+        let build = ms(t);
+        let (render, path) = b.render_preview(&p, region);
+        (build + render, path)
+    });
+    // Zoomed in, the canvas composites the region's visible part (here a 2560×1440 view at
+    // 100 %) and catches up elsewhere when the view moves.
+    let view = Rect::from_xywh(w as i32 / 3, h as i32 / 3, 2560, 1440).intersect(&region);
+    let mut v = 0;
+    b.time_path(&format!("{name}, layer preview 100 % view{sel}"), report_path, |b| {
+        v = (v + 7) % 120;
+        let t = Instant::now();
+        let p = photocraft_ui_egui::adjust_preview::with_settings(&base, "curves", &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]})).expect("preview");
+        let build = ms(t);
+        let (render, path) = b.render_preview(&p, view);
+        (build + render, path)
+    });
+    // Zoomed out (fit to a 1600-pixel-wide view on a 2× display: k = 2 for 36 MP), the canvas
+    // previews on a reduced copy built once per session.
+    let t = Instant::now();
+    let proxy = photocraft_ui_egui::adjust_preview::proxy_base(&base, k);
+    println!("  ({name}{sel}: zoomed-out proxy k {k} setup: {:.1} ms)", ms(t));
+    let kk = k as i32;
+    let pregion = Rect::new(region.x0 / kk, region.y0 / kk, region.x1 / kk + 1, region.y1 / kk + 1).intersect(&proxy.bounds());
+    let mut v = 0;
+    b.time_path(&format!("{name}, layer preview zoomed out{sel}"), report_path, |b| {
+        v = (v + 7) % 120;
+        let t = Instant::now();
+        let p = photocraft_ui_egui::adjust_preview::proxy_with_settings(&proxy, "curves", &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]}))
+            .expect("preview");
+        let build = ms(t);
+        let (render, path) = b.render_preview(&p, pregion);
+        (build + render, path)
+    });
 }
 
 fn main() {
@@ -273,103 +432,30 @@ fn main() {
             exec(&mut s, "select.rect", json!({"x": w / 4, "y": h / 4, "width": w / 2, "height": h / 2, "ellipse": true}));
         }
         let sel = if selection { ", selection" } else { "" };
-        let mut v = 0;
-        b.time(&format!("Curves dialog change, CPU proxy preview{sel}"), |_| {
-            v = (v + 7) % 120;
-            let st = s.active().expect("doc");
-            let k = photocraft_ui_egui::proxy::factor(&st.doc);
-            let t = Instant::now();
-            let p = photocraft_ui_egui::filter_dialog::preview_document(
-                &st.doc,
-                st.active_layer,
-                "image.adjustments.curves",
-                &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]}),
-                k,
-            )
-            .expect("preview");
-            std::hint::black_box(photocraft_compose::flatten(&p));
-            ms(t)
-        });
-        // Once per dialog session (the app caches both per document revision).
-        let (base, region) = {
-            let st = s.active().expect("doc");
-            let target = st.active_layer.expect("layer");
-            let t = Instant::now();
-            let base = photocraft_ui_egui::adjust_preview::base_document(&st.doc, target).expect("base");
-            let region = photocraft_ui_egui::adjust_preview::region(&st.doc, target);
-            println!("  (layer preview session setup: {:.1} ms, region {region:?})", ms(t));
-            (base, region)
-        };
-        b.time(&format!("Curves dialog change, layer preview{sel}"), |b| {
-            v = (v + 7) % 120;
-            let t = Instant::now();
-            let p =
-                photocraft_ui_egui::adjust_preview::with_settings(&base, "curves", &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]})).expect("preview");
-            let build = ms(t);
-            let t = Instant::now();
-            match &mut b.gpu {
-                Some(g) => {
-                    if g.comp.render(&g.device, &g.queue, &p, region, |_, _| {}).is_err() {
-                        std::hint::black_box(photocraft_compose::render(&p, region));
-                    }
-                    let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-                }
-                None => {
-                    std::hint::black_box(photocraft_compose::render(&p, region));
-                }
-            }
-            build + ms(t)
-        });
-        // Zoomed in, the canvas composites the region's visible part (here a 2560×1440 view at
-        // 100 %) and catches up elsewhere when the view moves.
-        let view = Rect::from_xywh(w as i32 / 3, h as i32 / 3, 2560, 1440).intersect(&region);
-        b.time(&format!("Curves dialog change, layer preview 100 % view{sel}"), |b| {
-            v = (v + 7) % 120;
-            let t = Instant::now();
-            let p =
-                photocraft_ui_egui::adjust_preview::with_settings(&base, "curves", &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]})).expect("preview");
-            match &mut b.gpu {
-                Some(g) => {
-                    if g.comp.render(&g.device, &g.queue, &p, view, |_, _| {}).is_err() {
-                        std::hint::black_box(photocraft_compose::render(&p, view));
-                    }
-                    let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-                }
-                None => {
-                    std::hint::black_box(photocraft_compose::render(&p, view));
-                }
-            }
-            ms(t)
-        });
-        // Zoomed out (fit to a 1600-pixel-wide view on a 2× display: k = 2 for 36 MP), the canvas
-        // previews on a reduced copy built once per session.
-        let zoom = 1600.0 / w as f32 * 2.0;
-        let k = photocraft_ui_egui::adjust_preview::proxy_factor(zoom);
-        let t = Instant::now();
-        let proxy = photocraft_ui_egui::adjust_preview::proxy_base(&base, k);
-        println!("  (zoomed-out proxy k {k} setup: {:.1} ms)", ms(t));
-        let kk = k as i32;
-        let pregion = Rect::new(region.x0 / kk, region.y0 / kk, region.x1 / kk + 1, region.y1 / kk + 1).intersect(&proxy.bounds());
-        b.time(&format!("Curves dialog change, layer preview zoomed out{sel}"), |b| {
-            v = (v + 7) % 120;
-            let t = Instant::now();
-            let p = photocraft_ui_egui::adjust_preview::proxy_with_settings(&proxy, "curves", &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]}))
-                .expect("preview");
-            match &mut b.gpu {
-                Some(g) => {
-                    if g.comp.render(&g.device, &g.queue, &p, pregion, |_, _| {}).is_err() {
-                        std::hint::black_box(photocraft_compose::render(&p, pregion));
-                    }
-                    let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-                }
-                None => {
-                    std::hint::black_box(photocraft_compose::render(&p, pregion));
-                }
-            }
-            ms(t)
-        });
+        let target = s.active().expect("doc").active_layer.expect("layer");
+        adjust_preview_case(&mut b, &s, target, "Curves dialog change", sel, false);
         if selection {
             exec(&mut s, "select.deselect", json!({}));
+        }
+    }
+    // The same case on a clipped target (#7487): the preview isolates it in a group. The styled
+    // target's group effects are keyed by the adjustment settings, so a change may rebuild them.
+    for (styled, label) in [(false, "clipped target"), (true, "clipped styled target")] {
+        let t = Instant::now();
+        let (doc, target) = clipped_document(w, h, styled);
+        let mut cs = Session::new();
+        cs.open_document(doc, None);
+        exec(&mut cs, "layer.select", json!({"layer": target.0}));
+        println!("  ({label} fixture setup: {:.1} ms)", ms(t));
+        for selection in [false, true] {
+            if selection {
+                exec(&mut cs, "select.rect", json!({"x": w / 4, "y": h / 4, "width": w / 2, "height": h / 2, "ellipse": true}));
+            }
+            let sel = if selection { ", selection" } else { "" };
+            adjust_preview_case(&mut b, &cs, target, &format!("Curves dialog change, {label}"), sel, true);
+            if selection {
+                exec(&mut cs, "select.deselect", json!({}));
+            }
         }
     }
     exec(&mut s, "layer.newAdjustmentLayer.levels", json!({"inBlack": 10, "inWhite": 240, "gamma": 1.1}));

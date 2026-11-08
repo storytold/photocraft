@@ -258,12 +258,12 @@ fn a_clipped_target_preview_keeps_its_place_and_properties() {
     assert_eq!(group.effects, before.effects);
     assert_eq!(group.excluded_channels, before.excluded_channels);
     assert_eq!(group.advanced, before.advanced);
-    let LayerContent::Group(g) = &group.content else { unreachable!("checked above") };
-    assert_eq!(g.children.len(), 2);
-    assert_eq!(g.children[0].id, CARRIER_LAYER);
-    assert_eq!(g.children[0].surface(), before.surface(), "the raw raster is unchanged");
-    assert_eq!(g.children[1].id, PREVIEW_LAYER);
-    assert!(g.children[1].clipped, "the adjustment clips to the raw raster");
+    let children = group.children().unwrap();
+    assert_eq!(children.len(), 2);
+    assert_eq!(children[0].id, CARRIER_LAYER);
+    assert_eq!(children[0].surface(), before.surface(), "the raw raster is unchanged");
+    assert_eq!(children[1].id, PREVIEW_LAYER);
+    assert!(children[1].clipped, "the adjustment clips to the raw raster");
     let mut preview_path = path;
     preview_path.push(1);
     assert_eq!(base.path_of(PREVIEW_LAYER), Some(preview_path), "inside the target's group");
