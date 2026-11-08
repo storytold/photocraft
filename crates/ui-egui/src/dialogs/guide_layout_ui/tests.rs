@@ -497,7 +497,6 @@ fn remembered_lengths_keep_their_size_when_the_ruler_unit_changes() {
 fn tab_selects_the_field_while_a_mouse_button_is_held() {
     let mut h = gutter_dialog("2 mm");
     let at = egui_kittest::kittest::Queryable::get_all_by_label(&h, "Number").next().unwrap().rect().center();
-    let at = egui::pos2(at.x as f32, at.y as f32);
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE });
     h.run_steps(2);
     tab_to_gutter(&mut h);
