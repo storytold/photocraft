@@ -1239,6 +1239,7 @@ fn an_edited_step_keeps_the_version_of_its_new_pattern() {
     let st = steps(&mut s);
     let b = s.patterns.items.iter().find(|p| p.name == "B").unwrap().id.clone();
     assert_eq!(st[2]["params"]["pattern"], json!(b), "kept by id");
+    assert_eq!(s.active().unwrap().doc.layers[1].surface().unwrap().pixel(1, 1), vec![0.0, 0.0, 1.0, 1.0], "the fill is B's blue now");
     let want = doc(&s);
     s.execute("pattern.delete", json!({"pattern": b})).unwrap();
     s.execute("design.replay", json!({})).unwrap();
@@ -1249,4 +1250,28 @@ fn an_edited_step_keeps_the_version_of_its_new_pattern() {
     r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
     r.execute("design.replay", json!({})).unwrap();
     assert_eq!(doc(&r), want, "after a save and load too");
+}
+
+/// A suppressed step edited to paint with another pattern keeps that pattern's version for when
+/// it is unsuppressed, after the library deleted it.
+#[test]
+fn a_suppressed_step_edited_to_another_pattern_keeps_its_version() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let a = s.execute("edit.definePattern", json!({"name": "A"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    let b = s.execute("edit.definePattern", json!({"name": "B"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.set_active(0);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": a})).unwrap();
+    let fill = step_id(&mut s, 2);
+    s.execute("design.suppress", json!({"step": fill})).unwrap();
+    s.execute("design.editStep", json!({"step": fill, "params": {"contents": "pattern", "pattern": b}})).unwrap();
+    s.execute("pattern.delete", json!({"pattern": b})).unwrap();
+    s.execute("design.unsuppress", json!({"step": fill})).unwrap();
+    assert_eq!(state(&mut s, 2), "ok");
+    assert_eq!(s.active().unwrap().doc.layers[1].surface().unwrap().pixel(1, 1), vec![0.0, 0.0, 1.0, 1.0], "painted with B");
 }

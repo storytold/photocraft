@@ -593,12 +593,23 @@ fn run_step(r: &mut Session, step: &mut DesignStep, versions: &mut Vec<photocraf
     let before = versions.clone();
     merge(versions, &step.patterns);
     // After the prelude: a library change it replays (a pattern deleted, then imported again,
-    // which a replay refuses) doesn't take a version a step paints with.
-    install(r, versions);
+    // which a replay refuses) doesn't take a version a step paints with. Without one, only the
+    // step's own versions are new.
+    if step.prelude.iter().any(|p| p.command.starts_with("pattern.")) {
+        install(r, versions);
+    } else {
+        install(r, &step.patterns);
+    }
     if step.rerecord {
         step.params = pin_patterns(r, &step.command, step.params.clone());
     }
     if step.suppressed {
+        // Edited while suppressed: its new pattern's version is kept for when it runs again.
+        if step.rerecord {
+            let new = new_versions(r, &step.params, &step.prelude, &before);
+            merge(&mut step.patterns, &new);
+            merge(versions, &new);
+        }
         return finish(r, step, StepState::Ok);
     }
     let missing: Vec<LayerId> = step.changed.iter().copied().filter(|id| pre.layer(*id).is_none()).collect();
