@@ -40,6 +40,10 @@ pub struct HeldRaw {
     source: Option<std::sync::Arc<ThumbSource>>,
     /// The thumbnail being redrawn on a worker: its source and image, `None` when it failed.
     redraw: Option<ThumbRedraw>,
+    /// The thumbnail was taken from the dialog's preview while `redraw` ran: its result only
+    /// fills the source cache. The worker still counts towards [`MAX_SOURCE_BUILDS`] until it
+    /// is done.
+    discard_redraw: bool,
 }
 
 /// A thumbnail redraw on a worker: its source and image, `None` when it failed.
@@ -62,7 +66,7 @@ struct ThumbSource {
 impl HeldRaw {
     pub(super) fn new(app: &PhotocraftApp, raw: RawOpen) -> Self {
         let thumb = super::open::raw_document(app, &raw).and_then(|doc| thumbnail(app, &doc));
-        HeldRaw { raw, kept: None, thumb, tex: None, selected: false, anchor: false, stale: false, source: None, redraw: None }
+        HeldRaw { raw, kept: None, thumb, tex: None, selected: false, anchor: false, stale: false, source: None, redraw: None, discard_redraw: false }
     }
 }
 
@@ -153,7 +157,7 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
         let (px, w, h) = shrink(developed, d.pw, d.ph);
         held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));
         // An older redraw still on a worker must not land over it.
-        (held.redraw, held.stale) = (None, false);
+        (held.discard_redraw, held.stale) = (held.redraw.is_some(), false);
         held.tex = None;
     }
 }
@@ -388,11 +392,12 @@ pub(super) fn request(app: &mut PhotocraftApp, ctx: &egui::Context, film: &Value
         }
     }
     let flag = |k: &str| film.get(k).and_then(Value::as_bool) == Some(true);
-    // An edit not yet synced goes to the raws selected when it was made, not to the new selection.
-    sync_selected(app);
+    // Once the request is known to be good, an edit not yet synced goes to the raws selected when
+    // it was made, not to the new selection.
     match (film.get("click"), flag("selectAll")) {
         (Some(_), true) => Err("Camera Raw filmstrip takes click or selectAll, not both".into()),
         (None, true) => {
+            sync_selected(app);
             select_all(app);
             Ok(())
         }
@@ -402,6 +407,7 @@ pub(super) fn request(app: &mut PhotocraftApp, ctx: &egui::Context, film: &Value
                 .and_then(|i| usize::try_from(i).ok())
                 .filter(|i| *i < app.raw_shelf.len())
                 .ok_or("filmstrip click must be the index of a raw in it")?;
+            sync_selected(app);
             click(app, ctx, i, flag("shift"), flag("command"))
         }
         (None, false) => Err("Camera Raw filmstrip needs click or selectAll".into()),
@@ -544,14 +550,17 @@ pub(super) fn refresh_thumbnails(app: &mut PhotocraftApp, wait: bool) -> bool {
             Ok(done) => {
                 held.redraw = None;
                 busy = true;
+                let discard = std::mem::take(&mut held.discard_redraw);
                 if let Some((source, image)) = done {
                     held.source = Some(source);
-                    held.thumb = Some(image);
-                    held.tex = None;
+                    if !discard {
+                        held.thumb = Some(image);
+                        held.tex = None;
+                    }
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => busy = true,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => held.redraw = None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => (held.redraw, held.discard_redraw) = (None, false),
         }
     }
     busy
@@ -579,7 +588,7 @@ pub(super) fn refresh_shown_thumbnail(app: &mut PhotocraftApp) -> bool {
     let (px, w, h) = shrink(&d.processed, d.pw, d.ph);
     held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));
     // An older redraw still on a worker (from before it was shown) must not land over it.
-    (held.redraw, held.stale) = (None, false);
+    (held.discard_redraw, held.stale) = (held.redraw.is_some(), false);
     held.tex = None;
     true
 }
@@ -664,7 +673,7 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
                 "selected": selected,
                 "shown": Some(i) == shown,
                 "edited": if Some(i) == shown { live.is_some_and(|p| !p.is_identity()) } else { h.kept.as_ref().is_some_and(|(p, _)| !p.is_identity()) },
-                "thumbnailPending": h.stale || h.redraw.is_some() || (Some(i) == shown && shown_behind),
+                "thumbnailPending": h.stale || (h.redraw.is_some() && !h.discard_redraw) || (Some(i) == shown && shown_behind),
             }))
             .collect::<Vec<_>>()
     )

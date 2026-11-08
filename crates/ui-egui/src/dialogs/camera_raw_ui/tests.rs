@@ -1789,3 +1789,18 @@ fn a_raw_whose_camera_raw_step_is_cancelled_goes_back_with_its_settings() {
         None => assert_eq!(app.session.documents().len(), 2, "opened with its step"),
     }
 }
+
+/// A request with Auto and a bad part changes nothing, on the shown raw or the other selected ones;
+/// a bad filmstrip request doesn't hand a pending edit to the selection either.
+#[test]
+fn a_bad_request_applies_neither_auto_nor_a_pending_edit() {
+    let (mut app, ctx, _) = filmstrip_app(2);
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
+    let before = (app.camera_raw.as_ref().unwrap().params.clone(), app.raw_shelf[1].kept.clone());
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true, "set": {"nope": 1}}})).unwrap().is_err());
+    assert_eq!((app.camera_raw.as_ref().unwrap().params.clone(), app.raw_shelf[1].kept.clone()), before);
+    // An edit not synced yet, then a click on a raw that isn't there.
+    app.camera_raw.as_mut().unwrap().params.contrast = 33.0;
+    assert!(film(&mut app, &ctx, json!({"click": 9})).is_err());
+    assert_eq!(app.raw_shelf[1].kept, before.1, "the edit waits for a request that is good");
+}
