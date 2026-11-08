@@ -22,9 +22,13 @@ fn click(anti_alias: bool) -> Surface {
 }
 
 fn click_at_flow(anti_alias: bool, flow: f32) -> Surface {
+    click_with(anti_alias, flow, 1.0)
+}
+
+fn click_with(anti_alias: bool, flow: f32, hardness: f32) -> Surface {
     let mut s = target();
     let stroke = Stroke {
-        brush: BrushSettings { size: 80.0, hardness: 1.0, spacing: 0.25, flow, pressure_size: false, ..Default::default() },
+        brush: BrushSettings { size: 80.0, hardness, spacing: 0.25, flow, pressure_size: false, ..Default::default() },
         points: vec![StrokePoint::new(100.0, 120.0, 1.0)],
     };
     let rs = ReplaceSettings {
@@ -103,4 +107,32 @@ fn anti_alias_off_keeps_the_brush_flow() {
     assert!(centre != RED && centre != full(), "a half-strength dab: {centre:?}");
     assert_eq!(px(&off, 100, 120), centre, "the centre keeps the flow");
     assert_eq!(px(&off, 58, 120), centre, "the hard rim takes the dab's strength");
+}
+
+#[test]
+fn a_soft_tip_with_anti_alias_off_replaces_fully_over_the_same_reach() {
+    // The issue's soft tips (hardness 0 % and 50 %): with Anti-alias off every pixel the tip reaches
+    // is fully replaced, over the same pixels as with it on; with it on the falloff stays.
+    let full = full();
+    let is_full = |c: &[i32; 3]| c.iter().zip(&full).all(|(a, b)| (a - b).abs() <= 3);
+    for hardness in [0.0, 0.5] {
+        let (on, off) = (click_with(true, 1.0, hardness), click_with(false, 1.0, hardness));
+        let mut partial_on = 0;
+        for y in 40..200 {
+            for x in 20..180 {
+                let (a, b) = (px(&on, x, y), px(&off, x, y));
+                let gap = (140..160).contains(&y);
+                if gap {
+                    assert_eq!((a, b), ([255, 255, 255], [255, 255, 255]), "{x},{y} hardness {hardness}: the gap stays white");
+                    continue;
+                }
+                assert!(b == RED || is_full(&b), "{x},{y} hardness {hardness}: {b:?} is partly replaced");
+                assert_eq!(a != RED, b != RED, "{x},{y} hardness {hardness}: the reach differs (on {a:?}, off {b:?})");
+                if a != RED && !is_full(&a) {
+                    partial_on += 1;
+                }
+            }
+        }
+        assert!(partial_on > 0, "hardness {hardness}: Anti-alias on keeps the falloff");
+    }
 }

@@ -181,22 +181,43 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 }
             }
         }
+        // A pixel recoloured by `k` (0..1), into `out`.
+        let recolor = |px: &[f32], k: f32, out: &mut [f32; 8]| {
+            out[..n].copy_from_slice(px);
+            let c = to_rgba(&fmt, px);
+            let b = blend_rgb(mode, [c[0], c[1], c[2]], fg);
+            let o = [c[0] + (b[0] - c[0]) * k, c[1] + (b[1] - c[1]) * k, c[2] + (b[2] - c[2]) * k, c[3]];
+            from_rgba_into(&fmt, o, out);
+        };
+        // A sample as the document stores it.
+        let stored = |v: f32| match fmt.sample {
+            photocraft_color::SampleType::U8 => (v.clamp(0.0, 1.0) * 255.0).round(),
+            photocraft_color::SampleType::U16 => (v.clamp(0.0, 1.0) * 65535.0).round(),
+            photocraft_color::SampleType::F32 => v,
+        };
         let mut enc = [0.0f32; 8];
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
-                // With Anti-alias off the tip has a hard edge (#11917): a pixel it reaches at all
-                // takes the dab's full strength (its flow and pressure), not its partial coverage.
-                let cover = fp.at(x, y);
-                let cover = if rs.anti_alias || cover <= 0.0 { cover } else { fp.dab.alpha };
-                let k = cover * weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
+                let wt = weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
+                let k = fp.at(x, y) * wt;
                 if k <= 0.0 {
                     continue;
                 }
                 let px = work.px_mut(x, y);
-                let c = to_rgba(&fmt, px);
-                let b = blend_rgb(mode, [c[0], c[1], c[2]], fg);
-                let o = [c[0] + (b[0] - c[0]) * k, c[1] + (b[1] - c[1]) * k, c[2] + (b[2] - c[2]) * k, c[3]];
-                from_rgba_into(&fmt, o, &mut enc);
+                // With Anti-alias off the tip has a hard edge (#11917): a pixel it reaches takes
+                // the dab's full strength (its flow and pressure), not its partial coverage. A soft
+                // tip too, over the same reach as with Anti-alias on: the pixels its blended edge
+                // would change as stored, not its faint tail past them.
+                let k = if rs.anti_alias {
+                    k
+                } else {
+                    recolor(px, k, &mut enc);
+                    if enc[..n].iter().zip(px.iter()).all(|(a, b)| stored(*a) == stored(*b)) {
+                        continue;
+                    }
+                    fp.dab.alpha * wt
+                };
+                recolor(px, k, &mut enc);
                 px.copy_from_slice(&enc[..n]);
             }
         }
