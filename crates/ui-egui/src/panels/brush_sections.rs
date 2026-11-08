@@ -325,26 +325,31 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ellipse_widget(ui, &mut b.angle, &mut b.roundness);
-        ui.add_space(8.0);
-        ui.vertical(|ui| {
+        // Reserve the widget's column so both numeric rows share the same right edge.
+        let fields_width = (ui.available_width() - 84.0 - ui.spacing().item_spacing.x).max(0.0);
+        ui.allocate_ui_with_layout(vec2(fields_width, 84.0), egui::Layout::top_down(egui::Align::Max), |ui| {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.allocate_ui_with_layout(vec2(72.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| dim(ui, tl!("Angle:")));
-                let mut a = b.angle;
-                if widgets::value_field(ui, &mut a, -180.0..=180.0, "°", 70.0).accessible_name(tl!("Angle:")).changed() {
-                    b.angle = a.round().clamp(-180.0, 180.0);
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut a = b.angle;
+                    if widgets::value_field(ui, &mut a, -180.0..=180.0, "°", 70.0).accessible_name(tl!("Angle:")).changed() {
+                        b.angle = a.round().clamp(-180.0, 180.0);
+                    }
+                    ui.allocate_ui_with_layout(vec2(72.0, 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| dim(ui, tl!("Angle:")));
+                });
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.allocate_ui_with_layout(vec2(72.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| dim(ui, tl!("Roundness:")));
-                let mut r = (b.roundness * 100.0).round();
-                if widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 70.0).accessible_name(tl!("Roundness:")).changed() {
-                    b.roundness = (r.round() / 100.0).clamp(0.01, 1.0);
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut r = (b.roundness * 100.0).round();
+                    if widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 70.0).accessible_name(tl!("Roundness:")).changed() {
+                        b.roundness = (r.round() / 100.0).clamp(0.01, 1.0);
+                    }
+                    ui.allocate_ui_with_layout(vec2(72.0, 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| dim(ui, tl!("Roundness:")));
+                });
             });
         });
+        ellipse_widget(ui, &mut b.angle, &mut b.roundness);
     });
     ui.add_space(6.0);
     ui.add_enabled_ui(matches!(b.tip, TipShape::Round), |ui| {
