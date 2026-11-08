@@ -35,6 +35,18 @@ pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraf
     }
 }
 
+/// The Eraser's Smoothing %: whole numbers 0..100 that say when a typed value was past them, for
+/// the reference's alert (#11938). Returns the field and whether to show the alert.
+pub(super) fn smoothing_field_alerting(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> (egui::Response, bool) {
+    let mut sm = b.smoothing.amount * 100.0;
+    let (r, alert) = widgets::value_field_whole_alerting(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, "%", width);
+    if r.changed() {
+        b.smoothing.enabled = true;
+        b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);
+    }
+    (r, alert)
+}
+
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
 pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> egui::Response {
     let mut sm = (b.smoothing.amount * 100.0).round();
