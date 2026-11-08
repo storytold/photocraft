@@ -6,6 +6,7 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -30,6 +31,13 @@ impl PhotocraftApp {
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
+        }
+        // Find Layers sets the Layers panel's Name filter however it runs: the menu, the shortcut,
+        // `engine.execute` or an action step (#10884).
+        if id == "select.findLayers"
+            && let Ok(reply) = &result
+        {
+            crate::layer_filter_ui::find::apply(self, reply);
         }
         result
     }
@@ -264,6 +272,7 @@ impl PhotocraftApp {
                     | "path.toSelection"
                     | "path.addToSelection"
                     | "path.subtractFromSelection"
+                    | "path.intersectWithSelection"
             )
             && self.session.active().is_some_and(|st| st.doc.selection.is_some())
         {

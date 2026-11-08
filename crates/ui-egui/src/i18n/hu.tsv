@@ -4522,6 +4522,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Réteghatárok megjelenítése rámutatáskor
 	Expand layer group on click	Rétegcsoport kibontása kattintásra
 	Show hover bounds from Layers	Határok megjelenítése a Rétegek panelről rámutatáskor
+	Saved Camera Raw settings to {file}	Camera Raw-beállítások mentve ide: {file}
+	Save the settings to each raw's sidecar without opening it	A beállítások mentése minden raw kísérőfájljába megnyitás nélkül
+	No settings saved: these raws can't keep a sidecar here	Nincs mentve semmi: ezek a raw fájlok itt nem kaphatnak kísérőfájlt
+	Some settings could not be saved; the raws stay open	Néhány beállítást nem sikerült menteni; a raw fájlok nyitva maradnak
+	Nothing to save: these raws are at their default settings	Nincs mit menteni: ezek a raw fájlok alapértelmezett beállításokon vannak
 # Artboard tool options bar (#11385)
 	Distribute Widths	Szélességek elosztása
 	Distribute Heights	Magasságok elosztása
