@@ -173,3 +173,17 @@ fn the_alert_shows_its_question_and_its_buttons_answer() {
         assert_eq!(steps(h.state()), before + usize::from(left == 0), "{button}: history");
     }
 }
+
+#[test]
+fn enter_is_ok_and_escape_is_cancel() {
+    for (key, left) in [(egui::Key::Escape, 3), (egui::Key::Enter, 0)] {
+        let mut h = harness_with_dialogs(app());
+        let before = steps(h.state());
+        clear_all(&mut h);
+        h.key_press(key);
+        h.run_steps(3);
+        assert!(alert(h.state()).is_none(), "{key:?} closes the alert");
+        assert_eq!(notes(h.state()), left, "{key:?}: {left} notes left");
+        assert_eq!(steps(h.state()), before + usize::from(left == 0), "{key:?}: history");
+    }
+}
