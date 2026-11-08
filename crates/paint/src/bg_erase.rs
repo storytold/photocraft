@@ -92,21 +92,14 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
     let a = alpha_index(&fmt)?;
     let nc = a;
     let tol = if bs.tolerance.is_finite() { bs.tolerance.clamp(0.0, 1.0) } else { 0.0 };
-    let soft = bs.limits != Limits::FindEdges;
     let native = |c: [f32; 4]| -> Vec<f32> { from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec() };
     let swatch = native(bs.background);
     let fg = native(bs.foreground);
     let (sampling, limits, protect_foreground) = (bs.sampling, bs.limits, bs.protect_foreground);
     let mut once: Option<Option<Vec<f32>>> = None;
-    let match_w = move |d: f32| -> f32 {
-        if soft {
-            graded_weight(d, tol)
-        } else if d > tol {
-            0.0
-        } else {
-            1.0
-        }
-    };
+    // Find Edges grades soft edges like Contiguous does instead of cutting them hard (#11904):
+    // the reference application keeps at least as much of a blurred transition with it.
+    let match_w = move |d: f32| -> f32 { graded_weight(d, tol) };
     let pre = pre.clone();
     // The pixels before the stroke under the working copy, read once per working area. Sampling
     // and matching read these, so a dab landing on pixels earlier dabs already erased still
@@ -215,6 +208,10 @@ fn keep_connected(weight: &mut [f32], w: usize, h: usize, sx: usize, sy: usize) 
 #[cfg(test)]
 #[path = "bg_erase_graded_alpha_tests.rs"]
 mod graded_alpha_tests;
+
+#[cfg(test)]
+#[path = "bg_erase_find_edges_tests.rs"]
+mod find_edges_tests;
 
 #[cfg(test)]
 mod tests {
