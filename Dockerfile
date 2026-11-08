@@ -57,8 +57,7 @@ FROM nginx:${NGINX_VERSION} AS runtime
 COPY packaging/web/nginx.conf /etc/nginx/nginx.conf
 COPY --from=builder /src/dist/web/ /usr/share/nginx/html/
 COPY LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md /usr/share/nginx/html/
-COPY assets/fonts/OFL-*.txt assets/icons/LICENSE-*.txt assets/dict/LICENSE-*.txt \
-    crates/ui-egui/src/i18n/LICENSE-translations.txt /usr/share/nginx/html/licenses/
+COPY assets/fonts/OFL-*.txt assets/icons/LICENSE-*.txt assets/dict/LICENSE-*.txt /usr/share/nginx/html/licenses/
 # Bypass the stock entrypoint: this configuration needs no runtime rewriting.
 USER nginx
 EXPOSE 8080
