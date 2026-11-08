@@ -98,8 +98,13 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
         if let ToolEvent::Down { x, y, pressure } = ev {
             app.mixer_sampling = true;
             let pen = app.stylus.sample().unwrap_or_default();
-            let p = json!({"points":[[x,y,pressure,pen.tilt_x,pen.tilt_y,pen.rotation]],"target":paint_target(app)});
-            if let Err(e) = app.run("brush.mixer.sample", p) {
+            // Load Solid Colors Only loads the one colour under the hotspot (#11952).
+            let (id, p) = if app.session.tools.brush.mixer.solid_colors_only {
+                ("paint.mixerLoad", json!({"x": x, "y": y}))
+            } else {
+                ("brush.mixer.sample", json!({"points":[[x,y,pressure,pen.tilt_x,pen.tilt_y,pen.rotation]],"target":paint_target(app)}))
+            };
+            if let Err(e) = app.run(id, p) {
                 app.ui.status = e;
                 app.ui.status_error = true;
             }
