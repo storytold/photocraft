@@ -326,7 +326,8 @@ fn outline_into(
 
 /// Paints the colour glyphs of `layout` in their own colours over the premultiplied accumulator
 /// (`w × h`, `format`'s colour channels then alpha): their palette's sRGB converted to the
-/// document's colour model, times the text colour's opacity.
+/// document's colour model, times the text colour's opacity. `None` when a glyph's buffers could
+/// not be reserved.
 fn paint_color_glyphs(
     layout: &TextLayout,
     xf: &Xform,
@@ -335,7 +336,7 @@ fn paint_color_glyphs(
     antialias: AntiAlias,
     acc: &mut [f32],
     (w, h): (usize, usize),
-) {
+) -> Option<()> {
     let n = format.mode.color_channels();
     let stride = n + 1;
     let opaque = PixelFormat { alpha: false, ..*format };
@@ -371,7 +372,7 @@ fn paint_color_glyphs(
             continue;
         }
         let opacity = st.color.alpha.clamp(0.0, 1.0);
-        for (i, s) in painter.finish().iter().enumerate() {
+        for (i, s) in painter.finish()?.iter().enumerate() {
             let a = s[3] * opacity;
             let o = ((wy0 + i / ww) * w + wx0 + i % ww) * stride;
             let (true, Some(px)) = (a > 0.0, acc.get_mut(o..o + stride)) else { continue };
@@ -384,6 +385,7 @@ fn paint_color_glyphs(
             px[n] = a + px[n] * keep;
         }
     }
+    Some(())
 }
 
 /// One glyph into `pen`: its thickened `bold` outline when there is one, else the font's own.
@@ -573,7 +575,9 @@ pub(crate) fn rasterize_passes(
         let a = c.alpha.clamp(0.0, 1.0);
         composite(&mut acc, w, sub, &cov, stride, &comps, a, antialias);
     }
-    paint_color_glyphs(layout, &xf, warp, &format, antialias, &mut acc, (w, h));
+    if paint_color_glyphs(layout, &xf, warp, &format, antialias, &mut acc, (w, h)).is_none() {
+        return nothing(format);
+    }
     // Unpremultiply.
     unpremultiply(&mut acc, n, stride, format.sample);
     surface.write_region_par(rect, &acc);

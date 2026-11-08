@@ -224,12 +224,24 @@ pub(crate) struct Painter<'a, F: FnMut(GlyphId, &Xform, &mut Coverage)> {
     layers: Vec<Vec<[f32; 4]>>,
     /// `push_layer` calls past [`MAX_LAYERS`], painted into the layer below.
     flat: usize,
+    /// A buffer could not be reserved: [`Painter::finish`] returns `None`.
+    failed: bool,
+}
+
+/// `len` copies of `v`, or `None` when its bytes cannot be reserved.
+fn filled<T: Clone>(len: usize, v: T) -> Option<Vec<T>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).ok()?;
+    out.resize(len, v);
+    Some(out)
 }
 
 impl<'a, F: FnMut(GlyphId, &Xform, &mut Coverage)> Painter<'a, F> {
     pub fn new(w: usize, h: usize, outline: F, to_window: Xform, palette: &'a [skrifa::color::Color], foreground: [f32; 4], hard: bool) -> Self {
-        let layers = vec![vec![[0.0; 4]; w * h]];
-        Self { w, h, outline, to_window, palette, foreground, hard, xforms: Vec::new(), clips: Vec::new(), clip_boxes: true, layers, flat: 0 }
+        let base = w.checked_mul(h).and_then(|n| filled(n, [0.0; 4]));
+        let failed = base.is_none();
+        let layers = base.into_iter().collect();
+        Self { w, h, outline, to_window, palette, foreground, hard, xforms: Vec::new(), clips: Vec::new(), clip_boxes: true, layers, flat: 0, failed }
     }
 
     /// Leaves COLR clip boxes out (bent type); see [`Painter::clip_boxes`].
@@ -238,10 +250,21 @@ impl<'a, F: FnMut(GlyphId, &Xform, &mut Coverage)> Painter<'a, F> {
         self
     }
 
-    /// The painted glyph, premultiplied sRGB, row-major.
-    pub fn finish(mut self) -> Vec<[f32; 4]> {
+    /// The painted glyph, premultiplied sRGB, row-major, or `None` when a buffer could not be
+    /// reserved.
+    pub fn finish(mut self) -> Option<Vec<[f32; 4]>> {
+        if self.failed {
+            return None;
+        }
         self.layers.truncate(1);
-        self.layers.pop().unwrap_or_default()
+        self.layers.pop()
+    }
+
+    /// Records a buffer that could not be reserved; the empty clip keeps push/pop balanced and
+    /// paints nothing.
+    fn fail_clip(&mut self) {
+        self.failed = true;
+        self.clips.push(Vec::new());
     }
 
     fn current(&self) -> Xform {
@@ -249,7 +272,10 @@ impl<'a, F: FnMut(GlyphId, &Xform, &mut Coverage)> Painter<'a, F> {
     }
 
     fn push_coverage(&mut self, cov: Coverage) {
-        let mut c = cov.finish();
+        let Some(mut c) = cov.finish() else {
+            self.fail_clip();
+            return;
+        };
         if self.hard {
             c.iter_mut().for_each(|v| *v = if *v >= 0.5 { 1.0 } else { 0.0 });
         }
@@ -315,7 +341,10 @@ impl<F: FnMut(GlyphId, &Xform, &mut Coverage)> ColorPainter for Painter<'_, F> {
         self.xforms.pop();
     }
     fn push_clip_glyph(&mut self, id: GlyphId) {
-        let mut cov = Coverage::new(self.w, self.h);
+        let Some(mut cov) = Coverage::try_new(self.w, self.h) else {
+            self.fail_clip();
+            return;
+        };
         let m = self.current();
         (self.outline)(id, &m, &mut cov);
         self.push_coverage(cov);
@@ -323,11 +352,23 @@ impl<F: FnMut(GlyphId, &Xform, &mut Coverage)> ColorPainter for Painter<'_, F> {
     fn push_clip_box(&mut self, b: BoundingBox<f32>) {
         if !self.clip_boxes {
             // Keep push/pop balanced: the clip stays what it was.
-            let same = self.clips.last().cloned().unwrap_or_else(|| vec![1.0; self.w * self.h]);
-            self.clips.push(same);
+            let same = match self.clips.last() {
+                Some(c) => filled(c.len(), 0.0).map(|mut v| {
+                    v.copy_from_slice(c);
+                    v
+                }),
+                None => self.w.checked_mul(self.h).and_then(|n| filled(n, 1.0)),
+            };
+            match same {
+                Some(same) => self.clips.push(same),
+                None => self.fail_clip(),
+            }
             return;
         }
-        let mut cov = Coverage::new(self.w, self.h);
+        let Some(mut cov) = Coverage::try_new(self.w, self.h) else {
+            self.fail_clip();
+            return;
+        };
         rect_to(&mut cov, &self.to_window.mul(&self.current()), b.x_min as f64, b.y_min as f64, b.x_max as f64, b.y_max as f64);
         self.push_coverage(cov);
     }
@@ -363,8 +404,12 @@ impl<F: FnMut(GlyphId, &Xform, &mut Coverage)> ColorPainter for Painter<'_, F> {
     fn push_layer(&mut self, _: CompositeMode) {
         if self.layers.len() >= MAX_LAYERS || self.flat > 0 {
             self.flat += 1;
+        } else if let Some(layer) = self.w.checked_mul(self.h).and_then(|n| filled(n, [0.0; 4])) {
+            self.layers.push(layer);
         } else {
-            self.layers.push(vec![[0.0; 4]; self.w * self.h]);
+            // Painted into the layer below, and the result is dropped by `finish`.
+            self.failed = true;
+            self.flat += 1;
         }
     }
     fn pop_layer_with_mode(&mut self, mode: CompositeMode) {
@@ -435,13 +480,30 @@ mod tests {
             p.fill(Brush::Solid { palette_index: 0, alpha: 1.0 });
             p.pop_clip();
             p.pop_clip();
-            p.finish()
+            p.finish().unwrap_or_default()
         };
         let (clipped, bent) = (paint(true), paint(false));
         // Pixel (5, 5) lies outside the 2x2 clip box.
         assert_eq!(clipped.get(5 * 8 + 5).map(|c| c[3]), Some(0.0));
         assert_eq!(bent.get(5 * 8 + 5).map(|c| c[3]), Some(1.0));
         assert_eq!(bent.first().map(|c| c[3]), Some(1.0));
+    }
+
+    #[test]
+    fn a_window_too_large_to_reserve_paints_nothing() {
+        // Coverage buffers are fallible on main (#4979); a colour glyph whose window cannot be
+        // reserved gives `None` instead of aborting, and its clips stay balanced.
+        let palette = [skrifa::color::Color { red: 255, green: 0, blue: 0, alpha: 255 }];
+        let full = |_: GlyphId, _: &Xform, c: &mut Coverage| rect_to(c, &Xform::IDENTITY, 0.0, 0.0, 8.0, 8.0);
+        let mut p = Painter::new(usize::MAX / 2, 4, full, Xform::IDENTITY, &palette, [0.0, 0.0, 0.0, 1.0], false);
+        p.push_clip_box(BoundingBox { x_min: 0.0, y_min: 0.0, x_max: 2.0, y_max: 2.0 });
+        p.push_clip_glyph(GlyphId::new(1));
+        p.push_layer(CompositeMode::SrcOver);
+        p.fill(Brush::Solid { palette_index: 0, alpha: 1.0 });
+        p.pop_layer_with_mode(CompositeMode::SrcOver);
+        p.pop_clip();
+        p.pop_clip();
+        assert!(p.finish().is_none());
     }
 
     #[test]
