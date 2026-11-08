@@ -75,7 +75,8 @@ fn anti_alias_off_has_a_hard_edge() {
     for y in 70..170 {
         for x in 50..150 {
             let c = px(&s, x, y);
-            let white = c == [255, 255, 255];
+            // White only in the gap: a red pixel turned white would be wrong.
+            let white = (140..160).contains(&y) && c == [255, 255, 255];
             assert!(white || c == RED || c.iter().zip(&full).all(|(a, b)| (a - b).abs() <= 3), "{x},{y}: {c:?}");
         }
     }
@@ -93,7 +94,8 @@ fn anti_alias_on_keeps_the_blended_edge() {
 fn a_colour_boundary_stays_hard_either_way() {
     for anti_alias in [false, true] {
         let s = click(anti_alias);
-        assert_ne!(px(&s, 100, 139), RED, "y 139 replaced (anti-alias {anti_alias})");
+        let c = px(&s, 100, 139);
+        assert!(c.iter().zip(&full()).all(|(a, b)| (a - b).abs() <= 3), "y 139 fully replaced (anti-alias {anti_alias}): {c:?}");
         assert_eq!(px(&s, 100, 140), [255, 255, 255], "y 140 white (anti-alias {anti_alias})");
     }
 }
