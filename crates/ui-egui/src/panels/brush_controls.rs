@@ -57,10 +57,15 @@ pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::Br
         if brush {
             ui.label(egui::RichText::new(tl!("Smoothing Options")).strong());
         }
-        widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
-        widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
-        widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
-        widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
+        // At 0 % there is no smoothing to tune: the four are greyed and keep their values, as in
+        // the reference application (#11939).
+        let on = s.amount > 0.0;
+        ui.add_enabled_ui(on, |ui| {
+            widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
+            widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
+            widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
+            widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
+        });
     });
 }
 
@@ -139,3 +144,7 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../smoothing_options_greyed_tests.rs"]
+mod smoothing_options_greyed_tests;
