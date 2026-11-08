@@ -815,7 +815,9 @@ fn flush_bundle_dir(dir: &Path, written: &Path) -> std::io::Result<()> {
 /// is in place, but may not survive a power loss or crash (#4968).
 #[cfg(not(windows))]
 fn confirm_flushed(dir: &Path, written: &Path) -> Result<()> {
-    crate::atomic::dir_synced(flush_bundle_dir(dir, written), dir, &crate::atomic::RealFs).map_err(|e| {
+    use crate::atomic::AtomicFs;
+    let identity = crate::atomic::RealFs.dir_identity(dir);
+    crate::atomic::dir_synced(flush_bundle_dir(dir, written), dir, identity, &crate::atomic::RealFs).map_err(|e| {
         FormatError::Io(std::io::Error::new(
             e.kind(),
             format!("{} was written, but its folder could not be flushed to disk, so the save may not survive a power loss or crash: {e}", written.display()),
