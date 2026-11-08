@@ -31,48 +31,6 @@ fn sections_with_boxes_have_flags() {
     assert!(b.texture.enabled);
 }
 
-#[test]
-fn selecting_a_controls_section_keeps_its_enabled_flag_and_brush_history() {
-    use egui_kittest::kittest::Queryable;
-
-    for (section, name) in [(1, "Shape Dynamics"), (2, "Scattering"), (3, "Texture")] {
-        let mut h = harness(0, 0);
-        let before = h.state().session.tools.brush.clone();
-        let journal = h.state().session.journal.len();
-
-        h.get_by_label(name).click();
-        h.run_steps(3);
-
-        assert_eq!(h.state().ui.brush_section, section, "{name} settings are visible");
-        assert_eq!(h.state().session.tools.brush, before, "{name} remains disabled");
-        assert_eq!(h.state().session.journal.len(), journal, "selecting {name} is not a brush edit");
-    }
-}
-
-#[test]
-fn controls_section_checkbox_toggles_without_selecting_its_settings() {
-    use egui_kittest::kittest::Queryable;
-
-    let mut h = harness(0, 0);
-    let row = h.get_by_label("Scattering").rect();
-    let checkbox = egui::pos2(row.left() + 12.0, row.center().y);
-    let journal = h.state().session.journal.len();
-
-    for enabled in [true, false] {
-        h.hover_at(checkbox);
-        h.run_steps(1);
-        h.drag_at(checkbox);
-        h.run_steps(1);
-        h.drop_at(checkbox);
-        h.run_steps(3);
-
-        assert_eq!(h.state().session.tools.brush.scattering.enabled, enabled);
-        assert_eq!(h.state().ui.brush_section, 0, "the checkbox does not select Scattering");
-        assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"scattering": {"enabled": enabled}}));
-    }
-    assert_eq!(h.state().session.journal.len(), journal + 2);
-}
-
 /// What each section's controls edit, set to non-default values.
 fn edit_section(i: usize, b: &mut BrushSettings) {
     let dynamic = |jitter: f32, control: Control, minimum: f32| paint::Dynamic { jitter, control, fade_steps: 40, minimum, ..Default::default() };
@@ -1466,20 +1424,22 @@ fn f5_edits_the_default_brush_with_every_section() {
     for (name, _) in SECTIONS {
         assert!(h.query_all_by_label(name).next().is_some(), "{name} listed");
     }
-    // Clicking a section's name shows its settings without changing its enable flag.
+    // Clicking a section's name shows it and turns it on: one tools.setBrush.
     let n = h.state().session.journal.len();
-    let shape_enabled = h.state().session.tools.brush.shape_dynamics.enabled;
     h.get_by_label("Shape Dynamics").click();
     h.run_steps(3);
     assert_eq!(h.state().ui.brush_section, 1);
-    assert_eq!(h.state().session.tools.brush.shape_dynamics.enabled, shape_enabled);
-    assert_eq!(h.state().session.journal.len(), n);
+    assert!(h.state().session.tools.brush.shape_dynamics.enabled);
+    assert_eq!(h.state().session.journal.len(), n + 1);
+    let (id, p) = last_journal(h.state()).unwrap();
+    assert_eq!(id, "tools.setBrush");
+    assert_eq!(p["brush"]["shapeDynamics"]["enabled"], json!(true));
     // A section's box toggles it without showing it.
     h.get_by_label("Enable Transfer").click();
     h.run_steps(3);
     assert!(h.state().session.tools.brush.transfer.enabled);
     assert_eq!(h.state().ui.brush_section, 1);
-    assert_eq!(h.state().session.journal.len(), n + 1);
+    assert_eq!(h.state().session.journal.len(), n + 2);
     // The rest of the brush is untouched.
     let b = &h.state().session.tools.brush;
     assert_eq!((b.size, b.hardness, &b.tip), (fresh.size, fresh.hardness, &fresh.tip));
@@ -1847,20 +1807,12 @@ fn section_boxes_show_a_pressed_state() {
     let row = h.get_by_label("Shape Dynamics").rect();
     assert!(!h.state().session.tools.brush.shape_dynamics.enabled);
     assert_eq!(box_fill(&h, boxr), Some(widgets::check_box_fill(false, false, &t)));
-    // Selecting the controls row leaves its checkbox untouched, including while held.
+    // Held on the row's name: the unchecked box darkens; the release turns the section on.
     let at = egui::pos2(row.center().x, row.center().y);
     h.drag_at(at);
     h.run_steps(2);
-    assert_eq!(box_fill(&h, boxr), Some(widgets::check_box_fill(false, false, &t)), "row press leaves checkbox untouched");
-    h.drop_at(at);
-    h.run_steps(3);
-    assert!(!h.state().session.tools.brush.shape_dynamics.enabled);
-    assert_eq!(box_fill(&h, boxr), Some(widgets::check_box_fill(false, false, &t)));
-    // The checkbox itself still shows its pressed state and toggles the section.
-    h.drag_at(boxr.center());
-    h.run_steps(2);
     assert_eq!(box_fill(&h, boxr), Some(widgets::check_box_fill(false, true, &t)), "pressed, unchecked");
-    h.drop_at(boxr.center());
+    h.drop_at(at);
     h.run_steps(3);
     assert!(h.state().session.tools.brush.shape_dynamics.enabled);
     assert_eq!(box_fill(&h, boxr), Some(widgets::check_box_fill(true, false, &t)));
@@ -1923,4 +1875,112 @@ fn checkboxes_show_a_pressed_state_from_their_label() {
     h.run();
     assert!(*h.state(), "the release checks it");
     assert_eq!(fill(&h), Some(widgets::check_box_fill(true, false, &t)));
+}
+
+#[test]
+fn scatter_header_edits_route_to_the_correct_brush_block_and_disabled_sections_ignore_input() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    for section in [2, 4] {
+        let block = if section == 2 { "scattering" } else { "dualBrush" };
+        let mut h = harness(0, section);
+        let mut initial = json!({});
+        initial[block] = if section == 2 {
+            json!({"enabled": true, "bothAxes": false, "scatter": {"jitter": 2.137, "control": "penPressure"}, "count": 5})
+        } else {
+            json!({"enabled": true, "bothAxes": false, "scatter": 2.137, "count": 7})
+        };
+        h.state_mut().run("tools.setBrush", json!({"brush": initial})).unwrap();
+        h.run_steps(3);
+        let journal = h.state().session.journal.len();
+        let before = h.state().session.tools.brush.clone();
+        h.get_by_label("Both Axes").click();
+        h.run_steps(2);
+        let mut expected = json!({});
+        expected[block] = json!({"bothAxes": true});
+        assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+        assert_eq!(last_journal(h.state()).unwrap().1["brush"], expected);
+        let mut after = before;
+        if section == 2 {
+            after.scattering.both_axes = true;
+        } else {
+            after.dual_brush.both_axes = true;
+        }
+        assert_eq!(h.state().session.tools.brush, after, "toggle changes only the matching axis flag");
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(214.0)).unwrap();
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(2);
+        expected[block] = if section == 2 { json!({"scatter": {"jitter": 2.15_f32}}) } else { json!({"scatter": 2.15_f32}) };
+        assert_eq!(last_journal(h.state()).unwrap().1["brush"], expected);
+        if section == 2 {
+            after.scattering.scatter.jitter = 2.15;
+        } else {
+            after.dual_brush.scatter = 2.15;
+        }
+        assert_eq!(h.state().session.tools.brush, after);
+        assert_eq!(h.state().session.journal.len(), journal + 2);
+        let mut off = json!({});
+        off[block] = json!({"enabled": false});
+        h.state_mut().run("tools.setBrush", json!({"brush": off})).unwrap();
+        h.run_steps(2);
+        let before = h.state().session.tools.brush.clone();
+        let journal = h.state().session.journal.len();
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(215.0)).unwrap();
+        assert!(field.accesskit_node().is_disabled());
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.event(egui::Event::Text("999".into()));
+        h.key_press(egui::Key::Enter);
+        h.get_by_label("Both Axes").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.tools.brush, before, "the disabled header retains both values");
+        assert_eq!(h.state().session.journal.len(), journal, "disabled edits add no command");
+    }
+}
+
+#[test]
+fn tip_geometry_edits_and_arrow_drag_route_only_changed_fields_through_the_brush_command() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    fn centre(shape: &egui::Shape) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Circle(c) if c.radius == 40.0 => Some(c.center),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(centre),
+            _ => None,
+        }
+    }
+    let mut h = harness(0, 0);
+    h.state_mut().run("tools.setBrush", json!({"brush": {"angle": -23.0, "roundness": 0.473, "hardness": 0.65, "spacing": 0.31, "flipX": true}})).unwrap();
+    h.run_steps(3);
+    let mut expected = h.state().session.tools.brush.clone();
+    let journal = h.state().session.journal.len();
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(-23.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    expected.angle = -22.0;
+    assert_eq!(h.state().session.tools.brush, expected);
+    assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"angle": -22.0_f32}));
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(47.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    expected.roundness = 0.48;
+    assert_eq!(h.state().session.tools.brush, expected);
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"roundness": 0.48_f32}));
+    let c = h.output().shapes.iter().find_map(|shape| centre(&shape.shape)).unwrap();
+    let a = expected.angle.to_radians();
+    h.drag_at(c + vec2(a.cos(), -a.sin()) * 35.0);
+    h.run_steps(1);
+    h.hover_at(c + vec2(0.0, -35.0));
+    h.run_steps(2);
+    h.drop_at(c + vec2(0.0, -35.0));
+    h.run_steps(2);
+    expected.angle = 90.0;
+    assert_eq!(h.state().session.tools.brush, expected);
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"angle": 90.0_f32}));
+    assert_eq!(h.state().session.journal.len(), journal + 3, "one command per field edit and arrow gesture");
 }

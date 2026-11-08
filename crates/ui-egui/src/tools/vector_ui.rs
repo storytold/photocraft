@@ -30,7 +30,7 @@ pub(crate) use curvature::curvature_anchor_at;
 pub use curvature::{curvature_down, curvature_move, curvature_toggle, curvature_up};
 #[cfg(test)]
 use options::{corner_radii_patch, solid_paint};
-pub(crate) use options::{enabled_stroke_width, paint_gesture};
+pub(crate) use options::{draws_path, enabled_stroke_width, paint_gesture};
 pub use options::{options_bar, shape_properties};
 pub use overlay::draw_overlay;
 pub(crate) use overlay::selected_saved_path_index;
@@ -41,7 +41,9 @@ pub(crate) use overlay::{curve_points, path_lines, selected_saved_path, shows_an
 pub(crate) use overlay::{draw_anchor, draw_handle, draw_outline};
 #[cfg(test)]
 use path_ops::target_path;
-pub use path_ops::{active_path_name, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path};
+pub use path_ops::{
+    active_path_name, make_shape, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path,
+};
 pub(crate) use path_ops::{
     active_shape_path, active_type_path, delete_key_deletes_work_path, deselect_loaded_path, free_transform_path, targeted_vector_mask, work_path_shown,
 };
@@ -61,6 +63,73 @@ use pen::{closing, pen_path_op};
 pub use shapes::{create_shape, draw_shape_preview, finish_shape, is_shape_tool, shape_bounds};
 #[cfg(test)]
 use shapes::{shape_geometry, shape_preview};
+
+// "Set as default" is a temporary UI choice, not a document property.
+#[derive(Clone, Copy, Default)]
+struct ArrowDefaultLink {
+    target: Option<(u64, u64)>,
+    enabled: bool,
+}
+
+fn arrow_default_link_id() -> egui::Id {
+    egui::Id::unique("arrow-default-link")
+}
+
+/// Reset the checkbox whenever the selected document, layer or shape changes.
+pub(crate) fn track_arrow_default_selection(app: &PhotocraftApp, ctx: &egui::Context) {
+    let target = app.session.active().and_then(|st| {
+        let id = st.active_layer?;
+        let layer = st.doc.layer(id)?;
+        match &layer.content {
+            LayerContent::Shape(sh) if matches!(sh.live.as_ref(), Some(photocraft_doc::vector::LiveShape::ArrowLine { .. })) => Some((st.doc.id.0, id.0)),
+            _ => None,
+        }
+    });
+
+    ctx.data_mut(|data| {
+        let key = arrow_default_link_id();
+        let previous = data.get_temp::<ArrowDefaultLink>(key).unwrap_or_default();
+        if previous.target != target {
+            data.insert_temp(key, ArrowDefaultLink { target, enabled: false });
+        }
+    });
+}
+
+/// Copy only the selected arrow's live parameters into new-arrow defaults.
+/// Existing shapes and geometry are not modified.
+fn copy_arrow_to_tool_defaults(app: &mut PhotocraftApp, id: photocraft_doc::LayerId) {
+    let values = app.session.active().and_then(|st| st.doc.layer(id)).and_then(|layer| match &layer.content {
+        LayerContent::Shape(sh) => match sh.live.as_ref() {
+            Some(photocraft_doc::vector::LiveShape::ArrowLine { start, end, width, length, concavity, weight, .. }) => {
+                {
+                    // Live dimensions may exceed new-arrow input limits after scaling.
+                    // Clamp only the defaults, never the existing shape.
+                    let bounded = |v: f64, min: f64, max: f64| -> f32 { if v.is_finite() { v.clamp(min, max) as f32 } else { min as f32 } };
+                    Some((
+                        *start,
+                        *end,
+                        bounded(*width, 1.0, 4096.0),
+                        bounded(*length, 1.0, 4096.0),
+                        bounded(*concavity, 0.0, 100.0),
+                        bounded(*weight, 1.0, 10000.0),
+                    ))
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    });
+
+    if let Some((start, end, width, length, concavity, weight)) = values {
+        let o = &mut app.ui.tool_options;
+        o.arrow_start = start;
+        o.arrow_end = end;
+        o.arrow_width = width;
+        o.arrow_length = length;
+        o.arrow_concavity = concavity;
+        o.line_weight = weight;
+    }
+}
 
 /// Pen tool path under construction: knots as [anchor, in, out] (document px).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -100,6 +169,11 @@ pub struct PenPath {
     /// commit replaces that subpath instead of adding one.
     #[serde(default)]
     pub resumes: Option<Resumed>,
+    /// The Curvature Pen carrying on a path: its knots as they were, which keep their shape while
+    /// the new anchors' handles follow them (`curvature_refresh`, #10726). The last one is the
+    /// endpoint drawing carries on from; only its outgoing handle bends into the new segment.
+    #[serde(default)]
+    pub fixed: Vec<[[f64; 2]; 3]>,
 }
 
 /// The subpath a Pen path carries on: where it is and what it was when drawing resumed. The
@@ -126,6 +200,9 @@ impl PenPath {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod path_drag_preview_tests;
 
 #[cfg(test)]
 mod path_selection_tests;

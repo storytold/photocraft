@@ -11,12 +11,13 @@ use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
+pub(crate) use crate::gpu::GpuArgs;
 use clap::error::ErrorKind;
 use clap::parser::ValueSource;
 use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use photocraft_automation::args::{AutomationArgs, ControlArgs, blank_env_is_unset, conflict, control_port, name_env_vars};
 use photocraft_codecs::{JpegFormat, TiffCompression};
-use photocraft_io::{DdsCompression, DpxBits, TgaBits};
+use photocraft_io::{DdsCompression, DpxBits, TgaBits, XmpEmbed};
 use serde_json::Value;
 
 /// photocraft-cli: headless PhotoCraft
@@ -55,6 +56,14 @@ pub(crate) struct ExportArgs {
     /// Compress TIFF output: none (the default), lzw or zip
     #[arg(long, value_name = "none|lzw|zip", value_parser = tiff_compression)]
     pub(crate) tiff_compression: Option<TiffCompression>,
+    /// TIFF Save Transparency: on keeps the transparency (ahead of any alpha or spot channels),
+    /// off composites the image over white. Without it: kept unless the document has alpha or
+    /// spot channels
+    #[arg(long, value_name = "on|off", value_parser = on_off)]
+    pub(crate) tiff_transparency: Option<bool>,
+    /// Also write a TIFF image pyramid: half-size copies after the full image
+    #[arg(long)]
+    pub(crate) tiff_pyramid: bool,
     /// A TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its
     /// alpha, 24 none. Without it: 32 with an alpha channel or transparency, else 24
     #[arg(long, value_name = "24|32", value_parser = tga_bits)]
@@ -74,6 +83,22 @@ pub(crate) struct ExportArgs {
     /// and CMYK shrink) or progressive
     #[arg(long, value_name = "baseline|optimized|progressive", value_parser = jpeg_format)]
     pub(crate) jpeg_format: Option<JpegFormat>,
+    /// Request the flattened document at its canvas size in .pcraft output as
+    /// composite/full.png; it may be omitted. Check the manifest's full_composite member.
+    #[arg(long)]
+    pub(crate) pcraft_full_composite: bool,
+    /// A layered PSD/PSB stores Photoshop's white placeholder instead of the merged image
+    /// (Maximize Compatibility off): a smaller file and a faster save, but readers that show only
+    /// the merged image see white. Bitmap, Indexed Color and Duotone documents still write the
+    /// real image
+    #[arg(long)]
+    pub(crate) no_maximize_compatibility: bool,
+    /// The document metadata a flat export embeds: all (the default) keeps the document's XMP
+    /// packet and free-form text where the format holds them, as Save As does; none leaves them
+    /// out, as Export As's Metadata: None. Nothing else changes: the ICC profile, EXIF and
+    /// resolution are written as they are without it. PSD, PSB and .pcraft always keep the XMP
+    #[arg(long, value_name = "none|all", value_parser = metadata)]
+    pub(crate) metadata: Option<XmpEmbed>,
 }
 
 /// Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …)
@@ -91,6 +116,21 @@ pub(crate) struct ConvertArgs {
     /// Allow an <OUT> that is the <IN> file, replacing the original
     #[arg(long)]
     pub(crate) in_place: bool,
+    /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
+    #[arg(long)]
+    pub(crate) approve_high_memory: bool,
+    /// PDF import resolution in DPI (default 300)
+    #[arg(long, value_name = "DPI", value_parser = pdf_dpi)]
+    pub(crate) pdf_dpi: Option<f32>,
+    /// PDF pages to import, 1-based: "3" or "2-7" (default all)
+    #[arg(long)]
+    pub(crate) pdf_pages: Option<String>,
+    /// Import PDF paths and embedded-font text as editable layers (experimental; unsupported
+    /// pages fall back to raster, and embedded fonts may change when edited or reopened)
+    #[arg(long)]
+    pub(crate) pdf_editable: bool,
+    #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
 }
@@ -102,6 +142,12 @@ pub(crate) struct InfoArgs {
     /// One line of JSON instead of pretty-printed
     #[arg(long)]
     pub(crate) compact: bool,
+    /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
+    #[arg(long)]
+    pub(crate) approve_high_memory: bool,
+    /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
+    #[arg(long)]
+    pub(crate) detail: bool,
 }
 
 /// Open a file (or start a new document), run engine commands in order, save the result
@@ -130,6 +176,11 @@ pub(crate) struct RunArgs {
     /// Allow an --out that is the <FILE>, replacing the original
     #[arg(long)]
     pub(crate) in_place: bool,
+    /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
+    #[arg(long)]
+    pub(crate) approve_high_memory: bool,
+    #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
     /// `--cmd` and `--params` values in command-line order, set by [`parse`].
@@ -169,6 +220,27 @@ pub(crate) struct BatchArgs {
     /// originals; --in-place allows it
     #[arg(long)]
     pub(crate) in_place: bool,
+    /// Include images in subfolders; every result goes straight into --out, so a later file of
+    /// the same name replaces an earlier one
+    #[arg(long)]
+    pub(crate) recursive: bool,
+    /// Name each result with Batch tokens such as {name}, {serial}, {date}, and {ext}
+    #[arg(long, value_name = "TEMPLATE")]
+    pub(crate) naming: Option<String>,
+    /// First serial number used by --naming
+    #[arg(long, value_name = "1-4294967295", value_parser = clap::value_parser!(u32).range(1..))]
+    pub(crate) start_serial: Option<u32>,
+    /// Stop after the first failed input
+    #[arg(long)]
+    pub(crate) stop_on_error: bool,
+    /// Write failed inputs and reasons to this text file
+    #[arg(long, value_name = "FILE")]
+    pub(crate) error_log: Option<PathBuf>,
+    /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
+    #[arg(long)]
+    pub(crate) approve_high_memory: bool,
+    #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
 }
@@ -213,6 +285,8 @@ pub(crate) struct McpArgs {
     #[arg(skip)]
     pub(crate) bridge_from_env: bool,
     #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
+    #[command(flatten)]
     pub(crate) control: ControlArgs,
     #[command(flatten)]
     pub(crate) automation: AutomationArgs,
@@ -234,6 +308,8 @@ pub(crate) struct ServeArgs {
     #[arg(skip)]
     pub(crate) port_from_env: bool,
     #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
+    #[command(flatten)]
     pub(crate) control: ControlArgs,
     #[command(flatten)]
     pub(crate) automation: AutomationArgs,
@@ -252,6 +328,12 @@ enum ValueError {
     TiffCompression,
     #[error("expected baseline, optimized or progressive")]
     JpegFormat,
+    #[error("expected none or all")]
+    Metadata,
+    #[error("expected on or off")]
+    OnOff,
+    #[error("expected a positive number")]
+    PdfDpi,
     /// Why a `--bridge` value, or a PHOTOCRAFT_CONTROL_PORT value for `mcp`, is refused.
     #[error("expected a port, 0-65535 (--bridge also takes 127.0.0.1:<PORT>)")]
     Bridge,
@@ -269,6 +351,12 @@ enum ServerOptionError {
     /// authority the bridge can't give (#8035).
     #[error("configure automation roots on the desktop app; --automation-read-root and --automation-write-root require headless MCP mode")]
     BridgeRoots,
+    /// Invalid value for PHOTOCRAFT_GPU.
+    #[error("invalid value '{0}' for 'PHOTOCRAFT_GPU': expected '1' or '0'")]
+    GpuVar(String),
+    /// Explicit GPU flags require headless MCP mode, not bridge mode.
+    #[error("configure rendering on the desktop app; --gpu and --no-gpu require headless MCP mode")]
+    BridgeGpu,
     /// A token flag without the bridge or port that reads it would be ignored (#8035).
     #[error("{flag} requires {transport}")]
     NeedsTransport { flag: &'static str, transport: &'static str },
@@ -277,8 +365,8 @@ enum ServerOptionError {
 impl ServerOptionError {
     fn into_clap(self, cmd: &mut clap::Command) -> clap::Error {
         let kind = match self {
-            Self::BridgeVar(_) => ErrorKind::ValueValidation,
-            Self::BridgeRoots => ErrorKind::ArgumentConflict,
+            Self::BridgeVar(_) | Self::GpuVar(_) => ErrorKind::ValueValidation,
+            Self::BridgeRoots | Self::BridgeGpu => ErrorKind::ArgumentConflict,
             Self::NeedsTransport { .. } => ErrorKind::MissingRequiredArgument,
         };
         cmd.error(kind, self)
@@ -306,8 +394,30 @@ fn tiff_compression(s: &str) -> Result<TiffCompression, ValueError> {
     }
 }
 
+fn on_off(s: &str) -> Result<bool, ValueError> {
+    match s {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(ValueError::OnOff),
+    }
+}
+
+/// A PDF import DPI: a finite number greater than zero. The importer's fallback to 300 DPI is
+/// for absent preferences, not for a mistyped flag.
+fn pdf_dpi(s: &str) -> Result<f32, ValueError> {
+    s.parse::<f32>().ok().filter(|dpi| dpi.is_finite() && *dpi > 0.0).ok_or(ValueError::PdfDpi)
+}
+
 fn jpeg_format(s: &str) -> Result<JpegFormat, ValueError> {
     JpegFormat::parse(s).ok_or(ValueError::JpegFormat)
+}
+
+fn metadata(s: &str) -> Result<XmpEmbed, ValueError> {
+    match s {
+        "none" => Ok(XmpEmbed::None),
+        "all" => Ok(XmpEmbed::All),
+        _ => Err(ValueError::Metadata),
+    }
 }
 
 /// Where `mcp --bridge` connects. Shown as the address: `127.0.0.1:<PORT>` for a port.
@@ -375,7 +485,10 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     let mut cli = Cli::from_arg_matches(&matches)?;
     let from_env = |m: &ArgMatches, id: &str| m.value_source(id) == Some(ValueSource::EnvVariable);
     match (&mut cli.command, matches.subcommand()) {
-        (Command::Run(r), Some((_, m))) => r.steps = steps(m),
+        (Command::Run(r), Some((_, m))) => {
+            r.steps = steps(m);
+            check_gpu_env(&mut cmd, m)?;
+        }
         (Command::Mcp(a), Some((name, m))) => {
             a.bridge_from_env = from_env(m, "bridge");
             if a.bridge_from_env
@@ -398,7 +511,14 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
                 if a.bridge.is_some() && (a.automation.automation_read_root.is_some() || a.automation.automation_write_root.is_some()) {
                     return Err(ServerOptionError::BridgeRoots.into_clap(sub));
                 }
+                if a.bridge.is_some() && (m.value_source("gpu") == Some(ValueSource::CommandLine) || m.value_source("no_gpu") == Some(ValueSource::CommandLine))
+                {
+                    return Err(ServerOptionError::BridgeGpu.into_clap(sub));
+                }
                 check_server(sub, m, a.bridge.is_some(), "--bridge")?;
+            }
+            if a.bridge.is_none() {
+                check_gpu_env(&mut cmd, m)?;
             }
         }
         (Command::Serve(a), Some((name, m))) => {
@@ -410,10 +530,30 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
                 }
                 check_server(sub, m, a.port.is_some(), "--port")?;
             }
+            check_gpu_env(&mut cmd, m)?;
+        }
+        (Command::Convert(_), Some((_, m))) | (Command::Batch(_), Some((_, m))) => {
+            check_gpu_env(&mut cmd, m)?;
         }
         _ => {}
     }
     Ok(cli)
+}
+
+fn check_gpu_env(cmd: &mut clap::Command, m: &ArgMatches) -> Result<(), clap::Error> {
+    if m.value_source("gpu") == Some(ValueSource::CommandLine) || m.value_source("no_gpu") == Some(ValueSource::CommandLine) {
+        return Ok(());
+    }
+    if let Some(v) = std::env::var_os("PHOTOCRAFT_GPU") {
+        // A non-UTF-8 value is still a value other than empty, "0" or "1": reject it rather
+        // than silently treating it as unset and running on the CPU.
+        let v = v.to_string_lossy();
+        let trimmed = v.trim();
+        if !trimmed.is_empty() && trimmed != "1" && trimmed != "0" {
+            return Err(ServerOptionError::GpuVar(trimmed.to_string()).into_clap(cmd));
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a token flag without the bridge or port that reads it (as a flag or its variable). A
@@ -425,4 +565,20 @@ fn check_server(sub: &mut clap::Command, m: &ArgMatches, has_transport: bool, tr
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--pdf-dpi` only takes a positive finite number: a mistyped value is refused at parse time
+    /// instead of silently becoming the importer's 300 DPI fallback.
+    #[test]
+    fn pdf_dpi_rejects_non_positive_and_non_finite_values() {
+        assert!(pdf_dpi("300").is_ok());
+        assert!(pdf_dpi("0.5").is_ok());
+        for bad in ["0", "-1", "nan", "inf", "-inf", "abc"] {
+            assert!(pdf_dpi(bad).is_err(), "{bad} should be refused");
+        }
+    }
 }
