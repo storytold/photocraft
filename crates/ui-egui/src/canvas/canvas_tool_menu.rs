@@ -790,9 +790,14 @@ pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
 
 /// Right-click on the image with the Perspective Crop tool while a quad is pending (#11805): its
 /// Crop / Cancel menu at screen point `pos`. False (today's behaviour) with no quad, while a drag
-/// is held or corners are still being clicked: those cases weren't measured.
+/// is held or corners are still being clicked: those cases weren't measured. A quad left from
+/// another document is dropped first, so it gets no menu.
 pub fn open_perspective_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]) -> bool {
-    if tool != Tool::PerspectiveCrop || app.ui.perspective_crop.is_none() || app.pcrop.drag.is_some() || !pos.iter().all(|v| v.is_finite()) {
+    if tool != Tool::PerspectiveCrop {
+        return false;
+    }
+    crate::perspective_crop_ui::cancel_stale(app);
+    if app.ui.perspective_crop.is_none() || app.pcrop.drag.is_some() || !pos.iter().all(|v| v.is_finite()) {
         return false;
     }
     app.ui.brush_picker = None;

@@ -113,3 +113,32 @@ fn crop_with_no_document_left_is_no_panic() {
     empty.run("file.close", json!({})).unwrap();
     choose(&mut empty, &ctx2, PCROP_COMMIT);
 }
+
+/// Two documents; the quad is pending on the second (active) one, then the first becomes active
+/// as a tab click does (`session.set_active`, no `sync_views` until the next frame).
+fn quad_left_on_another_document() -> (PhotocraftApp, egui::Context) {
+    let (mut app, ctx) = app();
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.sync_views();
+    app.ui.perspective_crop = Some(QUAD);
+    assert!(app.session.set_active(0));
+    (app, ctx)
+}
+
+#[test]
+fn a_quad_left_from_another_document_opens_no_menu() {
+    // A document switch and a right-click handled in the same control pass: the old document's
+    // quad is dropped, and no Crop / Cancel menu opens for it.
+    let (mut app, ctx) = quad_left_on_another_document();
+    right_click(&mut app, &ctx, 100.0, 70.0);
+    assert_eq!(listed(&mut app, &ctx), None, "no menu for the other document's quad");
+    assert!(app.ui.perspective_crop.is_none(), "the stale quad is dropped");
+}
+
+#[test]
+fn the_canvas_right_click_opens_no_menu_for_a_quad_left_from_another_document() {
+    let (mut app, ctx) = quad_left_on_another_document();
+    assert!(!open_perspective_crop(&mut app, &ctx, Tool::PerspectiveCrop, [10.0, 10.0]));
+    assert!(app.ui.canvas_tool_menu.is_none());
+    assert!(app.ui.perspective_crop.is_none(), "the stale quad is dropped");
+}
