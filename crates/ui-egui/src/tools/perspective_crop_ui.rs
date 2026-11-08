@@ -147,17 +147,35 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
                     }
                 } else {
                     app.pcrop.clicks.clear();
-                    let start = snap_start(app, start);
-                    let (x0, y0, x1, y1) = (start[0].min(cur[0]), start[1].min(cur[1]), start[0].max(cur[0]), start[1].max(cur[1]));
-                    // A straight drag has no area: no box (it could neither be committed nor
-                    // replaced by a new drag).
-                    app.ui.perspective_crop = (x1 > x0 && y1 > y0).then_some([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+                    app.ui.perspective_crop = new_box(app, start, cur);
                 }
             }
             app.pcrop.drag = None;
         }
     }
     true
+}
+
+/// The box a new-quad drag from `start` to `cur` makes, its start snapped ([`snap_start`]). A
+/// straight drag has no area: no box (it could neither be committed nor replaced by a new drag).
+fn new_box(app: &PhotocraftApp, start: [f64; 2], cur: [f64; 2]) -> Option<[[f64; 2]; 4]> {
+    rect(snap_start(app, start), cur)
+}
+
+fn rect(a: [f64; 2], b: [f64; 2]) -> Option<[[f64; 2]; 4]> {
+    let (x0, y0, x1, y1) = (a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1]));
+    (x1 > x0 && y1 > y0).then_some([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+}
+
+/// The quad the overlay draws: while a new box is being dragged, the box its release would make
+/// (so a snapped start shows during the drag, not only after it; a press still within click
+/// distance shows its raw box); otherwise the current quad.
+fn shown_quad(app: &PhotocraftApp) -> Option<[[f64; 2]; 4]> {
+    match app.pcrop.drag {
+        Some(Drag::New { start, cur }) if is_click(app, start, cur) => rect(start, cur),
+        Some(Drag::New { start, cur }) => new_box(app, start, cur),
+        _ => app.ui.perspective_crop,
+    }
 }
 
 /// Where a new quad's drag starts, with View › Snap and Snap To › Document Bounds on (#11803): a
@@ -266,13 +284,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     let scr = |p: [f64; 2]| xf.to_screen(p[0] as f32, p[1] as f32);
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
-    let quad = match app.pcrop.drag {
-        Some(Drag::New { start, cur }) => {
-            let (x0, y0, x1, y1) = (start[0].min(cur[0]), start[1].min(cur[1]), start[0].max(cur[0]), start[1].max(cur[1]));
-            (x1 > x0 && y1 > y0).then_some([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
-        }
-        _ => app.ui.perspective_crop,
-    };
+    let quad = shown_quad(app);
     if let Some(q) = quad.filter(|q| q.iter().flatten().all(|v| v.is_finite())) {
         let ok = convex_quad(&q);
         let color = if ok { accent } else { Color32::from_rgb(0xe5, 0x3e, 0x3e) };

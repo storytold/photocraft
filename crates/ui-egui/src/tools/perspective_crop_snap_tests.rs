@@ -11,7 +11,13 @@ fn app(snap: bool) -> PhotocraftApp {
     app.ui.tool = Tool::PerspectiveCrop;
     app.ui.extras.snap = snap;
     app.ui.view.snap_to.document_bounds = true;
+    set_zoom(&mut app, 1.0);
     app
+}
+
+fn set_zoom(app: &mut PhotocraftApp, zoom: f32) {
+    app.ui.views = vec![crate::state::View { zoom, ..Default::default() }];
+    assert_eq!(app.point_zoom(), zoom);
 }
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
@@ -77,4 +83,37 @@ fn far_presses_and_no_document_never_panic() {
     empty.ui.tool = Tool::PerspectiveCrop;
     drag(&mut empty, [-100.0, -100.0], [50.0, 50.0]);
     assert_eq!(empty.ui.perspective_crop, None);
+}
+
+#[test]
+fn the_drag_preview_shows_the_snapped_start() {
+    let mut app = app(true);
+    pointer(&mut app, ToolEvent::Down { x: -78.0, y: -100.0, pressure: 1.0 });
+    pointer(&mut app, ToolEvent::Move { x: 700.0, y: 450.0, pressure: 1.0 });
+    assert_eq!(shown_quad(&app), Some([[0.0, 0.0], [700.0, 0.0], [700.0, 450.0], [0.0, 450.0]]), "while dragging");
+    pointer(&mut app, ToolEvent::Up { x: 700.0, y: 450.0 });
+    assert_eq!(shown_quad(&app), app.ui.perspective_crop, "after the release");
+}
+
+#[test]
+fn a_press_outside_on_one_side_only_stays_put() {
+    for from in [[-50.0, 100.0], [100.0, -50.0], [850.0, 100.0], [100.0, 550.0]] {
+        let mut app = app(true);
+        drag(&mut app, from, [400.0, 300.0]);
+        let q = app.ui.perspective_crop.unwrap_or_default();
+        assert!(q.contains(&from), "{from:?} -> {q:?}");
+    }
+}
+
+#[test]
+fn the_snap_distance_is_in_screen_pixels() {
+    // 8 screen px: about 10.7 document px at 75%, 4 at 200%.
+    let mut app = app(true);
+    set_zoom(&mut app, 0.75);
+    drag(&mut app, [9.0, 9.0], [700.0, 450.0]);
+    assert_eq!(app.ui.perspective_crop.map(|q| q[0]), Some([0.0, 0.0]), "75%");
+    let mut app = self::app(true);
+    set_zoom(&mut app, 2.0);
+    drag(&mut app, [6.0, 6.0], [700.0, 450.0]);
+    assert_eq!(app.ui.perspective_crop.map(|q| q[0]), Some([6.0, 6.0]), "200%");
 }
