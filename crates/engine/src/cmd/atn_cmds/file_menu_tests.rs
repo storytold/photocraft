@@ -54,15 +54,16 @@ fn package_notes_and_data_set_steps_load_and_save_back() {
 /// Package plays: the document and its folder are written where the step says.
 #[test]
 fn a_loaded_package_step_plays() {
-    let dir = std::env::temp_dir().join(format!("pc-10723-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let out = dir.join("pkg").to_string_lossy().replace('\\', "/");
+    // A fresh folder of its own, removed even when an assertion fails.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("pkg").to_string_lossy().replace('\\', "/");
     let (mut s, _) = load(vec![named("packageFile", "Package", desc("null").with("T   ", path_value(&out)))]);
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "Poster"})).unwrap();
     let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
     assert_eq!(played["ran"], 1, "{played}");
-    assert!(std::fs::read_dir(&out).unwrap().next().is_some(), "the package folder holds the document");
-    let _ = std::fs::remove_dir_all(&dir);
+    // PhotoCraft's Package: `<folder>/<document>/<document>.pcraft` (no links, so no `Links` folder).
+    let document = std::path::Path::new(&out).join("Poster").join("Poster.pcraft");
+    assert!(document.is_file(), "the package folder holds the document: {}", document.display());
 }
 
 /// A step with a key the event does not have, or an `apply` of something other than a data set
