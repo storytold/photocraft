@@ -101,7 +101,17 @@ fn reference(
             }
         }
     }
-    amount *= 1.0 - 0.08 * (1.0 - load);
+    // The supply drain (#11943) is shared with the optimized kernel; it is not pickup or blending.
+    let (x, y) = (fp.dab.center.x, fp.dab.center.y);
+    let before = match state.last_dab {
+        Some((index, ..)) if fp.index > index => state.travelled,
+        _ => 0.0,
+    };
+    let step = state.last_dab.filter(|(index, ..)| fp.index > *index).map_or(0.0, |(_, lx, ly)| (x - lx).hypot(y - ly) as f32);
+    let after = before + if step.is_finite() { step } else { 0.0 };
+    amount *= supply_left(load, after) / supply_left(load, before);
+    state.travelled = after;
+    state.last_dab = Some((fp.index, x, y));
     state.amount = amount;
     state.pickup = pickup.map(|p| to_rgba(&fmt, &p));
 }

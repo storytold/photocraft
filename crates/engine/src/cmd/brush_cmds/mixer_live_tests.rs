@@ -255,7 +255,9 @@ fn mixer_rejects_malformed_load_and_retains_or_reloads_paint() {
     }
     assert!(s.execute("brush.mixer.load", json!({"color":[1e300,0,0,1]})).is_err());
     s.execute("brush.mixer.load", json!({"color":"#ff0000"})).unwrap();
-    s.execute("paint.mixerBrush", json!({"points":[[40,40],[80,40]],"size":10,"loadAfterStroke":false,"cleanAfterStroke":false,"load":10})).unwrap();
+    // The load lasts for a length of stroke (390 px at Load 1 %), so the stroke runs back and forth.
+    let long = json!([[10, 40], [180, 40], [10, 40], [180, 40], [10, 40]]);
+    s.execute("paint.mixerBrush", json!({"points":long,"size":10,"loadAfterStroke":false,"cleanAfterStroke":false,"load":1})).unwrap();
     assert!(s.tools.mixer.amount > 0.0 && s.tools.mixer.amount < 1.0);
     s.execute("paint.mixerBrush", json!({"points":[[40,40],[80,40]],"size":10,"loadAfterStroke":true,"load":10})).unwrap();
     assert_eq!(s.tools.mixer.amount, 1.0);

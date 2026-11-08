@@ -408,3 +408,5 @@ mod tests {
 
 #[cfg(test)]
 mod brush_tests;
+#[cfg(test)]
+mod mixer_load_supply_tests;

@@ -214,14 +214,15 @@ fn pencil_is_aliased_and_auto_erases() {
 
 #[test]
 fn mixer_brush_reservoir_and_cleaning() {
-    let mut s = session(200, 30);
+    // The load lasts for a length of stroke (390 px at the lowest Load), so the stroke is longer.
+    let mut s = session(800, 30);
     s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     s.execute(
         "paint.mixerBrush",
-        json!({"points": [[5, 15], [195, 15]], "size": 8, "wet": 0, "load": 0, "mix": 0, "brush": {"pressureSize": false, "spacing": 0.25}}),
+        json!({"points": [[5, 15], [795, 15]], "size": 8, "wet": 0, "load": 0, "mix": 0, "brush": {"pressureSize": false, "spacing": 0.25}}),
     )
     .unwrap();
-    assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 190, 15)[3] < 0.5, "low load dries out");
+    assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 790, 15)[3] < 0.5, "low load dries out");
     assert!(s.tools.mixer.pickup.is_none(), "cleaned after stroke");
     // Wet, not cleaned: the pickup persists into the session.
     s.execute("paint.mixerBrush", json!({"points": [[5, 5], [100, 5]], "size": 8, "wet": 100, "mix": 80, "cleanAfterStroke": false})).unwrap();
@@ -982,15 +983,16 @@ fn new_brush_controls_round_trip_through_set_brush() {
 
 #[test]
 fn mixer_brush_uses_the_brush_mixer_settings() {
-    let mut s = session(200, 30);
+    // The load lasts for a length of stroke (390 px at the lowest Load), so the stroke is longer.
+    let mut s = session(800, 30);
     s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     // No wet/load params: the brush's Mixer settings (a dry brush with 0 % Load) apply.
     s.execute("tools.setBrush", json!({"brush": {"pressureSize": false, "spacing": 0.25, "mixer": {"wet": 0, "load": 0, "mix": 0}}})).unwrap();
-    s.execute("paint.mixerBrush", json!({"points": [[5, 15], [195, 15]], "size": 8})).unwrap();
-    assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 190, 15)[3] < 0.5, "the brush's 0 % Load dries out");
+    s.execute("paint.mixerBrush", json!({"points": [[5, 15], [795, 15]], "size": 8})).unwrap();
+    assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 790, 15)[3] < 0.5, "the brush's 0 % Load dries out");
     // A param still overrides the brush.
-    s.execute("paint.mixerBrush", json!({"points": [[5, 5], [195, 5]], "size": 8, "load": 100})).unwrap();
-    assert!(rgba(&s, 190, 5)[3] > 0.95);
+    s.execute("paint.mixerBrush", json!({"points": [[5, 5], [795, 5]], "size": 8, "load": 100})).unwrap();
+    assert!(rgba(&s, 790, 5)[3] > 0.95);
 }
 
 /// A red image with an empty layer above it, a blue foreground, and a Mixer Brush that samples all
