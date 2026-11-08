@@ -9,13 +9,17 @@ use photocraft_color::PixelFormat;
 use photocraft_raster::Surface;
 
 fn click(s: &mut Surface, wet: f32) {
+    click_with(s, wet, 0.9, 1.0);
+}
+
+fn click_with(s: &mut Surface, wet: f32, mix: f32, flow: f32) {
     let stroke = Stroke {
         brush: BrushSettings { size: 35.0, hardness: 0.0, spacing: 0.25, pressure_size: false, ..Default::default() },
         points: vec![StrokePoint::new(182.0, 47.0, 1.0)],
     };
     let mut st = MixerState::default();
     st.load([0.0, 0.0, 0.0, 1.0]);
-    let m = MixerSettings { wet, load: 0.75, mix: 0.9, flow: 1.0, ..Default::default() };
+    let m = MixerSettings { wet, load: 0.75, mix, flow, ..Default::default() };
     apply_mixer_stroke(s, None, &stroke, &m, &mut st, None, false);
 }
 
@@ -60,4 +64,22 @@ fn a_wet_click_on_a_colour_still_mixes_it_in() {
     assert!(c[0] > 0.3, "the red under the click is mixed in: {c:?}");
     assert!(c[0] < 0.99, "and the black load darkens it: {c:?}");
     assert!(c[1] < 0.02 && c[2] < 0.02 && c[3] > 0.99, "only red and black, opaque: {c:?}");
+}
+
+/// On an empty layer Wet and Mix change nothing: the dab is a dry dab at the same Flow, so its
+/// centre is about 251 × Flow / 100. davidmann4 measured 126 at Flow 50 and 251 at Flow 100,
+/// at Wet 80 with Mix 50 and with Mix 90 (#11944).
+#[test]
+fn at_flow_50_an_empty_layer_dab_is_half_the_flow_100_dab_at_any_mix() {
+    for mix in [0.5, 0.9] {
+        let centre = |flow| {
+            let mut s = Surface::new(PixelFormat::RGBA8);
+            click_with(&mut s, 0.8, mix, flow);
+            alpha(&s, 182, 47)
+        };
+        let (full, half) = (centre(1.0), centre(0.5));
+        assert!((half - 126).abs() <= 3, "Mix {mix}, Flow 50: centre alpha {half}, measured 126");
+        assert!(full >= 250, "Mix {mix}, Flow 100: centre alpha {full}, measured 251");
+        assert!((2 * half - full).abs() <= 6, "Mix {mix}: Flow 50 centre {half}, expected about half of {full}");
+    }
 }
