@@ -97,3 +97,130 @@ fn a_right_click_on_the_row_name_still_opens_the_layer_menu() {
     assert!(!menu_open(&h), "no thumbnail menu away from the thumbnail");
     assert!(h.query_by_label("Duplicate Layer…").is_some(), "the layer menu opened");
 }
+
+/// How many of the 64x64 canvas's pixels are selected (more than half), 0 with no selection.
+fn selected_area(h: &Harness<'static, PhotocraftApp>) -> usize {
+    let Some(m) = h.state().session.active().unwrap().doc.selection.as_ref() else { return 0 };
+    (0..64).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| m.sample_channel(x, y, 0) > 0.5).count()
+}
+
+/// Seeds a 20x20 selection at (20, 20) that overlaps the painted block (10..30 x 12..28) in 10x8 pixels.
+fn seed_selection(h: &mut Harness<'static, PhotocraftApp>) {
+    h.state_mut().session.execute("select.rect", json!({"x": 20, "y": 20, "width": 20, "height": 20})).unwrap();
+    h.run_steps(4);
+    assert_eq!(selected_area(h), 400);
+}
+
+fn pick(h: &mut Harness<'static, PhotocraftApp>, layer: u64, entry: &str) {
+    let p = thumb_point(h, layer);
+    right_click(h, p);
+    h.get_by_label(entry).click();
+    h.run_steps(4);
+}
+
+#[test]
+fn select_pixels_selects_exactly_the_painted_area() {
+    let (mut h, _, paint) = panel();
+    pick(&mut h, paint, "Select Pixels");
+    assert_eq!(selected_area(&h), 20 * 16, "the painted block, pixel for pixel");
+}
+
+#[test]
+fn select_pixels_replaces_an_existing_selection() {
+    let (mut h, _, paint) = panel();
+    seed_selection(&mut h);
+    pick(&mut h, paint, "Select Pixels");
+    assert_eq!(selected_area(&h), 320, "new replaces the seeded selection");
+    let m = h.state().session.active().unwrap().doc.selection.clone().unwrap();
+    assert!(m.sample_channel(12, 14, 0) > 0.5 && m.sample_channel(35, 35, 0) < 0.5);
+}
+
+#[test]
+fn add_pixels_unites_with_the_selection() {
+    let (mut h, _, paint) = panel();
+    seed_selection(&mut h);
+    pick(&mut h, paint, "Add Pixels to Selection");
+    assert_eq!(selected_area(&h), 400 + 320 - 80, "the union of the seeded square and the block");
+}
+
+#[test]
+fn subtract_pixels_removes_the_layer_from_the_selection() {
+    let (mut h, _, paint) = panel();
+    seed_selection(&mut h);
+    pick(&mut h, paint, "Subtract Pixels from Selection");
+    assert_eq!(selected_area(&h), 400 - 80, "the seeded square minus the block");
+}
+
+#[test]
+fn intersect_pixels_keeps_only_the_overlap() {
+    let (mut h, _, paint) = panel();
+    seed_selection(&mut h);
+    pick(&mut h, paint, "Intersect Pixels with Selection");
+    assert_eq!(selected_area(&h), 80, "the 10x8 overlap");
+}
+
+#[test]
+fn a_transparent_layer_selects_nothing() {
+    let (mut h, _, _) = panel();
+    let empty = h.state_mut().session.execute("layer.new.layer", json!({"name": "empty"})).unwrap()["layer"].as_u64().unwrap();
+    h.run_steps(6);
+    pick(&mut h, empty, "Select Pixels");
+    assert_eq!(selected_area(&h), 0, "nothing painted, nothing selected");
+}
+
+#[test]
+fn every_background_entry_is_disabled_and_does_nothing() {
+    let (mut h, background, _) = panel();
+    seed_selection(&mut h);
+    let p = thumb_point(&h, background);
+    for entry in ENTRIES {
+        right_click(&mut h, p);
+        let node = h.get_by_label(entry);
+        assert!(node.accesskit_node().is_disabled(), "{entry} is disabled for the Background");
+        node.click();
+        h.run_steps(4);
+        assert_eq!(selected_area(&h), 400, "{entry} left the selection alone");
+    }
+}
+
+#[test]
+fn a_mask_thumbnail_keeps_the_mask_menu() {
+    let (mut h, _, paint) = panel();
+    {
+        let s = &mut h.state_mut().session;
+        s.execute("layer.select", json!({"layer": paint, "mode": "replace"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 64})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    }
+    h.run_steps(8);
+    let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, paint).expect("the mask thumbnail was drawn");
+    let at = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a pixel mask thumbnail").1.center();
+    right_click(&mut h, at);
+    assert!(!menu_open(&h), "no Select Pixels entries on a mask thumbnail");
+    h.get_by_label("Delete Layer Mask");
+    assert!(h.query_by_label("Duplicate Layer…").is_none(), "the mask menu, not the layer menu");
+}
+
+#[test]
+fn a_frame_row_keeps_the_original_menu() {
+    let (mut h, _, _) = panel();
+    let frame = h.state_mut().session.execute("layer.new.frame", json!({"x": 4, "y": 4, "width": 30, "height": 30})).unwrap()["layer"].as_u64().unwrap();
+    h.run_steps(8);
+    let r = row(&h, frame);
+    let p = r.thumbnail.map_or_else(|| Pos2::new(r.row.left() + 30.0, r.row.center().y), |t| t.center());
+    right_click(&mut h, p);
+    assert!(!menu_open(&h), "no Select Pixels entries on a frame row");
+    assert!(h.query_by_label("Duplicate Layer…").is_some() || h.query_by_label("Delete Layer").is_some(), "the layer menu opened");
+}
+
+#[test]
+fn with_thumbnails_off_the_menu_is_the_original() {
+    let (mut h, _, paint) = panel();
+    let p = thumb_point(&h, paint);
+    h.state_mut().ui.layers_panel_options.thumbnail_size = crate::state::LayerThumbnailSize::None;
+    h.run_steps(8);
+    assert!(row(&h, paint).thumbnail.is_none(), "thumbnails are off");
+    right_click(&mut h, p);
+    assert!(!menu_open(&h), "no thumbnail to right-click, no Select Pixels entries");
+    assert!(h.query_by_label("Duplicate Layer…").is_some(), "the layer menu opened");
+}
