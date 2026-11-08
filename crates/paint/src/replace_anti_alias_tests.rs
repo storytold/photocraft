@@ -66,7 +66,7 @@ fn anti_alias_off_has_a_hard_edge() {
         assert!(*c == RED || c.iter().zip(&full).all(|(a, b)| (a - b).abs() <= 3), "x {x}: {c:?} is neither untouched nor fully replaced ({full:?})");
     }
     let first = (50..70).find(|x| px(&s, *x, 120) != RED).expect("the tip replaced the row");
-    assert!((58..=60).contains(&first), "the hard edge sits at the tip's rim: x {first}");
+    assert_eq!(first, 58, "the hard edge sits at the tip's rim");
     // The whole tip: no partly replaced pixel anywhere.
     for y in 70..170 {
         for x in 50..150 {
