@@ -4,7 +4,7 @@ use super::draw::texture_quad;
 use super::preview::{Above, preview_image};
 use super::{
     Arc, BezierMesh, CAS_ONLY_SCALES, Color32, DocId, Document, Follow, Homography, LOCKED, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Steps,
-    TransformPreview, TransformSession, Warp, WarpStyle, corners, json,
+    TransformPreview, TransformSession, Warp, WarpStyle, corners, default_interpolation, json,
 };
 
 /// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
@@ -12,6 +12,9 @@ use super::{
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
         return begin_path(app, ctx, params, path);
+    }
+    if crate::canvas::multiple_color_target(app) {
+        return Err("Move and transforms on several colour channels are not implemented yet".into());
     }
     if app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some()) {
         app.run("select.drop", json!({}))?;
@@ -26,10 +29,16 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let id = st.active_layer.ok_or("no active layer")?;
     // Several layers selected: one box moves them all, as in Photoshop (#6501).
     let targets = photocraft_engine::transform_cmds::selection_targets(st);
+    // The selection takes its linked layers along, as `edit.transform` does: in Photoshop the box
+    // over one linked layer frames and moves the whole link group (#11217), but not a linked
+    // Background (`box_targets`). Unlinked, unchanged.
+    let targets = photocraft_engine::transform_cmds::box_targets(&doc, &targets);
     if targets != [id] {
         return begin_several(app, ctx, doc, revision, id, targets);
     }
     let layer = doc.layer(id).ok_or("no layer")?;
+    let frame_only =
+        app.ui.tool == crate::state::Tool::Frame && layer.frame.is_some() && crate::frame_tool::target(app, layer) == crate::frame_tool::Target::Frame;
     if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
         // Photoshop refuses before the box opens rather than when it is committed (#2585).
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
@@ -71,12 +80,12 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
-        doc: Arc::new(pd),
+        doc: if frame_only { doc.clone() } else { Arc::new(pd) },
         texture,
         opacity: layer.opacity * layer.fill_opacity,
-        above: Some(above),
-        styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
-        follow: Some(Follow { revision, hidden: if lifted.is_none() { vec![id] } else { Vec::new() } }),
+        above: (!frame_only).then_some(above),
+        styled: (styled && !frame_only).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
+        follow: Some(Follow { revision, hidden: if lifted.is_none() && !frame_only { vec![id] } else { Vec::new() }, selected: selected_now(app) }),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -96,10 +105,10 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
-        target: None,
+        target: frame_only.then(|| json!({"frame": id.0})),
         path: None,
         made: None,
         mode: Default::default(),
@@ -111,13 +120,24 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     Ok(())
 }
 
+pub(super) fn interpolation_preference(interpolation: &str) -> Option<photocraft_engine::prefs::Interpolation> {
+    use photocraft_engine::prefs::Interpolation;
+    match interpolation {
+        "nearest" => Some(Interpolation::Nearest),
+        "bilinear" => Some(Interpolation::Bilinear),
+        "bicubic" => Some(Interpolation::Bicubic),
+        _ => None,
+    }
+}
+
 /// Free Transform of the selected layers `ids` together (#6501): the box frames them all, and the
 /// preview moves their composite, drawn over the layers they cover. `active` stays the session's
 /// `layer`, so picking another layer still applies the box. The selected pixels of each pixel
 /// layer move when there is a selection; type, shapes, smart objects and groups move whole.
 fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document>, revision: u64, active: LayerId, ids: Vec<LayerId>) -> Result<(), String> {
     use photocraft_engine::transform_cmds as tc;
-    if ids.iter().any(|id| tc::locked_for_transform(&doc, *id)) {
+    // The Background among them refuses the same way, rather than being left out (#11101).
+    if tc::background_among(&doc, &ids).is_some() || ids.iter().any(|id| tc::locked_for_transform(&doc, *id)) {
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
         return Err(LOCKED.into());
     }
@@ -173,7 +193,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
         opacity: 1.0,
         above: Some(above),
         styled: None,
-        follow: Some(Follow { revision, hidden }),
+        follow: Some(Follow { revision, hidden, selected: selected_now(app) }),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -193,7 +213,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
         target: None,
@@ -221,6 +241,13 @@ pub(crate) fn moving_texel(app: &PhotocraftApp, p: [i32; 2]) -> (Option<Color32>
     (texel, texture_quad(t, pv))
 }
 
+/// The Layers panel's selection, sorted, as a layer's box records it when it opens (#11101).
+pub(super) fn selected_now(app: &PhotocraftApp) -> Option<Vec<LayerId>> {
+    let mut ids = app.session.active()?.selected_layers();
+    ids.sort_unstable();
+    Some(ids)
+}
+
 /// The layers the box moves: every layer of a several-layer session (#6501), else its one layer.
 pub(crate) fn moving_layers(t: &TransformSession) -> Vec<LayerId> {
     if t.layers.is_empty() { vec![LayerId(t.layer)] } else { t.layers.iter().copied().map(LayerId).collect() }
@@ -238,6 +265,19 @@ pub const WARP_ONE_LAYER: &str = "Warp works on one layer at a time: select a si
 /// its selected pixels, as Layer via Copy) and transforms the copy (#352).
 pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     let selection = app.session.active().is_some_and(|d| d.doc.selection.is_some());
+    // A linked layer without a selection: the reference application makes no copy and frames the
+    // whole link group, as Free Transform does (measured, #11217). Unlinked layers get the copy,
+    // and so does a targeted mask (a lone target).
+    let target = crate::canvas::paint_target(app);
+    let linked = !selection
+        && app.session.active().is_some_and(|st| {
+            let lone = photocraft_engine::transform_cmds::lone_target(&st.doc, st.active_layer, &json!({ "target": target }));
+            let targets = photocraft_engine::transform_cmds::selection_targets(st);
+            matches!(lone, Ok(None)) && photocraft_engine::transform_cmds::box_targets(&st.doc, &targets) != targets
+        });
+    if linked {
+        return begin(app, ctx);
+    }
     let params = if selection { json!({}) } else { json!({"inPlace": true}) };
     app.run(if selection { "layer.new.layerViaCopy" } else { "layer.duplicate" }, params)?;
     let made = app.session.active().and_then(|st| st.active_layer.map(|layer| (st.doc.id, layer)));
@@ -255,7 +295,11 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 
 /// Free Transform on the layer a file dropped on the canvas just placed, like the reference app's
 /// Place: Esc takes the place back, ↩ makes the place and the transform one Place Embedded step.
+/// With Preferences ▸ General ▸ Skip Transform when Placing on, the place stands as it is.
 pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if app.session.prefs().general.skip_transform_when_placing {
+        return Ok(());
+    }
     begin(app, ctx)?;
     if let Some(t) = app.ui.transform.as_mut() {
         t.made = Some(MadeLayer::Place);
@@ -283,11 +327,21 @@ pub(crate) fn begin_content_aware(
     crate::type_tool::commit(app);
     let rect = [region.x0 as f64, region.y0 as f64, region.x1 as f64, region.y1 as f64];
     let session = app.ui.alloc_id();
-    // The command clears the area before writing the result (a layer without transparency keeps it).
+    // The command vacates the area before writing the result, as Delete does: transparent, or on
+    // the Background the background colour (a layer without transparency otherwise keeps it).
+    let background = doc.is_background(id).then_some(app.session.tools.background);
     let mut pd = (*doc).clone();
-    if let Some(s) = pd.layer_mut(id).and_then(|l| l.surface_mut()).filter(|s| s.format().alpha) {
-        let clear = vec![0.0; s.format().channels()];
-        s.fill_rect(region, &clear);
+    if let Some(s) = pd.layer_mut(id).and_then(|l| l.surface_mut()).filter(|s| background.is_some() || s.format().alpha) {
+        let fmt = s.format();
+        let mut fill = vec![0.0; fmt.channels()];
+        if let Some([r, g, b, _]) = background {
+            let mut enc = [0.0f32; 8];
+            let n = photocraft_raster::from_rgba_into(&fmt, [r, g, b, 1.0], &mut enc);
+            if let (Some(dst), Some(src)) = (fill.get_mut(..n), enc.get(..n)) {
+                dst.copy_from_slice(src);
+            }
+        }
+        s.fill_rect(region, &fill);
         s.prune();
     }
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
@@ -301,7 +355,7 @@ pub(crate) fn begin_content_aware(
         texture,
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
-        follow: Some(Follow { revision, hidden: Vec::new() }),
+        follow: Some(Follow { revision, hidden: Vec::new(), selected: None }),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -322,7 +376,7 @@ pub(crate) fn begin_content_aware(
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
         target: None,
@@ -450,7 +504,7 @@ fn begin_lone(
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
         target: Some(target),
@@ -505,7 +559,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
         target: None,
@@ -592,7 +646,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bilinear".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: true,
         target: None,

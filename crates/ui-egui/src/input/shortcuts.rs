@@ -485,9 +485,10 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if crate::canvas::cancel_mixer_on_context_change(app, ctx) {
         return false;
     }
-    // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
-    // it back later (#2608).
-    app.ui.remember_group_tool();
+    // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key and its
+    // toolbar slot bring it back later (#2608). A temporary tool is no choice, so it isn't noted.
+    app.ui.remember_group_tool(crate::tool_memory::selected(app));
+    crate::canvas::polygon_cancel_stale(app);
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
@@ -567,7 +568,7 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     // Dialogs (and Liquify's panel while one of its controls has focus) keep canvas zoom; a
     // focused text field keeps its keys.
     let liquify_focus = (app.distort.liquify.is_some() || app.distort.caf.is_some() || app.distort.select_mask.is_some()) && focus != Focus::None;
-    if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() {
+    if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() || app.smart_svg.modal_open() || app.save_options_open() {
         if focus != Focus::Text {
             nav_keys(app, ctx);
         }
@@ -617,6 +618,9 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     }
     // Perspective Crop with a pending quad: ↵ commits, Esc cancels.
     if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
+        return true;
+    }
+    if focus == Focus::None && crate::frame_tool::keys(app, ctx) {
         return true;
     }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
@@ -695,8 +699,18 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         }
     }
     // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
-    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape)) {
+    // When the document refuses it, ↩ keeps the draft to commit again; Esc keeps it as the Work Path.
+    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
         crate::vector_ui::pen_commit(app, false);
+        return true;
+    }
+    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::vector_ui::pen_end(app);
+        return true;
+    }
+    // A shape box handle drag: Esc drops it, the shapes keep their size (#11107).
+    if app.ui.shape_box.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::shape_bounds_box::cancel(app);
         return true;
     }
     // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
@@ -729,6 +743,10 @@ fn handle_object_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool
     }
     // A slice selected with Slice Select: ⌫/Delete deletes the slice, not the layer (#7862).
     if crate::slice_ui::keys(app, ctx) {
+        return true;
+    }
+    // A note selected with the Note tool: ⌫/Delete asks to delete the note, not the layer (#11788).
+    if crate::analysis_ui::note_keys(app, ctx) {
         return true;
     }
     // A selected smart filter row: ⌫/Delete removes the filter, not its smart object (#4751).
@@ -782,6 +800,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
+    if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
+        crate::frame_tool::cancel(app);
+        return true;
+    }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {
         let mods = ctx.input(|i| i.modifiers);
@@ -807,12 +829,17 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
         // In a full screen mode, the Crop tool's untouched default frame (Straighten off) has nothing to cancel: cancelling only
-        // makes the next one, so Esc goes on to leave full screen (#7315).
-        let untouched = app.ui.view.screen_mode != "standard" && app.ui.polygon.is_empty() && app.crop.default_frame && !crate::crop_straighten::mode(app);
+        // makes the next one, so Esc goes on to leave full screen (#7315). A gesture on it is still cancelled (#9275).
+        let untouched = app.ui.view.screen_mode != "standard"
+            && app.ui.polygon.is_empty()
+            && app.crop.default_frame
+            && app.crop.drag.is_none()
+            && !crate::crop_straighten::mode(app);
         if !untouched && pressed(Key::Escape) {
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
-            crate::crop_ui::cancel(app);
+            app.ui.polygon_doc = None;
+            crate::crop_ui::dismiss(app);
             return true;
         }
     }
@@ -828,7 +855,7 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // and inline type returned above, transform, pen, lasso and crop consumed it, and these own
     // theirs later in the frame: the palette, the canvas and layer menus, the brush picker,
     // Rotate View, Adaptive Wide Angle, the Filter Gallery, the TIFF prompt, any open egui popup
-    // and the toolbar tool flyout. A canvas drag in progress (a marquee being drawn) keeps it too.
+    // and the toolbar tool and "…" flyouts. A canvas drag in progress (a marquee being drawn) keeps it too.
     let esc_taken = app.drag.is_some()
         || app.ui.palette_open
         || app.ui.canvas_tool_menu.is_some()
@@ -837,9 +864,11 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || app.ui.tool == Tool::RotateView
         || app.wide_angle.is_some()
         || app.save_options_open()
+        || app.smart_svg.modal_open()
         || app.distort.gallery.is_some()
         || ctx.any_popup_open()
-        || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some());
+        || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some())
+        || crate::panels::toolbar::more_flyout_open(ctx);
     // Both full screen modes (with and without the menu bar) return to Standard, as in Photoshop
     // (#4116), through the menu command so the window and the Screen Mode check follow.
     if !esc_taken && app.ui.view.screen_mode != "standard" && pressed(Key::Escape) {
@@ -856,8 +885,10 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
-    // ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the tool
-    // letters: `consume_key` ignores extra ⇧ and ⌥, so ⇧⌥M would otherwise pick a tool.
+    // + / − pick a Path Operation with the Pen tools and Path Selection (`path_components`)…
+    crate::path_components::handle_keys(app, ctx);
+    // … and otherwise ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the
+    // tool letters: `consume_key` ignores extra ⇧ and ⌥, so ⇧⌥M would otherwise pick a tool.
     crate::blend_keys::handle(app, ctx);
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
@@ -887,8 +918,9 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::opacity_keys::handle(app, ctx);
 }
 
-/// Selects a tool from its letter key. Pressing the key of the current group cycles within it; with
-/// the Shift-switch preference only ⇧+key cycles. Returns true when a tool key was handled.
+/// Selects a tool from its letter key. Entering a group uses its remembered eligible tool or the
+/// first eligible tool in toolbar order. Pressing the key of the current group cycles within it.
+/// With the Shift-switch preference, only ⇧+key cycles. Returns true when a tool key was handled.
 fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &impl Fn(Key) -> bool) -> bool {
     let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
     // Each tool's plain key, default or assigned: tools with the same key are one group.
@@ -900,13 +932,20 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
         let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, k));
         if cycle_shift || pressed(k) {
             let before = app.ui.tool;
-            let group: Vec<Tool> = keys.iter().filter(|(_, x)| *x == k).map(|(t, _)| *t).collect();
+            let mut group: Vec<Tool> = keys.iter().filter(|(_, x)| *x == k).map(|(t, _)| *t).collect();
+            // Shift+key cycles in toolbar flyout order.
+            if cycle_shift {
+                group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
+            }
+            let Some(&first) = group.iter().min_by_key(|tool| crate::panels::toolbar::toolbar_position(**tool)) else { continue };
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
-                // The group's last-used tool (the latest one remembered that is in it).
-                None => app.ui.group_tools.iter().rev().copied().find(|last| group.contains(last)).unwrap_or(group[0]),
+                // The group's last-used tool (`group_tools` is most recent first), else its first in
+                // toolbar order.
+                None => app.ui.group_tools.iter().copied().find(|last| group.contains(last)).unwrap_or(first),
             };
+            crate::tool_memory::ended_by_tool(app);
             // Only a letter key is spring-loaded (held for a temporary switch).
             let letter = k.name().chars().next().filter(|_| k.name().chars().count() == 1);
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
@@ -924,3 +963,7 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tool_key_default_tests.rs"]
+mod tool_key_default_tests;

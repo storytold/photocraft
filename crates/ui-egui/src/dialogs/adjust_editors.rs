@@ -4,7 +4,7 @@
 //! Every editor edits the kind's complete parameter set (`photocraft_engine::adjust_params`) as a
 //! JSON object and reports an [`Edit`]: `changed` while values move (the host previews them live)
 //! and `commit` when a gesture ends (the Properties host then runs one `layer.setAdjustment`; a
-//! dialog commits on OK). Selective Color and Color Lookup keep their editors in `adjust_ui`.
+//! dialog commits on OK). Color Lookup keeps its editor in `adjust_ui`.
 
 use crate::point_curve as curve_edit;
 use crate::state::CurvesEditorState as CurveUi;
@@ -28,8 +28,10 @@ mod curves;
 mod gradient_map;
 mod hue_saturation;
 mod levels;
+mod selective_color;
 mod session;
 
+pub(crate) use basic::PHOTO_FILTER_MODE;
 #[cfg(test)]
 pub(crate) use basic::row_value;
 #[cfg(test)]
@@ -47,11 +49,13 @@ use hue_saturation::hue_saturation;
 #[cfg(test)]
 use hue_saturation::{lightness_track, move_hue_range_handle, saturation_track};
 use levels::levels;
+pub(crate) use levels::levels_drag;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
+use selective_color::selective_color;
 pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
 
-/// Kinds edited here (Selective Color and Color Lookup have their own editors; Invert has none).
-pub const KINDS: [&str; 13] = [
+/// Kinds edited here (Color Lookup has its own editor in `adjust_ui`; Invert has none).
+pub const KINDS: [&str; 14] = [
     "brightnessContrast",
     "levels",
     "curves",
@@ -65,10 +69,17 @@ pub const KINDS: [&str; 13] = [
     "posterize",
     "threshold",
     "gradientMap",
+    "selectiveColor",
 ];
 
 pub fn has_editor(kind: &str) -> bool {
     KINDS.contains(&kind)
+}
+
+/// Forget Photo Filter's Filter / Color choice in the editor memory `mem`, so the editor derives it
+/// from the colour again: a choice changed and then cancelled must not outlive the dialog (#9879).
+pub(crate) fn forget_photo_filter_mode(ctx: &egui::Context, mem: egui::Id) {
+    ctx.data_mut(|d| d.remove::<bool>(mem.with(PHOTO_FILTER_MODE)));
 }
 
 /// Kinds that draw a histogram behind their controls.
@@ -161,6 +172,7 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
         "posterize" => sliders(ui, v, &[("levels", "Levels", 2.0, 255.0, 4.0, "", None)]),
         "threshold" => threshold(ui, v, cx),
         "gradientMap" => gradient_map(ui, v, cx),
+        "selectiveColor" => selective_color(ui, v, cx),
         _ => Edit::default(),
     }
 }
@@ -205,15 +217,17 @@ fn color32(c: [f32; 3]) -> Color32 {
     Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
 }
 
-/// A colour swatch button (egui's picker); returns the edit.
-fn color_button(ui: &mut egui::Ui, c: &mut [f32; 3]) -> Edit {
+/// A colour swatch that opens the Color Picker titled after `name` ("Color Picker (Filter
+/// Color)"); the colour previews while the picker is open and commits once when it closes (OK, or
+/// Cancel back to the opening colour after a preview). Cancel without a preview is no edit.
+fn color_button(ui: &mut egui::Ui, c: &mut [f32; 3], name: &str) -> Edit {
     let mut srgb = [c[0], c[1], c[2]].map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
-    let r = crate::widgets::color_edit_button_srgb(ui, &mut srgb);
+    let r = crate::widgets::color_edit_button_srgb(ui, &mut srgb, &crate::color_picker_ui::title_for(name));
     if r.changed() {
         *c = srgb.map(|x| f32::from(x) / 255.0);
     }
-    // The popup edits continuously; each change is a complete value.
-    Edit::discrete(r.changed())
+    let previewing = crate::color_picker_ui::widget_picker_open(ui.ctx(), r.id);
+    Edit { changed: r.changed(), commit: r.changed() && !previewing, ..Default::default() }
 }
 
 fn label(ui: &mut egui::Ui, text: &str) {
