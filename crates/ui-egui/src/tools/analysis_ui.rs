@@ -21,8 +21,8 @@ use crate::theme::Tokens;
 /// What a pointer drag is doing (not serialised).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
-    /// New ruler line from a point.
-    RulerNew,
+    /// New ruler line from a point; the ruler it replaces comes back if the press doesn't move (#11980).
+    RulerNew(Option<Ruler>),
     /// Moving a ruler handle: 0 start, 1 end, 2 protractor end.
     RulerHandle(u8),
     /// Moving count marker (group, index) from where it was.
@@ -235,6 +235,10 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
 }
 
 #[cfg(test)]
+#[path = "analysis_ruler_click_tests.rs"]
+mod analysis_ruler_click_tests;
+
+#[cfg(test)]
 #[path = "note_show_on_new_tests.rs"]
 mod note_show_on_new_tests;
 
@@ -287,14 +291,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 Some(r) if near(r.start) => app.ui.analysis.drag = Some(Drag::RulerHandle(0)),
                 _ => {
                     set_ruler(app, Ruler { start: p, end: p, protractor: None });
-                    app.ui.analysis.drag = Some(Drag::RulerNew);
+                    app.ui.analysis.drag = Some(Drag::RulerNew(cur));
                 }
             }
         }
         (Tool::Ruler, ToolEvent::Move { x, y, .. }) => {
             let (Some(drag), Some(mut r)) = (app.ui.analysis.drag, doc.measurement.ruler) else { return true };
             match drag {
-                Drag::RulerNew | Drag::RulerHandle(1) => r.end = constrain(r.start, [x, y], mods.shift),
+                Drag::RulerNew(_) | Drag::RulerHandle(1) => r.end = constrain(r.start, [x, y], mods.shift),
                 Drag::RulerHandle(0) => r.start = constrain(r.end, [x, y], mods.shift),
                 Drag::RulerHandle(_) => r.protractor = Some(constrain(r.start, [x, y], mods.shift)),
                 _ => return true,
@@ -303,8 +307,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         }
         (Tool::Ruler, ToolEvent::Up { .. }) => {
             let drag = app.ui.analysis.drag.take();
-            if drag == Some(Drag::RulerNew) && doc.measurement.ruler.is_some_and(|r| dist(r.start, r.end) < 0.5) {
-                let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
+            if let Some(Drag::RulerNew(before)) = drag
+                && doc.measurement.ruler.is_some_and(|r| dist(r.start, r.end) < 0.5)
+            {
+                // A click leaves the ruler that was there; with none, it leaves none.
+                match before {
+                    Some(r) => set_ruler(app, r),
+                    None => {
+                        let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
+                    }
+                }
             }
         }
         (Tool::Count, ToolEvent::Down { x, y, .. }) => {
