@@ -365,8 +365,8 @@ pub fn cycle_canvas_color(app: &mut PhotocraftApp, backward: bool) -> Result<(),
     app.run("prefs.set", json!({"values": {"interface.canvasColor": name}})).map(|_| ())
 }
 
-/// The Zoom and Hand tools' context menu: the fixed zooms of the View menu (plus the Hand tool's
-/// Fill Screen), then the zoom steps last, in Photoshop's order (#6005).
+/// The Zoom tool's context menu: the fixed zooms of the View menu (plus Fill Screen), then the
+/// zoom steps last, in Photoshop's order (#6005).
 pub const VIEW_MENU: &[Row] = &[
     Some(("Fit on Screen", "view.fitOnScreen")),
     Some(("Fill Screen", FILL_SCREEN)),
@@ -376,6 +376,14 @@ pub const VIEW_MENU: &[Row] = &[
     None,
     Some(("Zoom In", "view.zoomIn")),
     Some(("Zoom Out", "view.zoomOut")),
+];
+
+/// The Hand tool's context menu: only the fixed zooms, as measured in the reference application (#12022).
+pub const HAND_MENU: &[Row] = &[
+    Some(("Fit on Screen", "view.fitOnScreen")),
+    Some(("100%", "view.actualPixels")),
+    Some(("200%", "view.twoHundredPercent")),
+    Some(("Print Size", "view.printSize")),
 ];
 
 /// The view menu's Fill Screen row. Photoshop has no View menu command for it, so the menu sets
@@ -558,7 +566,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     } else if menu.transform {
         TRANSFORM_MENU
     } else if menu.anchor.is_some() {
-        VIEW_MENU
+        if menu.tool == Tool::Hand { HAND_MENU } else { VIEW_MENU }
     } else if menu.text {
         TYPE_EDIT_MENU
     } else if menu.type_layer {
@@ -1306,3 +1314,6 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hand_menu_entries_tests;

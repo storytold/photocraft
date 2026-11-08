@@ -276,8 +276,10 @@ use tools::align_bar;
 pub use tools::analysis_ui;
 pub use tools::anchor_tools;
 pub use tools::artboard_tool;
+pub use tools::bg_eraser_popup;
 pub(crate) use tools::brush_cursor;
 pub use tools::brush_picker;
+pub use tools::brush_refusal;
 pub use tools::brush_resize;
 use tools::cam_transform;
 pub use tools::cas_transform;
@@ -780,6 +782,8 @@ mod background_eraser_tolerance_field_tests;
 mod brush_options_tooltips_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
+#[cfg(test)]
+mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod shape_bounds_box_tests;
 
