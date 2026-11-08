@@ -223,15 +223,6 @@ fn marker_grab(ends: [(Pos2, Vec2); 2], index: usize, p: Pos2, closed: bool, ran
     }
 }
 
-/// Whether Direct Selection should edit the path instead of moving a marker at document point
-/// `(x, y)`: that tool reshapes paths, so an anchor or handle under a marker (an open path's
-/// default end marker sits on its last anchor) keeps the click. Path Selection always takes the
-/// marker.
-fn anchor_wins(app: &PhotocraftApp, x: f64, y: f64) -> bool {
-    use photocraft_vector::edit::Hit;
-    app.ui.tool == Tool::DirectSelection && matches!(crate::direct_select::hit_target(app, [x, y], true), Some((_, _, Hit::Anchor(_) | Hit::Handle(..))))
-}
-
 /// What the pointer would move: the cursor shows an I-beam with a right-pointing triangle for the
 /// beginning, a left-pointing one for the end, and both for the whole text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,7 +269,7 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option
         let TextShape::Path { path, .. } = &text.shape else { return None };
         let range = effective_range(text, &geometry)?;
         let (endpoint, _) = marker_grab(ends, index, p, path.closed, range, geometry.length());
-        return (!anchor_wins(app, d[0], d[1])).then_some(Grab::of(endpoint));
+        return Some(Grab::of(endpoint));
     }
     (crate::type_tool::hit_layer(app, d[0], d[1]) == Some(layer)).then_some(Grab::Body)
 }
@@ -682,9 +673,6 @@ pub(crate) fn pointer_with_context(
     let best = markers_with_geometry(&text, &geometry, &xf).and_then(|ends| Some((ends, marker_hit(ends, p)?)));
     let active_layer = app.session.active().and_then(|st| st.active_layer);
     let (endpoint, either) = if let Some((ends, (index, _))) = best {
-        if anchor_wins(app, x, y) {
-            return false;
-        }
         marker_grab(ends, index, p, path.closed, original, geometry.length())
     } else if crate::type_tool::hit_layer(app, x, y) == active_layer && active_layer.is_some() {
         (None, false)
@@ -1124,20 +1112,29 @@ mod tests {
         assert!(cancel(&mut app));
     }
 
-    /// An open path's default end marker sits on its last anchor. Direct Selection reshapes the
-    /// path there (the anchor keeps the click), while Path Selection moves the marker.
+    /// An open path's default end marker sits on its last anchor. Both selection tools move the
+    /// marker there, as the reference editor does, even when Direct Selection has selected the anchor.
     #[test]
-    fn direct_selection_anchor_under_a_marker_keeps_the_click() {
-        for (tool, marker) in [(Tool::DirectSelection, false), (Tool::PathSelection, true)] {
-            let mut app = app(tool);
-            app.run("type.setPathPlacement", json!({"end": null})).unwrap();
-            let xf = ViewXform::active(&app).unwrap();
-            let end = markers(active_text(&app).unwrap(), &xf).unwrap()[1].0;
-            let doc = xf.to_doc(end);
-            assert!((doc[0] - 180.0).abs() < 1e-3, "end marker on the last anchor: {doc:?}");
-            assert_eq!(cursor(&mut app, &xf, end), marker.then_some(Grab::End), "{tool:?}");
-            assert_eq!(pointer(&mut app, ToolEvent::Down { x: doc[0], y: doc[1], pressure: 1.0 }), marker, "{tool:?}");
-            assert_eq!(app.ui.type_path_drag.as_ref().map(|d| d.endpoint), marker.then_some(Some(1)));
+    fn a_marker_on_an_anchor_is_grabbed_by_both_selection_tools() {
+        for tool in [Tool::DirectSelection, Tool::PathSelection] {
+            for select_anchor in [false, true] {
+                let mut app = app(tool);
+                app.run("type.setPathPlacement", json!({"end": null})).unwrap();
+                if select_anchor {
+                    // A marquee round the last anchor selects it first.
+                    let mods = egui::Modifiers::NONE;
+                    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 195.0, y: 115.0, pressure: 1.0 }, mods);
+                    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 170.0, y: 90.0, pressure: 1.0 }, mods);
+                    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 170.0, y: 90.0 }, mods);
+                }
+                let xf = ViewXform::active(&app).unwrap();
+                let end = markers(active_text(&app).unwrap(), &xf).unwrap()[1].0;
+                let doc = xf.to_doc(end);
+                assert!((doc[0] - 180.0).abs() < 1e-3, "end marker on the last anchor: {doc:?}");
+                assert_eq!(cursor(&mut app, &xf, end), Some(Grab::End), "{tool:?} selected {select_anchor}");
+                assert!(pointer(&mut app, ToolEvent::Down { x: doc[0], y: doc[1], pressure: 1.0 }), "{tool:?} selected {select_anchor}");
+                assert_eq!(app.ui.type_path_drag.as_ref().map(|d| d.endpoint), Some(Some(1)), "{tool:?} selected {select_anchor}");
+            }
         }
     }
 
