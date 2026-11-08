@@ -908,6 +908,9 @@ mod color_tab_theme_tests;
 mod new_layer_button_tests;
 
 #[cfg(test)]
+mod layer_via_label_tests;
+
+#[cfg(test)]
 mod smart_filter_rows_tests;
 
 #[cfg(test)]
@@ -1023,6 +1026,8 @@ mod brush_opacity_minimum_tests;
 mod doc_tab_menu_tests;
 #[cfg(test)]
 mod layers_empty_area_menu_tests;
+#[cfg(test)]
+mod pencil_auto_erase_tooltip_tests;
 #[cfg(test)]
 mod preferences_submenu_tests;
 #[cfg(test)]
