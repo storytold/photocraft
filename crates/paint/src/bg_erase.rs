@@ -17,8 +17,15 @@ use crate::retouch::{Footprint, Region, alpha_index, apply_dab_stroke};
 #[serde(default, rename_all = "camelCase")]
 pub struct BgEraseSettings {
     pub sampling: Sampling,
+    /// Which matching pixels are erased. [`Limits::FindEdges`] grades the erase over the Tolerance
+    /// like [`Limits::Contiguous`] in this tool (#11904), unlike Color Replacement, where it turns
+    /// the soft falloff off.
     pub limits: Limits,
-    /// 0..1: largest per-channel difference from the sampled colour that is erased.
+    /// 0..1: how far from the sampled colour a colour is still partly erased. The distance is the
+    /// largest increase plus the largest decrease over the colour channels (`dist`); an exact
+    /// match is erased fully, then less the further a colour is, and colours at or beyond the
+    /// Tolerance are kept (`graded_weight`). Protect Foreground Color still compares the
+    /// foreground by the largest per-channel difference (`max_channel_dist`).
     pub tolerance: f32,
     /// Keep pixels that match the foreground colour.
     pub protect_foreground: bool,
@@ -51,6 +58,12 @@ fn dist(a: &[f32], b: &[f32]) -> f32 {
         (up.max(diff), down.max(-diff))
     });
     up + down
+}
+
+/// The largest per-channel difference of `a` from `b`: the distance Protect Foreground Color keeps
+/// using (#11901 measured only the sample match; #11903 keeps today's measure for the foreground).
+fn max_channel_dist(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
 }
 
 /// The match weight of one dab for a colour `d` away from the sampled colour (#11901): an exact
@@ -140,7 +153,7 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
         // partly is matched by its current, decontaminated colour, which is pushed away from the
         // sampled colour, so later dabs erase it again only while it is still within the Tolerance.
         let mut weight = vec![0.0f32; w * h];
-        let protected = |c: &[f32]| protect_foreground && dist(c, &fg) <= tol;
+        let protected = |c: &[f32]| protect_foreground && max_channel_dist(c, &fg) <= tol;
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
                 if fp.at(x, y) <= 0.0 {
