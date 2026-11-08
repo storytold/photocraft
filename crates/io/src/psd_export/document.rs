@@ -154,7 +154,10 @@ fn export_supported_document(
         resources.push(ImageResource::new(ids::XMP, photocraft_codecs::export_xmp(x, ppi).as_bytes().to_vec()));
     }
     if let Some(e) = &doc.metadata.exif {
-        resources.push(ImageResource::new(ids::EXIF, photocraft_codecs::export_exif(e, ppi).into_owned()));
+        resources.push(ImageResource::new(
+            ids::EXIF,
+            photocraft_codecs::exif_with_pixel_size(&photocraft_codecs::export_exif(e, ppi), (doc.size.width, doc.size.height)).into_owned(),
+        ));
     }
     let mut global_blocks = Vec::new();
     let preserved = ex.smart.finish(crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc)));

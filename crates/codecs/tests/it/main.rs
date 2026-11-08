@@ -8,6 +8,7 @@ mod decode_warnings;
 mod deep_exr;
 mod detect_caps;
 mod dpx;
+mod exif_pixel_size;
 mod exr_cryptomatte;
 mod exr_multipart;
 mod exr_stream;

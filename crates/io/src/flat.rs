@@ -1448,11 +1448,11 @@ impl<'a> FlatSource<'a> {
         layout_for(self.mode, alpha)
     }
 
-    /// The document's EXIF, XMP, text and resolution.
+    /// The document's EXIF (its pixel size the document's, #12385), XMP, text and resolution.
     fn meta(&self) -> codecs::Metadata {
         let doc = self.doc;
         codecs::Metadata {
-            exif: doc.metadata.exif.as_ref().map(|e| e.to_vec()),
+            exif: doc.metadata.exif.as_ref().map(|e| codecs::exif_with_pixel_size(e, (doc.size.width, doc.size.height)).into_owned()),
             xmp: doc.metadata.xmp.as_deref().map(str::to_owned),
             text: doc.metadata.text.clone(),
             dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),

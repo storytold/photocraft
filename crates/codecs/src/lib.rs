@@ -52,7 +52,7 @@ pub use crate::options::{
     TiffCompression,
 };
 pub use crate::orientation::{OrientSteps, exif_orientation, upright_exif, upright_xmp};
-pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
+pub use crate::resolution::{exif_resolution, exif_with_pixel_size, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
