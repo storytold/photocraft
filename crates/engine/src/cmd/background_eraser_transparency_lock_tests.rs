@@ -74,26 +74,32 @@ fn a_drag_and_the_live_preview_erase_a_transparency_locked_layer_too() {
 #[test]
 fn with_a_colour_channel_target_the_preview_matches_the_commit_on_a_locked_layer() {
     // A channel target erases colour channels only (towards the background colour) and never
-    // changes alpha, so the lock the preview keeps there gives the commit's pixels exactly. The
-    // stroke crosses the band's edge, so transparent pixels are under the tip too.
-    let mut s = session(8);
-    s.execute("layer.setProps", json!({"locks": {"transparency": true}})).unwrap();
-    let opts = |pts: &[[f64; 2]]| json!({"points": pts, "size": 16, "hardness": 0.5, "target": {"colors": [1]}});
-    let all = [[8.0, 12.0], [32.0, 12.0], [56.0, 12.0]];
-    let mut live = live_background_eraser(&s, &opts(&all[..1])).unwrap();
-    for q in &all[1..] {
-        live.push(&[photocraft_paint::StrokePoint::new(q[0], q[1], 1.0)]).unwrap();
+    // changes alpha. The commit mixes back without the lock, so the preview must too: at 32 bits
+    // a lock-keeping mix rounds partly transparent pixels differently. The stroke crosses the
+    // band's edge and a half-transparent strip, at half opacity, so every mix case is under the tip.
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        s.execute("select.rect", json!({"x": 0, "y": 4, "width": 64, "height": 6, "antiAlias": false})).unwrap();
+        s.execute("edit.fill", json!({"color": "#3a7fd0", "opacity": 37})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("layer.setProps", json!({"locks": {"transparency": true}})).unwrap();
+        let opts = |pts: &[[f64; 2]]| json!({"points": pts, "size": 16, "hardness": 0.5, "opacity": 0.53, "target": {"colors": [1]}});
+        let all = [[8.0, 9.0], [32.0, 10.0], [56.0, 11.0]];
+        let mut live = live_background_eraser(&s, &opts(&all[..1])).unwrap();
+        for q in &all[1..] {
+            live.push(&[photocraft_paint::StrokePoint::new(q[0], q[1], 1.0)]).unwrap();
+        }
+        let id = s.active().unwrap().active_layer.unwrap();
+        let shown = live.doc.layer(id).unwrap().surface().unwrap().clone();
+        let before = alphas(&s);
+        s.execute("paint.backgroundEraser", opts(&all)).unwrap();
+        let surf = target(&s).surface().unwrap();
+        assert!(surf.rgba(32, 12)[1] > 0.0, "{depth}-bit: the green channel moved towards the white background");
+        for (x, y) in (0..40).flat_map(|y| (0..64).map(move |x| (x, y))) {
+            assert_eq!(shown.rgba(x, y), surf.rgba(x, y), "{depth}-bit ({x}, {y}): preview = commit");
+        }
+        assert_eq!(alphas(&s), before, "{depth}-bit: alpha untouched");
     }
-    let id = s.active().unwrap().active_layer.unwrap();
-    let shown = live.doc.layer(id).unwrap().surface().unwrap().clone();
-    let before = alphas(&s);
-    s.execute("paint.backgroundEraser", opts(&all)).unwrap();
-    let surf = target(&s).surface().unwrap();
-    assert!(surf.rgba(32, 12)[1] > 0.0, "the green channel moved towards the white background");
-    for (x, y) in (0..40).flat_map(|y| (0..64).map(move |x| (x, y))) {
-        assert_eq!(shown.rgba(x, y), surf.rgba(x, y), "({x}, {y}): preview = commit");
-    }
-    assert_eq!(alphas(&s), before, "alpha untouched");
 }
 
 #[test]

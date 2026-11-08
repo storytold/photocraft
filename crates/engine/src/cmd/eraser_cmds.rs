@@ -235,15 +235,18 @@ pub fn live_background_eraser(s: &Session, p: &Value) -> Result<crate::retouch_c
         crate::extra_cmds::background_to_layer(&mut doc, id);
     }
     let mut stroke = background_eraser_stroke(&stroke);
+    // The commit mixes back without the transparency lock (a locked layer is erased too, and a
+    // channel target leaves alpha alone), so the preview does as well; the points go in once the
+    // lock is off.
+    let points = std::mem::take(&mut stroke.points);
     if let Some(colors) = colors {
-        return crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({"target":colors.params()}), stroke, Some(id), 0, |pre| {
+        let mut live = crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({"target":colors.params()}), stroke, Some(id), 0, |pre| {
             selected_background_effect(pre, &bs, colors, bg)
         })?
-        .with_tail_preview();
+        .unlocked();
+        live.push(&points)?;
+        return live.with_tail_preview();
     }
-    // The commit erases a transparency-locked layer too, so the preview mixes back without the
-    // lock; the points go in once the lock is off.
-    let points = std::mem::take(&mut stroke.points);
     let mut live = crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({}), stroke, Some(id), 0, |pre| match background_eraser_effect(pre, &bs) {
         Some(effect) => Box::new(effect),
         // No alpha: the commit erases nothing either.
