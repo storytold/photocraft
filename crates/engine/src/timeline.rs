@@ -329,6 +329,15 @@ pub(crate) fn pin_patterns(s: &Session, id: &str, mut params: Value) -> Value {
 /// The patterns `params` and `prelude` name, as they are now, where that isn't the version in
 /// effect at the marker of document `doc`'s timeline.
 fn used_patterns(s: &Session, doc: DocId, params: &Value, prelude: &[Prelude]) -> Vec<photocraft_doc::pattern::Pattern> {
+    let tl = s.docs.iter().find(|st| st.doc.id == doc).and_then(|st| st.doc.design_timeline.clone());
+    let held: Vec<photocraft_doc::pattern::Pattern> =
+        tl.as_ref().map(|tl| tl.steps.iter().take(tl.in_effect()).flat_map(|st| st.patterns.iter().cloned()).collect()).unwrap_or_default();
+    new_versions(s, params, prelude, &held)
+}
+
+/// The patterns `params` and `prelude` name, as `s` resolves them now, that aren't the latest
+/// version `held` has of them.
+fn new_versions(s: &Session, params: &Value, prelude: &[Prelude], held: &[photocraft_doc::pattern::Pattern]) -> Vec<photocraft_doc::pattern::Pattern> {
     /// Each pattern key with the object naming it (which may add a `patternName`).
     fn named<'a>(v: &'a Value, out: &mut Vec<(&'a str, &'a Value)>, depth: usize) {
         match v {
@@ -347,8 +356,7 @@ fn used_patterns(s: &Session, doc: DocId, params: &Value, prelude: &[Prelude]) -
     for p in prelude {
         named(&p.params, &mut keys, 0);
     }
-    let tl = s.docs.iter().find(|st| st.doc.id == doc).and_then(|st| st.doc.design_timeline.clone());
-    let in_effect = |id: &str| tl.as_ref().and_then(|tl| tl.steps.iter().take(tl.in_effect()).rev().flat_map(|st| &st.patterns).find(|p| p.id == id).cloned());
+    let in_effect = |id: &str| held.iter().rev().find(|p| p.id == id).cloned();
     let mut out: Vec<photocraft_doc::pattern::Pattern> = Vec::new();
     for (key, obj) in keys {
         let Ok(p) = crate::pattern_cmds::resolve_or_named(s, key, obj) else { continue };
@@ -357,6 +365,16 @@ fn used_patterns(s: &Session, doc: DocId, params: &Value, prelude: &[Prelude]) -
         }
     }
     out
+}
+
+/// `versions` with `patterns` in place of any with their ids.
+fn merge(versions: &mut Vec<photocraft_doc::pattern::Pattern>, patterns: &[photocraft_doc::pattern::Pattern]) {
+    for p in patterns {
+        match versions.iter_mut().find(|q| q.id == p.id) {
+            Some(q) => *q = p.clone(),
+            None => versions.push(p.clone()),
+        }
+    }
 }
 
 /// Put `patterns` in `r`'s library in place of any with their ids.
@@ -532,18 +550,21 @@ pub(crate) fn replay(
             .ok_or_else(|| crate::EngineError::Other("internal error: no checkpoint to replay from".into()))?,
     };
     let mut r = scratch(seed, &resume);
-    // The tool settings the steps before `start` set, as a replay from the base has them.
+    // The tool settings and pattern versions the steps before `start` set, as a replay from the
+    // base has them.
+    let mut versions = Vec::new();
     for st in tl.steps.iter().take(start) {
-        install(&mut r, &st.patterns);
         for p in &st.prelude {
             let _ = r.execute(&p.command, p.params.clone());
         }
+        merge(&mut versions, &st.patterns);
     }
+    install(&mut r, &versions);
     for (i, step) in tl.steps.iter_mut().enumerate().take(end).skip(start) {
         ctx.check()?;
         ctx.progress((i - start) as f32 / (end - start) as f32, &format!("Step {} of {end}", i + 1));
         let stale = can_go_stale(step) && (step.state == StepState::Stale || changed.is_some_and(|c| i > c));
-        run_step(&mut r, step);
+        run_step(&mut r, step, &mut versions);
         if stale && !step.state.is_failure() {
             step.state = StepState::Stale;
         }
@@ -556,18 +577,26 @@ pub(crate) fn replay(
     Ok(Replayed { doc: (*st.doc).clone(), active: st.active_layer, selected: st.selected_layers.clone(), timeline: tl })
 }
 
-/// Replay one step in `r`, setting its outcome and checkpoint.
-fn run_step(r: &mut Session, step: &mut DesignStep) {
+/// Replay one step in `r`, setting its outcome and checkpoint. `versions` are the pattern versions
+/// in effect, this step's included once it has run.
+fn run_step(r: &mut Session, step: &mut DesignStep, versions: &mut Vec<photocraft_doc::pattern::Pattern>) {
     let Some(pre) = r.active().map(|st| st.doc.clone()) else { return };
     let finish = |r: &mut Session, step: &mut DesignStep, state: StepState| {
         step.state = state;
         step.checkpoint = Checkpoint(r.active().map(|st| st.doc.clone()));
     };
     // Tool settings and patterns feed the later steps too, so they go in even when the step doesn't.
-    install(r, &step.patterns);
     for p in &step.prelude {
         // A tool setting that no longer applies leaves the tool as it is.
         let _ = r.execute(&p.command, p.params.clone());
+    }
+    let before = versions.clone();
+    merge(versions, &step.patterns);
+    // After the prelude: a library change it replays (a pattern deleted, then imported again,
+    // which a replay refuses) doesn't take a version a step paints with.
+    install(r, versions);
+    if step.rerecord {
+        step.params = pin_patterns(r, &step.command, step.params.clone());
     }
     if step.suppressed {
         return finish(r, step, StepState::Ok);
@@ -607,6 +636,11 @@ fn run_step(r: &mut Session, step: &mut DesignStep) {
         if step.baked.is_some() {
             step.baked = Some(Arc::new(photocraft_doc::design::Baked::capture(&pre, &post, &created, &changed)));
         }
+        // The pattern versions its new params paint with, beside those it brought in (later
+        // steps may paint with them).
+        let new = new_versions(r, &step.params, &step.prelude, &before);
+        merge(&mut step.patterns, &new);
+        merge(versions, &new);
         (step.created, step.changed, step.rerecord) = (created, changed, false);
         return finish(r, step, StepState::Ok);
     }

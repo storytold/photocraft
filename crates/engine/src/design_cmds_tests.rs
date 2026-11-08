@@ -1191,3 +1191,62 @@ fn a_pattern_version_reaches_later_steps_through_timeline_edits() {
     // The inserted selection is the later fill's now: it paints over the inserted blue fill.
     assert!(red_at(&s, 4, 12), "the later fill keeps the version it painted with");
 }
+
+/// A replayed prelude that deletes a pattern (then imports it again, which a replay refuses)
+/// doesn't take the version a later fill paints with.
+#[test]
+fn a_replayed_pattern_delete_leaves_the_version_a_step_paints_with() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let id = s.execute("edit.definePattern", json!({"name": "Mine"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    let dir = std::env::temp_dir().join(format!("pc-design-reimport-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.pat").to_string_lossy().into_owned();
+    s.execute("pattern.export", json!({"path": path})).unwrap();
+    s.set_active(0);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": id})).unwrap();
+    s.execute("pattern.delete", json!({"pattern": id})).unwrap();
+    s.execute("pattern.import", json!({"path": path})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": id})).unwrap();
+    let want = doc(&s);
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(state(&mut s, 4), "ok");
+    assert_eq!(doc(&s), want);
+}
+
+/// A step edited to paint with another pattern keeps that pattern's version: a replay after it
+/// is deleted, and after a save and load, paints with it.
+#[test]
+fn an_edited_step_keeps_the_version_of_its_new_pattern() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let a = s.execute("edit.definePattern", json!({"name": "A"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    s.execute("edit.definePattern", json!({"name": "B"})).unwrap();
+    s.set_active(0);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": a})).unwrap();
+    let fill = step_id(&mut s, 2);
+    s.execute("design.editStep", json!({"step": fill, "params": {"contents": "pattern", "pattern": "B"}})).unwrap();
+    let st = steps(&mut s);
+    let b = s.patterns.items.iter().find(|p| p.name == "B").unwrap().id.clone();
+    assert_eq!(st[2]["params"]["pattern"], json!(b), "kept by id");
+    let want = doc(&s);
+    s.execute("pattern.delete", json!({"pattern": b})).unwrap();
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(state(&mut s, 2), "ok");
+    assert_eq!(doc(&s), want);
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let mut r = Session::new();
+    r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
+    r.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&r), want, "after a save and load too");
+}
