@@ -949,6 +949,36 @@ fn an_open_that_asks_about_its_profile_holds_the_document_back() {
     assert_eq!(s.documents().len(), 1);
 }
 
+/// An interactive open of a raw that goes to the Camera Raw dialog holds the developed document
+/// back (the dialog's Open admits it); a headless open, or one with Open in Camera Raw off, adds
+/// it at once.
+#[test]
+fn an_interactive_raw_open_is_held_for_the_camera_raw_dialog() {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    let bytes = Arc::new(DngSpec::cfa(24, 16, mosaic(&scene(24, 16), 24, [0, 1, 1, 2], 0, 30000)).build());
+    let mut s = Session::new();
+    let open = |s: &mut Session, user: bool| {
+        let started = if user {
+            s.start_open_for_user("a.dng", OpenSource::Bytes(Arc::clone(&bytes))).unwrap()
+        } else {
+            s.start_open("a.dng", OpenSource::Bytes(Arc::clone(&bytes))).unwrap()
+        };
+        let JobOutcome::Done(v) = wait_event(s, job(started)).outcome else { panic!() };
+        v
+    };
+    let v = open(&mut s, true);
+    assert!(s.documents().is_empty(), "held back, not opened: {v}");
+    assert_eq!(v["cameraRaw"], true);
+    assert!(s.take_held_open(v["held"].as_u64().unwrap()).is_some());
+    let v = open(&mut s, false);
+    assert!(v.get("held").is_none(), "headless: opened: {v}");
+    assert_eq!(s.documents().len(), 1);
+    s.execute("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
+    let v = open(&mut s, true);
+    assert!(v.get("held").is_none(), "no dialog: opened: {v}");
+    assert_eq!(s.documents().len(), 2);
+}
+
 #[test]
 fn warm_layer_bounds_visits_every_layer_and_can_be_cancelled() {
     let mut s = session(40, 30);

@@ -191,8 +191,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         && !app.raw_shelf.is_empty()
         && let Err(e) = super::filmstrip::open_held(app, ctx, 0)
     {
-        // The document stays open, developed with the defaults.
-        app.raw_shelf.remove(0);
+        // It opens as developed with the defaults rather than vanish.
+        let held = app.raw_shelf.remove(0);
+        let _ = super::open::commit_open_raw(app, &Default::default(), &held.raw, None);
         app.ui.status = e;
         app.ui.status_error = true;
     }
@@ -240,7 +241,12 @@ impl CameraRawDialog {
 fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
+    // A raw being opened is not in the session: its own document says how it displays.
+    let held = app.camera_raw.as_ref().and_then(|d| d.raw_open.as_ref()).and_then(|r| r.held.clone());
+    let current_display = match held {
+        Some(doc) => app.session.color.canvas_display(&doc).ok(),
+        None => app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok()),
+    };
     let mut action: Option<&str> = None;
     let mut show_held: Option<usize> = None;
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {

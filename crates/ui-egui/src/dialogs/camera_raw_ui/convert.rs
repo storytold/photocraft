@@ -98,11 +98,14 @@ pub(super) struct Source {
     pub(super) surf: photocraft_raster::Surface,
     /// The raw file the open-time dialog develops its raw-stage settings from ([`ProxyJob`](super::ProxyJob)).
     pub(super) raw: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    /// The document the pixels belong to: a held raw's, which is not in the session. `None`: the
+    /// active document.
+    pub(super) doc: Option<std::sync::Arc<photocraft_doc::Document>>,
 }
 
 impl From<photocraft_raster::Surface> for Source {
     fn from(surf: photocraft_raster::Surface) -> Self {
-        Source { surf, raw: None }
+        Source { surf, raw: None, doc: None }
     }
 }
 
@@ -124,13 +127,16 @@ pub(super) fn open_pixels(
     coverage: Coverage,
     target: Target,
 ) -> Result<(), String> {
-    let Source { surf, raw } = source;
-    let st = app.session.active().ok_or("no document")?;
-    let canvas = st.doc.bounds();
-    let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
+    let Source { surf, raw, doc } = source;
+    let doc = match doc {
+        Some(doc) => doc,
+        None => app.session.active().ok_or("no document")?.doc.clone(),
+    };
+    let canvas = doc.bounds();
+    let name = doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let mut params = params;
     if params.encoding_gamma == 0.0 {
-        params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
+        params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&doc);
     }
     let (area, w, h) = preview_area(canvas, &surf)?;
     // A raw being opened: the proxy is its binned sensor data developed as the document was, so
@@ -150,12 +156,12 @@ pub(super) fn open_pixels(
             .collect::<Vec<_>>()
     };
     let selection = match &coverage {
-        Coverage::Selection => st.doc.selection.as_ref().map(|mask| sample(&|x, y| mask.sample_channel(x, y, 0))),
+        Coverage::Selection => doc.selection.as_ref().map(|mask| sample(&|x, y| mask.sample_channel(x, y, 0))),
         Coverage::Mask(mask) => Some(sample(&|x, y| mask.value(x, y))),
         Coverage::None => None,
     };
-    let source = photocraft_engine::color_cmds::composite_profile(&st.doc);
-    let display = app.session.color.canvas_display(&st.doc).map_err(|e| e.to_string())?;
+    let source = photocraft_engine::color_cmds::composite_profile(&doc);
+    let display = app.session.color.canvas_display(&doc).map_err(|e| e.to_string())?;
     let lab_transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::LabD50.profile(), Default::default()).map_err(|e| e.to_string())?;
     let scope_transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::Srgb.profile(), Default::default()).map_err(|e| e.to_string())?;
     if let Some(saved) = app.session.prefs().dialogs.get("filter.cameraRaw.scope")
@@ -200,7 +206,7 @@ pub(super) fn open_pixels(
             area,
             match coverage {
                 Coverage::Selection => {
-                    st.doc.selection.clone().map(crate::camera_raw_detail_ui::Coverage::Selection).unwrap_or(crate::camera_raw_detail_ui::Coverage::None)
+                    doc.selection.clone().map(crate::camera_raw_detail_ui::Coverage::Selection).unwrap_or(crate::camera_raw_detail_ui::Coverage::None)
                 }
                 Coverage::Mask(mask) => crate::camera_raw_detail_ui::Coverage::Mask(mask),
                 Coverage::None => crate::camera_raw_detail_ui::Coverage::None,

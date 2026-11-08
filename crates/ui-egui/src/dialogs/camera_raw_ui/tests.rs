@@ -348,9 +348,19 @@ fn raw_app() -> (PhotocraftApp, Vec<u8>) {
     (app, spec.build())
 }
 
+/// The raw being looked at: the one the open-time dialog shows (not a document yet), else the
+/// last one waiting for it, else the active document.
+fn shown_doc(app: &PhotocraftApp) -> std::sync::Arc<photocraft_doc::Document> {
+    let shown = app.camera_raw.as_ref().and_then(|d| d.raw_open.as_ref()).and_then(|r| r.held.clone());
+    match shown.or_else(|| app.raw_shelf.last().and_then(|h| h.raw.held.clone())) {
+        Some(doc) => doc,
+        None => app.session.active().unwrap().doc.clone(),
+    }
+}
+
 fn mean_red(app: &PhotocraftApp) -> f32 {
-    let st = app.session.active().unwrap();
-    let s = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    let doc = shown_doc(app);
+    let s = doc.layers.iter().find_map(|l| l.surface()).unwrap();
     (0..8).map(|i| s.rgba(4 + i * 4, 16)[0]).sum::<f32>() / 8.0
 }
 
@@ -382,8 +392,8 @@ fn raw_opens_in_camera_raw_and_open_redevelops() {
 }
 
 fn pixels(app: &PhotocraftApp) -> Vec<f32> {
-    let st = app.session.active().unwrap();
-    let s = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    let doc = shown_doc(app);
+    let s = doc.layers.iter().find_map(|l| l.surface()).unwrap();
     (0..32).flat_map(|y| (0..48).map(move |x| (x, y))).flat_map(|(x, y)| s.rgba(x, y)).collect()
 }
 
@@ -424,10 +434,9 @@ fn the_demosaic_method_is_chosen_at_open() {
     // The preference may change while a background open runs: the dialog starts from the
     // method the open developed with (its note), not from the newer preference.
     let warnings = app.open_bytes("IMG_0004.dng", &dng).unwrap();
-    take_queued(&mut app);
+    let held = take_queued(&mut app).unwrap().held.unwrap();
     app.run("prefs.set", json!({"path": "rawDefaults.demosaic", "value": "ahd"})).unwrap();
-    let document = app.session.active().unwrap().doc.id;
-    queue_open_dialog(&mut app, document, "IMG_0004.dng", None, Some(&dng), &warnings).unwrap();
+    queue_open_dialog(&mut app, (*held).clone(), "IMG_0004.dng", None, Some(&dng), &warnings).unwrap();
     let raw = take_queued(&mut app).unwrap();
     use photocraft_io::raw::Demosaic;
     assert_eq!((raw.developed_with, raw.demosaic), (Demosaic::Bilinear, Demosaic::Bilinear));
@@ -522,8 +531,10 @@ fn clarity_texture_and_dehaze_of_a_raw_open_act_on_the_raw_data() {
     assert!(mean_red(&app) < before, "Dehaze darkens: {before} → {}", mean_red(&app));
 }
 
+/// Open in the background: the re-developed raw becomes a document when the develop lands, after
+/// the tabs already there, and is the active one. Until then it is not a tab.
 #[test]
-fn background_redevelop_keeps_the_tab_position_and_view() {
+fn background_redevelop_opens_the_raw_when_it_lands() {
     let (mut app, dng) = raw_app();
     let ctx = egui::Context::default();
     app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
@@ -531,9 +542,8 @@ fn background_redevelop_keeps_the_tab_position_and_view() {
     app.run("file.new", json!({"width": 12, "height": 12})).unwrap();
     app.sync_views();
     let raw = take_queued(&mut app).unwrap();
-    let old_id = raw.document;
-    assert_eq!(document_index(&app, old_id), Some(1));
-    app.ui.views[1].zoom = 3.0;
+    assert_eq!(app.session.documents().len(), 2, "the raw in the dialog is no tab");
+    assert_eq!(app.session.active_index(), Some(1));
     open_raw(&mut app, &ctx, raw).unwrap();
     let before = mean_red(&app);
     // The re-develop and the Camera Raw step run as jobs; the UI thread only polls.
@@ -542,6 +552,7 @@ fn background_redevelop_keeps_the_tab_position_and_view() {
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["pending"], true, "{r}");
     assert!(app.camera_raw.is_none());
+    assert_eq!(app.session.documents().len(), 2, "no tab before the develop lands");
     for _ in 0..3000 {
         crate::jobs_ui::tick(&mut app, &ctx);
         if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
@@ -552,12 +563,11 @@ fn background_redevelop_keeps_the_tab_position_and_view() {
     assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the jobs never finished");
     let docs = app.session.documents();
     assert_eq!(docs.len(), 3);
-    assert_eq!((docs[0].doc.size.width, docs[2].doc.size.width), (10, 12), "the other tabs keep their places");
-    assert_ne!(docs[1].doc.id, old_id, "re-developed");
-    assert_eq!(docs[1].doc.depth, photocraft_color::SampleType::U16);
-    assert_eq!(docs[1].saved_revision, docs[1].revision, "Open leaves the document unmodified");
-    assert_eq!(app.session.active_index(), Some(1));
-    assert_eq!(app.ui.views[1].zoom, 3.0, "the view carries over to the re-developed document");
+    assert_eq!((docs[0].doc.size.width, docs[1].doc.size.width), (10, 12), "the other tabs keep their places");
+    assert_eq!(docs[2].doc.name, "mid.dng");
+    assert_eq!(docs[2].doc.depth, photocraft_color::SampleType::U16);
+    assert_eq!(docs[2].saved_revision, docs[2].revision, "Open leaves the document unmodified");
+    assert_eq!(app.session.active_index(), Some(2));
     assert!(mean_red(&app) > before + 0.05, "{before} → {}", mean_red(&app));
 }
 
@@ -569,8 +579,8 @@ fn a_raw_opens_and_redevelops_at_the_raw_defaults_resolution() {
     let ctx = egui::Context::default();
     app.run("prefs.set", json!({"path": "rawDefaults.resolution", "value": 240})).unwrap();
     app.open_bytes("IMG_0004.dng", &dng).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.resolution_dpi, 240.0);
     let raw = take_queued(&mut app).unwrap();
+    assert_eq!(raw.held.as_ref().unwrap().resolution_dpi, 240.0);
     open_raw(&mut app, &ctx, raw).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
@@ -668,8 +678,8 @@ fn a_raw_that_cannot_be_shown_keeps_the_dialog_and_the_filmstrip() {
     app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
-    let two = document_index(&app, ids[1]).unwrap();
-    app.session.close(two);
+    // Two's developed document is gone.
+    app.raw_shelf[1].raw.held = None;
     assert!(filmstrip::show_raw(&mut app, &ctx, 1).is_err());
     let d = app.camera_raw.as_ref().expect("the dialog stays");
     assert_eq!((d.raw_open.as_ref().unwrap().document, d.params.exposure), (ids[0], 1.0));
@@ -754,7 +764,7 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
         }
     }
     let method = photocraft_io::raw::Demosaic::Ahd;
-    let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method };
+    let raw = RawOpen { document, held: None, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method };
     let (unshown, _) = filmstrip::first_settings(&app, &raw);
     open_raw(&mut app, &ctx, raw).unwrap();
     let shown = &app.camera_raw.as_ref().unwrap().params;
@@ -790,6 +800,7 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
             &ctx,
             RawOpen {
                 document: photocraft_doc::DocId(u64::MAX),
+                held: None,
                 name: "x".into(),
                 path: None,
                 bytes: None,
@@ -1314,4 +1325,86 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert_eq!((r["done"].clone(), r["saved"].clone()), (json!(true), json!([])), "{r}");
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What the session looks like from outside: its documents' identities and revisions, the active
+/// one and the History length of each.
+fn session_state(app: &PhotocraftApp) -> (Vec<(photocraft_doc::DocId, u64, usize)>, Option<usize>) {
+    let docs = app.session.documents().iter().map(|st| (st.doc.id, st.revision, st.history.past_len())).collect();
+    (docs, app.session.active_index())
+}
+
+/// Raws waiting in the open-time dialog are not documents: no tab, no canvas, no history. Cancel
+/// and Done leave the session as it was, the active document included (#4180).
+#[test]
+fn raws_in_the_open_dialog_are_not_documents_until_open() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+    app.run("file.new", json!({"width": 30, "height": 30})).unwrap();
+    app.session.set_active(0);
+    app.sync_views();
+    let before = session_state(&app);
+    for finish in ["cancel", "done"] {
+        app.open_bytes("one.dng", &dng).unwrap();
+        app.open_bytes("two.dng", &dng).unwrap();
+        assert_eq!(app.raw_shelf.len(), 2);
+        assert_eq!(session_state(&app), before, "queued raws are no documents");
+        assert_eq!(app.ui.views.len(), 2, "and no canvases");
+        filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5}}})).unwrap().unwrap();
+        filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+        assert_eq!(session_state(&app), before, "showing and editing them opens nothing");
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {finish: true}})).unwrap().unwrap();
+        assert!(app.camera_raw.is_none() && app.raw_shelf.is_empty(), "{finish}: {r}");
+        assert_eq!(session_state(&app), before, "{finish} leaves the session as it was");
+    }
+}
+
+/// Open with several raws in the filmstrip makes exactly those documents, in filmstrip order,
+/// each unmodified; the documents already open keep their places.
+#[test]
+fn open_with_several_raws_creates_exactly_those_documents() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+    let first = app.session.active().unwrap().doc.id;
+    for name in ["one.dng", "two.dng", "three.dng"] {
+        app.open_bytes(name, &dng).unwrap();
+    }
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(3), "{r}");
+    let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.clone()).collect();
+    assert_eq!(names[1..], ["one.dng", "two.dng", "three.dng"]);
+    assert_eq!(app.session.documents()[0].doc.id, first);
+    assert!(app.session.documents()[1..].iter().all(|st| st.saved_revision == st.revision && st.history.past_len() == 0), "unmodified, nothing to undo");
+    assert!(app.raw_shelf.is_empty() && app.camera_raw.is_none());
+}
+
+/// A background open (the desktop app's) holds the raw back in the engine, so it never shows up
+/// as a tab, even for a frame.
+#[test]
+fn a_background_raw_open_never_adds_a_tab() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+    let before = session_state(&app);
+    app.background_jobs = true;
+    app.open_bytes("late.dng", &dng).unwrap();
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        assert_eq!(session_state(&app), before, "no document while the raw opens");
+        if !app.raw_shelf.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(app.raw_shelf.len(), 1, "the raw waits for the dialog");
+    assert!(app.jobs.opens.is_empty(), "its loading tab is gone");
+    app.background_jobs = false;
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
+    assert_eq!(session_state(&app), before);
 }

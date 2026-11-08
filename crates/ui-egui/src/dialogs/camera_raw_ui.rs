@@ -42,10 +42,10 @@ use convert::open_pixels;
 pub use filmstrip::HeldRaw;
 pub use menu::menu;
 #[cfg(test)]
-use open::{Coverage, commit_open_raw, document_index, finish_redevelop, open_raw, replace_raw_document};
+use open::{Coverage, commit_open_raw, finish_redevelop, open_raw, replace_raw_document};
 pub use open::{
-    REDEVELOP_JOB, RawOpen, Redevelop, on_redevelop_event, open, open_smart_filter, opened_without_dialog, queue_open_dialog, wants_open_dialog,
-    without_develop_note,
+    REDEVELOP_JOB, RawOpen, Redevelop, hold_for_dialog, on_redevelop_event, open, open_smart_filter, opened_without_dialog, queue_open_dialog,
+    wants_open_dialog, without_develop_note,
 };
 use open::{Target, non_defaults};
 pub(crate) use open::{after_raw_stage, raw_tuning};

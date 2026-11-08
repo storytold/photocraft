@@ -1199,7 +1199,9 @@ impl Session {
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
-    /// confirmation, without changing import or subsequent save behaviour.
+    /// confirmation, without changing import or subsequent save behaviour. A raw that opens in
+    /// the Camera Raw dialog (Camera Raw Defaults › Open in Camera Raw) is held back the same way
+    /// (`{held, cameraRaw: true, …}`): the dialog's Open admits it.
     /// Headless callers keep using [`Self::start_open`].
     pub fn start_open_for_user(&mut self, name: &str, source: OpenSource) -> Result<Started> {
         self.start_open_for_user_with_background(name, source, true)
@@ -1371,9 +1373,15 @@ impl Session {
                     let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
                     let damaged = confirm_damage && damaged;
                     let question = s.color.open_question(&r.document).filter(|_| !raw);
-                    if damaged || question.is_some() {
+                    // An interactive open of a raw goes to the open-time Camera Raw dialog first
+                    // (Camera Raw Defaults › Open in Camera Raw): it becomes a document only when
+                    // the dialog's Open admits it, so it is held back like a file with a prompt.
+                    let camera_raw = confirm_damage && raw && s.prefs().raw_defaults.open_in_camera_raw;
+                    if damaged || question.is_some() || camera_raw {
                         let held = s.hold_open(r.document, r.source_read_only);
-                        return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
+                        return Ok(
+                            json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged, "cameraRaw": camera_raw}),
+                        );
                     }
                     let (index, color) = s.open_document(r.document, None);
                     let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;

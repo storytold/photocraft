@@ -9,19 +9,25 @@ pub(super) enum Target {
     NewFilter,
     SmartFilter(usize),
     /// The open-time dialog of a raw file just opened (File › Open): OK is **Open**, Cancel
-    /// closes the document again. See [`RawOpen`].
+    /// opens nothing. See [`RawOpen`].
     OpenRaw,
 }
 
 /// A raw file opened interactively, shown in Camera Raw before it is kept (as Photoshop opens
-/// raws in Adobe Camera Raw first). The document is already developed with the defaults; Open
-/// re-develops it when Temperature, Tint, Exposure, Shadows, Highlights, Clarity, Texture,
-/// Dehaze or the demosaic method changed (those act on the sensor data, see
-/// [`photocraft_io::raw::import_raw_tuned`]) and applies the other settings as one Camera Raw
-/// step, then marks the document unmodified. Cancel closes it.
+/// raws in Adobe Camera Raw first). It is already developed with the defaults, held outside the
+/// session ([`Self::held`]): no tab, nothing on the canvas, no history until Open makes it a
+/// document. Open admits that develop, or re-develops when Temperature, Tint, Exposure, Shadows,
+/// Highlights, Clarity, Texture, Dehaze or the demosaic method changed (those act on the sensor
+/// data, see [`photocraft_io::raw::import_raw_tuned`]), applies the other settings as one Camera
+/// Raw step, then marks the document unmodified. Cancel and Done open nothing.
 #[derive(Clone, Debug)]
 pub struct RawOpen {
+    /// The identity of the developed document (of [`Self::held`] while it waits).
     pub document: photocraft_doc::DocId,
+    /// The default develop waiting for the open-time dialog's Open, outside the session. `None`:
+    /// the document is already open in the session (a raw opened without the dialog,
+    /// [`opened_without_dialog`]), and a re-develop replaces it there.
+    pub held: Option<std::sync::Arc<photocraft_doc::Document>>,
     pub name: String,
     pub path: Option<String>,
     /// The file, when it was opened from bytes (no path to read it again from).
@@ -44,21 +50,20 @@ pub fn without_develop_note(warnings: &[String]) -> Vec<String> {
     warnings.iter().filter(|w| !w.contains(photocraft_io::raw::DEVELOPED_NOTE)).cloned().collect()
 }
 
-/// Queues the open-time dialog for the document whose import completed, independent of the
-/// active tab: the dialog shows on the next frame, or adds it to its filmstrip when it is already
-/// open. A delayed completion for a closed document must not review another photograph.
-/// `warnings` are the import's: its note says which demosaic method the open developed with.
+/// Queues the open-time dialog for `doc`, a raw developed with the defaults whose import
+/// completed: it waits outside the session (no tab, no canvas, no history) and the dialog shows
+/// on the next frame, or adds it to its filmstrip when it is already open. Only Open makes it a
+/// document. `warnings` are the import's: its note says which demosaic method the open developed
+/// with.
 pub fn queue_open_dialog(
     app: &mut PhotocraftApp,
-    document: photocraft_doc::DocId,
+    doc: photocraft_doc::Document,
     name: &str,
     path: Option<&str>,
     bytes: Option<&[u8]>,
     warnings: &[String],
 ) -> Result<(), String> {
-    if document_index(app, document).is_none() {
-        return Err("the imported raw document is missing".into());
-    }
+    let document = doc.id;
     // The method the open actually used (`jobs::import_options` at the job's start), from its
     // note: the preference may have changed while a background open ran.
     let method = photocraft_io::raw::developed_demosaic(warnings).unwrap_or_else(|| app.session.prefs().raw_defaults.demosaic.method());
@@ -67,6 +72,7 @@ pub fn queue_open_dialog(
     }
     let raw = RawOpen {
         document,
+        held: Some(std::sync::Arc::new(doc)),
         name: name.to_string(),
         path: path.map(str::to_string),
         bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
@@ -75,6 +81,23 @@ pub fn queue_open_dialog(
     };
     let held = super::filmstrip::HeldRaw::new(app, raw);
     app.raw_shelf.push(held);
+    Ok(())
+}
+
+/// An interactive open of a raw for the open-time dialog: `doc` waits there
+/// ([`queue_open_dialog`]), and the import's notes are shown as for any open.
+pub fn hold_for_dialog(
+    app: &mut PhotocraftApp,
+    doc: photocraft_doc::Document,
+    name: &str,
+    path: Option<&str>,
+    bytes: Option<&[u8]>,
+    warnings: &[String],
+) -> Result<(), String> {
+    queue_open_dialog(app, doc, name, path, bytes, warnings)?;
+    app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", name)]);
+    app.ui.status_error = false;
+    crate::notices::io_warnings(app, &crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]), &without_develop_note(warnings));
     Ok(())
 }
 
@@ -87,11 +110,9 @@ pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpe
 /// [`open_raw`], or with `kept` settings and the settings they started from (a filmstrip raw
 /// shown again).
 pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen, kept: Option<(CameraRaw, CameraRaw)>) -> Result<(), String> {
-    let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
-    app.session.set_active(index);
-    let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
-    let canvas = app.session.active().ok_or("no document")?.doc.bounds();
-    let source = Source { raw: raw_source(&raw, canvas, &surf), surf };
+    let doc = raw_document(app, &raw).ok_or("the raw document was closed")?;
+    let (layer, surf) = doc.layers.iter().find_map(|l| Some((l.id, l.surface()?.clone()))).ok_or("the raw document has no pixels")?;
+    let source = Source { raw: raw_source(&raw, doc.bounds(), &surf), surf, doc: Some(doc.clone()) };
     if let Some((params, original)) = kept {
         open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
         if let Some(d) = app.camera_raw.as_mut() {
@@ -118,12 +139,15 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: R
         app.ui.status_error = false;
     }
     open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
-    // Camera Raw Defaults › Apply auto tone: a file without its own settings opens with Auto.
+    // Camera Raw Defaults › Apply auto tone: a file without its own settings opens with Auto,
+    // from the same pixels as for a raw Open develops without showing it
+    // ([`super::filmstrip::first_settings`]).
     if !from_sidecar
         && app.session.prefs().raw_defaults.apply_auto_tone
+        && let Some(proxy) = super::filmstrip::default_proxy(&doc)
         && let Some(d) = app.camera_raw.as_mut()
     {
-        photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut d.params);
+        photocraft_algo::camera_raw::auto_tone(&proxy, &mut d.params);
         d.dirty = true;
     }
     attach_raw(app, raw);
@@ -161,6 +185,14 @@ fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
 
 pub(super) fn document_index(app: &PhotocraftApp, id: photocraft_doc::DocId) -> Option<usize> {
     app.session.documents().iter().position(|st| st.doc.id == id)
+}
+
+/// The developed document of `raw`: the held one, or the session's.
+pub(super) fn raw_document(app: &PhotocraftApp, raw: &RawOpen) -> Option<std::sync::Arc<photocraft_doc::Document>> {
+    match &raw.held {
+        Some(doc) => Some(doc.clone()),
+        None => app.session.documents().get(document_index(app, raw.document)?).map(|st| st.doc.clone()),
+    }
 }
 
 /// The non-default settings of `p` as engine params.
@@ -229,14 +261,18 @@ pub(crate) fn after_raw_stage(p: &CameraRaw, white_balance: bool) -> CameraRaw {
     rest
 }
 
-/// Open: re-develop for raw-stage settings, apply the rest, keep the document unmodified.
+/// Open: re-develop for raw-stage settings, apply the rest, keep the document unmodified. A held
+/// raw becomes a document here, and only here: the default develop, or the re-developed one.
 ///
 /// Re-developing reads and decodes the whole raw again, so in the desktop app (background jobs
-/// on) it runs as a job like the open itself: the reply is `{"job", "pending": true}`, the
-/// document is locked meanwhile, and [`on_redevelop_event`] finishes when it lands. Elsewhere
-/// (tests, the web) it runs inline.
+/// on) it runs as a job like the open itself: the reply is `{"job", "pending": true}`, a raw
+/// already in the session is locked meanwhile, and [`on_redevelop_event`] finishes when it lands.
+/// Elsewhere (tests, the web) it runs inline.
 pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, loaded: Option<&CameraRaw>) -> Result<Value, String> {
-    let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
+    let index = match &raw.held {
+        Some(_) => None,
+        None => Some(document_index(app, raw.document).ok_or("the raw document was closed")?),
+    };
     write_sidecar(app, raw, params, loaded);
     let tuning = raw_tuning(params, raw.demosaic);
     // The open itself: the default settings, developed with the method it was opened with.
@@ -249,11 +285,19 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         _ => None,
     };
     let Some(source) = source.filter(|_| tuning != as_opened) else {
+        let index = match (&raw.held, index) {
+            (Some(doc), _) => admit(app, raw, (**doc).clone())?,
+            (None, Some(index)) => index,
+            (None, None) => return Err("the raw document was closed".into()),
+        };
         let defaults = app.session.prefs().raw_defaults.clone();
         return finish_open_raw(app, index, params.clone(), None, raw, &defaults);
     };
-    app.session.set_active(index);
+    if let Some(index) = index {
+        app.session.set_active(index);
+    }
     let (name, doc_id) = (raw.name.clone(), raw.document);
+    let held_resolution = raw.held.as_ref().map(|d| d.resolution_dpi);
     let work = move |ctx: &photocraft_engine::jobs::JobCtx| -> photocraft_engine::Result<(photocraft_io::ImportResult, bool)> {
         ctx.progress(0.0, "Reading");
         let bytes = match source {
@@ -269,10 +313,15 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         ctx.progress(0.05, "Developing");
         photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
     };
-    let apply = move |s: &mut photocraft_engine::Session, (r, wb): (photocraft_io::ImportResult, bool)| replace_raw_document(s, doc_id, r, wb);
+    let apply = move |s: &mut photocraft_engine::Session, (r, wb): (photocraft_io::ImportResult, bool)| match held_resolution {
+        Some(dpi) => open_redeveloped(s, r, dpi, wb),
+        None => replace_raw_document(s, doc_id, r, wb),
+    };
     let label = crate::i18n::fmt(tl!("Developing {name}"), &[("name", &raw.name)]);
+    // A held raw has no document to lock yet (the active one is someone else's).
+    let lock = raw.held.is_none();
     let started = if app.background_jobs {
-        app.session.start_job(REDEVELOP_JOB, json!({"name": raw.name}), &label, true, work, apply).map_err(|e| e.to_string())?
+        app.session.start_job(REDEVELOP_JOB, json!({"name": raw.name}), &label, lock, work, apply).map_err(|e| e.to_string())?
     } else {
         let v = work(&photocraft_engine::jobs::JobCtx::new()).and_then(|t| apply(&mut app.session, t)).map_err(|e| e.to_string())?;
         photocraft_engine::jobs::Started::Done(v)
@@ -299,6 +348,38 @@ pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, original
     if let Some(pending) = app.raw_redevelop.iter_mut().find(|r| Some(r.job.0) == job && !r.filter_step) {
         pending.back_to_filmstrip = Some(original.clone());
     }
+}
+
+/// A held raw becomes a document: `doc`, its default develop, opens in the session (the Color
+/// Settings policy applies, as to any open) and does what any open does afterwards. Returns its
+/// tab index.
+fn admit(app: &mut PhotocraftApp, raw: &RawOpen, doc: photocraft_doc::Document) -> Result<usize, String> {
+    let (index, _) = app.session.open_document(doc, None);
+    let id = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened raw document is missing")?;
+    app.session.set_active(index);
+    after_admit(app, raw);
+    // The "Open Document" scripts may have moved tabs.
+    document_index(app, id).ok_or_else(|| "the opened raw document was closed".into())
+}
+
+/// What any open does once the raw is a document: remember its path (File › Save, Open Recent)
+/// and fire the "Open Document" script events.
+fn after_admit(app: &mut PhotocraftApp, raw: &RawOpen) {
+    if let Some(p) = &raw.path {
+        app.opened_from(p);
+    }
+    photocraft_engine::automate_cmds::document_opened(&mut app.session);
+    app.sync_views();
+}
+
+/// The re-developed held raw opens as a document, at the `dpi` its default develop had
+/// (Preferences › Camera Raw Defaults › Resolution). Returns `{document, docId, warnings, wb}`.
+fn open_redeveloped(s: &mut photocraft_engine::Session, mut r: photocraft_io::ImportResult, dpi: f32, wb: bool) -> photocraft_engine::Result<Value> {
+    r.document.resolution_dpi = dpi;
+    let (index, _) = s.open_document(r.document, None);
+    let id = s.documents().get(index).ok_or(photocraft_engine::EngineError::NoDocument)?.doc.id;
+    s.set_active(index);
+    Ok(json!({"document": index, "docId": id.0, "warnings": r.warnings, "wb": wb}))
 }
 
 /// Swap the default-developed document `doc_id` for the re-developed one, at the same tab
@@ -340,6 +421,12 @@ pub(super) fn finish_redevelop(
     // A preceding completion (for example Save and Close) may have shifted the tab indices.
     // Validate identity before remapping views, filtering or marking any document unmodified.
     let replacement = v.get("docId").and_then(Value::as_u64).map(photocraft_doc::DocId).ok_or("the re-develop returned no document identity")?;
+    let index = document_index(app, replacement).ok_or("the re-developed document was closed")?;
+    if raw.held.is_some() {
+        app.session.set_active(index);
+        after_admit(app, raw);
+    }
+    // A shift by the script events, or by a raw in the session the re-develop replaced.
     let index = document_index(app, replacement).ok_or("the re-developed document was closed")?;
     for id in app.view_docs.iter_mut().filter(|id| **id == raw.document) {
         *id = replacement;
@@ -407,7 +494,7 @@ pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, 
     }
     let Some(document) = app.session.documents().get(index).map(|st| st.doc.id) else { return };
     let method = photocraft_io::raw::developed_demosaic(warnings).unwrap_or_else(|| app.session.prefs().raw_defaults.demosaic.method());
-    let raw = RawOpen { document, name: name.to_string(), path: path.map(str::to_string), bytes: None, developed_with: method, demosaic: method };
+    let raw = RawOpen { document, held: None, name: name.to_string(), path: path.map(str::to_string), bytes: None, developed_with: method, demosaic: method };
     let mut params = CameraRaw::default();
     let sidecar = path.and_then(read_sidecar).map(|(loaded, _, _)| loaded);
     if let Some(loaded) = &sidecar {
@@ -493,10 +580,11 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
             Err(err) => crate::notices::error(app, format!("{}: {err}", e.label)),
         },
         photocraft_engine::jobs::JobOutcome::Failed(err) => {
-            // The document stays open, developed with the defaults; from the dialog, it goes back
-            // to the filmstrip with its settings, which may have no sidecar to keep them.
+            // A raw from the dialog goes back to the filmstrip with its settings, which may have
+            // no sidecar to keep them, still not a document; one already in the session stays
+            // open, developed with the defaults.
             if let Some(original) = pending.back_to_filmstrip
-                && document_index(app, pending.raw.document).is_some()
+                && raw_document(app, &pending.raw).is_some()
             {
                 let mut held = super::filmstrip::HeldRaw::new(app, pending.raw);
                 held.kept = Some((pending.params, original));
@@ -513,15 +601,16 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
     true
 }
 
-/// Cancel: closes the dialog; for the open-time dialog also the documents it was opening (every
-/// raw in its filmstrip).
+/// Cancel: closes the dialog; for the open-time dialog also drops the raws it was opening (every
+/// raw in its filmstrip). They were never documents, so the session is left as it was.
 pub(super) fn cancel(app: &mut PhotocraftApp) {
     let Some(d) = app.camera_raw.take() else { return };
     if let (Target::OpenRaw, Some(raw)) = (d.target, &d.raw_open) {
-        let mut opening: Vec<_> = std::mem::take(&mut app.raw_shelf).into_iter().map(|h| h.raw.document).collect();
-        opening.push(raw.document);
-        for id in opening {
-            if let Some(index) = document_index(app, id) {
+        let mut opening: Vec<_> = std::mem::take(&mut app.raw_shelf).into_iter().map(|h| h.raw).collect();
+        opening.push(raw.clone());
+        // A raw shown from the session (not held) is closed, as before it was kept.
+        for raw in opening.iter().filter(|r| r.held.is_none()) {
+            if let Some(index) = document_index(app, raw.document) {
                 app.session.close(index);
             }
         }
