@@ -178,3 +178,19 @@ fn ok_on_the_unchanged_colour_leaves_the_note_alone() {
     assert_eq!(steps(&app), before, "no \"Note Color\" step");
     assert_eq!(journaled_notes_set(&app), 0, "no notes.set for an action to record");
 }
+
+#[test]
+fn ok_on_the_unchanged_colour_spelled_in_capitals_leaves_the_note_alone() {
+    let mut app = app();
+    select(&mut app, 0);
+    let before = steps(&app);
+    let shown = app.ui.analysis.note_color;
+    let id = crate::color_picker_ui::open_for_target(&mut app, "noteColor", "Color", shown);
+    let d = app.ui.dialog_mut(id).unwrap();
+    let same = d.fields["__orig"].as_str().unwrap().to_uppercase();
+    d.fields.insert("color".into(), json!(same));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(note(&app, 0).color.to_rgb(), BLUE, "the note's finer colour is kept");
+    assert_eq!(steps(&app), before, "no \"Note Color\" step");
+    assert_eq!(journaled_notes_set(&app), 0, "no notes.set for an action to record");
+}

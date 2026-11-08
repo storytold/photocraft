@@ -1002,8 +1002,9 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
     if target == "noteColor" {
         let rgb = parse_hex(color).ok_or("not a colour")?;
         if let Some(i) = crate::analysis_ui::selected_note(app) {
-            // OK on the colour it opened with leaves the note's own (possibly finer) colour alone.
-            if f.get("color") == f.get("__orig") {
+            // OK on the colour it opened with, however it is spelt, leaves the note's own (possibly
+            // finer) colour alone.
+            if f.get("__orig").and_then(Value::as_str).and_then(parse_hex) == Some(rgb) {
                 return Ok(json!({ "color": color }));
             }
             app.run("notes.set", json!({"index": i, "color": color}))?;
