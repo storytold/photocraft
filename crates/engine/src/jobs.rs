@@ -1053,6 +1053,13 @@ impl Session {
         self.jobs.inline = ctx;
     }
 
+    /// Defer profile conversion for a captured document until the caller drops its token.
+    pub fn hold_profile_conversion(&mut self, document: DocId) -> Arc<()> {
+        let owner = Arc::new(());
+        self.profile_conversion_owner = Some((document, Arc::downgrade(&owner)));
+        owner
+    }
+
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
     /// like [`Session::execute`] for unknown, disabled or failing commands.
     pub fn start(&mut self, id: &str, params: Value) -> Result<Started> {
@@ -1751,6 +1758,14 @@ impl Session {
             crate::document_preset_cmds::validate_new_params(self, &params)?;
         }
         crate::param_check::check(spec, &params)?;
+        // Refuse conversion before it can drop a floating selection.
+        if id == "edit.convertToProfile"
+            && let Some((document, owner)) = &self.profile_conversion_owner
+            && owner.strong_count() != 0
+            && self.active().is_some_and(|st| st.doc.id == *document)
+        {
+            return Err(EngineError::Other("Close Liquify before converting the document profile.".into()));
+        }
         crate::filters::validate_params(id, &params)?;
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {

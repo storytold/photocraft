@@ -1460,6 +1460,213 @@ fn open_liquify_refreshes_proxy_detail_and_backdrop_for_display_changes() {
     }
 }
 
+#[test]
+fn direct_profile_conversion_preserves_the_open_liquify_document_and_stroke() {
+    use photocraft_cms::Builtin;
+    use std::sync::Arc;
+
+    for background_jobs in [false, true] {
+        let mut app = app_with_layer();
+        app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+        app.run("edit.colorSettings", json!({"workingRgb":"linear-srgb","monitorProfile":"srgb"})).unwrap();
+        app.background_jobs = background_jobs;
+        let ctx = egui::Context::default();
+        open(&mut app, &ctx).unwrap();
+        pointer(&mut app, ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Up { x: 55.0, y: 40.0 }, egui::Modifiers::NONE);
+        let d = app.distort.liquify.as_ref().unwrap();
+        let field = d.field.clone();
+        let source = d.source.clone();
+        assert!(field.max_displacement() > 0.0);
+        let st = app.session.active().unwrap();
+        let doc = st.doc.clone();
+        let history = st.history.past_len();
+
+        app.session.authorize = Some(|id, _| {
+            if id == "edit.convertToProfile" {
+                return Err(photocraft_engine::EngineError::Other("test authorizer denied conversion".into()));
+            }
+            Ok(())
+        });
+        assert!(app.run("edit.convertToProfile", json!({"profile":"working"})).unwrap_err().contains("test authorizer denied conversion"));
+        app.session.authorize = None;
+        assert!(app.run("edit.convertToProfile", json!({"profile":"working"})).unwrap_err().contains("Close Liquify"));
+        let st = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&doc, &st.doc));
+        assert_eq!(st.history.past_len(), history);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.field, field);
+        assert!(d.source == source);
+
+        app.run("edit.assignProfile", json!({"profile":"display-p3"})).unwrap();
+        refresh_display(&mut app);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.icc_profile.as_deref(), Some(Builtin::DisplayP3.profile().to_bytes().as_slice()));
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.field, field);
+        assert!(d.source == source);
+    }
+}
+
+#[test]
+fn shell_action_cannot_convert_the_document_while_liquify_is_open() {
+    use photocraft_engine::actions_cmds::Action;
+    use std::sync::Arc;
+
+    let mut app = app_with_layer();
+    app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+    app.session.actions.list.push(Action::new("Convert", vec![("edit.convertToProfile".into(), json!({"profile":"linear-srgb"}))]));
+    open(&mut app, &egui::Context::default()).unwrap();
+    let doc = app.session.active().unwrap().doc.clone();
+
+    let result = app.run("actions.play", json!({"action":"Convert"})).unwrap();
+    assert_eq!(result["ran"], 0);
+    assert_eq!(result["failed"]["id"], "edit.convertToProfile");
+    assert!(Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    assert!(app.distort.liquify.is_some());
+}
+
+#[test]
+fn direct_conditional_rejects_conversion_while_liquify_is_open() {
+    use photocraft_engine::actions_cmds::Action;
+    use std::sync::Arc;
+
+    let mut app = app_with_layer();
+    app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+    app.session.actions.list.push(Action::new("Convert", vec![("edit.convertToProfile".into(), json!({"profile":"linear-srgb"}))]));
+    open(&mut app, &egui::Context::default()).unwrap();
+    let doc = app.session.active().unwrap().doc.clone();
+
+    let params = json!({"if":"always","then":"Convert"});
+    let blocked = app.run("actions.conditional", params.clone()).unwrap();
+    assert_eq!(blocked["ran"], 0);
+    assert_eq!(blocked["failed"]["id"], "edit.convertToProfile");
+    assert!(blocked["failed"]["error"].as_str().unwrap().contains("Close Liquify"));
+    assert!(Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    assert!(app.distort.liquify.is_some());
+
+    let no_branch = app.run("actions.conditional", json!({"if":"always"})).unwrap();
+    assert_eq!(no_branch["holds"], true);
+    assert!(no_branch["played"].is_null());
+
+    cancel(&mut app);
+    let converted = app.run("actions.conditional", params).unwrap();
+    assert_eq!(converted["ran"], 1);
+    assert!(converted.get("failed").is_none());
+    assert_ne!(app.session.active().unwrap().doc.icc_profile, doc.icc_profile);
+}
+
+#[test]
+fn foreign_drop_releases_the_original_profile_and_other_sessions_stay_independent() {
+    let mut app = app_with_layer();
+    let first = app.session.active_index().unwrap();
+    let params = json!({"profile":"linear-srgb"});
+    app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+    open(&mut app, &egui::Context::default()).unwrap();
+    crate::distort_ui::drop_foreign(&mut app);
+    let doc = app.session.active().unwrap().doc.clone();
+
+    let mut standalone = photocraft_engine::Session::new();
+    standalone.add_document(doc.as_ref().clone(), None);
+    standalone.execute("edit.convertToProfile", params.clone()).unwrap();
+    assert_ne!(standalone.active().unwrap().doc.icc_profile, doc.icc_profile);
+
+    app.session.execute("file.new", json!({"width":32,"height":32,"depth":8})).unwrap();
+    assert!(app.distort.liquify.is_some());
+    app.session.execute("edit.convertToProfile", params.clone()).unwrap();
+    crate::distort_ui::drop_foreign(&mut app);
+    assert!(app.distort.liquify.is_none());
+
+    assert!(app.session.set_active(first));
+    app.run("edit.convertToProfile", params).unwrap();
+    assert_ne!(app.session.active().unwrap().doc.icc_profile, doc.icc_profile);
+}
+
+#[test]
+fn direct_profile_conversion_runs_after_liquify_closes() {
+    use photocraft_cms::Builtin;
+
+    let mut app = app_with_layer();
+    app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+    app.run("edit.colorSettings", json!({"workingRgb":"linear-srgb"})).unwrap();
+    open(&mut app, &egui::Context::default()).unwrap();
+    cancel(&mut app);
+    let st = app.session.active().unwrap();
+    let layer = st.active_layer.unwrap();
+    let before = st.doc.layer(layer).unwrap().surface().unwrap().pixel(20, 20);
+
+    app.run("edit.convertToProfile", json!({"profile":"working"})).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.icc_profile.as_deref(), Some(Builtin::LinearSrgb.profile().to_bytes().as_slice()));
+    assert_ne!(st.doc.layer(layer).unwrap().surface().unwrap().pixel(20, 20), before);
+}
+
+#[test]
+fn reduced_proxy_paths_keep_working_float_precision_until_display_encoding() {
+    use photocraft_cms::Builtin;
+
+    let width = PROXY_SIDE + 2;
+    let left = [1.0 / 1024.0, 2.0 / 1024.0, 3.0 / 1024.0, 1.0];
+    let right = [2.0 / 1024.0, 5.0 / 1024.0, 9.0 / 1024.0, 1.0];
+    let average = std::array::from_fn(|i| (left[i] + right[i]) / 2.0);
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width":width,"height":2,"depth":32,"background":"transparent"})).unwrap();
+    app.sync_views();
+    app.session
+        .edit("Float fixture", |doc, active| {
+            doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surface.fill_rect(Rect::new(0, 0, 1, 2), &left);
+            surface.fill_rect(Rect::new(1, 0, width as i32, 2), &right);
+            Ok(())
+        })
+        .unwrap();
+    app.session.color.settings.monitor_profile = "srgb".into();
+    let st = app.session.active().unwrap();
+    let bounds = st.doc.bounds();
+    let display = app.session.color.canvas_display(&st.doc).unwrap();
+    let encode = |sample| -> [u8; 4] {
+        let image = display.to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), sample));
+        image.pixels[..4].try_into().unwrap()
+    };
+    let quantize = |sample: [f32; 4]| sample.map(|v| (v * 255.0).round() / 255.0);
+    let rounded_left = quantize(left);
+    let rounded_right = quantize(right);
+    let rounded_average = std::array::from_fn(|i| (rounded_left[i] + rounded_right[i]) / 2.0);
+    let proxy_pixel = encode(average);
+    let backdrop_pixel = encode(left);
+    assert_ne!(proxy_pixel, encode(rounded_average), "8-bit input before reduction must fail");
+    assert_ne!(proxy_pixel, encode(quantize(average)), "8-bit reduced proxy before display must fail");
+    assert_ne!(backdrop_pixel, encode(rounded_left), "8-bit backdrop before display must fail");
+
+    for component in [false, true] {
+        if component {
+            app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        }
+        open(&mut app, &ctx).unwrap();
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!((d.proxy.scale, d.proxy.w, d.proxy.h), (2.0, width / 2, 1));
+        assert_eq!(d.proxy.px[0], average);
+        assert_eq!(d.native_proxy.is_some(), component);
+        if let Some(native) = &d.native_proxy {
+            assert_eq!(native.pixel(0, 0).as_slice(), &average);
+        }
+        let texture = d.tex.as_ref().unwrap().id();
+        let delta = ctx.tex_manager().write().take_delta();
+        let egui::ImageData::Color(image) = &delta.set.get(&texture).unwrap()[0].image;
+        assert_eq!(image.size, [width / 2, 1]);
+        assert_eq!(image.pixels[0].to_array(), proxy_pixel);
+        cancel(&mut app);
+    }
+
+    let backdrop = load_backdrop(&app, &ctx, None, bounds).unwrap();
+    let delta = ctx.tex_manager().write().take_delta();
+    let egui::ImageData::Color(image) = &delta.set.get(&backdrop.id()).unwrap()[0].image;
+    assert_eq!(image.size, [width / 2, 1]);
+    assert_eq!(image.pixels[0].to_array(), backdrop_pixel);
+}
+
 /// Preview off shows the image unwarped while strokes still change the field, and P turns it back
 /// on, as Photoshop's Liquify Preview checkbox does (#7905). Each opening starts with it on.
 #[test]

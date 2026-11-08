@@ -242,6 +242,7 @@ impl LiquifyOpts {
 pub struct LiquifyDialog {
     /// Document this dialog belongs to (#5115).
     pub document: DocId,
+    profile_conversion_owner: std::sync::Arc<()>,
     pub layer: LayerId,
     layer_name: String,
     canvas: Rect,
@@ -662,8 +663,10 @@ fn open_on(
     let native_proxy = colors.map(|_| crate::gallery_ui::reduce(&surf, canvas, proxy.scale as u32));
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
+    let document = st.doc.id;
     let mut d = LiquifyDialog {
-        document: st.doc.id,
+        document,
+        profile_conversion_owner: app.session.hold_profile_conversion(document),
         layer,
         layer_name: name,
         canvas,
@@ -741,6 +744,7 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<(), String> {
     let Some(mut d) = app.distort.liquify.take() else { return Ok(()) };
     remember(app, &d.opts);
     d.end();
+    drop(d.profile_conversion_owner);
     if let Some(index) = d.smart_filter {
         let params = json!({"strokes": d.strokes, "meshSize": d.cell});
         return app.run("layer.smartFilter.setParams", json!({"layer": d.layer.0, "index": index, "params": params})).map(|_| ());
