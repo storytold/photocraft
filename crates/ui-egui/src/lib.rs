@@ -572,8 +572,8 @@ pub struct PhotocraftApp {
     /// Action playbacks paused at a step dialog, by the token in that dialog's fields
     /// ([`actions::RESUME`]): what to play next and the automation gate it paused under.
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
-    /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
-    pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
+    /// Levels/Curves histogram cache: the counts and the revision they are valid for.
+    pub(crate) tone_hist: Option<tone::ToneHist>,
     /// Histogram panel: the document's histogram (`histogram_panel`).
     pub(crate) doc_hist: Option<histogram_panel::PanelHist>,
     /// Histogram panel: the histogram of the adjustment previewing on the canvas.

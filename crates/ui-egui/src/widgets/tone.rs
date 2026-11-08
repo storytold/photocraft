@@ -445,39 +445,64 @@ fn gray_bins(surf: &photocraft_raster::Surface, area: photocraft_geom::Rect) -> 
     h
 }
 
+/// The tone editors' cached histograms: what they count, the revision they are valid for, and
+/// the fingerprint of the masks they read.
+pub(crate) struct ToneHist {
+    doc: photocraft_doc::DocId,
+    layer: LayerId,
+    rev: u64,
+    hist: Arc<Histograms>,
+    masks: u64,
+    // The fingerprint holds the mask's tile addresses. A weak reference to each keeps its
+    // allocation (a few bytes, not the pixels) from being reused for another tile, so equal
+    // fingerprints mean equal masks, without keeping the pixels alive. (A write to a tile nothing
+    // else holds, such as history, then copies it while the counts are cached.)
+    _tiles: Vec<std::sync::Weak<photocraft_raster::Tile>>,
+}
+
+/// The layer whose masks counting `source` reads: the adjustment counted below, or the layer whose
+/// mask is the counted channel. Editing a mask can change no pixels (the layer is hidden, say), so
+/// their fingerprint tells when such counts are stale.
+fn mask_source(doc: &Document, source: HistSource) -> Option<&Layer> {
+    match source {
+        HistSource::BelowLayer(id) | HistSource::Channel { layer: id, surface: photocraft_engine::channel_cmds::GraySurface::LayerMask } => doc.layer(id),
+        _ => None,
+    }
+}
+
+fn mask_fingerprint(doc: &Document, source: HistSource) -> u64 {
+    mask_source(doc, source).map_or(0, |l| photocraft_compose::masks::mask_key(l, doc.bounds()))
+}
+
 /// Cached histograms for a tone editor; recomputed only when something other than the editor's
 /// own commits changed the document (see [`keep_after_commit`]).
 pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace) -> Arc<Histograms> {
     let Some(st) = app.session.active() else { return Arc::new(Histograms::default()) };
     let (doc_id, rev) = (st.doc.id, st.revision);
-    // Counting below an adjustment reads its masks, and editing them can change no pixels (the
-    // layer is hidden, say), so their fingerprint is part of what the cached counts are for.
-    let masks = match source {
-        HistSource::BelowLayer(l) => st.doc.layer(l).map_or(0, |l| photocraft_compose::masks::mask_key(l, st.doc.bounds())),
-        _ => 0,
-    };
-    let want = tag(source, space) ^ masks;
+    let want = tag(source, space);
     let layer = match source {
         HistSource::BelowLayer(l) | HistSource::Layer(l) | HistSource::UpTo(l) => l,
         HistSource::Channel { layer, .. } | HistSource::Colors { layer, .. } => layer,
     };
-    let pixels_kept = view_only(st);
-    if let Some((d, l, r, h)) = app.tone_hist.as_mut()
-        && *d == doc_id
-        && *l == layer
-        && (*r == rev || (*r + 1 == rev && pixels_kept))
-        && h.tag == want
+    if let Some(c) = app.tone_hist.as_mut()
+        && c.doc == doc_id
+        && c.layer == layer
+        && c.hist.tag == want
+        // Same revision: nothing changed. The next one changed no pixels: the counts hold unless
+        // it edited the masks they read (fingerprinted only then, never on every frame).
+        && (c.rev == rev || (c.rev.checked_add(1) == Some(rev) && view_only(st) && mask_fingerprint(&st.doc, source) == c.masks))
     {
-        *r = rev;
-        return h.clone();
+        c.rev = rev;
+        return c.hist.clone();
     }
     let t0 = crate::gpu_canvas::now_ms();
-    let mut h = compute_histograms(&st.doc, source, space);
-    h.tag = want;
-    let h = Arc::new(h);
+    let hist = Arc::new(compute_histograms(&st.doc, source, space));
     app.perf.span("histogram", crate::gpu_canvas::now_ms() - t0);
-    app.tone_hist = Some((doc_id, layer, rev, h.clone()));
-    h
+    let masks = mask_fingerprint(&st.doc, source);
+    let tiles =
+        mask_source(&st.doc, source).and_then(|l| l.mask.as_ref()).map_or_else(Vec::new, |m| m.surface.tiles().map(|(_, t)| Arc::downgrade(t)).collect());
+    app.tone_hist = Some(ToneHist { doc: doc_id, layer, rev, hist: hist.clone(), masks, _tiles: tiles });
+    hist
 }
 
 /// Whether the latest revision changed no pixels (selecting a layer, say): cached histograms of
@@ -490,11 +515,11 @@ pub(crate) fn view_only(st: &photocraft_engine::DocState) -> bool {
 /// cached histogram valid for the new revision. Call with the revision seen before the commit.
 pub fn keep_after_commit(app: &mut PhotocraftApp, layer: LayerId, before: Option<u64>) {
     let now = app.session.active().map(|s| s.revision);
-    if let (Some((_, l, r, _)), Some(before), Some(now)) = (app.tone_hist.as_mut(), before, now)
-        && *l == layer
-        && *r == before
+    if let (Some(c), Some(before), Some(now)) = (app.tone_hist.as_mut(), before, now)
+        && c.layer == layer
+        && c.rev == before
     {
-        *r = now;
+        c.rev = now;
     }
 }
 
@@ -895,6 +920,46 @@ mod tests {
         app.session.active_mut().unwrap().last_damage = Some(photocraft_geom::Rect::EMPTY);
         let after = histograms(&mut app, HistSource::BelowLayer(id), ToneSpace::Rgb);
         assert_eq!((after[0][0], after[0][255]), (32 * 64, 32 * 64));
+    }
+
+    /// The same holds when the counted channel is a hidden layer's mask: editing it changes no
+    /// pixels, but the mask's histogram is counted again.
+    #[test]
+    fn a_hidden_layer_mask_channel_is_recounted_on_no_damage() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("hide", |doc, _| {
+            doc.layer_mut(id).unwrap().visible = false;
+            Ok(())
+        })
+        .unwrap();
+        let source = HistSource::Channel { layer: id, surface: photocraft_engine::channel_cmds::GraySurface::LayerMask };
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let first = histograms(&mut app, source, ToneSpace::Rgb);
+        // A revision that changes neither pixels nor the mask keeps the counts.
+        app.session
+            .edit("rename", |doc, _| {
+                doc.layer_mut(id).unwrap().name = "renamed".into();
+                Ok(())
+            })
+            .unwrap();
+        app.session.active_mut().unwrap().last_damage = Some(photocraft_geom::Rect::EMPTY);
+        let first = {
+            let kept = histograms(&mut app, source, ToneSpace::Rgb);
+            assert!(Arc::ptr_eq(&first, &kept), "an unchanged mask keeps the cached counts");
+            kept
+        };
+        assert_eq!(first[0][0], 32 * 64, "the hidden half of the mask");
+        app.session
+            .edit("reveal all", |doc, _| {
+                doc.layer_mut(id).unwrap().mask.as_mut().unwrap().surface.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.active_mut().unwrap().last_damage = Some(photocraft_geom::Rect::EMPTY);
+        let after = histograms(&mut app, source, ToneSpace::Rgb);
+        assert_eq!((after[0][0], after[0][255]), (0, 64 * 64));
+        // An unchanged revision keeps the counts without fingerprinting the mask again.
+        assert!(Arc::ptr_eq(&after, &histograms(&mut app, source, ToneSpace::Rgb)));
     }
 
     /// A feathered mask is counted as the compositor blurs it: a two-pixel revealed stripe is
