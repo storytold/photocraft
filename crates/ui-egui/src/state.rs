@@ -9,6 +9,9 @@ mod tool;
 mod tool_options;
 mod transform;
 
+#[cfg(test)]
+mod type_default_size_tests;
+
 pub use color_panel::{ColorPanelMode, ColorPanelState, ColorRamp, DockTabs};
 pub use panel_state::{
     CameraRawPreviewState, CameraRawScopeState, CurvesEditorState, LayerThumbnailContents, LayerThumbnailSize, LayersPanelDialog, LayersPanelOptions,
@@ -774,7 +777,7 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 71);
+        assert_eq!(Tool::ALL.len(), 72);
         assert_eq!(Tool::from_name("Marker Tool"), Some(Tool::Marker));
         assert_eq!(Tool::from_name("Arrow Tool"), Some(Tool::Arrow));
         assert_eq!(Tool::from_name("cutOut"), Some(Tool::CutOut));

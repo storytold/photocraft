@@ -71,6 +71,8 @@ pub enum Tool {
     EllipseShape,
     Triangle,
     Polygon,
+    /// The shape flyout's Star Tool (#11377): a live polygon shape with a star ratio.
+    Star,
     Line,
     CustomShape,
     /// Snagit-style arrow: drag tail to tip; a stroked open path with arrowheads, bendable.
@@ -85,7 +87,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 71] = [
+    pub const ALL: [Tool; 72] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -150,6 +152,7 @@ impl Tool {
         Tool::EllipseShape,
         Tool::Triangle,
         Tool::Polygon,
+        Tool::Star,
         Tool::Line,
         Tool::Arrow,
         Tool::Marker,
@@ -228,6 +231,7 @@ impl Tool {
             Tool::EllipseShape => "Ellipse Tool",
             Tool::Triangle => "Triangle Tool",
             Tool::Polygon => "Polygon Tool",
+            Tool::Star => "Star Tool",
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
             Tool::Arrow => "Arrow Tool",
@@ -300,7 +304,7 @@ impl Tool {
             // In the Pen flyout, but P never reaches them.
             Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => ' ',
             Tool::PathSelection | Tool::DirectSelection => 'A',
-            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::Arrow | Tool::Marker | Tool::CustomShape => 'U',
+            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::Arrow | Tool::Marker | Tool::CustomShape => 'U',
         }
     }
     /// Glyph drawn in the toolbar (vector icons come later).
