@@ -34,11 +34,11 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
     (h - 0.5) * std::f32::consts::SQRT_2 > h
 }
 
-/// Whether a brush-tip circle draws its centre mark.
-/// Clone Stamp and Healing Brush stay an empty circle until Option is held, the source-point
-/// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
-/// Photoshop; the Background Eraser and the Color Replacement tool (#11934) always show their
-/// sampling hotspot.
+/// Whether a brush-tip circle draws its centre mark, for Normal and Full Size Brush Tip cursors
+/// alike (both draw through this). Quick Selection never draws one. Clone Stamp and Healing Brush
+/// stay an empty circle until Option is held, the source-point cursor. Other brushes follow
+/// Preferences › Cursors › Show Crosshair in Brush Tip, as in Photoshop; the Background Eraser
+/// and the Color Replacement tool (#11934) always show their sampling hotspot.
 pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
     if tool == Tool::QuickSelection {
         return false;

@@ -1,6 +1,6 @@
-//! #11934: with Normal Brush Tip cursors the Color Replacement cursor always draws the centre +,
-//! its sampling hotspot, whatever Show Crosshair in Brush Tip says. Other brush tools follow the
-//! preference, and Clone Stamp / Healing Brush keep their Alt behaviour.
+//! #11934: with Normal and Full Size Brush Tip cursors the Color Replacement cursor always draws
+//! the centre +, its sampling hotspot, whatever Show Crosshair in Brush Tip says. Other brush
+//! tools follow the preference, and Clone Stamp / Healing Brush keep their Alt behaviour.
 
 use super::*;
 
@@ -16,11 +16,18 @@ fn color_replacement_always_shows_its_centre() {
 #[test]
 fn other_brush_tools_follow_the_preference() {
     for tool in [Tool::Brush, Tool::Eraser, Tool::PatternStamp, Tool::Dodge, Tool::Pencil, Tool::Smudge] {
-        assert!(!brush_tip_centre(tool, false, false), "{tool:?} off");
-        assert!(brush_tip_centre(tool, false, true), "{tool:?} on");
+        for option in [false, true] {
+            assert!(!brush_tip_centre(tool, option, false), "{tool:?} off, Alt {option}");
+            assert!(brush_tip_centre(tool, option, true), "{tool:?} on, Alt {option}");
+        }
     }
-    // The Background Eraser keeps its hotspot, as before.
-    assert!(brush_tip_centre(Tool::BackgroundEraser, false, false));
+    for show_crosshair in [false, true] {
+        for option in [false, true] {
+            // The Background Eraser keeps its hotspot, as before; Quick Selection never has one.
+            assert!(brush_tip_centre(Tool::BackgroundEraser, option, show_crosshair));
+            assert!(!brush_tip_centre(Tool::QuickSelection, option, show_crosshair));
+        }
+    }
 }
 
 #[test]
