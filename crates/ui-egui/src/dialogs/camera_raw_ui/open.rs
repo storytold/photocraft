@@ -157,7 +157,14 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
             (layer, surf, app.session.active().ok_or("no document")?.doc.clone())
         }
     };
-    let source = Source { raw: raw_source(&raw, doc.bounds(), &surf).map(|s| (s, raw.developed_with)), surf, doc: Some(doc.clone()) };
+    // The develop's ProPhoto pixels in the document's colours (the open policy may have converted it).
+    let to_document = super::convert::raw_to_document(app, &doc);
+    let raw_detail = raw_source(&raw, doc.bounds(), &surf).map(|source| crate::camera_raw_detail_ui::RawDetail {
+        source,
+        demosaic: raw.developed_with,
+        to_document: to_document.clone(),
+    });
+    let source = Source { raw: raw_detail, surf, doc: Some(doc.clone()) };
     if let Some((params, original)) = kept {
         open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
         if let Some(d) = app.camera_raw.as_mut() {

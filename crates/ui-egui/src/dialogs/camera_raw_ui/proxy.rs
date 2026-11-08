@@ -48,7 +48,7 @@ impl ProxyJob {
         let raw_develop = self
             .raw_source
             .as_ref()
-            .map(|(raw, method)| (raw, raw_tuning(&p, *method), *method))
+            .map(|raw| (raw, raw_tuning(&p, raw.demosaic), raw.demosaic))
             .filter(|(_, tuning, method)| *tuning != photocraft_io::raw::RawTuning { demosaic: *method, ..Default::default() });
         let developed = raw_develop.as_ref().and_then(|(raw, tuning, _)| raw_proxy(raw, tuning, pw, ph));
         let retoned = match developed {

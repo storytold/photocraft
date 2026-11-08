@@ -594,10 +594,22 @@ pub(super) fn refresh_shown_thumbnail(app: &mut PhotocraftApp) -> bool {
 }
 
 /// Everything one thumbnail redraw reads, owned, so it can run off the UI thread.
+#[derive(Clone)]
 struct ThumbJob {
     params: CameraRaw,
-    source: Result<std::sync::Arc<ThumbSource>, (photocraft_raster::Surface, photocraft_geom::Rect, RawOpen, f32)>,
+    source: Result<std::sync::Arc<ThumbSource>, ThumbBuild>,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
+}
+
+/// What a thumbnail's first redraw builds its [`ThumbSource`] from.
+#[derive(Clone)]
+struct ThumbBuild {
+    surf: photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    raw: RawOpen,
+    encoding_gamma: f32,
+    /// ProPhoto to the document's colours ([`crate::camera_raw_detail_ui::RawDetail::to_document`]).
+    to_document: Option<std::sync::Arc<photocraft_cms::Transform>>,
 }
 
 fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
@@ -609,7 +621,13 @@ fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
         Some(source) => Ok(source.clone()),
         None => {
             let surf = doc.layers.iter().find_map(|l| l.surface())?.clone();
-            Err((surf, doc.bounds(), held.raw.clone(), photocraft_engine::lens_cmds::encoding_gamma(&doc)))
+            Err(ThumbBuild {
+                surf,
+                bounds: doc.bounds(),
+                raw: held.raw.clone(),
+                encoding_gamma: photocraft_engine::lens_cmds::encoding_gamma(&doc),
+                to_document: super::convert::raw_to_document(app, &doc),
+            })
         }
     };
     Some(ThumbJob { params, source, display })
@@ -617,23 +635,28 @@ fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
 
 fn spawn_thumb(job: ThumbJob) -> ThumbRedraw {
     let (tx, rx) = std::sync::mpsc::channel();
-    let work = move || {
+    let draw = |job: ThumbJob, tx: std::sync::mpsc::Sender<_>| {
         let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw_thumb(job))).ok().flatten();
         let _ = tx.send(drawn);
     };
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = std::thread::Builder::new().name("camera-raw-thumbnail".into()).spawn(work) {
-        log::warn!("no thread for a Camera Raw thumbnail: {e}");
+    {
+        let (worker_job, worker_tx) = (job.clone(), tx.clone());
+        if let Err(e) = std::thread::Builder::new().name("camera-raw-thumbnail".into()).spawn(move || draw(worker_job, worker_tx)) {
+            // No thread to spare: drawn here rather than left out of date.
+            log::warn!("no thread for a Camera Raw thumbnail, drawing it here: {e}");
+            draw(job, tx);
+        }
     }
     #[cfg(target_arch = "wasm32")]
-    work();
+    draw(job, tx);
     rx
 }
 
 fn draw_thumb(job: ThumbJob) -> Option<(std::sync::Arc<ThumbSource>, egui::ColorImage)> {
     let source = match job.source {
         Ok(source) => source,
-        Err((surf, bounds, raw, encoding_gamma)) => std::sync::Arc::new(thumb_source(&surf, bounds, &raw, encoding_gamma)?),
+        Err(build) => std::sync::Arc::new(thumb_source(&build)?),
     };
     let mut params = job.params;
     if params.encoding_gamma == 0.0 {
@@ -681,7 +704,9 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
 
 /// [`ThumbSource`] of a filmstrip raw: its developed pixels at thumbnail size, and the camera tone
 /// curve the dialog would read from its file.
-fn thumb_source(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect, raw: &RawOpen, encoding_gamma: f32) -> Option<ThumbSource> {
+fn thumb_source(build: &ThumbBuild) -> Option<ThumbSource> {
+    let ThumbBuild { surf, bounds, raw, encoding_gamma, to_document } = build;
+    let (bounds, encoding_gamma) = (*bounds, *encoding_gamma);
     let (area, w, h) = super::convert::preview_area(bounds, surf).ok()?;
     // The raw binned straight to the thumbnail's size, as the dialog's proxy is to its own.
     let k = w.max(h).div_ceil(THUMB_SIDE).max(1);
@@ -692,13 +717,17 @@ fn thumb_source(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect
         (None, Some(p)) => std::fs::read(p).ok(),
         _ => None,
     };
-    let source = bytes.and_then(|b| photocraft_io::raw::RawSource::proxy_only(&b, k).ok());
+    let source = bytes.and_then(|b| photocraft_io::raw::RawSource::proxy_only(&b, k).ok()).map(|s| crate::camera_raw_detail_ui::RawDetail {
+        source: std::sync::Arc::new(s),
+        demosaic: raw.developed_with,
+        to_document: to_document.clone(),
+    });
     let as_opened = photocraft_io::raw::RawTuning { demosaic: raw.developed_with, ..Default::default() };
     let developed = source.as_ref().and_then(|s| super::convert::raw_proxy(s, &as_opened, tw, th));
     let (px, size, raw_source, curve) = match (developed, source) {
         (Some((px, _)), Some(s)) => {
-            let curve = std::sync::Arc::new(s.tone_curve().to_vec());
-            (px, (tw, th), Some((std::sync::Arc::new(s), raw.developed_with)), Some(curve))
+            let curve = std::sync::Arc::new(s.source.tone_curve().to_vec());
+            (px, (tw, th), Some(s), Some(curve))
         }
         _ => {
             let (proxy, pw, ph, _) = super::convert::box_proxy(surf, area, w, h);

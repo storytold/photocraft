@@ -166,21 +166,25 @@ pub struct RawSource {
     curve: Vec<[f32; 2]>,
 }
 
-/// `p` box-averaged by `k` (blocks of `k`×`k`, the last row and column of blocks cut short), as
-/// the dialog's proxy averages the developed document.
+/// `p` box-averaged by `k` as the dialog's proxy averages the developed document: `k`×`k`
+/// blocks, the last column of blocks cut short and the last row of blocks filled by repeating
+/// the frame's last row.
 fn shrink_rgb(p: RawPixels, k: usize) -> RawPixels {
     if k <= 1 || p.width == 0 || p.height == 0 || p.rgb.len() < p.width * p.height * 3 {
         return p;
     }
     let (w, h) = (p.width.div_ceil(k), p.height.div_ceil(k));
     let mut acc = vec![[0u64; 4]; w * h];
-    for (i, px) in p.rgb.as_chunks::<3>().0.iter().take(p.width * p.height).enumerate() {
-        let (x, y) = (i % p.width, i / p.width);
-        if let Some(a) = acc.get_mut((y / k) * w + x / k) {
-            for c in 0..3 {
-                a[c] += u64::from(px[c]);
+    let rows = p.rgb.as_chunks::<3>().0;
+    for y in 0..h * k {
+        let Some(row) = rows.get(y.min(p.height - 1) * p.width..(y.min(p.height - 1) + 1) * p.width) else { continue };
+        for (x, px) in row.iter().enumerate() {
+            if let Some(a) = acc.get_mut((y / k) * w + x / k) {
+                for c in 0..3 {
+                    a[c] += u64::from(px[c]);
+                }
+                a[3] += 1;
             }
-            a[3] += 1;
         }
     }
     let rgb = acc.iter().flat_map(|a| (0..3).map(move |c| (a[c] + a[3] / 2).checked_div(a[3]).unwrap_or(0) as u16)).collect();

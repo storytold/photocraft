@@ -1876,3 +1876,22 @@ fn a_bad_request_applies_neither_auto_nor_a_pending_edit() {
     assert!(film(&mut app, &ctx, json!({"click": 9})).is_err());
     assert_eq!(app.raw_shelf[1].kept, before.1, "the edit waits for a request that is good");
 }
+
+/// With Color Settings converting raws to the working space on open, the proxy developed from
+/// the sensor data is converted the same way, so it shows the document's colours.
+#[test]
+fn the_sensor_proxy_takes_the_open_policys_conversion() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("edit.colorSettings", json!({"policyRgb": "convert", "askOnMismatch": false})).unwrap();
+    app.open_bytes("IMG_0008.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let d = app.camera_raw.as_ref().unwrap();
+    assert!(d.raw_proxy && d.raw_source.as_ref().is_some_and(|r| r.to_document.is_some()), "a converted document");
+    let (surf, area) = d.detail.source();
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    let (doc_proxy, ..) = super::convert::box_proxy(surf, area, w, h);
+    let (_, max) = proxy_difference(&d.proxy, &doc_proxy);
+    assert!(max < 2e-3, "the proxy is the converted document: {max}");
+}
