@@ -137,3 +137,39 @@ fn ok_after_the_document_changed_deletes_nothing() {
     assert_eq!(docs.iter().map(|d| d.doc.notes.len()).collect::<Vec<_>>(), [3, 1], "no note deleted in either document");
     assert_eq!(docs.iter().map(|d| d.history.past_len()).collect::<Vec<_>>(), past, "no history step in either");
 }
+
+/// The options bar with the open dialogs drawn over it, as the window shows them.
+fn harness_with_dialogs(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(vec2(1200.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::panels::options_bar(app, ui);
+            crate::dialogs::show(app, ui.ctx());
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(4);
+    h
+}
+
+#[test]
+fn the_alert_shows_its_question_and_its_buttons_answer() {
+    for (button, left) in [("Cancel", 3), ("OK", 0)] {
+        let mut h = harness_with_dialogs(app());
+        let before = steps(h.state());
+        let id = clear_all(&mut h);
+        let d = h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap();
+        assert_eq!(crate::dialogs::title(d), "Clear All");
+        let question = egui_kittest::kittest::by().label("Are you sure you want to delete all notes?").include_labels();
+        assert!(h.query_all(question).next().is_some(), "the question is shown");
+        assert!(h.query_by_label("OK").is_some() && h.query_by_label("Cancel").is_some(), "OK and Cancel");
+        h.get_by_label(button).click();
+        h.run_steps(3);
+        assert!(alert(h.state()).is_none(), "{button} closes the alert");
+        assert_eq!(notes(h.state()), left, "{button}: {left} notes left");
+        assert_eq!(steps(h.state()), before + usize::from(left == 0), "{button}: history");
+    }
+}
