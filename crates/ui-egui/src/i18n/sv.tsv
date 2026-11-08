@@ -4850,3 +4850,10 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	Show layer bounds on hover	Visa lagrets gränser vid hovring
 	Expand layer group on click	Expandera lagergrupp vid klick
 	Show hover bounds from Layers	Visa hovringsgränser från Lager
+# Artboard tool options bar (#11385)
+	Distribute Widths	Fördela bredder
+	Distribute Heights	Fördela höjder
+	Auto-nest Layers	Kapsla in lager automatiskt
+	Auto-size Canvas	Ändra storlek på arbetsytan automatiskt
+	Keep Relative Position During Layer Reordering	Behåll relativ position vid ändring av lagerordning
+	Shrinkwrap Canvas on Save	Krymp arbetsytan till innehållet vid sparning

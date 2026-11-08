@@ -4852,3 +4852,10 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Show layer bounds on hover	Vis lagets grænser ved svæv
 	Expand layer group on click	Udvid lagergruppe ved klik
 	Show hover bounds from Layers	Vis svævegrænser fra Lag
+# Artboard tool options bar (#11385)
+	Distribute Widths	Fordel bredder
+	Distribute Heights	Fordel højder
+	Auto-nest Layers	Indlejr lag automatisk
+	Auto-size Canvas	Tilpas lærredsstørrelse automatisk
+	Keep Relative Position During Layer Reordering	Bevar relativ placering ved omorganisering af lag
+	Shrinkwrap Canvas on Save	Beskær lærredet til indholdet ved lagring

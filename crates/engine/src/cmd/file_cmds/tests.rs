@@ -4299,17 +4299,20 @@ fn huge_pdf_numbers_clamp_or_are_refused_not_wrapped() {
 }
 
 /// A page or an embedded image opened with Import PDF answers is untitled (not tied to the PDF
-/// for Save), as in Photoshop; so is a rasterised page opened with the defaults.
+/// for Save), as in Photoshop; so are the rasterised artboards a PDF opens as without answers.
 #[test]
 fn pdf_pages_and_images_open_untitled() {
     let dir = tmp("pdf-untitled");
     let pdf = pdf_file(&dir, "doc.pdf");
     let mut s = Session::new();
-    for (params, name, size) in [
-        (json!({"path": pdf}), "doc-1.pdf", (208, 208)),
-        (json!({"path": pdf, "page": 2, "resolution": 72, "crop": "mediaBox"}), "doc-2.pdf", (100, 100)),
-        (json!({"path": pdf, "image": 1}), "doc-1", (2, 2)),
-    ] {
+    s.execute("file.openAs", json!({"path": pdf})).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.name, "doc", "named after the file, not its path");
+    assert!(st.doc.layers.iter().all(|l| matches!(&l.content, photocraft_doc::LayerContent::Group(g) if g.artboard.is_some())), "a page an artboard");
+    assert!(st.path.is_none() && st.source_read_only, "artboards: Save must not write into the PDF");
+    for (params, name, size) in
+        [(json!({"path": pdf, "page": 2, "resolution": 72, "crop": "mediaBox"}), "doc-2.pdf", (100, 100)), (json!({"path": pdf, "image": 1}), "doc-1", (2, 2))]
+    {
         s.execute("file.openAs", params).unwrap();
         let st = s.active().unwrap();
         assert_eq!((st.doc.name.as_str(), st.doc.size.width, st.doc.size.height), (name, size.0, size.1));

@@ -3640,3 +3640,10 @@ curves	Smooth	تنعيم
 	Show layer bounds on hover	إظهار حدود الطبقة عند التمرير
 	Expand layer group on click	توسيع مجموعة الطبقات عند النقر
 	Show hover bounds from Layers	إظهار حدود التمرير من الطبقات
+# Artboard tool options bar (#11385)
+	Distribute Widths	توزيع العروض
+	Distribute Heights	توزيع الارتفاعات
+	Auto-nest Layers	تداخل الطبقات تلقائيًا
+	Auto-size Canvas	تحديد حجم مساحة الرسم تلقائيًا
+	Keep Relative Position During Layer Reordering	الإبقاء على الموضع النسبي عند إعادة ترتيب الطبقات
+	Shrinkwrap Canvas on Save	تقليص مساحة الرسم إلى المحتوى عند الحفظ

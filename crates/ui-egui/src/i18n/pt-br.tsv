@@ -368,6 +368,8 @@
 	Match Color…	Corresponder cores…
 	Replace Color…	Substituir cor…
 	Equalize	Equalizar
+	Equalize Selected Area Only	Equalizar somente a área selecionada
+	Equalize Entire Image Based On Selected Area	Equalizar a imagem inteira com base na área selecionada
 	Auto Tone	Tom automático
 	Auto Contrast	Contraste automático
 	Auto Color	Cor automática
@@ -4558,3 +4560,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostrar limites da camada ao passar o cursor
 	Expand layer group on click	Expandir grupo de camadas ao clicar
 	Show hover bounds from Layers	Mostrar limites ao passar o cursor em Camadas
+	Saved Camera Raw settings to {file}	Configurações do Camera Raw salvas em {file}
+	Save the settings to each raw's sidecar without opening it	Salvar as configurações no arquivo sidecar de cada raw sem abri-lo
+	No settings saved: these raws can't keep a sidecar here	Nada foi salvo: estes raw não podem ter um arquivo sidecar aqui
+	Some settings could not be saved; the raws stay open	Não foi possível salvar algumas configurações; os raw continuam abertos
+	Nothing to save: these raws are at their default settings	Nada para salvar: estes raw estão nas configurações padrão
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribuir larguras
+	Distribute Heights	Distribuir alturas
+	Auto-nest Layers	Aninhar camadas automaticamente
+	Auto-size Canvas	Ajustar tamanho da tela automaticamente
+	Keep Relative Position During Layer Reordering	Manter a posição relativa ao reordenar camadas
+	Shrinkwrap Canvas on Save	Reduzir a tela ao conteúdo ao salvar

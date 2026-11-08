@@ -1,7 +1,8 @@
 //! PDF import, as Photoshop's File › Open on a PDF (its Import PDF dialog): one page rasterised
 //! into a transparent `Layer 1` at the chosen resolution, colour mode and depth, cropped to one of
-//! the page's boxes or to the bounding box of its marks. Pages are interpreted and rasterised by
-//! `hayro` (pure Rust, on the CPU).
+//! the page's boxes or to the bounding box of its marks. Pages are read, interpreted and rasterised
+//! by `craft-pdf` (its vendored Hayro; pure Rust, on the CPU), as the artboard import
+//! ([`import`], without Import PDF answers) renders them.
 //!
 //! What Photoshop 25.4 does was measured on synthetic PDFs (page boxes, rotation, the bounding box
 //! of fills, strokes, text and images, device colour spaces, optional content, annotations) and
@@ -29,24 +30,22 @@
 //! base-14 stand-ins; Anti-aliased off settles coverage and opacity under one half as out.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
-use hayro::hayro_interpret::font::GlyphRun;
-use hayro::hayro_interpret::{
-    BlendMode, CacheKey, ClipPath, Context, Device, DrawMode, DrawProps, Image, ImageData, ImageDrawProps, InterpreterCache, InterpreterSettings, LumaData,
-    SoftMask, interpret_page,
+use craft_pdf::OpenError;
+use craft_pdf::interpret::TransformExt;
+use craft_pdf::interpret::font::Glyph;
+use craft_pdf::interpret::{
+    BlendMode, CacheKey, ClipPath, Context, Device, GlyphDrawMode, Image, ImageData, InterpreterCache, InterpreterSettings, LumaData, Paint, PathDrawMode,
+    SoftMask,
 };
-use hayro::hayro_syntax::content::TypedIter;
-use hayro::hayro_syntax::content::ops::TypedInstruction;
-use hayro::hayro_syntax::object::dict::keys;
-use hayro::hayro_syntax::object::{Array, Dict, Name, Object, ObjectIdentifier, Stream};
-use hayro::hayro_syntax::page::{Page, Resources, Rotation};
-use hayro::hayro_syntax::{Filter, LoadPdfError, Pdf};
-use hayro::kurbo::{Affine, BezPath, Rect as PtRect, Shape};
-use hayro::vello_cpu::color::palette::css::TRANSPARENT;
-use hayro::vello_cpu::peniko::ImageAlphaType;
-use hayro::vello_cpu::{self, Pixmap, RenderContext};
-use hayro::{RenderCache, RenderSettings, render_into};
+use craft_pdf::raster::{self, RenderCache};
+use craft_pdf::syntax::content::TypedIter;
+use craft_pdf::syntax::content::ops::TypedInstruction;
+use craft_pdf::syntax::object::dict::keys;
+use craft_pdf::syntax::object::{Array, Dict, Name, Object, ObjectIdentifier, Stream};
+use craft_pdf::syntax::page::{Page, Resources, Rotation};
+use craft_pdf::syntax::{Filter, LoadPdfError, Pdf};
+use kurbo::{Affine, BezPath, Rect as PtRect, Shape};
 use photocraft_cms::{Builtin, Intent, Transform};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
@@ -55,11 +54,15 @@ use photocraft_raster::{Interrupt, Surface};
 
 use crate::{ImportResult, IoError};
 
-/// Largest side a page opens at; a larger page is scaled down to fit, with a warning.
-pub const MAX_SIDE: u32 = 16_384;
-/// Most pixels a page opens with (a Letter page at 1200 ppi is 135 MP); past it the page is
-/// scaled down, with a warning.
-pub const MAX_PAGE_PIXELS: u64 = 64_000_000;
+/// Largest side a page opens at (craft-pdf's renderer bound); a larger page is scaled down to
+/// fit, with a warning.
+pub const MAX_SIDE: u32 = raster::MAX_SIDE;
+/// Most pixels a page opens with (a Letter page at 1200 ppi is 135 MP; craft-pdf's renderer
+/// bound); past it the page is scaled down, with a warning.
+pub const MAX_PAGE_PIXELS: u64 = raster::MAX_PIXELS;
+/// Largest side one raster image, stencil or mask of a page may decode to. The reader decodes
+/// images itself, so this is not the page renderer's [`MAX_SIDE`].
+pub const MAX_IMAGE_SIDE: u32 = 16_384;
 /// Most pixels one raster image, stencil, soft mask or explicit mask of a page may decode to,
 /// as the file declares its size: an image past it refuses the page before anything is decoded.
 pub const MAX_IMAGE_PIXELS: u64 = MAX_PAGE_PIXELS;
@@ -295,13 +298,13 @@ pub fn opens_as_image(bytes: &[u8], password: Option<&str>) -> bool {
     if codec_check(page).is_err() {
         return false;
     }
-    let m = marks(page, None);
+    let Ok(m) = marks(page, None) else { return false };
     m.paths == 0 && m.glyphs == 0 && m.stencils == 0 && m.images.len() == 1
 }
 
 /// Does opening `bytes` need a user password?
 pub fn needs_password(bytes: &[u8]) -> bool {
-    matches!(Pdf::new(Arc::new(bytes.to_vec())), Err(LoadPdfError::Decryption(_)))
+    matches!(craft_pdf::open_slice(bytes, None), Err(OpenError::Load(LoadPdfError::Decryption(_))))
 }
 
 /// The pages of a PDF: boxes and rotation of each.
@@ -318,7 +321,7 @@ pub fn bounding_box(bytes: &[u8], page: usize, password: Option<&str>) -> Result
     let p = page_of(&pdf, page)?;
     let info = page_info(p);
     codec_check(p)?;
-    Ok(marks(p, None).bounds_within(info.crop))
+    Ok(marks(p, None)?.bounds_within(info.crop))
 }
 
 /// Page `page` (from 1) rendered to fit `max_side` pixels on its longer side, on nothing (the
@@ -333,7 +336,7 @@ pub fn thumbnail(bytes: &[u8], page: usize, max_side: u32, password: Option<&str
     let (w, h) = (side(dw), side(dh));
     // A small thumbnail still decodes the page's images at their own size: within budget first.
     preflight(p)?;
-    let rgba = render_page(p, info.crop, info.rotation, (w, h), true);
+    let rgba = render_page(p, info.crop, (w, h), true)?;
     Ok(Thumbnail { width: w, height: h, rgba })
 }
 
@@ -366,7 +369,7 @@ fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Inter
     }
     let info = page_info(page);
     let bx = match opts.crop {
-        CropTo::BoundingBox => marks(page, None).bounds_within(info.crop),
+        CropTo::BoundingBox => marks(page, None)?.bounds_within(info.crop),
         c => info.box_for(c),
     };
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -383,7 +386,7 @@ fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Inter
         w = ((f64::from(w) * fit).floor() as u32).max(1);
         h = ((f64::from(h) * fit).floor() as u32).max(1);
     }
-    let rgba = render_page(page, bx, info.rotation, (w, h), opts.anti_alias);
+    let rgba = render_page(page, bx, (w, h), opts.anti_alias)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.8);
     let mode = match opts.mode {
@@ -443,7 +446,7 @@ pub fn images(bytes: &[u8], password: Option<&str>) -> Result<Vec<PdfImage>, IoE
     let mut out = Vec::new();
     for (p, page) in pdf.pages().iter().enumerate() {
         codec_check(page)?;
-        let m = marks(page, None);
+        let m = marks(page, None)?;
         for placed in m.images {
             out.push(PdfImage { index: out.len() + 1, page: p + 1, width: placed.size.0, height: placed.size.1 });
         }
@@ -461,12 +464,12 @@ pub fn import_image(name: &str, bytes: &[u8], index: usize, chosen: Option<&str>
     for page in pdf.pages().iter() {
         // Count this page's images first (no image decoding), then decode the one asked for.
         codec_check(page)?;
-        let n = marks(page, None).images.len();
+        let n = marks(page, None)?.images.len();
         if index > seen && index <= seen + n {
             ctl.progress(0.3);
             // The one image decodes only within the page's budgets.
             preflight(page)?;
-            let placed = marks(page, Some(index - seen - 1)).images.into_iter().nth(index - seen - 1);
+            let placed = marks(page, Some(index - seen - 1))?.images.into_iter().nth(index - seen - 1);
             let doc = placed
                 .and_then(|p| image_document(&image_name(name, chosen, index), &p))
                 .ok_or_else(|| IoError::Pdf(format!("image {index} couldn't be decoded")))?;
@@ -507,13 +510,8 @@ pub fn image_thumbnail(bytes: &[u8], index: usize, max_side: u32, password: Opti
 // ------------------------------------------------------------------------------------- reading
 
 fn load(bytes: &[u8], password: Option<&str>) -> Result<Pdf, IoError> {
-    let data = Arc::new(bytes.to_vec());
-    let r = match password {
-        Some(p) => Pdf::new_with_password(data, p),
-        None => Pdf::new(data),
-    };
-    r.map_err(|e| match e {
-        LoadPdfError::Decryption(d) => {
+    craft_pdf::open_slice(bytes, password).map_err(|e| match e {
+        OpenError::Load(LoadPdfError::Decryption(d)) => {
             let what = format!("{d:?}");
             if password.is_some() && what.contains("Password") {
                 IoError::Pdf(WRONG_PASSWORD.to_string())
@@ -523,7 +521,11 @@ fn load(bytes: &[u8], password: Option<&str>) -> Result<Pdf, IoError> {
                 IoError::Pdf(format!("the file's encryption isn't supported ({what})"))
             }
         }
-        LoadPdfError::Invalid => IoError::Pdf("not a PDF that can be read (damaged, truncated or not a PDF at all)".to_string()),
+        OpenError::Load(LoadPdfError::Invalid) | OpenError::BackendPanic => {
+            IoError::Pdf("not a PDF that can be read (damaged, truncated or not a PDF at all)".to_string())
+        }
+        OpenError::InputLimit { limit } => IoError::Pdf(format!("the PDF is larger than the {} MB this build opens", limit >> 20)),
+        OpenError::Allocation => IoError::Pdf("there isn't enough memory to read the PDF".to_string()),
     })
 }
 
@@ -536,7 +538,7 @@ fn page_of<'a>(pdf: &'a Pdf, page: usize) -> Result<&'a Page<'a>, IoError> {
 }
 
 /// `[x0, y0, x1, y1]` with the corners ordered.
-fn norm(r: hayro::hayro_syntax::object::Rect) -> [f32; 4] {
+fn norm(r: craft_pdf::syntax::object::Rect) -> [f32; 4] {
     [r.x0.min(r.x1) as f32, r.y0.min(r.y1) as f32, r.x0.max(r.x1) as f32, r.y0.max(r.y1) as f32]
 }
 
@@ -563,7 +565,7 @@ fn page_info(p: &Page) -> PdfPage {
     if !has_area(crop) {
         crop = media;
     }
-    let get = |key: &[u8]| p.raw().get::<hayro::hayro_syntax::object::Rect>(key).map(norm).map(|b| inter(b, media)).filter(|b| has_area(*b)).unwrap_or(crop);
+    let get = |key: &[u8]| p.raw().get::<craft_pdf::syntax::object::Rect>(key).map(norm).map(|b| inter(b, media)).filter(|b| has_area(*b)).unwrap_or(crop);
     let rotation = match p.rotation() {
         Rotation::None => 0,
         Rotation::Horizontal => 90,
@@ -579,49 +581,46 @@ fn settings() -> InterpreterSettings {
 
 // ---------------------------------------------------------------------------------- rendering
 
-/// PDF points of box `bx` → the unrotated page with y down, then turned by `rotation`, at one
-/// pixel per point (the page's own `initial_transform`, for any box).
-fn oriented(bx: [f32; 4], rotation: u16) -> Affine {
-    let (x0, y1) = (f64::from(bx[0]), f64::from(bx[3]));
-    let (w, h) = (f64::from(bx[2] - bx[0]), f64::from(bx[3] - bx[1]));
-    let upright = Affine::new([1.0, 0.0, 0.0, -1.0, -x0, y1]);
-    let turn = match rotation {
-        90 => Affine::new([0.0, 1.0, -1.0, 0.0, h, 0.0]),
-        180 => Affine::new([-1.0, 0.0, 0.0, -1.0, w, h]),
-        270 => Affine::new([0.0, -1.0, 1.0, 0.0, 0.0, w]),
-        _ => Affine::IDENTITY,
-    };
-    turn * upright
-}
-
 /// Box `bx` of `page` rendered into `w × h` pixels, straight-alpha RGBA, transparent where the
 /// page paints nothing. Callers run [`preflight`] first: rendering decodes the page's images at
 /// the size the file declares, whatever `w × h`.
-fn render_page(page: &Page, bx: [f32; 4], rotation: u16, (w, h): (u32, u32), anti_alias: bool) -> Vec<u8> {
+///
+/// The renderer draws a viewport of the page as it shows it (turned by `/Rotate`, `/UserUnit`
+/// applied), clipped to the crop box: the box is placed in that space by the page's own initial
+/// transform, then scaled and offset into `w × h`. A media or bleed box larger than the crop box
+/// is transparent outside the crop box.
+fn render_page(page: &Page, bx: [f32; 4], (w, h): (u32, u32), anti_alias: bool) -> Result<Vec<u8>, IoError> {
     let (w, h) = (w.clamp(1, MAX_SIDE), h.clamp(1, MAX_SIDE));
-    let (bw, bh) = (f64::from(bx[2] - bx[0]).max(1.0e-6), f64::from(bx[3] - bx[1]).max(1.0e-6));
-    let (dw, dh) = if rotation == 90 || rotation == 270 { (bh, bw) } else { (bw, bh) };
-    let transform = Affine::scale_non_uniform(f64::from(w) / dw, f64::from(h) / dh) * oriented(bx, rotation);
+    let shown =
+        page.initial_transform(true).to_kurbo().transform_rect_bbox(PtRect::new(f64::from(bx[0]), f64::from(bx[1]), f64::from(bx[2]), f64::from(bx[3])));
+    let sx = f64::from(w) / shown.width().max(1.0e-6);
+    let sy = f64::from(h) / shown.height().max(1.0e-6);
+    let viewport =
+        raster::Options { scale: [sx as f32, sy as f32], size: Some([w, h]), offset: [(shown.x0 * sx) as f32, (shown.y0 * sy) as f32], ..Default::default() };
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact((w as usize) * (h as usize) * 4).map_err(|_| IoError::Pdf("there isn't enough memory to render the page".to_string()))?;
+    rgba.resize((w as usize) * (h as usize) * 4, 0);
     // The page renders on this thread; PhotoCraft's own parallelism runs around it.
-    let render_settings = vello_cpu::RenderSettings { num_threads: 0, ..Default::default() };
-    let mut ctx = RenderContext::new_with(w as u16, h as u16, render_settings);
-    render_into(page, &RenderCache::new(), &settings(), &RenderSettings::default(), &mut ctx, transform);
-    ctx.flush();
-    let mut pixmap = Pixmap::new(w as u16, h as u16);
-    ctx.render_with(
-        &mut pixmap,
-        &mut vello_cpu::Resources::default(),
-        vello_cpu::RasterizerSettings { target_init: vello_cpu::TargetInit::Clear(TRANSPARENT), ..Default::default() },
-    );
-    let mut rgba = pixmap.take_rgba8(ImageAlphaType::Alpha);
-    if !anti_alias {
-        // Anti-aliased off: a pixel is in or out. The renderer resets its own aliasing threshold
-        // while hayro drives it, so the coverage is settled afterwards: half or more is in.
-        for px in rgba.as_chunks_mut::<4>().0 {
-            px[3] = if px[3] >= 128 { 255 } else { 0 };
+    raster::render_into(page, &RenderCache::new(), &settings(), &viewport, &mut rgba)
+        .map_err(|e| IoError::Pdf(format!("PDF: the page can't be rendered ({e})")))?;
+    for px in rgba.as_chunks_mut::<4>().0 {
+        // The renderer's output is premultiplied.
+        let a = px[3];
+        if !anti_alias && a < 128 {
+            // Anti-aliased off: a pixel is in or out; less than half is out.
+            *px = [0; 4];
+            continue;
+        }
+        if a != 0 && a != 255 {
+            for c in &mut px[..3] {
+                *c = ((u32::from(*c) * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8;
+            }
+        }
+        if !anti_alias && a != 0 {
+            px[3] = 255;
         }
     }
-    rgba
+    Ok(rgba)
 }
 
 /// Straight-alpha sRGB bytes → the document's interleaved normalised channels: sRGB as is, and
@@ -672,11 +671,14 @@ fn write_bands(surface: &mut Surface, rgba: &[u8], (w, h): (u32, u32), mode: Col
 
 /// Whether an image the file declares as `w × h` px may be decoded at all.
 fn image_fits(w: u32, h: u32) -> bool {
-    w > 0 && h > 0 && w <= MAX_SIDE && h <= MAX_SIDE && u64::from(w) * u64::from(h) <= MAX_IMAGE_PIXELS
+    w > 0 && h > 0 && w <= MAX_IMAGE_SIDE && h <= MAX_IMAGE_SIDE && u64::from(w) * u64::from(h) <= MAX_IMAGE_PIXELS
 }
 
 fn image_error(what: &str, w: u32, h: u32) -> IoError {
-    IoError::Pdf(format!("PDF: {what} of {w} × {h} px is past the {MAX_SIDE} px / {} MP limit, so the page can't be opened", MAX_IMAGE_PIXELS / 1_000_000))
+    IoError::Pdf(format!(
+        "PDF: {what} of {w} × {h} px is past the {MAX_IMAGE_SIDE} px / {} MP limit, so the page can't be opened",
+        MAX_IMAGE_PIXELS / 1_000_000
+    ))
 }
 
 fn total_error() -> IoError {
@@ -777,7 +779,7 @@ impl Part {
             && (!image_fits(e.size().0, e.size().1) || self.pixels() > MAX_IMAGE_PIXELS)
         {
             return Err(IoError::Pdf(format!(
-                "PDF: {} of {w} × {h} px is {}, past the {MAX_SIDE} px / {} MP limit, so the page can't be opened",
+                "PDF: {} of {w} × {h} px is {}, past the {MAX_IMAGE_SIDE} px / {} MP limit, so the page can't be opened",
                 self.what,
                 e.describe(),
                 MAX_IMAGE_PIXELS / 1_000_000
@@ -1259,7 +1261,7 @@ impl Budget {
 ///   procedures, the groups of `/ExtGState` soft masks and annotation appearances, and the inline
 ///   images in all those content streams; one the content never placed is charged once.
 ///
-/// Refused: an image past [`MAX_IMAGE_PIXELS`] or [`MAX_SIDE`] on a side, a page whose images pass
+/// Refused: an image past [`MAX_IMAGE_PIXELS`] or [`MAX_IMAGE_SIDE`] on a side, a page whose images pass
 /// [`MAX_PAGE_IMAGE_PIXELS`] together, an image that doesn't declare its size, a JPX or JBIG2 image
 /// whose headers can't be read or a JBIG2 image in symbol or halftone coding (so its decoding
 /// can't be bounded), a stream other than an image that an image codec would decode, a stencil
@@ -1269,7 +1271,7 @@ fn preflight(page: &Page) -> Result<(), IoError> {
     let mut walk = Walk::default();
     // What the content places, once per drawing.
     let mut unsourced = Vec::new();
-    for p in marks(page, None).placements {
+    for p in marks(page, None)?.placements {
         walk.placed.insert(p.key);
         match p.parts {
             Some(parts) => walk.budget.charge(&parts?)?,
@@ -1278,7 +1280,7 @@ fn preflight(page: &Page) -> Result<(), IoError> {
     }
     // What the resources reach, drawn or not.
     walk.scan(page.typed_operations())?;
-    walk.resources(page.resources().clone(), 0)?;
+    walk.resources(Sub::page(page.resources()), 0)?;
     walk.annotations(page)?;
     // A stencil is sized by the stream the walk found under its key.
     for (key, (w, h)) in unsourced {
@@ -1347,11 +1349,31 @@ enum ScopeId {
     Stream(ObjectIdentifier),
 }
 
+/// The parts of a resource dictionary the scans read, as hayro's `Resources` holds them (its
+/// constructor from a dictionary is private to the reader).
+struct Sub<'a> {
+    x_objects: Dict<'a>,
+    patterns: Dict<'a>,
+    fonts: Dict<'a>,
+    ext_g_states: Dict<'a>,
+}
+
+impl<'a> Sub<'a> {
+    fn of(d: &Dict<'a>) -> Sub<'a> {
+        let get = |key: &[u8]| d.get::<Dict<'a>>(key).unwrap_or_default();
+        Sub { x_objects: get(b"XObject"), patterns: get(b"Pattern"), fonts: get(b"Font"), ext_g_states: get(b"ExtGState") }
+    }
+
+    fn page(r: &Resources<'a>) -> Sub<'a> {
+        Sub { x_objects: r.x_objects.clone(), patterns: r.patterns.clone(), fonts: r.fonts.clone(), ext_g_states: r.ext_g_states.clone() }
+    }
+}
+
 impl<'a> Scope<'a> {
     /// `stream`'s own resources, or `inherited` when it has none.
     fn of(stream: &Stream<'a>, inherited: &Scope<'a>) -> Scope<'a> {
         match stream.dict().get::<Dict<'a>>(b"Resources") {
-            Some(r) => Scope { x: Resources::new(r).x_objects, id: ScopeId::Stream(stream.obj_id()) },
+            Some(r) => Scope { x: Sub::of(&r).x_objects, id: ScopeId::Stream(stream.obj_id()) },
             None => inherited.clone(),
         }
     }
@@ -1369,7 +1391,7 @@ fn other_contents<'a>(page: &Page<'a>, page_scope: &Scope<'a>) -> Vec<(Stream<'a
         let Some(font) = res.fonts.get::<Dict<'a>>(&name) else { continue };
         let Some(procs) = font.get::<Dict<'a>>(b"CharProcs") else { continue };
         let scope = match font.get::<Dict<'a>>(b"Resources") {
-            Some(r) => Scope { x: Resources::new(r).x_objects, id: ScopeId::Font(name.as_ref().to_vec()) },
+            Some(r) => Scope { x: Sub::of(&r).x_objects, id: ScopeId::Font(name.as_ref().to_vec()) },
             None => page_scope.clone(),
         };
         for glyph in procs.keys() {
@@ -1448,7 +1470,7 @@ impl<'a> Forms<'a> {
         if !self.open.insert(id) {
             return Err(IoError::Pdf("PDF: a Form XObject draws itself, so the page can't be opened".into()));
         }
-        let own = form.dict().get::<Dict<'a>>(b"Resources").map(Resources::new);
+        let own = form.dict().get::<Dict<'a>>(b"Resources").map(|r| Sub::of(&r));
         let scope = Scope::of(form, inherited);
         let kids = self.kids(form, &scope);
         for kid in &kids {
@@ -1575,7 +1597,7 @@ impl Walk {
 
     fn nested(&mut self, resources: Option<Dict<'_>>, depth: usize) -> Result<(), IoError> {
         match resources {
-            Some(r) => self.resources(Resources::new(r), depth + 1),
+            Some(r) => self.resources(Sub::of(&r), depth + 1),
             None => Ok(()),
         }
     }
@@ -1583,7 +1605,7 @@ impl Walk {
     /// A resource dictionary: image XObjects are sized; Form XObjects, tiling patterns, Type 3
     /// glyph procedures and the groups of `/ExtGState` soft masks are scanned, with their own
     /// resources.
-    fn resources(&mut self, res: Resources<'_>, depth: usize) -> Result<(), IoError> {
+    fn resources(&mut self, res: Sub<'_>, depth: usize) -> Result<(), IoError> {
         if depth > MAX_FORM_DEPTH {
             return Err(IoError::Pdf(format!("PDF: Form XObjects nest deeper than {MAX_FORM_DEPTH}, so the page can't be opened")));
         }
@@ -1899,23 +1921,27 @@ impl Marks {
 
 /// Interprets `page` through a [`Marks`] device, in PDF points (y up); `decode` picks the raster
 /// image (by drawing order) whose pixels are wanted.
-fn marks(page: &Page, decode: Option<usize>) -> Marks {
+fn marks(page: &Page, decode: Option<usize>) -> Result<Marks, IoError> {
     let mut device = Marks { clips: Vec::new(), bounds: None, paths: 0, glyphs: 0, stencils: 0, decode, images: Vec::new(), placements: Vec::new() };
     let cache = InterpreterCache::new();
     let media = to_pt(norm(page.media_box()));
     let mut context = Context::new(Affine::IDENTITY, media, &cache, page.xref(), settings());
-    interpret_page(page, &mut context, &mut device);
-    device
+    craft_pdf::interpret_page(page, &mut context, &mut device).map_err(|e| IoError::Pdf(format!("PDF: the page can't be read ({e})")))?;
+    Ok(device)
 }
 
 impl<'a> Device<'a> for Marks {
-    fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
+    fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+
+    fn set_blend_mode(&mut self, _: BlendMode) {}
+
+    fn draw_path(&mut self, path: &BezPath, transform: Affine, _: &Paint<'a>, draw_mode: &PathDrawMode) {
         let mut r = path.bounding_box();
-        if let DrawMode::Stroke(s) | DrawMode::FillAndStroke(_, s) = draw_mode {
+        if let PathDrawMode::Stroke(s) = draw_mode {
             let grow = (f64::from(s.line_width) / 2.0).max(4.0) + 2.0;
             r = r.inflate(grow, grow);
         }
-        self.mark(props.transform.transform_rect_bbox(r));
+        self.mark(transform.transform_rect_bbox(r));
         self.paths = self.paths.saturating_add(1);
     }
 
@@ -1930,18 +1956,17 @@ impl<'a> Device<'a> for Marks {
 
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
 
-    fn draw_glyph_run(&mut self, glyph_run: &GlyphRun<'_, 'a>, props: DrawProps<'a>, _: &DrawMode) {
+    // Every glyph the interpreter reports counts, invisible (OCR) text included.
+    fn draw_glyph(&mut self, _: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {
         let b = PtRect::new(GLYPH_BOX[0], GLYPH_BOX[1], GLYPH_BOX[2], GLYPH_BOX[3]);
-        for g in glyph_run.glyphs() {
-            self.mark((props.transform * g.transform()).transform_rect_bbox(b));
-            self.glyphs = self.glyphs.saturating_add(1);
-        }
+        self.mark((transform * glyph_transform).transform_rect_bbox(b));
+        self.glyphs = self.glyphs.saturating_add(1);
     }
 
-    fn draw_image(&mut self, image: Image<'a, '_>, props: ImageDrawProps<'a>) {
+    fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
         // The transform places the image's own pixel grid (top row first).
         let (w, h) = (f64::from(image.width()), f64::from(image.height()));
-        self.mark(props.transform.transform_rect_bbox(PtRect::new(0.0, 0.0, w, h)));
+        self.mark(transform.transform_rect_bbox(PtRect::new(0.0, 0.0, w, h)));
         let (key, size) = (image.cache_key(), (image.width(), image.height()));
         match image {
             Image::Stencil(_) => {
@@ -1957,13 +1982,13 @@ impl<'a> Device<'a> for Marks {
                 if self.decode == Some(self.images.len()) && parts.as_ref().is_ok_and(|p| p.iter().all(|x| x.fits().is_ok())) {
                     r.with_rgba(|data, alpha| decoded = Some((data, alpha)), None);
                 }
-                self.images.push(Placed { transform: props.transform, size, decoded });
+                self.images.push(Placed { transform, size, decoded });
                 self.placements.push(Placement { key, size, parts: Some(parts) });
             }
         }
     }
 
-    fn pop_clip(&mut self) {
+    fn pop_clip_path(&mut self) {
         self.clips.pop();
     }
 
@@ -1973,7 +1998,7 @@ impl<'a> Device<'a> for Marks {
 /// The image of a page that draws exactly one raster image and nothing else, as the document
 /// Photoshop opens for it (see [`image_document`]). `None` for any other page.
 fn image_only(name: &str, page: &Page) -> Result<Option<Document>, IoError> {
-    let m = marks(page, Some(0));
+    let m = marks(page, Some(0))?;
     if m.paths != 0 || m.glyphs != 0 || m.stencils != 0 || m.images.len() != 1 {
         return Ok(None);
     }
@@ -1987,7 +2012,7 @@ fn image_only(name: &str, page: &Page) -> Result<Option<Document>, IoError> {
 fn image_document(name: &str, placed: &Placed) -> Option<Document> {
     let (data, alpha) = placed.decoded.as_ref()?;
     let (w, h) = (data.width(), data.height());
-    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE || u64::from(w) * u64::from(h) > MAX_PAGE_PIXELS {
+    if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE || u64::from(w) * u64::from(h) > MAX_PAGE_PIXELS {
         return None;
     }
     // The placed width in points: the declared pixel width along the matrix's x axis.
@@ -2020,6 +2045,9 @@ fn image_document(name: &str, placed: &Placed) -> Option<Document> {
     doc.layers.push(layer);
     Some(doc)
 }
+
+mod artboards;
+pub use artboards::import;
 
 #[cfg(test)]
 mod tests;

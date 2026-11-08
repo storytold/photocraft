@@ -263,7 +263,6 @@ fn pages_of_a_multi_page_file_are_named_and_counted() {
 
 #[test]
 fn rotation_turns_the_page_like_hayro_and_photoshop() {
-    use hayro::hayro_interpret::TransformExt;
     for (rot, (w, h)) in [(0, (612, 792)), (90, (792, 612)), (180, (612, 792)), (270, (792, 612))] {
         // A mark in the top-left corner of the unrotated page.
         let bytes =
@@ -278,14 +277,6 @@ fn rotation_turns_the_page_like_hayro_and_photoshop() {
         };
         assert_eq!(pixel(&r, x, y)[3], 1.0, "rotate {rot}: the mark moved with the page");
         assert_eq!(pixel(&r, w as i32 / 2, h as i32 / 2)[3], 0.0);
-        // Our transform for the crop box is hayro's own.
-        let p = load(&bytes, None).unwrap();
-        let pg = &p.pages()[0];
-        let ours = oriented(page_info(pg).crop, rot).as_coeffs();
-        let theirs = pg.initial_transform(true).to_kurbo().as_coeffs();
-        for (a, b) in ours.iter().zip(theirs.iter()) {
-            assert!((a - b).abs() < 1e-6, "rotate {rot}: {ours:?} vs {theirs:?}");
-        }
     }
 }
 
@@ -443,12 +434,23 @@ fn thumbnails_fit_the_asked_side() {
     assert!(thumbnail(&bytes, 2, 128, None).is_err());
 }
 
+/// Without Import PDF answers every page opens as an artboard (#11647); with them, the page the
+/// dialog chose opens on its own.
 #[test]
-fn plain_import_opens_pdfs_with_photoshop_defaults() {
+fn plain_import_opens_pages_as_artboards_and_answers_open_one_page() {
     let bytes = pdf(&[page(72.0, 72.0, &rect(0.0, 0.0, 72.0, 72.0, (0.0, 0.0, 0.0))), page(36.0, 36.0, "")]);
     let r = crate::import("two.pdf", &bytes).unwrap();
-    assert_eq!(r.document.name, "two-1.pdf");
-    assert_eq!((r.document.size.width, r.document.size.height, r.document.resolution_dpi), (300, 300, 300.0));
+    let boards: Vec<_> = r
+        .document
+        .layers
+        .iter()
+        .filter_map(|l| match &l.content {
+            LayerContent::Group(g) => g.artboard.as_ref().map(|a| (a.rect.width(), a.rect.height())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(boards, vec![(300, 300), (150, 150)], "one artboard a page, at 300 ppi");
+    assert_eq!(r.document.resolution_dpi, 300.0);
     let opts =
         crate::ImportOptions { pdf: Some(PdfOpenOptions { page: 2, crop: CropTo::MediaBox, resolution: 72.0, ..Default::default() }), ..Default::default() };
     let r = crate::import_with_options("two.pdf", &bytes, &opts).unwrap();

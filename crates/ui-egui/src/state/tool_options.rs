@@ -145,8 +145,8 @@ pub struct ToolOptions {
     #[serde(default = "one")]
     pub slice_height: f32,
     /// Move tool: Auto-Select (with "layer" or "group" target) and Show Transform Controls.
-    /// Auto-Select is on with the "group" target by default, as in current Photoshop;
-    /// ⌘/Ctrl-click inverts it.
+    /// Auto-Select is on with the "layer" target by default, as Photoshop's Reset Tool leaves it
+    /// (measured for #11380; #4056 had asked for "group"); ⌘/Ctrl-click inverts it.
     #[serde(default = "yes")]
     pub move_auto_select: bool,
     #[serde(default = "default_move_target")]
@@ -168,6 +168,10 @@ pub struct ToolOptions {
     /// transforms still turn and scale about it (#11098).
     #[serde(default)]
     pub transform_reference_point: bool,
+    /// Transform options bar: X and Y show the reference point's offset from where the box started
+    /// instead of its position (Photoshop's relative positioning, off by default, #11679).
+    #[serde(default)]
+    pub transform_relative_position: bool,
     /// Last interpolation selected in the Transform options bar; unset follows General's default.
     #[serde(default)]
     pub transform_interpolation: Option<photocraft_engine::prefs::Interpolation>,
@@ -292,7 +296,7 @@ fn default_crop_resolution_unit() -> String {
 }
 
 fn default_move_target() -> String {
-    "group".into()
+    "layer".into()
 }
 
 fn default_pen_path_op() -> String {
@@ -349,10 +353,10 @@ fn default_eyedropper_sample() -> String {
 }
 
 /// Each tool's Sample All Layers (the Paint Bucket calls it All Layers). Photoshop keeps one per
-/// tool, all off by default: turning it on for the Magic Wand must not leave Blur or Smudge
-/// copying the composite onto the active layer (#5524). The Mixer Brush keeps its own with the
-/// brush (`MixerSettings`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// tool, all off by default except the Patch tool's Content-Aware Sample All Layers (#5524,
+/// #12125): turning it on for the Magic Wand must not leave Blur or Smudge copying the composite
+/// onto the active layer. The Mixer Brush keeps its own with the brush (`MixerSettings`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SampleAllLayers {
     pub magic_wand: bool,
@@ -367,6 +371,25 @@ pub struct SampleAllLayers {
     pub blur: bool,
     pub sharpen: bool,
     pub smudge: bool,
+}
+
+impl Default for SampleAllLayers {
+    fn default() -> Self {
+        Self {
+            magic_wand: false,
+            quick_selection: false,
+            object_selection: false,
+            paint_bucket: false,
+            magic_eraser: false,
+            spot_healing: false,
+            patch: true,
+            content_aware_move: false,
+            remove: false,
+            blur: false,
+            sharpen: false,
+            smudge: false,
+        }
+    }
 }
 
 impl SampleAllLayers {
@@ -417,7 +440,7 @@ impl Default for ToolOptions {
             bucket_clear: false,
             type_font: "Inter".into(),
             type_style: "Regular".into(),
-            type_size: 48.0,
+            type_size: 50.0,
             type_aa: "sharp".into(),
             type_align: "left".into(),
             type_style_defaults: serde_json::Map::new(),
@@ -478,6 +501,7 @@ impl Default for ToolOptions {
             move_expand_group_on_click: true,
             move_show_layers_hover_bounds: true,
             transform_reference_point: false,
+            transform_relative_position: false,
             transform_interpolation: None,
             crop_ratio: String::new(),
             crop_custom_ratio_width: 0.0,

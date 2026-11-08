@@ -4853,3 +4853,10 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Show layer bounds on hover	Näytä tason rajat osoitettaessa
 	Expand layer group on click	Laajenna tasoryhmä napsautuksella
 	Show hover bounds from Layers	Näytä rajat osoitettaessa Tasot-paneelista
+# Artboard tool options bar (#11385)
+	Distribute Widths	Jaa leveydet tasaisesti
+	Distribute Heights	Jaa korkeudet tasaisesti
+	Auto-nest Layers	Sisäkkäistä tasot automaattisesti
+	Auto-size Canvas	Muuta kankaan kokoa automaattisesti
+	Keep Relative Position During Layer Reordering	Säilytä suhteellinen sijainti tasojen järjestystä muutettaessa
+	Shrinkwrap Canvas on Save	Pienennä kangas sisältöön tallennettaessa
