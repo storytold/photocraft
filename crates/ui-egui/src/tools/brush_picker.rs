@@ -65,7 +65,14 @@ pub enum Pick {
     NewPreset,
     /// Import brushes (.abr) with the file dialog.
     Import,
+    /// A value typed out of range was replaced by the closest one: say so in an alert with OK,
+    /// as Photoshop does (#11817). The English message, translated when shown.
+    RangeAlert(&'static str),
 }
+
+/// The alerts for Size and Hardness typed out of range (#11817).
+pub const SIZE_RANGE_ALERT: &str = "An integer between 1 pixel and 5000 Pixels is required. Closest value inserted.";
+pub const HARDNESS_RANGE_ALERT: &str = "An integer between 0% and 100% is required. Closest value inserted.";
 
 impl Pick {
     /// Does this pick dismiss the picker? A double-click on a preset does (Photoshop), and so does
@@ -204,6 +211,17 @@ pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
             Pick::Import => {
                 let _ = crate::preset_files_ui::import_brushes(app);
             }
+            Pick::RangeAlert(message) => {
+                let message = tl!(message).to_owned();
+                let shown = app
+                    .ui
+                    .dialogs
+                    .iter()
+                    .any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
+                if !shown {
+                    app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+                }
+            }
         }
     }
 }
@@ -229,6 +247,24 @@ pub fn settings_toggle(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         app.ui.status = e;
     }
+}
+
+/// A picker field of whole numbers in `lo..=hi` (#11817): a typed fraction is cut off (2.5 → 2),
+/// text that is no number leaves the value, and a value past the range becomes the closest one,
+/// with `alert` once the field is left.
+fn integer_field(ui: &mut egui::Ui, value: &mut f32, (lo, hi): (f32, f32), suffix: &str, name: &str, alert: &'static str, picks: &mut Vec<Pick>) -> bool {
+    // The field's own range is wide, so the typed value reaches here unclamped.
+    let mut typed = *value;
+    let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, suffix, 72.0).accessible_name(tl!(name));
+    let out_id = r.id.with("out-of-range");
+    if r.changed() && typed.is_finite() {
+        *value = typed.trunc().clamp(lo, hi);
+        ui.ctx().data_mut(|d| d.insert_temp(out_id, typed < lo || typed > hi));
+    }
+    if r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false) {
+        picks.push(Pick::RangeAlert(alert));
+    }
+    r.changed() && typed.is_finite()
 }
 
 /// An icon button's accessible name (icon buttons have only a tooltip).
@@ -269,10 +305,7 @@ pub fn body(
         ui.horizontal(|ui| {
             ui.label(RichText::new(tl!("Size")).color(t.text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut size = b.size;
-                if widgets::value_field(ui, &mut size, 1.0..=MAX_BRUSH_SIZE, "px", 72.0).accessible_name(tl!("Size")).changed() {
-                    b.size = size.round().clamp(1.0, MAX_BRUSH_SIZE);
-                }
+                integer_field(ui, &mut b.size, (1.0, MAX_BRUSH_SIZE), "px", "Size", SIZE_RANGE_ALERT, &mut picks);
             });
         });
         let mut lv = b.size.max(1.0).ln();
@@ -282,10 +315,19 @@ pub fn body(
         }
         dismiss_popup(&size_slider);
         if b.tip == TipShape::Round {
+            // Like Size: a caption and a whole-number field, then the slider.
             let mut hard = b.hardness * 100.0;
-            let hardness = widgets::slider_row(ui, "Hardness", &mut hard, 0.0..=100.0, "%", None);
-            if hardness.changed() {
-                b.hardness = (hard / 100.0).clamp(0.0, 1.0);
+            let mut typed = false;
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tl!("Hardness")).color(t.text_dim));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    typed = integer_field(ui, &mut hard, (0.0, 100.0), "%", "Hardness", HARDNESS_RANGE_ALERT, &mut picks);
+                });
+            });
+            let hardness = widgets::slider(ui, &mut hard, 0.0..=100.0, None);
+            hardness.widget_info(|| egui::WidgetInfo::slider(true, f64::from(hard), tl!("Hardness")));
+            if typed || hardness.changed() {
+                b.hardness = (hard.round() / 100.0).clamp(0.0, 1.0);
             }
             dismiss_popup(&hardness);
         }
