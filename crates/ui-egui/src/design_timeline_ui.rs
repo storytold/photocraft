@@ -92,8 +92,9 @@ fn tint(st: &DesignStep, dimmed: bool, t: &Tokens) -> Color32 {
     }
 }
 
-/// Step previews by (step id, checkpoint): `None` while one renders.
-type Thumbs = Arc<Mutex<HashMap<(u64, usize), Option<egui::TextureHandle>>>>;
+/// Step previews by (step id, checkpoint address), with the checkpoint they show: `None` while
+/// one renders.
+type Thumbs = Arc<Mutex<HashMap<(u64, usize), (std::sync::Weak<Document>, Option<egui::TextureHandle>)>>>;
 
 /// The preview of a step's result, rendered from its checkpoint off the UI thread on first
 /// request. Steps past the checkpoint memory budget have none.
@@ -102,12 +103,16 @@ fn thumb(ctx: &egui::Context, tl: &DesignTimeline, st: &DesignStep) -> Option<eg
     let key = (st.step, Arc::as_ptr(&doc) as usize);
     let thumbs = ctx.data_mut(|d| d.get_temp_mut_or_default::<Thumbs>(egui::Id::unique("design_timeline_thumbs")).clone());
     let mut map = thumbs.lock().ok()?;
-    if let Some(t) = map.get(&key) {
+    // The address alone could be a freed checkpoint's, reused.
+    if let Some((shown, t)) = map.get(&key)
+        && shown.upgrade().is_some_and(|d| Arc::ptr_eq(&d, &doc))
+    {
         return t.clone();
     }
     // Replays give steps new checkpoints: drop the previews of the old ones.
     map.retain(|k, _| tl.steps.iter().any(|s| s.step == k.0 && s.checkpoint.0.as_ref().is_some_and(|d| Arc::as_ptr(d) as usize == k.1)));
-    map.insert(key, None);
+    let shown = Arc::downgrade(&doc);
+    map.insert(key, (shown.clone(), None));
     drop(map);
     let ctx = ctx.clone();
     let work = move || {
@@ -115,7 +120,7 @@ fn thumb(ctx: &egui::Context, tl: &DesignTimeline, st: &DesignStep) -> Option<eg
         let img = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
         let tex = ctx.load_texture(format!("design-step-{}", key.0), img, egui::TextureOptions::LINEAR);
         if let Ok(mut map) = thumbs.lock() {
-            map.insert(key, Some(tex));
+            map.insert(key, (shown, Some(tex)));
         }
         ctx.request_repaint();
     };
@@ -344,6 +349,12 @@ fn edit(app: &mut PhotocraftApp, i: usize) -> Result<(), String> {
     // Not a background job: the dialog must open on the rolled-back document. Usually a
     // checkpoint restore; after a reload (no checkpoints) it replays up to step `i` here.
     app.session.execute("design.rollTo", json!({ "at": i })).map_err(|e| e.to_string())?;
+    // The layers the step acted on, so the dialog previews where OK replays it.
+    if let Some(d) = app.session.active_mut() {
+        d.active_layer = st.active.filter(|a| d.doc.layer(*a).is_some());
+        d.selected_layers = st.selected.iter().copied().filter(|id| d.doc.layer(*id).is_some()).collect();
+        d.layer_anchor = d.active_layer;
+    }
     let dialog = crate::dialogs::open_command_dialog(app, &st.command, &st.label);
     if let Some(d) = app.ui.dialog_mut(dialog) {
         if let Some(o) = st.params.as_object() {
@@ -352,8 +363,14 @@ fn edit(app: &mut PhotocraftApp, i: usize) -> Result<(), String> {
         let doc = app.session.active().map(|d| d.doc.id.0);
         d.fields.insert(EDIT.into(), json!({ "step": st.step, "restore": tl.marker, "doc": doc }));
     }
-    app.filter_preview_hold = size.map(|size| (dialog, size));
+    app.filter_preview_hold = size.zip(app.session.active().map(|d| d.doc.id.0)).map(|(size, doc)| (dialog, size, doc));
     Ok(())
+}
+
+/// Whether `fields` are an Edit Parameters dialog's for a document other than `active`: its
+/// preview must not show on whichever document a background open made active.
+pub(crate) fn edits_other(fields: &serde_json::Map<String, Value>, active: Option<u64>) -> bool {
+    fields.get(EDIT).is_some_and(|e| e["doc"].as_u64() != active)
 }
 
 /// A confirmed Edit Parameters dialog: replay the step with the new values and put the marker back,
@@ -367,11 +384,28 @@ pub fn confirm_edit(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Va
         (r, app.session.active().is_some_and(|st| app.session.job_on(st.doc.id).is_some()))
     });
     let (r, running) = r.unwrap_or_else(|e| (Err(e), false));
+    // A cancelled or failed replay puts the marker back (`on_job_event`), as Cancel would.
+    if running && let Some(job) = r.as_ref().ok().and_then(|v| v["job"].as_u64()) {
+        app.jobs.edit_steps.push((photocraft_engine::jobs::JobId(job), e.clone()));
+    }
     match app.filter_preview.as_mut() {
         Some(p) if r.is_ok() && running => p.committing = true,
         _ => app.filter_preview = None,
     }
     Some(r)
+}
+
+/// An Edit Parameters replay job that ended without landing (cancelled or failed): the marker goes
+/// back where it was, with the later steps' effects.
+pub fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) {
+    let Some(i) = app.jobs.edit_steps.iter().position(|(job, _)| *job == e.id) else { return };
+    let (_, edit) = app.jobs.edit_steps.remove(i);
+    if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
+        return;
+    }
+    if let Err(err) = on_edited_document(app, &edit, |app| app.run("design.rollTo", json!({ "at": edit["restore"] }))).and_then(|r| r) {
+        app.ui.status = err;
+    }
 }
 
 /// A cancelled Edit Parameters dialog: the marker goes back where it was.
@@ -577,5 +611,81 @@ mod tests {
         a.session.wait_job(job).unwrap();
         let tl = timeline(&a).unwrap();
         assert_eq!((tl.steps[2].params["amount"].clone(), tl.in_effect()), (json!(40), 4));
+    }
+
+    /// Edit Parameters previews on the layer the step acted on, not the top one.
+    #[test]
+    fn edit_parameters_targets_the_steps_layer() {
+        let mut a = app();
+        a.run("design.start", json!({})).unwrap();
+        a.run("layer.new.layer", json!({"name": "A"})).unwrap();
+        let layer_a = a.session.active().unwrap().active_layer;
+        a.run("layer.new.layer", json!({"name": "B"})).unwrap();
+        a.run("layer.select", json!({"layer": "A"})).unwrap();
+        a.run("filter.noise.addNoise", json!({"amount": 10})).unwrap();
+        a.run("layer.select", json!({"layer": "B"})).unwrap();
+        edit(&mut a, 2).unwrap();
+        assert_eq!(a.session.active().unwrap().active_layer, layer_a);
+    }
+
+    /// With another document made active (a background open), the dialog previews on neither,
+    /// and the held canvas of the edited one is let go.
+    #[test]
+    fn edit_parameters_previews_only_on_the_document_it_edits() {
+        let mut a = app();
+        a.run("design.start", json!({})).unwrap();
+        a.run("layer.new.layer", json!({"name": "A"})).unwrap();
+        a.run("edit.fillForeground", json!({})).unwrap();
+        a.run("filter.noise.addNoise", json!({"amount": 10})).unwrap();
+        edit(&mut a, 2).unwrap();
+        assert!(a.filter_preview_hold.is_some());
+        a.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let other = a.session.active_index().unwrap();
+        assert_eq!(crate::canvas::ensure_filter_preview(&mut a, other, &egui::Context::default()), None);
+        assert!(a.filter_preview.is_none(), "nothing computed for the other document");
+        assert!(a.filter_preview_hold.is_none());
+    }
+
+    /// Cancelling the replay Edit Parameters started puts the marker back, as Cancel would.
+    #[test]
+    fn a_cancelled_edit_replay_puts_the_marker_back() {
+        let mut a = app();
+        a.run("design.start", json!({})).unwrap();
+        a.run("layer.new.layer", json!({"name": "A"})).unwrap();
+        a.run("edit.fillForeground", json!({})).unwrap();
+        a.run("filter.noise.addNoise", json!({"amount": 10})).unwrap();
+        a.run("layer.new.layer", json!({"name": "B"})).unwrap();
+        edit(&mut a, 2).unwrap();
+        let d = a.ui.dialogs.last().unwrap().id;
+        a.background_jobs = true;
+        crate::dialogs::confirm(&mut a, d).unwrap();
+        let doc = a.session.active().unwrap().doc.id;
+        let job = a.session.job_on(doc).expect("the replay runs as a job").id;
+        assert!(a.session.cancel_job(job));
+        let ctx = egui::Context::default();
+        for _ in 0..500 {
+            crate::jobs_ui::tick(&mut a, &ctx);
+            if a.jobs.edit_steps.is_empty() && a.session.job_on(doc).is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(timeline(&a).unwrap().in_effect(), 4, "back at the end");
+    }
+
+    /// A cached preview is reused only for the checkpoint it shows, never for another at its address.
+    #[test]
+    fn a_step_preview_is_not_reused_for_another_checkpoint() {
+        let mut a = app();
+        a.run("design.start", json!({})).unwrap();
+        a.run("layer.new.layer", json!({"name": "A"})).unwrap();
+        let tl = timeline(&a).unwrap();
+        let st = &tl.steps[0];
+        let doc = st.checkpoint.0.clone().unwrap();
+        let ctx = egui::Context::default();
+        let stale = ctx.load_texture("stale", egui::ColorImage::filled([1, 1], Color32::RED), egui::TextureOptions::LINEAR);
+        let thumbs = ctx.data_mut(|d| d.get_temp_mut_or_default::<Thumbs>(egui::Id::unique("design_timeline_thumbs")).clone());
+        thumbs.lock().unwrap().insert((st.step, Arc::as_ptr(&doc) as usize), (std::sync::Weak::new(), Some(stale)));
+        assert!(thumb(&ctx, &tl, st).is_none(), "a new render starts");
     }
 }

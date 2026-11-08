@@ -33,6 +33,12 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     if let Some(held) = committed_filter_preview(app, idx) {
         return held;
     }
+    // The held canvas is the edited document's texture from before the rollback: with another
+    // document active, an arranged view may redraw it rolled back, so stop holding it.
+    let active = app.session.active().map(|st| st.doc.id.0);
+    if app.filter_preview_hold.is_some_and(|h| Some(h.2) != active) {
+        app.filter_preview_hold = None;
+    }
     // Command dialogs always edit the active document. Never show their preview in another tab.
     if app.session.active_index() != Some(idx) {
         return None;
@@ -41,7 +47,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         return None;
     }
     let d = app.ui.dialogs.iter().find(|d| d.fields.contains_key("__filter"))?;
-    if d.fields.get("__preview").and_then(serde_json::Value::as_bool) != Some(true) {
+    if d.fields.get("__preview").and_then(serde_json::Value::as_bool) != Some(true) || crate::design_timeline_ui::edits_other(&d.fields, active) {
         return None;
     }
     let cmd = d.fields.get("__command")?.as_str()?.to_string();
@@ -146,7 +152,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         // Until its first frame lands, Edit Parameters keeps the canvas texture from before the
         // rollback (drawn as is, not recomposited) rather than flash the rolled-back document.
         let landed = app.filter_preview.as_ref().is_some_and(|p| p.key.same_target(&request));
-        if let Some((_, size)) = app.filter_preview_hold.filter(|h| h.0 == request.dialog && !landed && app.filter_preview_worker.busy()) {
+        if let Some((_, size, _)) = app.filter_preview_hold.filter(|h| h.0 == request.dialog && !landed && app.filter_preview_worker.busy()) {
             return Some((1, request.doc.0, size));
         }
         app.filter_preview_hold = None;

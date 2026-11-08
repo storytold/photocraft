@@ -181,6 +181,8 @@ pub struct JobsUi {
     pub place: Option<PlaceJob>,
     /// Cached read-only canvas image of the current folder Batch input.
     batch_preview_texture: Option<(JobId, u64, egui::TextureHandle)>,
+    /// Edit Parameters replays running, with their dialog's edit (document and marker to restore).
+    pub(crate) edit_steps: Vec<(JobId, Value)>,
 }
 
 /// Run command `id`: in the background when background jobs are on and the command is a job
@@ -582,6 +584,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     });
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
+    crate::design_timeline_ui::on_job_event(app, &e);
     if crate::prefs_ui::on_recovery_event(app, &e) {
         return;
     }
