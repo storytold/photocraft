@@ -659,7 +659,8 @@ fn a_targeted_vector_mask_flips_its_path_not_the_layer_pixels() {
 fn a_targeted_vector_mask_yields_to_alpha_quick_mask_and_explicit_targets() {
     let (s, masked, _) = session();
     let mut h = harness(s, 0, 1.0, 290.0);
-    click_with(&mut h, mask_rect(&h, masked, MaskKind::Vector).center(), Modifiers::NONE);
+    let r = mask_rect(&h, masked, MaskKind::Vector);
+    click_with(&mut h, r.center(), Modifiers::NONE);
     assert!(h.state().ui.vector_mask_target && h.state().vector_mask_targeted());
     let target = |h: &Harness<'_, PhotocraftApp>, p: serde_json::Value| h.state().with_mask_target("edit.transform.flipHorizontal", p);
     assert_eq!(target(&h, json!({}))["target"], "vectorMask");
@@ -667,7 +668,7 @@ fn a_targeted_vector_mask_yields_to_alpha_quick_mask_and_explicit_targets() {
     let before = layer(&h, masked).vector_mask.unwrap().path;
 
     // Photoshop targets a new alpha channel on its own; the panel still says vector mask.
-    h.state_mut().run("channel.new", json!({"name": "Alpha"})).unwrap();
+    h.state_mut().run("channel.new", json!({"name": "Alpha", "fill": "white"})).unwrap();
     assert!(h.state().ui.vector_mask_target, "the panel keeps its vector-mask flag");
     assert_eq!(h.state().session.active().unwrap().channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Alpha(0));
     assert!(target(&h, json!({})).get("target").is_none(), "the alpha channel wins");
