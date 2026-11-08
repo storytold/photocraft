@@ -425,6 +425,34 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
     }
 }
 
+/// The Content-Aware Move tool's "Don't show again" for [`content_aware_move_no_pixels`].
+const CAM_NO_PIXELS_PREF: &str = "contentAwareMove.noPixelsSelected";
+
+/// Content-Aware Move Tool with no selection: a drag that encloses no area (a click, a straight
+/// line) selects nothing and adds no History state, and says so in the alert "No pixels are
+/// selected." with "Don't show again" (#12192). Returns whether this drag was such a one. With a
+/// selection, or a drag that encloses an area, it is the tool's lasso as before.
+pub fn content_aware_move_no_pixels(app: &mut PhotocraftApp, points: &[[f64; 2]]) -> bool {
+    if app.session.active().is_none_or(|s| s.doc.selection.is_some()) || encloses_area(points) {
+        return false;
+    }
+    crate::dialogs::dont_show_again::alert(app, tl!("No pixels are selected."), CAM_NO_PIXELS_PREF);
+    true
+}
+
+/// Whether the lasso through `points` encloses any area: at least three points and a polygon of at
+/// least half a pixel (shoelace), so a straight line, however long, encloses none.
+fn encloses_area(points: &[[f64; 2]]) -> bool {
+    let Some(last) = points.last() else { return false };
+    let mut prev = last;
+    let mut twice = 0.0;
+    for p in points {
+        twice += prev[0] * p[1] - p[0] * prev[1];
+        prev = p;
+    }
+    points.len() >= 3 && twice.abs() >= 1.0
+}
+
 /// `paint.contentAwareMove`'s params for a drag by `offset`, from the options bar.
 pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value {
     let o = &app.ui.tool_options;
