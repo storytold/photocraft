@@ -63,7 +63,7 @@ fn body(headline: &str, error: &str, renderer: &str, note: Option<&str>, version
 
 /// Show [`text`] in a native error dialog. Called after the event loop returned, so nothing is
 /// repainting and the launch was about to fail anyway.
-/// `started`: the app's window had been created (see [`closed_text`]).
+/// `started`: the window had shown its first frames (see [`closed_text`]).
 pub fn show(error: &str, renderer: &str, note: Option<&str>, log: Option<&Path>, started: bool) {
     let version = photocraft_engine::build_info::long_version();
     let (body, title) = if started {
