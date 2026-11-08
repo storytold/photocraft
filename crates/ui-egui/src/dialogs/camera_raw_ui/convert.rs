@@ -147,6 +147,8 @@ pub(super) fn open_pixels(
         layer,
         layer_name: name,
         original: params.clone(),
+        synced: params.clone(),
+        auto_all: false,
         params,
         target,
         before_histogram: RgbHistogram::from_rgba(&proxy),

@@ -122,6 +122,11 @@ pub struct CameraRawDialog {
     edit_origin: Option<CameraRaw>,
     /// Geometry › Upright › Guided's tool (Shift+T).
     pub(crate) guides: crate::camera_raw_guides_ui::GuideTool,
+    /// The settings as last applied to the other raws selected in the filmstrip: what differs
+    /// from them is the edit to apply next ([`filmstrip::sync_selected`]).
+    synced: CameraRaw,
+    /// Auto was pressed: the other selected raws get their own Auto, not these values.
+    auto_all: bool,
 }
 
 impl CameraRawDialog {
@@ -302,6 +307,14 @@ impl CameraRawDialog {
         }
         self.preview_error = None;
     }
+}
+
+/// The open dialog as the control channel describes it ([`CameraRawDialog::describe`]), with the
+/// filmstrip of raws being opened together.
+pub fn describe(app: &PhotocraftApp) -> Option<Value> {
+    let mut v = app.camera_raw.as_ref()?.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
+    v["filmstrip"] = filmstrip::describe(app);
+    Some(v)
 }
 
 // The shared Curve editor must never produce a curve `CameraRaw::validate` rejects.

@@ -122,6 +122,8 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: R
         && let Some(d) = app.camera_raw.as_mut()
     {
         photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut d.params);
+        // Where the raw starts, not an edit for the other selected raws.
+        d.synced = d.params.clone();
         d.dirty = true;
     }
     attach_raw(app, raw);
@@ -130,12 +132,7 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: R
 
 /// Gives the open dialog its raw: the file name, and the camera tone curve it was developed with.
 fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
-    let curve = match (&raw.bytes, &raw.path) {
-        (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
-        #[cfg(not(target_arch = "wasm32"))]
-        (None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
-        _ => None,
-    };
+    let curve = raw_tone_curve(&raw);
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
         // The full-size preview retones the whole frame with it, as Open will.
@@ -143,6 +140,16 @@ fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
         d.detail.raw_curve = curve.clone();
         d.raw_curve = curve;
         d.raw_open = Some(raw);
+    }
+}
+
+/// The camera tone curve `raw` was developed with, read from its file.
+pub(super) fn raw_tone_curve(raw: &RawOpen) -> Option<Vec<[f32; 2]>> {
+    match (&raw.bytes, &raw.path) {
+        (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
+        #[cfg(not(target_arch = "wasm32"))]
+        (None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
+        _ => None,
     }
 }
 

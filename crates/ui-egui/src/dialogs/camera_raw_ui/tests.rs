@@ -1315,3 +1315,185 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `count` raws opened together, the dialog showing the first.
+fn filmstrip_app(count: usize) -> (PhotocraftApp, egui::Context, Vec<u8>) {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    for n in 0..count {
+        app.open_bytes(&format!("IMG_{n}.dng"), &dng).unwrap();
+    }
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    (app, ctx, dng)
+}
+
+fn film(app: &mut PhotocraftApp, ctx: &egui::Context, request: Value) -> Result<Value, String> {
+    menu(app, ctx, "filter.cameraRaw", &json!({"ui": {"filmstrip": request}})).unwrap()
+}
+
+/// The filmstrip's selection as `[selected]` and the shown raw's index.
+fn film_state(app: &PhotocraftApp) -> (Vec<bool>, usize) {
+    let shown = app.camera_raw.as_ref().and_then(|d| d.raw_open.as_ref()).map(|r| r.document).unwrap();
+    (filmstrip::selection(app), app.raw_shelf.iter().position(|h| h.raw.document == shown).unwrap())
+}
+
+/// Camera Raw's filmstrip selection: a click selects one raw, Shift-click a range from the last
+/// raw clicked without Shift, ⌘-click adds or removes one; the shown raw is the one last clicked
+/// into the selection, and the selection is never empty.
+#[test]
+fn filmstrip_clicks_select_one_a_range_or_toggle() {
+    let (mut app, ctx, _) = filmstrip_app(5);
+    let (t, f) = (true, false);
+    assert_eq!(film_state(&app), (vec![t, f, f, f, f], 0), "the shown raw is selected");
+    film(&mut app, &ctx, json!({"click": 2})).unwrap();
+    assert_eq!(film_state(&app), (vec![f, f, t, f, f], 2));
+    film(&mut app, &ctx, json!({"click": 4, "shift": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![f, f, t, t, t], 4), "the range from the anchor");
+    film(&mut app, &ctx, json!({"click": 0, "shift": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![t, t, t, f, f], 0), "the anchor stays where it was");
+    film(&mut app, &ctx, json!({"click": 4, "command": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![t, t, t, f, t], 4), "⌘ adds one and shows it");
+    film(&mut app, &ctx, json!({"click": 4, "command": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![t, t, t, f, f], 2), "taking out the shown raw shows another selected one");
+    film(&mut app, &ctx, json!({"click": 0, "command": true})).unwrap();
+    film(&mut app, &ctx, json!({"click": 1, "command": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![f, f, t, f, f], 2));
+    film(&mut app, &ctx, json!({"click": 2, "command": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![f, f, t, f, f], 2), "the last selected raw stays");
+    film(&mut app, &ctx, json!({"click": 4, "shift": true, "command": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![f, f, t, t, t], 4), "⌘⇧ adds the range");
+    let r = film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![t; 5], 4), "⌘A selects every raw, the shown one stays");
+    assert!(r["filmstrip"].as_array().unwrap().iter().all(|h| h["selected"] == true), "{r}");
+    assert_eq!(r["filmstrip"][4]["shown"], true);
+    film(&mut app, &ctx, json!({"click": 3})).unwrap();
+    assert_eq!(film_state(&app), (vec![f, f, f, t, f], 3), "a plain click selects one again");
+    // Bad requests change nothing.
+    for bad in
+        [json!({"click": 5}), json!({"click": -1}), json!({"click": 1, "selectAll": true}), json!({}), json!({"shift": 1, "click": 0}), json!({"drag": 1})]
+    {
+        assert!(film(&mut app, &ctx, bad.clone()).is_err(), "{bad}");
+    }
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"filmstrip": {"click": 0}, "set": {"contrast": 5}}})).unwrap().is_err());
+    assert_eq!(film_state(&app), (vec![f, f, f, t, f], 3));
+    assert_eq!(app.camera_raw.as_ref().unwrap().params.contrast, 0.0);
+}
+
+/// An edit to the shown raw changes the same setting, and only it, on every other selected raw:
+/// each keeps its other settings, what it started from and its demosaic method; an unselected raw
+/// keeps everything. A grain seed (one photograph's) never syncs.
+#[test]
+fn an_edit_applies_only_what_changed_to_every_selected_raw() {
+    use photocraft_io::raw::Demosaic;
+    let (mut app, ctx, _) = filmstrip_app(4);
+    let mut own = CameraRaw { exposure: 0.5, contrast: 20.0, seed: 3, ..Default::default() };
+    own.hsl_sat[2] = 10.0;
+    let started = CameraRaw { contrast: 5.0, ..Default::default() };
+    app.raw_shelf[1].kept = Some((own.clone(), started.clone()));
+    app.raw_shelf[1].raw.demosaic = Demosaic::Bilinear;
+    let thumb = app.raw_shelf[2].thumb.clone();
+    // 0, 1 and 2 selected; 3 not. Two was never shown.
+    film(&mut app, &ctx, json!({"click": 2, "shift": true})).unwrap();
+    film(&mut app, &ctx, json!({"click": 0, "command": true})).unwrap();
+    film(&mut app, &ctx, json!({"click": 0, "command": true})).unwrap();
+    assert_eq!(film_state(&app), (vec![true, true, true, false], 0));
+    let mut sat = [0.0f32; 8];
+    sat[7] = 30.0;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"clarity": 15, "hslSat": sat, "seed": 9}}})).unwrap().unwrap();
+    let (one, from) = app.raw_shelf[1].kept.clone().unwrap();
+    let mut want = own.clone();
+    want.clarity = 15.0;
+    want.hsl_sat[7] = 30.0;
+    assert_eq!(one, want, "only Clarity and the Magenta band change; its own settings and seed stay");
+    assert_eq!(from, started, "and what it started from");
+    assert_eq!(app.raw_shelf[1].raw.demosaic, Demosaic::Bilinear, "and its demosaic method");
+    let (two, _) = app.raw_shelf[2].kept.clone().expect("a never-shown raw takes the edit");
+    assert_eq!((two.clarity, two.hsl_sat[7], two.exposure, two.seed), (15.0, 30.0, 0.0, CameraRaw::default().seed));
+    assert!(app.raw_shelf[3].kept.is_none(), "an unselected raw is left alone");
+    assert!(r["filmstrip"].as_array().unwrap()[..3].iter().all(|h| h["edited"] == true && h["thumbnailPending"] == false), "{r}");
+    assert_eq!(r["filmstrip"][3]["edited"], false);
+    assert!(app.raw_shelf[2].thumb != thumb, "the synced raw's thumbnail shows its new settings");
+    // A second edit carries only itself: one's Exposure and Contrast are still its own.
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"vibrance": 25}}})).unwrap().unwrap();
+    let (one, _) = app.raw_shelf[1].kept.clone().unwrap();
+    assert_eq!((one.exposure, one.contrast, one.clarity, one.vibrance), (0.5, 20.0, 15.0, 25.0));
+    // Showing one: it is as synced, and with only it selected an edit stays with it.
+    film(&mut app, &ctx, json!({"click": 1})).unwrap();
+    let d = app.camera_raw.as_ref().unwrap();
+    assert_eq!((d.params.vibrance, d.params.contrast), (25.0, 20.0));
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": -1.0}}})).unwrap().unwrap();
+    assert_eq!(app.raw_shelf[0].kept.as_ref().map(|(p, _)| p.exposure), Some(0.0));
+    assert_eq!(app.raw_shelf[2].kept.as_ref().map(|(p, _)| p.exposure), Some(0.0));
+}
+
+/// Auto with several raws selected sets each one's tone from its own pixels, as Camera Raw's does.
+#[test]
+fn auto_with_several_selected_tones_each_raw_from_its_own_pixels() {
+    let (mut app, ctx, _) = filmstrip_app(2);
+    // Two's pixels made darker than one's.
+    let two = document_index(&app, app.raw_shelf[1].raw.document).unwrap();
+    let active = app.session.active_index().unwrap();
+    app.session.set_active(two);
+    app.run("edit.fill", json!({"color": "#202020"})).unwrap();
+    app.session.set_active(active);
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true, "set": {"vibrance": 10}}})).unwrap().unwrap();
+    let shown = app.camera_raw.as_ref().unwrap().params.clone();
+    let (other, _) = app.raw_shelf[1].kept.clone().unwrap();
+    let mut expected = CameraRaw { vibrance: 10.0, ..Default::default() };
+    filmstrip::auto_tone(&app, &app.raw_shelf[1].raw, &mut expected);
+    assert_eq!(other.vibrance, 10.0, "the rest of the edit syncs");
+    assert_eq!((other.exposure, other.whites, other.blacks), (expected.exposure, expected.whites, expected.blacks));
+    assert_ne!(other.exposure, shown.exposure, "not the shown raw's Auto");
+}
+
+/// Open develops every raw with its own settings after a synced edit.
+#[test]
+fn open_develops_each_raw_with_its_synced_settings() {
+    let (mut app, ctx, _) = filmstrip_app(3);
+    app.raw_shelf[1].kept = Some((CameraRaw { vibrance: 40.0, ..Default::default() }, CameraRaw::default()));
+    film(&mut app, &ctx, json!({"click": 1, "shift": true})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 30}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    // The shown raw (one, which Shift-click showed) first, then zero and two.
+    let opened = r["opened"].as_array().unwrap().clone();
+    assert_eq!(opened.len(), 3, "{r}");
+    assert!(opened[0].get("filter").is_some() && opened[1].get("filter").is_some(), "both selected raws take the Camera Raw step: {r}");
+    assert_eq!(opened[2].get("filter"), None, "the unselected raw opens at its defaults: {r}");
+    let mut developed = opened.iter().map(|o| {
+        app.session.set_active(o["document"].as_u64().unwrap() as usize);
+        pixels(&app)
+    });
+    let (one, zero, two) = (developed.next().unwrap(), developed.next().unwrap(), developed.next().unwrap());
+    assert_ne!(zero, two, "zero develops with the synced Contrast");
+    assert_ne!(one, zero, "one keeps its own Vibrance as well");
+}
+
+/// Done saves each selected raw's synced settings to its own sidecar.
+#[test]
+fn done_writes_the_synced_settings_to_each_sidecar() {
+    let (mut app, dng, dir, first, written) = raw_with_sidecar("film-done", None);
+    let ctx = egui::Context::default();
+    let second = dir.join("IMG_0101.cr2").to_string_lossy().into_owned();
+    std::fs::write(&second, &dng).unwrap();
+    app.open_bytes("IMG_0100.cr2", &dng).unwrap();
+    app.open_bytes("IMG_0101.cr2", &dng).unwrap();
+    app.raw_shelf[0].raw.path = Some(first.clone());
+    app.raw_shelf[1].raw.path = Some(second.clone());
+    app.raw_shelf[1].kept = Some((CameraRaw { exposure: 0.25, ..Default::default() }, CameraRaw::default()));
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"clarity": 15}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+    assert_eq!(r["saved"], json!(["IMG_0100.xmp", "IMG_0101.xmp"]), "{r}");
+    let w = written.lock().unwrap().clone();
+    let read = |path: &str| {
+        let (_, bytes) = w.iter().find(|(p, _)| *p == sidecar_path(path)).unwrap();
+        let mut back = CameraRaw::default();
+        photocraft_io::camera_raw_xmp::load(&mut back, bytes).unwrap();
+        back
+    };
+    assert_eq!((read(&first).clarity, read(&first).exposure), (15.0, 0.0));
+    assert_eq!((read(&second).clarity, read(&second).exposure), (15.0, 0.25));
+    let _ = std::fs::remove_dir_all(&dir);
+}
