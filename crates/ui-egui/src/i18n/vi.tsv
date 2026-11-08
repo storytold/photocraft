@@ -4111,6 +4111,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Chọn một tài liệu khác cho mỗi kênh.
 	A picked document is no longer open.	Một tài liệu đã chọn không còn mở.
 	A picked document is no longer a grayscale document of the same size.	Một tài liệu đã chọn không còn là tài liệu thang xám cùng kích thước.
+	Netscape Gray	Xám Netscape
 # Move tool options bar (#11381)
 	Align top edges	Căn các cạnh trên
 	Align vertical centers	Căn các tâm dọc

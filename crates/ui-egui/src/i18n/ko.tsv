@@ -3833,6 +3833,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	채널마다 다른 문서를 선택하십시오.
 	A picked document is no longer open.	선택한 문서 중 하나가 더 이상 열려 있지 않습니다.
 	A picked document is no longer a grayscale document of the same size.	선택한 문서 중 하나가 더 이상 같은 크기의 회색 음영 문서가 아닙니다.
+	Netscape Gray	Netscape 회색
 
 # Rows that #8185 adds on top of the catalog above.
 	Working CMY Plate	작업용 CMY 판
