@@ -53,7 +53,8 @@ pub fn place_source(
             (a * u + c * v + e, b * u + d * v + f)
         };
         let (cu, cv) = patch_cuts(w, src_rect);
-        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear, facets_of(w)));
+        let sampling = Sampling::for_scale((a * d - b * c).abs().sqrt());
+        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, sampling, facets_of(w)));
     }
     let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
@@ -143,7 +144,11 @@ pub fn place_source_projective(
             h.apply(u, v)
         };
         let (cu, cv) = patch_cuts(w, src_rect);
-        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear, facets_of(w)));
+        // The placement's scale where the source's middle lands.
+        let (cx, cy) = (f64::from(src_rect.x0 + src_rect.x1) / 2.0, f64::from(src_rect.y0 + src_rect.y1) / 2.0);
+        let ((x0, y0), (x1, y1), (x2, y2)) = (h.apply(cx, cy), h.apply(cx + 1.0, cy), h.apply(cx, cy + 1.0));
+        let scale = ((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)).abs().sqrt();
+        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Sampling::for_scale(scale), facets_of(w)));
     }
     // A one-way perspective: as the reference application draws it.
     let corner = crate::smart_perspective::from_corner(h.0, f64::from(src_rect.x0), f64::from(src_rect.y0));
@@ -196,7 +201,7 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
             tris.push([a, a + w1 + 1, a + w1]);
         }
     }
-    triangles(src, src_rect, &verts, &tris, interp, ctl)
+    triangles(src, src_rect, &verts, &tris, interp, ctl, false)
 }
 
 /// How far (destination px) a cell's straight edges and middle may stray from the warped surface
@@ -223,6 +228,25 @@ pub enum Facets {
 /// control points along a side ([`photocraft_geom::warp::Warp::envelope`]), else [`Facets::Mesh`].
 pub fn facets_of(warp: &photocraft_geom::warp::Warp) -> Facets {
     if warp.envelope { Facets::Envelope } else { Facets::Mesh }
+}
+
+/// How [`warp_patches_surface`] samples the source (bilinearly either way).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sampling {
+    /// One sample per pixel, as the reference application's renders of its warps show (also where
+    /// the warp itself squeezes the source).
+    Single,
+    /// The pixel's source footprint averaged, so a strong reduction doesn't alias.
+    Footprint,
+}
+
+impl Sampling {
+    /// [`Sampling::Single`] for a smart object placed at least half its size (linear `scale`),
+    /// else [`Sampling::Footprint`] (as the reference prefilters a plain downscale; no render of a
+    /// warp placed that small has been measured).
+    pub fn for_scale(scale: f64) -> Sampling {
+        if scale.is_finite() && scale >= 0.5 { Sampling::Single } else { Sampling::Footprint }
+    }
 }
 
 /// Most cells one [`warp_patches_surface`] tessellation makes; past it, cells stay as they are.
@@ -254,7 +278,7 @@ pub fn warp_patches_surface(
     f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync),
     cuts_u: &[f64],
     cuts_v: &[f64],
-    interp: Interp,
+    sampling: Sampling,
     facets: Facets,
 ) -> Surface {
     if src_rect.is_empty() {
@@ -280,7 +304,7 @@ pub fn warp_patches_surface(
             cell_triangles(&at, &leaves, [x0, y0, sw, sh])
         }
     };
-    triangles(src, src_rect, &verts, &tris, interp, &Interrupt::NONE)
+    triangles(src, src_rect, &verts, &tris, Interp::Bilinear, &Interrupt::NONE, sampling == Sampling::Single)
 }
 
 /// The sorted, deduplicated cuts of `0..1` from `inner` (values outside or non-finite dropped).
@@ -464,7 +488,7 @@ fn mapped_lengths(src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync)) -
 /// interpolation of its source positions. Later triangles in `tris` draw over earlier ones (the
 /// order is the depth order). Output has `src`'s format with alpha added.
 pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp) -> Surface {
-    triangles(src, src_rect, verts, tris, interp, &Interrupt::NONE)
+    triangles(src, src_rect, verts, tris, interp, &Interrupt::NONE, false)
 }
 
 /// [`warp_triangles`], reporting progress per destination tile to `ctl`. A cancelled `ctl` skips
@@ -474,7 +498,7 @@ const MAX_DST_TILES: u64 = 1 << 20;
 /// Source pixels one destination tile may read densely.
 const MAX_FOOTPRINT_PIXELS: u64 = 1 << 25;
 
-fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt) -> Surface {
+fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt, single: bool) -> Surface {
     let mut fmt = src.format();
     let converted;
     let src = if fmt.alpha {
@@ -559,8 +583,10 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         // the warp keeps or enlarges the source, else about one per source pixel the output pixel
         // spans (an area average, as the transform path gets from its pre-reduction; a single
         // bicubic sample aliases thin lines when shrinking). The subsamples are bilinear: the
-        // box does the filtering, and it is ~4x cheaper than bicubic at no loss.
-        let count = |j: [f64; 2]| if interp == Interp::Nearest { 1 } else { j[0].hypot(j[1]).round().clamp(1.0, MAX_SS) as usize };
+        // box does the filtering, and it is ~4x cheaper than bicubic at no loss. A smart object's
+        // warp (`single`) takes one bilinear sample per pixel at any scale, as the reference
+        // application's renders of its warps show.
+        let count = |j: [f64; 2]| if interp == Interp::Nearest || single { 1 } else { j[0].hypot(j[1]).round().clamp(1.0, MAX_SS) as usize };
         // Source position per destination pixel (NaN = not covered) and the triangle it came
         // from. Per triangle: its source step per destination pixel along x and y (`[dx_u, dx_v,
         // dy_u, dy_v]`, the inverse map's Jacobian, constant over a triangle; zero when
@@ -963,6 +989,14 @@ mod tests {
         assert!(e[3] > 0.2, "a point near the top-left corner lands at its mapped position: {e:?}");
         let c = arc.content_bounds();
         assert!(c.y0 < r.y0 - 2 && c.x0 < r.x0 && c.x1 > r.x1, "the top rises and spreads past the box: {c:?}");
+    }
+
+    #[test]
+    fn a_warp_samples_once_unless_placed_small() {
+        assert_eq!(Sampling::for_scale(1.0), Sampling::Single);
+        assert_eq!(Sampling::for_scale(0.5), Sampling::Single);
+        assert_eq!(Sampling::for_scale(0.49), Sampling::Footprint);
+        assert_eq!(Sampling::for_scale(f64::NAN), Sampling::Footprint);
     }
 
     #[test]
