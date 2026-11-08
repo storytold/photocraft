@@ -118,3 +118,34 @@ fn the_brush_bar_keeps_todays_silent_clamp() {
     assert_eq!(brush(&h).0, 100.0);
     assert!(alerts(&h).is_empty(), "not measured for the Brush: no alert");
 }
+
+/// A value typed past the range and left by switching tools (the click on the toolbar takes the
+/// keyboard) shows the stored value when the Eraser comes back, not the typed one.
+#[test]
+fn a_typed_value_left_by_a_tool_switch_shows_the_stored_value() {
+    let mut h = bar(Tool::Eraser);
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity:")).expect("the Opacity field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("150".into()));
+    h.run_steps(1);
+    let switch = |h: &mut Harness<'static, PhotocraftApp>, tool: Tool| {
+        h.state_mut().ui.tool = tool;
+        crate::paint_mouse::sync_tool_brush(h.state_mut());
+    };
+    switch(&mut h, Tool::Brush);
+    h.ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    h.run_steps(3);
+    switch(&mut h, Tool::Eraser);
+    h.run_steps(1);
+    let shown = h
+        .query_all_by_role(Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Opacity:"))
+        .and_then(|n| n.accesskit_node().numeric_value());
+    assert_eq!(brush(&h).0, 100.0, "the stored value");
+    assert_eq!(shown, Some(100.0), "the field shows the stored value");
+}

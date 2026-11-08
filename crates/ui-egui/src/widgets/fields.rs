@@ -29,8 +29,11 @@ pub fn value_field_whole_alerting(
     let fit = |v: f32| if v.is_finite() { v.round().clamp(lo, hi) } else { lo };
     *value = fit(*value);
     let draft_id = ui.make_persistent_id(egui::IdSalt::new(("whole-alerting-typed", name)));
-    let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(draft_id));
-    let mut typed = draft.filter(|(_, stored)| *stored == *value).map_or(*value, |(typed, _)| typed);
+    // Typed text only while its field still has the keyboard: one left without being drawn (a
+    // tool switch) shows the stored value when it comes back.
+    let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
+    let draft = draft.filter(|(_, stored, field)| *stored == *value && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
+    let mut typed = draft.map_or(*value, |(typed, _, _)| typed);
     // The field's own range is wide, so the typed value reaches here unclamped.
     let r = value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, suffix, width);
     let out_id = r.id.with("out-of-range");
@@ -43,13 +46,13 @@ pub fn value_field_whole_alerting(
         let out = typing && !(lo..=hi).contains(&typed);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
         if typing && r.has_focus() {
-            ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, *value)));
+            ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, *value, Some(r.id))));
         } else {
-            ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+            ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
         }
     }
     if !r.has_focus() {
-        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
     }
     let alert = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false);
     (r, alert)
