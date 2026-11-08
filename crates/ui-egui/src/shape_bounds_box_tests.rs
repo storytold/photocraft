@@ -323,3 +323,165 @@ fn a_tool_switch_during_a_drag_ends_it_and_takes_its_release() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     assert_eq!((bounds(&app, a), bounds(&app, b)), (ba, bb));
 }
+
+/// #11473: a side scales from anywhere along its line, not only from its middle handle, and from
+/// just outside it; inside the box the press stays the tool's. On the box 100,98–723,451.
+#[test]
+fn a_side_is_grabbed_anywhere_along_its_line() {
+    use egui::CursorIcon::{ResizeHorizontal, ResizeNwSe, ResizeVertical};
+    let (app, ..) = app_with_two_shapes(Tool::Rectangle);
+    let at = |p: [f64; 2]| cursor(&app, p);
+    // On the left line, far from its middle (274.5) and the corners.
+    assert_eq!(at([100.0, 150.0]), Some(ResizeHorizontal));
+    assert_eq!(at([100.0, 400.0]), Some(ResizeHorizontal));
+    assert_eq!(at([723.0, 130.0]), Some(ResizeHorizontal));
+    assert_eq!(at([200.0, 98.0]), Some(ResizeVertical));
+    assert_eq!(at([650.0, 451.0]), Some(ResizeVertical));
+    // Up to 5 screen points outside the line: less than a handle, the rest stays the tool's.
+    assert_eq!(at([95.0, 150.0]), Some(ResizeHorizontal));
+    assert_eq!(at([650.0, 456.0]), Some(ResizeVertical));
+    assert_eq!(at([94.0, 150.0]), None);
+    // Just inside, the Rectangle tool draws and Path Selection selects.
+    assert_eq!(at([101.0, 150.0]), None);
+    assert_eq!(at([650.0, 450.0]), None);
+    // A corner keeps its press where the two sides' bands meet it.
+    assert_eq!(at([96.0, 95.0]), Some(ResizeNwSe));
+    assert_eq!(at([103.0, 101.0]), Some(ResizeNwSe));
+
+    // A drag from there scales that side about the opposite one.
+    let (mut app, a, b) = app_with_two_shapes(Tool::Rectangle);
+    let steps = app.session.active().unwrap().history.past_len();
+    drag(&mut app, [100.0, 150.0], [150.0, 160.0]);
+    assert!(app.ui.shape_box.is_none() && app.ui.corner_radius.is_none());
+    let s = 1.0 - 50.0 / 623.0;
+    near(bounds(&app, a), [150.0, 98.0, 723.0 - 320.0 * s, 301.0]);
+    near(bounds(&app, b), [723.0 - 303.0 * s, 318.0, 723.0, 451.0]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    // The bottom side, pressed just outside its line, scales y about the top.
+    let (mut app, a, b) = app_with_two_shapes(Tool::PathSelection);
+    drag(&mut app, [300.0, 455.0], [310.0, 405.0]);
+    let s = 1.0 - 50.0 / 353.0;
+    near(bounds(&app, a), [100.0, 98.0, 403.0, 98.0 + 203.0 * s]);
+    near(bounds(&app, b), [420.0, 98.0 + 220.0 * s, 723.0, 98.0 + 353.0 * s]);
+}
+
+/// The side band is screen sized: at 200 % it reaches half as far into the document.
+#[test]
+fn the_side_band_keeps_its_screen_size_when_zoomed() {
+    let (mut app, ..) = app_with_two_shapes(Tool::PathSelection);
+    app.sync_views();
+    app.ui.views[0].zoom = 2.0;
+    assert_eq!(cursor(&app, [97.5, 150.0]), Some(egui::CursorIcon::ResizeHorizontal));
+    assert_eq!(cursor(&app, [97.0, 150.0]), None);
+}
+
+#[test]
+fn edge_hit_picks_the_nearest_side_within_its_band() {
+    use crate::shape_bounds_box::edge_hit;
+    let r = [0.0, 0.0, 100.0, 50.0];
+    assert_eq!(edge_hit(r, [0.0, 20.0], 11.0, 1e-3), Some([-1, 0]));
+    assert_eq!(edge_hit(r, [111.0, 20.0], 11.0, 1e-3), Some([1, 0]));
+    assert_eq!(edge_hit(r, [40.0, -5.0], 11.0, 1e-3), Some([0, -1]));
+    assert_eq!(edge_hit(r, [40.0, 50.0], 11.0, 1e-3), Some([0, 1]));
+    // Inside, only rounding off the line.
+    assert_eq!(edge_hit(r, [0.0005, 20.0], 11.0, 1e-3), Some([-1, 0]));
+    assert_eq!(edge_hit(r, [1.0, 20.0], 11.0, 1e-3), None);
+    // A side is a segment: past its end, the distance runs to its end point.
+    assert_eq!(edge_hit(r, [-8.0, -8.0], 11.0, 1e-3), None);
+    assert_eq!(edge_hit(r, [-5.0, 60.0], 11.0, 1e-3), None);
+    assert_eq!(edge_hit(r, [-5.0, 55.0], 11.0, 1e-3).map(|h| h[0] == -1 || h[1] == 1), Some(true));
+    // Non-finite points hit nothing.
+    assert_eq!(edge_hit(r, [f64::NAN, 20.0], 11.0, 1e-3), None);
+    assert_eq!(edge_hit(r, [f64::NAN, 0.0], 11.0, 1e-3), None);
+    assert_eq!(edge_hit(r, [f64::INFINITY, 20.0], 11.0, 1e-3), None);
+}
+
+/// The two measured rectangles selected, and an unselected one starting 3 px right of their box
+/// (726,200–876,300). Returns the app, the selected two and the neighbour.
+fn app_with_a_neighbour(tool: Tool) -> (PhotocraftApp, u64, u64, u64) {
+    let (mut app, a, b) = app_with_two_shapes(tool);
+    app.run("shape.create", json!({"kind": "rect", "rect": [726, 200, 150, 100], "fill": "#20a040"})).unwrap();
+    let n = app.session.active().unwrap().active_layer.unwrap().0;
+    app.run("layer.select", json!({"layer": a})).unwrap();
+    app.run("layer.select", json!({"layer": b, "mode": "toggle"})).unwrap();
+    (app, a, b, n)
+}
+
+/// #11473 review: the side band takes no press from the tool next to the box. Outside the band a
+/// press is the tool's; inside it, a press on a shape the box doesn't hold is too: Path Selection
+/// selects that shape, the Rectangle tool draws, neither scales the selection.
+#[test]
+fn a_press_on_a_neighbouring_shape_or_past_the_band_stays_the_tools() {
+    let (app, ..) = app_with_a_neighbour(Tool::PathSelection);
+    for p in [[726.5, 250.0], [729.0, 250.0], [731.0, 120.0]] {
+        assert_eq!(cursor(&app, p), None, "{p:?}");
+    }
+    // The band still works where there is no other shape.
+    assert_eq!(cursor(&app, [726.5, 120.0]), Some(egui::CursorIcon::ResizeHorizontal));
+    // A neighbour with no fill is picked by its outline, within Path Selection's tolerance.
+    let (mut app, a, b) = app_with_two_shapes(Tool::PathSelection);
+    app.run("shape.create", json!({"kind": "rect", "rect": [726, 200, 150, 100], "fill": null, "stroke": {"width": 2}})).unwrap();
+    app.run("layer.select", json!({"layer": a})).unwrap();
+    app.run("layer.select", json!({"layer": b, "mode": "toggle"})).unwrap();
+    for p in [[724.0, 250.0], [727.5, 250.0]] {
+        assert_eq!(cursor(&app, p), None, "{p:?}");
+    }
+
+    // Path Selection: a click on the neighbour, inside the band and past it, selects it.
+    for p in [[726.5, 250.0], [729.0, 250.0]] {
+        let (mut app, a, b, n) = app_with_a_neighbour(Tool::PathSelection);
+        let steps = app.session.active().unwrap().history.past_len();
+        tool_event(&mut app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, NONE);
+        assert!(app.ui.shape_box.is_none(), "{p:?}: no scale starts");
+        tool_event(&mut app, ToolEvent::Up { x: p[0], y: p[1] }, NONE);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.selected_layers(), vec![photocraft_doc::LayerId(n)], "{p:?}: the neighbour is selected");
+        assert_eq!(st.history.past_len(), steps, "{p:?}: nothing scaled");
+        near(bounds(&app, a), [100.0, 98.0, 403.0, 301.0]);
+        near(bounds(&app, b), [420.0, 318.0, 723.0, 451.0]);
+    }
+
+    // The Rectangle tool: a drag from the neighbour, or from past the band, draws a new shape.
+    for p in [[726.5, 250.0], [731.0, 120.0]] {
+        let (mut app, a, b, _) = app_with_a_neighbour(Tool::Rectangle);
+        let layers = app.session.active().unwrap().doc.walk().len();
+        tool_event(&mut app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, NONE);
+        assert!(app.ui.shape_box.is_none(), "{p:?}: no scale starts");
+        tool_event(&mut app, ToolEvent::Move { x: p[0] + 40.0, y: p[1] + 30.0, pressure: 1.0 }, NONE);
+        tool_event(&mut app, ToolEvent::Up { x: p[0] + 60.0, y: p[1] + 40.0 }, NONE);
+        assert_eq!(app.session.active().unwrap().doc.walk().len(), layers + 1, "{p:?}: a new shape is drawn");
+        near(bounds(&app, a), [100.0, 98.0, 403.0, 301.0]);
+        near(bounds(&app, b), [420.0, 318.0, 723.0, 451.0]);
+    }
+}
+
+/// #11473 review: the pick under the side band skips a shape's outline test where the point is
+/// out of reach of it, and still finds every shape it found before: an outline within the pick
+/// tolerance just past the shape's box, and a fill's pixels past the path (an outside stroke).
+#[test]
+fn the_pick_still_finds_shapes_just_past_their_path_bounds() {
+    use crate::vector_ui::pick_shape_at;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 1000, "height": 700, "background": "white"})).unwrap();
+    // A stroke-only ellipse 200,200–400,300: picked by its outline alone.
+    app.run("shape.create", json!({"kind": "ellipse", "rect": [200, 200, 200, 100], "fill": null, "stroke": {"width": 2}})).unwrap();
+    let e = app.session.active().unwrap().active_layer.unwrap();
+    // A filled rectangle 500,400–600,500 with a 20 px stroke outside its path.
+    app.run("shape.create", json!({"kind": "rect", "rect": [500, 400, 100, 100], "fill": "#20a040", "stroke": {"width": 20, "align": "outside"}})).unwrap();
+    let r = app.session.active().unwrap().active_layer.unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    let pick = |p: [f64; 2], tol: f64| pick_shape_at(doc, p, tol);
+    // Within the tolerance of the ellipse's extreme anchors, outside its box.
+    assert_eq!(pick([405.5, 250.0], 6.0), Some(e));
+    assert_eq!(pick([300.0, 194.5], 6.0), Some(e));
+    assert_eq!(pick([406.5, 250.0], 6.0), None);
+    assert_eq!(pick([300.0, 193.5], 6.0), None);
+    // Within it of a curve, off the anchors: the ellipse's outline at 45°.
+    let (cx, cy) = (300.0 + 100.0 * std::f64::consts::FRAC_1_SQRT_2, 250.0 + 50.0 * std::f64::consts::FRAC_1_SQRT_2);
+    assert_eq!(pick([cx + 4.0, cy], 6.0), Some(e));
+    // The stroke's pixels up to 20 px past the rectangle's path, far past the tolerance.
+    assert_eq!(pick([612.0, 450.0], 1.0), Some(r));
+    assert_eq!(pick([550.0, 381.5], 1.0), Some(r));
+    assert_eq!(pick([625.0, 450.0], 1.0), None);
+    assert_eq!(pick([550.0, 378.5], 1.0), None);
+}

@@ -104,6 +104,7 @@ use options_bar::options_bar_height;
 pub(crate) use options_bar::{FIXED_SIZE_MAX_PX, opt_label};
 pub use panel_state::{migrate_panel_state, panel_state_id, remember_panel_state};
 pub use properties::properties_window;
+pub(crate) use properties::selection_mode_buttons;
 #[cfg(test)]
 use properties::{adjustments_grid, properties_body};
 pub use status_bar::{status_bar, status_bar_heights};
