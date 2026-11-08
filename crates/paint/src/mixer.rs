@@ -266,7 +266,13 @@ pub fn apply_mixer_dab_region(
             });
         }
     }
-    let wr = if res.is_some() { amount * (1.0 - mix * wet) } else { 0.0 };
+    // Nothing picked up (a transparent canvas under a clean pickup) leaves the load at full
+    // strength, as a dry dab: an empty layer does not thin the paint (#11944).
+    let wr = match (&res, &pickup) {
+        (None, _) => 0.0,
+        (Some(_), None) => amount,
+        (Some(_), Some(_)) => amount * (1.0 - mix * wet),
+    };
     let wp = if pickup.is_some() { mix * wet } else { 0.0 };
     let total = wr + wp;
     if total > 1e-6 {

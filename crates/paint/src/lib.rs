@@ -408,3 +408,5 @@ mod tests {
 
 #[cfg(test)]
 mod brush_tests;
+#[cfg(test)]
+mod mixer_click_empty_layer_tests;
