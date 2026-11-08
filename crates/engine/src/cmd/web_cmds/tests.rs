@@ -1429,7 +1429,8 @@ fn quick_export_naming_override_is_local_and_validated() {
     assert_eq!(s.prefs().export.quick_export_naming, crate::prefs::QuickExportNaming::Timestamp);
     let invalid = dir.path().join("invalid.png");
     for naming in [json!("other"), json!(true), json!(2), Value::Null] {
-        assert!(s.execute("file.export.quickExport", json!({"path": invalid, "naming": naming})).is_err());
+        let error = s.execute("file.export.quickExport", json!({"path": invalid, "naming": naming})).unwrap_err().to_string();
+        assert!(error.contains("`naming` must be `default` or `timestamp`"), "{error}");
     }
     assert!(!invalid.exists());
 }
