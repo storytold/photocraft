@@ -96,9 +96,10 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
         ReplaceMode::Luminosity => BlendMode::Luminosity,
     };
     let fg = [rs.color[0], rs.color[1], rs.color[2]];
-    // In a Lab document Color mode keeps the pixel's L and takes the foreground's a and b, as in
-    // the reference application (#11922): the stored a, b channels move straight to its.
-    let lab_color = fmt.mode == photocraft_color::ColorMode::Lab && rs.mode == ReplaceMode::Color;
+    // In a Lab/8 document Color mode keeps the pixel's L and takes the foreground's a and b, as in
+    // the reference application (#11922): the stored a, b channels move straight to its. Lab/16
+    // wasn't measured and keeps the RGB blend.
+    let lab_color = fmt.mode == photocraft_color::ColorMode::Lab && fmt.sample == photocraft_color::SampleType::U8 && rs.mode == ReplaceMode::Color;
     let fg_ab = {
         let l = photocraft_color::convert::srgb_to_lab(fg);
         [(l[1] + 128.0) / 255.0, (l[2] + 128.0) / 255.0]

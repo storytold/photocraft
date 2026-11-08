@@ -14,11 +14,15 @@ const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 /// A Lab/8 surface with the four colours in 100 px columns.
 fn target() -> Surface {
-    let mut s = Surface::new(LAB8);
+    target_in(LAB8)
+}
+
+fn target_in(fmt: PixelFormat) -> Surface {
+    let mut s = Surface::new(fmt);
     for (i, c) in COLOURS.iter().enumerate() {
         let rgba = [f32::from(c[0]) / 255.0, f32::from(c[1]) / 255.0, f32::from(c[2]) / 255.0, 1.0];
         let x0 = i as i32 * 100;
-        s.fill_rect(Rect::new(x0, 0, x0 + 100, 100), &photocraft_raster::from_rgba(&LAB8, rgba));
+        s.fill_rect(Rect::new(x0, 0, x0 + 100, 100), &photocraft_raster::from_rgba(&fmt, rgba));
     }
     s
 }
@@ -72,6 +76,25 @@ fn hue_saturation_and_luminosity_keep_todays_blend() {
         let got = s.pixel(150, 50);
         for (g, w) in got.iter().zip(&want) {
             assert!((g - w).abs() <= 1.0 / 255.0 + 1e-6, "{mode:?}: {got:?} vs {want:?}");
+        }
+    }
+}
+
+#[test]
+fn lab_16_color_keeps_todays_blend() {
+    // Lab/16 wasn't measured: its Color mode still blends through RGB.
+    let lab16 = PixelFormat { sample: SampleType::U16, ..LAB8 };
+    for i in 0..COLOURS.len() {
+        let mut s = target_in(lab16);
+        let x = i as i32 * 100 + 50;
+        let pre = s.pixel(x, 50).to_vec();
+        click(&mut s, ReplaceMode::Color, f64::from(x) + 0.5);
+        let c = to_rgba(&lab16, &pre);
+        let b = blend_rgb(BlendMode::Color, [c[0], c[1], c[2]], [0.0, 0.0, 1.0]);
+        let want = photocraft_raster::from_rgba(&lab16, [b[0], b[1], b[2], c[3]]);
+        let got = s.pixel(x, 50);
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g - w).abs() <= 1.0 / 65535.0 + 1e-6, "colour {i}: {got:?} vs {want:?}");
         }
     }
 }
