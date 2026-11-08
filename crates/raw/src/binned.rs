@@ -5,7 +5,7 @@
 //! Dehaze, black point, tone curve) on a frame `factor²` times smaller, with no demosaic: what
 //! the open-time Camera Raw dialog needs to show a raw-stage setting as Open will develop it.
 
-use crate::develop::{Scale, gain_row, grey_world};
+use crate::develop::{Scale, gain_row, grey_world, normalize};
 use crate::error::{RawError, Result};
 use crate::par;
 use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
@@ -95,7 +95,14 @@ pub fn binned(s: &Sensor, factor: usize) -> Result<Sensor> {
     let whole = Rect::new(0, 0, bw, bh);
     // Grey world on the binned frame would see other samples than on the whole one.
     let mut color = s.color.clone();
-    let as_shot = color.as_shot_neutral.is_some() || color.as_shot_white_xy.is_some() || s.camera_wb.is_some();
+    // Usable as-shot data, by the rules `resolve_neutral` follows; without it both develops fall
+    // back to grey world.
+    let as_shot = color
+        .as_shot_neutral
+        .or_else(|| color.as_shot_white_xy.and_then(|xy| color.xy_to_neutral(xy)))
+        .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
+        .and_then(normalize)
+        .is_some();
     if !as_shot && !mono {
         color.as_shot_neutral = Some(grey_world(s, &sc));
     }

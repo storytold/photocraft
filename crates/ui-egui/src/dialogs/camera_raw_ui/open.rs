@@ -170,15 +170,11 @@ fn raw_source(raw: &RawOpen, canvas: Rect, surf: &photocraft_raster::Surface) ->
     source.ok().map(std::sync::Arc::new)
 }
 
-/// Gives the open dialog its raw: the file name, and the camera tone curve it was developed with.
+/// Gives the open dialog its raw and its file name (the tone curve came with the raw source,
+/// before the first render).
 fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
-        // Without the sensor data, the preview retones the developed pixels with it.
-        let curve = d.raw_source.as_ref().map(|(s, _)| std::sync::Arc::new(s.tone_curve().to_vec()));
-        d.detail.raw_curve = curve.clone();
-        d.detail.raw = d.raw_source.clone();
-        d.raw_curve = curve;
         d.raw_open = Some(raw);
     }
 }

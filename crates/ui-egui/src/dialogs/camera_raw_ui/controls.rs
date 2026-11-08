@@ -351,18 +351,18 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         crate::camera_raw_scope_ui::header(&mut props, d, scope);
         d.scope.alt_tone = None;
         let mut dirty = false;
+        let mut auto_clicked = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             let p = &mut d.params;
-            let proxy = &d.proxy;
+            let auto = &mut auto_clicked;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
             section(ui, "Light", true, |ui| {
                 // Auto: Camera Raw's one-click tone from the histogram; the sliders show what it
                 // chose, so each can be adjusted afterwards.
                 if ui.button(tl!("Auto")).on_hover_text(tl!("Set the tone sliders from the image")).clicked() {
-                    photocraft_algo::camera_raw::auto_tone(proxy, p);
-                    dirty = true;
+                    *auto = true;
                 }
                 tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
                 row(ui, &mut dirty, "Contrast", &mut p.contrast, -100.0..=100.0, None);
@@ -474,6 +474,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 }
             });
         });
+        if auto_clicked {
+            let mut params = d.params.clone();
+            photocraft_algo::camera_raw::auto_tone(&d.auto_pixels(), &mut params);
+            d.params = params;
+            dirty = true;
+        }
         crate::camera_raw_scope_ui::floating(ctx, d, scope, right);
         crate::camera_raw_scope_ui::shortcuts(ctx, scope);
         d.dirty |= dirty;
