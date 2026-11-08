@@ -105,6 +105,12 @@ pub struct BrushesPanelState {
     /// width all the way — the text holds its 1.0 size, and at or below the compact threshold
     /// the tips drop the size number under them and take their cell whole.
     pub scale: f32,
+    /// The Brush Preset picker: show the row of recently used brushes under the search field (the
+    /// gear's Show Recent Brushes, #11884).
+    pub show_recent: bool,
+    /// The Brush Preset picker's recently used presets by name, newest first, at most
+    /// [`crate::brush_picker::RECENT_MAX`]. For the running session only (#11884).
+    pub recent: Vec<String>,
 }
 
 impl Default for BrushesPanelState {
@@ -118,6 +124,8 @@ impl Default for BrushesPanelState {
             show_stroke: true,
             show_tip: true,
             scale: 1.0,
+            show_recent: true,
+            recent: Vec::new(),
         }
     }
 }
