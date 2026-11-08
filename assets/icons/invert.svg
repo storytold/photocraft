@@ -4,9 +4,12 @@
   height="24"
   viewBox="0 0 24 24"
   fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
 >
-  <path
-    d="M8.5 8.5l7.1 7.1c2-2 2-5.1 0-7.1s-5.2-1.9-7.1 0z M19.5 2.1h-15c-.6 0-1.2.3-1.7.7-.4.4-.7 1-.7 1.7v15c0 1.3 1.1 2.4 2.4 2.4h15c.6 0 1.2-.2 1.7-.7.5-.5.7-1.1.7-1.7v-15c0-1.4-1.1-2.5-2.4-2.5z M20.1 19.5c0 .2-.1.3-.2.4l-4.4-4.4c-2 1.9-5.1 1.9-7.1 0s-2-5.1 0-7.1L4 4.1c.1-.1.3-.2.4-.2h15c.3 0 .6.3.6.6v15z"
-    fill="currentColor"
-  />
+  <rect width="18" height="18" x="3" y="3" rx="2" />
+  <circle cx="12" cy="12" r="5" />
+  <path d="M8.46 15.54a5 5 0 0 1 7.08-7.08z" fill="currentColor" stroke="none" />
 </svg>
