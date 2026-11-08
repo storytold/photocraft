@@ -134,7 +134,9 @@ impl Manifest {
             return Err(Error::Manifest(format!("manifest is {} bytes (limit {MAX_MANIFEST_BYTES})", bytes.len())));
         }
         let text = std::str::from_utf8(bytes).map_err(|_| Error::Manifest("manifest is not UTF-8".into()))?;
-        let man: Manifest = serde_json::from_str(text).map_err(|e| Error::Manifest(format!("manifest: {e}")))?;
+        let mut man: Manifest = serde_json::from_str(text).map_err(|e| Error::Manifest(format!("manifest: {e}")))?;
+        // The name is shown as stored, so white space and line breaks at its ends are dropped here.
+        man.name = man.name.trim().to_owned();
         man.validate()?;
         Ok(man)
     }
@@ -143,7 +145,7 @@ impl Manifest {
         if !valid_id(&self.id) {
             return Err(Error::Manifest(format!("invalid id {:?}: use 1-64 characters from A-Z a-z 0-9 . _ -", self.id)));
         }
-        if !printable_name(self.name.trim()) {
+        if !printable_name(&self.name) {
             return Err(Error::Manifest("`name` must be 1-64 printable characters".into()));
         }
         if self.version.len() > 32 || self.description.len() > 1024 || self.author.len() > 128 {
@@ -372,18 +374,23 @@ const FORMAT: &[(char, char)] = &[
     ('\u{E0020}', '\u{E007F}'),
 ];
 
-/// Default-ignorable characters outside Cf (fillers, variation selectors): allowed in a name, but they
-/// draw nothing on their own.
+/// Default-ignorable characters outside Cf (fillers, variation selectors, unassigned ignorables), and
+/// the blank Braille pattern U+2800: allowed in a name, but they draw nothing on their own.
 const BLANK: &[(char, char)] = &[
     ('\u{34F}', '\u{34F}'),
     ('\u{115F}', '\u{1160}'),
     ('\u{17B4}', '\u{17B5}'),
     ('\u{180B}', '\u{180D}'),
     ('\u{180F}', '\u{180F}'),
+    ('\u{2065}', '\u{2065}'),
+    ('\u{2800}', '\u{2800}'),
     ('\u{3164}', '\u{3164}'),
     ('\u{FE00}', '\u{FE0F}'),
     ('\u{FFA0}', '\u{FFA0}'),
-    ('\u{E0100}', '\u{E01EF}'),
+    ('\u{FFF0}', '\u{FFF8}'),
+    ('\u{E0000}', '\u{E0000}'),
+    ('\u{E0002}', '\u{E001F}'),
+    ('\u{E0080}', '\u{E0FFF}'),
 ];
 
 fn in_ranges(c: char, ranges: &[(char, char)]) -> bool {
@@ -400,7 +407,9 @@ fn hidden_format(c: char) -> bool {
 /// Whether `name` (already trimmed) can be shown as a label: 1-64 characters, at least one of them
 /// visible, and no control characters, line or paragraph separators, or hidden format characters.
 pub fn printable_name(name: &str) -> bool {
-    name.chars().count() <= 64 && name.chars().any(visible) && !name.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') || hidden_format(c))
+    name.chars().nth(64).is_none()
+        && name.chars().any(visible)
+        && !name.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') || hidden_format(c))
 }
 
 /// A character that draws something on its own.
@@ -637,6 +646,12 @@ mod tests {
             "Tone\u{7}",
             "Tone\u{2028}Pro",
             "Tone\u{2029}Pro",
+            "\u{2800}",
+            " \u{2800}\u{2800} ",
+            "\u{2065}",
+            "\u{FFF0}",
+            "\u{E0000}\u{E0002}",
+            "\u{E0080}\u{E0FFF}",
         ] {
             assert!(with_name(bad).is_err(), "{bad:?}");
         }
@@ -644,6 +659,12 @@ mod tests {
         for good in ["Tone…", "Kontrast ±", "می\u{200C}خواهم", "\u{1F469}\u{200D}\u{1F4BB} Code", "\u{2764}\u{FE0F} Love", "色调"] {
             assert_eq!(with_name(good).map(|m| m.name).ok().as_deref(), Some(good));
         }
+        // White space and line breaks at the ends are dropped from the stored name, so the menu never
+        // shows them, and padding does not count towards the limit.
+        for (padded, stored) in [("\nTone", "Tone"), ("Tone\r\n", "Tone"), ("\u{2028}Tone ", "Tone"), (" Tone… ", "Tone…")] {
+            assert_eq!(with_name(padded).map(|m| m.name).ok().as_deref(), Some(stored), "{padded:?}");
+        }
+        assert_eq!(with_name(&format!("{}{}", "x".repeat(64), " ".repeat(1000))).map(|m| m.name.len()).ok(), Some(64));
         // The documented limit counts characters, not bytes.
         assert!(with_name(&"é".repeat(64)).is_ok());
         assert!(with_name(&"é".repeat(65)).is_err());

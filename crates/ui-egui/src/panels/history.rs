@@ -185,13 +185,12 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The History panel's source column at the left of a state or snapshot row: the History Brush
-/// icon on the source; a click makes the row the source (`history.setSource`). It sits above the
-/// row, so the click doesn't also step to the state or snapshot.
 /// The icon of a History step, from its name.
 pub(crate) fn step_icon(step: &str) -> &'static str {
     match step {
         s if s.contains("Brush") || s.contains("Eraser") => "brush",
+        // Applying a patch edits pixels; only the Patch tool's lasso is a selection step.
+        "Patch Selection" => "sliders-horizontal",
         // The Layers panel's controls (layer.setProps).
         "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
         s if s.contains("Layer") => "layers",
@@ -204,6 +203,9 @@ pub(crate) fn step_icon(step: &str) -> &'static str {
     }
 }
 
+/// The History panel's source column at the left of a state or snapshot row: the History Brush
+/// icon on the source; a click makes the row the source (`history.setSource`). It sits above the
+/// row, so the click doesn't also step to the state or snapshot.
 fn history_source_column(ui: &mut egui::Ui, row: Rect, salt: egui::Id, is_source: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let cell = Rect::from_min_size(row.min, vec2(24.0, row.height()));

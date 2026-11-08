@@ -51,7 +51,7 @@ fn the_lasso_is_named_for_the_tool_that_drew_it() {
 fn a_hostile_history_name_is_refused_without_a_step() {
     let mut s = session();
     let steps = s.active().unwrap().history.past_len();
-    let invisible = ["\u{200B}", " \u{200B}\u{FEFF} ", "\u{3164}", "\u{FE0F}", "\u{E0020}", "\u{00AD}"];
+    let invisible = ["\u{200B}", " \u{200B}\u{FEFF} ", "\u{3164}", "\u{FE0F}", "\u{E0020}", "\u{00AD}", "\u{2800}"];
     let hidden = ["Patch\u{202E}looT", "\u{FEFF}Patch Tool", "Patch Tool\u{200B}", "\u{2066}Patch", "Patch\u{2028}Tool", "a\u{2029}b"];
     let ends = ["Patch Tool\n", "\r\nPatch Tool", "\tPatch", "\u{0085}Patch", "Patch\u{2028}"];
     let others = [json!(""), json!("   "), json!("x".repeat(65)), json!("a\nb"), json!(7), json!(["Patch Tool"])];
