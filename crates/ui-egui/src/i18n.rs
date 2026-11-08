@@ -2,7 +2,8 @@
 //! catalogs map them to display text at render time. Command ids, menu paths used for logic, the
 //! control channel, the CLI and MCP never see translated text, so agents and scripts are
 //! unaffected. A string without a translation is shown in English, and a missing translation never
-//! fails a build, a test or a release.
+//! fails a build or a release. A few tests check named rows of the pinned catalogs, so moving
+//! `craft-i18n.rev` to a commit that drops one fails that test until it is updated.
 //!
 //! The catalogs live in [storytold/craft-i18n](https://github.com/storytold/craft-i18n)
 //! (`locales/<code>/common.tsv`, shared by the Crafting Apps, and `photocraft.tsv`), not in this
@@ -40,7 +41,7 @@ pub(crate) use system::with_decimal_separator;
 pub use system::{decimal_separator, system_lang};
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{LazyLock, OnceLock};
 
 use craft_i18n::I18n;
@@ -158,9 +159,9 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     LangInfo { code: "ka", complete_menus: true },
 ];
 
-/// Per language of [`LANGUAGES`], the (context, source) keys of PhotoCraft's own catalog as
-/// written (escaped), read on first use ([`Lang::has_own`]).
-static OWN_ROWS: [OnceLock<HashSet<(&'static str, &'static str)>>; LANGUAGE_COUNT] = [const { OnceLock::new() }; LANGUAGE_COUNT];
+/// Per language of [`LANGUAGES`], PhotoCraft's own catalog rows as written (escaped): (context,
+/// source) to translation, read on first use ([`Lang::owns`]).
+static OWN_ROWS: [OnceLock<HashMap<(&'static str, &'static str), &'static str>>; LANGUAGE_COUNT] = [const { OnceLock::new() }; LANGUAGE_COUNT];
 
 /// A language the UI can be shown in: English, or one of [`LANGUAGES`] whose catalogs are
 /// embedded.
@@ -248,29 +249,30 @@ impl Lang {
         dir_for_code(self.code())
     }
 
-    /// Whether PhotoCraft's own catalog (`photocraft.tsv`, not the shared `common.tsv`) has the
-    /// row (`context`, `source`). The shared catalog's `@id` rows are keyed by the other apps'
-    /// command ids, which can name another command, so command-id lookups ask this; every `@id`
-    /// row PhotoCraft had is in its own catalog. A test fixture has no shared catalog: its rows are
-    /// its own.
-    fn has_own(self, context: &str, source: &str) -> bool {
+    /// Whether `translated`, the lookup's text for (`context`, `source`), comes from PhotoCraft's
+    /// own catalog (`photocraft.tsv`, not the shared `common.tsv`). The shared catalog's `@id` rows
+    /// are keyed by the other apps' command ids, which can name another command, so command-id
+    /// lookups ask this; every `@id` row PhotoCraft had is in its own catalog. Comparing the text,
+    /// not only the key, keeps a shared row out when craft-i18n skipped a malformed own row. A test
+    /// fixture has no shared catalog: its rows are its own.
+    fn owns(self, context: &str, source: &str, translated: &str) -> bool {
         if let Some(fixture) = self.catalogs {
-            return fixture.get(self.lang, context, source).is_some();
+            return fixture.get(self.lang, context, source) == Some(translated);
         }
         let code = self.code();
         let Some(slot) = LANGUAGES.iter().position(|l| l.code == code).and_then(|i| OWN_ROWS.get(i)) else { return false };
-        let rows: &HashSet<(&str, &str)> = slot.get_or_init(|| {
+        let rows: &HashMap<(&str, &str), &str> = slot.get_or_init(|| {
             app_catalog(code)
                 .lines()
                 .filter(|l| !l.starts_with('#'))
                 .filter_map(|l| {
                     let mut columns = l.split('\t');
-                    Some((columns.next()?, columns.next()?))
+                    Some(((columns.next()?, columns.next()?), columns.next()?))
                 })
                 .collect()
         });
         let escape = |s: &str| s.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t");
-        rows.contains(&(escape(context).as_str(), escape(source).as_str()))
+        rows.get(&(escape(context).as_str(), escape(source).as_str())).is_some_and(|own| *own == escape(translated))
     }
 }
 
@@ -440,12 +442,12 @@ pub fn tr_id<'a>(lang: Lang, id: &str, label: &'a str) -> &'a str {
     if own_id(lang, id, label) { lang.i18n().tid(lang.lang, id, label) } else { tr(lang, label) }
 }
 
-/// Whether `lang` has PhotoCraft's own `@id` row for `id` ([`Lang::has_own`]: command ids are each
+/// Whether `lang` has PhotoCraft's own `@id` row for `id` ([`Lang::owns`]: command ids are each
 /// app's own) and it keeps the `{placeholders}` and trailing `…` of the English `label`. craft-i18n
 /// can't check that, because an `@id` row's source is the id, so a row that doesn't is skipped
 /// here and the label's translation shows instead.
 fn own_id(lang: Lang, id: &str, label: &str) -> bool {
-    lang.has_own("@id", id) && lang.i18n().get(lang.lang, "@id", id).is_some_and(|translated| same_shape(translated, label))
+    lang.i18n().get(lang.lang, "@id", id).is_some_and(|translated| lang.owns("@id", id, translated) && same_shape(translated, label))
 }
 
 /// Whether `translated` has the `{placeholders}` (in any order) and the trailing `…` of `english`,

@@ -411,7 +411,7 @@ fn counts_pick_the_same_plural_form_as_before() {
         ("pt-br", 2, &[0, 1, 2, 1_000_000], &[0, 0, 1, 1]),
         ("es", 2, &[0, 1, 3, 1_000_000], &[1, 0, 1, 1]),
         ("it", 2, &[0, 1, 3, 1_000_000], &[1, 0, 1, 1]),
-        ("hi", 2, &[1, 2, 5, 21], &[0, 1, 1, 1]),
+        ("hi", 2, &[0, 1, 2, 5, 21], &[0, 0, 1, 1, 1]),
         ("ja", 1, &[0, 1, 5], &[0, 0, 0]),
         ("th", 1, &[0, 1, 5], &[0, 0, 0]),
     ];
@@ -476,7 +476,8 @@ fn id_rows_keep_the_shape_of_their_label() {
     assert!(!same_shape("{name}} öffnen", "Open {name}"), "a second closing brace");
 }
 
-/// The language list is well-formed. Problems in the embedded catalogs are not failed: craft-i18n
+/// The language list is well-formed, and with the catalogs embedded each registered language has
+/// one. Problems in the embedded catalogs' rows are not failed: craft-i18n
 /// checks its rows, a row PhotoCraft can't use shows in English, and `cargo xtask i18n-report`
 /// lists what each language lacks.
 #[test]
@@ -489,6 +490,12 @@ fn bundled_catalogs_are_consistent() {
     assert_eq!(LANGUAGES.first().map(|l| l.code), Some("en"), "English first: the source and the fallback");
     if !needs_catalogs() {
         return;
+    }
+    // A build that requires the catalogs (`CRAFT_I18N_REQUIRED=1`) must offer every registered
+    // language, not only whichever locales the checkout happens to hold.
+    for l in LANGUAGES.iter().filter(|l| l.code != "en") {
+        assert!(!app_catalog(l.code).is_empty(), "{}: no photocraft.tsv at craft-i18n.rev", l.code);
+        assert!(Lang::from_code(l.code).is_some(), "{}: registered but not offered", l.code);
     }
     let problems = I18N.check_all();
     if !problems.is_empty() {

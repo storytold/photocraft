@@ -122,6 +122,8 @@ fn the_app_menu_switches_the_ui_language() {
     let ctx = egui::Context::default();
     crate::menus::invoke(&mut a, &ctx, "app.language.fr", json!({})).unwrap();
     assert_eq!(a.session.prefs().interface.language, "fr");
+    crate::menus::invoke(&mut a, &ctx, "app.language.sr", json!({})).unwrap();
+    assert_eq!(a.session.prefs().interface.language, "sr-latn", "the old Serbian id still switches");
     crate::menus::invoke(&mut a, &ctx, "app.language.auto", json!({})).unwrap();
     assert_eq!(a.session.prefs().interface.language, "auto");
     assert!(crate::menus::invoke(&mut a, &ctx, "app.language.xx-nope", json!({})).is_err(), "an unknown code is an error");
