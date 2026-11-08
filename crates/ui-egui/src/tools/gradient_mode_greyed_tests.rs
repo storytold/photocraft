@@ -47,6 +47,15 @@ fn dropdown(h: &Harness<'static, PhotocraftApp>) -> (bool, String) {
     (node.is_disabled(), node.value().unwrap_or_default())
 }
 
+/// Pick `option` from the enabled mode dropdown, as a click on it and then on the option does.
+fn pick(h: &mut Harness<'static, PhotocraftApp>, option: &str) {
+    let modes = ["Gradient", "Classic gradient"];
+    h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().value().is_some_and(|v| modes.contains(&v.as_str()))).expect("the mode dropdown").click();
+    h.run_steps(2);
+    h.query_all_by_label(option).find(|n| n.accesskit_node().role() != Role::ComboBox).expect("the option").click();
+    h.run_steps(2);
+}
+
 fn gradient_of(app: &PhotocraftApp, id: LayerId) -> Fill {
     match &app.session.active().unwrap().doc.layer(id).unwrap().content {
         LayerContent::Fill(f @ Fill::Gradient { .. }) => f.clone(),
@@ -75,10 +84,15 @@ fn a_pixel_layer_enables_it_with_the_stored_choice() {
         select(h.state_mut(), pixels);
         h.run_steps(2);
         assert_eq!(dropdown(&h), (false, shown.into()));
+        // The re-enabled dropdown still records a new choice.
+        let other = if classic { "Gradient" } else { "Classic gradient" };
+        pick(&mut h, other);
+        assert_eq!(dropdown(&h), (false, other.into()));
+        assert_eq!(h.state().ui.tool_options.gradient_classic, !classic, "the new choice is stored");
         select(h.state_mut(), fill);
         h.run_steps(2);
         assert_eq!(dropdown(&h), (true, "Gradient".into()), "greyed again");
-        assert_eq!(h.state().ui.tool_options.gradient_classic, classic);
+        assert_eq!(h.state().ui.tool_options.gradient_classic, !classic, "and kept");
     }
 }
 
