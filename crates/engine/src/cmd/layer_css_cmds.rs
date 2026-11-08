@@ -10,17 +10,26 @@
 //!   gradient or pattern fills, smart objects): `background-image`, an image named after it;
 //! - `opacity` when it isn't 100 %;
 //! - `position: absolute`, `left` and `top`, and `width` and `height` except for point type;
-//! - `z-index`, its place in the stack counted from the bottom layer as 1.
+//! - `z-index`, its place in the stack counted from the bottom layer as 1, where a group takes
+//!   two places (its own, and one below its layers for the group's end).
+//!
+//! A group writes only its box (the canvas, or its artboard) and z-index, followed by the rule
+//! of every layer in it, top first. A fill layer without a vector mask and an adjustment layer
+//! have no rule, and Copy CSS is off when no selected layer has one. Point type is placed as
+//! Photoshop places it (see [`place_point_text`]).
 //!
 //! Not written: strokes (`border`), layer effects (`box-shadow`, `text-shadow`), gradients as
 //! CSS gradients, blend modes (`mix-blend-mode`), fill opacity, the styles of later runs and
 //! paragraphs, the corners of a rounded rectangle scaled unequally (elliptical, while it keeps
 //! one radius per corner), and the geometry of other shapes (live polygons, stars and lines, and
-//! custom paths), which get the rule of their box. Groups and adjustment layers have no rule.
+//! custom paths), which get the rule of their box.
 
-use photocraft_doc::text::{TextAlign, TextShape};
-use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, LiveShape, Path};
-use photocraft_geom::Point;
+use std::collections::HashMap;
+use std::sync::PoisonError;
+
+use photocraft_doc::text::{Orientation, TextAlign, TextShape};
+use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, LiveShape, Path, TextLayer};
+use photocraft_geom::{Point, Rect};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -32,14 +41,44 @@ fn bad(message: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: ID.into(), msg: message.into() }
 }
 
+/// Deepest group nesting followed; deeper layers are left out rather than recursing without end.
+const MAX_DEPTH: usize = 256;
+
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
-    if st.selected_layers().is_empty() { Err("no layer selected".into()) } else { Ok(()) }
+    let ids = st.selected_layers();
+    if ids.is_empty() {
+        return Err("no layer selected".into());
+    }
+    // Photoshop greys Copy CSS out for a fill layer without a shape (measured), and for an
+    // adjustment layer, which has nothing to place either.
+    if st.doc.walk().iter().any(|(_, _, l)| ids.contains(&l.id) && has_css(l)) { Ok(()) } else { Err("no selected layer has CSS".into()) }
+}
+
+/// Whether a layer can have a rule (one with nothing to place still gets none).
+fn has_css(l: &Layer) -> bool {
+    match &l.content {
+        LayerContent::Adjustment(_) => false,
+        LayerContent::Fill(_) => l.vector_mask.is_some(),
+        _ => true,
+    }
 }
 
 /// A number as Photoshop writes it in CSS: at most three decimals, no trailing zeros.
 pub fn number(v: f64) -> String {
     let v = if v.is_finite() { (v * 1000.0).round() / 1000.0 } else { 0.0 };
+    decimals(v)
+}
+
+/// A `left` or `top` as Photoshop writes it: cut after three decimals, not rounded (measured:
+/// 49.8125 is `49.812px`, 176.5668 is `176.566px`). The nudge keeps 127.1, computed as
+/// 127.0999…, at `127.1`.
+pub fn position(v: f64) -> String {
+    let v = if v.is_finite() { (v * 1000.0 + 1e-6).floor() / 1000.0 } else { 0.0 };
+    decimals(v)
+}
+
+fn decimals(v: f64) -> String {
     let s = format!("{v:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s == "-0" { "0".into() } else { s.to_string() }
@@ -100,8 +139,59 @@ fn draws(live: &LiveShape, path: &Path) -> bool {
     have.iter().all(|p| among(p, &want)) && want.iter().all(|p| among(p, &have))
 }
 
+/// Where Photoshop places point type, from its pixel bounds `pix`, its ink `ink` (`[x0, y0, x1,
+/// y1]` from its origin, unrounded), its first baseline `baseline` in the same space, the cap
+/// height `cap` of its font and its size and line height in px. Measured on Arial and Times New
+/// Roman at 24 and 48 px, with auto and explicit leading:
+/// - `left` is the pixel left less the ink's offset from the origin ("Hello": 52 − 1.875 =
+///   `50.125`);
+/// - without a descender, the line box is centred on the pixels ("Hello", pixels 132–151, line
+///   28.8: 141.5 − 14.4 = `127.1`);
+/// - with one, on half the cap height above the baseline the pixels give ("xyz" in Arial, top
+///   pixel 187, ink top −12.5625, cap 17.19: 199.5625 − (28.8 + 17.19) / 2 = `176.566`).
+pub fn place_point_text(pix: Rect, ink: [f64; 4], baseline: f64, cap: f64, size_px: f64, line_height_px: f64) -> Point {
+    let left = f64::from(pix.x0) - ink[0];
+    // An "o" overshoots the baseline by a hair, a "g" by a fifth of the size.
+    let top = if ink[3] - baseline > 0.05 * size_px {
+        f64::from(pix.y0) - (ink[1] - baseline) - (line_height_px + cap) / 2.0
+    } else {
+        (f64::from(pix.y0) + f64::from(pix.y1)) / 2.0 - line_height_px / 2.0
+    };
+    Point::new(left, top)
+}
+
+/// [`place_point_text`] for a type layer, from its layout; `None` (placed at its pixels) when
+/// there is nothing to measure: no pixels or ink, no font, or type that is turned, scaled,
+/// warped or vertical.
+fn point_text_origin(t: &TextLayer, pix: Rect, dpi: f32, family: &str, size_pt: f32, line_height: f64) -> Option<Point> {
+    let [a, b, c, d, _, _] = t.transform.m;
+    if pix.is_empty() || a != 1.0 || b != 0.0 || c != 0.0 || d != 1.0 || t.warp.is_some() || t.orientation != Orientation::Horizontal {
+        return None;
+    }
+    let size_px = f64::from(size_pt) * f64::from(dpi) / 72.0;
+    let cap_layer = TextLayer { text: "H".into(), font_family: family.into(), size_pt, ..Default::default() };
+    let mut eng = photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner);
+    let layout = eng.layout(t, dpi);
+    let ink = photocraft_text::render::ink_bounds(&layout)?;
+    let baseline = f64::from(layout.lines.first()?.baseline);
+    let cap_layout = eng.layout(&cap_layer, dpi);
+    let cap = f64::from(cap_layout.lines.first()?.baseline) - photocraft_text::render::ink_bounds(&cap_layout)?[1];
+    // Photoshop works with the line height it writes, three decimals of the size.
+    let line_height_px = (line_height * 1000.0).round() / 1000.0 * size_px;
+    let at = place_point_text(pix, ink, baseline, cap, size_px, line_height_px);
+    (at.x.is_finite() && at.y.is_finite()).then_some(at)
+}
+
+/// The box of a group's rule: its artboard, else the canvas (measured: a group holding a 50 × 30
+/// layer writes the 400 × 300 canvas).
+fn group_bounds(doc: &Document, l: &Layer) -> Rect {
+    let r = photocraft_doc::comps::position_bounds(l);
+    if r.is_empty() { doc.bounds() } else { r }
+}
+
 /// The rule for one layer, `z` its place in the stack from the bottom (1-based); `None` for a
-/// layer CSS can't describe (groups, adjustments) or one with nothing to place.
+/// layer CSS can't describe (adjustments, fill layers without a shape) or one with nothing to
+/// place. A group's rule is its box alone; [`copy_css`] adds the rules of its layers.
 pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
     let px_per_pt = f64::from(doc.resolution_dpi.max(1.0)) / 72.0;
     let mut props: Vec<(&str, String)> = Vec::new();
@@ -109,8 +199,12 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
     let mut bounds = photocraft_doc::comps::position_bounds(l);
     // Where the rule starts when it isn't where the layer's pixels start.
     let mut origin: Option<Point> = None;
+    if !has_css(l) {
+        return None;
+    }
     match &l.content {
-        LayerContent::Group(_) | LayerContent::Adjustment(_) => return None,
+        LayerContent::Adjustment(_) => return None,
+        LayerContent::Group(_) => bounds = group_bounds(doc, l),
         LayerContent::Text(t) => {
             let style = t.runs.first().map(|r| &r.style);
             let size_pt = style.map_or(t.size_pt, |s| s.size_pt);
@@ -142,7 +236,10 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
                     origin = Some(Point::new(at.x, at.y + leading));
                 }
                 // Point text has no box of its own: only its position.
-                _ => sized = false,
+                _ => {
+                    sized = false;
+                    origin = point_text_origin(t, bounds, doc.resolution_dpi.max(1.0), family, size_pt, line_height);
+                }
             }
         }
         LayerContent::Shape(sh) => {
@@ -165,9 +262,12 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
             }
         }
         LayerContent::Fill(f) => {
-            // A fill layer without a shape covers the canvas.
+            // Only a fill layer with a vector mask (a shape) gets here: placed at its outline.
             if bounds.is_empty() {
-                bounds = doc.bounds();
+                let outline = l.vector_mask.as_ref().and_then(|m| m.path.control_bounds());
+                bounds = outline.map_or(Rect::EMPTY, |(x0, y0, x1, y1)| {
+                    Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32).intersect(&doc.bounds())
+                });
             }
             match f {
                 Fill::Solid(c) => props.push(("background-color", rgb(c))),
@@ -184,8 +284,8 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
     }
     props.push(("position", "absolute".into()));
     let at = origin.unwrap_or(Point::new(f64::from(bounds.x0), f64::from(bounds.y0)));
-    props.push(("left", format!("{}px", number(at.x))));
-    props.push(("top", format!("{}px", number(at.y))));
+    props.push(("left", format!("{}px", position(at.x))));
+    props.push(("top", format!("{}px", position(at.y))));
     if sized {
         props.push(("width", format!("{}px", number(f64::from(bounds.width())))));
         props.push(("height", format!("{}px", number(f64::from(bounds.height())))));
@@ -215,19 +315,48 @@ fn copy_css(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::NoLayer(*id));
         }
     }
-    // In Layers panel order, top first.
-    let rules: Vec<(u64, String)> = walk
-        .iter()
-        .enumerate()
-        .rev()
-        .filter(|(_, (_, _, l))| ids.contains(&l.id))
-        .filter_map(|(i, (_, _, l))| rule(&st.doc, i + 1, l).map(|r| (l.id.0, r)))
-        .collect();
+    let mut z = HashMap::new();
+    stack_places(&st.doc.layers, &mut 0, &mut z, 0);
+    // In Layers panel order, top first: a group, then its layers (measured).
+    let mut picked = Vec::new();
+    panel_order(&st.doc.layers, false, &ids, &mut picked, 0);
+    let rules: Vec<(u64, String)> = picked.into_iter().filter_map(|l| z.get(&l.id).and_then(|&z| rule(&st.doc, z, l)).map(|r| (l.id.0, r))).collect();
     if rules.is_empty() {
-        return Err(EngineError::Other("Copy CSS needs a pixel, type, shape or fill layer with content".into()));
+        return Err(EngineError::Other("Copy CSS needs a pixel, type, shape or group layer with content".into()));
     }
-    let css = rules.iter().map(|(_, r)| r.as_str()).collect::<Vec<_>>().join("\n");
+    // Photoshop writes a group's rules one after another, with no blank line between them.
+    let css: String = rules.iter().map(|(_, r)| r.as_str()).collect();
     Ok(json!({"css": css, "layers": rules.iter().map(|(id, _)| id).collect::<Vec<_>>()}))
+}
+
+/// Every layer's `z-index`, counted from the bottom: a group's layers come first, after one place
+/// for the group's end, then the group (measured: Background 1, group end 2, its layer 3, the
+/// group 4, the layer above it 5).
+fn stack_places(layers: &[Layer], n: &mut usize, out: &mut HashMap<LayerId, usize>, depth: usize) {
+    for l in layers {
+        if let Some(children) = l.children() {
+            *n += 1;
+            if depth < MAX_DEPTH {
+                stack_places(children, n, out, depth + 1);
+            }
+        }
+        *n += 1;
+        out.insert(l.id, *n);
+    }
+}
+
+/// The layers whose rules are copied, top first: the selected ones and everything inside a
+/// selected group, each once.
+fn panel_order<'a>(layers: &'a [Layer], inside_picked: bool, ids: &[LayerId], out: &mut Vec<&'a Layer>, depth: usize) {
+    for l in layers.iter().rev() {
+        let take = inside_picked || ids.contains(&l.id);
+        if take {
+            out.push(l);
+        }
+        if let Some(children) = l.children().filter(|_| depth < MAX_DEPTH) {
+            panel_order(children, take, ids, out, depth + 1);
+        }
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {

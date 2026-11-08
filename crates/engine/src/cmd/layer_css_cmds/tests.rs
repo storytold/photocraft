@@ -41,12 +41,14 @@ fn a_pixel_layer_copies_as_photoshop_writes_it() {
 #[test]
 fn fill_and_type_layers_describe_their_colour_and_font() {
     let doc = session("Box").active().unwrap().doc.clone();
-    // Photoshop: a solid colour gives `background-color` (a fill layer without a shape covers the
-    // canvas).
-    let fill = Layer::new("Card", LayerContent::Fill(Fill::Solid(photocraft_color::Color::rgb(1.0, 120.0 / 255.0, 30.0 / 255.0))));
+    // Photoshop: a solid colour gives `background-color`. A fill layer is a shape with a vector
+    // mask, placed at its outline; without one it has no rule (Copy CSS is greyed out, measured).
+    let mut fill = Layer::new("Card", LayerContent::Fill(Fill::Solid(photocraft_color::Color::rgb(1.0, 120.0 / 255.0, 30.0 / 255.0))));
+    assert!(rule(&doc, 4, &fill).is_none());
+    fill.vector_mask = Some(photocraft_doc::VectorMask::new(photocraft_vector::shapes::rect(250.0, 200.0, 120.0, 60.0)));
     assert_eq!(
         rule(&doc, 4, &fill).unwrap(),
-        ".Card {\n  background-color: rgb(255, 120, 30);\n  position: absolute;\n  left: 0px;\n  top: 0px;\n  width: 400px;\n  height: 300px;\n  z-index: 4;\n}\n"
+        ".Card {\n  background-color: rgb(255, 120, 30);\n  position: absolute;\n  left: 250px;\n  top: 200px;\n  width: 120px;\n  height: 60px;\n  z-index: 4;\n}\n"
     );
     // A type layer: size, family, colour, auto leading and alignment, then only its position
     // (Photoshop writes no size for point text). Its position is where its pixels are.
@@ -65,9 +67,89 @@ fn fill_and_type_layers_describe_their_colour_and_font() {
         css,
         ".Title {\n  font-size: 24px;\n  font-family: \"Inter\";\n  color: rgb(0, 0, 0);\n  line-height: 1.2;\n  text-align: left;\n  position: absolute;\n  left: 49px;\n  top: 28px;\n  z-index: 3;\n}\n"
     );
-    // Groups and adjustments have no CSS.
+    // A group's own rule is its box, the canvas.
     let group = Layer::group("Group 1", Vec::new());
-    assert!(rule(&doc, 5, &group).is_none());
+    assert_eq!(
+        rule(&doc, 5, &group).unwrap(),
+        ".Group_1 {\n  position: absolute;\n  left: 0px;\n  top: 0px;\n  width: 400px;\n  height: 300px;\n  z-index: 5;\n}\n"
+    );
+}
+
+/// Measured: Layer › Copy CSS on a group holding a 50 × 30 layer "2nd-Box" at (10, 20) writes the
+/// group's canvas box, then the layer, with no blank line; the group's end takes a place in the
+/// stack, so the layer is 3 and the group 4 above the Background.
+#[test]
+fn a_group_writes_its_box_then_its_layers() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "2nd-Box"})).unwrap();
+    s.edit("paint", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 20, 60, 50), &[0.16, 0.35, 0.78, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
+    s.edit("paint", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(300, 200, 320, 220), &[0.16, 0.35, 0.78, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let group = s.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.children().is_some()).unwrap().2.id.0;
+    let css = s.execute(ID, json!({"layer": group})).unwrap()["css"].as_str().unwrap().to_string();
+    let rest = css.split_once(' ').unwrap().1;
+    assert_eq!(
+        rest,
+        "{\n  position: absolute;\n  left: 0px;\n  top: 0px;\n  width: 400px;\n  height: 300px;\n  z-index: 4;\n}\n\
+         ._2nd_Box {\n  background-image: url(\"2nd-Box.png\");\n  position: absolute;\n  left: 10px;\n  top: 20px;\n  width: 50px;\n  height: 30px;\n  z-index: 3;\n}\n"
+    );
+    let css = s.execute(ID, json!({})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.starts_with(".Top {\n") && css.contains("  z-index: 5;\n"), "{css}");
+}
+
+/// Measured: Copy CSS is greyed out for a Solid Color fill layer without a shape.
+#[test]
+fn copy_css_is_off_for_a_fill_layer_without_a_shape() {
+    let mut s = session("Box");
+    assert!(s.is_enabled(ID));
+    s.execute("layer.newFillLayer.solidColor", json!({})).unwrap();
+    assert!(!s.is_enabled(ID), "a plain fill layer has no CSS");
+    assert!(s.execute(ID, json!({})).is_err());
+}
+
+/// Point type as Photoshop placed it (measured: text bounds and pixel bounds from its scripting
+/// interface, then the copied CSS).
+#[test]
+fn point_type_is_placed_as_photoshop_places_it() {
+    let arial_cap = 1467.0 / 2048.0 * 24.0;
+    let times_cap = 1356.0 / 2048.0 * 24.0;
+    let css = |pix: Rect, ink: [f64; 4], cap: f64, size: f64, line_height: f64| {
+        let at = place_point_text(pix, ink, 0.0, cap, size, line_height * size);
+        (position(at.x), position(at.y))
+    };
+    let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+    // "Hello", Arial 24 at (50, 150).
+    assert_eq!(css(Rect::new(52, 132, 104, 151), [1.875, -17.25, 53.71875, 0.1875], arial_cap, 24.0, 1.2), s("50.125", "127.1"));
+    // The same at 48 px.
+    assert_eq!(css(Rect::new(53, 65, 158, 101), [3.75, -34.5, 107.4375, 0.375], arial_cap * 2.0, 48.0, 1.2), s("49.25", "54.2"));
+    // With a 40 pt leading: line-height 1.667.
+    assert_eq!(css(Rect::new(202, 82, 254, 101), [1.875, -17.25, 53.71875, 0.1875], arial_cap, 24.0, 1.667), s("200.125", "71.496"));
+    // "x": no descender.
+    assert_eq!(css(Rect::new(300, 237, 312, 250), [0.1875, -12.5625, 11.8799, 0.0], arial_cap, 24.0, 1.2), s("299.812", "229.1"));
+    // Descenders: "xyz", "xg", "Hg" in Arial, "Hg" and "xg" in Times New Roman.
+    assert_eq!(css(Rect::new(50, 187, 86, 205), [0.1875, -12.5625, 35.71875, 4.875], arial_cap, 24.0, 1.2), s("49.812", "176.566"));
+    assert_eq!(css(Rect::new(330, 237, 354, 255), [0.1875, -12.75, 23.6953, 4.875], arial_cap, 24.0, 1.2), s("329.812", "226.754"));
+    assert_eq!(css(Rect::new(302, 262, 329, 285), [1.875, -17.25, 29.0273, 4.875], arial_cap, 24.0, 1.2), s("300.125", "256.254"));
+    assert_eq!(css(Rect::new(50, 84, 79, 106), [0.375, -15.9375, 28.5, 5.0625], times_cap, 24.0, 1.2), s("49.625", "77.592"));
+    assert_eq!(css(Rect::new(150, 89, 174, 106), [0.1875, -11.0625, 23.5, 5.0625], times_cap, 24.0, 1.2), s("149.812", "77.717"));
+}
+
+#[test]
+fn positions_are_cut_after_three_decimals() {
+    assert_eq!(position(49.8125), "49.812");
+    assert_eq!(position(141.5 - 14.4), "127.1");
+    assert_eq!(position(100.0), "100");
+    assert_eq!(position(f64::INFINITY), "0");
 }
 
 /// Photoshop 2025, paragraph text in a 200 × 120 box at (60, 40) that wraps to two lines whose
@@ -147,7 +229,7 @@ fn bad_params_and_layers_without_css_are_errors() {
     assert!(s.execute(ID, json!({"layer": 999_999})).is_err());
     assert!(s.execute(ID, json!([])).is_err());
     s.execute("layer.new.group", json!({})).unwrap();
-    assert!(s.execute(ID, json!({})).is_err(), "a group alone has no CSS");
+    assert!(s.execute(ID, json!({})).unwrap()["css"].as_str().unwrap().contains("  width: 400px;\n"), "an empty group writes its box");
     let mut empty = Session::new();
     assert!(empty.execute(ID, json!({})).is_err(), "no document");
 }
@@ -246,4 +328,19 @@ fn a_layer_with_a_drop_shadow_writes_its_rule_without_the_effect() {
     let css = s.execute(ID, json!({})).unwrap()["css"].as_str().unwrap().to_string();
     assert_eq!(css, plain);
     assert!(!css.contains("shadow"), "{css}");
+}
+
+/// Real point type goes through its layout: "Hello" at a baseline of 150 is placed by its line
+/// box, which starts above its first pixel (Photoshop: 127.1 for pixels from 132), not at it.
+#[test]
+fn point_type_is_placed_by_its_line_box() {
+    let mut s = session("Box");
+    let id = s.execute("type.create", json!({"x": 50, "y": 150, "text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let doc = &s.active().unwrap().doc;
+    let pix = photocraft_doc::comps::position_bounds(doc.walk().into_iter().find(|(_, _, l)| l.id.0 == id).unwrap().2);
+    let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
+    let value = |key: &str| css.split(&format!("  {key}: ")).nth(1).and_then(|v| v.split("px;").next()).and_then(|v| v.parse::<f64>().ok()).unwrap();
+    let (left, top) = (value("left"), value("top"));
+    assert!((left - 50.0).abs() < 1.0, "left at the origin, within the pixel rounding: {css}");
+    assert!(top < f64::from(pix.y0) - 2.0 && top > 150.0 - 28.8, "top {top} above the pixels at {}: {css}", pix.y0);
 }
