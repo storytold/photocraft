@@ -4306,6 +4306,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Επιλέξτε διαφορετικό έγγραφο για κάθε κανάλι.
 	A picked document is no longer open.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον ανοιχτό.
 	A picked document is no longer a grayscale document of the same size.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον έγγραφο σε κλίμακα του γκρι ίδιου μεγέθους.
+	Netscape Gray	Γκρι Netscape
 # Move tool options bar (#11381)
 	Align top edges	Στοίχιση πάνω άκρων
 	Align vertical centers	Στοίχιση κατακόρυφων κέντρων

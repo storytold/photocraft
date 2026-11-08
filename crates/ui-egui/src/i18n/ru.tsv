@@ -4496,7 +4496,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The file could not be saved.	Не удалось сохранить файл.
 	Thickness	Толщина
 	This Layer:	Этот слой:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Перед продолжением необходимо растрировать этот смарт-объект. Его содержимое перестанет быть редактируемым. Растрировать смарт-объект?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Перед продолжением необходимо растрировать этот смарт-объект. Его содержимое перестанет быть редактируемым. Растрировать смарт-объект?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Эта коррекция ({key}) сохраняется в импортированном виде и пока не может быть изменена.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Перед продолжением необходимо растрировать этот слой заливки. Содержимое заливки перестанет быть редактируемым. Растрировать слой?
 	This layer must be rasterized before proceeding.	Перед продолжением необходимо растрировать этот слой.
@@ -4791,6 +4791,7 @@ shape	Appearance	Оформление
 	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.
 	A picked document is no longer open.	Один из выбранных документов больше не открыт.
 	A picked document is no longer a grayscale document of the same size.	Один из выбранных документов больше не является документом в градациях серого того же размера.
+	Netscape Gray	Серый Netscape
 # Move tool options bar (#11381)
 	Align top edges	Выровнять верхние края
 	Align vertical centers	Выровнять центры по вертикали

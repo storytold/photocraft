@@ -4060,7 +4060,7 @@ layerLabel	No Color	Fără culoare
 	Scroll menu down	Derulare meniu jos
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Acest strat de text trebuie rasterizat înainte de a continua. Textul său nu va mai fi editabil. Rasterizați textul?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Acest strat de formă trebuie rasterizat înainte de a continua. Nu va mai fi editabil ca formă. Rasterizați forma?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Acest obiect inteligent trebuie rasterizat înainte de a continua. Conținutul său nu va mai fi editabil. Rasterizați obiectul inteligent?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Acest obiect inteligent trebuie rasterizat înainte de a continua. Conținutul său nu va mai fi editabil. Rasterizați obiectul inteligent?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Acest strat de umplere trebuie rasterizat înainte de a continua. Conținutul său de umplere nu va mai fi editabil. Rasterizați stratul?
 	This layer must be rasterized before proceeding.	Acest strat trebuie rasterizat înainte de a continua.
 	Color Picker (Background Color)	Selector de culoare (culoare de fundal)
