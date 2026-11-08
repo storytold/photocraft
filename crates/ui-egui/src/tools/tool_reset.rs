@@ -13,8 +13,9 @@
 //! Smudge). Resetting one of those tools resets the shared field too. Sample All Layers is kept per
 //! tool, as in Photoshop, so resetting a tool resets only its own.
 //! [`reset_options`] lists the fields of each tool. The selection tools also go back to New
-//! Selection, and the painting tools (the ones with a brush in the options bar) get the default
-//! brush, keeping the colours. Tools without options (Hand, Rotate View, Ruler, Note, …) have
+//! Selection, and the painting tools (the ones with a brush in the options bar) get their starting
+//! brush (`paint_mouse::fresh_brush`: the Brush tool's 13 px soft round, the default brush for the
+//! others), keeping the colours. Tools without options (Hand, Rotate View, Ruler, Note, …) have
 //! nothing to reset.
 
 use serde_json::{Map, Value, json};
@@ -96,12 +97,20 @@ fn reset_all(app: &mut PhotocraftApp) {
     app.ui.tool_options = ToolOptions::default();
     app.ui.artboard_tool = Default::default();
     app.ui.selection_mode = 0;
-    app.ui.tool_brushes.clear();
     reset_session_brush(app);
+    // Every other painting tool gets its own starting brush. Left without one, it would take the
+    // live brush when picked (`sync_tool_brush`), and the tools' starting tips differ (#11810).
+    let (live, current) = (app.ui.brush_tool, app.session.tools.brush.clone());
+    app.ui.tool_brushes = Tool::ALL
+        .iter()
+        .filter(|t| **t != live && crate::paint_mouse::has_brush_picker(**t))
+        .map(|t| (*t, crate::paint_mouse::fresh_brush(*t, &current)))
+        .collect();
 }
 
+/// The live brush is `app.ui.brush_tool`'s: give it that tool's starting brush.
 fn reset_session_brush(app: &mut PhotocraftApp) {
-    app.session.tools.brush = crate::paint_mouse::fresh_brush(&app.session.tools.brush);
+    app.session.tools.brush = crate::paint_mouse::fresh_brush(app.ui.brush_tool, &app.session.tools.brush);
     app.session.tools.brush_gesture = None;
     app.session.tools.current_preset = None;
     app.session.tools.brush_changed();
@@ -150,10 +159,12 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
 /// The serialized name of `tool`'s own Sample All Layers inside `sample_all`, if it has one: a
 /// tool preset stores that one alone, not the other tools' (#5524, #7356).
 pub fn sample_all_key(tool: Tool) -> Option<String> {
-    let mut probe = crate::state::SampleAllLayers::default();
-    *probe.slot(tool)? = true;
-    let Ok(Value::Object(m)) = serde_json::to_value(probe) else { return None };
-    m.into_iter().find(|(_, v)| v.as_bool() == Some(true)).map(|(k, _)| k)
+    let base = crate::state::SampleAllLayers::default();
+    let mut probe = base;
+    let slot = probe.slot(tool)?;
+    *slot = !*slot;
+    let (Ok(Value::Object(b)), Ok(Value::Object(m))) = (serde_json::to_value(base), serde_json::to_value(probe)) else { return None };
+    m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
 }
 
 /// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets and
@@ -175,7 +186,8 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             move_expand_group_on_click,
             move_show_layers_hover_bounds,
             transform_interpolation,
-            transform_reference_point
+            transform_reference_point,
+            transform_relative_position
         ),
         Tool::RectMarquee | Tool::EllipseMarquee => reset!(feather, anti_alias, marquee_style, marquee_width, marquee_height, marquee_unit),
         // The single-pixel marquees are never anti-aliased: Feather is their only option.
@@ -247,7 +259,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             arrow_length,
             arrow_concavity,
         ),
-        Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::CustomShape => {
+        Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
             reset!(shape_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
         }
         Tool::ColorSampler
@@ -360,3 +372,7 @@ mod tests {
         assert_eq!((keys.len(), distinct.len()), (12, 12), "one key per tool with the option");
     }
 }
+
+#[cfg(test)]
+#[path = "../patch_sample_all_default_tests.rs"]
+mod patch_sample_all_default_tests;
