@@ -3629,6 +3629,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.
 	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
 	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.
+	Netscape Gray	Abu-abu Netscape
 # Move tool options bar (#11381)
 	Align top edges	Ratakan tepi atas
 	Align vertical centers	Ratakan pusat vertikal
@@ -3638,6 +3639,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Tampilkan batas layer saat kursor di atasnya
 	Expand layer group on click	Perluas grup layer saat diklik
 	Show hover bounds from Layers	Tampilkan batas saat kursor di atas dari Layer
+	Saved Camera Raw settings to {file}	Pengaturan Camera Raw disimpan ke {file}
+	Save the settings to each raw's sidecar without opening it	Simpan pengaturan ke file sidecar setiap raw tanpa membukanya
+	No settings saved: these raws can't keep a sidecar here	Tidak ada yang disimpan: raw ini tidak dapat memiliki file sidecar di sini
+	Some settings could not be saved; the raws stay open	Beberapa pengaturan tidak dapat disimpan; raw tetap terbuka
+	Nothing to save: these raws are at their default settings	Tidak ada yang perlu disimpan: raw ini memakai pengaturan default
 # Artboard tool options bar (#11385)
 	Distribute Widths	Distribusi lebar
 	Distribute Heights	Distribusi tinggi

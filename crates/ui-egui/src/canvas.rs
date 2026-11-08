@@ -1679,6 +1679,15 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         {
             crate::tool_cursor::close_path(painter, p)
         }
+        // Over an endpoint of an open path, the continue-path pointer (#9356).
+        Tool::Pen
+            if {
+                let [x, y] = xf.to_doc(p);
+                crate::vector_ui::continues_path_at(app, tool, x, y)
+            } =>
+        {
+            crate::tool_cursor::continue_path(painter, p)
+        }
         // The pen tools: their own icon with its nib on the point, or the crosshair for
         // precise Other Cursors (#4639).
         Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
@@ -2031,7 +2040,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     app.stylus.update_for_frame(ui.ctx().cumulative_frame_nr(), &ui.input(|i| i.events.clone()));
     crate::stylus::Stylus::sync_eraser_tool(app);
     // A Magnetic Lasso border left behind by a tool or document switch is dropped.
-    crate::magnetic_lasso_ui::frame(app);
+    crate::magnetic_lasso_ui::frame(app, ui.input(|i| i.pointer.primary_down()), primary);
     // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
     crate::layer_picker::prune(app);
     // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
