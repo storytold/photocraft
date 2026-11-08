@@ -519,7 +519,9 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
         },
         move |s, (surf, damage, moved_sel)| {
             let (dx, dy) = plan.offset;
-            s.edit(label, |doc, _| {
+            // The History step is named as the reference names it, in Move and Extend mode alike;
+            // `label` stays the job's own progress text.
+            s.edit("Content-Aware Move Selection", |doc, _| {
                 *crate::channel_cmds::target_surface(doc, plan.target.id, &p)?.0 = surf;
                 // The selection follows the content, ready for another drag.
                 if let Some(moved) = moved_sel {

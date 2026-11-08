@@ -1316,7 +1316,7 @@ fn content_aware_extend_keeps_the_original() {
     assert_eq!(r["mode"], "extend");
     assert!(is_object(rgba(&s, 25, 31)), "the original stays");
     assert!(is_object(rgba(&s, 85, 21)), "the copy lands");
-    assert_eq!(s.active().unwrap().history.undo_label(), Some("Content-Aware Extend"));
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Content-Aware Move Selection"));
 }
 
 #[test]

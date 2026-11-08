@@ -145,9 +145,15 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                 // The Patch and Content-Aware Move tools have no Feather in their options bar.
                 let feather = if d.tool == Tool::Lasso { o.feather } else { 0.0 };
                 let mut params = json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": feather});
-                // The Patch tool's lasso is a step of that tool in History; the Lasso tool keeps "Lasso".
-                if d.tool == Tool::Patch {
-                    params["historyName"] = json!("Patch Tool");
+                // The Patch and Content-Aware Move tools' lassos are steps of those tools in History;
+                // the Lasso tool keeps "Lasso".
+                let tool_step = match d.tool {
+                    Tool::Patch => Some("Patch Tool"),
+                    Tool::ContentAwareMove => Some("Content-Aware Move Tool"),
+                    _ => None,
+                };
+                if let Some(name) = tool_step {
+                    params["historyName"] = json!(name);
                 }
                 let made = app.run("select.lasso", params);
                 // The lasso only outlines the patch; say that it is dragged next (#1715).

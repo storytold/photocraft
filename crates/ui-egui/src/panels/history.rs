@@ -196,8 +196,8 @@ pub(crate) fn step_icon(step: &str) -> &'static str {
         "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
         s if s.contains("Layer") => "layers",
         s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
-        // The selections the Patch tool draws (select.lasso's historyName).
-        "Patch Tool" => "square-dashed",
+        // The selections the Patch and Content-Aware Move tools draw (select.lasso's historyName).
+        "Patch Tool" | "Content-Aware Move Tool" => "square-dashed",
         s if s.contains("Fill") => "paint-bucket",
         "Open" => "image",
         _ => "sliders-horizontal",
