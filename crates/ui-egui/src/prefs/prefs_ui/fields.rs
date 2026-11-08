@@ -151,26 +151,27 @@ pub(super) fn color_of(s: &str) -> Color32 {
 /// Search the same visible, editable preference labels used in the dialog.
 pub(super) fn preference_matches(section: &str, key: &str, query: &str) -> bool {
     let label = humanize(key);
-    format!("{section}.{key}").to_lowercase().contains(query)
-        || label.to_lowercase().contains(query)
-        || tl!(&label).to_lowercase().contains(query)
+    let en = crate::i18n::Lang::EN;
+    en.contains_ignore_case(&format!("{section}.{key}"), query)
+        || en.contains_ignore_case(&label, query)
+        || crate::i18n::current().contains_ignore_case(tl!(&label), query)
         // The Tablet input row and its Pen Tablet note are the visible terms, not just the key.
-        || (cfg!(target_os = "windows") && section == "tools" && key == "tabletInput" && "windows ink pen tablet wintab tablet input".contains(query))
+        || (cfg!(target_os = "windows") && section == "tools" && key == "tabletInput" && en.contains_ignore_case("windows ink pen tablet wintab tablet input", query))
 }
 
 pub(super) fn preference_sections(values: &Value, search: &str) -> Vec<(&'static str, &'static str)> {
-    let query = search.trim().to_lowercase();
+    let query = search.trim();
     SECTIONS
         .iter()
         .copied()
         .filter(|(id, title)| {
             query.is_empty()
-                || title.to_lowercase().contains(&query)
-                || tl!(title).to_lowercase().contains(&query)
+                || crate::i18n::Lang::EN.contains_ignore_case(title, query)
+                || crate::i18n::current().contains_ignore_case(tl!(title), query)
                 || values
                     .get(*id)
                     .and_then(Value::as_object)
-                    .is_some_and(|fields| fields.keys().any(|key| !prefs::is_hidden(&format!("{id}.{key}")) && preference_matches(id, key, &query)))
+                    .is_some_and(|fields| fields.keys().any(|key| !prefs::is_hidden(&format!("{id}.{key}")) && preference_matches(id, key, query)))
         })
         .collect()
 }
@@ -237,8 +238,8 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
             let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
             ui.label(RichText::new(tl!(&title)).font(crate::theme::semibold(14.0)).color(t.text));
             let show_all = search.trim().is_empty()
-                || title.to_lowercase().contains(&search.trim().to_lowercase())
-                || tl!(&title).to_lowercase().contains(&search.trim().to_lowercase());
+                || crate::i18n::Lang::EN.contains_ignore_case(title, search.trim())
+                || lang.contains_ignore_case(tl!(&title), search.trim());
             let filter = if show_all { "" } else { search.trim() };
             ui.add_space(6.0);
             egui::ScrollArea::vertical().max_height(content_height - 30.0).id_salt("prefs-scroll").show(ui, |ui| {
@@ -404,23 +405,23 @@ pub(super) fn section_fields(
     system: Option<egui::Theme>,
     search: &str,
 ) {
-    let query = search.to_lowercase();
+    let query = search.trim();
     let mut keys: Vec<String> = order.iter().filter(|k| obj.contains_key(*k)).cloned().collect();
     keys.extend(obj.keys().filter(|k| !order.contains(k)).cloned());
     if section == "interface" {
-        interface_groups(ui, obj, &keys, lang, system, &query);
+        interface_groups(ui, obj, &keys, lang, system, query);
         return;
     }
-    if section == "performance" && (query.is_empty() || preference_matches(section, "renderingMode", &query)) {
+    if section == "performance" && (query.is_empty() || preference_matches(section, "renderingMode", query)) {
         rendering_mode_row(ui, obj);
     }
-    if section == "performance" && (query.is_empty() || preference_matches(section, "memoryUsageMb", &query)) {
+    if section == "performance" && (query.is_empty() || preference_matches(section, "memoryUsageMb", query)) {
         memory_usage_row(ui, obj);
     }
     // WinTab is an explicit Windows choice; Windows Ink stays the default everywhere else.
     if section == "tools"
         && cfg!(target_os = "windows")
-        && (query.is_empty() || preference_matches(section, "tabletInput", &query))
+        && (query.is_empty() || preference_matches(section, "tabletInput", query))
         && obj.contains_key("tabletInput")
     {
         let t = Tokens::get(ui.ctx());
@@ -440,7 +441,7 @@ pub(super) fn section_fields(
             );
         });
     }
-    keys.retain(|k| field_visible(section, obj, k, &query));
+    keys.retain(|k| field_visible(section, obj, k, query));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
 }
 
