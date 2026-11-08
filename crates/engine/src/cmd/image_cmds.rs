@@ -134,9 +134,21 @@ pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
     }
 }
 
-/// Scale every size and distance of a style by `k` (Image Size's Scale Styles, Layer Style ›
-/// Scale Effects, and previews that draw a style at a reduced resolution).
+/// Scale every size and distance of a style by `k` (Image Size's Scale Styles and Layer Style ›
+/// Scale Effects), with pattern scales kept within the dialog's 1..1000 %.
 pub fn scale_effects(fx: &mut Effects, k: f32) {
+    scale_effects_with(fx, k, true);
+}
+
+/// [`scale_effects`] for a preview that draws a style at a reduced resolution: pattern scales
+/// follow `k` exactly, so the preview matches the style it stands for (a 2 % pattern drawn at a
+/// quarter of the size is 0.5 %, not the dialog's 1 % minimum).
+pub fn scale_effects_preview(fx: &mut Effects, k: f32) {
+    scale_effects_with(fx, k, false);
+}
+
+fn scale_effects_with(fx: &mut Effects, k: f32, clamp: bool) {
+    let pattern = |scale: &mut f32| scale_pattern(scale, k, clamp);
     for e in &mut fx.items {
         match e {
             Effect::DropShadow(s) | Effect::InnerShadow(s) => {
@@ -152,19 +164,32 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
             Effect::BevelEmboss(b) => {
                 b.size *= k;
                 b.soften *= k;
+                if let Some(t) = &mut b.texture {
+                    pattern(&mut t.scale);
+                }
             }
-            Effect::PatternOverlay { scale, .. } => *scale *= k,
+            Effect::PatternOverlay { scale, .. } => pattern(scale),
             Effect::GradientOverlay { .. } | Effect::ColorOverlay { .. } => {}
         }
         if let Effect::Stroke(s) = e
             && let FxPaint::Pattern { scale, .. } = &mut s.paint
         {
-            *scale *= k;
+            pattern(scale);
         }
     }
     // Effects changed: the preserved PSD block no longer applies.
     if k != 1.0 {
         fx.psd_raw = None;
+    }
+}
+
+/// Scale a style's pattern scale; with `clamp`, kept within the 1..1000 % the Layer Style dialog
+/// and the reference application allow (a 10 % pattern reduced to 5 % stays at 1 %).
+fn scale_pattern(scale: &mut f32, k: f32, clamp: bool) {
+    let (min, max) = photocraft_doc::effects::PATTERN_SCALE_RANGE;
+    let v = *scale * k;
+    if !v.is_nan() {
+        *scale = if clamp { v.clamp(min, max) } else { v };
     }
 }
 
@@ -755,6 +780,7 @@ fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value>
     let unlock = !delete && !content_aware && !keep_background;
     // Values beyond i32 would wrap through the narrowing casts into a rectangle unrelated to
     // the numbers passed; reject them (see `commands::int_i32`).
+    let given = ["x", "y", "width", "height"].into_iter().any(|k| p.get(k).is_some_and(|v| !v.is_null()));
     let explicit = match (
         crate::commands::int_i32("image.crop", p, "x")?,
         crate::commands::int_i32("image.crop", p, "y")?,
@@ -774,6 +800,14 @@ fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value>
                     .ok_or_else(|| bad("image.crop", format!("`{ko}` + `{kl}` = {} is outside the 32-bit coordinate range", i64::from(o) + i64::from(len))))
             };
             Some(Rect::new(x, y, end(x, w, "x", "width")?, end(y, h, "y", "height")?))
+        }
+        // A rectangle that is passed but incomplete or empty is refused: falling back to the
+        // selection would crop somewhere the caller didn't ask for (#9279).
+        _ if given => {
+            return Err(bad(
+                "image.crop",
+                "`x`, `y`, `width` and `height` go together: pass all four as numbers of pixels, with `width` and `height` rounding to at least 1",
+            ));
         }
         _ => None,
     };
@@ -1206,7 +1240,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.crop",
             "Crop",
             ["Image"],
-            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; deleteCroppedPixels false: the pixels past the frame are kept and, unless contentAware, the Background becomes a normal layer, "Layer 0", so an extension is transparent on every layer (with contentAware the Background stays); contentAware: the Crop tool's Fill › Content-Aware Fill uses surrounding pixels to fill areas uncovered by a rotated or extending crop. The fill targets the Background, or the active pixel layer if there is no Background. With Delete Cropped Pixels on, it also targets a separate active pixel layer if it is visible and unlocked.)"##,
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (x/y/width/height, all four or none: without them the selection's bounds are cropped to; targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; deleteCroppedPixels false: the pixels past the frame are kept and, unless contentAware, the Background becomes a normal layer, "Layer 0", so an extension is transparent on every layer (with contentAware the Background stays); contentAware: the Crop tool's Fill › Content-Aware Fill uses surrounding pixels to fill areas uncovered by a rotated or extending crop. The fill targets the Background, or the active pixel layer if there is no Background. With Delete Cropped Pixels on, it also targets a separate active pixel layer if it is visible and unlocked.)"##,
             has_doc,
             crop
         ),
