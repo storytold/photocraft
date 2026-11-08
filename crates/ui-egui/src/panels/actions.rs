@@ -36,6 +36,16 @@ pub(crate) fn library_slots_changed(app: &mut PhotocraftApp) {
     app.ui.actions.collapsed_set_slots.clear();
 }
 
+/// Preserve selection and disclosure for the existing physical folders after inserting a row.
+pub(crate) fn library_slot_inserted(app: &mut PhotocraftApp, slot: usize) {
+    let ui = &mut app.ui.actions;
+    for existing in ui.selected_set_slot.iter_mut().chain(&mut ui.collapsed_set_slots) {
+        if *existing >= slot {
+            *existing = existing.saturating_add(1);
+        }
+    }
+}
+
 /// Which row is selected and which rows are expanded. The action list itself is
 /// [`photocraft_engine::Session::actions`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1753,7 +1763,7 @@ fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
         && let Some(set) = app.ui.actions.selected_set.clone()
     {
         let count = app.session.actions.list.len();
-        let result = app.run("actions.duplicate", json!({"set": set}))?;
+        let result = app.run("actions.duplicate", json!({"set": set, "setSlot": app.ui.actions.selected_set_slot}))?;
         if let (Some(at), Some(added)) = (result["index"].as_u64(), result["actions"].as_u64())
             && let (Ok(at), Ok(added)) = (usize::try_from(at), usize::try_from(added))
             && at <= count
@@ -1762,6 +1772,7 @@ fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
             app.ui.actions.expanded.splice(at..at, std::iter::repeat_n(false, added));
         }
         app.ui.actions.selected_set = result["set"].as_str().map(str::to_owned);
+        app.ui.actions.selected_set_slot = result["setSlot"].as_u64().and_then(|slot| usize::try_from(slot).ok());
         app.ui.actions.selected = None;
         app.ui.actions.selected_step = None;
         return Ok(result);

@@ -133,7 +133,9 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         if p.get("action").is_some() || p.get("step").is_some() {
             return Err(bad(cmd, "select a set or an action step, not both"));
         }
-        return duplicate_set(s, set.as_str().ok_or_else(|| bad(cmd, "set must be a name"))?);
+        let name = set.as_str().ok_or_else(|| bad(cmd, "set must be a name"))?;
+        let slot = set_slot(s, p, Some(name), cmd)?;
+        return duplicate_set(s, name, slot);
     }
     let idx = resolve(&s.actions.list, p, cmd)?;
     if let Some(step) = index(p, "step", cmd)? {
@@ -173,8 +175,8 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 
-/// Copy the named group represented by main, including a session-only empty New Set.
-fn duplicate_set(s: &mut Session, source: &str) -> Result<Value> {
+/// Copy a physical folder occurrence or the legacy named group, including empty folders.
+fn duplicate_set(s: &mut Session, source: &str, source_slot: Option<usize>) -> Result<Value> {
     let cmd = "actions.duplicate";
     if s.actions.recording.is_some() {
         return Err(bad(cmd, "stop recording before duplicating a set"));
@@ -184,32 +186,49 @@ fn duplicate_set(s: &mut Session, source: &str) -> Result<Value> {
         return Err(bad(cmd, "the selected set no longer exists"));
     }
     let name = crate::atn_cmds::UniqueNames::new(sets).claim(&format!("{source} copy"));
-    if let Some(first) = s.actions.list.iter().position(|action| action.set.as_deref() == Some(source)) {
-        let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|action| action.name.clone()));
-        let copies: Vec<_> = s
-            .actions
-            .list
-            .iter()
-            .filter(|action| action.set.as_deref() == Some(source))
-            .cloned()
-            .map(|mut action| {
-                action.name = names.claim(&format!("{} copy", action.name));
-                action.set = Some(name.clone());
-                action
-            })
-            .collect();
-        // Classic groups rows by name even when a set's actions are interleaved.
-        let at = first + s.actions.list[first..].iter().take_while(|action| action.set.as_deref() == Some(source)).count();
-        let count = copies.len();
+    let copy_slot = source_slot.map(|slot| slot + 1);
+    let belongs = |action: &crate::actions_cmds::Action| action.set.as_deref() == Some(source) && source_slot.is_none_or(|slot| action.set_slot == Some(slot));
+    let first = s.actions.list.iter().position(belongs);
+    // The panel groups a folder's actions even when they are interleaved in the underlying list.
+    let at = first.map(|first| first + s.actions.list[first..].iter().take_while(|action| belongs(action)).count());
+    let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|action| action.name.clone()));
+    let copies: Vec<_> = s
+        .actions
+        .list
+        .iter()
+        .filter(|action| belongs(action))
+        .cloned()
+        .map(|mut action| {
+            action.name = names.claim(&format!("{} copy", action.name));
+            action.set = Some(name.clone());
+            action.set_slot = copy_slot;
+            action
+        })
+        .collect();
+    let count = copies.len();
+    let mut result = json!({"set": name, "actions": count});
+    if let Some(slot) = copy_slot {
+        let old_len = s.actions.set_rows.len();
+        s.actions.set_rows.insert(slot, name);
+        for action in &mut s.actions.list {
+            if let Some(row) = &mut action.set_slot
+                && (slot..old_len).contains(row)
+            {
+                *row += 1;
+            }
+        }
+        result["setSlot"] = json!(slot);
+    } else if at.is_none() {
+        let at = s.actions.sets.iter().position(|set| set == source).ok_or_else(|| bad(cmd, "the selected set no longer exists"))? + 1;
+        s.actions.sets.insert(at, name);
+    }
+    if let Some(at) = at {
         s.actions.list.splice(at..at, copies);
         crate::actions_cmds::shift_action_calls(&mut s.actions.list, at, count);
-        s.actions.touch();
-        return Ok(json!({"set": name, "index": at, "actions": count}));
+        result["index"] = json!(at);
     }
-    let at = s.actions.sets.iter().position(|set| set == source).ok_or_else(|| bad(cmd, "the selected set no longer exists"))? + 1;
-    s.actions.sets.insert(at, name.clone());
     s.actions.touch();
-    Ok(json!({"set": name, "actions": 0}))
+    Ok(result)
 }
 
 /// The panel's dialog toggle column. With `step`, switch one step's dialog on or off; without
@@ -506,7 +525,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Duplicate Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index,"step":index?} or {"set":name} → {action?,index?,step?,steps?,set?,actions?}. Copy an action, step or named set below the source. Copies retain settings and flags, and leave shortcuts with the originals."##,
+            params: r##"{"action":name|index,"step":index?} or {"set":name,"setSlot":index?} → {action?,index?,step?,steps?,set?,setSlot?,actions?}. Copy an action, step or set below the source. Copies retain settings and flags, and leave shortcuts with the originals."##,
             enabled: always,
             run: duplicate,
             journal: false,

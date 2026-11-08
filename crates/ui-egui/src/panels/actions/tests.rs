@@ -55,6 +55,49 @@ fn repeated_factory_rows_select_and_play_independently() {
 }
 
 #[test]
+fn duplicate_selected_physical_folder_keeps_occurrences_and_shortcuts() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.actions.set_rows = ["Same", "Same", "Same", "Later"].map(str::to_owned).to_vec();
+    app.session.actions.list = [("First", "Same", 0), ("Chosen", "Same", 1), ("Later action", "Later", 3)]
+        .into_iter()
+        .map(|(name, set, slot)| Action { set: Some(set.into()), set_slot: Some(slot), ..Action::new(name, Vec::new()) })
+        .collect();
+    app.session.edit_prefs(|prefs| {
+        prefs.shortcuts.insert("actions.play:Chosen".into(), "F2".into());
+    });
+    app.ui.actions.selected_set = Some("Same".into());
+    app.ui.actions.selected_set_slot = Some(1);
+    app.ui.actions.expanded = vec![true, true, true];
+    app.ui.actions.collapsed_set_slots = vec![1, 3];
+
+    let copied = duplicate_selection(&mut app).unwrap();
+    assert_eq!(copied, json!({"set": "Same copy", "setSlot": 2, "index": 2, "actions": 1}));
+    assert_eq!(app.session.actions.set_rows, ["Same", "Same", "Same copy", "Same", "Later"]);
+    assert_eq!(app.ui.actions.selected_set.as_deref(), Some("Same copy"));
+    assert_eq!(app.ui.actions.selected_set_slot, Some(2));
+    assert_eq!(selected_set_actions(&app), [2]);
+    assert_eq!(app.ui.actions.collapsed_set_slots, [1, 4]);
+    assert_eq!(app.ui.actions.expanded, [true, true, false, true]);
+    assert_eq!(
+        app.session.actions.list.iter().map(|a| (a.name.as_str(), a.set_slot)).collect::<Vec<_>>(),
+        [("First", Some(0)), ("Chosen", Some(1)), ("Chosen copy", Some(2)), ("Later action", Some(4))]
+    );
+    assert_eq!(app.session.prefs().shortcuts["actions.play:Chosen"], "F2");
+    assert!(!app.session.prefs().shortcuts.contains_key("actions.play:Chosen copy"));
+
+    app.ui.actions.selected_set = Some("Same".into());
+    app.ui.actions.selected_set_slot = Some(3);
+    let copied = duplicate_selection(&mut app).unwrap();
+    assert_eq!(copied, json!({"set": "Same copy 2", "setSlot": 4, "actions": 0}));
+    assert_eq!(app.session.actions.set_rows, ["Same", "Same", "Same copy", "Same", "Same copy 2", "Later"]);
+    assert_eq!(app.ui.actions.selected_set.as_deref(), Some("Same copy 2"));
+    assert_eq!(app.ui.actions.selected_set_slot, Some(4));
+    assert!(selected_set_actions(&app).is_empty());
+    assert_eq!(app.ui.actions.collapsed_set_slots, [1, 5]);
+    assert_eq!(app.session.actions.list[3].set_slot, Some(5));
+}
+
+#[test]
 fn replace_picker_holds_validated_bytes_until_confirmed() {
     use crate::file_dialog::{FileDialogAnswer, fake};
     let bytes = action_set_bytes("Replacement", "Invert");
