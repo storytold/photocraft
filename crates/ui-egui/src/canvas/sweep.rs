@@ -130,23 +130,8 @@ pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas
                 app.perf.gpu_uploads = r.uploads;
             }
         }
-        match (r.kind, &r.fallback) {
-            ("gpu-rect" | "rect", None) => {}
-            // The texture had to be made again: that refresh drew everything.
-            ("gpu-full", None) => {
-                if let Some(s) = app.canvas_states.get_mut(&doc.id) {
-                    s.pending.clear();
-                }
-                return Step::Done;
-            }
-            _ => {
-                log::info!("canvas: redrawing in blocks stopped ({}); redrawing in one go", r.kind);
-                if let Some(s) = app.canvas_states.get_mut(&doc.id) {
-                    s.pending.clear();
-                    s.failed = true;
-                }
-                return Step::Failed;
-            }
+        if let Some(end) = after_block(app, doc.id, r.kind, r.fallback.is_some()) {
+            return end;
         }
         if !running(app, doc.id) {
             return Step::Done;
@@ -154,6 +139,30 @@ pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas
         if crate::gpu_canvas::now_ms() - started >= FRAME_BUDGET_MS {
             ctx.request_repaint();
             return Step::Continuing;
+        }
+    }
+}
+
+/// What a block's refresh (`kind`, and whether the CPU stepped in) means for the sweep: `None`,
+/// carry on; `Done`, that refresh drew everything (the texture had to be made again); `Failed`,
+/// it didn't redraw on the GPU, so the sweep is dropped and the document redraws in one go until
+/// a full refresh lands ([`full_refresh_landed`]).
+fn after_block(app: &mut PhotocraftApp, doc: DocId, kind: &str, fallback: bool) -> Option<Step> {
+    match (kind, fallback) {
+        ("gpu-rect" | "rect", false) => None,
+        ("gpu-full", false) => {
+            if let Some(s) = app.canvas_states.get_mut(&doc) {
+                s.pending.clear();
+            }
+            Some(Step::Done)
+        }
+        _ => {
+            log::info!("canvas: redrawing in blocks stopped ({kind}); redrawing in one go");
+            if let Some(s) = app.canvas_states.get_mut(&doc) {
+                s.pending.clear();
+                s.failed = true;
+            }
+            Some(Step::Failed)
         }
     }
 }
@@ -216,5 +225,72 @@ mod tests {
         }
         let covered = a.iter().fold(Rect::EMPTY, |u, r| if u.is_empty() { *r } else { u.union(r) });
         assert!(covered.contains(100, 100) && covered.contains(2_999, 1_499), "the region is covered: {covered:?}");
+    }
+
+    fn app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = true;
+        app
+    }
+
+    fn doc(w: u32, h: u32) -> Arc<Document> {
+        Arc::new(Document::new("t", photocraft_geom::Size::new(w, h), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8))
+    }
+
+    #[test]
+    fn only_large_canvases_with_background_jobs_and_no_failed_sweep_are_eligible() {
+        let mut app = app();
+        let big = doc(8192, 8192);
+        assert!(eligible(&app, &big), "64 MP with background jobs");
+        assert!(!eligible(&app, &doc(8192, 8191)), "under SWEEP_MIN_PX");
+        app.background_jobs = false;
+        assert!(!eligible(&app, &big), "no background jobs (web, tests)");
+        app.background_jobs = true;
+        app.canvas_states.entry(big.id).or_default().failed = true;
+        assert!(!eligible(&app, &big), "a failed sweep");
+    }
+
+    #[test]
+    fn a_block_off_the_gpu_fails_the_sweep_until_a_full_refresh_lands() {
+        let mut app = app();
+        let big = doc(8192, 8192);
+        start(&mut app, &big, big.bounds());
+        assert_eq!(after_block(&mut app, big.id, "gpu-rect", false), None, "a GPU block carries on");
+        assert_eq!(after_block(&mut app, big.id, "rect", false), None, "nothing to draw carries on");
+        assert_eq!(after_block(&mut app, big.id, "rect", true), Some(Step::Failed), "the CPU stepped in");
+        assert!(!running(&app, big.id), "the rest of the sweep is dropped");
+        assert!(!eligible(&app, &big), "and the document redraws in one go");
+        start(&mut app, &big, big.bounds());
+        full_refresh_landed(&mut app, big.id);
+        assert!(eligible(&app, &big) && !running(&app, big.id), "a full refresh clears it");
+        start(&mut app, &big, big.bounds());
+        assert_eq!(after_block(&mut app, big.id, "gpu-full", false), Some(Step::Done), "a texture made again drew everything");
+        assert!(!running(&app, big.id));
+    }
+
+    #[test]
+    fn adding_a_region_twice_queues_its_blocks_once_and_first() {
+        let mut app = app();
+        let big = doc(10_000, 10_000);
+        let region = Rect::new(100, 100, 5_000, 3_000);
+        add(&mut app, &big, Rect::new(6_000, 6_000, 9_000, 9_000), big.bounds());
+        add(&mut app, &big, region, big.bounds());
+        let once = app.canvas_states[&big.id].pending.clone();
+        add(&mut app, &big, region, big.bounds());
+        let twice = &app.canvas_states[&big.id].pending;
+        assert_eq!(twice.len(), once.len(), "no duplicates");
+        let set = |v: &[Rect]| v.iter().map(|r| (r.x0, r.y0)).collect::<std::collections::HashSet<_>>();
+        assert_eq!(set(twice), set(&once));
+        let last = *twice.last().unwrap();
+        assert!(!last.intersect(&region).is_empty(), "the region is drawn first: {last:?}");
+    }
+
+    #[test]
+    fn a_comparison_needs_the_same_display() {
+        let mut app = app();
+        let big = doc(8192, 8192);
+        shown(&mut app, &big, 1);
+        assert_eq!(changed_since_shown(&app, &big, 2), None, "another display key: nothing to compare");
+        assert_eq!(changed_since_shown(&app, &doc(8192, 8192), 1), None, "another document: nothing shown");
     }
 }
