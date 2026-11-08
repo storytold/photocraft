@@ -126,6 +126,20 @@ pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
 }
 
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
+/// The Healing Brush's alert for a stroke with no source point yet: a modal with OK, once even
+/// if more than one stroke asks while it is up.
+fn no_source_alert(app: &mut PhotocraftApp) {
+    let message = if cfg!(target_os = "macos") {
+        tl!("Option-click to define a source point to be used to repair the image.")
+    } else {
+        tl!("Alt-click to define a source point to be used to repair the image.")
+    };
+    let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(message));
+    if !shown {
+        app.ui.open_dialog(crate::state::DialogKind::Error, serde_json::Map::from_iter([("message".to_string(), json!(message))]));
+    }
+}
+
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
@@ -143,6 +157,11 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
         Tool::PatternStamp => ("paint.patternStamp", pattern_stamp_params(app, points)),
         Tool::Healing | Tool::CloneStamp => {
             let Some(p) = clone_params(app) else {
+                if tool == Tool::Healing {
+                    // The Healing Brush says it in an alert, in its own words (#12109).
+                    no_source_alert(app);
+                    return true;
+                }
                 // Option-click on the Mac, Alt-click on Windows.
                 app.ui.status = if cfg!(target_os = "macos") {
                     tl!("Option-click to define a source point to clone from")
@@ -800,3 +819,7 @@ fn pattern_stamp_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../healing_no_source_alert_tests.rs"]
+mod healing_no_source_alert_tests;
