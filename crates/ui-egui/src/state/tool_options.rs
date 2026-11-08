@@ -74,7 +74,9 @@ pub struct ToolOptions {
     pub cam_mode: String,
     pub cam_structure: f32,
     pub cam_color: f32,
-    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch).
+    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch). On by
+    /// default (#12185); a saved `false` stays off.
+    #[serde(default = "yes")]
     pub cam_transform_on_drop: bool,
     /// Dodge/Burn: shadows | midtones | highlights, exposure %, protect tones.
     pub tone_range: String,
@@ -465,7 +467,7 @@ impl Default for ToolOptions {
             cam_mode: "move".into(),
             cam_structure: 4.0,
             cam_color: 0.0,
-            cam_transform_on_drop: false,
+            cam_transform_on_drop: true,
             tone_range: "midtones".into(),
             exposure: 50.0,
             protect_tones: true,
@@ -555,3 +557,7 @@ impl Default for ToolOptions {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../cam_transform_on_drop_default_tests.rs"]
+mod cam_transform_on_drop_default_tests;
