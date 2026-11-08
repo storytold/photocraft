@@ -16,8 +16,15 @@ use crate::retouch::{Footprint, Region, alpha_index, apply_dab_stroke};
 #[serde(default, rename_all = "camelCase")]
 pub struct BgEraseSettings {
     pub sampling: Sampling,
+    /// Which matching pixels are erased. [`Limits::FindEdges`] grades the erase over the Tolerance
+    /// like [`Limits::Contiguous`] in this tool (#11904), unlike Color Replacement, where it turns
+    /// the soft falloff off.
     pub limits: Limits,
-    /// 0..1: largest per-channel difference from the sampled colour that is erased.
+    /// 0..1: how far from the sampled colour a colour is still partly erased. The distance is the
+    /// largest increase plus the largest decrease over the colour channels (`dist`); an exact
+    /// match is erased fully, then less the further a colour is, and colours at or beyond the
+    /// Tolerance are kept (`graded_weight`). Protect Foreground Color still compares the
+    /// foreground by the largest per-channel difference (`max_channel_dist`).
     pub tolerance: f32,
     /// Keep pixels that match the foreground colour.
     pub protect_foreground: bool,
@@ -40,9 +47,37 @@ impl Default for BgEraseSettings {
     }
 }
 
-/// Largest per-channel difference over the colour channels.
+/// Colour distance of `a` from `b` over the colour channels: the largest increase plus the largest
+/// decrease (#11901). Changes in the same direction count like the largest of them; changes in
+/// opposite directions add up, as the reference application measures them (a red-to-green edge is
+/// about twice as far as one channel alone). One channel (Gray) gives the absolute difference.
 fn dist(a: &[f32], b: &[f32]) -> f32 {
+    let (up, down) = a.iter().zip(b).fold((0.0f32, 0.0f32), |(up, down), (x, y)| {
+        let diff = x - y;
+        (up.max(diff), down.max(-diff))
+    });
+    up + down
+}
+
+/// The largest per-channel difference of `a` from `b`: the distance Protect Foreground Color keeps
+/// using (#11901 measured only the sample match; #11903 keeps today's measure for the foreground).
+fn max_channel_dist(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+}
+
+/// The match weight of one dab for a colour `d` away from the sampled colour (#11901): an exact
+/// match is erased fully, then the weight falls off linearly over the whole Tolerance `tol` after
+/// a short plateau `d0 = min(tol / 20, 8 levels)`, and colours at or beyond the Tolerance are kept.
+/// Measured in the reference application with single clicks (one dab) at Tolerance 10 to 100.
+fn graded_weight(d: f32, tol: f32) -> f32 {
+    if !d.is_finite() || d >= tol {
+        return if d <= 0.0 { 1.0 } else { 0.0 };
+    }
+    let d0 = (tol / 20.0).min(8.0 / 255.0);
+    if d <= d0 {
+        return 1.0;
+    }
+    (1.0 - (d - d0) / (tol - d0)).clamp(0.0, 1.0)
 }
 
 /// Erase along `stroke`. The brush opacity is ignored (Photoshop's Background Eraser has none);
@@ -70,22 +105,14 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
     let a = alpha_index(&fmt)?;
     let nc = a;
     let tol = if bs.tolerance.is_finite() { bs.tolerance.clamp(0.0, 1.0) } else { 0.0 };
-    let soft = bs.limits != Limits::FindEdges;
     let native = |c: [f32; 4]| -> Vec<f32> { from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec() };
     let swatch = native(bs.background);
     let fg = native(bs.foreground);
     let (sampling, limits, protect_foreground) = (bs.sampling, bs.limits, bs.protect_foreground);
     let mut once: Option<Option<Vec<f32>>> = None;
-    let match_w = move |d: f32| -> f32 {
-        if d > tol {
-            0.0
-        } else if soft && tol > 0.0 {
-            // Soft falloff over the last quarter of the tolerance.
-            ((tol - d) / (tol * 0.25)).clamp(0.0, 1.0)
-        } else {
-            1.0
-        }
-    };
+    // Find Edges grades soft edges like Contiguous does instead of cutting them hard (#11904):
+    // the reference application keeps at least as much of a blurred transition with it.
+    let match_w = move |d: f32| -> f32 { graded_weight(d, tol) };
     let pre = pre.clone();
     // The pixels before the stroke under the working copy, read once per working area. Sampling
     // and matching read these, so a dab landing on pixels earlier dabs already erased still
@@ -130,7 +157,7 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
                     continue;
                 }
                 let c = &p[..nc];
-                if protect_foreground && dist(c, &fg) <= tol {
+                if protect_foreground && max_channel_dist(c, &fg) <= tol {
                     continue;
                 }
                 weight[(y - r.y0) as usize * w + (x - r.x0) as usize] = match_w(dist(c, &sampled));
@@ -190,6 +217,14 @@ fn keep_connected(weight: &mut [f32], w: usize, h: usize, sx: usize, sy: usize) 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bg_erase_graded_alpha_tests.rs"]
+mod graded_alpha_tests;
+
+#[cfg(test)]
+#[path = "bg_erase_find_edges_tests.rs"]
+mod find_edges_tests;
 
 #[cfg(test)]
 mod tests {

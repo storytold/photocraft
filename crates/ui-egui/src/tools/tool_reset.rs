@@ -262,11 +262,11 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
             reset!(shape_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
         }
+        Tool::MixerBrush => reset!(mixer_combination),
         Tool::ColorSampler
         | Tool::Ruler
         | Tool::Note
         | Tool::Count
-        | Tool::MixerBrush
         | Tool::Hand
         | Tool::RotateView
         | Tool::HistoryBrush

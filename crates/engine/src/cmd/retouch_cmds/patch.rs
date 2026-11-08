@@ -23,6 +23,8 @@ use super::{
 };
 
 const CMD: &str = "paint.patch";
+/// The History step of applying a patch, in every mode.
+const HISTORY_NAME: &str = "Patch Selection";
 
 /// Largest patch, in pixels of the selection's bounding box. The solve holds the two regions, the
 /// result and per-channel float planes of it (on the order of 150 bytes per pixel with four
@@ -151,7 +153,6 @@ struct Plan {
     /// Shift of the repaired area from the selection, and of the texture from the repaired area.
     dst_shift: (i32, i32),
     src_shift: (i32, i32),
-    destination: bool,
     offset: (i32, i32),
 }
 
@@ -185,7 +186,7 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
         PatchMode::Source => ((0, 0), (dx, dy)),
         PatchMode::Destination => ((dx, dy), (-dx, -dy)),
     };
-    Ok(Plan { id, canvas, area, dst_shift, src_shift, destination: mode == PatchMode::Destination, offset: (dx, dy) })
+    Ok(Plan { id, canvas, area, dst_shift, src_shift, offset: (dx, dy) })
 }
 
 /// Heal `surf` at the selection (shifted by `dst_shift`) with texture read `src_shift` away, the
@@ -216,7 +217,7 @@ pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
         return patch_content_aware(s, p);
     }
     let plan = plan(s, p)?;
-    let label = if plan.destination { "Patch (Destination)" } else { "Patch" };
+    let label = HISTORY_NAME;
     let dmg = run_stroke(s, label, plan.id, p, |pre, surf, _, lock| {
         let sel = pre.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
         Ok(patch_surface(surf, sel, &plan, lock, 1))
@@ -263,6 +264,7 @@ fn level(p: &Value, k: &str, default: u8, lo: u8, hi: u8) -> Result<u8> {
 /// docs), as a background job.
 fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
     use super::content_aware_move::{Target, land, mask, read, window};
+    // The job's progress text; its History step is `HISTORY_NAME`.
     const LABEL: &str = "Patch (Content-Aware)";
     let plan = plan(s, p)?;
     let structure = level(p, "structure", 4, 1, 7)?;
@@ -294,7 +296,7 @@ fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
             }
         },
         move |s, (surf, damage)| {
-            s.edit(LABEL, |doc, _| {
+            s.edit(HISTORY_NAME, |doc, _| {
                 *crate::channel_cmds::target_surface(doc, target.id, &p)?.0 = surf;
                 Ok(())
             })?;

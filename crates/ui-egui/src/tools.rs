@@ -5,6 +5,7 @@ pub mod artboard_tool;
 pub mod bg_eraser_popup;
 pub(crate) mod brush_cursor;
 pub mod brush_picker;
+pub mod brush_refusal;
 pub mod brush_resize;
 pub(super) mod cam_transform;
 pub mod cas_transform;
