@@ -28,13 +28,16 @@ mod count_readout_tests;
 
 /// The Count tool options bar's number (#11764): with one group (or none), its markers; with two
 /// or more, the markers of the visible groups, then the current group's in brackets (0 while it
-/// is hidden), as "5 (2)".
+/// is hidden), as "5 (2)". The single-group case counts a hidden group too (not measured, so it
+/// keeps the old total). An out-of-range current index means the last group, as in the Group
+/// dropdown and `count.add`.
 pub(crate) fn count_readout(m: &photocraft_doc::analysis::Measurement) -> String {
     if m.count_groups.len() < 2 {
         return m.count_total().to_string();
     }
     let visible: usize = m.count_groups.iter().filter(|g| g.visible).map(|g| g.points.len()).sum();
-    let current = m.count_groups.get(m.active_count_group).filter(|g| g.visible).map_or(0, |g| g.points.len());
+    let gi = m.active_count_group.min(m.count_groups.len().saturating_sub(1));
+    let current = m.count_groups.get(gi).filter(|g| g.visible).map_or(0, |g| g.points.len());
     format!("{visible} ({current})")
 }
 

@@ -40,3 +40,22 @@ fn two_groups_read_the_visible_total_and_the_current_group() {
     // count_total() keeps its meaning: every group.
     assert_eq!(s.active().unwrap().doc.measurement.count_total(), 5);
 }
+
+#[test]
+fn hiding_another_group_or_switching_the_current_one() {
+    let mut s = session(&[3, 2]);
+    s.execute("count.setGroup", json!({"group": 0, "visible": false})).unwrap();
+    assert_eq!(readout(&s), "2 (2)", "a hidden other group leaves the total only");
+    s.execute("count.setGroup", json!({"group": 0, "visible": true, "active": true})).unwrap();
+    assert_eq!(readout(&s), "5 (3)");
+    assert_eq!(readout(&session(&[3, 2, 4])), "9 (4)");
+    assert_eq!(readout(&session(&[0, 0])), "0 (0)");
+}
+
+#[test]
+fn an_out_of_range_current_group_reads_the_last_one() {
+    // The Group dropdown and `count.add` treat a stale index as the last group; the readout too.
+    let mut m = session(&[3, 2]).active().unwrap().doc.measurement.clone();
+    m.active_count_group = 9;
+    assert_eq!(count_readout(&m), "5 (2)");
+}
