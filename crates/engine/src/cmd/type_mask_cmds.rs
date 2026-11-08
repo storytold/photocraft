@@ -39,38 +39,28 @@ fn antialias(p: &Value) -> Result<Option<AntiAlias>> {
     })
 }
 
-/// Glyph coverage of `t` (0..=1 per pixel) over its rendered bounds inside the canvas. The text
-/// colour's own alpha doesn't thin the selection: every run renders opaque.
-fn coverage(doc: &Document, t: &TextLayer) -> (Vec<f32>, Rect) {
+/// Glyph coverage of `t` (0..=1 per pixel) over its rendered bounds, past the canvas edge too: the
+/// reference application keeps a Type Mask's off-canvas part (#12074). The text colour's own alpha
+/// doesn't thin the selection: every run renders opaque.
+fn coverage(doc: &Document, t: &TextLayer) -> Result<(Vec<f32>, Rect)> {
     let mut t = t.clone();
     for r in &mut t.runs {
         r.style.color.alpha = 1.0;
     }
     let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let surface = eng.render(&t, doc.resolution_dpi, doc.pixel_format()).1.surface;
-    let area = surface.content_bounds().intersect(&doc.bounds());
+    let area = surface.content_bounds();
     if area.is_empty() {
-        return (Vec::new(), Rect::EMPTY);
+        return Ok((Vec::new(), Rect::EMPTY));
     }
-    let mut px = vec![[0.0f32; 4]; area.width() as usize * area.height() as usize];
+    // No longer bounded by the canvas: a very large text must fail as an error, not abort.
+    const PURPOSE: &str = "the Type Mask selection";
+    let len = (area.width() as usize).checked_mul(area.height() as usize).ok_or_else(|| crate::allocation::error(PURPOSE, "requested size overflowed"))?;
+    let mut px = crate::allocation::filled(len, [0.0f32; 4], PURPOSE)?;
     surface.read_rgba_into(area, &mut px);
-    (px.iter().map(|p| p[3]).collect(), area)
-}
-
-/// Coverage of `area`'s mask spread over `to` (which contains `area`), zero elsewhere.
-fn widen(m: &[f32], area: Rect, to: Rect) -> Vec<f32> {
-    if area == to {
-        return m.to_vec();
-    }
-    let (w, aw) = (to.width() as usize, area.width() as usize);
-    let mut out = vec![0.0; w * to.height() as usize];
-    for (y, row) in m.chunks_exact(aw.max(1)).enumerate() {
-        let start = (area.y0 - to.y0) as usize * w + y * w + (area.x0 - to.x0) as usize;
-        if let Some(dst) = out.get_mut(start..start + aw) {
-            dst.copy_from_slice(row);
-        }
-    }
-    out
+    let mut alpha = crate::allocation::capacity(len, PURPOSE)?;
+    alpha.extend(px.iter().map(|p| p[3]));
+    Ok((alpha, area))
 }
 
 fn create_selection(s: &mut Session, p: &Value) -> Result<Value> {
@@ -101,21 +91,11 @@ fn create_selection(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(aa) = aa {
         t.antialias = aa;
     }
-    let (mask, text_area) = coverage(&doc, &t);
+    let (mask, text_area) = coverage(&doc, &t)?;
     let selected = s.edit("Type Mask", |doc, active| {
-        let old = doc.selection.as_ref().map(|o| o.content_bounds().intersect(&doc.bounds())).unwrap_or(Rect::EMPTY);
-        // Replace and Intersect leave nothing outside the text; Add and Subtract keep the rest.
-        let area = match mode {
-            SelectionMode::Add | SelectionMode::Subtract if !old.is_empty() => {
-                if text_area.is_empty() {
-                    old
-                } else {
-                    old.union(&text_area)
-                }
-            }
-            _ => text_area,
-        };
-        doc.selection = if area.is_empty() { None } else { sel::combine(doc.selection.as_ref(), &widen(&mask, text_area, area), area, mode) };
+        // Replace and Intersect leave nothing outside the text; Add and Subtract keep the rest of
+        // the selection as it is, its part past the canvas too, without a buffer spanning both.
+        doc.selection = sel::combine_band(doc.selection.as_ref(), &mask, text_area, mode);
         if let (true, Some(id)) = (remove, layer) {
             let neighbours = crate::layer_multi_cmds::deletion_neighbours(doc, id);
             doc.remove(id).ok_or(EngineError::NoLayer(id))?;
@@ -147,6 +127,10 @@ pub fn specs() -> Vec<CommandSpec> {
         run: create_selection,
     }]
 }
+
+#[cfg(test)]
+#[path = "type_mask_off_canvas_tests.rs"]
+mod off_canvas_tests;
 
 #[cfg(test)]
 mod tests {
