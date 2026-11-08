@@ -1,4 +1,6 @@
-use super::brush_controls::{brush_preset_chip, mixer_load_swatch, paint_mode_dropdown, smoothing_field, smoothing_options, tool_mode_dropdown};
+use super::brush_controls::{
+    brush_preset_chip, mixer_combination_dropdown, mixer_load_swatch, paint_mode_dropdown, smoothing_field, smoothing_options, tool_mode_dropdown,
+};
 use super::properties::{select_and_mask_button, selection_mode_buttons};
 use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Value, icons, json, starts_blend_group, vec2, widgets};
 use photocraft_paint::BrushSettings;
@@ -278,6 +280,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 if icons::button(ui, icon, 24.0, *on, tip).clicked() {
                     *on = !*on;
                 }
+            }
+            if let Some(r) = mixer_combination_dropdown(ui, &mut app.ui.tool_options.mixer_combination, &mut b.mixer) {
+                r.on_hover_text(tl!("Useful mixer brush combinations"));
             }
             widgets::vline(ui, 22.0);
             for (label, value) in
