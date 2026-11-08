@@ -326,6 +326,10 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied } = held;
     // A raw opens in the Camera Raw dialog first and becomes a document only on its Open.
     if crate::camera_raw_ui::wants_open_dialog(app, &warnings) {
+        // The Color Settings policy applies now, as to any open, so the dialog previews the
+        // pixels Open keeps.
+        let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
+        app.session.color.open_policy(&mut doc, ignore_exif);
         crate::camera_raw_ui::hold_for_dialog(app, doc, &name, path.as_deref(), bytes.as_deref().map(Vec::as_slice), &warnings)?;
         return Ok(json!({"cameraRaw": true, "name": name}));
     }

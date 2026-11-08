@@ -182,6 +182,18 @@ impl CameraRawDialog {
         if self.show_before { &self.before_histogram } else { &self.after_histogram }
     }
 
+    /// The pixels Auto reads: the default develop box-averaged to the preview's size, also when the
+    /// proxy is a raw's binned sensor data, so the dialog's Auto and Camera Raw Defaults' Auto for
+    /// a raw never shown read the same pixels.
+    pub(crate) fn auto_pixels(&self) -> std::borrow::Cow<'_, [[f32; 4]]> {
+        if !self.raw_proxy {
+            return std::borrow::Cow::Borrowed(self.proxy.as_slice());
+        }
+        let (surf, area) = self.detail.source();
+        let (w, h) = (area.width() as usize, area.height() as usize);
+        std::borrow::Cow::Owned(convert::box_proxy(surf, area, w, h).0)
+    }
+
     /// Params for the engine: only the settings that differ from the defaults.
     pub fn command_params(&self) -> Value {
         non_defaults(&self.params)

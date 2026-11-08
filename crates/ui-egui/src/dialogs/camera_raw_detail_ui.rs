@@ -68,6 +68,11 @@ impl DetailPreview {
         }
     }
 
+    /// The pixels refined and the area of them shown.
+    pub(crate) fn source(&self) -> (&Surface, PixelRect) {
+        (&self.source, self.area)
+    }
+
     pub(crate) fn pending(&self) -> bool {
         self.pending.is_some()
     }

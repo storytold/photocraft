@@ -172,15 +172,11 @@ fn raw_source(raw: &RawOpen, canvas: Rect, surf: &photocraft_raster::Surface) ->
     source.ok().map(std::sync::Arc::new)
 }
 
-/// Gives the open dialog its raw: the file name, and the camera tone curve it was developed with.
+/// Gives the open dialog its raw and its file name (the tone curve came with the raw source,
+/// before the first render).
 fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
-        // Without the sensor data, the preview retones the developed pixels with it.
-        let curve = d.raw_source.as_ref().map(|(s, _)| std::sync::Arc::new(s.tone_curve().to_vec()));
-        d.detail.raw_curve = curve.clone();
-        d.detail.raw = d.raw_source.clone();
-        d.raw_curve = curve;
         d.raw_open = Some(raw);
     }
 }
@@ -226,9 +222,10 @@ pub struct Redevelop {
     filter_step: bool,
     /// The Camera Raw Defaults the open started with, for the conversions after the filter step.
     defaults: photocraft_engine::prefs::RawDefaults,
-    /// The dialog's Open started this, from these settings: if the re-develop fails, the raw goes
-    /// back to the filmstrip to be tried again or cancelled.
-    back_to_filmstrip: Option<CameraRaw>,
+    /// The dialog's Open started this: its settings and the settings they started from. If the
+    /// re-develop or the Camera Raw step fails or is cancelled, the raw goes back to the
+    /// filmstrip with them (not a document), to be tried again or cancelled.
+    back_to_filmstrip: Option<(CameraRaw, CameraRaw)>,
 }
 
 /// The sliders a raw open applies while developing, before the tone curve (as Camera Raw does).
@@ -343,20 +340,39 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
     }
 }
 
-/// `reply` is [`commit_open_raw`]'s from the dialog's Open: if it started a background re-develop
-/// and that fails, the raw comes back to the filmstrip, its settings having started from `original`.
-pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, original: &CameraRaw) {
-    let job = reply.get("job").and_then(Value::as_u64);
-    if let Some(pending) = app.raw_redevelop.iter_mut().find(|r| Some(r.job.0) == job && !r.filter_step) {
-        pending.back_to_filmstrip = Some(original.clone());
+/// `reply` is [`commit_open_raw`]'s from the dialog's Open of `params`: if it started a background
+/// re-develop or Camera Raw step and that fails, the raw comes back to the filmstrip with
+/// `params`, which started from `original`.
+pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, params: &CameraRaw, original: &CameraRaw) {
+    let jobs = [reply.get("job"), reply.get("filter").and_then(|f| f.get("job"))];
+    for job in jobs.into_iter().flatten().filter_map(Value::as_u64) {
+        if let Some(pending) = app.raw_redevelop.iter_mut().find(|r| r.job.0 == job) {
+            pending.back_to_filmstrip = Some((params.clone(), original.clone()));
+        }
     }
 }
 
-/// A held raw becomes a document: `doc`, its default develop, opens in the session (the Color
-/// Settings policy applies, as to any open) and does what any open does afterwards. Returns its
+/// A held raw whose open failed after it became a document: the document closes again and the raw
+/// goes back to the filmstrip with `back`, its settings and what they started from.
+fn back_to_filmstrip(app: &mut PhotocraftApp, raw: RawOpen, document: Option<photocraft_doc::DocId>, back: (CameraRaw, CameraRaw)) {
+    if raw.held.is_none() {
+        return;
+    }
+    if let Some(index) = document.and_then(|id| document_index(app, id)) {
+        app.session.close(index);
+    }
+    let mut held = super::filmstrip::HeldRaw::new(app, raw);
+    held.kept = Some(back);
+    app.raw_shelf.push(held);
+    app.sync_views();
+}
+
+/// A held raw becomes a document: `doc`, its default develop, opens in the session and does what
+/// any open does afterwards. Returns its
 /// tab index.
 fn admit(app: &mut PhotocraftApp, raw: &RawOpen, doc: photocraft_doc::Document) -> Result<usize, String> {
-    let (index, _) = app.session.open_document(doc, None);
+    // The Color Settings policy was applied when it was held, so the dialog previewed these pixels.
+    let index = app.session.add_document(doc, None);
     let id = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened raw document is missing")?;
     app.session.set_active(index);
     after_admit(app, raw);
@@ -380,10 +396,11 @@ fn opened_event(app: &mut PhotocraftApp, raw: &RawOpen, index: usize) {
     if raw.held.is_none() {
         return;
     }
-    let active = app.session.active_index();
+    // The active document, by identity: the scripts may close or move tabs.
+    let active = app.session.active().map(|st| st.doc.id);
     app.session.set_active(index);
     photocraft_engine::automate_cmds::document_opened(&mut app.session);
-    if let Some(i) = active.filter(|i| *i < app.session.documents().len()) {
+    if let Some(i) = active.and_then(|id| document_index(app, id)) {
         app.session.set_active(i);
     }
     app.sync_views();
@@ -495,14 +512,15 @@ fn finish_open_raw(
         });
         let r = match step {
             Ok(r) => r,
-            // A held raw is a document now: it stays open, developed, and leaves the filmstrip;
-            // a retry would open it twice.
-            Err(e) if raw.held.is_some() => {
-                crate::notices::error(app, format!("{}: {e}", raw.name));
-                result["error"] = json!(e);
-                Value::Null
+            // A held raw just admitted closes again, so its settings stay in the filmstrip for
+            // another Open (which can't open it twice) or Cancel.
+            Err(e) => {
+                if raw.held.is_some() {
+                    app.session.close(index);
+                    app.sync_views();
+                }
+                return Err(e);
             }
-            Err(e) => return Err(e),
         };
         if r.get("pending").and_then(Value::as_bool) == Some(true)
             && let Some(job) = r.get("job").and_then(Value::as_u64)
@@ -595,6 +613,11 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
     if pending.filter_step {
         // The Camera Raw Defaults' conversions follow the Camera Raw step, whatever its outcome:
         // the document still opens in the workflow's colour space and depth.
+        let done = matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_));
+        if !done && let Some(back) = pending.back_to_filmstrip.clone() {
+            back_to_filmstrip(app, pending.raw, e.document, back);
+            return false;
+        }
         if let Some(index) = e.document.and_then(|id| document_index(app, id)) {
             let active = app.session.active_index();
             if let Err(err) = apply_raw_conversions(app, index, &pending.defaults) {
@@ -614,23 +637,29 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
     }
     match &e.outcome {
         photocraft_engine::jobs::JobOutcome::Done(v) => match finish_redevelop(app, &pending.params, &pending.raw, v, &pending.defaults) {
-            Ok(_) => {
+            Ok(r) => {
+                // A Camera Raw step that runs on: it returns the raw to the filmstrip if it fails.
+                if let Some(back) = &pending.back_to_filmstrip {
+                    return_on_failure(app, &r, &back.0, &back.1);
+                }
                 app.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", &pending.raw.name)]);
                 app.ui.status_error = false;
             }
-            Err(err) => crate::notices::error(app, format!("{}: {err}", e.label)),
+            Err(err) => {
+                // The re-developed document closed again (see `finish_open_raw`).
+                if let Some(back) = pending.back_to_filmstrip.clone() {
+                    back_to_filmstrip(app, pending.raw.clone(), None, back);
+                }
+                crate::notices::error(app, format!("{}: {err}", e.label));
+            }
         },
         photocraft_engine::jobs::JobOutcome::Failed(_) | photocraft_engine::jobs::JobOutcome::Cancelled => {
             // A raw from the dialog goes back to the filmstrip with its settings, which may have
             // no sidecar to keep them, still not a document (also when its develop was
             // cancelled: it was never opened); one already in the session stays open, developed
             // with the defaults.
-            if let Some(original) = pending.back_to_filmstrip
-                && raw_document(app, &pending.raw).is_some()
-            {
-                let mut held = super::filmstrip::HeldRaw::new(app, pending.raw);
-                held.kept = Some((pending.params, original));
-                app.raw_shelf.push(held);
+            if let Some(back) = pending.back_to_filmstrip {
+                back_to_filmstrip(app, pending.raw, None, back);
             }
             app.sync_views();
             match &e.outcome {

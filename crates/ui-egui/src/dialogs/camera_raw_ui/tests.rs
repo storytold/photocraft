@@ -1733,3 +1733,59 @@ fn auto_with_a_setting_keeps_the_setting_on_every_selected_raw() {
     assert_eq!(other.exposure, 0.7, "the explicit exposure wins over Auto's");
     assert_eq!((other.whites, other.blacks), (auto.whites, auto.blacks), "the rest is the raw's own Auto");
 }
+
+/// Auto reads the default develop at the preview's size, not the binned sensor proxy, so the
+/// dialog's Auto and Camera Raw Defaults' Auto for a raw Open develops unseen agree.
+#[test]
+fn auto_reads_the_default_develop_when_the_proxy_is_binned() {
+    let (mut app, _) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("bright.dng", &bright_raw()).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    assert!(app.camera_raw.as_ref().unwrap().raw_proxy);
+    let mut expected = CameraRaw::default();
+    {
+        let (surf, area) = app.camera_raw.as_ref().unwrap().detail.source();
+        let (w, h) = (area.width() as usize, area.height() as usize);
+        photocraft_algo::camera_raw::auto_tone(&super::convert::box_proxy(surf, area, w, h).0, &mut expected);
+    }
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true}})).unwrap().unwrap();
+    assert_eq!(r["params"]["exposure"].as_f64().map(|v| v as f32), Some(expected.exposure));
+    assert_eq!(r["params"]["whites"].as_f64().map(|v| v as f32), Some(expected.whites));
+}
+
+/// A held raw whose Camera Raw step is cancelled (or fails) after it became a document closes
+/// again and returns to the filmstrip with its settings: one document at most, never one opened
+/// without its settings.
+#[test]
+fn a_raw_whose_camera_raw_step_is_cancelled_goes_back_with_its_settings() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+    let before = session_state(&app);
+    app.open_bytes("one.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    // Contrast only: no re-develop, the Camera Raw step is the job.
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}}})).unwrap().unwrap();
+    app.background_jobs = true;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    if let Some(job) = r["filter"]["job"].as_u64() {
+        app.session.cancel_job(photocraft_engine::jobs::JobId(job));
+    }
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the job never finished");
+    match app.raw_shelf.first() {
+        Some(held) => {
+            assert_eq!(session_state(&app).0, before.0, "the admitted document closed again");
+            assert_eq!(held.kept.as_ref().map(|(p, _)| p.contrast), Some(40.0));
+        }
+        None => assert_eq!(app.session.documents().len(), 2, "opened with its step"),
+    }
+}

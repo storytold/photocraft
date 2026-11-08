@@ -490,6 +490,12 @@ fn a_raw_source_develops_as_open_does() {
     let small = RawSource::proxy_only(&bytes, 4).unwrap();
     assert!(small.develop_full(&RawTuning::default()).is_err(), "no whole frame kept");
     assert_eq!(small.develop_proxy(&RawTuning::default()).unwrap().rgb, source.develop_proxy(&RawTuning::default()).unwrap().rgb);
+    // A frame that can't be binned by the factor (smaller than a block here) is developed whole
+    // and box-averaged to the size the preview asks for.
+    let whole = RawSource::new(&bytes, 500).unwrap();
+    let small = whole.develop_proxy(&RawTuning { exposure: -1.0, ..Default::default() }).unwrap();
+    assert_eq!((small.width, small.height, small.rgb.len()), (1, 1, 3));
+    assert!(RawSource::proxy_only(&bytes, 500).unwrap().develop_proxy(&RawTuning::default()).is_ok(), "keeps the frame it develops");
 }
 
 #[test]
