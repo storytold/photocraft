@@ -80,6 +80,8 @@ use history::history;
 pub(crate) use history::select_snapshot;
 pub(crate) use history::selected_snapshot;
 #[cfg(test)]
+pub(crate) use history::step_icon as history_step_icon;
+#[cfg(test)]
 use info::info_panel;
 pub(crate) use info::{SamplerReadouts, sampler_readouts};
 #[cfg(test)]
@@ -104,6 +106,7 @@ use options_bar::options_bar_height;
 pub(crate) use options_bar::{FIXED_SIZE_MAX_PX, opt_label};
 pub use panel_state::{migrate_panel_state, panel_state_id, remember_panel_state};
 pub use properties::properties_window;
+pub(crate) use properties::selection_mode_buttons;
 #[cfg(test)]
 use properties::{adjustments_grid, properties_body};
 pub use status_bar::{status_bar, status_bar_heights};
