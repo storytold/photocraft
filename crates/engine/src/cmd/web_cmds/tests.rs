@@ -410,6 +410,44 @@ fn selected_slice_format_limits_are_checked_before_any_write() {
 }
 
 #[test]
+fn selected_slice_format_limits_use_scaled_and_clipped_bounds() {
+    let mut params = json!({
+        "format": "webp", "lossless": false, "dir": "downloads", "slices": "selected", "numbers": [1, 2],
+        "width": 16_384, "height": 1, "resample": "nearest",
+    });
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 32_768, "height": 1})).unwrap();
+    s.execute("slice.new", json!({"rect": [0, 0, 2, 1], "name": "small"})).unwrap();
+    let wide = s.execute("slice.new", json!({"rect": [2, 0, 32_766, 1], "name": "wide"})).unwrap()["slice"].clone();
+    // Slice Options can store an overhang. The visible 32,766 pixels scale to the exact limit.
+    s.execute("slice.set", json!({"slice": wide, "rect": [2, 0, 32_768, 1]})).unwrap();
+    let mut writes = Vec::new();
+    save_for_web_with_writer(&mut s, &params, &mut |path, bytes| {
+        writes.push((path.to_owned(), photocraft_codecs::decode(bytes).unwrap().dimensions()));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(writes, [("downloads/images/small.webp".to_owned(), (1, 1)), ("downloads/images/wide.webp".to_owned(), (16_383, 1))]);
+    assert_eq!(s.file_menu.last_web.as_ref(), Some(&params));
+
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8_193, "height": 1})).unwrap();
+    s.execute("slice.new", json!({"rect": [0, 0, 1, 1], "name": "small"})).unwrap();
+    s.execute("slice.new", json!({"rect": [1, 0, 8_192, 1], "name": "wide"})).unwrap();
+    params["width"] = json!(16_386);
+    let mut writes = 0;
+    let err = save_for_web_with_writer(&mut s, &params, &mut |_, _| {
+        writes += 1;
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("Image slice 2 exceeds the 16383x16383 limit for webp"), "{err}");
+    assert_eq!(writes, 0, "refuse before writing the small slice");
+    assert!(s.file_menu.last_web.is_none());
+    assert!(!s.prefs().dialogs.contains_key("file.export.saveForWebLegacy"));
+}
+
+#[test]
 fn platform_writer_checks_settings_before_dropping_floating_pixels() {
     let mut s = session(8);
     s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
