@@ -14,11 +14,20 @@ use crate::state::Tool;
 const OPTIONS: [&str; 4] = ["Pulled String Mode", "Stroke Catch-up", "Catch-up on Stroke End", "Adjust for Zoom"];
 
 fn bar(tool: Tool, smoothing: f32) -> Harness<'static, PhotocraftApp> {
+    bar_with(tool, smoothing, None)
+}
+
+/// [`bar`] with the four options set to `options` (in [`OPTIONS`] order) before the first frame.
+fn bar_with(tool: Tool, smoothing: f32, options: Option<[bool; 4]>) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
     crate::paint_mouse::sync_tool_brush(&mut app);
-    app.session.tools.brush.smoothing.amount = smoothing;
+    let s = &mut app.session.tools.brush.smoothing;
+    s.amount = smoothing;
+    if let Some([a, b, c, d]) = options {
+        (s.pulled_string, s.catch_up, s.catch_up_on_end, s.adjust_for_zoom) = (a, b, c, d);
+    }
     let mut h = Harness::builder().with_size(vec2(1800.0, 400.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
@@ -73,6 +82,61 @@ fn a_smoothing_that_shows_as_zero_greys_them_too() {
         let h = bar(tool, 0.004);
         for label in OPTIONS {
             assert!(checkbox(&h, label).accesskit_node().is_disabled(), "{tool:?}: {label} greyed at a displayed 0 %");
+        }
+    }
+}
+
+/// The opposite of each option's default (Pulled String off, Stroke Catch-up on, Catch-up on
+/// Stroke End off, Adjust for Zoom on).
+const SET: [bool; 4] = [true, false, true, false];
+
+/// Types `text` into the options bar's Smoothing field, then Tabs out of it.
+fn type_smoothing(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+    h.query_all_by_role(Role::SpinButton)
+        .find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == "Smoothing"))
+        .expect("the Smoothing field")
+        .click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+}
+
+#[test]
+fn a_smoothing_that_shows_as_one_enables_them() {
+    // 0.9 % reads 1 % in the field, so the four are on.
+    for tool in [Tool::Brush, Tool::Eraser] {
+        let h = bar(tool, 0.009);
+        for label in OPTIONS {
+            assert!(!checkbox(&h, label).accesskit_node().is_disabled(), "{tool:?}: {label} enabled at a displayed 1 %");
+        }
+    }
+}
+
+#[test]
+fn smoothing_to_zero_and_back_keeps_the_four_values() {
+    for tool in [Tool::Brush, Tool::Eraser] {
+        let mut h = bar_with(tool, 0.1, Some(SET));
+        type_smoothing(&mut h, "0");
+        assert_eq!(h.state().session.tools.brush.smoothing.amount, 0.0, "{tool:?}: Smoothing 0 %");
+        assert_eq!(values(&h), SET, "{tool:?}: kept at 0 %");
+        type_smoothing(&mut h, "10");
+        assert_eq!(values(&h), SET, "{tool:?}: kept back above 0 %");
+    }
+}
+
+#[test]
+fn at_zero_each_checkbox_shows_its_value() {
+    use egui::accesskit::Toggled;
+    for tool in [Tool::Brush, Tool::Eraser] {
+        for set in [SET, SET.map(|v| !v)] {
+            let h = bar_with(tool, 0.0, Some(set));
+            for (label, on) in OPTIONS.into_iter().zip(set) {
+                let shown = checkbox(&h, label).accesskit_node().toggled();
+                assert_eq!(shown, Some(if on { Toggled::True } else { Toggled::False }), "{tool:?}: {label} shows {on} at 0 %");
+            }
         }
     }
 }
