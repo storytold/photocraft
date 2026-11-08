@@ -69,8 +69,9 @@ fn translation<'a>(i18n: &'a craft_i18n::I18n, lang: craft_i18n::Lang, key: &'a 
 fn embedded(dir: &Path) -> Result<&'static craft_i18n::Embedded, String> {
     let list = fs::read_dir(dir).map_err(|e| format!("{} is not a craft-i18n checkout ({e})", dir.display()))?;
     let mut out: Vec<(&'static str, &'static str, &'static str)> = Vec::new();
-    for entry in list.flatten() {
-        let path = entry.path();
+    for entry in list {
+        // A listing that fails part way would pass off the rest of the locales as missing.
+        let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
         let Some(code) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
         // A locale without the file is skipped (or reads without a shared catalog); a file that is
         // there but can't be read is an error, not a gap in the coverage.
