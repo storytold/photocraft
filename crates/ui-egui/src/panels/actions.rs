@@ -253,6 +253,18 @@ fn called(app: &mut PhotocraftApp, caller: &str, i: usize, id: &str, value: &Val
     Called::Done
 }
 
+/// A recorded Quick Export or Save for Web step runs the engine command directly, not its UI
+/// wrapper, so the metadata a JPEG couldn't hold is reported here, as the wrappers do (#11332).
+fn export_step_warnings(app: &mut PhotocraftApp, id: &str, value: &Value) {
+    if !matches!(id, "file.export.quickExport" | "file.export.saveForWebLegacy") {
+        return;
+    }
+    let warnings: Vec<String> = value["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
+    let file = value["path"].as_str().or_else(|| value["files"][0].as_str()).unwrap_or_default();
+    let what = crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::file_open::display_name(file))]);
+    crate::notices::io_warnings(app, &what, &warnings);
+}
+
 /// File `c` under the playback's ending, or count the step when it ran: whether the playback ends.
 fn end_at(c: Called, ran: &mut u64, failed: &mut Option<Value>, paused: &mut Option<Value>, stopped: &mut Option<Value>) -> bool {
     match c {
@@ -544,6 +556,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         match result {
             // A called action that paused for a dialog continues here after it once confirmed.
             Ok(value) => {
+                export_step_warnings(app, id, &value);
                 // Step by Step and Pause For: the canvas shows this step before the next one runs.
                 let c = called(app, &action.name, i, id, &value, target);
                 if end_at(playback::paced(app, &action, i, id, ran, c), &mut ran, &mut failed, &mut paused, &mut stopped) {

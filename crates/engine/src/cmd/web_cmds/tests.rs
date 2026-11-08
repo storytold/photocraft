@@ -1385,6 +1385,43 @@ fn web_xmp_that_does_not_fit_is_trimmed_or_left_out_and_reported() {
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
+/// #11332: the XMP warning is for a JPEG that was encoded. Only no-image slices chosen: nothing
+/// is written, so nothing is said; and a later slice failing after one was written still tells
+/// what the written one lacks.
+#[test]
+fn web_xmp_warning_needs_a_written_jpeg_and_survives_a_later_failure() {
+    let dir = tmp("xmp_slices");
+    let big = format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><!-- {} --></x:xmpmeta>", "x".repeat(70_000));
+    let mut s = session(8);
+    s.edit("xmp", |doc, _| {
+        doc.metadata.xmp = Some(std::sync::Arc::from(big.as_str()));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("slice.new", json!({"rect": [0, 0, 20, 20], "kind": "noImage", "name": "text"})).unwrap();
+    s.execute("slice.new", json!({"rect": [30, 0, 20, 20], "name": "a"})).unwrap();
+    s.execute("slice.new", json!({"rect": [30, 24, 20, 20], "name": "b"})).unwrap();
+    let nums = |s: &Session, only_text: bool| -> Vec<u64> {
+        photocraft_doc::slices::resolve(&s.active().unwrap().doc)
+            .iter()
+            .filter(|r| (r.kind == photocraft_doc::SliceKind::NoImage) == only_text && r.origin != photocraft_doc::SliceOrigin::Auto)
+            .map(|r| r.number as u64)
+            .collect()
+    };
+    let text = nums(&s, true);
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "jpeg", "metadata": "all", "dir": dir, "slices": "selected", "numbers": text})).unwrap();
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert_eq!(r["warnings"], json!([]), "no JPEG was written, so no XMP warning: {r}");
+    let mut writes = 0;
+    let mut write = |_: &str, _: &[u8]| -> crate::Result<()> {
+        writes += 1;
+        if writes > 1 { Err(crate::EngineError::Other("disk full".into())) } else { Ok(()) }
+    };
+    let p = json!({"format": "jpeg", "metadata": "all", "dir": dir, "slices": "user"});
+    let e = super::save_for_web_with_writer(&mut s, &p, &mut write).unwrap_err().to_string();
+    assert!(e.contains("disk full") && e.contains("XMP"), "the failure keeps the warning: {e}");
+}
+
 #[test]
 fn quick_export_exr_preserves_linear_hdr_and_alpha() {
     use photocraft_codecs::{ChannelLayout, Format, Image, SampleType};

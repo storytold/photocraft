@@ -317,58 +317,67 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // text goes into its first piece only. In the HTML, a slice that isn't exported stays as an
     // empty cell, so the exported ones keep their place in the table.
     let mut texted = std::collections::HashSet::new();
-    for r in &all {
-        let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
-        if piece.is_empty() {
-            continue;
-        }
-        if !picked(r) {
-            if html {
-                cells.push((piece, String::new(), String::new()));
-            }
-            continue;
-        }
-        let stored = r.id.and_then(|id| doc.slices.get(id));
-        if r.kind == SliceKind::NoImage {
-            let text = stored
-                .filter(|s| texted.insert(s.id))
-                .map(|s| if trusted_slice_html && s.cell_text_is_html { s.cell_text.clone() } else { html_escape(&s.cell_text) })
-                .unwrap_or_default();
-            let bg = stored.and_then(|s| s.background).map(|c| format!(" bgcolor=\"#{:02X}{:02X}{:02X}\"", c[1], c[2], c[3])).unwrap_or_default();
-            cells.push((piece, bg, text));
-            continue;
-        }
-        let o = optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)?;
-        let name = unique(&slice_file(&r.name), o.ext);
-        let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
-        let out = join(&dir, &rel);
-        write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;
-        total += o.bytes.len();
-        files.push(out);
-        let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
-        let img = format!("\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{alt}\">", html_escape(&rel), piece.width(), piece.height());
-        let body = match stored.filter(|s| safe_slice_url(&s.url)) {
-            Some(s) => {
-                let target = if s.target.is_empty() { String::new() } else { format!(" target=\"{}\"", html_escape(&s.target)) };
-                format!("\n\t\t\t<a href=\"{}\"{target}>{img}</a>", html_escape(&s.url))
-            }
-            None => img,
-        };
-        cells.push((piece, String::new(), body));
-    }
     let mut html_path = None;
-    if html {
-        let grid = cells.len() > 1;
-        let spacer = grid.then(|| if images.is_empty() { "spacer.gif".to_string() } else { format!("{images}/spacer.gif") });
-        if let Some(sp) = &spacer {
-            let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
-            write(&web_derived_path(&dir, sp, native_paths)?, &gif)?;
+    // Anything that fails after a file is on disk says which metadata that file lacks (#11332).
+    let mut run = || -> Result<()> {
+        for r in &all {
+            let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
+            if piece.is_empty() {
+                continue;
+            }
+            if !picked(r) {
+                if html {
+                    cells.push((piece, String::new(), String::new()));
+                }
+                continue;
+            }
+            let stored = r.id.and_then(|id| doc.slices.get(id));
+            if r.kind == SliceKind::NoImage {
+                let text = stored
+                    .filter(|s| texted.insert(s.id))
+                    .map(|s| if trusted_slice_html && s.cell_text_is_html { s.cell_text.clone() } else { html_escape(&s.cell_text) })
+                    .unwrap_or_default();
+                let bg = stored.and_then(|s| s.background).map(|c| format!(" bgcolor=\"#{:02X}{:02X}{:02X}\"", c[1], c[2], c[3])).unwrap_or_default();
+                cells.push((piece, bg, text));
+                continue;
+            }
+            let o = optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)?;
+            let name = unique(&slice_file(&r.name), o.ext);
+            let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
+            let out = join(&dir, &rel);
+            write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;
+            total += o.bytes.len();
+            files.push(out);
+            let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
+            let img = format!("\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{alt}\">", html_escape(&rel), piece.width(), piece.height());
+            let body = match stored.filter(|s| safe_slice_url(&s.url)) {
+                Some(s) => {
+                    let target = if s.target.is_empty() { String::new() } else { format!(" target=\"{}\"", html_escape(&s.target)) };
+                    format!("\n\t\t\t<a href=\"{}\"{target}>{img}</a>", html_escape(&s.url))
+                }
+                None => img,
+            };
+            cells.push((piece, String::new(), body));
         }
-        let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
-        let hp = join(&dir, &format!("{base}.html"));
-        write(&web_derived_path(&dir, &format!("{base}.html"), native_paths)?, page.as_bytes())?;
-        html_path = Some(hp);
+        if html {
+            let grid = cells.len() > 1;
+            let spacer = grid.then(|| if images.is_empty() { "spacer.gif".to_string() } else { format!("{images}/spacer.gif") });
+            if let Some(sp) = &spacer {
+                let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
+                write(&web_derived_path(&dir, sp, native_paths)?, &gif)?;
+            }
+            let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
+            let hp = join(&dir, &format!("{base}.html"));
+            write(&web_derived_path(&dir, &format!("{base}.html"), native_paths)?, page.as_bytes())?;
+            html_path = Some(hp);
+        }
+        Ok(())
+    };
+    if let Err(e) = run() {
+        return Err(if files.is_empty() || warnings.is_empty() { e } else { other(format!("{e} ({})", warnings.join("; "))) });
     }
+    // No JPEG was encoded when every chosen slice is a no-image one: nothing to warn about.
+    let warnings = if files.is_empty() { Vec::new() } else { warnings };
     remember_web_settings(s, cmd, &last_web);
     s.file_menu.last_web = Some(last_web);
     crate::automate_cmds::fire_event(s, "export");

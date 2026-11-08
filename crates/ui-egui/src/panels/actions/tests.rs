@@ -2945,3 +2945,33 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     assert_eq!(names, ["A", "B"]);
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
 }
+
+/// #11332: a recorded Quick Export or Save for Web step runs the engine command, not the UI
+/// wrapper, so playback itself reports the XMP a JPEG couldn't hold.
+#[test]
+fn playback_reports_the_xmp_a_recorded_export_left_out() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+    let big = format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><!-- {} --></x:xmpmeta>", "x".repeat(70_000));
+    app.session
+        .edit("xmp", |doc, _| {
+            doc.metadata.xmp = Some(std::sync::Arc::from(big.as_str()));
+            Ok(())
+        })
+        .unwrap();
+    app.run("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "metadata": "all"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("pc-play-xmp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    for (name, id, p) in [
+        ("Quick", "file.export.quickExport", json!({"path": path("q.jpg")})),
+        ("Web", "file.export.saveForWebLegacy", json!({"format": "jpeg", "metadata": "all", "path": path("w.jpg")})),
+    ] {
+        app.ui.notices.clear();
+        app.session.actions.list.push(Action { name: name.into(), steps: vec![(id.into(), p)], disabled: Default::default(), ..Default::default() });
+        let r = play(&mut app, &json!({"action": name})).unwrap();
+        assert!(r.get("failed").is_none(), "{r}");
+        assert!(app.ui.notices.last().is_some_and(|n| n.lines.iter().any(|l| l.contains("XMP"))), "{name}: playback says the XMP was left out");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
