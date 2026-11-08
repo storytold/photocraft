@@ -13,6 +13,11 @@
 //! values the luminosity (0.30 R + 0.59 G + 0.11 B) of the composite in the document's value
 //! range (0–255 at 8 bits, 0–32768 at 16 bits, 0–1 at 32 bits), integrated density area × mean.
 //! Lengths and areas are scaled by the measurement scale.
+//!
+//! Straighten Layer is offered where the reference application offers it: the ruler line is needed,
+//! and the target must be a single layer that is not the Background, not a group and not locked in
+//! place ([`straighten_disabled`], #12033). A hidden target layer keeps the button and is refused
+//! with [`STRAIGHTEN_HIDDEN_ERROR`] before anything changes.
 
 use std::sync::Arc;
 
@@ -136,6 +141,60 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 fn has_ruler(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     s.active().and_then(|d| d.doc.measurement.ruler).map(|_| ()).ok_or_else(|| "no ruler line".into())
+}
+
+/// The reference's alert for Straighten Layer on a hidden target layer (#12033), measured: one
+/// alert window with an OK button, and the document and its History stay as they were. The button
+/// is *enabled* for a hidden layer, so this is the command's refusal and not a greyed state; the
+/// options bar shows the same text through `tl!` (English is the catalog source).
+pub const STRAIGHTEN_HIDDEN_ERROR: &str = "Could not straighten the layer because the target layer is hidden.";
+
+/// The enabled check of `image.analysis.straightenLayer`: a ruler line, and a target the reference
+/// straightens ([`straighten_disabled`], #12033).
+fn has_straightenable_layer(s: &Session) -> std::result::Result<(), String> {
+    has_ruler(s)?;
+    straighten_disabled(s).map_or(Ok(()), |why| Err(why.into()))
+}
+
+/// Why Straighten Layer is greyed out for the current target, `None` when its button is live
+/// (#12033). Measured with a ruler line drawn: the Background, two or more selected layers, a
+/// group, a layer with Lock All and a layer with Lock Position all grey it out.
+///
+/// Deliberately not here: a hidden target layer keeps the button enabled and is refused by
+/// [`straighten`] with [`STRAIGHTEN_HIDDEN_ERROR`], and the states the ticket marks *not measured*
+/// (a layer with a mask, a shape, vector or adjustment layer, artboards, and the lock kinds other
+/// than Lock All and Lock Position) keep today's behaviour. A document with no active layer keeps
+/// turning the whole canvas as it does now; an active id the document no longer holds is refused.
+fn straighten_disabled(s: &Session) -> Option<&'static str> {
+    let st = s.active()?;
+    if st.selected_layers().len() > 1 {
+        return Some("several layers selected");
+    }
+    // The active layer is the one the Layers panel targets; with none, the command turns the
+    // canvas, which the reference was not measured for.
+    let id = st.active_layer?;
+    // An id the document no longer holds: `Session::edit` keeps the *selected* layers valid but
+    // not the active one, so an edit that drops the active layer can leave a stale id behind.
+    // Turning and cropping the whole canvas for a layer that is not there is the worse answer, and
+    // `select_layer` and `restore_layer_selection` both refuse such an id.
+    let Some(layer) = st.doc.layer(id) else {
+        return Some("no active layer");
+    };
+    if st.doc.is_background(id) {
+        return Some("the Background");
+    }
+    if layer.is_group() {
+        return Some("a group");
+    }
+    // Locks inherited from a group count, as they do for the Move tool.
+    let locks = st.doc.effective_locks(id);
+    if locks.all {
+        return Some("the layer is locked");
+    }
+    if locks.position {
+        return Some("the layer's position is locked");
+    }
+    None
 }
 
 fn has_log(s: &Session) -> std::result::Result<(), String> {
@@ -718,6 +777,12 @@ pub fn straighten_angle(r: &Ruler) -> f64 {
 fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
     let d = doc(s)?;
     let r = d.measurement.ruler.ok_or_else(|| EngineError::Other("no ruler line".into()))?;
+    // A hidden target layer keeps its button and gets this alert instead of a rotation (#12033).
+    // Asked before anything is read for the edit, so the document, its History and the ruler line
+    // stay exactly as they were; a layer inside a hidden group is hidden too (#571).
+    if s.active().and_then(|st| st.active_layer).is_some_and(|id| d.path_of(id).is_some_and(|path| !d.shown_at(&path))) {
+        return Err(EngineError::Other(STRAIGHTEN_HIDDEN_ERROR.into()));
+    }
     let rot = straighten_angle(&r);
     if rot.abs() < 1e-9 {
         return Ok(json!({"angle": 0.0}));
@@ -1297,8 +1362,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.analysis.straightenLayer",
             "Straighten Layer",
             [],
-            r##"{"crop":bool=(active layer is the Background)} (rotates so the ruler line is level; crop = rotate the canvas and crop to the image)"##,
-            has_ruler,
+            r##"{"crop":bool=(active layer is the Background)} (rotates so the ruler line is level; crop = rotate the canvas and crop to the image; off for the Background, two or more selected layers, a group, Lock All and Lock Position, and a hidden target layer answers "Could not straighten the layer because the target layer is hidden." with nothing changed (#12033))"##,
+            has_straightenable_layer,
             straighten,
             true
         ),
@@ -1332,5 +1397,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "analysis_straighten_enabled_tests.rs"]
+mod analysis_straighten_enabled_tests;
 #[cfg(test)]
 mod tests;
