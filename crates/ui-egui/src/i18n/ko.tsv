@@ -407,8 +407,8 @@
 	Artboard…	아트보드…
 	Artboard from Group…	그룹으로 아트보드 만들기…
 	Artboard from Layers…	레이어로 아트보드 만들기…
-	Layer via Copy	복사하여 레이어 만들기
-	Layer via Cut	잘라내어 레이어 만들기
+	Layer Via Copy	복사하여 레이어 만들기
+	Layer Via Cut	잘라내어 레이어 만들기
 	Layer From Background…	배경에서 레이어 만들기…
 	Layer from Background…	배경에서 레이어 만들기…
 	Background from Layer	레이어에서 배경 만들기
@@ -4025,7 +4025,7 @@ layerLabel	No Color	색상 없음
 	Scroll menu down	메뉴 아래로 스크롤
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	계속하려면 이 문자 레이어를 래스터화해야 합니다. 이후에는 텍스트를 편집할 수 없습니다. 문자를 래스터화할까요?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	계속하려면 이 도형 레이어를 래스터화해야 합니다. 이후에는 도형으로 편집할 수 없습니다. 도형을 래스터화할까요?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	계속하려면 이 고급 개체를 래스터화해야 합니다. 이후에는 내용을 편집할 수 없습니다. 고급 개체를 래스터화할까요?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	계속하려면 이 고급 개체를 래스터화해야 합니다. 이후에는 내용을 편집할 수 없습니다. 고급 개체를 래스터화할까요?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	계속하려면 이 칠 레이어를 래스터화해야 합니다. 이후에는 칠 내용을 편집할 수 없습니다. 레이어를 래스터화할까요?
 	This layer must be rasterized before proceeding.	계속하려면 이 레이어를 래스터화해야 합니다.
 	Color Picker (Background Color)	색상 선택기(배경색)
