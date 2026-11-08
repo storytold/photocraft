@@ -1,5 +1,5 @@
 use super::*;
-use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
 fn app() -> PhotocraftApp {
@@ -932,15 +932,20 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
 
-/// The dock-edge layout is only chosen for a horizontal root split with the canvas alone.
+/// The dock-edge layout is only chosen for a horizontal root split whose canvas side is the lone
+/// canvas and whose other side is the end dock itself.
 #[test]
 fn the_dock_edge_layout_only_applies_with_the_canvas_alone() {
     let tabs = |panel: &str| Node::Tabs { panels: vec![panel.to_owned()], active: 0 };
+    let dock = |panels: Vec<&str>, width: f32| Node::Dock {
+        side: Side::End,
+        columns: vec![Column::new(vec![craft_ui::docking::Group::new(panels.into_iter().map(str::to_owned).collect(), 0)], width)],
+    };
     let aside = |first: Node<String>| Node::Split {
         axis: SplitAxis::Horizontal,
         size: SplitSize::FixedSecond(280.0),
         first: Box::new(first),
-        second: Box::new(tabs("color")),
+        second: Box::new(dock(vec!["color"], 280.0)),
     };
 
     let alone = Layout { root: Some(aside(tabs(CANVAS))), floating: Vec::new() };
@@ -952,17 +957,80 @@ fn the_dock_edge_layout_only_applies_with_the_canvas_alone() {
     let layout = Layout { root: Some(aside(beside)), floating: Vec::new() };
     assert!(!canvas_alone_layout(&layout), "{layout:?}");
 
-    // A vertical root split with the canvas above another panel is not the canvas-beside-dock shape.
-    let vertical = Layout {
+    // The second child must be the end dock itself: a trailing split or tabs cannot be resized,
+    // so the handle would snap back on release.
+    let not_a_dock = Layout {
         root: Some(Node::Split {
-            axis: SplitAxis::Vertical,
+            axis: SplitAxis::Horizontal,
             size: SplitSize::FixedSecond(280.0),
             first: Box::new(tabs(CANVAS)),
             second: Box::new(tabs("color")),
         }),
         floating: Vec::new(),
     };
+    assert!(!canvas_alone_layout(&not_a_dock), "{not_a_dock:?}");
+
+    // A vertical root split with the canvas above another panel is not the canvas-beside-dock shape.
+    let vertical = Layout {
+        root: Some(Node::Split {
+            axis: SplitAxis::Vertical,
+            size: SplitSize::FixedSecond(280.0),
+            first: Box::new(tabs(CANVAS)),
+            second: Box::new(dock(vec!["color"], 280.0)),
+        }),
+        floating: Vec::new(),
+    };
     assert!(!canvas_alone_layout(&vertical), "{vertical:?}");
+}
+
+/// The end dock is followed through horizontal splits only; a vertical or tabs sibling is not an
+/// end dock, so resizing it returns false instead of half-applying.
+#[test]
+fn the_end_dock_is_only_the_horizontal_split_s_second_child() {
+    let tabs = |panel: &str| Node::Tabs { panels: vec![panel.to_owned()], active: 0 };
+    let dock = Node::Dock { side: Side::End, columns: vec![Column::new(vec![craft_ui::docking::Group::new(vec!["color".to_owned()], 0)], 260.0)] };
+    let mut vertical =
+        Node::Split { axis: SplitAxis::Vertical, size: SplitSize::FixedSecond(300.0), first: Box::new(tabs(CANVAS)), second: Box::new(dock.clone()) };
+    assert!(end_dock_node(&vertical).is_none(), "a vertical split has no end dock");
+    let mut actual = 0.0;
+    assert!(!resize_end_dock(&mut vertical, 320.0, &mut actual), "resizing a vertical dock must not follow the split");
+
+    let mut horizontal =
+        Node::Split { axis: SplitAxis::Horizontal, size: SplitSize::FixedSecond(300.0), first: Box::new(tabs(CANVAS)), second: Box::new(dock) };
+    assert!(end_dock_node(&horizontal).is_some());
+    let mut actual = 0.0;
+    assert!(resize_end_dock(&mut horizontal, 320.0, &mut actual));
+    assert!((actual - 320.0).abs() < 0.5, "the end dock takes the requested width, got {actual}");
+}
+
+/// The dock-only guard restores the flag on drop and during unwinding, so a later standard layout
+/// never loses its canvas.
+#[test]
+fn dock_only_guard_restores_the_previous_flag_on_drop_and_unwind() {
+    DOCK_ONLY.with(|flag| flag.set(false));
+    {
+        let previous = DOCK_ONLY.with(|flag| {
+            let previous = flag.get();
+            flag.set(true);
+            previous
+        });
+        let guard = DockOnlyGuard(previous);
+        assert!(DOCK_ONLY.with(|flag| flag.get()), "show_dock's flag is set while it draws");
+        drop(guard);
+    }
+    assert!(!DOCK_ONLY.with(|flag| flag.get()), "dropping the guard restores the flag");
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let previous = DOCK_ONLY.with(|flag| {
+            let previous = flag.get();
+            flag.set(true);
+            previous
+        });
+        let _guard = DockOnlyGuard(previous);
+        panic!("simulated panel panic");
+    }));
+    assert!(unwound.is_err());
+    assert!(!DOCK_ONLY.with(|flag| flag.get()), "unwinding must restore the flag");
 }
 
 /// The toolbar lands on the requested physical side in every interface theme.
@@ -984,15 +1052,133 @@ fn the_toolbar_side_toggle_works_in_every_interface_theme() {
     );
     for kind in crate::theme::ThemeKind::ALL {
         crate::theme::apply(&h.ctx, kind);
-        for side in [ToolbarSide::Left, ToolbarSide::Right] {
-            h.state_mut().ui.panels.toolbar_side = side;
-            h.run_steps(2);
-            // The header's chevron carries the toolbar's label; its screen X is the panel's side.
-            let chevron = h.get_by_label("Toolbar").rect();
-            match side {
-                ToolbarSide::Right => assert!(chevron.center().x > 640.0, "{kind:?}: right toolbar at {chevron:?}"),
-                _ => assert!(chevron.center().x < 640.0, "{kind:?}: left toolbar at {chevron:?}"),
-            }
-        }
+        h.state_mut().ui.panels.toolbar_side = ToolbarSide::Left;
+        h.run_steps(2);
+        // The header's chevron carries the toolbar's label; its screen X is the panel's side.
+        let left = h.get_by_label("Toolbar").rect().center().x;
+        assert!(left < 640.0, "{kind:?}: left toolbar at {left}");
+
+        // The dock button itself moves the toolbar, rather than the test setting the state.
+        h.get_by_label("Move Toolbar to the Right").click();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.panels.toolbar_side, ToolbarSide::Right, "{kind:?}: the button moves the toolbar right");
+        let right = h.get_by_label("Toolbar").rect().center().x;
+        assert!(right > 640.0, "{kind:?}: right toolbar at {right}");
+
+        h.get_by_label("Move Toolbar to the Left").click();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.panels.toolbar_side, ToolbarSide::Left, "{kind:?}: the button moves the toolbar left");
+        let back = h.get_by_label("Toolbar").rect().center().x;
+        assert!(back < 640.0, "{kind:?}: left toolbar again at {back}");
     }
+}
+
+/// A dock-edge harness: draw only the dock column, as the dock-edge frame layout does.
+fn dock_edge_harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
+    let mut ready = false;
+    let mut harness = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+                return;
+            }
+            crate::panels::dock_panel(app, ui);
+        },
+        app,
+    );
+    harness.run_steps(4);
+    harness
+}
+
+/// The dock-edge handle resizes the dock and keeps the new width after release; a locked
+/// workspace makes the same drag a no-op.
+#[test]
+fn the_dock_edge_handle_resizes_and_a_locked_workspace_refuses_it() {
+    let drag_once = |locked: bool| -> (f32, f32) {
+        let mut app = app();
+        app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
+        if locked {
+            app.session.prefs.edit(|p| p.workspace_locked = true);
+        }
+        let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
+        let stored = dock_width(h.state());
+        let rail = if h.state().ui.panels.rail { if h.state().ui.theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
+        let edge = 1280.0 - (stored + rail);
+        drag(&mut h, pos2(edge, 400.0), pos2(edge + 60.0, 400.0));
+        let resized = dock_width(h.state());
+        h.run_steps(4);
+        let settled = dock_width(h.state());
+        (resized, settled)
+    };
+
+    let (resized, settled) = drag_once(false);
+    assert!(resized < 290.0, "dragging right should shrink the dock, got {resized}");
+    assert!((settled - resized).abs() < 1.0, "the resized width must not snap back: {resized} then {settled}");
+
+    let (locked_resized, locked_settled) = drag_once(true);
+    assert!((locked_resized - locked_settled).abs() < 1.0);
+    assert!(locked_resized >= 250.0, "a locked workspace keeps the default dock width, got {locked_resized}");
+}
+
+/// `ui.set {dockWidth}` sets the whole end dock, scaling every column rather than only the outer
+/// one; the split holding the dock follows the new total.
+#[test]
+fn ui_set_dock_width_scales_every_column() {
+    let mut app = app();
+    let mut layout = legacy(&app);
+    let used: std::collections::HashSet<String> = layout.panels().into_iter().map(|panel| panel.to_string()).collect();
+    let extra = PANELS.iter().map(|(id, _, _)| *id).find(|id| !used.contains(*id)).expect("a free panel id");
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
+    }
+    app.ui.docking = Some(Workspace::new(layout));
+    let total = |app: &PhotocraftApp| -> f32 {
+        let root = app.ui.docking.as_ref().expect("a customized workspace").layout.root.as_ref().expect("root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_ref(),
+            _ => root,
+        };
+        match dock {
+            Node::Dock { columns, .. } => columns.iter().map(|column| column.width).sum(),
+            _ => 0.0,
+        }
+    };
+    let before = total(&app);
+    set_dock_width(&mut app, 420.0);
+    let after = total(&app);
+    assert!((after - 420.0).abs() < 1.0, "the whole dock should be 420 points, got {after} (was {before})");
+    let widths: Vec<f32> = {
+        let root = app.ui.docking.as_ref().unwrap().layout.root.as_ref().unwrap();
+        let dock = match root {
+            Node::Split { second, .. } => second.as_ref(),
+            _ => root,
+        };
+        match dock {
+            Node::Dock { columns, .. } => columns.iter().map(|column| column.width).collect(),
+            _ => Vec::new(),
+        }
+    };
+    assert_eq!(widths.len(), 2, "both columns are kept");
+    assert!(widths.iter().all(|width| *width > 0.0), "every column keeps a positive width: {widths:?}");
+}
+/// Closing every panel leaves the dock with nothing in it, which the dock-edge layout uses to
+/// take no width for the column.
+#[test]
+fn an_empty_dock_has_no_panels() {
+    let mut app = app();
+    assert!(!dock_is_empty(&app), "the default dock shows its panels");
+    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
+    {
+        let root = app.ui.docking.as_mut().expect("a customized workspace").layout.root.as_mut().expect("root");
+        let Node::Split { second, .. } = root else { panic!("the canvas is beside the dock") };
+        **second = Node::Dock { side: Side::End, columns: Vec::new() };
+    }
+    assert!(dock_is_empty(&app), "a dock with no columns has nothing to show");
 }

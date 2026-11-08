@@ -247,7 +247,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 };
                                 let resp = icons::button_with_icon_size_tip(ui, icons::tool_icon(tool), bx, toolbar_icon_size(bx, t.pro), sel, &tip, tool_tips);
                                 if slot.len() > 1 {
-                                    paint_toolbar_flyout_indicator(ui, &t, &resp);
+                                    paint_toolbar_flyout_indicator(ui, &t, &resp, side);
                                 }
                                 // Plain click selects the shown tool; Alt/Option-click cycles the
                                 // flyout slot to the next tool, as Shift+letter does for the key group.
@@ -460,7 +460,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     icons::button_with_icon_size_tip(ui, "app-window", bx, (bx * 0.52).round(), false, tl!("Change Screen Mode  (F)"), tool_tips)
                 })
                 .inner;
-            paint_toolbar_flyout_indicator(ui, &t, &sm);
+            paint_toolbar_flyout_indicator(ui, &t, &sm, side);
 
             // Right-click, or click and hold like the tool flyouts (#4444), lists the modes,
             // like Photoshop's flyout. The release that ends a hold doesn't cycle the mode.
@@ -518,9 +518,10 @@ pub(super) fn toolbar_icon_size(box_size: f32, pro: bool) -> f32 {
 
 /// Paints a triangle on the bottom corner of an icon button that faces the canvas (bottom right,
 /// bottom left in a right-to-left UI) to indicate that a toolbar item has a submenu.
-pub fn paint_toolbar_flyout_indicator(ui: &mut egui::Ui, tokens: &Tokens, resp: &egui::Response) {
+pub fn paint_toolbar_flyout_indicator(ui: &mut egui::Ui, tokens: &Tokens, resp: &egui::Response, side: ToolbarSide) {
     let r = resp.rect;
-    let tri = if crate::direction::is_rtl() {
+    // The corner nearest the canvas, so the triangle faces the flyout.
+    let tri = if side == ToolbarSide::Right {
         vec![r.left_bottom() + vec2(2.0, -2.0), r.left_bottom() + vec2(6.0, -2.0), r.left_bottom() + vec2(2.0, -6.0)]
     } else {
         vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)]

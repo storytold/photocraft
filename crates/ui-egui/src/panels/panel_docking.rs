@@ -95,8 +95,22 @@ fn default_width(pro: bool) -> f32 {
 fn end_dock_node(node: &Node<String>) -> Option<&Node<String>> {
     match node {
         Node::Dock { .. } => Some(node),
-        Node::Split { second, .. } => end_dock_node(second),
+        Node::Split { axis: SplitAxis::Horizontal, second, .. } => end_dock_node(second),
         _ => None,
+    }
+}
+
+/// True when the end dock holds no panels at all (every panel is closed): the dock column should
+/// then take no width, as the standard layout's empty dock does.
+pub(crate) fn dock_is_empty(app: &PhotocraftApp) -> bool {
+    let layout = match &app.ui.docking {
+        Some(workspace) => workspace.layout.clone(),
+        None => legacy(app),
+    };
+    match layout.root.as_ref().and_then(end_dock_node) {
+        Some(Node::Dock { columns, .. }) => columns.iter().all(|column| column.groups.iter().all(|group| group.panels.is_empty())),
+        // No end dock at the edge: there is no dock column to show, which is empty for our purpose.
+        _ => true,
     }
 }
 
@@ -594,11 +608,13 @@ pub(crate) fn canvas_alone(app: &PhotocraftApp) -> bool {
 }
 
 /// True when the layout is the canvas-beside-dock shape: a horizontal root split whose first
-/// child holds only the canvas.
+/// child holds only the canvas and whose second child is the dock itself. A trailing split or
+/// stack is not an end dock: resizing it would snap back on release, so it keeps the standard
+/// layout.
 fn canvas_alone_layout(layout: &Layout<String>) -> bool {
     match &layout.root {
-        Some(Node::Split { axis: SplitAxis::Horizontal, first, .. }) => {
-            matches!(first.as_ref(), Node::Tabs { panels, .. } if panels.len() == 1 && panels[0] == CANVAS)
+        Some(Node::Split { axis: SplitAxis::Horizontal, first, second, .. }) => {
+            matches!(first.as_ref(), Node::Tabs { panels, .. } if panels.len() == 1 && panels[0] == CANVAS) && matches!(second.as_ref(), Node::Dock { .. })
         }
         _ => false,
     }
@@ -863,7 +879,7 @@ pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
 /// split that holds the dock at its edge in step. Creates the custom workspace from the legacy
 /// dock the first time. `false` when there is no end dock.
 pub(crate) fn set_end_dock_total(app: &mut PhotocraftApp, total: f32) -> bool {
-    if !total.is_finite() || total <= 0.0 {
+    if !total.is_finite() || total <= 0.0 || app.session.prefs().workspace_locked {
         return false;
     }
     if app.ui.docking.is_none() {
@@ -896,7 +912,7 @@ fn resize_end_dock(node: &mut Node<String>, total: f32, actual: &mut f32) -> boo
             *actual = columns.iter().map(|column| column.width).sum();
             true
         }
-        Node::Split { second, size, .. } => {
+        Node::Split { axis: SplitAxis::Horizontal, second, size, .. } => {
             let found = resize_end_dock(second, total, actual);
             if found && matches!(&**second, Node::Dock { .. }) {
                 *size = SplitSize::FixedSecond(*actual);
