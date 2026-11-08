@@ -5619,6 +5619,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "imagesize",
+ "kurbo 0.13.1",
  "lopdf",
  "miniz_oxide 0.9.1",
  "photocraft-affinity",

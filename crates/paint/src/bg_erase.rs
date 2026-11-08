@@ -4,6 +4,7 @@
 //! Colours are compared in the surface's own colour channels (RGB, CMYK, Gray, Lab… at any depth),
 //! so nothing is converted through RGB; only alpha changes.
 
+use photocraft_color::SampleType;
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba};
 use serde::{Deserialize, Serialize};
@@ -109,6 +110,7 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
     let swatch = native(bs.background);
     let fg = native(bs.foreground);
     let (sampling, limits, protect_foreground) = (bs.sampling, bs.limits, bs.protect_foreground);
+    let float = fmt.sample == SampleType::F32;
     let mut once: Option<Option<Vec<f32>>> = None;
     // Find Edges grades soft edges like Contiguous does instead of cutting them hard (#11904):
     // the reference application keeps at least as much of a blurred transition with it.
@@ -144,27 +146,40 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
         };
         let Some(sampled) = sampled else { return };
         let (w, h) = (r.width() as usize, r.height() as usize);
-        // Per-pixel match weight from the pre-stroke colours: the contiguous fill passes through
-        // pixels this stroke already erased.
+        // Which pixels the contiguous fill may pass, from the pre-stroke colours as before: it
+        // passes through pixels this stroke already erased.
+        let mut reach = vec![0.0f32; w * h];
+        // Per-pixel match weight from the working copy (#11902): a pixel an earlier dab erased
+        // partly is matched by its current, decontaminated colour, which is pushed away from the
+        // sampled colour, so later dabs erase it again only while it is still within the Tolerance.
         let mut weight = vec![0.0f32; w * h];
+        let protected = |c: &[f32]| protect_foreground && max_channel_dist(c, &fg) <= tol;
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
                 if fp.at(x, y) <= 0.0 {
                     continue;
                 }
-                let p = orig.px(x, y);
-                if p[a] <= 0.0 {
+                let o = orig.px(x, y);
+                if o[a] <= 0.0 {
                     continue;
                 }
-                let c = &p[..nc];
-                if protect_foreground && max_channel_dist(c, &fg) <= tol {
-                    continue;
+                let i = (y - r.y0) as usize * w + (x - r.x0) as usize;
+                if !protected(&o[..nc]) {
+                    reach[i] = match_w(dist(&o[..nc], &sampled));
                 }
-                weight[(y - r.y0) as usize * w + (x - r.x0) as usize] = match_w(dist(c, &sampled));
+                let c = work.px(x, y);
+                if c[a] > 0.0 && !protected(&c[..nc]) {
+                    weight[i] = match_w(dist(&c[..nc], &sampled));
+                }
             }
         }
         if limits != Limits::Discontiguous {
-            keep_connected(&mut weight, w, h, (cx.clamp(r.x0, r.x1 - 1) - r.x0) as usize, (cy.clamp(r.y0, r.y1 - 1) - r.y0) as usize);
+            keep_connected(&mut reach, w, h, (cx.clamp(r.x0, r.x1 - 1) - r.x0) as usize, (cy.clamp(r.y0, r.y1 - 1) - r.y0) as usize);
+            for (wv, rv) in weight.iter_mut().zip(&reach) {
+                if *rv <= 0.0 {
+                    *wv = 0.0;
+                }
+            }
         }
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
@@ -172,14 +187,30 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
                 if k <= 0.0 {
                     continue;
                 }
+                let keep = 1.0 - k.min(1.0);
                 let p = work.px_mut(x, y);
-                p[a] *= 1.0 - k.min(1.0);
-                if p[a] <= 0.0 {
+                p[a] *= keep;
+                if p[a] <= 0.0 || keep <= 0.0 {
                     p.fill(0.0);
+                    continue;
                 }
+                decontaminate(&mut p[..nc], &sampled, keep, float);
             }
         }
     })
+}
+
+/// Colour decontamination of a partly erased pixel (#11902): of the colour `c`, the share `1 - keep`
+/// the dab removed was the sampled colour, so what stays is pushed away from it until compositing
+/// it at `keep` over the sampled colour gives back `c`: `(c - sampled × (1 - keep)) / keep` per
+/// channel, in the document's own channels. Clipped to the channel range (0..1; 32-bit float keeps
+/// values above 1 it already had).
+fn decontaminate(c: &mut [f32], sampled: &[f32], keep: f32, float: bool) {
+    for (v, s) in c.iter_mut().zip(sampled) {
+        let hi = if float { v.max(1.0) } else { 1.0 };
+        let d = (*v - s * (1.0 - keep)) / keep;
+        *v = if d.is_finite() { d.clamp(0.0, hi) } else { v.clamp(0.0, hi) };
+    }
 }
 
 /// Zeroes the weights not 4-connected to `(sx, sy)` through non-zero weights.
@@ -225,6 +256,10 @@ mod graded_alpha_tests;
 #[cfg(test)]
 #[path = "bg_erase_find_edges_tests.rs"]
 mod find_edges_tests;
+
+#[cfg(test)]
+#[path = "bg_erase_decontamination_tests.rs"]
+mod decontamination_tests;
 
 #[cfg(test)]
 mod tests {
