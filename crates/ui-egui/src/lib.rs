@@ -791,6 +791,8 @@ mod brush_options_tooltips_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
+mod cam_no_pixels_alert_tests;
+#[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod shape_bounds_box_tests;
