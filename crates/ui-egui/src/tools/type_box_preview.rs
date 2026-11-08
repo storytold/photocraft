@@ -47,6 +47,7 @@ struct Hooks {
 }
 
 impl Hooks {
+    /// In tests, holds a render back until the gate opens; does nothing otherwise.
     #[allow(clippy::unused_self)]
     fn wait(&self) {
         #[cfg(test)]
@@ -113,6 +114,7 @@ fn dragging(app: &PhotocraftApp, p: &TypeBoxPreview) -> bool {
     app.ui.tool.is_type() && app.ui.text_edit.as_ref().is_some_and(|e| e.layer == p.layer.0 && e.resize.is_some())
 }
 
+/// The text layer `layer` of `doc`, if it is one.
 fn text_of(doc: &Document, layer: LayerId) -> Option<&TextLayer> {
     match &doc.layer(layer)?.content {
         LayerContent::Text(t) => Some(t),
@@ -233,6 +235,7 @@ fn render(layer: &TextLayer, dpi: f32, format: PixelFormat) -> Surface {
     photocraft_text::render::rasterize_warped(&layout, &layer.transform, format, layer.antialias, warp.as_ref()).surface
 }
 
+/// Starts a worker thread that renders `layer` and sends back its surface; `None` if no thread could be started.
 fn spawn(layer: TextLayer, dpi: f32, format: PixelFormat, boxed: [f64; 4], ctx: Option<egui::Context>, hooks: Hooks) -> Option<Running> {
     let (tx, rx) = std::sync::mpsc::channel();
     #[cfg(test)]
@@ -407,10 +410,12 @@ mod tests {
     use egui::Modifiers;
     use photocraft_doc::text::TextShape;
 
+    /// An app with one paragraph text layer in a box, open for editing.
     fn app_with_box() -> (PhotocraftApp, LayerId) {
         app_with_box_and(crate::Services::default())
     }
 
+    /// [`app_with_box`] with the given shell services.
     fn app_with_box_and(services: crate::Services) -> (PhotocraftApp, LayerId) {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
@@ -429,54 +434,68 @@ mod tests {
     }
 
     // The bottom edge's handle sits at the midpoint of the box's lower edge.
+    /// Press the bottom-edge handle of the box.
     fn press(app: &mut PhotocraftApp) {
         tool_event(app, ToolEvent::Down { x: 420.0, y: 480.0, pressure: 1.0 }, Modifiers::NONE);
     }
+    /// Move the held bottom-edge handle to document `y`.
     fn to(app: &mut PhotocraftApp, y: f64) {
         tool_event(app, ToolEvent::Move { x: 420.0, y, pressure: 1.0 }, Modifiers::NONE);
     }
+    /// Release the bottom-edge handle at document `y`.
     fn release(app: &mut PhotocraftApp, y: f64) {
         tool_event(app, ToolEvent::Up { x: 420.0, y }, Modifiers::NONE);
     }
     // The right edge's handle sits at the midpoint of the box's right edge.
+    /// Press the right-edge handle of the box.
     fn press_right(app: &mut PhotocraftApp) {
         tool_event(app, ToolEvent::Down { x: 540.0, y: 390.0, pressure: 1.0 }, Modifiers::NONE);
     }
+    /// Move the held right-edge handle to document `x`.
     fn to_x(app: &mut PhotocraftApp, x: f64) {
         tool_event(app, ToolEvent::Move { x, y: 390.0, pressure: 1.0 }, Modifiers::NONE);
     }
+    /// Release the right-edge handle at document `x`.
     fn release_x(app: &mut PhotocraftApp, x: f64) {
         tool_event(app, ToolEvent::Up { x, y: 390.0 }, Modifiers::NONE);
     }
+    /// The active document's revision.
     fn revision(app: &PhotocraftApp) -> u64 {
         app.session.active().unwrap().revision
     }
+    /// The text layer `id` of `doc`.
     fn layer_of(doc: &Document, id: LayerId) -> TextLayer {
         text_of(doc, id).unwrap().clone()
     }
+    /// The text layer `id` of the active document.
     fn session_layer(app: &PhotocraftApp, id: LayerId) -> TextLayer {
         layer_of(&app.session.active().unwrap().doc, id)
     }
+    /// The height of a box-shaped text layer.
     fn height(t: &TextLayer) -> f32 {
         match t.shape {
             TextShape::Box { height, .. } => height,
             ref s => panic!("not a box: {s:?}"),
         }
     }
+    /// The width of a box-shaped text layer.
     fn width(t: &TextLayer) -> f32 {
         match t.shape {
             TextShape::Box { width, .. } => width,
             ref s => panic!("not a box: {s:?}"),
         }
     }
+    /// Whether two layers' cached pixels are identical.
     fn same_pixels(a: &TextLayer, b: &TextLayer) -> bool {
         let (a, b) = (a.cache.as_ref().unwrap(), b.cache.as_ref().unwrap());
         let r = a.content_bounds();
         r == b.content_bounds() && (r.y0..r.y1).all(|y| (r.x0..r.x1).all(|x| a.rgba(x, y) == b.rgba(x, y)))
     }
+    /// Turn background jobs on, as the desktop app does.
     fn background(app: &mut PhotocraftApp) {
         app.background_jobs = true;
     }
+    /// Let held renders run.
     fn open_gate(gate: &Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>) {
         *gate.0.lock().unwrap() = true;
         gate.1.notify_all();
@@ -503,6 +522,7 @@ mod tests {
         out
     }
 
+    /// A background drag changes nothing until release, then equals the synchronous drag.
     #[test]
     fn an_async_drag_leaves_the_document_alone_until_release_and_ends_as_the_sync_drag() {
         let (mut sync, id) = app_with_box();
@@ -539,6 +559,7 @@ mod tests {
         assert!(same_pixels(&got, &preview), "and what the preview showed");
     }
 
+    /// Moves while a render runs start no second one, and the next render draws the newest box.
     #[test]
     fn the_newest_box_wins_with_one_render_at_a_time() {
         let (mut app, id) = app_with_box();
@@ -556,6 +577,7 @@ mod tests {
         release(&mut app, 560.0);
     }
 
+    /// Without background jobs every move runs `type.edit` at once.
     #[test]
     fn a_sync_drag_applies_every_move_at_once() {
         let (mut app, id) = app_with_box();
@@ -570,6 +592,7 @@ mod tests {
         release(&mut app, 560.0);
     }
 
+    /// A background drag is one history step.
     #[test]
     fn one_undo_restores_the_box_after_an_async_drag() {
         let (mut app, id) = app_with_box();
@@ -585,6 +608,7 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     }
 
+    /// Commit keeps the box the drag reached; cancel undoes the session.
     #[test]
     fn committing_mid_drag_keeps_the_dragged_box_and_cancelling_drops_it() {
         let (mut app, id) = app_with_box();
@@ -604,6 +628,7 @@ mod tests {
         assert_eq!(height(&session_layer(&app, id)), 180.0, "cancelling leaves the box");
     }
 
+    /// `settle` applies the box of a drag that ended without a release, unless the document changed.
     #[test]
     fn a_drag_that_ends_without_a_release_is_applied_by_the_frame_step() {
         let (mut app, id) = app_with_box();
@@ -632,6 +657,7 @@ mod tests {
         assert_eq!(height(&session_layer(&app, id)), 180.0);
     }
 
+    /// A layer deleted mid-drag clears the preview and nothing panics.
     #[test]
     fn deleting_the_layer_mid_drag_clears_the_preview_without_a_panic() {
         let (mut app, id) = app_with_box();
@@ -647,6 +673,7 @@ mod tests {
         assert!(app.type_box_preview.is_none());
     }
 
+    /// A width drag rewraps the text in the preview and ends as the synchronous drag does.
     #[test]
     fn a_width_drag_rewraps_the_preview_and_ends_as_the_sync_drag() {
         let (mut sync, id) = app_with_box();
@@ -678,6 +705,7 @@ mod tests {
         assert!(same_pixels(&got, &want), "the finished layer is the sync drag's");
     }
 
+    /// Commands apply the box and end the drag first; zoom commands leave it going.
     #[test]
     fn a_command_mid_drag_applies_the_box_and_ends_the_drag_but_a_view_command_does_not() {
         let (mut app, id) = app_with_box();
@@ -840,6 +868,7 @@ mod tests {
         assert_eq!(t.rect, after, "its frame is the resized layer's");
     }
 
+    /// If the document changed during the drag, the press-time box is never applied over it.
     #[test]
     fn a_stale_preview_ends_the_drag_instead_of_applying_the_press_time_box() {
         let (mut app, id) = app_with_box();
@@ -861,6 +890,7 @@ mod tests {
         assert_eq!(revision(&app), rev);
     }
 
+    /// Type Mask edits drag synchronously, so their overlay matches the box.
     #[test]
     fn a_type_mask_edit_keeps_the_synchronous_drag() {
         let (mut app, id) = app_with_box();

@@ -1013,6 +1013,7 @@ fn relative_steps_move_each_character_from_its_own_value() {
     assert_eq!(text_layer(&s, empty).char_runs()[0].style.leading_pt, Some(10.0));
 }
 
+/// The `(width, height)` of a layer that is paragraph text in a box.
 fn box_size(t: &TextLayer) -> (f32, f32) {
     match t.shape {
         TextShape::Box { width, height, .. } => (width, height),
@@ -1036,6 +1037,7 @@ fn a_huge_box_keeps_a_finite_size() {
     }
 }
 
+/// `apply_box` keeps the stored size between 1 px and `f32::MAX`, and non-finite input becomes the minimum.
 #[test]
 fn apply_box_clamps_sizes_to_a_finite_minimum_and_maximum() {
     let mut s = session();
