@@ -106,6 +106,7 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
         return Some(Ok(json!({"committed": true})));
     }
     if let Some(result) = crate::panel_docking::command(app, id, params) {
+        apply_workspace_theme(app, ctx, &result);
         return Some(result);
     }
     // Help › Discord, website, GitHub, Report an Issue.
@@ -121,6 +122,7 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     }
     // Workspace New/Delete/Lock, Modifier Keys, custom pixel aspect, Extras/32-bit options.
     if let Some(r) = crate::workspace_ui::menu(app, id, params) {
+        apply_workspace_theme(app, ctx, &r);
         return Some(r);
     }
     // Window › Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source.
@@ -742,7 +744,9 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
         | "window.theme.breezeLight"
         | "window.theme.breezeDark"
         | "window.theme.softLight"
-        | "window.theme.softDark" => {
+        | "window.theme.softDark"
+        | "window.theme.cs4"
+        | "window.theme.cs5" => {
             let theme = crate::theme::ThemeKind::from_name(&id["window.theme.".len()..]).unwrap_or_default();
             app.set_theme(ctx, theme);
             Some(Ok(Value::Null))
@@ -829,8 +833,21 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+/// A workspace command that names a theme applies it. Reset and the built-in presets omit the key.
+fn apply_workspace_theme(app: &mut PhotocraftApp, ctx: &egui::Context, result: &Result<Value, String>) {
+    if let Ok(value) = result
+        && let Some(kind) = super::workspace_files::theme_in(value)
+    {
+        app.set_theme(ctx, kind);
+    }
+}
+
 /// Workspace presets (Window → Workspace): which panels are visible.
 pub fn apply_workspace(app: &mut PhotocraftApp) {
+    // A bundled sample (CS4, CS5, or one added under workspaces/) wins over a saved name collision.
+    if super::workspace_files::apply_current_bundle(app) {
+        return;
+    }
     // Saved workspaces (Window › Workspace › New Workspace…) restore their own layout.
     if crate::workspace_ui::apply_custom(app) {
         return;

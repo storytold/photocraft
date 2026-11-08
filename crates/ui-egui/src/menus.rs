@@ -18,6 +18,7 @@ mod render;
 mod search;
 mod state;
 pub mod view_cmds;
+pub(crate) mod workspace_files;
 pub mod workspace_ui;
 
 pub use bar::menu_bar;

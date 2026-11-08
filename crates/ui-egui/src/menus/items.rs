@@ -43,6 +43,10 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("window.theme.cs4", "window.theme.softLight"),
+    ("window.theme.cs5", "window.theme.cs4"),
+    ("window.workspace.importWorkspace", "window.workspace.deleteWorkspace"),
+    ("window.workspace.exportWorkspace", "window.workspace.importWorkspace"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
@@ -166,14 +170,17 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         }
     }
     // Window › Workspace: saved workspaces follow the presets, checked while current.
-    let saved = crate::workspace_ui::saved_names(app);
+    // The id index is the position in the unfiltered preferences map. Filtering the names
+    // and then numbering from zero selects a different workspace than the label shows.
+    let saved: Vec<(usize, String)> =
+        crate::workspace_ui::saved_names(app).into_iter().enumerate().map(|(index, name)| (index, crate::workspace_ui::saved_menu_label(app, &name))).collect();
     if !saved.is_empty()
         && let Some(after) = items.iter().position(|i| i.id == "window.workspace.motion")
     {
         let wp: Vec<String> = vec!["Window".into(), "Workspace".into()];
         let separator = MenuItem { id: "---".into(), label: "---".into(), path: wp.clone(), shortcut: None, enabled: false, checked: None, color: None };
-        let entries = saved.into_iter().enumerate().map(|(i, name)| {
-            let id = format!("{}{i}", crate::workspace_ui::SAVED);
+        let entries = saved.into_iter().map(|(index, name)| {
+            let id = format!("{}{index}", crate::workspace_ui::SAVED);
             let checked = checked(app, &id);
             MenuItem { id, label: name, path: wp.clone(), shortcut: None, enabled: true, checked, color: None }
         });
@@ -181,6 +188,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
+    super::workspace_files::insert_menu_items(app, &mut items);
     // Keep the update command with the links, ahead of System Info and About.
     if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
         let update = items.remove(at);

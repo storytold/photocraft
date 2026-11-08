@@ -80,7 +80,7 @@ id = "UI-217-11"
 target = "Soft dark and soft light themes with picker previews; outlined knobs in light themes"
 status = "done"
 issue = 217
-note = "theme.rs ThemeKind has fourteen themes: the twelve earlier ones plus Soft Dark and Soft Light (low-contrast Studio-layout palettes, text at 4.5:1, selectable in Preferences with the existing theme-card previews, ui.set {theme}, Window > Theme); the light themes outline the slider knob with Tokens::knob_outline (dim text, at least 3:1 against dock, card and chrome; #7927)"
+note = "theme.rs ThemeKind has sixteen themes: the fourteen earlier ones plus CS4 and CS5 (light frames, Window > Theme, and the bundled .pcraft-workspace samples). Soft Dark and Soft Light remain the low-contrast Studio-layout palettes (text at 4.5:1, selectable in Preferences with the existing theme-card previews, ui.set {theme}, Window > Theme); the light themes outline the slider knob with Tokens::knob_outline (dim text, at least 3:1 against dock, card and chrome; #7927)"
 
 [[item]]
 id = "UI-217-12"

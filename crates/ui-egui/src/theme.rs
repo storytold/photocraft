@@ -34,6 +34,10 @@ pub enum ThemeKind {
     ProLightGray,
     /// Photoshop's fourth (lightest) interface brightness: #F0F0F0 panels (#2661).
     ProLight,
+    /// Light-gray panels, a blue accent and a medium-gray canvas: the Photoshop CS4-era frame.
+    Cs4,
+    /// Cooler light panels, a clearer blue accent and a dark cool-gray canvas: the Photoshop CS5-era frame.
+    Cs5,
     Studio,
     StudioLight,
     Classic,
@@ -55,11 +59,13 @@ pub enum ThemeKind {
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 14] = [
+    pub const ALL: [ThemeKind; 16] = [
         ThemeKind::Pro,
         ThemeKind::ProMedium,
         ThemeKind::ProLightGray,
         ThemeKind::ProLight,
+        ThemeKind::Cs4,
+        ThemeKind::Cs5,
         ThemeKind::Studio,
         ThemeKind::StudioLight,
         ThemeKind::Classic,
@@ -77,6 +83,8 @@ impl ThemeKind {
             ThemeKind::ProMedium => "Pro (Medium Gray)",
             ThemeKind::ProLightGray => "Pro (Light Gray)",
             ThemeKind::ProLight => "Pro (Light)",
+            ThemeKind::Cs4 => "CS4",
+            ThemeKind::Cs5 => "CS5",
             ThemeKind::Studio => "Studio (Dark)",
             ThemeKind::StudioLight => "Studio (Light)",
             ThemeKind::Classic => "Classic",
@@ -97,6 +105,8 @@ impl ThemeKind {
             ThemeKind::ProMedium => "proMedium",
             ThemeKind::ProLightGray => "proLightGray",
             ThemeKind::ProLight => "proLight",
+            ThemeKind::Cs4 => "cs4",
+            ThemeKind::Cs5 => "cs5",
             ThemeKind::Studio => "studio",
             ThemeKind::StudioLight => "studioLight",
             ThemeKind::Classic => "classic",
@@ -111,7 +121,7 @@ impl ThemeKind {
     }
     /// Photoshop-grammar layout (tab strips, flat panels): the four Pro brightness levels.
     pub fn is_pro(self) -> bool {
-        matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProLightGray | ThemeKind::ProLight)
+        matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProLightGray | ThemeKind::ProLight | ThemeKind::Cs4 | ThemeKind::Cs5)
     }
     /// Whether this theme belongs to the dark appearance family.
     pub fn is_dark(self) -> bool {
@@ -140,6 +150,8 @@ impl ThemeKind {
             "promedium" | "promediumgray" | "medium" | "mediumgray" => Some(ThemeKind::ProMedium),
             "prolightgray" | "lightgray" | "mediumlight" => Some(ThemeKind::ProLightGray),
             "prolight" | "prolightest" | "lightest" | "light" => Some(ThemeKind::ProLight),
+            "cs4" | "photoshopcs4" => Some(ThemeKind::Cs4),
+            "cs5" | "photoshopcs5" => Some(ThemeKind::Cs5),
             "studio" | "studiodark" => Some(ThemeKind::Studio),
             "studiolight" => Some(ThemeKind::StudioLight),
             "classic" | "win2000" | "retro" => Some(ThemeKind::Classic),
@@ -290,6 +302,82 @@ impl Tokens {
                 shadow: Color32::from_black_alpha(50),
                 tab_strip: Color32::from_rgb(226, 226, 226),
                 row_selected: Color32::from_rgb(204, 204, 204),
+                ..Tokens::for_kind(ThemeKind::Pro)
+            },
+            // CS4-era frame: light-gray chrome, a classic blue accent, nearly square corners.
+            ThemeKind::Cs4 => Tokens {
+                kind,
+                chrome: Color32::from_rgb(212, 212, 212),
+                canvas: Color32::from_rgb(128, 128, 128),
+                canvas_dot: Color32::from_rgb(128, 128, 128),
+                dock: Color32::from_rgb(198, 198, 198),
+                card: Color32::from_rgb(220, 220, 220),
+                card_border: Color32::from_rgb(168, 168, 168),
+                field: Color32::WHITE,
+                field_border: Color32::from_rgb(160, 160, 160),
+                hover: Color32::from_rgb(200, 200, 200),
+                pressed: Color32::from_rgb(176, 176, 176),
+                text: Color32::from_rgb(20, 20, 20),
+                text_dim: Color32::from_rgb(55, 55, 55),
+                text_faint: Color32::from_rgb(90, 90, 90),
+                icon: Color32::from_rgb(40, 40, 40),
+                accent: Color32::from_rgb(49, 106, 197),
+                accent_soft: Color32::from_rgb(196, 210, 232),
+                accent_border: Color32::from_rgb(49, 106, 197),
+                accent_text: Color32::from_rgb(0, 51, 128),
+                separator: Color32::from_rgb(160, 160, 160),
+                shadow: Color32::from_black_alpha(60),
+                primary_bg: Color32::from_rgb(49, 106, 197),
+                primary_text: Color32::WHITE,
+                radius_sm: 1.0,
+                radius: 1.0,
+                radius_lg: 2.0,
+                bevel: false,
+                pro: true,
+                round_chips: false,
+                tab_strip: Color32::from_rgb(196, 196, 196),
+                row_selected: Color32::from_rgb(210, 222, 240),
+                histogram_bg: Color32::from_rgb(40, 40, 40),
+                // Status text is `warning` on `chrome`. Pro's amber is about 1.3:1 on this gray.
+                warning: Color32::from_rgb(140, 72, 0),
+                ..Tokens::for_kind(ThemeKind::Pro)
+            },
+            // CS5-era frame: cooler than CS4, a clearer blue, corners a step rounder.
+            ThemeKind::Cs5 => Tokens {
+                kind,
+                chrome: Color32::from_rgb(198, 202, 206),
+                canvas: Color32::from_rgb(96, 98, 102),
+                canvas_dot: Color32::from_rgb(96, 98, 102),
+                dock: Color32::from_rgb(186, 190, 194),
+                card: Color32::from_rgb(210, 214, 218),
+                card_border: Color32::from_rgb(156, 162, 168),
+                field: Color32::WHITE,
+                field_border: Color32::from_rgb(150, 156, 162),
+                hover: Color32::from_rgb(188, 194, 200),
+                pressed: Color32::from_rgb(168, 174, 180),
+                text: Color32::from_rgb(20, 22, 26),
+                text_dim: Color32::from_rgb(52, 56, 62),
+                text_faint: Color32::from_rgb(86, 92, 98),
+                icon: Color32::from_rgb(36, 40, 46),
+                accent: Color32::from_rgb(0, 114, 198),
+                accent_soft: Color32::from_rgb(186, 214, 236),
+                accent_border: Color32::from_rgb(0, 114, 198),
+                accent_text: Color32::from_rgb(0, 62, 120),
+                separator: Color32::from_rgb(150, 156, 162),
+                shadow: Color32::from_black_alpha(70),
+                primary_bg: Color32::from_rgb(0, 114, 198),
+                primary_text: Color32::WHITE,
+                radius_sm: 2.0,
+                radius: 2.0,
+                radius_lg: 3.0,
+                bevel: false,
+                pro: true,
+                round_chips: false,
+                tab_strip: Color32::from_rgb(184, 190, 196),
+                row_selected: Color32::from_rgb(196, 220, 238),
+                histogram_bg: Color32::from_rgb(32, 36, 40),
+                // Status text is `warning` on `chrome`. This chrome is darker than CS4's, so the amber is darker too.
+                warning: Color32::from_rgb(120, 52, 0),
                 ..Tokens::for_kind(ThemeKind::Pro)
             },
             ThemeKind::Pro => Tokens {
