@@ -1177,3 +1177,62 @@ fn review_repaired_action_target_seeds_recorded_controls() {
         }
     }
 }
+
+/// Record Again resolves a recorded scalar target before seeding defaults from another panel target.
+#[test]
+fn record_again_uses_recorded_alpha_settings_and_matches_its_preview() {
+    for mode in MODES {
+        for kind in ["levels", "curves"] {
+            let mut app = fixture(mode, SampleType::U16, ChannelTarget::Color(0));
+            let mut recorded = photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for(kind, mode).unwrap());
+            for key in ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "lightness", "a", "b"] {
+                if recorded.get(key).is_some() {
+                    recorded[key] = if kind == "levels" { json!({"gamma":4}) } else { json!([[0, 255], [255, 255]]) };
+                }
+            }
+            recorded["target"] = json!({"channel": 0});
+            if kind == "levels" {
+                recorded["gamma"] = json!(2);
+            } else {
+                recorded["points"] = json!([[0, 255], [255, 0]]);
+            }
+            app.session
+                .actions
+                .list
+                .push(photocraft_engine::actions_cmds::Action::new("Recorded alpha", vec![(format!("image.adjustments.{kind}"), recorded)]));
+            app.ui.actions.selected = Some(0);
+            app.ui.actions.selected_step = Some(0);
+            let original = app.session.active().unwrap().doc.clone();
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(
+                |ui, app| {
+                    photocraft_ui_egui::actions::panel_menu(app, ui);
+                    dialogs::show(app, ui.ctx());
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(3);
+            h.get_by_role_and_label(egui::accesskit::Role::Button, "Record Again").click();
+            h.run_steps(3);
+            assert_eq!(names(&h), ["Saved sky"], "{mode:?} {kind}");
+            let values = params(&h);
+            assert_eq!(values["target"], json!({"channel": 0}));
+            let neutral = photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for(kind, ColorMode::Grayscale).unwrap());
+            for key in ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "lightness", "a", "b"] {
+                assert_eq!(values.get(key), neutral.get(key), "{mode:?} {kind}: hidden colour record {key}");
+            }
+            let id = h.state().ui.dialogs.last().unwrap().id;
+            let state = h.state().session.active().unwrap();
+            let preview = filter_dialog::preview_document(&state.doc, state.active_layer, &format!("image.adjustments.{kind}"), &values, 1).unwrap();
+            assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
+            dialogs::confirm(h.state_mut(), id).unwrap();
+            let after = &h.state().session.active().unwrap().doc;
+            assert_eq!(preview.channels[0].surface, after.channels[0].surface);
+            let expected = if kind == "levels" { 0.5 } else { 0.75 };
+            assert!((value(h.state(), ChannelTarget::Alpha(0)) - expected).abs() < 0.01, "{mode:?} {kind}");
+            assert_eq!(after.layers, original.layers);
+            assert_eq!(after.quick_mask, original.quick_mask);
+            assert_eq!(h.state().session.actions.list[0].steps[0].1["target"], json!({"channel": 0}));
+        }
+    }
+}

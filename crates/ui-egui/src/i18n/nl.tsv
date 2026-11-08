@@ -4360,6 +4360,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Kies voor elk kanaal een ander document.
 	A picked document is no longer open.	Een gekozen document is niet meer geopend.
 	A picked document is no longer a grayscale document of the same size.	Een gekozen document is geen grijswaardendocument van hetzelfde formaat meer.
+	Netscape Gray	Netscape-grijs
 # Move tool options bar (#11381)
 	Align top edges	Bovenranden uitlijnen
 	Align vertical centers	Verticale middens uitlijnen
@@ -4369,6 +4370,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Laaggrenzen tonen bij aanwijzen
 	Expand layer group on click	Laaggroep uitvouwen bij klikken
 	Show hover bounds from Layers	Aanwijsgrenzen tonen vanuit Lagen
+	Saved Camera Raw settings to {file}	Camera Raw-instellingen opgeslagen in {file}
+	Save the settings to each raw's sidecar without opening it	De instellingen in het sidecarbestand van elke raw opslaan zonder die te openen
+	No settings saved: these raws can't keep a sidecar here	Niets opgeslagen: deze raws kunnen hier geen sidecarbestand krijgen
+	Some settings could not be saved; the raws stay open	Sommige instellingen konden niet worden opgeslagen; de raws blijven open
+	Nothing to save: these raws are at their default settings	Niets op te slaan: deze raws staan op hun standaardinstellingen
 # Artboard tool options bar (#11385)
 	Distribute Widths	Breedtes verdelen
 	Distribute Heights	Hoogtes verdelen

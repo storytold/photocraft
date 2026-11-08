@@ -4506,6 +4506,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Elija un documento distinto para cada canal.
 	A picked document is no longer open.	Uno de los documentos elegidos ya no está abierto.
 	A picked document is no longer a grayscale document of the same size.	Uno de los documentos elegidos ya no es un documento en escala de grises del mismo tamaño.
+	Netscape Gray	Gris Netscape
 # Move tool options bar (#11381)
 	Align top edges	Alinear bordes superiores
 	Align vertical centers	Alinear centros verticales
@@ -4515,6 +4516,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostrar límites de capa al pasar el puntero
 	Expand layer group on click	Expandir grupo de capas al hacer clic
 	Show hover bounds from Layers	Mostrar límites al pasar el puntero desde Capas
+	Saved Camera Raw settings to {file}	Ajustes de Camera Raw guardados en {file}
+	Save the settings to each raw's sidecar without opening it	Guardar los ajustes en el archivo sidecar de cada raw sin abrirlo
+	No settings saved: these raws can't keep a sidecar here	No se guardó nada: estos raw no pueden tener un archivo sidecar aquí
+	Some settings could not be saved; the raws stay open	No se pudieron guardar algunos ajustes; los raw siguen abiertos
+	Nothing to save: these raws are at their default settings	Nada que guardar: estos raw tienen los ajustes predeterminados
 # Artboard tool options bar (#11385)
 	Distribute Widths	Distribuir anchos
 	Distribute Heights	Distribuir alturas
