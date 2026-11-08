@@ -122,9 +122,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
     match ev {
         ToolEvent::Down { .. } => {
             // A new quad's first press drops an active selection as its own "Deselect" step, as in
-            // Photoshop (#11975): it is gone after the commit and after Esc too.
-            if app.ui.perspective_crop.is_none() && app.pcrop.clicks.is_empty() && app.session.active().is_some_and(|d| d.doc.selection.is_some()) {
-                let _ = app.run("select.deselect", json!({}));
+            // Photoshop (#11975): it is gone after the commit and after Esc too. Refused (a job
+            // locks the document, its reason in the status bar), the press starts no quad.
+            if app.ui.perspective_crop.is_none()
+                && app.pcrop.clicks.is_empty()
+                && app.session.active().is_some_and(|d| d.doc.selection.is_some())
+                && app.run("select.deselect", json!({})).is_err()
+            {
+                return true;
             }
             app.pcrop.drag = match app.ui.perspective_crop {
                 Some(q) => {

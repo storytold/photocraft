@@ -93,3 +93,41 @@ fn a_selection_made_between_corner_clicks_is_kept() {
     assert_eq!(steps(&app), before, "no second Deselect step");
     assert!(app.ui.perspective_crop.is_some(), "four clicks made the quad");
 }
+
+#[test]
+fn a_press_while_a_job_locks_the_document_starts_no_quad() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut app = app(true);
+    let gate = Arc::new(AtomicBool::new(false));
+    let open = gate.clone();
+    let job = app
+        .session
+        .start_job(
+            "test.slow",
+            json!({}),
+            "Slow Filter",
+            true,
+            move |ctx| {
+                while !open.load(Ordering::Relaxed) {
+                    ctx.check()?;
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Ok(())
+            },
+            |_, ()| Ok(json!(null)),
+        )
+        .unwrap();
+    let photocraft_engine::jobs::Started::Job(job) = job else { panic!("ran inline") };
+    // Deselect is refused while the job runs: the press doesn't start a quad that would keep the
+    // selection, so it can be tried again once the job is done.
+    drag(&mut app, [20.0, 20.0], [180.0, 130.0]);
+    assert!(selected(&app), "the job refused the Deselect");
+    assert!(!pending(&app), "no quad without the Deselect: {:?}", app.ui.perspective_crop);
+    gate.store(true, Ordering::Relaxed);
+    app.session.wait_job(job).unwrap();
+    drag(&mut app, [20.0, 20.0], [180.0, 130.0]);
+    assert!(!selected(&app));
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Deselect"));
+    assert!(app.ui.perspective_crop.is_some());
+}
