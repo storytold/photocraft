@@ -600,12 +600,12 @@ fn digit_run(it: &mut std::iter::Peekable<std::str::Chars>) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn absolute(p: &str) -> String {
+pub(crate) fn absolute(p: &str) -> String {
     std::path::absolute(p).map(|a| a.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
-fn absolute(p: &str) -> String {
+pub(crate) fn absolute(p: &str) -> String {
     p.to_string()
 }
 

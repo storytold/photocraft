@@ -80,6 +80,8 @@ use history::history;
 pub(crate) use history::select_snapshot;
 pub(crate) use history::selected_snapshot;
 #[cfg(test)]
+pub(crate) use history::step_icon as history_step_icon;
+#[cfg(test)]
 use info::info_panel;
 pub(crate) use info::{SamplerReadouts, sampler_readouts};
 #[cfg(test)]
