@@ -859,6 +859,9 @@ mod transform_type_tests;
 mod transform_reference_point_tests;
 
 #[cfg(test)]
+mod transform_relative_position_tests;
+
+#[cfg(test)]
 mod transform_several_tests;
 
 #[cfg(test)]
@@ -871,6 +874,9 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+
+#[cfg(test)]
+mod move_target_default_tests;
 
 #[cfg(test)]
 mod move_history_names_tests;
