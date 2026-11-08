@@ -5673,6 +5673,7 @@ fn recorded_displace_round_trips_text_event_and_typed_path() {
 /// Keep unmeasured inputs intact and refuse settings that would be changed by export.
 #[test]
 fn unmeasured_displace_stays_opaque_and_lossy_export_is_refused() {
+    assert!(!super::menu_item_commands().contains(&"filter.distort.displace"));
     let path = r"C:\map.psd";
     let wire = path_value(path);
     let descriptor = displace_descriptor(wire.clone());
@@ -5766,6 +5767,14 @@ fn recorded_displace_loads_without_map_and_plays_through_the_step_gate() {
     };
     // Offset the source edge so the positive shift crosses it within the white part of the map.
     paint_split(&mut source, 64, 48, [1.0, 0.0, 0.0, 1.0]);
+    source
+        .edit("Bottom edge fixture", |doc, _| {
+            let id = doc.layers[0].id;
+            let surface = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+            surface.fill_rect(Rect::new(0, 48, 64, 64), &[0.0, 1.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
     let snapshot = |s: &Session| {
         let active = s.active().unwrap();
         (active.revision, active.history.past_len(), photocraft_compose::render(&active.doc, active.doc.bounds()).into_px())
@@ -5777,10 +5786,7 @@ fn recorded_displace_loads_without_map_and_plays_through_the_step_gate() {
     assert!(missing["failed"]["error"].as_str().unwrap().contains("cannot read displacement map"));
     assert_eq!(snapshot(&source), before);
 
-    let mut map = Session::new();
-    paint_split(&mut map, 16, 8, [1.0, 1.0, 1.0, 1.0]);
-    let encoded = photocraft_io::export(&map.active().unwrap().doc, "psd", &Default::default()).unwrap();
-    std::fs::write(&path, encoded.bytes).unwrap();
+    // Leave the map absent so a read before authorization would report the same I/O failure.
     source.authorize = Some(|id, p| {
         if id == "filter.distort.displace" && p["mapPath"].is_string() {
             return Err(EngineError::Other("test denied the map path".into()));
@@ -5794,6 +5800,10 @@ fn recorded_displace_loads_without_map_and_plays_through_the_step_gate() {
     assert_eq!(snapshot(&source), before);
 
     source.authorize = None;
+    let mut map = Session::new();
+    paint_split(&mut map, 16, 8, [1.0, 1.0, 1.0, 1.0]);
+    let encoded = photocraft_io::export(&map.active().unwrap().doc, "psd", &Default::default()).unwrap();
+    std::fs::write(&path, encoded.bytes).unwrap();
     let played = source.execute("actions.play", json!({"action":"A"})).unwrap();
     assert_eq!(played["ran"], 1, "{played}");
     assert!(played.get("failed").is_none(), "{played}");
@@ -5802,6 +5812,10 @@ fn recorded_displace_loads_without_map_and_plays_through_the_step_gate() {
     assert_eq!(before.2[32 * 64 + 38], [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(pixels[32 * 64 + 38], [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(pixels[32 * 64 + 20], [0.0, 0.0, 0.0, 1.0]);
+    // The vertical shift crosses into green, then repeats the bottom edge instead of wrapping to red.
+    assert_eq!(before.2[40 * 64 + 38], [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(pixels[40 * 64 + 38], [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(pixels[60 * 64 + 38], [0.0, 1.0, 0.0, 1.0]);
 }
 
 /// The step `d` of Photoshop event `code`, as PhotoCraft loads it.
