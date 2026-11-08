@@ -124,6 +124,9 @@ pub(crate) struct Redraw {
     collected_bytes: u64,
     /// Bytes the kept composites may hold: what Memory Usage leaves beside the document.
     cap: u64,
+    /// The redraw was asked for the whole canvas (directly, or by a redraw it continues): once
+    /// it finishes, every block has been redrawn.
+    full: bool,
     /// Set when this worker first reaches the test [`HOLD`], and this worker's generation.
     #[cfg(test)]
     reached_hold: Arc<AtomicBool>,
@@ -297,6 +300,7 @@ pub(crate) fn start(
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
     app.kept.trim(cap);
+    let full = region.intersect(&doc.bounds()) == doc.bounds() || app.redraws.get(&doc.id).is_some_and(|old| old.blocks == all && old.full);
     let (mut pending, since, fallback, gpu_attempt_ms, mut keep) = match app.redraws.remove(&doc.id) {
         Some(mut old) if old.blocks == all => {
             // Blocks drawn from another state aren't part of this one's composite.
@@ -334,11 +338,15 @@ pub(crate) fn start(
         }
         if !pending.contains(&true) {
             app.perf.record(KEPT, px, 0.0, crate::gpu_canvas::now_ms() - t0);
+            // The whole canvas uploaded from the kept copy: as good as a full refresh.
+            if px >= doc.bounds().size().area() {
+                crate::canvas::sweep::full_refresh_landed(app, doc.id);
+            }
             return;
         }
         keep = (vec![None; all.len()], 0, keep.2);
     }
-    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, gpu_attempt_ms, keep });
+    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, gpu_attempt_ms, keep, full });
 }
 
 /// After an edit drew its own damage: continue document `doc.id`'s redraw, if one is running, on
@@ -393,8 +401,9 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
         app.kept.store(k, &r.doc, cap);
     }
     // A whole canvas redrawn here is as good as a full GPU refresh: a block sweep that failed
-    // (and fell back to this) may run again on later edits.
-    if r.blocks.iter().map(|b| b.size().area()).sum::<u64>() >= r.doc.bounds().size().area() {
+    // (and fell back to this) may run again on later edits, if this
+    // redraw was asked for everything (`blocks` always spans the canvas, `pending` only the damage).
+    if r.full {
         crate::canvas::sweep::full_refresh_landed(app, doc);
     }
     let ms = crate::gpu_canvas::now_ms() - r.started_ms;
@@ -474,6 +483,8 @@ struct Spawn {
     gpu_attempt_ms: f64,
     /// Blocks collected for [`Kept`], their bytes, and the cap.
     keep: (Vec<Option<Vec<u8>>>, u64, u64),
+    /// See [`Redraw::full`].
+    full: bool,
 }
 
 fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
@@ -490,6 +501,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         fallback,
         gpu_attempt_ms,
         keep: (collected, collected_bytes, cap),
+        full,
     } = s;
     let id = doc.id;
     let kept_doc = doc.clone();
@@ -538,6 +550,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
             collected,
             collected_bytes,
             cap,
+            full,
             #[cfg(test)]
             reached_hold,
             #[cfg(test)]
