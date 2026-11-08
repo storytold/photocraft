@@ -132,6 +132,10 @@ fn clicking_a_recent_tile_picks_that_brush() {
     let (brush, preset) = (&h.state().session.tools.brush, &h.state().session.tools.presets[3].brush);
     assert_eq!((brush.size, brush.hardness, &brush.tip), (preset.size, preset.hardness, &preset.tip), "the preset's tip and size");
     assert!(h.state().ui.brush_picker.is_some(), "a click keeps the picker open");
+    // It moves to the front once the pointer is off the row.
+    let below = h.get_by_label("Brush Preset Options").rect().center() + egui::vec2(0.0, 200.0);
+    h.hover_at(below);
+    h.run_steps(2);
     assert_eq!(h.state().ui.brush_picker_list.recent[0], n[3], "and it moves to the front");
 }
 
@@ -217,4 +221,30 @@ fn a_full_recent_row_fits_the_narrowest_picker() {
         let r = h.get_by_label(&tile(name)).rect();
         assert!(r.max.x <= right + 0.5, "`{name}`'s tile ends at {} past the picker's right edge {right}", r.max.x);
     }
+}
+
+#[test]
+fn a_clicked_recent_tile_stays_under_the_pointer_until_it_leaves_the_row() {
+    // The click picks the brush, but the row keeps its order while the pointer is on it: the tile
+    // that was clicked stays where the pointer is, and moves to the front once the pointer leaves.
+    let mut app = app();
+    let n = names(&app);
+    pick(&mut app, &n[3]);
+    pick(&mut app, &n[1]);
+    let mut h = harness(app);
+    let p = h.get_by_label(&tile(&n[3])).rect().center();
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+    assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(n[3].as_str()), "the click picks the brush");
+    assert_eq!(recent(h.state()), [n[1].clone(), n[3].clone()], "the row holds its order under the pointer");
+    assert!(h.get_by_label(&tile(&n[3])).rect().contains(p), "the clicked tile is still under the pointer");
+    let below = h.get_by_label("Brush Preset Options").rect().center() + egui::vec2(0.0, 200.0);
+    h.hover_at(below);
+    h.run_steps(2);
+    assert_eq!(recent(h.state()), [n[3].clone(), n[1].clone()], "off the row, the picked brush goes to the front");
+    assert!(h.state().ui.brush_picker.is_some(), "the picker stays open");
 }

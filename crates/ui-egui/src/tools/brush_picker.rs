@@ -176,7 +176,10 @@ pub fn note_recent(st: &mut BrushesPanelState, current: Option<&str>, presets: &
 pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // The recent row follows the current preset however it changed (the picker, the Brushes
     // panel, a key, the control channel), so it is kept here in the frame loop too.
-    note_recent(&mut app.ui.brush_picker_list, app.session.tools.current_preset.as_deref(), &app.session.tools.presets);
+    // While the pointer is on the open picker's row, a brush picked there keeps its place, so the
+    // tiles don't shift under the pointer; it goes to the front once the pointer leaves the row.
+    let current = if pointer_on_recent_row(ctx) { None } else { app.session.tools.current_preset.as_deref() };
+    note_recent(&mut app.ui.brush_picker_list, current, &app.session.tools.presets);
     if ctx.input(|i| i.pointer.any_down()) {
         return;
     }
@@ -184,6 +187,17 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.session.prefs().brush_picker != now {
         app.session.prefs.edit(|p| p.brush_picker = now);
     }
+}
+
+/// The recent row's rect in the pass that drew it (`recent_row`).
+fn recent_row_id() -> egui::Id {
+    picker_id().with("recent-row")
+}
+
+/// Is the pointer on the recent row the picker drew this pass?
+fn pointer_on_recent_row(ctx: &egui::Context) -> bool {
+    let Some((pass, rect)) = ctx.data(|d| d.get_temp::<(u64, egui::Rect)>(recent_row_id())) else { return false };
+    pass == ctx.cumulative_pass_nr() && ctx.pointer_latest_pos().is_some_and(|p| rect.contains(p))
 }
 
 /// Restore the picker's remembered view at launch. A missing or malformed part keeps its
@@ -385,7 +399,7 @@ fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>,
     // A full row is wider than the narrowest picker: the tiles shrink to fit its width.
     let n = recent.iter().filter(|name| presets.iter().any(|p| &p.name == *name)).count().max(1) as f32;
     let tile = ((ui.available_width() - GAP * (n - 1.0)) / n).clamp(12.0, TILE);
-    ui.horizontal(|ui| {
+    let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
         for name in recent {
             let Some(p) = presets.iter().find(|p| &p.name == name) else { continue };
@@ -410,8 +424,8 @@ fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>,
                 egui::Color32::WHITE,
             );
             let resp = resp.on_hover_text(name);
-            // The first click moves its tile to the front, so the second can land on another
-            // tile: the double-click chooses the brush its first click picked.
+            // The double-click chooses the brush its first click picked, even if the row has
+            // moved between the clicks (the pointer left it and came back).
             let first_click = picker_id().with("recent-first-click");
             if resp.double_clicked() {
                 let first = ui.ctx().data_mut(|d| d.remove_temp::<String>(first_click)).unwrap_or_else(|| name.clone());
@@ -422,6 +436,8 @@ fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>,
             }
         }
     });
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().data_mut(|d| d.insert_temp(recent_row_id(), (pass, row.response.rect)));
 }
 
 /// A remembered picker size, clamped for `screen` (a corrupt or wildly stale value falls back to
