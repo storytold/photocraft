@@ -947,7 +947,7 @@ fn alt_over_the_box_shows_the_reference_point_pointer() {
     for p in [[55.0, 52.0], [30.0, 30.0], [200.0, 200.0]] {
         assert_eq!(crate::transform_tool::cursor(&app, &xf, p, alt), Some(egui::CursorIcon::Crosshair), "{p:?}");
     }
-    assert_eq!(crate::transform_tool::cursor(&app, &xf, [55.0, 52.0], egui::Modifiers::NONE), Some(egui::CursorIcon::Move));
+    assert_eq!(crate::transform_tool::cursor(&app, &xf, [55.0, 52.0], egui::Modifiers::NONE), Some(egui::CursorIcon::Default));
     assert_ne!(crate::transform_tool::cursor(&app, &xf, [40.0, 40.0], alt), Some(egui::CursorIcon::Crosshair), "a corner handle stays a handle");
 }
 

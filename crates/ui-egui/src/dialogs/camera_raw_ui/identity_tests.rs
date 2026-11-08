@@ -49,6 +49,7 @@ fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
     let (index, _) = session.open_document(imported.document, None);
     let raw = RawOpen {
         document: session.documents()[index].doc.id,
+        held: None,
         name: "synthetic.dng".into(),
         path: None,
         bytes: Some(bytes),
@@ -143,31 +144,33 @@ fn completion_identity_rejects_missing_and_invalid_ids_before_any_side_effect() 
     }
 }
 
+/// A queued raw waits outside the session: the active document, the tabs and history stay as
+/// they were.
 #[test]
-fn queue_identity_targets_an_inactive_raw_without_changing_the_active_document() {
+fn queueing_a_raw_leaves_the_session_untouched() {
     let (mut app, raw, control) = identity_app();
     app.session.set_active(0);
-    assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
-    queue_open_dialog(&mut app, raw.document, &raw.name, raw.path.as_deref(), raw.bytes.as_deref().map(Vec::as_slice), &[]).unwrap();
-    let queued = app.raw_shelf.first().map(|h| &h.raw).expect("the explicitly named RAW was queued");
-    assert_eq!(queued.document, raw.document);
-    assert_eq!((&queued.name, &queued.path, &queued.bytes), (&raw.name, &raw.path, &raw.bytes));
-    assert_eq!(app.session.active().unwrap().doc.id, control.doc.id, "queueing does not activate the target");
+    let docs = app.session.documents().len();
+    let held = photocraft_io::import("held.dng", raw.bytes.as_deref().unwrap()).unwrap().document;
+    let id = held.id;
+    queue_open_dialog(&mut app, held, "held.dng", None, raw.bytes.as_deref().map(Vec::as_slice), &[]).unwrap();
+    let queued = app.raw_shelf.first().map(|h| &h.raw).expect("the raw was queued");
+    assert_eq!((queued.document, queued.name.as_str(), queued.held.as_ref().map(|d| d.id)), (id, "held.dng", Some(id)));
+    assert_eq!(app.session.documents().len(), docs, "no document for a queued raw");
+    assert!(!app.session.documents().iter().any(|st| st.doc.id == id));
+    assert_eq!(app.session.active().unwrap().doc.id, control.doc.id, "queueing does not change the active document");
     control.assert_untouched(&app);
 }
 
+/// The same import queued twice (a late duplicate completion) keeps one review.
 #[test]
-fn queue_identity_rejects_a_missing_document_without_replacing_the_pending_review() {
+fn queueing_the_same_raw_twice_keeps_one_review() {
     let (mut app, raw, control) = identity_app();
-    queue_open_dialog(&mut app, raw.document, &raw.name, raw.path.as_deref(), raw.bytes.as_deref().map(Vec::as_slice), &[]).unwrap();
-    let pending = app.raw_shelf.first().map(|h| &h.raw).unwrap().clone();
+    let held = photocraft_io::import("held.dng", raw.bytes.as_deref().unwrap()).unwrap().document;
+    queue_open_dialog(&mut app, held.clone(), "held.dng", None, None, &[]).unwrap();
+    queue_open_dialog(&mut app, held, "again.dng", None, None, &[]).unwrap();
+    assert_eq!(app.raw_shelf.len(), 1);
+    assert_eq!(app.raw_shelf[0].raw.name, "held.dng");
     app.session.set_active(0);
-    let missing = photocraft_doc::DocId::fresh();
-    assert!(!app.session.documents().iter().any(|state| state.doc.id == missing));
-    assert!(queue_open_dialog(&mut app, missing, "missing.dng", Some("missing.dng"), Some(&[1, 2, 3]), &[]).is_err());
-    let queued = app.raw_shelf.first().map(|h| &h.raw).expect("the existing review is preserved");
-    assert_eq!(queued.document, pending.document);
-    assert_eq!((&queued.name, &queued.path, &queued.bytes), (&pending.name, &pending.path, &pending.bytes));
-    assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
     control.assert_untouched(&app);
 }

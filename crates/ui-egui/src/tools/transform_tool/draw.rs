@@ -1,11 +1,11 @@
 use super::begin::warps_type;
 use super::drag_modes::{HandleIndicator, handle_indicator};
 use super::options_bar::{quad_scale, readout};
-use super::pointer::{Hit, handle_at, rotate_dir, rotation_degrees};
+use super::pointer::{Hit, handle_at, rotation_degrees};
 use super::warp::{on_section_edge, quick_split_kind, single_patch};
 use super::{
-    BezierMesh, Color32, DocId, HANDLE_PX, Homography, LayerId, PhotocraftApp, Pos2, SplitTool, Stroke, TransformPreview, TransformSession, ViewXform, Warp,
-    WarpDrag, WarpStyle, corners, pos2, vec2,
+    BezierMesh, Color32, DocId, Homography, LayerId, PhotocraftApp, Pos2, SplitTool, Stroke, TransformPreview, TransformSession, ViewXform, Warp, WarpDrag,
+    WarpStyle, corners, pos2, vec2,
 };
 
 /// The distort or skew pointer at screen point `at`, where [`super::cursor`] hid the system
@@ -224,14 +224,6 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], Stroke::new(1.0, Color32::WHITE));
     }
     if let Some(at) = painter.ctx().pointer_hover_pos().filter(|p| xf.rect.contains(*p)) {
-        let p = xf.to_doc(at);
-        let tol = HANDLE_PX / f64::from(xf.zoom.max(0.01));
-        if let Some(k) = rotate_dir(t, Some(pv), p, tol) {
-            // Through the view, so the arc bends round the corner as it shows under a turned or
-            // flipped view.
-            let toward = xf.to_screen((p[0] + k[0] * 16.0) as f32, (p[1] + k[1] * 16.0) as f32) - at;
-            crate::crop_ui::draw_turn_cursor(painter.ctx(), at, toward);
-        }
         // Preferences › Tools › Show Transformation Values off hides it, as in Photoshop (#204).
         if let Some(r) = live_readout(app).filter(|_| app.session.prefs().tools.show_transformation_values) {
             draw_live_readout(app, painter.ctx(), at, r);

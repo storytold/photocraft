@@ -324,6 +324,11 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
     let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied } = held;
+    // A raw opens in the Camera Raw dialog first and becomes a document only on its Open.
+    if crate::camera_raw_ui::wants_open_dialog(app, &warnings) {
+        crate::camera_raw_ui::hold_for_dialog(app, doc, &name, path.as_deref(), bytes.as_deref().map(Vec::as_slice), &warnings)?;
+        return Ok(json!({"cameraRaw": true, "name": name}));
+    }
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)

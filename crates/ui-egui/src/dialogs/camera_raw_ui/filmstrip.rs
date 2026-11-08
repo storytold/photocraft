@@ -1,6 +1,7 @@
 //! The open-time dialog's filmstrip: raws opened together wait side by side in one Camera Raw
-//! dialog, as in Photoshop's. Each keeps its own settings and demosaic choice when another is
-//! shown, Open develops every one and Cancel closes every one.
+//! dialog, as in Photoshop's. None is a document yet. Each keeps its own settings and demosaic
+//! choice when another is shown, Open develops every one into a document and Cancel drops every
+//! one.
 //!
 //! Several can be selected, as in Camera Raw's filmstrip: Shift-click selects a range, ⌘-click
 //! (Ctrl elsewhere) adds or removes one, ⌘A selects every raw. The shown raw is always one of
@@ -18,8 +19,8 @@ pub(super) const FILM_W: f32 = 150.0;
 /// Long side of a filmstrip thumbnail, in pixels.
 const THUMB_SIDE: usize = 240;
 
-/// A raw waiting in the open-time dialog: opened (developed with the defaults) and reviewed
-/// before Open keeps it.
+/// A raw waiting in the open-time dialog: developed with the defaults and reviewed before Open
+/// makes it a document (until then it is not one: no tab, nothing on the canvas).
 pub struct HeldRaw {
     pub raw: RawOpen,
     /// Its settings and the settings it started from (its sidecar's, or the defaults) once it
@@ -52,19 +53,21 @@ struct ThumbSource {
     full_w: usize,
     float: bool,
     curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
+    /// The raw file binned to the thumbnail's size: synced raw-stage settings develop from the
+    /// sensor data, as Open does ([`super::ProxyJob`]). `None`: the file can't be read again.
+    raw: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
     encoding_gamma: f32,
 }
 
 impl HeldRaw {
     pub(super) fn new(app: &PhotocraftApp, raw: RawOpen) -> Self {
-        let thumb = super::open::document_index(app, raw.document).and_then(|i| thumbnail(app, i));
+        let thumb = super::open::raw_document(app, &raw).and_then(|doc| thumbnail(app, &doc));
         HeldRaw { raw, kept: None, thumb, tex: None, selected: false, anchor: false, stale: false, source: None, redraw: None }
     }
 }
 
-/// A filmstrip thumbnail of document `index` (a just-developed raw: its first pixel layer).
-fn thumbnail(app: &PhotocraftApp, index: usize) -> Option<egui::ColorImage> {
-    let doc = &app.session.documents().get(index)?.doc;
+/// A filmstrip thumbnail of `doc` (a just-developed raw: its first pixel layer).
+fn thumbnail(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<egui::ColorImage> {
     let surf = doc.layers.iter().find_map(|l| l.surface())?;
     let area = doc.bounds();
     let (w, h) = (area.width() as usize, area.height() as usize);
@@ -166,16 +169,20 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
     (p, None)
 }
 
-/// Camera Raw's Auto for a filmstrip raw, from the proxy the dialog would use, so showing a raw
-/// doesn't change what Auto gives it.
+/// Camera Raw's Auto for a filmstrip raw, from the pixels the dialog's Auto reads
+/// ([`default_proxy`]), so showing a raw doesn't change what Auto gives it.
 pub(super) fn auto_tone(app: &PhotocraftApp, raw: &RawOpen, p: &mut CameraRaw) {
-    if let Some(st) = super::open::document_index(app, raw.document).and_then(|i| app.session.documents().get(i))
-        && let Some(surf) = st.doc.layers.iter().find_map(|l| l.surface())
-        && let Ok((area, w, h)) = super::convert::preview_area(st.doc.bounds(), surf)
-    {
-        let (proxy, ..) = super::convert::box_proxy(surf, area, w, h);
+    if let Some(proxy) = super::open::raw_document(app, raw).and_then(|doc| default_proxy(&doc)) {
         photocraft_algo::camera_raw::auto_tone(&proxy, p);
     }
+}
+
+/// The default develop of a raw box-averaged to the preview's size: what Camera Raw Defaults ›
+/// Apply auto tone reads, for a shown raw and one Open develops without showing it alike.
+pub(super) fn default_proxy(doc: &photocraft_doc::Document) -> Option<Vec<[f32; 4]>> {
+    let surf = doc.layers.iter().find_map(|l| l.surface())?;
+    let (area, w, h) = super::convert::preview_area(doc.bounds(), surf).ok()?;
+    Some(super::convert::box_proxy(surf, area, w, h).0)
 }
 
 /// Open with raws in the filmstrip: the shown one as the dialog has it, then every other with
@@ -226,7 +233,7 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
 }
 
 /// Done: saves each raw's settings to its sidecar, as Camera Raw's Done does, and opens none of
-/// them (they close again).
+/// them.
 pub(super) fn done(app: &mut PhotocraftApp) -> Value {
     use super::sidecar::Stored;
     keep_settings(app);
@@ -259,7 +266,8 @@ pub(super) fn done(app: &mut PhotocraftApp) -> Value {
     let saved = json!(saved);
     app.camera_raw = None;
     app.raw_shelf.clear();
-    for (raw, _) in &raws {
+    // Held raws were never documents; one shown from the session closes, as before it was kept.
+    for (raw, _) in raws.iter().filter(|(r, _)| r.held.is_none()) {
         if let Some(index) = super::open::document_index(app, raw.document) {
             app.session.close(index);
         }
@@ -550,13 +558,14 @@ struct ThumbJob {
 
 fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
     let (params, _) = held.kept.clone()?;
-    let st = app.session.documents().get(super::open::document_index(app, held.raw.document)?)?;
-    let display = app.session.color.canvas_display(&st.doc).ok()?;
+    // A held raw: not a document, so not in the session.
+    let doc = super::open::raw_document(app, &held.raw)?;
+    let display = app.session.color.canvas_display(&doc).ok()?;
     let source = match &held.source {
         Some(source) => Ok(source.clone()),
         None => {
-            let surf = st.doc.layers.iter().find_map(|l| l.surface())?.clone();
-            Err((surf, st.doc.bounds(), held.raw.clone(), photocraft_engine::lens_cmds::encoding_gamma(&st.doc)))
+            let surf = doc.layers.iter().find_map(|l| l.surface())?.clone();
+            Err((surf, doc.bounds(), held.raw.clone(), photocraft_engine::lens_cmds::encoding_gamma(&doc)))
         }
     };
     Some(ThumbJob { params, source, display })
@@ -590,6 +599,7 @@ fn draw_thumb(job: ThumbJob) -> Option<(std::sync::Arc<ThumbSource>, egui::Color
         proxy: source.px.clone(),
         selection: None,
         raw_curve: source.curve.clone(),
+        raw_source: source.raw.clone(),
         params,
         float: source.float,
         size: source.size,
@@ -629,14 +639,35 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
 /// curve the dialog would read from its file.
 fn thumb_source(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect, raw: &RawOpen, encoding_gamma: f32) -> Option<ThumbSource> {
     let (area, w, h) = super::convert::preview_area(bounds, surf).ok()?;
-    let (proxy, pw, ph, _) = super::convert::box_proxy(surf, area, w, h);
-    let (px, tw, th) = shrink(&proxy, pw, ph);
+    // The raw binned straight to the thumbnail's size, as the dialog's proxy is to its own.
+    let k = w.max(h).div_ceil(THUMB_SIDE).max(1);
+    let (tw, th) = (w.div_ceil(k), h.div_ceil(k));
+    let bytes = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => Some(b.as_ref().clone()),
+        #[cfg(not(target_arch = "wasm32"))]
+        (None, Some(p)) => std::fs::read(p).ok(),
+        _ => None,
+    };
+    let source = bytes.and_then(|b| photocraft_io::raw::RawSource::proxy_only(&b, k).ok());
+    let developed = source.as_ref().and_then(|s| super::convert::raw_proxy(s, &Default::default(), tw, th));
+    let (px, size, raw_source, curve) = match (developed, source) {
+        (Some((px, _)), Some(s)) => {
+            let curve = std::sync::Arc::new(s.tone_curve().to_vec());
+            (px, (tw, th), Some(std::sync::Arc::new(s)), Some(curve))
+        }
+        _ => {
+            let (proxy, pw, ph, _) = super::convert::box_proxy(surf, area, w, h);
+            let (px, tw, th) = shrink(&proxy, pw, ph);
+            (px, (tw, th), None, None)
+        }
+    };
     Some(ThumbSource {
         px: std::sync::Arc::new(px),
-        size: (tw, th),
+        size,
         full_w: w,
         float: surf.format().sample == photocraft_color::SampleType::F32,
-        curve: super::open::raw_tone_curve(raw).map(std::sync::Arc::new),
+        curve,
+        raw: raw_source,
         encoding_gamma,
     })
 }

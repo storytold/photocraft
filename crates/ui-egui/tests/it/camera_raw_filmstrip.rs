@@ -61,7 +61,7 @@ fn filmstrip_clicks_and_command_a_select_raws_not_the_document() {
     // Without the dialog, ⌘A is the document's Select All.
     h.key_press(Key::Escape);
     h.run_steps(3);
-    assert!(h.state().session.documents().is_empty(), "Cancel closed the raws");
+    assert!(h.state().session.documents().is_empty(), "Cancel opened none of the raws");
     h.state_mut().run("file.new", json!({"width": 16, "height": 16})).unwrap();
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);

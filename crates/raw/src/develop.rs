@@ -630,7 +630,7 @@ fn working_memory(w: usize, h: usize, cfa: bool, bayer: bool, shape: Shape, opts
 
 /// Gain-map factors (DNG OpcodeList2 GainMap) for data row `y`, columns
 /// `x0..x0 + w`, sample `k`; `None` when no map touches the row.
-fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f32>> {
+pub(crate) fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f32>> {
     let a = s.active;
     if s.gain_maps.is_empty() || y < a.y || a.width == 0 || a.height == 0 {
         return None;
