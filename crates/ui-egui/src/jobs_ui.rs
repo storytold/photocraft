@@ -645,8 +645,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         JobOutcome::Done(ref result) if e.command == "select.loadSelection" => {
             app.sync_views();
             // As for an inline selection command (#5597): a new selection shows its outline
-            // even after View > Extras was hidden.
-            if result.get("selected") == Some(&Value::Bool(true)) {
+            // even after View > Extras was hidden, if its document is still the one shown.
+            let shown = e.document.is_some() && e.document == app.session.active().map(|st| st.doc.id);
+            if shown && result.get("selected") == Some(&Value::Bool(true)) {
                 app.ui.view.extras = true;
             }
             app.ui.status = e.label;
