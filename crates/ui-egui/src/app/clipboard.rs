@@ -12,6 +12,9 @@ fn rgba8(surface: &photocraft_raster::Surface, b: photocraft_geom::Rect) -> Vec<
 /// as that took; few other apps could open such an image anyway.
 pub(crate) const MAX_OS_CLIPBOARD_PIXELS: u64 = 64 << 20;
 
+/// The title of the notice for a copy too large for the system clipboard.
+const KEPT_IN_PHOTOCRAFT: &str = "Copy kept in PhotoCraft";
+
 /// Whether a copy of `b` is mirrored to the OS clipboard (see [`MAX_OS_CLIPBOARD_PIXELS`]).
 pub(super) fn mirrors_to_os(b: photocraft_geom::Rect) -> bool {
     b.size().area() <= MAX_OS_CLIPBOARD_PIXELS
@@ -149,11 +152,10 @@ impl PhotocraftApp {
     /// Tell the user a copy is too large for the system clipboard. One notice however many such
     /// copies follow: a newer one replaces it rather than stacking up and pushing others out.
     fn note_kept_in_photocraft(&mut self) {
-        const TITLE: &str = "Copy kept in PhotoCraft";
-        self.ui.notices.retain(|n| n.title != TITLE);
+        self.ui.notices.retain(|n| n.title != KEPT_IN_PHOTOCRAFT);
         crate::notices::post(
             self,
-            TITLE,
+            KEPT_IN_PHOTOCRAFT,
             vec!["It is too large for the system clipboard: other apps keep what they had, and Paste in PhotoCraft uses this copy.".into()],
             false,
             None,
@@ -186,6 +188,8 @@ impl PhotocraftApp {
     fn set_os_clipboard_image(&mut self, w: u32, h: u32, bytes: &[u8]) {
         let Some(set) = self.services.clipboard_set_image.as_mut() else { return };
         if set(w, h, bytes).is_ok() {
+            // A newer copy reached the system clipboard: the notice about an older one is stale.
+            self.ui.notices.retain(|n| n.title != KEPT_IN_PHOTOCRAFT);
             self.os_clip_svg = None;
             self.os_clip_sig = Some(clip_signature(w, h, bytes));
             self.clip_unmirrored = false;
