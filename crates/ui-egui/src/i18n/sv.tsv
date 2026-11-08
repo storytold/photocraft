@@ -4811,6 +4811,7 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	Pick a different document for each channel.	Välj ett annat dokument för varje kanal.
 	A picked document is no longer open.	Ett av de valda dokumenten är inte längre öppet.
 	A picked document is no longer a grayscale document of the same size.	Ett av de valda dokumenten är inte längre ett gråskaledokument i samma storlek.
+	Netscape Gray	Netscape-grå
 # Move tool options bar (#11381)
 	Align top edges	Justera överkanter
 	Align vertical centers	Justera vertikala mittpunkter

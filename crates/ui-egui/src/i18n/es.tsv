@@ -4506,6 +4506,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Elija un documento distinto para cada canal.
 	A picked document is no longer open.	Uno de los documentos elegidos ya no está abierto.
 	A picked document is no longer a grayscale document of the same size.	Uno de los documentos elegidos ya no es un documento en escala de grises del mismo tamaño.
+	Netscape Gray	Gris Netscape
 # Move tool options bar (#11381)
 	Align top edges	Alinear bordes superiores
 	Align vertical centers	Alinear centros verticales
