@@ -377,10 +377,20 @@ fn merge(versions: &mut Vec<photocraft_doc::pattern::Pattern>, patterns: &[photo
     }
 }
 
-/// What changes when a command deletes, adds or re-imports a library pattern (renames don't
-/// matter: steps name patterns by id).
-fn library_mark(r: &Session) -> (usize, u64) {
-    (r.patterns.items.len(), r.patterns.pixels_rev)
+/// Whether `r`'s library still holds each of `versions` as it was installed: a clone shares its
+/// tiles, so a pattern deleted and added again, or re-imported, under its id doesn't count, while
+/// a rename (steps name patterns by id) does.
+pub(crate) fn holds(r: &Session, versions: &[photocraft_doc::pattern::Pattern]) -> bool {
+    let lib: std::collections::HashMap<&str, &photocraft_doc::pattern::Pattern> = r.patterns.items.iter().map(|p| (p.id.as_str(), p)).collect();
+    versions.iter().all(|v| {
+        lib.get(v.id.as_str()).is_some_and(|p| {
+            let (a, b) = (&p.surface, &v.surface);
+            !r.patterns.stored.contains_key(&v.id)
+                && (p.width, p.height, a.format()) == (v.width, v.height, b.format())
+                && a.tiles().count() == b.tiles().count()
+                && a.tiles().zip(b.tiles()).all(|((ca, ta), (cb, tb))| ca == cb && Arc::ptr_eq(ta, tb))
+        })
+    })
 }
 
 /// Put `patterns` in `r`'s library in place of any with their ids.
@@ -566,12 +576,11 @@ pub(crate) fn replay(
         merge(&mut versions, &st.patterns);
     }
     install(&mut r, &versions);
-    let mut mark = library_mark(&r);
     for (i, step) in tl.steps.iter_mut().enumerate().take(end).skip(start) {
         ctx.check()?;
         ctx.progress((i - start) as f32 / (end - start) as f32, &format!("Step {} of {end}", i + 1));
         let stale = can_go_stale(step) && (step.state == StepState::Stale || changed.is_some_and(|c| i > c));
-        run_step(&mut r, step, &mut versions, &mut mark);
+        run_step(&mut r, step, &mut versions);
         if stale && !step.state.is_failure() {
             step.state = StepState::Stale;
         }
@@ -585,9 +594,8 @@ pub(crate) fn replay(
 }
 
 /// Replay one step in `r`, setting its outcome and checkpoint. `versions` are the pattern versions
-/// in effect, this step's included once it has run; `mark` is [`library_mark`] after they were
-/// last installed.
-fn run_step(r: &mut Session, step: &mut DesignStep, versions: &mut Vec<photocraft_doc::pattern::Pattern>, mark: &mut (usize, u64)) {
+/// in effect, this step's included once it has run.
+fn run_step(r: &mut Session, step: &mut DesignStep, versions: &mut Vec<photocraft_doc::pattern::Pattern>) {
     let Some(pre) = r.active().map(|st| st.doc.clone()) else { return };
     let finish = |r: &mut Session, step: &mut DesignStep, state: StepState| {
         step.state = state;
@@ -603,12 +611,11 @@ fn run_step(r: &mut Session, step: &mut DesignStep, versions: &mut Vec<photocraf
     // After the prelude: a library change since the last install (a pattern deleted by this
     // prelude or the step before, then imported again, which a replay refuses) doesn't take a
     // version a step paints with. Without one, only the step's own versions are new.
-    if library_mark(r) != *mark {
-        install(r, versions);
-    } else {
+    if holds(r, &before) {
         install(r, &step.patterns);
+    } else {
+        install(r, versions);
     }
-    *mark = library_mark(r);
     if step.rerecord {
         step.params = pin_patterns(r, &step.command, step.params.clone());
     }

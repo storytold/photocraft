@@ -1311,6 +1311,30 @@ fn a_library_change_by_a_step_leaves_later_steps_their_versions() {
     st.doc = std::sync::Arc::new(d);
     s.execute("design.replay", json!({})).unwrap();
     assert_eq!(commands(&mut s)[4..], ["edit.fill", "pattern.delete", "select.rect", "edit.fill"]);
+    assert_eq!(state(&mut s, 5), "ok", "the deletion ran");
     assert_eq!(state(&mut s, 7), "ok");
     assert_eq!(doc(&s).layers, want.layers);
+}
+
+/// A pattern the library holds as a replay installed it counts as held, renamed too; one deleted
+/// and added again under its id with other pixels doesn't, though the library's size and pixel
+/// revision are as they were.
+#[test]
+fn a_pattern_replaced_under_its_id_is_not_held() {
+    let mut s = started();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let a = s.execute("edit.definePattern", json!({"name": "A"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    let b = s.execute("edit.definePattern", json!({"name": "B"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    let held = vec![crate::pattern_cmds::resolve(&s, &a).unwrap()];
+    let i = s.patterns.items.iter().position(|p| p.id == a).unwrap();
+    s.patterns.items[i] = held[0].clone();
+    assert!(crate::timeline::holds(&s, &held));
+    s.patterns.items[i].name = "Renamed".into();
+    assert!(crate::timeline::holds(&s, &held), "a rename keeps it");
+    let (len, rev) = (s.patterns.items.len(), s.patterns.pixels_rev);
+    s.patterns.items[i].surface = crate::pattern_cmds::resolve(&s, &b).unwrap().surface;
+    assert_eq!((s.patterns.items.len(), s.patterns.pixels_rev), (len, rev));
+    assert!(!crate::timeline::holds(&s, &held));
 }
