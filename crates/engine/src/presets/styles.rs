@@ -6,7 +6,7 @@
 //! `layer.layerStyle.*`.
 
 use photocraft_color::{BlendMode, ColorMode, SampleType};
-use photocraft_doc::{Document, Effect, Layer, Size};
+use photocraft_doc::{Document, Effect, Layer, Pattern, Size};
 use photocraft_geom::Rect;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -170,19 +170,12 @@ fn targets(s: &Session, p: &Value) -> Vec<photocraft_doc::LayerId> {
     crate::layer_multi_cmds::selected(s)
 }
 
-fn apply(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "style.presets.apply";
-    let style = find_style(s, p, CMD)?.clone();
-    let add = p.get("add").and_then(Value::as_bool).unwrap_or(false);
-    let ids = targets(s, p);
-    if ids.is_empty() {
-        return Err(bad(CMD, "no target layers"));
-    }
-    // Pattern overlays name their pattern; resolve to library patterns copied into the document.
+/// Resolves each effect's pattern, plus the patterns that strokes and bevels name, copied from the library.
+fn resolve_style_effects(s: &Session, fx_list: &[Effect]) -> Result<(Vec<Effect>, Vec<Pattern>)> {
     let mut effects = Vec::new();
     let mut pats = Vec::new();
-    for fx in style.effects {
-        let (fx, pat) = crate::pattern_cmds::resolve_effect(s, fx)?;
+    for fx in fx_list {
+        let (fx, pat) = crate::pattern_cmds::resolve_effect(s, fx.clone())?;
         effects.push(fx);
         pats.extend(pat);
     }
@@ -192,6 +185,46 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
             pats.push(pat);
         }
     }
+    Ok((effects, pats))
+}
+
+/// Writes a preset onto one layer: replaces its effects, or appends to them when `add`.
+fn apply_to_layer(l: &mut Layer, style: &StylePreset, effects: &[Effect], add: bool) {
+    if add {
+        l.effects.items.extend(effects.iter().cloned());
+    } else {
+        l.effects.items = effects.to_vec();
+        l.effects.psd_raw = None;
+    }
+    l.effects.psd_raw = None;
+    l.effects.enabled = true;
+    // Adding keeps the layer's blending unless the preset carries some: a blend mode, or
+    // an Opacity saved on its own (`style.presets.new` with `includeBlending: false`).
+    if !add || style.blend.is_some() || style.opacity.is_some() {
+        if let Some(b) = style.blend {
+            l.blend = b;
+        }
+        if let Some(f) = style.fill_opacity {
+            l.fill_opacity = f;
+        } else if !add {
+            l.fill_opacity = 1.0;
+        }
+        if let Some(o) = style.opacity {
+            l.opacity = o;
+        }
+    }
+}
+
+fn apply(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "style.presets.apply";
+    let style = find_style(s, p, CMD)?.clone();
+    let add = p.get("add").and_then(Value::as_bool).unwrap_or(false);
+    let ids = targets(s, p);
+    if ids.is_empty() {
+        return Err(bad(CMD, "no target layers"));
+    }
+    // Pattern overlays name their pattern; resolve to library patterns copied into the document.
+    let (effects, pats) = resolve_style_effects(s, &style.effects)?;
     let label = format!("Apply Style: {}", style.name);
     s.edit(&label, |doc, _| {
         for pat in &pats {
@@ -204,29 +237,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
             // Styles can't sit on the Background: Photoshop turns it into a normal layer first.
             crate::extra_cmds::background_to_layer(doc, *id);
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
-            if add {
-                l.effects.items.extend(effects.iter().cloned());
-            } else {
-                l.effects.items = effects.clone();
-                l.effects.psd_raw = None;
-            }
-            l.effects.psd_raw = None;
-            l.effects.enabled = true;
-            // Adding keeps the layer's blending unless the preset carries some: a blend mode, or
-            // an Opacity saved on its own (`style.presets.new` with `includeBlending: false`).
-            if !add || style.blend.is_some() || style.opacity.is_some() {
-                if let Some(b) = style.blend {
-                    l.blend = b;
-                }
-                if let Some(f) = style.fill_opacity {
-                    l.fill_opacity = f;
-                } else if !add {
-                    l.fill_opacity = 1.0;
-                }
-                if let Some(o) = style.opacity {
-                    l.opacity = o;
-                }
-            }
+            apply_to_layer(l, &style, &effects, add);
         }
         Ok(())
     })?;
