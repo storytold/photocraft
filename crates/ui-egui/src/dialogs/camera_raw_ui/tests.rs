@@ -759,6 +759,7 @@ fn a_raw_whose_background_develop_fails_comes_back_to_the_filmstrip() {
     let left: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
     assert_eq!(left, vec![ids[1]], "only the failed raw comes back");
     assert_eq!(app.raw_shelf[0].kept, Some((kept, from)), "with its settings");
+    assert!(app.raw_shelf[0].stale, "its thumbnail is redrawn with them");
     app.background_jobs = false;
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
     assert_eq!(app.camera_raw.as_ref().unwrap().params.contrast, 20.0);

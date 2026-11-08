@@ -421,6 +421,8 @@ fn back_to_filmstrip(app: &mut PhotocraftApp, raw: RawOpen, document: Option<pho
     }
     let mut held = super::filmstrip::HeldRaw::new(app, raw);
     held.kept = Some(back);
+    // Its thumbnail is the default develop: redrawn with the settings it comes back with.
+    held.stale = true;
     app.raw_shelf.push(held);
     app.sync_views();
 }

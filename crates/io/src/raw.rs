@@ -155,7 +155,8 @@ fn tuned_options(sensor: &Sensor, camera_look: Option<CameraLook>, tuning: &RawT
 /// down for the fitted preview ([`photocraft_raw::binned`]) and the default open's colour
 /// rendering.
 pub struct RawSource {
-    /// `None` for [`RawSource::proxy_only`].
+    /// `None` for a [`RawSource::proxy_only`] source whose frame was binned (one that can't be
+    /// binned keeps it: its proxy develops from it).
     full: Option<Sensor>,
     /// The binned frame; `None` when the frame can't be binned by the factor (too small, or a CFA
     /// pattern whose blocks would miss a colour): the preview then develops the whole frame and
@@ -216,9 +217,9 @@ impl RawSource {
         Ok(RawSource { full: Some(full), proxy, shrink, look, curve })
     }
 
-    /// [`RawSource::new`] without the whole frame (only [`Self::develop_proxy`]): a small source
-    /// to keep for a thumbnail, without holding on to the sensor data. A frame that can't be
-    /// binned keeps it: the proxy develops from it.
+    /// [`RawSource::new`] for [`Self::develop_proxy`] only: a small source to keep for a
+    /// thumbnail. It drops the whole frame when the frame could be binned; one that can't be
+    /// binned keeps it (its proxy develops from it), and [`Self::develop_full`] then works too.
     pub fn proxy_only(bytes: &[u8], factor: usize) -> Result<RawSource, IoError> {
         let mut source = RawSource::new(bytes, factor)?;
         if source.proxy.is_some() {
@@ -244,7 +245,8 @@ impl RawSource {
     }
 
     /// The whole frame developed with `tuning`, as [`import_raw_tuned`] develops it (uncropped:
-    /// the dialog previews the whole frame). An error for a [`Self::proxy_only`] source.
+    /// the dialog previews the whole frame). An error for a [`Self::proxy_only`] source that
+    /// dropped the whole frame.
     pub fn develop_full(&self, tuning: &RawTuning) -> Result<RawPixels, IoError> {
         let full = self.full.as_ref().ok_or_else(|| IoError::Raw(RawError::Malformed("this raw source keeps only its binned frame".into())))?;
         self.develop(full, tuning)
