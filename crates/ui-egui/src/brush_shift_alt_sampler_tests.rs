@@ -134,6 +134,8 @@ fn a_shift_alt_click_refused_for_another_reason_keeps_the_error_styling() {
     assert!(app.ui.pen.as_ref().is_some_and(|p| p.commit_failed), "a failed Pen draft");
     app.session.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.ui.tool = Tool::Brush;
+    // The Pen failure styled the status bar as an error already: only the click may set it again.
+    app.ui.status_error = false;
     click(&mut app, 200.0, 150.0, SHIFT_ALT);
     assert!(samplers_of(&app).is_empty(), "nothing added");
     assert!(!app.ui.status.is_empty(), "the refusal is reported");
