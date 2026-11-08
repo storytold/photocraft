@@ -1,7 +1,7 @@
 use super::panel::chevron_icon;
 use super::scrub::take_label_scrub_name;
 use super::slider::wheel_notches_of;
-use super::{Pos2, Rect, Response, Ui, Vec2, type_ahead};
+use super::{Pos2, Rect, Response, Sense, Stroke, Tokens, Ui, Vec2, pos2, type_ahead, vec2};
 
 /// A compact labelled dropdown in the studio style.
 pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
@@ -11,13 +11,13 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current
 /// [`dropdown`] whose option labels are shown exactly as given: names the user typed (a channel
 /// or layer name) must not be translated, unlike the built-in labels [`dropdown`] translates (#5335).
 pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false);
+    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false, &|_| false);
     !chosen.is_empty()
 }
 
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
-    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true);
+    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false);
     (!chosen.is_empty(), hovered)
 }
 
@@ -35,7 +35,22 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
     options: &[(T, &str)],
     width: f32,
 ) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, name, current, options, width, true, true)
+    dropdown_with(ui, id, name, current, options, width, true, true, &|_| false)
+}
+
+/// [`dropdown_wheel_hovered`] whose open list draws a line above each option (but the first) that
+/// `starts_group`: Photoshop's blend mode lists group their modes (#5532). The lines are only
+/// drawn: the options, their order and how the wheel, the keys and the pointer pick them stay.
+pub fn dropdown_wheel_grouped<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    starts_group: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -48,6 +63,7 @@ fn dropdown_with<T: PartialEq + Clone>(
     width: f32,
     wheel: bool,
     translate: bool,
+    starts_group: &dyn Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
     let shown = |l: &str| if translate { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
@@ -86,7 +102,10 @@ fn dropdown_with<T: PartialEq + Clone>(
             // The row nearest the pointer, by its distance to each row.
             let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
             let mut nearest: Option<(f32, &T)> = None;
-            for ((v, _), text) in options.iter().zip(texts.iter()) {
+            for (i, ((v, _), text)) in options.iter().zip(texts.iter()).enumerate() {
+                if i > 0 && starts_group(v) {
+                    list_separator(ui);
+                }
                 let item = ui.selectable_label(v == current, text.as_str());
                 if reveal && v == current {
                     item.scroll_to_me(None);
@@ -133,6 +152,15 @@ fn dropdown_with<T: PartialEq + Clone>(
         hovered = None;
     }
     (chosen, hovered)
+}
+
+/// A line between two groups of an open dropdown list's options, as wide as the list. Like egui's
+/// separator it takes no width while egui sizes the list, so it never widens it.
+fn list_separator(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let width = if ui.is_sizing_pass() { 0.0 } else { ui.available_width() };
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 1.0), Sense::hover());
+    ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, t.separator));
 }
 
 /// Makes an open dropdown list as wide as its widest option is when hovered, from the start. egui
@@ -217,20 +245,100 @@ fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, 
 /// seen (clear of a taskbar a too-tall window runs under, #315), scrolling past that, so long
 /// context menus (a layer's, the canvas tools') stay reachable on small windows instead of running
 /// off the bottom. egui moves a popup up to keep it in the window, so a menu opened low on the
-/// screen first shifts up and only scrolls when it is taller than the window.
+/// screen first shifts up and only scrolls when it is taller than the window. An overflowing
+/// menu's ▲/▼ scroll arrows (#2091) count toward that height, so both stay on screen.
 pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     // The popup frame's margin and stroke, and a small gap to the window's edges.
     let frame = ui.spacing().menu_margin.sum().y + 2.0 + 2.0 * MENU_EDGE;
     let room = (crate::work_area::visible_rect(ui.ctx()).height() - frame).max(MENU_MIN_HEIGHT);
+    // An overflowing menu gets Photoshop's scroll arrows above and below its rows (#2091): the
+    // thin floating scroll bar alone gave no hint that more items were hidden. Whether it
+    // overflows is known only after layout, so it is remembered from the last frame.
+    let id = ui.scope_id().with("menu_scroll");
+    let overflow = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let offset = ui.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(0.0);
+    // The arrows are as wide as the rows were last frame, not the popup's whole available width:
+    // that widened an overflowing menu on every later open (a layer menu went from ~230 to ~600
+    // pt). The output's `inner_rect` is the width asked for, before auto-shrink fits the rows.
+    let width = ui.data(|d| d.get_temp::<f32>(id.with("width"))).unwrap_or(0.0);
+    // The arrows come out of the room, so both stay on screen: the minimum is the whole menu's
+    // height, arrows included. `room` is at least `MENU_MIN_HEIGHT`, which is taller than the two
+    // arrows, so the rows always keep a positive height; a window shorter than that minimum still
+    // gets a menu of that height, as one without arrows does.
+    let arrows = if overflow { 2.0 * MENU_ARROW_HEIGHT } else { 0.0 };
+    let room = (room - arrows).max(MENU_MIN_HEIGHT - arrows);
+    // The arrows sit flush against the rows, so no item spacing is added around them that `room`
+    // doesn't count; the rows keep the menu's own spacing.
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let mut step = 0.0;
+    if overflow {
+        step += menu_scroll_arrow(ui, true, offset > 0.5, width);
+    }
     // A popup's Ui is only as tall as the popup was last frame (400 pt on the first), so ask for
     // the whole room: the area still shrinks to its rows when they need less.
-    egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).show(ui, add_contents).inner
+    let mut area = egui::ScrollArea::vertical().id_salt(id).max_height(room).min_scrolled_height(room);
+    // A step is taken on the pass after the arrow was hovered, and only then: a menu closed while
+    // an arrow was hovered doesn't jump when it next opens.
+    let now = ui.ctx().cumulative_pass_nr();
+    let pending = ui.data(|d| d.get_temp::<(f32, u64)>(id.with("step"))).filter(|&(_, pass)| pass.saturating_add(1) == now).map_or(0.0, |(step, _)| step);
+    if pending != 0.0 {
+        area = area.vertical_scroll_offset((offset + pending).max(0.0));
+    }
+    let out = area.show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = spacing;
+        add_contents(ui)
+    });
+    let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
+    let offset = out.state.clamped_offset().y.clamp(0.0, max);
+    if overflow {
+        step += menu_scroll_arrow(ui, false, offset < max - 0.5, width);
+    }
+    ui.spacing_mut().item_spacing.y = spacing;
+    ui.data_mut(|d| {
+        d.insert_temp(id, max > 0.5);
+        d.insert_temp(id.with("offset"), offset);
+        d.insert_temp(id.with("width"), out.content_size.x);
+        d.insert_temp(id.with("step"), (step, now));
+    });
+    out.inner
 }
 
-/// Gap kept between a context menu and the window's edges, and the shortest it gets.
-const MENU_EDGE: f32 = 4.0;
+/// One scroll arrow of an overflowing menu: hovering scrolls that way, as in Photoshop's and the
+/// system menus. It doesn't page on a click: egui closes a context menu on any click inside it,
+/// so the page would never be seen. `width` is the rows' width. Returns the scroll step for the
+/// next frame.
+fn menu_scroll_arrow(ui: &mut Ui, up: bool, enabled: bool, width: f32) -> f32 {
+    let width = if width.is_finite() { width.max(MENU_ARROW_HEIGHT) } else { MENU_ARROW_HEIGHT };
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, MENU_ARROW_HEIGHT), Sense::hover());
+    let t = Tokens::get(ui.ctx());
+    let color = if enabled { t.text } else { t.text_dim.gamma_multiply(0.5) };
+    let (c, h) = (rect.center(), 3.5);
+    let pts = if up {
+        vec![pos2(c.x - h * 1.4, c.y + h * 0.6), pos2(c.x + h * 1.4, c.y + h * 0.6), pos2(c.x, c.y - h * 0.8)]
+    } else {
+        vec![pos2(c.x - h * 1.4, c.y - h * 0.6), pos2(c.x + h * 1.4, c.y - h * 0.6), pos2(c.x, c.y + h * 0.8)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+    if !enabled {
+        return 0.0;
+    }
+    if !resp.hovered() {
+        return 0.0;
+    }
+    ui.ctx().request_repaint();
+    let sign = if up { -1.0 } else { 1.0 };
+    sign * MENU_ARROW_SPEED * ui.input(|i| i.stable_dt).clamp(0.0, 0.1)
+}
 
-const MENU_MIN_HEIGHT: f32 = 120.0;
+/// Gap kept between a context menu and the window's edges.
+const MENU_EDGE: f32 = 4.0;
+/// The shortest a context menu gets, scroll arrows included.
+pub(super) const MENU_MIN_HEIGHT: f32 = 120.0;
+/// Height of an overflowing menu's scroll arrows, and how fast hovering one scrolls (points per
+/// second).
+pub(super) const MENU_ARROW_HEIGHT: f32 = 14.0;
+const MENU_ARROW_SPEED: f32 = 400.0;
 
 /// The colour picker popup of a colour swatch: a click on `swatch` toggles it, a click outside
 /// closes it. While open, its left edge stays where it first showed (at the swatch, or further

@@ -33,6 +33,7 @@ impl From<&ExportArgs> for ExportOptions {
             o.encode.dds.compression = c;
         }
         o.encode.dds.mipmaps = a.dds_mipmaps;
+        o.psd_maximize_compatibility = !a.no_maximize_compatibility;
         // Conversions keep the whole packet unless asked, as Save As does (#733, #9466).
         if let Some(m) = a.metadata {
             o.xmp = m;
@@ -44,6 +45,14 @@ impl From<&ExportArgs> for ExportOptions {
 pub(crate) fn warn_all(err: &mut dyn Write, ws: &[String]) {
     for w in ws {
         let _ = writeln!(err, "warning: {w}");
+    }
+}
+
+pub(crate) fn warn_dedup(err: &mut dyn Write, ws: &[String], seen: &mut std::collections::HashSet<String>) {
+    for w in ws {
+        if seen.insert(w.clone()) {
+            let _ = writeln!(err, "warning: {w}");
+        }
     }
 }
 

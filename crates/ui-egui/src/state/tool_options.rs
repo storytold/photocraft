@@ -96,6 +96,9 @@ pub struct ToolOptions {
     /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// Shape tools: "shape" (a shape layer) or "path" (the work path), as Photoshop's tool mode
+    /// (#9453). Shape by default, where the Pen's own mode defaults to Path.
+    pub shape_mode: String,
     /// Shape tools: fill with the foreground colour, stroke width (0 = none), rectangle corner
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
@@ -142,14 +145,33 @@ pub struct ToolOptions {
     #[serde(default = "one")]
     pub slice_height: f32,
     /// Move tool: Auto-Select (with "layer" or "group" target) and Show Transform Controls.
-    /// Auto-Select is on with the "group" target by default, as in current Photoshop;
-    /// ⌘/Ctrl-click inverts it.
+    /// Auto-Select is on with the "layer" target by default, as Photoshop's Reset Tool leaves it
+    /// (measured for #11380; #4056 had asked for "group"); ⌘/Ctrl-click inverts it.
     #[serde(default = "yes")]
     pub move_auto_select: bool,
     #[serde(default = "default_move_target")]
     pub move_target: String,
     #[serde(default)]
     pub move_show_transform: bool,
+    /// Move tool options bar, gear menu (#11381), all on by default: outline the layer under the
+    /// pointer, open the closed groups of a layer picked by a canvas click, and outline the layer
+    /// whose Layers panel row is hovered. Preferences > Show Highlight on Rollover still gates
+    /// the two outlines.
+    #[serde(default = "yes")]
+    pub move_show_hover_bounds: bool,
+    #[serde(default = "yes")]
+    pub move_expand_group_on_click: bool,
+    #[serde(default = "yes")]
+    pub move_show_layers_hover_bounds: bool,
+    /// Transform options bar: Toggle Reference Point. Off by default, as in Photoshop: the point
+    /// isn't drawn and isn't a handle, so a drag from the middle of the box moves the content;
+    /// transforms still turn and scale about it (#11098).
+    #[serde(default)]
+    pub transform_reference_point: bool,
+    /// Transform options bar: X and Y show the reference point's offset from where the box started
+    /// instead of its position (Photoshop's relative positioning, off by default, #11679).
+    #[serde(default)]
+    pub transform_relative_position: bool,
     /// Last interpolation selected in the Transform options bar; unset follows General's default.
     #[serde(default)]
     pub transform_interpolation: Option<photocraft_engine::prefs::Interpolation>,
@@ -165,7 +187,7 @@ pub struct ToolOptions {
     pub crop_custom_ratio_height: f32,
     #[serde(default = "yes")]
     pub crop_delete: bool,
-    /// Crop options bar › Fill: false = Background (Default), true = Content-Aware Fill (the area a
+    /// Crop options bar › Fill: false = Background (default), true = Content-Aware Fill (the area a
     /// rotated or extending crop uncovers is filled from its surroundings, #3823).
     #[serde(default)]
     pub crop_content_aware: bool,
@@ -184,7 +206,8 @@ pub struct ToolOptions {
     #[serde(default = "yes")]
     pub perspective_crop_grid: bool,
     /// Crop overlay (#1919): the guide in the crop box, when it shows and its orientation
-    /// (Photoshop's defaults: Rule of Thirds, Auto Show Overlay). See `crop_overlay`.
+    /// (the reference application's defaults: Rule of Thirds, Always Show Overlay, #10894). See
+    /// `crop_overlay`.
     #[serde(default)]
     pub crop_overlay: crate::crop_overlay::CropOverlay,
     #[serde(default)]
@@ -273,7 +296,7 @@ fn default_crop_resolution_unit() -> String {
 }
 
 fn default_move_target() -> String {
-    "group".into()
+    "layer".into()
 }
 
 fn default_pen_path_op() -> String {
@@ -313,6 +336,14 @@ pub(super) fn default_layer_filter_mode() -> photocraft_color::BlendMode {
     photocraft_color::BlendMode::Normal
 }
 
+/// A stored Mode filter set to Pass Through, which the Mode list offered until #10878, loads as
+/// Normal: Pass Through isn't a mode the filter lists any more.
+pub(super) fn layer_filter_mode_or_normal<'de, D: serde::Deserializer<'de>>(d: D) -> Result<photocraft_color::BlendMode, D::Error> {
+    use serde::Deserialize;
+    let mode = photocraft_color::BlendMode::deserialize(d)?;
+    Ok(if mode == photocraft_color::BlendMode::PassThrough { photocraft_color::BlendMode::Normal } else { mode })
+}
+
 fn one_u32() -> u32 {
     1
 }
@@ -322,10 +353,10 @@ fn default_eyedropper_sample() -> String {
 }
 
 /// Each tool's Sample All Layers (the Paint Bucket calls it All Layers). Photoshop keeps one per
-/// tool, all off by default: turning it on for the Magic Wand must not leave Blur or Smudge
-/// copying the composite onto the active layer (#5524). The Mixer Brush keeps its own with the
-/// brush (`MixerSettings`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// tool, all off by default except the Patch tool's Content-Aware Sample All Layers (#5524,
+/// #12125): turning it on for the Magic Wand must not leave Blur or Smudge copying the composite
+/// onto the active layer. The Mixer Brush keeps its own with the brush (`MixerSettings`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SampleAllLayers {
     pub magic_wand: bool,
@@ -340,6 +371,25 @@ pub struct SampleAllLayers {
     pub blur: bool,
     pub sharpen: bool,
     pub smudge: bool,
+}
+
+impl Default for SampleAllLayers {
+    fn default() -> Self {
+        Self {
+            magic_wand: false,
+            quick_selection: false,
+            object_selection: false,
+            paint_bucket: false,
+            magic_eraser: false,
+            spot_healing: false,
+            patch: true,
+            content_aware_move: false,
+            remove: false,
+            blur: false,
+            sharpen: false,
+            smudge: false,
+        }
+    }
 }
 
 impl SampleAllLayers {
@@ -390,7 +440,7 @@ impl Default for ToolOptions {
             bucket_clear: false,
             type_font: "Inter".into(),
             type_style: "Regular".into(),
-            type_size: 48.0,
+            type_size: 50.0,
             type_aa: "sharp".into(),
             type_align: "left".into(),
             type_style_defaults: serde_json::Map::new(),
@@ -421,6 +471,7 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
+            shape_mode: "shape".into(),
             shape_fill: true,
             stroke_width: 0.0,
             shape_stroke: Default::default(),
@@ -446,6 +497,11 @@ impl Default for ToolOptions {
             move_auto_select: true,
             move_target: default_move_target(),
             move_show_transform: false,
+            move_show_hover_bounds: true,
+            move_expand_group_on_click: true,
+            move_show_layers_hover_bounds: true,
+            transform_reference_point: false,
+            transform_relative_position: false,
             transform_interpolation: None,
             crop_ratio: String::new(),
             crop_custom_ratio_width: 0.0,
