@@ -9,7 +9,7 @@ use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{AllocationError, Interrupt, PruneCursor, RowWriteError, Surface};
 
 use crate::renderer::{BandRenderer, RenderError};
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
+use crate::{BmpBits, ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
@@ -1709,6 +1709,9 @@ pub fn export_flat_with_renderer(
                 if format == Format::Tiff {
                     warnings.extend(crate::tiff_layers::flat_transparency_and_channels(doc, &mut img, opts.tiff_transparency, opts.preserve_alpha)?);
                 }
+                if format == Format::Bmp {
+                    img = bmp_image(img, opts.bmp_bits, opts.preserve_alpha, &mut warnings)?;
+                }
                 // Drain only once encoding succeeded: if it fails, the queued diagnostics stay
                 // with the renderer for the caller to report alongside the error.
                 let mut res = encode_image(&img, format, opts, warnings)?;
@@ -1758,6 +1761,9 @@ pub fn export_flat_with_renderer(
     }
     if format == Format::Tiff {
         warnings.extend(crate::tiff_layers::flat_transparency_and_channels(doc, &mut img, opts.tiff_transparency, opts.preserve_alpha)?);
+    }
+    if format == Format::Bmp {
+        img = bmp_image(img, opts.bmp_bits, opts.preserve_alpha, &mut warnings)?;
     }
     encode_image(&img, format, opts, warnings)
 }
@@ -2054,6 +2060,36 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, preserve_alpha: 
             }
             map_bands(&img, ChannelLayout::Rgba, img.sample_type(), |vals| vals.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 1.0]).collect())
         }
+    }
+}
+
+/// The RGB image a BMP of `bits` per pixel holds (`None`: as it is, 32 with transparency, else
+/// 24). 24 bits are the colours alone, composited over white where the layers are transparent,
+/// as Photoshop writes them; 32 add the transparency as the alpha (opaque without any).
+/// Grayscale BMPs are left as they are. `preserve_alpha` (Save and Close) refuses 24 bits of a
+/// transparent image rather than replace the source with an opaque one.
+fn bmp_image(img: Image, bits: Option<BmpBits>, preserve_alpha: bool, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    if !img.layout().is_rgb() {
+        if let Some(bits) = bits {
+            warnings.push(format!("{}-bit BMP applies to RGB images; the grayscale image is written as it is", bits.bits()));
+        }
+        return Ok(img);
+    }
+    match bits {
+        None => Ok(img),
+        Some(BmpBits::Bits24) if img.layout().has_alpha() => {
+            if preserve_alpha {
+                return Err(IoError::Unsupported(
+                    "Save and Close cannot preserve transparency in a 24-bit BMP; use 32 bits or a separate output folder".into(),
+                ));
+            }
+            warnings.push("transparency composited over white; a 24-bit BMP has no alpha".into());
+            matte_over_white(&img)
+        }
+        Some(BmpBits::Bits32) if !img.layout().has_alpha() => {
+            map_bands(&img, ChannelLayout::Rgba, img.sample_type(), |vals| vals.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 1.0]).collect())
+        }
+        Some(_) => Ok(img),
     }
 }
 

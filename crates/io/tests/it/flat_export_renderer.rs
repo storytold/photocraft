@@ -502,3 +502,27 @@ fn single_layer_notice_reaches_the_export_warnings_without_renderer_diagnostics(
     let res = export_png_streamed_with_renderer(&single, &ExportOptions::default(), &Interrupt::NONE, 0, Some(&mut renderer)).expect("streamed single layer");
     assert!(res.warnings.iter().any(|w| w.contains("single-layer") && w.contains("CPU")), "{:?}", res.warnings);
 }
+
+/// BMP Options' depth applies when a custom renderer composites the document, as on the CPU path:
+/// 24 bits composite the transparency over white and 32 keep it as the alpha.
+#[test]
+fn custom_renderer_bmp_export_honours_bmp_bits() {
+    // Two transparent layers, so the composite goes through the renderer.
+    let mut doc = Document::new("bmp", Size::new(16, 8), ColorMode::Rgb, SampleType::U8);
+    for (name, rect) in [("left", Rect::new(0, 0, 6, 8)), ("middle", Rect::new(4, 0, 8, 8))] {
+        let mut s = Surface::new(doc.pixel_format());
+        s.fill_rect(rect, &[0.8, 0.1, 0.2, 1.0]);
+        doc.layers.push(Layer::new(name, LayerContent::Raster(s)));
+    }
+    let bpp = |bytes: &[u8]| u16::from_le_bytes([bytes[28], bytes[29]]);
+    for bits in [photocraft_io::BmpBits::Bits24, photocraft_io::BmpBits::Bits32] {
+        let opts = ExportOptions { bmp_bits: Some(bits), ..ExportOptions::default() };
+        let cpu = export_flat(&doc, Format::Bmp, &opts).expect("CPU export");
+        let mut renderer = RecordingRenderer::default();
+        let res = export_flat_with_renderer(&doc, Format::Bmp, &opts, &Interrupt::NONE, Some(&mut renderer)).expect("custom export");
+        assert!(renderer.renders > 0, "the renderer composites the document");
+        assert_eq!(bpp(&res.bytes), u16::from(bits.bits()), "{}-bit BMP Options through the renderer", bits.bits());
+        assert_eq!(res.bytes, cpu.bytes, "{}-bit BMP: the renderer's file matches the CPU one", bits.bits());
+        assert_eq!(res.warnings, cpu.warnings);
+    }
+}
