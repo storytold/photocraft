@@ -16,10 +16,12 @@ fn timeline_of(s: &Session) -> std::result::Result<&Arc<DesignTimeline>, String>
     s.active().ok_or("no document open")?.doc.design_timeline.as_ref().ok_or_else(|| "the design timeline is off".into())
 }
 
-/// Start's precondition: a document whose timeline is off.
+/// Start's precondition: a document whose timeline is off, and no job running: one started
+/// before the timeline (a print with a Script Event) could still edit it unrecorded.
 fn can_start(s: &Session) -> std::result::Result<(), String> {
     match s.active().ok_or("no document open")?.doc.design_timeline {
         Some(_) => Err("the design timeline is already on".into()),
+        None if s.has_jobs() => Err("wait for the running jobs to finish before starting the design timeline".into()),
         None => Ok(()),
     }
 }

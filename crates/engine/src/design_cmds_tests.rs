@@ -1011,6 +1011,7 @@ fn a_stroke_mirrored_across_a_path_replays_its_result() {
 fn a_step_inserted_before_another_leaves_it_its_colours() {
     let mut s = started();
     s.execute("layer.new.layer", json!({})).unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
     s.execute("tools.setColors", json!({"foreground": RED})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
     s.execute("edit.fillForeground", json!({})).unwrap();
@@ -1018,8 +1019,9 @@ fn a_step_inserted_before_another_leaves_it_its_colours() {
     s.execute("tools.setColors", json!({"foreground": BLUE})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("design.rollTo", json!({"at": null})).unwrap();
+    assert_eq!(commands(&mut s)[2..], ["layer.new.layer", "edit.fillForeground"], "put in before the fill");
     assert_eq!(state(&mut s, 3), "ok");
-    let fill = s.active().unwrap().doc.layers[1].surface().unwrap().pixel(1, 1);
+    let fill = s.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().pixel(1, 1);
     assert_eq!(fill, RED.to_vec(), "the fill after the inserted step is still red");
 }
 
@@ -1033,4 +1035,38 @@ fn a_stroke_in_a_document_without_a_timeline_is_no_tool_setting() {
     s.set_active(0);
     s.execute("layer.new.layer", json!({})).unwrap();
     assert!(!last_prelude(&s).contains(&"paint.pencil".to_string()), "{:?}", last_prelude(&s));
+}
+
+/// A pattern rename made while a document without a timeline is active still reaches the next
+/// step of one that has a timeline: it renames the shared library too.
+#[test]
+fn a_pattern_rename_is_a_tool_setting_wherever_it_runs() {
+    let mut s = started();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    let pattern = s.execute("edit.definePattern", json!({"name": "Red"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": pattern})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    s.execute("pattern.rename", json!({"pattern": pattern, "name": "Crimson"})).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc), "it renamed the document's copy too");
+    s.set_active(0);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(last_prelude(&s).contains(&"pattern.rename".to_string()), "{:?}", last_prelude(&s));
+}
+
+/// A timeline doesn't start while a job runs: one started before it could edit the document
+/// without a step.
+#[test]
+fn the_timeline_does_not_start_while_a_job_runs() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let src = photocraft_doc::Document::new("p", photocraft_doc::Size::new(8, 8), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    let bytes = photocraft_io::export(&src, "p.png", &Default::default()).unwrap().bytes;
+    let crate::jobs::Started::Job(id) = s.start_place_bytes("p.png", bytes, None, json!({})).unwrap() else { panic!("expected a job") };
+    // Not this document's job, so the running-job check of every edit lets it by.
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let e = s.execute("design.start", json!({})).unwrap_err().to_string();
+    assert!(e.contains("running"), "{e}");
+    s.wait_job(id).unwrap();
+    s.execute("design.start", json!({})).unwrap();
 }
