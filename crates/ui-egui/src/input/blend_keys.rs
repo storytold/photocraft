@@ -2,7 +2,9 @@
 //! letter picks one (⇧⌥M Multiply, ⇧⌥S Screen…). With a painting tool that has a Mode of its own
 //! (`tool_modes`: Brush, Pencil, Paint Bucket, Gradient, the stamps, History Brush, Healing) they
 //! set that tool's mode within its menu and never the layer's. With a tool that has no blend mode
-//! (Move, the selection tools, the Erasers…) they set every selected layer's mode.
+//! (Move, the selection tools, the Erasers…) they set every selected layer's mode. With the Color
+//! Replacement tool the ⇧⌥ letters set the layers' mode too and its own Mode stays, as measured in
+//! the reference application (#11928); its ⇧+ / ⇧− do nothing.
 //! The step list wraps at either end. Each press is one call of an engine command
 //! (`tools.setBrush`, `layer.setProps` with every target layer), so it is one undo step.
 
@@ -149,6 +151,9 @@ enum Target {
     /// nothing, and never reach the layer.
     Nothing,
     Layers,
+    /// The ⇧⌥ letters set the layers' mode; ⇧+ / ⇧− do nothing (the Color Replacement tool, #11928:
+    /// only the letters were measured).
+    LayerLetters,
 }
 
 fn target(tool: Tool) -> Target {
@@ -156,7 +161,9 @@ fn target(tool: Tool) -> Target {
         return Target::Tool(modes);
     }
     match tool {
-        Tool::SpotHealing | Tool::ColorReplacement | Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::ArtHistoryBrush => Target::Nothing,
+        Tool::SpotHealing | Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::ArtHistoryBrush => Target::Nothing,
+        // Its ⇧⌥ letters set the active layer's mode and leave the tool's own Mode (#11928).
+        Tool::ColorReplacement => Target::LayerLetters,
         // Photoshop's ⇧⌥S/M/H pick the Dodge and Burn Range and ⇧⌥D/S the Sponge's mode: never
         // the layer's.
         Tool::Dodge | Tool::Burn | Tool::Sponge => Target::Nothing,
@@ -242,7 +249,7 @@ pub fn press(app: &mut PhotocraftApp, step: i32) {
                 set_tool_mode(app, mode);
             }
         }
-        Target::Nothing => {}
+        Target::Nothing | Target::LayerLetters => {}
         Target::Layers => {
             let Some(st) = app.session.active() else { return };
             let Some(layer) = st.active_layer.and_then(|id| st.doc.layer(id)) else { return };
@@ -284,7 +291,7 @@ pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
     };
     match target(app.ui.tool) {
         Target::Tool(modes) if modes.contains(&want) => set_tool_mode(app, want),
-        Target::Layers => {
+        Target::Layers | Target::LayerLetters => {
             if let Some(m) = want {
                 set_layers_mode(app, m);
             }
@@ -299,3 +306,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../brush_behind_key_tests.rs"]
 mod brush_behind_key_tests;
+
+#[cfg(test)]
+#[path = "../color_replacement_blend_keys_tests.rs"]
+mod color_replacement_blend_keys_tests;
