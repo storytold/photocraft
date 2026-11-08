@@ -143,7 +143,7 @@ fn a_channel_overlay_follows_a_size_changing_preview() {
             canvas_view(&mut app, ui, 0, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), view.clone(), true);
         });
         output.textures_delta.clear();
-        let overlay = crate::channel_view::ensure(&mut app, &ctx, 0).expect("the channel overlay");
+        let overlay = crate::channel_view::ensure(&mut app, &ctx, 0, None).expect("the channel overlay");
         let mesh = output
             .shapes
             .iter()
@@ -935,20 +935,38 @@ fn navigator_damage_updates_match_a_full_thumbnail() {
 #[test]
 fn tab_context_uses_clicked_document_and_existing_close_commands() {
     let items = tab_context_items(2, 3, true);
-    assert_eq!(items.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(), ["file.close", "file.closeOthers", "file.closeAll", "file.revealInFinder"]);
-    assert_eq!(items[0].2, json!({"document": 2}));
+    assert_eq!(
+        items.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(),
+        [
+            "window.arrange.consolidateAllToTabs",
+            "file.close",
+            "file.closeAll",
+            "file.closeOthers",
+            "window.arrange.floatInWindow",
+            "file.new",
+            "file.open",
+            "file.revealInFinder"
+        ]
+    );
     assert_eq!(items[1].2, json!({"document": 2}));
-    assert_eq!(items[2].2, json!({}));
     assert_eq!(items[3].2, json!({"document": 2}));
-    assert!(items[3].3, "a saved document can be revealed in the file manager");
-    assert!(!tab_context_items(2, 3, false)[3].3, "an unsaved document cannot");
-    assert!(!tab_context_items(0, 1, false)[1].3);
-    assert!(items.iter().all(|(_, id, _, _)| photocraft_engine::commands::find(id).is_some()));
+    assert_eq!(items[2].2, json!({}));
+    assert_eq!(items[7].2, json!({"document": 2}));
+    assert!(items[7].3, "a saved document can be revealed in the file manager");
+    assert!(!tab_context_items(2, 3, false)[7].3, "an unsaved document cannot");
+    assert!(!tab_context_items(0, 1, false)[3].3);
+    // The window.* rows and file.new / file.open are UI commands; the doc_tab_menu tests check them.
+    assert!(
+        items
+            .iter()
+            .filter(|r| r.1.starts_with("file.close") || r.1 == "file.revealInFinder")
+            .all(|(_, id, _, _)| photocraft_engine::commands::find(id).is_some())
+    );
 }
 
 #[test]
 fn tab_context_reveal_names_the_platform_file_manager() {
-    let (label, id, _, _) = &tab_context_items(0, 1, true)[3];
+    let (label, id, _, _) = &tab_context_items(0, 1, true)[7];
     assert_eq!((*label, *id), (crate::menus::reveal_label(), "file.revealInFinder"));
 }
 
@@ -1099,7 +1117,7 @@ fn tab_close_others_prompts_for_unsaved_nonactive_document() {
     app.run("file.new", json!({"width": 8, "height": 8, "name": "Edited"})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     assert_eq!(app.session.active_index(), Some(1));
-    let (_, id, params, _) = tab_context_items(0, 2, false)[1].clone();
+    let (_, id, params, _) = tab_context_items(0, 2, false)[3].clone();
     crate::menus::invoke(&mut app, &egui::Context::default(), id, params).unwrap();
     assert!(app.discard.is_some(), "close others must ask before discarding the edited tab");
     assert_eq!(app.session.documents().len(), 2);
@@ -1391,14 +1409,11 @@ fn clone_overlay_is_clipped_to_a_shaped_tip() {
 }
 
 #[test]
-fn wayland_start_screen_hint_does_not_claim_file_drop_works() {
+fn wayland_start_screen_hint_offers_file_drop() {
     let x11 = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let wayland = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { is_wayland: true, ..Default::default() });
     assert!(start_screen_drop_hint(&x11).starts_with("Drop"));
-    // Pasting a copied image file works on Wayland (#338): the hint says how.
-    let hint = start_screen_drop_hint(&wayland);
-    assert!(!hint.contains("Drop"), "{hint}");
-    assert!(hint.ends_with(&format!("paste a copied image with {}.", crate::notices::paste_hint(&wayland))), "{hint}");
+    assert!(start_screen_drop_hint(&wayland).starts_with("Drop"));
 }
 
 /// A tiling window manager can hand PhotoCraft a canvas narrower than the Home card (460
@@ -1729,7 +1744,7 @@ fn mask_view_uploads_each_live_stroke_before_release() {
                 app.ui.tool = Tool::Brush;
                 let ctx = egui::Context::default();
                 ctx.input_mut(|i| i.max_texture_side = 256);
-                let tex = crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+                let tex = crate::channel_view::ensure(&mut app, &ctx, 0, None).unwrap();
                 ctx.tex_manager().write().take_delta().clear();
                 let revision = app.session.documents()[0].revision;
                 let steps = app.session.documents()[0].history.past_len();
@@ -1740,7 +1755,7 @@ fn mask_view_uploads_each_live_stroke_before_release() {
                     tool_event(&mut app, ToolEvent::Move { x, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
                     let shown = display_doc(&mut app, 0).0;
                     assert!(shown.layer(layer).unwrap().mask.as_ref().unwrap().value(x as i32, 30) < 0.1);
-                    assert_eq!(crate::channel_view::ensure(&mut app, &ctx, 0), Some(tex));
+                    assert_eq!(crate::channel_view::ensure(&mut app, &ctx, 0, None), Some(tex));
                     let mut delta = ctx.tex_manager().write().take_delta();
                     let uploads = delta.set.get(&tex).unwrap_or_else(|| panic!("{depth}-bit {mode}: live mask texture must upload before release at {x}"));
                     assert_eq!(uploads.len(), 1);
@@ -1765,7 +1780,7 @@ fn mask_view_uploads_each_live_stroke_before_release() {
                     assert_eq!(app.session.documents()[0].revision, revision);
                     assert_eq!(app.session.documents()[0].history.past_len(), steps);
                     assert_eq!(app.session.documents()[0].doc.layer(layer).unwrap(), &original);
-                    crate::channel_view::ensure(&mut app, &ctx, 0);
+                    crate::channel_view::ensure(&mut app, &ctx, 0, None);
                     assert!(ctx.tex_manager().write().take_delta().set.is_empty(), "idle frame does not upload");
                 }
                 tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 30.0 }, egui::Modifiers::NONE);
@@ -1773,7 +1788,7 @@ fn mask_view_uploads_each_live_stroke_before_release() {
                 assert_eq!(st.history.past_len(), steps + 1);
                 assert!(st.doc.layer(layer).unwrap().mask.as_ref().unwrap().value(50, 30) < 0.1);
                 assert_eq!(st.doc.layer(layer).unwrap().content, original.content);
-                crate::channel_view::ensure(&mut app, &ctx, 0);
+                crate::channel_view::ensure(&mut app, &ctx, 0, None);
                 let mut delta = ctx.tex_manager().write().take_delta();
                 // The commit takes the live stroke's pixels, which the texture already shows: at
                 // most a partial upload, never the whole mask again.
@@ -1781,7 +1796,7 @@ fn mask_view_uploads_each_live_stroke_before_release() {
                 delta.clear();
                 app.session.undo();
                 assert_eq!(app.session.documents()[0].doc.layer(layer).unwrap(), &original);
-                crate::channel_view::ensure(&mut app, &ctx, 0);
+                crate::channel_view::ensure(&mut app, &ctx, 0, None);
                 let mut delta = ctx.tex_manager().write().take_delta();
                 let upload = &delta.set.get(&tex).unwrap()[0];
                 let egui::ImageData::Color(image) = &upload.image;
@@ -1826,14 +1841,14 @@ fn channel_views_show_live_targets_and_discarded_strokes() {
         app.run("tools.setBrush", json!({"brush": {"size": 12, "hardness": 1.0, "smoothing": {"amount": 0.0}}})).unwrap();
         app.ui.tool = Tool::Brush;
         let ctx = egui::Context::default();
-        let tex = crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+        let tex = crate::channel_view::ensure(&mut app, &ctx, 0, None).unwrap();
         ctx.tex_manager().write().take_delta().clear();
         let original = app.session.documents()[0].doc.clone();
         let steps = app.session.documents()[0].history.past_len();
         tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
         tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
         let shown = display_doc(&mut app, 0).0;
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         let mut delta = ctx.tex_manager().write().take_delta();
         let upload = &delta.set.get(&tex).expect("live channel upload")[0];
         let pos = upload.pos.expect("partial channel upload");
@@ -1872,7 +1887,7 @@ fn channel_views_show_live_targets_and_discarded_strokes() {
         // document revision did not change. There is no committed damage rectangle to use.
         app.drag = None;
         app.live_stroke = None;
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         let mut delta = ctx.tex_manager().write().take_delta();
         let upload = &delta.set.get(&tex).unwrap()[0];
         assert!(upload.pos.is_none(), "discarding a preview refreshes the view");
@@ -3052,5 +3067,55 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
         h.run_steps(3);
         let tabs = h.state().0.tab_strip.as_ref().map(|s| s.tabs.iter().map(|(doc, _)| *doc).collect::<Vec<_>>());
         assert_eq!(tabs, Some(vec![1]), "{kind:?}: only the docked document stays on the main tab strip");
+    }
+}
+
+/// #8230: Edit › Fade opens with a Preview checkbox, and the canvas shows the layer faded with the
+/// dialog's opacity, at full size, on the background worker and the inline path alike. Cancel
+/// leaves the document, its history and Fade itself as they were; OK applies what was shown.
+#[test]
+fn fade_dialog_previews_the_faded_layer_and_cancel_keeps_the_document() {
+    for background in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
+        app.run("edit.fill", json!({"color": "#000000"})).unwrap();
+        app.background_jobs = background;
+        let ctx = egui::Context::default();
+        let st = app.session.active().unwrap();
+        let (layer, steps, revision) = (st.active_layer.unwrap(), st.history.past_len(), st.revision);
+        let id = crate::filter_dialog::open(&mut app, "edit.fade").expect("Fade has a dialog");
+        let d = app.ui.dialog_mut(id).expect("the dialog");
+        assert_eq!(d.fields.get("__preview"), Some(&json!(true)), "a Preview checkbox, on");
+        d.fields.insert("opacity".into(), json!(25));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (k, size) = loop {
+            if let Some((k, _, size)) = ensure_filter_preview(&mut app, 0, &ctx)
+                && app.filter_preview.as_ref().is_some_and(|p| p.key.params.get("opacity") == Some(&json!(25)))
+            {
+                break (k, size);
+            }
+            assert!(std::time::Instant::now() < deadline, "background jobs {background}: no preview");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        assert_eq!((k, size), (1, [40, 30]), "background jobs {background}: full size");
+        let shown = app.filter_preview.as_ref().and_then(|p| p.result.as_ref()).expect("a result").layer(layer).unwrap().surface().unwrap().pixel(3, 3);
+        assert!((shown[0] - 0.75).abs() < 0.01, "background jobs {background}: {shown:?}");
+
+        // Cancel: nothing changed, nothing previewed, and Fade is still there to use.
+        app.ui.close_dialog(id);
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none(), "background jobs {background}: no preview after Cancel");
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.layer(layer).unwrap().surface().unwrap().pixel(3, 3)[0], 0.0, "background jobs {background}: the layer is untouched");
+        assert_eq!((st.history.past_len(), st.revision), (steps, revision), "background jobs {background}: no history step");
+        assert!(app.session.is_enabled("edit.fade"), "background jobs {background}: Fade is still available");
+
+        // OK applies the faded layer as one step.
+        let id = crate::filter_dialog::open(&mut app, "edit.fade").unwrap();
+        app.ui.dialog_mut(id).unwrap().fields.insert("opacity".into(), json!(25));
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        let st = app.session.active().unwrap();
+        let faded = st.doc.layer(layer).unwrap().surface().unwrap().pixel(3, 3)[0];
+        assert!((faded - shown[0]).abs() < 1e-6, "background jobs {background}: OK applies the preview ({faded})");
+        assert_eq!(st.history.past_len(), steps + 1);
     }
 }

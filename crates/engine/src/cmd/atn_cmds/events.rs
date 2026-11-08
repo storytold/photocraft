@@ -88,18 +88,21 @@ fn applies_at_canvas_bounds(p: &Value) -> bool {
 }
 
 /// Settings a mapped event has no field for, by command: `(param, the value the event plays as)`.
-/// Photoshop's event has nowhere to put these, so a step that sets one cannot be written: it
+/// The exported event has nowhere to put these, so a step that sets one cannot be written: it
 /// would import as a different edit, silently. Such a step is refused, the way [`pixel_target`]
 /// refuses a filter aimed at a mask -- and no key Photoshop does not define is invented for it,
 /// which the clean-room rule forbids and which would make the file wrong in another reader.
 ///
 /// A step that leaves the setting at the value the event plays as exports as before.
 /// How a setting the event cannot carry behaves once the step is replayed without it. Which of
-/// the two a setting takes follows the command's own reading of it, not the parameter spec.
+/// these a setting takes follows the command's own reading of it, not the parameter spec.
 enum Lost {
-    /// Replay uses this value, so only a step already at it survives. Numbers and strings are
-    /// both compared as written, since the commands below read these settings as written.
+    /// Replay uses this value, so only a step already at it survives. Numbers, strings and
+    /// booleans are compared as written, since the commands below read these settings as written.
     ReplaysAs(&'static str),
+    /// Replay uses this boolean, and the command refuses any other type, so only a step at this
+    /// boolean survives: a string such as `"true"` is refused.
+    ReplaysAsBool(bool),
     /// The command reads only this one spelling as anything other than what replay does, so every
     /// other value survives -- a differently cased one included, because it too plays as replay's.
     DiffersAt(&'static str),
@@ -114,6 +117,8 @@ const UNHOLDABLE: &[(&str, &[(&str, Lost)])] = &[
     // the exact string "roundness" -- see `preserve` in filters.rs.
     ("filter.other.minimum", &[("preserve", Lost::DiffersAt("roundness"))]),
     ("filter.other.maximum", &[("preserve", Lost::DiffersAt("roundness"))]),
+    // Eqlz is exported with no fields; replay equalizes the selected area only.
+    ("image.adjustments.equalize", &[("selectedAreaOnly", Lost::ReplaysAsBool(true))]),
 ];
 
 /// Whether every setting of `p` that its event cannot hold would play the same without it
@@ -121,8 +126,15 @@ const UNHOLDABLE: &[(&str, &[(&str, Lost)])] = &[
 fn holds_its_settings(id: &str, p: &Value) -> bool {
     let Some((_, settings)) = UNHOLDABLE.iter().find(|(cmd, _)| *cmd == id) else { return true };
     settings.iter().all(|(param, lost)| match (p.get(param), lost) {
-        (None | Some(Value::Null), _) => true,
-        (Some(v), Lost::ReplaysAs(played)) => v.as_str() == Some(played) || v.as_f64().is_some_and(|n| played.parse::<f64>().is_ok_and(|d| n == d)),
+        (None, _) => true,
+        // The command refuses null here too, so a null step is refused like any other non-boolean.
+        (Some(v), Lost::ReplaysAsBool(played)) => v.as_bool() == Some(*played),
+        (Some(Value::Null), _) => true,
+        (Some(v), Lost::ReplaysAs(played)) => {
+            v.as_str() == Some(played)
+                || v.as_f64().is_some_and(|n| played.parse::<f64>().is_ok_and(|d| n == d))
+                || v.as_bool().is_some_and(|b| played.parse::<bool>() == Ok(b))
+        }
         (Some(v), Lost::DiffersAt(spelling)) => v.as_str() != Some(spelling),
     })
 }
@@ -786,6 +798,30 @@ pub(super) const EVENTS: &[Event] = &[
     target_event!("disableLayerStyle", "Clear Layer Style", "layer.layerStyle.clear"),
     target_event!("rasterizeAll", "Rasterize All Layers", "layer.rasterize.allLayers"),
     target_event!("addBlankVideoLayer", "New Blank Video Layer", "layer.videoLayers.newBlankVideoLayer"),
+    Event {
+        code: "",
+        name: "insertBlankFrame",
+        label: "Insert Blank Frame",
+        ids: &["layer.videoLayers.insertBlankFrame"],
+        from: |d| super::steps_video::from(d, "layer.videoLayers.insertBlankFrame"),
+        to: |_, p| super::steps_video::to(p),
+    },
+    Event {
+        code: "",
+        name: "duplicateFrame",
+        label: "Duplicate Frame",
+        ids: &["layer.videoLayers.duplicateFrame"],
+        from: |d| super::steps_video::from(d, "layer.videoLayers.duplicateFrame"),
+        to: |_, p| super::steps_video::to(p),
+    },
+    Event {
+        code: "",
+        name: "deleteFrame",
+        label: "Delete Frame",
+        ids: &["layer.videoLayers.deleteFrame"],
+        from: |d| super::steps_video::from(d, "layer.videoLayers.deleteFrame"),
+        to: |_, p| super::steps_video::to(p),
+    },
     target_event!("isolateLayers", "Isolate Layers", "select.isolateLayers"),
     target_event!("textLoadDefaultTypeStyles", "Load Default Type Styles", "type.loadDefaultTypeStyles"),
     target_event!("textSaveDefaultTypeStyles", "Save Default Type Styles", "type.saveDefaultTypeStyles"),
@@ -825,6 +861,7 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.new.layerViaCut",
             "layer.newFillLayer.solidColor",
             "layer.newFillLayer.pattern",
+            "layer.newFillLayer.gradient",
             "layer.newAdjustmentLayer.levels",
             "layer.newAdjustmentLayer.curves",
             "layer.newAdjustmentLayer.hueSaturation",
@@ -869,9 +906,11 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.setLabelColor",
             "layer.setAdjustment",
             "layer.fill.pattern.set",
+            "gradient.fill.set",
             "layer.new.layerFromBackground",
             "layer.layerStyle.blendingOptions",
             "layer.smartFilter.blendingOptions",
+            "path.set",
         ],
         from: set_from,
         to: set_to,
@@ -931,6 +970,22 @@ pub(super) const EVENTS: &[Event] = &[
     ev!("", "newPlacedLayer", "Convert to Smart Object", "layer.smartObjects.convertToSmartObject", &[]),
     ev!("", "placedLayerEditContents", "Edit Contents", "layer.smartObjects.editContents", &[]),
     ev!("", "updatePlacedLayer", "Update Smart Objects", "layer.smartObjects.updateModifiedContent", &[]),
+    Event {
+        code: "",
+        name: "applyImageStackPluginRenderer",
+        label: "Stack Mode",
+        ids: super::steps_stack::MODE_IDS,
+        from: super::steps_stack::mode_from,
+        to: super::steps_stack::mode_to,
+    },
+    Event {
+        code: "",
+        name: "imageStackConvertSmartObject",
+        label: "Stack Mode: None",
+        ids: &[super::steps_stack::NONE],
+        from: super::steps_stack::none_from,
+        to: super::steps_stack::none_to,
+    },
     target_event!("placedLayerMakeCopy", "New Smart Object via Copy", "layer.smartObjects.newSmartObjectViaCopy"),
     target_event!("placedLayerConvertToLayers", "Convert to Layers", "layer.smartObjects.convertToLayers"),
     target_event!("placedLayerConvertToEmbedded", "Convert to Embedded", "layer.smartObjects.convertToEmbedded"),
@@ -1069,6 +1124,14 @@ pub(super) const EVENTS: &[Event] = &[
     Event { code: "ClrR", name: "colorRange", label: "Color Range", ids: &["select.colorRange"], from: color_range_from, to: color_range_to },
     // Edit.
     Event {
+        code: "",
+        name: "perspectiveWarpTransform",
+        label: "Perspective Warp",
+        ids: &[crate::distort_cmds::PERSPECTIVE],
+        from: super::steps_perspective_warp::from,
+        to: super::steps_perspective_warp::to,
+    },
+    Event {
         code: "Grdn",
         name: "gradientClassEvent",
         label: "Gradient",
@@ -1136,6 +1199,15 @@ pub(super) const EVENTS: &[Event] = &[
         ids: &["file.automate.batch"],
         from: super::steps_batch::batch_from,
         to: super::steps_batch::batch_to,
+    },
+    // Create Droplet (#10710): Photoshop has no string ID for it.
+    Event {
+        code: "CrtD",
+        name: "CrtD",
+        label: "Create Droplet",
+        ids: &["file.automate.createDroplet"],
+        from: super::steps_droplet::droplet_from,
+        to: super::steps_droplet::droplet_to,
     },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },
