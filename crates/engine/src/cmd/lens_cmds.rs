@@ -465,12 +465,19 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     cr.validate().map_err(|e| bad(RAW, e))?;
     // The document's primaries, when its profile's aren't the ones the transfer curve implies.
     cr.document_primaries = s.active().and_then(|d| document_primaries(&d.doc));
+    let geometry = !cr.geometry_neutral();
     // The pixel path works on the canvas plus the layer's content in one buffer; a legal
     // 65536×65536 canvas is 2^32 pixels, which overflowed the u32 size arithmetic (#962).
     if !cr.is_identity() {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let id = target(s, p)?;
-        let area = d.doc.layer(id).and_then(Layer::surface).map_or(d.doc.bounds(), |sf| d.doc.bounds().union(&sf.content_bounds()));
+        // Geometry develops the canvas only (below), so content past it must not refuse a canvas
+        // that fits; with a selection the result is mixed over the content's whole extent.
+        let area = match d.doc.layer(id).and_then(Layer::surface) {
+            Some(_) if geometry && d.doc.selection.is_none() => d.doc.bounds(),
+            Some(sf) => d.doc.bounds().union(&sf.content_bounds()),
+            None => d.doc.bounds(),
+        };
         if raw_pixels(area).is_none() {
             return Err(bad(
                 RAW,
@@ -478,8 +485,22 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             ));
         }
     }
+    // Geometry moves alpha with the pixels (uncovered corners turn transparent), which a
+    // transparency lock forbids, as it does for other filters that make transparency. A
+    // Background has no transparency to make: uncovered pixels turn white there instead.
+    if geometry {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let id = target(s, p)?;
+        if !d.doc.is_background(id)
+            && d.doc.effective_locks(id).transparency
+            && let Some(l) = d.doc.layer(id)
+            && let LayerContent::Raster(surf) = &l.content
+            && surf.format().alpha
+        {
+            return Err(EngineError::Other(format!("Could not complete your request because the transparency of layer \"{}\" is locked", l.name)));
+        }
+    }
     let t0 = Stopwatch::start();
-    let geometry = !cr.geometry_neutral();
     let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
         try_camera_raw_surface(surf, if geometry { canvas } else { canvas.union(&surf.content_bounds()) }, &cr).map_err(|e| bad(RAW, e))
     })?;
@@ -537,7 +558,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "RAW Develop Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
-            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase"}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the result}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise"}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
+            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent, white on a layer without transparency such as the Background),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase"}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the result}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise"}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
             journal: true,
@@ -859,6 +880,38 @@ mod tests {
         }
         // Hostile but well-typed numbers are clamped, not fatal.
         s.execute(RAW, json!({"perspectiveVertical": 1e30, "perspectiveScale": -4, "perspectiveUpright": "full"})).unwrap();
+    }
+
+    #[test]
+    fn camera_raw_geometry_sizes_the_canvas_not_far_off_canvas_content() {
+        // One opaque pixel far past a 100 × 100 canvas: canvas ∪ content is about 6.25e8 px.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        s.edit("far", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            let fmt = surf.format();
+            surf.write_pixel(25_000, 25_000, &photocraft_raster::from_rgba(&fmt, [0.5, 0.5, 0.5, 1.0]));
+            Ok(())
+        })
+        .unwrap();
+        // Geometry develops only the canvas, which fits.
+        s.execute(RAW, json!({"perspectiveRotate": 2})).unwrap();
+        // Without Geometry the whole extent is developed, which does not.
+        let err = s.execute(RAW, json!({"exposure": 1})).unwrap_err();
+        assert!(err.to_string().contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn camera_raw_geometry_respects_a_transparency_lock() {
+        let mut s = session(8);
+        s.execute("layer.lockLayers", json!({"transparency": true})).unwrap();
+        let (corner, steps) = (active_px(&s, 1, 1), s.active().unwrap().history.past_len());
+        let err = s.execute(RAW, json!({"perspectiveRotate": 5})).unwrap_err();
+        assert!(err.to_string().contains("transparency"), "{err}");
+        assert_eq!(active_px(&s, 1, 1), corner);
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        // Settings that keep alpha still apply.
+        s.execute(RAW, json!({"exposure": 0.5})).unwrap();
     }
 
     #[test]

@@ -922,7 +922,7 @@ fn calibration_changes_the_preview_and_round_trips_through_xmp() {
         d.processed.iter().zip(&before).any(|(a, b)| (a[0] - b[0]).abs() > 0.01 || (a[1] - b[1]).abs() > 0.01),
         "the Calibration panel changes the preview"
     );
-    let xmp = photocraft_io::camera_raw_xmp::save(&d.params);
+    let xmp = photocraft_io::camera_raw_xmp::save(&d.params).unwrap();
     assert!(xmp.contains("crs:ShadowTint=\"+100\"") && xmp.contains("crs:RedHue=\"+100\"") && xmp.contains("crs:BlueSaturation=\"-100\""), "{xmp}");
     let mut back = CameraRaw::default();
     photocraft_io::camera_raw_xmp::load(&mut back, xmp.as_bytes()).unwrap();
@@ -1170,7 +1170,7 @@ fn a_sidecar_crop_crops_the_opened_raw() {
     assert_eq!(size(&app), Some((48, 32)));
     // PhotoCraft's own sidecar: a changed setting rewrites it, with the crop it was opened with.
     let crop = photocraft_io::camera_raw_xmp::Crop { top: 0.25, left: 0.125, bottom: 0.75, right: 0.625 };
-    std::fs::write(sidecar_path(&raw_path), photocraft_io::camera_raw_xmp::save_with_crop(&CameraRaw::default(), Some(crop))).unwrap();
+    std::fs::write(sidecar_path(&raw_path), photocraft_io::camera_raw_xmp::save_with_crop(&CameraRaw::default(), Some(crop)).unwrap()).unwrap();
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 15}, "commit": true}})).unwrap().unwrap();
     assert_eq!(size(&app), Some((24, 16)));
@@ -1486,4 +1486,14 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert_eq!((r["done"].clone(), r["saved"].clone()), (json!(true), json!([])), "{r}");
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geometry_previews_the_canvas_blocks_of_the_proxy() {
+    use super::convert::canvas_in_proxy;
+    // A layer 20 px past a 64 × 48 canvas, proxy blocks of 1 and of 3 pixels.
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(0, 0, 84, 48), 1, 84, 48), Some([0, 0, 64, 48]));
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(-20, 0, 64, 48), 3, 28, 16), Some([6, 0, 28, 16]));
+    // The canvas is the whole proxy: nothing to frame.
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(0, 0, 64, 48), 1, 64, 48), None);
 }

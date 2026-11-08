@@ -8,7 +8,7 @@
 //! `Radius` as a fraction of the long side, `Flow`, `CenterWeight` = 1 − feather, `Dabs` as
 //! `d x y`), each correction with its local sliders (`LocalExposure2012` in quarter stops of
 //! the ±4 EV range, the others in hundredths). A mask that layout cannot hold (colour or
-//! luminance ranges, AI kinds, subtract / intersect, inverted parts) is written only in
+//! luminance ranges, AI kinds, subtract / intersect, inverted parts, Auto Mask brushes) is written only in
 //! PhotoCraft's own attribute, `pcraft:CameraRawMasks` (the masks as JSON), which also keeps the
 //! exact PhotoCraft settings of every mask; when present it wins on load.
 
@@ -75,10 +75,20 @@ fn child<'a, 'i>(n: roxmltree::Node<'a, 'i>, name: &str) -> Option<roxmltree::No
     n.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS) && c.tag_name().name() == name)
 }
 
-/// The masks in one `crs:…BasedCorrections` element (one mask per correction).
-pub fn read(n: roxmltree::Node<'_, '_>, out: &mut Vec<Mask>) {
-    for corr in items(n).into_iter().take(masks::MAX_MASKS) {
+/// The masks in one `crs:…BasedCorrections` element (one mask per correction), naming what it
+/// skips in `ignored`. Returns how many corrections the element holds.
+pub fn read(n: roxmltree::Node<'_, '_>, out: &mut Vec<Mask>, ignored: &mut Vec<String>) -> usize {
+    let all = items(n);
+    for corr in all.iter().copied().take(masks::MAX_MASKS) {
         if crs(corr, "CorrectionActive").is_some_and(|v| v.eq_ignore_ascii_case("false")) {
+            continue;
+        }
+        // A colour / luminance range restriction (Lightroom's Range Mask) has no counterpart
+        // here: importing the correction without it would apply it unrestricted.
+        if crs(corr, "CorrectionRangeMask").is_some() || child(corr, "CorrectionRangeMask").is_some() {
+            if !ignored.iter().any(|s| s == "CorrectionRangeMask") {
+                ignored.push("CorrectionRangeMask".into());
+            }
             continue;
         }
         let mut adjust = Local::default();
@@ -90,9 +100,15 @@ pub fn read(n: roxmltree::Node<'_, '_>, out: &mut Vec<Mask>) {
         let amount = num(crs(corr, "CorrectionAmount")).map_or(100.0, |a| (a * 100.0).clamp(0.0, 200.0));
         let mut components = Vec::new();
         let mut brush: Vec<Dab> = Vec::new();
-        for m in child(corr, "CorrectionMasks").map(items).unwrap_or_default().into_iter().take(masks::MAX_COMPONENTS) {
+        // Every stroke (or run of one brush's settings) is its own Mask/Paint item and they all
+        // go into one brush, so only the other kinds count against the component cap; the
+        // item count is still bounded.
+        for m in child(corr, "CorrectionMasks").map(items).unwrap_or_default().into_iter().take(masks::MAX_COMPONENTS + masks::MAX_DABS) {
             let what = crs(m, "What").unwrap_or("");
             let value = num(crs(m, "MaskValue")).unwrap_or(1.0);
+            if what != "Mask/Paint" && components.len() >= masks::MAX_COMPONENTS {
+                continue;
+            }
             let shape = match what {
                 "Mask/Gradient" => {
                     let p = |k| num(crs(m, k)).unwrap_or(0.0);
@@ -102,12 +118,13 @@ pub fn read(n: roxmltree::Node<'_, '_>, out: &mut Vec<Mask>) {
                     let p = |k, d| num(crs(m, k)).unwrap_or(d);
                     let (t, l, b, r) = (p("Top", 0.25), p("Left", 0.25), p("Bottom", 0.75), p("Right", 0.75));
                     let inside = crs(m, "Flipped").is_some_and(|v| v.eq_ignore_ascii_case("true"));
-                    let shape = Shape::Radial {
-                        center: [(l + r) / 2.0, (t + b) / 2.0],
-                        radius: [((r - l) / 2.0).abs(), ((b - t) / 2.0).abs()],
-                        angle: p("Angle", 0.0),
-                        feather: p("Feather", 50.0).clamp(0.0, 100.0),
-                    };
+                    let (center, radius) = ([(l + r) / 2.0, (t + b) / 2.0], [((r - l) / 2.0).abs(), ((b - t) / 2.0).abs()]);
+                    // Each value is finite, but sums of huge ones overflow: such a gradient would
+                    // fail validation later, after a load that reported success.
+                    if !center.iter().chain(&radius).all(|v| v.is_finite()) {
+                        continue;
+                    }
+                    let shape = Shape::Radial { center, radius, angle: p("Angle", 0.0), feather: p("Feather", 50.0).clamp(0.0, 100.0) };
                     // Camera Raw's radial gradient acts outside the ellipse unless flipped.
                     components.push(Component { op: Op::Add, invert: !inside, shape });
                     None
@@ -137,12 +154,14 @@ pub fn read(n: roxmltree::Node<'_, '_>, out: &mut Vec<Mask>) {
             }
         }
         if !brush.is_empty() {
+            components.truncate(masks::MAX_COMPONENTS - 1);
             components.push(Component { op: Op::Add, invert: false, shape: Shape::Brush { dabs: brush } });
         }
         if !components.is_empty() && out.len() < masks::MAX_MASKS {
             out.push(Mask { name: format!("Mask {}", out.len() + 1), amount, components, adjust, ..Mask::default() });
         }
     }
+    all.len()
 }
 
 /// Reads `pcraft:CameraRawMasks`, if valid.
@@ -172,7 +191,9 @@ fn classic(m: &Mask) -> Option<usize> {
     let kind = |c: &Component| match c.shape {
         Shape::Linear { .. } if !c.invert => Some(0),
         Shape::Radial { .. } => Some(1),
-        Shape::Brush { .. } if !c.invert => Some(2),
+        // Camera Raw's dabs carry no Auto Mask flag: written there, the brush would spill over
+        // colour edges.
+        Shape::Brush { ref dabs } if !c.invert && !dabs.iter().any(|d| d.auto) => Some(2),
         _ => None,
     };
     let first = kind(&m.components[0])?;
@@ -199,12 +220,14 @@ pub fn write(all: &[Mask]) -> String {
                 Shape::Brush { dabs } => {
                     // One Mask/Paint per run of dabs with the same brush.
                     let mut i = 0;
-                    while i < dabs.len() {
-                        let d0 = dabs[i];
+                    while let Some(&d0) = dabs.get(i) {
                         let same = |d: &Dab| d.size == d0.size && d.feather == d0.feather && d.flow == d0.flow && d.density == d0.density && d.erase == d0.erase;
-                        let mut li = String::new();
-                        while i < dabs.len() && same(&dabs[i]) {
-                            li.push_str(&format!("<rdf:li>d {:.6} {:.6}</rdf:li>", dabs[i].x, dabs[i].y));
+                        // The first dab always goes in: with a NaN field `same(d0)` is false, and
+                        // the run would never advance.
+                        let mut li = format!("<rdf:li>d {:.6} {:.6}</rdf:li>", d0.x, d0.y);
+                        i += 1;
+                        while let Some(d) = dabs.get(i).filter(|d| same(d)) {
+                            li.push_str(&format!("<rdf:li>d {:.6} {:.6}</rdf:li>", d.x, d.y));
                             i += 1;
                         }
                         let value = if d0.erase { 0.0 } else { d0.density / 100.0 };
@@ -233,11 +256,9 @@ pub fn write(all: &[Mask]) -> String {
     out
 }
 
-/// `pcraft:CameraRawMasks="…"` with every mask, or nothing when there are none.
+/// `pcraft:CameraRawMasks="…"` with every mask (`[]` when there are none, so loading the file
+/// over settings with masks clears them, as it sets every other control).
 pub fn own_attribute(all: &[Mask]) -> String {
-    if all.is_empty() {
-        return String::new();
-    }
     let json = serde_json::to_string(all).unwrap_or_default();
     format!("   pcraft:CameraRawMasks=\"{}\"\n", escape(&json))
 }

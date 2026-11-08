@@ -179,7 +179,7 @@ fn ai(px: &[[f32; 4]], w: usize, h: usize, within: Option<Rect>, sky_mask: bool)
 
 /// Side of the grid brushes are painted on (then interpolated up): masks are soft, and this
 /// bounds the work for any image size.
-const BRUSH_GRID: usize = 1024;
+pub(crate) const BRUSH_GRID: usize = 1024;
 
 /// Paints the dabs in order: each adds `flow` of the way to `density` under its soft disc, or
 /// takes `flow` away when erasing.
@@ -224,7 +224,9 @@ fn brush(out: &mut [f32], w: usize, h: usize, dabs: &[Dab], px: &[[f32; 4]]) {
 fn paint(out: &mut [f32], w: usize, h: usize, dabs: &[Dab], colours: Option<&[[f32; 3]]>) {
     let long = w.max(h) as f32;
     for d in dabs.iter().take(super::MAX_DABS) {
-        let r = (d.size.abs().min(super::MAX_DAB_SIZE) * long).max(0.5);
+        // At least half a cell's diagonal: a dab centred on a cell corner still reaches the four
+        // cell centres around it, so a tiny dab never vanishes depending on where it lands.
+        let r = (d.size.abs().min(super::MAX_DAB_SIZE) * long).max(std::f32::consts::FRAC_1_SQRT_2);
         let f = d.feather.clamp(0.0, 100.0) / 100.0;
         let core = r * (1.0 - f);
         let sigma = (0.38 * f * r).max(1e-3);

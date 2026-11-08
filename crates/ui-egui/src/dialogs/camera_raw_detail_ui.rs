@@ -26,6 +26,9 @@ pub(crate) struct DetailPreview {
     /// then act on the raw data, in linear light before it (see [`develop`]).
     pub(crate) raw_curve: Option<Arc<Vec<[f32; 2]>>>,
     area: PixelRect,
+    /// The document's canvas when it is smaller than `area`: Geometry develops only the canvas,
+    /// as the filter does when applied (see [`develop_framed`]).
+    canvas: Option<PixelRect>,
     coverage: Coverage,
     result: Option<(u64, Surface)>,
     pending: Option<(u64, Receiver<DetailResult>)>,
@@ -46,11 +49,17 @@ impl Drop for DetailPreview {
 }
 
 impl DetailPreview {
+    /// Sets the document's canvas (see [`Self::canvas`]).
+    pub(crate) fn with_canvas(mut self, canvas: PixelRect) -> Self {
+        self.canvas = (canvas != self.area).then_some(canvas);
+        self
+    }
     pub(crate) fn new(source: Surface, area: PixelRect, coverage: Coverage) -> Self {
         Self {
             source,
             raw_curve: None,
             area,
+            canvas: None,
             coverage,
             result: None,
             pending: None,
@@ -110,7 +119,7 @@ impl DetailPreview {
         }
         let source = self.source.clone();
         let raw_curve = self.raw_curve.clone();
-        let area = self.area;
+        let (area, canvas) = (self.area, self.canvas);
         let coverage = self.coverage.clone();
         let mut params = params.clone();
         params.pixel_scale = 1.0;
@@ -122,7 +131,7 @@ impl DetailPreview {
                 return;
             }
             let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| develop(&source, raw_curve.as_deref().map(Vec::as_slice), area, &params, &coverage)))
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| develop_framed(&source, raw_curve.as_deref().map(Vec::as_slice), area, canvas, &params, &coverage)))
                     .map(|surface| (revision, surface))
                     .map_err(|_| "RAW Develop detail preview failed; the proxy remains available".into());
             if !cancel.load(Ordering::Relaxed) {
@@ -302,7 +311,15 @@ impl DetailPreview {
 /// ([`photocraft_io::raw::retone`]), then the rest of the pipeline: at 1:1 the preview shows close
 /// to what Open will make. It retones the developed pixels, which already carry the black point,
 /// so it differs from Open only in the deepest shadows, as `retone` documents.
+#[cfg(test)]
 fn develop(source: &Surface, curve: Option<&[[f32; 2]]>, area: PixelRect, params: &CameraRaw, coverage: &Coverage) -> Surface {
+    develop_framed(source, curve, area, None, params, coverage)
+}
+
+/// [`develop`] where the document's `canvas` differs from `area`: with Geometry on, only the
+/// canvas is developed (warped about its centre), as the committed filter does
+/// (`lens_cmds::camera_raw_cmd`), so the preview shows what will be applied.
+fn develop_framed(source: &Surface, curve: Option<&[[f32; 2]]>, area: PixelRect, canvas: Option<PixelRect>, params: &CameraRaw, coverage: &Coverage) -> Surface {
     let tone = photocraft_io::raw::Tone {
         shadows: params.shadows,
         highlights: params.highlights,
@@ -343,7 +360,11 @@ fn develop(source: &Surface, curve: Option<&[[f32; 2]]>, area: PixelRect, params
         _ => (None, params.clone()),
     };
     let base = retoned.as_ref().unwrap_or(source);
-    let mut result = photocraft_engine::lens_cmds::camera_raw_surface(base, area, &params);
+    let frame = match canvas {
+        Some(c) if !params.geometry_neutral() => c,
+        _ => area,
+    };
+    let mut result = photocraft_engine::lens_cmds::camera_raw_surface(base, frame, &params);
     if matches!(coverage, Coverage::None) {
         return result;
     }
@@ -458,6 +479,22 @@ mod tests {
         let mask = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
         assert_eq!(develop(&source, None, area, &params, &Coverage::Selection(mask)), source);
     }
+    #[test]
+    fn geometry_preview_develops_the_canvas_as_the_filter_does() {
+        // A layer reaching 20 px past the right of a 64 × 48 canvas.
+        let (canvas, area) = (PixelRect::new(0, 0, 64, 48), PixelRect::new(0, 0, 84, 48));
+        let mut source = Surface::new(PixelFormat::RGBA8);
+        let values: Vec<f32> = (0..84 * 48).flat_map(|i| [if (i % 84 / 6 + i / 84 / 6) % 2 == 0 { 0.2 } else { 0.8 }, 0.4, 0.6, 1.0]).collect();
+        source.write_region(area, &values);
+        let params = CameraRaw { perspective_rotate: 5.0, ..Default::default() };
+        // What the command applies: the canvas warped about its own centre.
+        let committed = photocraft_engine::lens_cmds::camera_raw_surface(&source, canvas, &params);
+        assert_eq!(develop_framed(&source, None, area, Some(canvas), &params, &Coverage::None), committed);
+        // Without Geometry the whole extent develops, as the command does then.
+        let tone = CameraRaw { exposure: 0.5, ..Default::default() };
+        assert_eq!(develop_framed(&source, None, area, Some(canvas), &tone, &Coverage::None), photocraft_engine::lens_cmds::camera_raw_surface(&source, area, &tone));
+    }
+
     #[test]
     fn a_raw_open_refines_raw_stage_sliders_from_the_whole_frame() {
         // Shadows on a raw being opened: the full-size refinement retones the whole frame (as

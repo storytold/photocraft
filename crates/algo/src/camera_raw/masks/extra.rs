@@ -25,7 +25,8 @@ fn hue_rgb(h: f32) -> [f32; 3] {
 /// The Color swatch: `sat` 0 … 100 of `hue`.
 pub fn tint(px: &mut [[f32; 4]], w: usize, hue: f32, sat: f32) {
     let s = (sat.clamp(0.0, 100.0) / 100.0) * 0.35;
-    if s <= 0.0 || !hue.is_finite() {
+    // `is_nan` first: a NaN amount is neutral, not a NaN tint.
+    if s.is_nan() || s <= 0.0 || !hue.is_finite() {
         return;
     }
     let c = hue_rgb(hue);
@@ -44,10 +45,11 @@ pub fn tint(px: &mut [[f32; 4]], w: usize, hue: f32, sat: f32) {
 }
 
 fn box_blur(v: &mut [f32], w: usize, h: usize, r: usize) {
-    if r == 0 || w == 0 || h == 0 || v.len() < w * h {
+    let Some(n) = w.checked_mul(h) else { return };
+    if r == 0 || w == 0 || h == 0 || v.len() < n {
         return;
     }
-    let mut tmp = vec![0.0f32; w * h];
+    let mut tmp = vec![0.0f32; n];
     for y in 0..h {
         let row = &v[y * w..(y + 1) * w];
         let mut acc: f32 = row.iter().take(r.min(w - 1) + 1).sum();
@@ -85,17 +87,15 @@ fn box_blur(v: &mut [f32], w: usize, h: usize, r: usize) {
     }
 }
 
-/// Moiré reduction: colour blurred over up to 0.6 % of the long side at 100.
-pub fn moire(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
+/// Moiré reduction: colour blurred over up to 0.6 % of the image's long side (`long_side`, not
+/// that of the `w × h` region being processed) at 100.
+pub fn moire(px: &mut [[f32; 4]], w: usize, h: usize, long_side: usize, amount: f32) {
     let a = amount.clamp(0.0, 100.0) / 100.0;
-    if a <= 0.0 || px.len() < w * h {
+    let Some(n) = w.checked_mul(h) else { return };
+    if a.is_nan() || a <= 0.0 || px.len() < n {
         return;
     }
-    let r = ((w.max(h) as f32 * 0.006 * a).round() as usize).max(1);
-    if px.len() < w * h {
-        return;
-    }
-    let n = w * h;
+    let r = ((long_side as f32 * 0.006 * a).round() as usize).max(1);
     let (mut cr, mut cb) = (vec![0.0f32; n], vec![0.0f32; n]);
     for (i, q) in px[..n].iter().enumerate() {
         let y = luma([q[0], q[1], q[2]]);
@@ -119,10 +119,11 @@ pub fn moire(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
 /// Defringe (0 … 100): purple and green fringes along strong edges lose their colour.
 pub fn defringe(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     let a = amount.clamp(0.0, 100.0) / 100.0;
-    if a <= 0.0 || w < 3 || h < 3 || px.len() < w * h {
+    let Some(n) = w.checked_mul(h) else { return };
+    if a.is_nan() || a <= 0.0 || w < 3 || h < 3 || px.len() < n {
         return;
     }
-    let lum: Vec<f32> = px[..w * h].iter().map(|q| luma([q[0], q[1], q[2]])).collect();
+    let lum: Vec<f32> = px[..n].iter().map(|q| luma([q[0], q[1], q[2]])).collect();
     for y in 1..h - 1 {
         for x in 1..w - 1 {
             let i = y * w + x;
@@ -167,7 +168,7 @@ mod tests {
         let (w, h) = (64, 64);
         let mut px: Vec<[f32; 4]> = (0..w * h).map(|i| if (i % w + i / w) % 2 == 0 { [0.6, 0.4, 0.5, 1.0] } else { [0.4, 0.6, 0.5, 1.0] }).collect();
         let before: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
-        moire(&mut px, w, h, 100.0);
+        moire(&mut px, w, h, w, 100.0);
         let mid = px[32 * w + 32];
         assert!((mid[0] - mid[1]).abs() < 0.1, "{mid:?}");
         let after = luma([mid[0], mid[1], mid[2]]);
@@ -185,6 +186,36 @@ mod tests {
         assert!((e[0] - e[1]).abs() < 0.2, "edge pixel greyer: {e:?}");
         assert_eq!(px[3 * w + 1], [0.7, 0.3, 0.8, 1.0], "away from edges: kept");
         defringe(&mut [], 0, 0, 50.0);
-        moire(&mut [], 0, 0, 50.0);
+        moire(&mut [], 0, 0, 0, 50.0);
+    }
+
+    #[test]
+    fn moire_radius_follows_the_image_not_the_region() {
+        // A colour checker: radius 1 (a 20 px region's own long side) and radius 6 (0.6 % of a
+        // 1000 px image) blur it differently.
+        let (w, h) = (20, 20);
+        let src: Vec<[f32; 4]> = (0..w * h).map(|i| if (i % w / 3 + i / w / 3) % 2 == 0 { [0.7, 0.3, 0.5, 1.0] } else { [0.3, 0.7, 0.5, 1.0] }).collect();
+        let (mut small, mut large) = (src.clone(), src);
+        moire(&mut small, w, h, 20, 100.0);
+        moire(&mut large, w, h, 1000, 100.0);
+        assert!(small.iter().zip(&large).any(|(a, b)| (a[0] - b[0]).abs() > 0.01));
+    }
+
+    #[test]
+    fn non_finite_amounts_are_neutral() {
+        let src = vec![[0.6f32, 0.2, 0.4, 1.0]; 16];
+        let mut px = src.clone();
+        tint(&mut px, 4, 0.0, f32::NAN);
+        moire(&mut px, 4, 4, 4, f32::NAN);
+        defringe(&mut px, 4, 4, f32::NAN);
+        assert!(px.iter().zip(&src).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)), "{px:?}");
+    }
+
+    #[test]
+    fn oversized_dimensions_do_not_overflow() {
+        moire(&mut [], usize::MAX, 3, 1, 50.0);
+        defringe(&mut [], usize::MAX, 3, 50.0);
+        let mut v = [0.0f32; 4];
+        box_blur(&mut v, usize::MAX, 3, 1);
     }
 }

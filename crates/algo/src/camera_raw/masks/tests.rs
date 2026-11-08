@@ -180,3 +180,38 @@ fn masks_round_trip_through_json() {
     let parsed: Mask = serde_json::from_str(r#"{"components":[{"kind":"linear","zero":[0,0],"full":[0,1]}],"adjust":{"exposure":1}}"#).unwrap();
     assert!(parsed.visible && parsed.amount == 100.0 && parsed.is_active());
 }
+
+#[test]
+fn a_tiny_dab_on_a_cell_corner_still_paints() {
+    let (w, h) = (100, 100);
+    let px = flat(w, h, |_, _| [0.5; 3]);
+    let dab = Dab { x: 0.5, y: 0.5, size: 0.001, feather: 0.0, flow: 100.0, density: 100.0, erase: false, auto: false };
+    let v = render(&Shape::Brush { dabs: vec![dab] }, &px, w, h);
+    assert!(v.iter().copied().fold(0.0, f32::max) > 0.0);
+}
+
+#[test]
+fn validation_bounds_the_brushes_total_work() {
+    let dab = Dab { x: 0.5, y: 0.5, size: MAX_DAB_SIZE, feather: 0.0, flow: 100.0, density: 100.0, erase: false, auto: false };
+    let brush = || Component { op: Op::Add, invert: false, shape: Shape::Brush { dabs: vec![dab; MAX_DABS] } };
+    let one = Mask { components: vec![brush()], ..Mask::default() };
+    assert!(validate(std::slice::from_ref(&one)).is_ok());
+    let full = Mask { components: (0..MAX_COMPONENTS).map(|_| brush()).collect(), ..Mask::default() };
+    assert!(validate(&vec![full; MAX_MASKS]).is_err());
+}
+
+#[test]
+fn people_without_face_detection_covers_nothing_even_inverted() {
+    let (w, h) = (40, 30);
+    let px = flat(w, h, |_, _| [0.5; 3]);
+    let people = Component { op: Op::Add, invert: true, shape: Shape::People { part: PeoplePart::Person } };
+    for invert in [false, true] {
+        let m = Mask { components: vec![people.clone()], invert, ..Mask::default() };
+        assert!(coverage_with(&m, &px, w, h, false).iter().all(|v| *v == 0.0), "mask invert {invert}");
+    }
+    // With a detector, an inverted People component that finds no one covers everything.
+    let m = Mask { components: vec![people], ..Mask::default() };
+    if crate::faces::AVAILABLE {
+        assert!(coverage_with(&m, &px, w, h, true).iter().all(|v| *v > 0.99));
+    }
+}

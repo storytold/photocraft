@@ -26,7 +26,10 @@ fn grid(w: f64, h: f64) -> Vec<[f64; 2]> {
 fn worst(a: &[f64; 9], b: &[f64; 9], w: f64, h: f64) -> f64 {
     grid(w, h).iter().map(|p| {
         let (x, y) = (pt(a, p[0], p[1]), pt(b, p[0], p[1]));
-        (x[0] - y[0]).hypot(x[1] - y[1])
+        let d = (x[0] - y[0]).hypot(x[1] - y[1]);
+        // `f64::max` drops a NaN, which would let a broken matrix pass.
+        assert!(d.is_finite(), "non-finite distance at {p:?}");
+        d
     }).fold(0.0, f64::max)
 }
 
@@ -213,12 +216,17 @@ fn plumb_and_level(u: &[f64; 9], m: &[f64; 9]) -> (f64, f64) {
     for i in -4..=4 {
         let x = i as f64 * 120.0;
         let (a, b) = (pt(&total, x, -300.0), pt(&total, x, 300.0));
-        worst_v = worst_v.max(((b[0] - a[0]) / (b[1] - a[1])).atan().to_degrees().abs());
+        let v = ((b[0] - a[0]) / (b[1] - a[1])).atan().to_degrees().abs();
+        // `f64::max` drops a NaN, which would let a broken matrix pass.
+        assert!(v.is_finite(), "non-finite vertical angle");
+        worst_v = worst_v.max(v);
     }
     for j in -3..=3 {
         let y = j as f64 * 90.0;
         let (a, b) = (pt(&total, -450.0, y), pt(&total, 450.0, y));
-        worst_h = worst_h.max(((b[1] - a[1]) / (b[0] - a[0])).atan().to_degrees().abs());
+        let hz = ((b[1] - a[1]) / (b[0] - a[0])).atan().to_degrees().abs();
+        assert!(hz.is_finite(), "non-finite horizontal angle");
+        worst_h = worst_h.max(hz);
     }
     (worst_v, worst_h)
 }
@@ -284,6 +292,66 @@ fn guided_upright_follows_the_guides() {
     // One guide: a rotation that makes it plumb.
     let one = guided(&[[[0.48, 0.1], [0.52, 0.9]]], w, h).expect("a rotation");
     assert!(one[6].abs() < 1e-12 && one[1].abs() > 0.01);
+}
+
+/// Angle (degrees) of guide `g` (0 … 1 image coordinates) from vertical / horizontal after `m`.
+fn guide_angle(m: &[f64; 9], g: [[f32; 2]; 2], w: f64, h: f64, vertical: bool) -> f64 {
+    let c = |p: [f32; 2]| pt(m, (f64::from(p[0]) - 0.5) * w, (f64::from(p[1]) - 0.5) * h);
+    let (a, b) = (c(g[0]), c(g[1]));
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let r = if vertical { (dx / dy).atan() } else { (dy / dx).atan() }.to_degrees().abs();
+    assert!(r.is_finite());
+    r
+}
+
+#[test]
+fn guided_levels_a_single_horizontal_next_to_a_single_vertical() {
+    let (w, h) = (1000.0, 800.0);
+    let (v, hz) = ([[0.5f32, 0.1], [0.5, 0.9]], [[0.1f32, 0.45], [0.9, 0.55]]);
+    let u = guided(&[v, hz], w, h).expect("a correction");
+    assert!(guide_angle(&u, hz, w, h, false) < 0.05, "{}°", guide_angle(&u, hz, w, h, false));
+    assert!(guide_angle(&u, v, w, h, true) < 0.05);
+}
+
+#[test]
+fn guided_follows_a_guide_tilted_past_detected_uprights_limit() {
+    let (w, h) = (1000.0, 800.0);
+    let dx = (0.8 * 20f64.to_radians().tan() * h / w) as f32;
+    let g = [[0.4f32, 0.1], [0.4 + dx, 0.9]];
+    let u = guided(&[g], w, h).expect("a 20° guide is still corrected");
+    assert!(guide_angle(&u, g, w, h, true) < 0.05);
+    // Detected lines still refuse a 20° roll: they were probably not the scene's verticals.
+    let t = 20f64.to_radians();
+    let turned = [t.cos(), -t.sin(), 0.0, t.sin(), t.cos(), 0.0, 0.0, 0.0, 1.0];
+    assert!(homography_from_segments(&facade(&turned), w, h, Upright::Vertical).is_none());
+}
+
+#[test]
+fn guided_fits_three_close_guides() {
+    let (w, h) = (1000.0, 800.0);
+    let tilted = manual(&t(|t| t.vertical = 30.0), w, h);
+    let g = |x: f64| -> [[f32; 2]; 2] {
+        let (a, b) = (pt(&tilted, x, -300.0), pt(&tilted, x, 300.0));
+        [[(a[0] / w + 0.5) as f32, (a[1] / h + 0.5) as f32], [(b[0] / w + 0.5) as f32, (b[1] / h + 0.5) as f32]]
+    };
+    // Too close together for the detector's spread rule, but the user drew them.
+    let u = guided(&[g(-40.0), g(0.0), g(40.0)], w, h).expect("a correction");
+    let (v, _) = plumb_and_level(&u, &tilted);
+    assert!(v < 0.05, "{v}°");
+}
+
+#[test]
+fn warp_keeps_colour_at_opaque_edges() {
+    // A fractional shift: the Catmull-Rom taps beyond the border are skipped and the remaining
+    // weights sum above 1; the colour must not brighten by that factor.
+    let (w, h) = (40, 30);
+    let mut px = image(w, h, |_, _| 0.5);
+    warp(&mut px, w, h, &manual(&t(|t| t.x = 0.3), w as f64, h as f64), true);
+    for (i, q) in px.iter().enumerate() {
+        if q[3] > 0.5 {
+            assert!(q[..3].iter().all(|v| (v - 0.5).abs() < 1e-4), "pixel {i}: {q:?}");
+        }
+    }
 }
 
 #[test]

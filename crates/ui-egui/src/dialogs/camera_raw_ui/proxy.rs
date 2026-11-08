@@ -12,6 +12,8 @@ pub(super) struct ProxyJob {
     pub(super) float: bool,
     pub(super) size: (usize, usize),
     pub(super) full_w: usize,
+    /// The canvas's blocks of the proxy, when it does not fill it: Geometry develops only them.
+    pub(super) canvas_frame: Option<[usize; 4]>,
     pub(super) display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(super) gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
     pub(super) source_key: u64,
@@ -48,12 +50,37 @@ impl ProxyJob {
         let develop_start = crate::gpu_canvas::now_ms();
         let key = retoned.is_none().then_some(self.source_key);
         let input = retoned.as_deref().unwrap_or(&self.proxy);
-        let (mut px, backend) = match self.gpu.as_ref().and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
-            Some(out) => (out, "gpu"),
-            None => {
-                let mut px = retoned.unwrap_or_else(|| self.proxy.to_vec());
-                photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
-                (px, "cpu")
+        // With Geometry on, the filter develops (and warps about the centre of) the canvas only;
+        // the layer past it stays as it is. The preview does the same on the canvas's blocks.
+        let frame = self.canvas_frame.filter(|_| !p.geometry_neutral());
+        let (mut px, backend) = if let Some([x0, y0, x1, y1]) = frame {
+            let (fw, fh) = (x1 - x0, y1 - y0);
+            let mut sub: Vec<[f32; 4]> = (y0..y1).flat_map(|y| input.get(y * pw + x0..y * pw + x1).unwrap_or(&[]).iter().copied()).collect();
+            let backend = match self.gpu.as_ref().and_then(|g| g.develop(&sub, None, fw, fh, &p, self.float)) {
+                Some(out) => {
+                    sub = out;
+                    "gpu"
+                }
+                None => {
+                    photocraft_algo::camera_raw::develop(&mut sub, fw, fh, &p, self.float);
+                    "cpu"
+                }
+            };
+            let mut px = input.to_vec();
+            for (y, row) in (y0..y1).zip(sub.chunks_exact(fw.max(1))) {
+                if let Some(dst) = px.get_mut(y * pw + x0..y * pw + x1) {
+                    dst.copy_from_slice(row);
+                }
+            }
+            (px, backend)
+        } else {
+            match self.gpu.as_ref().and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
+                Some(out) => (out, "gpu"),
+                None => {
+                    let mut px = retoned.unwrap_or_else(|| self.proxy.to_vec());
+                    photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
+                    (px, "cpu")
+                }
             }
         };
         let develop_ms = crate::gpu_canvas::now_ms() - develop_start;

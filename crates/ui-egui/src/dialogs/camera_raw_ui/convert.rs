@@ -105,6 +105,19 @@ pub(super) fn preview_area(canvas: Rect, surf: &photocraft_raster::Surface) -> R
     Ok((area, w, h))
 }
 
+/// The canvas's blocks in the proxy of `area` (blocks of `k` pixels, `pw` × `ph`) as
+/// `[x0, y0, x1, y1]`, or `None` when the canvas is the whole proxy. Geometry develops only these,
+/// as the committed filter develops only the canvas.
+pub(super) fn canvas_in_proxy(canvas: Rect, area: Rect, k: usize, pw: usize, ph: usize) -> Option<[usize; 4]> {
+    let k = u64::try_from(k.max(1)).ok()?;
+    // Offsets into `area`, which holds the canvas: never negative.
+    let off = |c: i32, a: i32| u64::try_from(i64::from(c) - i64::from(a)).unwrap_or(0);
+    let lo = |c: i32, a: i32| usize::try_from(off(c, a) / k).ok();
+    let hi = |c: i32, a: i32, max: usize| usize::try_from(off(c, a).div_ceil(k)).ok().map(|v| v.min(max));
+    let f = [lo(canvas.x0, area.x0)?, lo(canvas.y0, area.y0)?, hi(canvas.x1, area.x0, pw)?, hi(canvas.y1, area.y0, ph)?];
+    (f[0] < f[2] && f[1] < f[3] && f != [0, 0, pw, ph]).then_some(f)
+}
+
 /// `area` of `surf` (`w`×`h`) box-averaged down to at most [`PROXY_SIDE`] pixels on its long side:
 /// the proxy, its size, and the side of the blocks averaged.
 pub(super) fn box_proxy(surf: &photocraft_raster::Surface, area: Rect, w: usize, h: usize) -> (Vec<[f32; 4]>, usize, usize, usize) {
@@ -199,7 +212,9 @@ pub(super) fn open_pixels(
                 Coverage::Mask(mask) => crate::camera_raw_detail_ui::Coverage::Mask(mask),
                 Coverage::None => crate::camera_raw_detail_ui::Coverage::None,
             },
-        ),
+        )
+        .with_canvas(canvas),
+        canvas_frame: canvas_in_proxy(canvas, area, k, pw, ph),
         display,
         viewport: None,
         float,

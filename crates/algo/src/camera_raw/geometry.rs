@@ -432,13 +432,17 @@ pub fn warp(px: &mut [[f32; 4]], w: usize, h: usize, m: &[f64; 9], float: bool) 
                 }
             }
             let inv_n = 1.0 / (n * n) as f32;
-            let a = (acc[3] * inv_n).clamp(0.0, 1.0);
-            if a <= 1e-6 {
+            // Un-premultiply by the raw coverage: near an opaque edge the skipped Catmull-Rom
+            // taps (negative weights) push it above 1, and dividing by the clamped value would
+            // brighten the colour by that factor.
+            let raw = acc[3] * inv_n;
+            if !(raw > 1e-6) {
                 *q = [0.0; 4];
                 continue;
             }
+            let a = raw.min(1.0);
             for c in 0..3 {
-                let v = acc[c] * inv_n / a;
+                let v = acc[c] * inv_n / raw;
                 q[c] = if float { v } else { v.clamp(0.0, 1.0) };
             }
             q[3] = a;

@@ -263,8 +263,9 @@ fn rotation(deg: f64) -> [f64; 9] {
 }
 
 /// Rotation and vertical keystone sending vanishing point `v` (homogeneous, centred pixels) to
-/// infinity straight down / up, at most `limit` slider units of keystone.
-pub fn vertical_fix(v: &[f64; 3], w: f64, h: f64, limit: f64) -> Option<[f64; 9]> {
+/// infinity straight down / up, at most `limit` slider units of keystone and `max_roll` degrees
+/// of rotation ([`MAX_ROLL_DEG`] for detected lines; the user's own guides may need more).
+pub fn vertical_fix(v: &[f64; 3], w: f64, h: f64, limit: f64, max_roll: f64) -> Option<[f64; 9]> {
     let r = (w.hypot(h) / 2.0).max(1e-9);
     // Direction of v from the centre.
     let (mut dx, mut dy) = (v[0], v[1]);
@@ -272,11 +273,11 @@ pub fn vertical_fix(v: &[f64; 3], w: f64, h: f64, limit: f64) -> Option<[f64; 9]
         dx = -dx;
         dy = -dy;
     }
-    if !(dy.abs() > 1e-12) || (dx / dy).abs() > (CANDIDATE_DEG * 1.5).to_radians().tan() {
+    if !(dy.abs() > 1e-12) || (dx / dy).abs() > max_roll.max(CANDIDATE_DEG * 1.5).to_radians().tan() {
         return None;
     }
     let theta = (dx / dy).atan();
-    if theta.to_degrees().abs() > MAX_ROLL_DEG {
+    if !(theta.to_degrees().abs() <= max_roll) {
         return None;
     }
     let rot = [theta.cos(), -theta.sin(), 0.0, theta.sin(), theta.cos(), 0.0, 0.0, 0.0, 1.0];
@@ -298,8 +299,8 @@ pub fn vertical_fix(v: &[f64; 3], w: f64, h: f64, limit: f64) -> Option<[f64; 9]
 const SWAP: [f64; 9] = [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
 
 /// [`vertical_fix`] for a horizontal vanishing point (axes swapped).
-pub fn horizontal_fix(v: &[f64; 3], w: f64, h: f64, limit: f64) -> Option<[f64; 9]> {
-    let m = vertical_fix(&[v[1], v[0], v[2]], h, w, limit)?;
+pub fn horizontal_fix(v: &[f64; 3], w: f64, h: f64, limit: f64, max_roll: f64) -> Option<[f64; 9]> {
+    let m = vertical_fix(&[v[1], v[0], v[2]], h, w, limit, max_roll)?;
     Some(mul(&SWAP, &mul(&m, &SWAP)))
 }
 
@@ -313,12 +314,12 @@ fn apply_point(m: &[f64; 9], v: &[f64; 3]) -> [f64; 3] {
 
 /// Both vanishing points: the vertical first, then the horizontal one where it lands after it,
 /// with a keystone along x and a shear that keep the verticals plumb.
-fn full_fix(vv: Option<&[f64; 3]>, vh: Option<&[f64; 3]>, w: f64, h: f64, lim_v: f64, share_h: f64) -> Option<[f64; 9]> {
-    let first = vv.and_then(|v| vertical_fix(v, w, h, lim_v));
+fn full_fix(vv: Option<&[f64; 3]>, vh: Option<&[f64; 3]>, w: f64, h: f64, lim_v: f64, share_h: f64, max_roll: f64) -> Option<[f64; 9]> {
+    let first = vv.and_then(|v| vertical_fix(v, w, h, lim_v, max_roll));
     // Without a vertical vanishing point to anchor it, Photoshop's Full leaves horizontals alone
     // too (an upright terrace render: no correction).
     let Some(base) = first else {
-        return if share_h > 1.0 { vh.and_then(|v| horizontal_fix(v, w, h, MAX_KEYSTONE)) } else { None };
+        return if share_h > 1.0 { vh.and_then(|v| horizontal_fix(v, w, h, MAX_KEYSTONE, max_roll)) } else { None };
     };
     let Some(v) = vh else { return Some(base) };
     // Auto corrects horizontals only alongside a real vertical keystone (Photoshop left a pure
@@ -328,6 +329,14 @@ fn full_fix(vv: Option<&[f64; 3]>, vh: Option<&[f64; 3]>, w: f64, h: f64, lim_v:
     }
     let m = apply_point(&base, v);
     if !(m[2].abs() > 1e-12) {
+        // Still at infinity (a single horizontal guide, or parallel horizontals): no keystone
+        // to apply, but a shear along y levels its direction and keeps the verticals plumb.
+        if m[0].abs() > 1e-9 {
+            let k = -m[1] / m[0];
+            if k.is_finite() {
+                return Some(mul(&[1.0, 0.0, 0.0, k, 1.0, 0.0, 0.0, 0.0, 1.0], &base));
+            }
+        }
         return Some(base);
     }
     let (x, y) = (m[0] / m[2], m[1] / m[2]);
@@ -368,17 +377,17 @@ pub fn homography_from_segments(segs: &[Segment], w: f64, h: f64, mode: Upright)
         Upright::Level => level_angle(segs).map(rotation),
         Upright::Vertical => {
             let vv = enough(vanishing_point(&verticals, scale), tv, VERTICAL_SHARE);
-            vv.and_then(|v| vertical_fix(&v, w, h, MAX_KEYSTONE)).or_else(|| level_angle(segs).map(rotation))
+            vv.and_then(|v| vertical_fix(&v, w, h, MAX_KEYSTONE, MAX_ROLL_DEG)).or_else(|| level_angle(segs).map(rotation))
         }
         Upright::Full => {
             let vv = enough(vanishing_point(&verticals, scale), tv, VERTICAL_SHARE);
             let vh = enough(vanishing_point(&horizontals, scale), th, HORIZONTAL_SHARE);
-            full_fix(vv.as_ref(), vh.as_ref(), w, h, MAX_KEYSTONE, 1.0).or_else(|| level_angle(segs).map(rotation))
+            full_fix(vv.as_ref(), vh.as_ref(), w, h, MAX_KEYSTONE, 1.0, MAX_ROLL_DEG).or_else(|| level_angle(segs).map(rotation))
         }
         Upright::Auto => {
             let vv = enough(vanishing_point(&verticals, scale), tv, VERTICAL_SHARE);
             let vh = enough(vanishing_point(&horizontals, scale), th, HORIZONTAL_SHARE);
-            full_fix(vv.as_ref(), vh.as_ref(), w, h, MAX_KEYSTONE, AUTO_HORIZONTAL).or_else(|| level_angle(segs).map(rotation))
+            full_fix(vv.as_ref(), vh.as_ref(), w, h, MAX_KEYSTONE, AUTO_HORIZONTAL, MAX_ROLL_DEG).or_else(|| level_angle(segs).map(rotation))
         }
     }
 }
@@ -405,16 +414,39 @@ pub fn guided(guides: &[[[f32; 2]; 2]], w: f64, h: f64) -> Option<[f64; 9]> {
                 unit(d)
             }
             [a, b] => unit(cross(&a.line()?, &b.line()?)),
-            many => vanishing_point(many, w.hypot(h) / 2.0).map(|(v, _)| v),
+            // The user drew every guide on purpose: fit them all, with no support thresholds.
+            many => fit_point(many, w.hypot(h) / 2.0),
         }
     };
     let (vv, vh) = (vp(&verticals), vp(&horizontals));
     match (vv, vh) {
         (None, None) => None,
-        (Some(v), None) => vertical_fix(&v, w, h, MAX_KEYSTONE),
-        (None, Some(v)) => horizontal_fix(&v, w, h, MAX_KEYSTONE),
-        (Some(a), Some(b)) => full_fix(Some(&a), Some(&b), w, h, MAX_KEYSTONE, 1.0),
+        (Some(v), None) => vertical_fix(&v, w, h, MAX_KEYSTONE, GUIDED_MAX_ROLL_DEG),
+        (None, Some(v)) => horizontal_fix(&v, w, h, MAX_KEYSTONE, GUIDED_MAX_ROLL_DEG),
+        (Some(a), Some(b)) => full_fix(Some(&a), Some(&b), w, h, MAX_KEYSTONE, 1.0, GUIDED_MAX_ROLL_DEG),
     }
+}
+
+/// Largest roll Guided applies: a guide is the user's statement of what is vertical (or
+/// horizontal), so [`MAX_ROLL_DEG`]'s doubt about detected lines does not apply; a guide is
+/// already classed by whichever axis it is within 45° of.
+const GUIDED_MAX_ROLL_DEG: f64 = 45.0;
+
+/// The point closest to all of `segs`' lines (least squares, homogeneous, unit length), in
+/// centred pixels; `scale` conditions the fit as in [`vanishing_point`].
+fn fit_point(segs: &[Segment], scale: f64) -> Option<[f64; 3]> {
+    let s = scale.max(1.0);
+    let mut m = [[0.0; 3]; 3];
+    for g in segs {
+        let l = Segment { a: g.a.map(|v| v / s), b: g.b.map(|v| v / s) }.line()?;
+        for r in 0..3 {
+            for c in 0..3 {
+                m[r][c] += l[r] * l[c];
+            }
+        }
+    }
+    let v = smallest_eigenvector(m)?;
+    unit([v[0], v[1], v[2] / s])
 }
 
 /// Prints what the analysis sees (the `upright_debug` test).

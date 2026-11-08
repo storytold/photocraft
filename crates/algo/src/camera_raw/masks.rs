@@ -36,6 +36,10 @@ pub const MAX_DABS: usize = 4_000;
 pub const MAX_DAB_SIZE: f32 = 0.25;
 /// Most sampled colours in a colour range.
 pub const MAX_SAMPLES: usize = 5;
+/// Most brush-grid cells all the masks' dabs together may touch: about two brushes full of
+/// largest dabs. The per-component caps alone allow some 10¹² cell visits (32 masks × 32 brushes
+/// × [`MAX_DABS`] dabs of [`MAX_DAB_SIZE`]), which would stall a develop for hours.
+pub const MAX_BRUSH_WORK: f64 = 2.0e9;
 
 /// How a component combines with the components before it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,11 +248,22 @@ impl Mask {
     }
 }
 
-/// Checks masks from untrusted input: counts, finite coordinates and Depth Range.
+/// Brush-grid cells one dab can touch (an upper bound: the grid's long side is at most
+/// [`shapes::BRUSH_GRID`]).
+fn dab_work(d: &Dab) -> f64 {
+    let grid = shapes::BRUSH_GRID as f64;
+    let r = f64::from(d.size.abs().min(MAX_DAB_SIZE)) * grid;
+    let side = 2.0 * r + 2.0;
+    (side * side).min(grid * grid)
+}
+
+/// Checks masks from untrusted input: counts, finite coordinates, Depth Range and the brushes'
+/// total work ([`MAX_BRUSH_WORK`]).
 pub fn validate(masks: &[Mask]) -> Result<(), String> {
     if masks.len() > MAX_MASKS {
         return Err(format!("at most {MAX_MASKS} masks"));
     }
+    let mut work = 0.0f64;
     for (i, m) in masks.iter().enumerate() {
         if m.components.len() > MAX_COMPONENTS {
             return Err(format!("mask {i}: at most {MAX_COMPONENTS} components"));
@@ -261,6 +276,10 @@ pub fn validate(masks: &[Mask]) -> Result<(), String> {
                     }
                     if dabs.iter().any(|d| ![d.x, d.y, d.size, d.feather, d.flow, d.density].iter().all(|v| v.is_finite())) {
                         return Err(format!("mask {i}: brush dabs must be finite"));
+                    }
+                    work += dabs.iter().map(dab_work).sum::<f64>();
+                    if work > MAX_BRUSH_WORK {
+                        return Err(format!("mask {i}: the masks' brushes hold too many large dabs to paint"));
                     }
                 }
                 Shape::Linear { zero, full } => {
@@ -301,8 +320,19 @@ pub fn validate(masks: &[Mask]) -> Result<(), String> {
 
 /// The mask's coverage (0 … 1) per pixel of a `w × h` image `px` (the developed pixels the
 /// range and AI components look at).
+///
+/// A mask with a People component covers nothing where this build cannot detect faces (the
+/// browser build, see [`crate::faces::AVAILABLE`]), whatever its inversions: an empty People
+/// selection that is then inverted would otherwise silently adjust the whole image.
 pub fn coverage(m: &Mask, px: &[[f32; 4]], w: usize, h: usize) -> Vec<f32> {
+    coverage_with(m, px, w, h, crate::faces::AVAILABLE)
+}
+
+fn coverage_with(m: &Mask, px: &[[f32; 4]], w: usize, h: usize, faces_available: bool) -> Vec<f32> {
     let n = w.saturating_mul(h);
+    if !faces_available && m.components.iter().any(|c| matches!(c.shape, Shape::People { .. })) {
+        return vec![0.0; n];
+    }
     let mut acc: Option<Vec<f32>> = None;
     for c in &m.components {
         let mut v = shapes::render(&c.shape, px, w, h);
@@ -425,7 +455,7 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool
         super::develop(&mut dev, bw, bh, &local, float);
         if extras {
             extra::tint(&mut dev, bw, a.color_hue, a.color_sat);
-            extra::moire(&mut dev, bw, bh, a.moire);
+            extra::moire(&mut dev, bw, bh, w.max(h), a.moire);
             extra::defringe(&mut dev, bw, bh, a.defringe);
         }
         let k = (m.amount / 100.0).clamp(0.0, 2.0);

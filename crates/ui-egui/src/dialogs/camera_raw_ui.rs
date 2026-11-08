@@ -78,6 +78,8 @@ pub struct CameraRawDialog {
     pub(crate) ph: usize,
     pub(crate) full_w: usize,
     full_h: usize,
+    /// The canvas's part of the proxy when the layer reaches past it ([`convert::canvas_in_proxy`]).
+    canvas_frame: Option<[usize; 4]>,
     preview_ppp: f32,
     pub(crate) detail: crate::camera_raw_detail_ui::DetailPreview,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
@@ -207,6 +209,7 @@ impl CameraRawDialog {
             float: self.float,
             size: (self.pw, self.ph),
             full_w: self.full_w,
+            canvas_frame: self.canvas_frame,
             display: self.display.clone(),
             gpu: self.gpu.clone(),
             source_key: self.source_key,
