@@ -10,9 +10,9 @@ use crate::pickers::browser::asset_browser::{
     BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, begin_item_rename, browser, delete_item_actions,
     item_context_targets, move_item_actions,
 };
+use crate::pickers::browser::browser_actions::{generic, run};
 use crate::pickers::browser::browser_interaction::canvas_drop_rect;
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::commands::{generic, run};
 use crate::pickers::footer::FooterOptions;
 use crate::pickers::preset_previews::{c32, cached_texture, sample_fingerprint};
 use crate::pickers::shell::{ShellOptions, picker_shell};
@@ -214,12 +214,12 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Contribute the Patterns-specific actions to the shared docking header menu.
 pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if ui.button(tl!("Import")).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Import"), true).clicked() {
         crate::preset_files_ui::import_patterns_dialog(app);
         ui.close();
     }
     let can_export = !app.session.patterns.items.is_empty() && !cfg!(target_arch = "wasm32");
-    if ui.add_enabled(can_export, egui::Button::new(tl!("Export…"))).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Export…"), can_export).clicked() {
         ui.close();
         export_patterns_dialog(app);
     }
@@ -259,10 +259,12 @@ pub(crate) fn compact_item_context_menu(
     let crate::pickers::browser::asset_browser::ItemContextMenuArgs { panel, item, group, group_names, selected_items } = args;
     let targets = item_context_targets(item, group, selected_items);
     let count = targets.len();
-    if ui.button(tl!("Rename…")).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Rename…"), true).clicked() {
         begin_item_rename(st, panel, &targets);
         compact_context_menu_close_later(ui, panel);
-    } else if ui.button(if count > 1 { format!("{} ({count})", tl!("Delete")) } else { tl!("Delete").to_string() }).clicked() {
+    } else if crate::menu_keys::menu_item_button(ui, &if count > 1 { format!("{} ({count})", tl!("Delete")) } else { tl!("Delete").to_string() }, true)
+        .clicked()
+    {
         ev.extend(delete_item_actions(&targets));
         compact_context_menu_close_later(ui, panel);
     } else {
@@ -270,7 +272,7 @@ pub(crate) fn compact_item_context_menu(
         ui.menu_button(tl!("Move to"), |ui| {
             for name in group_names {
                 let already_in_target = targets.iter().all(|(source_group, _)| source_group == name);
-                if !already_in_target && ui.button(name).clicked() {
+                if !already_in_target && crate::menu_keys::menu_item_button(ui, name, true).clicked() {
                     move_to = Some(name.clone());
                 }
             }
@@ -283,10 +285,10 @@ pub(crate) fn compact_item_context_menu(
 }
 
 pub(crate) fn compact_group_context_menu(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str, group: &GroupView, ev: &mut Vec<BrowserAction>) {
-    if ui.button(tl!("Rename Group…")).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Rename Group…"), true).clicked() {
         st.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone()));
         compact_context_menu_close_later(ui, panel);
-    } else if ui.button(tl!("Delete Group")).clicked() {
+    } else if crate::menu_keys::menu_item_button(ui, tl!("Delete Group"), true).clicked() {
         ev.push(BrowserAction::DeleteGroup(group.name.clone()));
         compact_context_menu_close_later(ui, panel);
     }

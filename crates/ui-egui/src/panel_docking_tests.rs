@@ -1,6 +1,9 @@
 use super::*;
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 
 fn app() -> PhotocraftApp {
     PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
@@ -656,7 +659,8 @@ fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
     }
     h.run_steps(2);
     assert!(h.query_all_by_label("Close Tab Group").count() > 0);
-    assert!(h.query_all_by_label("New Swatch…").count() > 0);
+    assert!(h.query_all_by_label("Close").count() > 0, "the floating group menu can close its active tab");
+    assert!(h.query_all_by_label("New Swatch Preset…").count() > 0);
     // Panel-specific menu body is shared by both its context and group menu seams.
     let mut ready = false;
     let mut menu = Harness::builder().build_ui_state(
@@ -670,9 +674,33 @@ fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
         self::app(),
     );
     menu.run_steps(2);
-    assert!(menu.query_all_by_label("New Swatch…").count() > 0);
+    assert!(menu.query_all_by_label("New Swatch Preset…").count() > 0);
     assert!(menu.query_all_by_label("Text Only").count() > 0, "shared shell display controls precede the adapter extension");
     assert!(menu.query_all_by_label("Show Search Bar").count() > 0, "the shared shell owns search visibility");
+}
+
+#[test]
+fn floating_group_menu_close_removes_only_the_active_tab_and_closes_an_empty_window() {
+    let mut app = app();
+    app.run("window.panel.float", json!({"panel":"swatches","x":40,"y":60,"width":320,"height":320})).unwrap();
+    app.run("window.panel.move", json!({"panel":"gradients","anchor":"swatches"})).unwrap();
+    let mut h = harness(app, vec2(1280.0, 800.0));
+
+    open_floating_panel_menu(&mut h, "swatches");
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    let layout = h.state().ui.docking.as_ref().unwrap();
+    assert!(!layout.contains(&"gradients".into()), "Close removes the active tab");
+    assert!(layout.floating.iter().any(|group| group.panels == ["swatches"]), "the window stays open while another tab remains");
+    assert!(h.state().ui.docking_hidden.contains_key("gradients"));
+
+    open_floating_panel_menu(&mut h, "swatches");
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    let layout = h.state().ui.docking.as_ref().unwrap();
+    assert!(!layout.contains(&"swatches".into()));
+    assert!(layout.floating.iter().all(|group| !group.panels.contains(&"swatches".into())), "closing the final tab removes its floating window");
+    assert!(h.state().ui.docking_hidden.contains_key("swatches"));
 }
 
 #[test]
@@ -691,7 +719,7 @@ fn shared_picker_menu_is_scoped_and_preserves_domain_extensions() {
     picker.run_steps(2);
     assert!(picker.query_all_by_label("Text Only").count() > 0);
     assert!(picker.query_all_by_label("Show Search Bar").count() > 0);
-    assert!(picker.query_all_by_label("Import .GRD").count() > 0, "the adapter still contributes its domain action");
+    assert!(picker.query_all_by_label("Import Gradients…").count() > 0, "the adapter still contributes its domain action");
 
     let mut ready = false;
     let mut ordinary = Harness::builder().build_ui_state(
@@ -755,26 +783,55 @@ fn every_supported_picker_panel_uses_the_shared_docking_composer() {
 }
 
 #[test]
-fn legacy_right_dock_menu_composes_picker_then_docking_actions_and_keeps_ordinary_menus_independent() {
-    let mut swatches_app = app();
-    swatches_app.ui.dock_tabs.color = 1;
-    let mut swatches = harness(swatches_app, vec2(1280.0, 1000.0));
-    let color_menu = crate::dock::last_strips(&swatches.ctx).into_iter().find(|strip| strip.group == Group::Color).unwrap().menu.center();
-    swatches.hover_at(color_menu);
-    swatches.event(Event::PointerButton { pos: color_menu, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    swatches.run_steps(1);
-    swatches.event(Event::PointerButton { pos: color_menu, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    swatches.run_steps(2);
+fn shared_picker_right_dock_menu_follows_the_contract_and_keeps_ordinary_menus_independent() {
+    let mut gradients_app = app();
+    gradients_app.ui.dock_tabs.color = 2;
+    let mut gradients = harness(gradients_app, vec2(1280.0, 1000.0));
+    let color_menu = crate::dock::last_strips(&gradients.ctx).into_iter().find(|strip| strip.group == Group::Color).unwrap().menu.center();
+    gradients.hover_at(color_menu);
+    gradients.event(Event::PointerButton { pos: color_menu, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    gradients.run_steps(1);
+    gradients.event(Event::PointerButton { pos: color_menu, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    gradients.run_steps(2);
 
-    let display = swatches.get_by_label("Text Only").rect();
-    let domain = swatches.get_by_label("New Swatch…").rect();
-    let last_domain = swatches.get_by_label("Reset Swatches").rect();
-    let docking = swatches.get_by_label("Float Panel").rect();
-    let group = swatches.get_by_label("Collapse Panel Group").rect();
-    assert!(display.bottom() <= domain.top(), "shared display controls precede Swatches actions");
-    assert!(domain.bottom() <= last_domain.top(), "Swatches domain action groups retain their order");
-    assert!(last_domain.bottom() < docking.top(), "all adapter actions precede the docking-owned section separator and actions");
-    assert!(docking.bottom() <= group.top(), "legacy menu actions precede right-dock group controls");
+    let labels = [
+        "New Gradient Preset…",
+        "New Gradient Group…",
+        "Rename Gradient…",
+        "Delete Gradient…",
+        "Text Only",
+        "Small Thumbnail",
+        "Large Thumbnail",
+        "Small List",
+        "Large List",
+        "Wrap List",
+        "Show Search Bar",
+        "Show Recents",
+        "Append Default Gradients…",
+        "Import Gradients…",
+        "Float Panel",
+        "Collapse Panel Group",
+        "Close",
+        "Close Tab Group",
+    ];
+    let mut previous_bottom = None;
+    for label in labels {
+        let rect = gradients.get_by_label(label).rect();
+        if let Some(bottom) = previous_bottom {
+            assert!(rect.top() >= bottom, "{label} follows the shared-browser contract");
+        }
+        previous_bottom = Some(rect.bottom());
+    }
+    for label in ["Rename Gradient…", "Delete Gradient…"] {
+        assert!(gradients.get_by_label(label).accesskit_node().is_disabled(), "{label} is disabled without a selection");
+    }
+    assert!(gradients.query_by_label("Rename Group…").is_none());
+    assert!(gradients.query_by_label("Delete Group…").is_none());
+    let collapse = gradients.get_by_label("Collapse Panel Group").rect();
+    let close = gradients.get_by_label("Close").rect();
+    let close_group = gradients.get_by_label("Close Tab Group").rect();
+    assert!(collapse.bottom() < close.top(), "Close belongs after panel/window management actions");
+    assert!(close.bottom() <= close_group.top(), "Close precedes Close Tab Group in the shared management section");
 
     let mut ordinary_app = app();
     ordinary_app.ui.dock_tabs.properties = 0;
@@ -806,7 +863,7 @@ fn swatches_menu_actions_update_the_shell_owned_picker_state() {
         app,
     );
     menu.run_steps(2);
-    menu.get_by_label("New Swatch…").click();
+    menu.get_by_label("New Swatch Preset…").click();
     menu.run_steps(2);
     assert_eq!(menu.state().ui.presets_ui.selected.get("swatches").map(String::as_str), Some("Color Swatch 1"));
     assert_eq!(menu.state().ui.presets_ui.renaming.as_ref().map(|(_, name, _)| name.as_str()), Some("Color Swatch 1"));
@@ -956,6 +1013,21 @@ fn every_preset_picker_floating_title_bar_remains_draggable() {
         drag(&mut h, title.rect.center(), title.rect.center() + vec2(45.0, 25.0));
         let after = h.ctx.memory(|memory| memory.area_rect(area_id)).unwrap();
         assert_ne!(after.min, before.min, "{panel} title bar must move its floating panel");
+    }
+}
+
+#[test]
+fn every_preset_picker_floating_title_bar_can_be_dragged_partly_offscreen() {
+    for panel in PRESET_PICKERS {
+        let mut h = floating_picker_harness(panel);
+        let area_id = floating_picker_area_id(panel);
+        let before = h.ctx.memory(|memory| memory.area_rect(area_id)).unwrap();
+        let title = h.ctx.read_response(floating_picker_drag_id("move-title", panel)).expect("shared floating title drag target");
+        let from = title.rect.center();
+        drag(&mut h, from, egui::pos2(5.0, from.y));
+        let after = h.ctx.memory(|memory| memory.area_rect(area_id)).unwrap();
+        assert!(after.left() < 0.0, "{panel} floating panel should follow the pointer beyond the left viewport edge: before={before:?}, after={after:?}");
+        assert!(after.intersect(h.ctx.content_rect()).width() >= 48.0, "{panel} keeps a reachable grab area: {after:?}");
     }
 }
 

@@ -6,7 +6,7 @@ use crate::pickers::state::PresetUi;
 
 #[cfg(test)]
 pub(crate) use crate::pickers::picker_panel_menu::picker_menu_popup;
-pub(crate) use crate::pickers::picker_panel_menu::{MenuContentsCallback, PickerMenuOptions, picker_menu_contents};
+pub(crate) use crate::pickers::picker_panel_menu::{MenuContentsCallback, PickerMenuOptions, picker_menu_contents, picker_menu_contents_ordered};
 
 const FOOTER_GUESS: f32 = 32.0;
 type UiCallback<'a> = &'a mut dyn FnMut(&mut egui::Ui);
@@ -48,8 +48,12 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
         ui.add(egui::TextEdit::singleline(query).desired_width(ui.available_width()).hint_text(tl!("Search")));
     }
 
-    let recent_options = crate::pickers::recents_bar::Options::for_panel(&panel);
-    let mut events = crate::pickers::recents_bar::show(ui, st, adapter, recent_options);
+    let mut events = if st.recents_visible(&panel) {
+        let recent_options = crate::pickers::recents_bar::Options::for_panel(&panel);
+        crate::pickers::recents_bar::show(ui, st, adapter, recent_options)
+    } else {
+        Vec::new()
+    };
 
     let footer_id = egui::Id::new(("preset-footer", panel.as_str()));
     let footer_h = if shell.footer.is_some() { ui.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(FOOTER_GUESS) } else { 0.0 };
@@ -163,7 +167,13 @@ mod display_menu_tests {
         let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
             |ui, state: &mut PresetUi| {
                 picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
-                    picker_menu_contents(ui, state, "test-picker", PickerMenuOptions::for_panel("test-picker"), None);
+                    picker_menu_contents(
+                        ui,
+                        state,
+                        "test-picker",
+                        PickerMenuOptions { display: true, wrap_list: true, search_visibility: true, recents_visibility: false },
+                        None,
+                    );
                 });
             },
             PresetUi::default(),
@@ -185,6 +195,69 @@ mod display_menu_tests {
         }
         let wrap_rect = harness.get_by_label("Wrap List").rect();
         assert!(wrap_rect.top() > previous_bottom.unwrap() + 4.0, "Wrap List must follow a menu separator after the display modes");
+        let search_rect = harness.get_by_label("Show Search Bar").rect();
+        assert!(search_rect.top() > wrap_rect.bottom() + 4.0, "search visibility must follow Wrap List in its own section");
+    }
+
+    #[test]
+    fn panel_menu_popup_aligns_its_left_edge_to_the_buttons_top_right_or_bottom_right() {
+        for (height, spacer, aligns_top) in [(500.0, 0.0, true), (260.0, 220.0, false)] {
+            let mut harness = Harness::builder().with_size(vec2(420.0, height)).build_ui_state(
+                |ui, state: &mut PresetUi| {
+                    ui.add_space(spacer);
+                    let button = picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                        picker_menu_contents(ui, state, "gradients", PickerMenuOptions::for_panel("gradients"), None);
+                    });
+                    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("panel-menu-popup-test"), egui::Popup::default_response_id(&button)));
+                },
+                PresetUi::default(),
+            );
+            crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+            harness.run_steps(2);
+            let button = harness.get_by_label("Panel menu").rect();
+            harness.get_by_label("Panel menu").click();
+            harness.run_steps(2);
+            let popup_id = harness.ctx.data(|data| data.get_temp::<egui::Id>(egui::Id::new("panel-menu-popup-test"))).unwrap();
+            let popup = harness.ctx.memory(|memory| memory.area_rect(popup_id)).expect("open panel menu has an area rect");
+            assert!(
+                (popup.left() - button.right()).abs() < 1.0,
+                "popup left edge must align with the trigger's right edge: button={button:?}, popup={popup:?}"
+            );
+            if aligns_top {
+                assert!((popup.top() - button.top()).abs() < 1.0, "popup top-left must align with the trigger's top-right: button={button:?}, popup={popup:?}");
+            } else {
+                assert!(
+                    (popup.bottom() - button.bottom()).abs() < 1.0,
+                    "popup bottom-left must align with the trigger's bottom-right when it cannot fit from the top: button={button:?}, popup={popup:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn panel_menu_popup_flips_when_below_space_is_insufficient_even_if_neither_alignment_fits() {
+        let mut harness = Harness::builder().with_size(vec2(420.0, 500.0)).build_ui_state(
+            |ui, _state: &mut PresetUi| {
+                let spacer = ui.ctx().data(|data| data.get_temp::<f32>(egui::Id::new("panel-menu-spacer"))).unwrap_or(0.0);
+                ui.add_space(spacer);
+                let button = ui.button("Panel menu");
+                let popup = super::super::picker_panel_menu::panel_menu_popup(&button).open(true);
+                let best_align = popup.get_best_align();
+                ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("panel-menu-best-align"), best_align));
+                popup.show(|ui| {
+                    for index in 0..20 {
+                        let _ = ui.button(format!("Menu action {index}"));
+                    }
+                });
+            },
+            PresetUi::default(),
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(3);
+        harness.ctx.data_mut(|data| data.insert_temp(egui::Id::new("panel-menu-spacer"), 240.0));
+        harness.run_steps(2);
+        let best_align = harness.ctx.data(|data| data.get_temp::<egui::RectAlign>(egui::Id::new("panel-menu-best-align")));
+        assert_eq!(best_align, Some(egui::RectAlign::RIGHT_END), "the menu should flip rather than retain a top anchor that egui then shifts");
     }
 
     #[test]
@@ -251,6 +324,26 @@ mod display_menu_tests {
         harness.run_steps(2);
         assert_eq!(harness.state().search_visible.get("gradients"), Some(&false));
         assert!(harness.query_by_label("Text Only").is_none(), "toggling search visibility closes the panel menu");
+    }
+
+    #[test]
+    fn shared_picker_menu_exposes_and_persists_recent_strip_visibility() {
+        let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+            |ui, state: &mut PresetUi| {
+                picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    picker_menu_contents(ui, state, "gradients", PickerMenuOptions::for_panel("gradients"), None);
+                });
+            },
+            PresetUi::default(),
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+        harness.get_by_label("Show Recents").click();
+        harness.run_steps(2);
+        assert!(!harness.state().recents_visible("gradients"));
+        assert!(harness.query_by_label("Show Recents").is_none(), "toggling recents visibility closes the menu");
     }
 
     #[test]

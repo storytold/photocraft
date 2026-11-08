@@ -2,6 +2,7 @@
 
 pub(crate) mod asset_browser;
 pub(crate) mod browser_actions;
+pub(crate) mod browser_gestures;
 pub(crate) mod browser_interaction;
 pub(crate) mod context_menu;
 pub(crate) mod data;

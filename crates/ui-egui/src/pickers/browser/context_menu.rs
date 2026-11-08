@@ -193,15 +193,15 @@ pub(crate) fn begin_item_rename(state: &mut PresetUi, panel: &str, targets: &[(S
 }
 
 /// Standard item-menu policy shared by preset panels and specialised adapters.
-pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
-    let ItemContextMenuArgs { panel, item, group, group_names, selected_items } = args;
+pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, _state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
+    let ItemContextMenuArgs { panel: _, item, group, group_names, selected_items } = args;
     let targets = item_context_targets(item, group, selected_items);
     let count = targets.len();
     let delete_label = if count > 1 { format!("{} ({count})", tl!("Delete")) } else { tl!("Delete").to_string() };
     let all_in_current_group = targets.iter().all(|(source_group, _)| source_group == &group.name);
     match draw_item_context_menu(ui, tl!("Rename…"), &delete_label, Some((tl!("Move to"), group_names, if all_in_current_group { &group.name } else { "" })))
     {
-        Some(ContextMenuAction::Rename) => begin_item_rename(state, panel, &targets),
+        Some(ContextMenuAction::Rename) => events.push(BrowserAction::BeginRenameItems(targets)),
         Some(ContextMenuAction::Delete) => events.extend(delete_item_actions(&targets)),
         Some(ContextMenuAction::MoveTo(destination)) => events.extend(move_item_actions(&targets, &destination)),
         None => {}
@@ -209,9 +209,9 @@ pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi
 }
 
 /// Standard group-menu policy shared by preset panels and specialised adapters.
-pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
+pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, _state: &mut PresetUi, _panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
     match draw_group_context_menu(ui, tl!("Rename Group…"), tl!("Delete Group")) {
-        Some(ContextMenuAction::Rename) => state.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone())),
+        Some(ContextMenuAction::Rename) => events.push(BrowserAction::BeginRenameGroup(group.name.clone())),
         Some(ContextMenuAction::Delete) => events.push(BrowserAction::DeleteGroup(group.name.clone())),
         _ => {}
     }

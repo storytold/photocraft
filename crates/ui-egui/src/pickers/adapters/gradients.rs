@@ -8,9 +8,9 @@ use crate::pickers::browser::asset_browser::{
     BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, standard_group_context_menu,
     standard_item_context_menu,
 };
+use crate::pickers::browser::browser_actions::{generic, run};
 use crate::pickers::browser::browser_interaction::canvas_drop_rect;
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::commands::{generic, run};
 use crate::pickers::footer::FooterOptions;
 use crate::pickers::preset_previews::c32;
 use crate::pickers::shell::{ShellOptions, picker_shell};
@@ -187,30 +187,9 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 run(app, "gradient.presets.apply", json!({"preset": key}));
             }
             BrowserAction::New => {
-                let root_level = groups.iter().all(|group| group.root_only);
-                let destination_group = if root_level {
-                    ROOT_ITEMS_GROUP
-                } else {
-                    groups.iter().find(|group| !group.root_only).map(|group| group.name.as_str()).unwrap_or(ROOT_ITEMS_GROUP)
-                };
-                if let Some(result) = run(app, "gradient.presets.new", json!({"name": "Custom", "group": destination_group})) {
-                    let name = result.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
-                    if !name.is_empty() {
-                        app.ui.presets_ui.set_selected_item("gradients", destination_group, &[], &name);
-                        if root_level {
-                            let mut root = app.ui.presets_ui.hierarchy_order.get("gradients").and_then(|orders| orders.get("")).cloned().unwrap_or_default();
-                            root.push(HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: name.clone() });
-                            app.ui.presets_ui.set_hierarchy_order("gradients", "", root);
-                        }
-                        app.ui.presets_ui.item_renaming = Some(ItemRenameState {
-                            panel: "gradients".into(),
-                            group: destination_group.into(),
-                            group_path: Vec::new(),
-                            key: name.clone(),
-                            text: name,
-                        });
-                    }
-                }
+                let mut state = std::mem::take(&mut app.ui.presets_ui);
+                new_gradient(app, &mut state);
+                app.ui.presets_ui = state;
             }
             // Only the brush browser supports nested-group context actions.
             BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
@@ -221,14 +200,43 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Create a gradient through the same domain-aware path from the footer or the shared panel menu.
+pub(crate) fn new_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::state::PresetUi) {
+    let root_level = app.session.presets.gradients.iter().all(|group| group.name == ROOT_ITEMS_GROUP);
+    let destination_group = if root_level {
+        ROOT_ITEMS_GROUP.to_owned()
+    } else {
+        app.session
+            .presets
+            .gradients
+            .iter()
+            .find(|group| group.name != ROOT_ITEMS_GROUP)
+            .map(|group| group.name.clone())
+            .unwrap_or_else(|| ROOT_ITEMS_GROUP.to_owned())
+    };
+    if let Some(result) = run(app, "gradient.presets.new", json!({"name": "Custom", "group": destination_group})) {
+        let name = result.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+        if !name.is_empty() {
+            state.set_selected_item("gradients", &destination_group, &[], &name);
+            if root_level {
+                let mut root = state.hierarchy_order.get("gradients").and_then(|orders| orders.get("")).cloned().unwrap_or_default();
+                root.push(HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: name.clone() });
+                state.set_hierarchy_order("gradients", "", root);
+            }
+            state.item_renaming =
+                Some(ItemRenameState { panel: "gradients".into(), group: destination_group, group_path: Vec::new(), key: name.clone(), text: name });
+        }
+    }
+}
+
 /// Contribute the Gradients-specific actions to the shared docking header menu.
 pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if ui.button(tl!("Import .GRD")).clicked() {
-        crate::preset_files_ui::import_gradients_dialog(app);
+    if crate::menu_keys::menu_item_button(ui, tl!("Append Default Gradients…"), true).clicked() {
+        run(app, "gradient.presets.reset", json!({"append": true}));
         ui.close();
     }
-    if ui.button(tl!("Reset")).clicked() {
-        run(app, "gradient.presets.reset", json!({}));
+    if crate::menu_keys::menu_item_button(ui, tl!("Import Gradients…"), true).clicked() {
+        crate::preset_files_ui::import_gradients_dialog(app);
         ui.close();
     }
 }

@@ -735,6 +735,7 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
             BrowserAction::RenameItem { group: _, group_path, key, text } => {
                 occurrence_name(presets, &key).map(|name| Action::Rename(Renaming { group: false, name, folder: group_path, text }))
             }
+            BrowserAction::BeginRenameItems(_) | BrowserAction::BeginRenameGroup(_) | BrowserAction::BeginRenameGroups(_) => None,
             BrowserAction::DeleteItem { group: _, group_path: _, key } => preset_by_identity(presets, &key).map(|preset| Action::DeleteOccurrence {
                 name: preset.name.clone(),
                 group: preset.group.clone(),

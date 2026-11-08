@@ -163,6 +163,24 @@ pub fn menu_row_text(ui: &Ui, checked: bool, label: &str, mnemonic: Option<char>
     job.into()
 }
 
+/// A plain menu action with the same checkmark gutter as checked menu rows.
+pub fn menu_item_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
+    let indent = ui.ctx().data(|data| data.get_temp::<bool>(ui.id().with("menu-item-indent")).unwrap_or(false));
+    let text = if indent { menu_row_text(ui, false, label, None) } else { label.into() };
+    let response = ui.add_enabled(enabled, egui::Button::new(text));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    response
+}
+
+/// Opt plain actions into the checkmark gutter for the duration of this menu.
+pub fn with_menu_item_indent<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let id = ui.id().with("menu-item-indent");
+    ui.ctx().data_mut(|data| data.insert_temp(id, true));
+    let result = add(ui);
+    ui.ctx().data_mut(|data| data.remove::<bool>(id));
+    result
+}
+
 impl Keys {
     /// Last frame's state.
     pub fn load(ctx: &egui::Context) -> Keys {

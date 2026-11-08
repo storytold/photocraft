@@ -131,9 +131,15 @@ pub struct PresetUi {
     /// Recently selected asset identities, newest first, shared by every picker adapter.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) recent_items: BTreeMap<String, Vec<RecentPickerItem>>,
+    /// Visibility of the recent-items strip per picker. Missing entries default to visible.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) recents_visible: BTreeMap<String, bool>,
     /// In-place rename: (panel, preset or "group:<name>", text).
     #[serde(skip)]
     pub renaming: Option<(String, String, String)>,
+    /// Remaining selected top-level groups to rename sequentially.
+    #[serde(skip)]
+    pub(crate) group_rename_queue: Vec<(String, String, String)>,
     /// Typed in-place nested-group rename. Transient and intentionally excluded from serde.
     #[serde(skip)]
     pub(crate) group_renaming: Option<NestedGroupRenameState>,
@@ -156,6 +162,10 @@ pub(crate) struct RecentPickerItem {
 pub(crate) const MAX_RECENT_PICKER_ITEMS: usize = 15;
 
 impl PresetUi {
+    pub(crate) fn recents_visible(&self, panel: &str) -> bool {
+        self.recents_visible.get(panel).copied().unwrap_or(true)
+    }
+
     pub(crate) fn record_recent_item(&mut self, panel: &str, group: &str, group_path: &[String], key: &str) {
         let items = self.recent_items.entry(panel.to_owned()).or_default();
         items.retain(|item| item.group != group || item.group_path != group_path || item.key != key);
@@ -488,6 +498,7 @@ impl PresetUi {
     }
 
     /// Rename one item identity without touching same-key cards in sibling domain groups.
+    #[cfg(test)]
     pub(crate) fn rename_hierarchy_item_in_group(&mut self, panel: &str, group: &str, from: &str, to: &str) {
         if from == to {
             return;

@@ -251,6 +251,9 @@ pub(crate) fn draw_rename_row(ui: &mut egui::Ui, state: &mut PresetUi, panel: &s
                     None => actions.push(BrowserAction::Rename(key, text)),
                 }
             }
+            if let Some(index) = state.group_rename_queue.iter().position(|rename| rename.0 == panel) {
+                state.renaming = Some(state.group_rename_queue.remove(index));
+            }
         }
     }
 

@@ -482,7 +482,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui,
         &mut app.ui.presets_ui,
         "brushes",
-        crate::pickers::shell::PickerMenuOptions { display: true, search_visibility: false },
+        crate::pickers::shell::PickerMenuOptions { display: true, wrap_list: true, search_visibility: false, recents_visibility: false },
         None,
     );
     ui.separator();
@@ -490,7 +490,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui,
         &mut app.ui.presets_ui,
         "brush-texture-patterns",
-        crate::pickers::shell::PickerMenuOptions { display: true, search_visibility: false },
+        crate::pickers::shell::PickerMenuOptions { display: true, wrap_list: true, search_visibility: false, recents_visibility: false },
         None,
     );
     ui.separator();

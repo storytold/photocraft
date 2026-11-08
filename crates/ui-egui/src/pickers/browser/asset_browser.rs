@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use egui::{Align2, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
-use crate::pickers::browser::browser_actions::apply_browser_item_gesture;
+use crate::pickers::browser::browser_gestures::apply_browser_item_gesture;
 use crate::pickers::browser::browser_interaction::{
     AssetDrag, BrowserDeleteContext, BrowserDragGhostSource, GroupDragGhost, ItemDragGhost, NestedGroupDragGhost, asset_browser_header_drag_source_with_id,
     browser_drag_ghost_rect, draw_context_menu_target, draw_rename_row, item_row_edge_targets, replace_selected_delete_actions,
@@ -143,6 +143,12 @@ pub(crate) enum BrowserAction {
         key: String,
         text: String,
     },
+    /// Begin in-place renaming for the supplied item occurrences.
+    BeginRenameItems(Vec<(String, ItemView)>),
+    /// Begin in-place renaming of a top-level group.
+    BeginRenameGroup(String),
+    /// Begin in-place renaming of multiple top-level groups, one after another.
+    BeginRenameGroups(Vec<String>),
     DeleteItem {
         group: String,
         group_path: Vec<String>,
@@ -1284,6 +1290,44 @@ pub(crate) fn browser_with_root_sequence(
             });
         });
     let mut ev = sink.into_actions();
+    let mut selection_actions = Vec::new();
+    if let Some(selection) = st.browser_selection.get(panel).filter(|selection| !selection.is_empty()) {
+        let selected_items: Vec<(String, ItemView)> = groups
+            .iter()
+            .flat_map(|group| {
+                group.items.iter().filter_map(|item| {
+                    item_node_for_identity(&group.name, &item.group_path, &item.key, &projection.hierarchy_identities)
+                        .filter(|id| selection.contains(id))
+                        .map(|_| (group.name.clone(), item.clone()))
+                })
+            })
+            .collect();
+        if !selected_items.is_empty() {
+            selection_actions.push(BrowserAction::BeginRenameItems(selected_items));
+        }
+        let mut selected_groups = Vec::new();
+        for (id, identity) in &projection.hierarchy_identities {
+            if selection.contains(id)
+                && let PickerNodeIdentity::Group(group) = identity
+            {
+                selected_groups.push(group.clone());
+            }
+        }
+        if !selected_groups.is_empty() {
+            selection_actions.push(BrowserAction::BeginRenameGroups(selected_groups));
+        }
+    }
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(egui::Id::new(("preset-browser-selection-actions", panel)), selection_actions);
+    });
+    let last_selected_kind = st
+        .browser_selection_anchor
+        .get(panel)
+        .and_then(|anchor| projection.hierarchy_identities.get(anchor))
+        .map(|identity| matches!(identity, PickerNodeIdentity::Group(_) | PickerNodeIdentity::Folder { .. }));
+    if let Some(is_group) = last_selected_kind {
+        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new(("preset-browser-last-selection-is-group", panel)), is_group));
+    }
     let selected_delete_actions = st
         .browser_selection
         .get(panel)

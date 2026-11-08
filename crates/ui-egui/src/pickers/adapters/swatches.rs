@@ -4,8 +4,8 @@
 //!
 //! As in Photoshop, clicking a swatch sets the foreground colour (and recolours selected type);
 //! Alt- or Ctrl/Cmd-clicking sets the background colour; double-clicking renames it. The
-//! panel menu (the group's "…" button) adds New Swatch, New Group, Import/Replace (`.aco`,
-//! `.ase`), Export (`.aco`) and Export for Exchange (`.ase`) and Reset. Every action is a
+//! shared panel menu owns New Swatch and New Swatch Group; this adapter contributes
+//! Import/Replace (`.aco`, `.ase`), Export (`.aco`), Export for Exchange (`.ase`) and Reset. Every action is a
 //! `swatches.*` engine command; this module only draws and dispatches. Colours are shown in the
 //! RGB working space through `photocraft-cms` (cached per library revision and colour settings).
 
@@ -19,8 +19,8 @@ use crate::pickers::browser::asset_browser::{
     BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, standard_group_context_menu,
     standard_item_context_menu,
 };
+use crate::pickers::browser::browser_actions::run;
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::commands::run;
 use crate::pickers::footer::FooterOptions;
 use crate::pickers::shell::{ShellOptions, picker_shell};
 use crate::pickers::state::PresetUi;
@@ -163,9 +163,6 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
-    let sel = |app: &mut PhotocraftApp, k: &str| {
-        app.ui.presets_ui.set_selected(PANEL, k);
-    };
     match e {
         BrowserAction::SelectItem { group, group_path, key } => {
             app.ui.presets_ui.set_selected_item(PANEL, &group, &group_path, &key);
@@ -177,55 +174,15 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
         }
         // Swatches don't drop onto the canvas.
         BrowserAction::Drop(..) => {}
-        BrowserAction::Rename(k, n) => {
-            if run(app, "swatches.rename", json!({"swatch": k, "name": n})).is_some() {
-                app.ui.presets_ui.rename_hierarchy_item(PANEL, &k, &n);
-                if app.ui.presets_ui.selected.get(PANEL) == Some(&k) {
-                    sel(app, &n);
-                }
-            }
+        action => {
+            crate::pickers::browser::browser_actions::generic(app, PANEL, "swatches", &action, json!({}));
         }
-        BrowserAction::RenameItem { group, group_path, key, text } => {
-            if run(app, "swatches.rename", json!({"swatch": key, "name": text})).is_some() {
-                app.ui.presets_ui.rename_hierarchy_item_in_group(PANEL, &group, &key, &text);
-                if app.ui.presets_ui.is_selected_item(PANEL, &group, &group_path, &key) {
-                    app.ui.presets_ui.set_selected_item(PANEL, &group, &group_path, &text);
-                }
-            }
-        }
-        BrowserAction::DeleteItem { group, group_path, key } => {
-            if run(app, "swatches.delete", json!({"swatch": key})).is_some() {
-                if app.ui.presets_ui.is_selected_item(PANEL, &group, &group_path, &key) {
-                    app.ui.presets_ui.clear_selected(PANEL);
-                }
-                app.ui.presets_ui.delete_hierarchy_item_in_group(PANEL, &group, &key);
-                app.ui.presets_ui.clear_browser_selection(PANEL);
-            }
-        }
-        BrowserAction::Move(k, g) => drop(run(app, "swatches.move", json!({"swatch": k, "to": g}))),
-        BrowserAction::RenameGroup(g, n) => {
-            if run(app, "swatches.renameGroup", json!({"group": g, "name": n})).is_some() {
-                app.ui.presets_ui.rename_group(PANEL, &g, &n);
-            }
-        }
-        BrowserAction::DeleteGroup(g) => {
-            if run(app, "swatches.deleteGroup", json!({"group": g})).is_some() {
-                if app.ui.presets_ui.selected_group.get(PANEL) == Some(&g) {
-                    app.ui.presets_ui.clear_selected(PANEL);
-                }
-                app.ui.presets_ui.delete_group(PANEL, &g);
-                app.ui.presets_ui.clear_browser_selection(PANEL);
-            }
-        }
-        // Only the brush browser supports nested-group context actions.
-        BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
-        BrowserAction::NewGroup => new_group_from_app(app),
-        BrowserAction::New => new_swatch_from_app(app),
     }
 }
 
 /// New Swatch: the foreground colour, named and selected, then renamed in place (Photoshop asks
 /// for the name).
+#[cfg(test)]
 fn new_swatch(app: &mut PhotocraftApp, state: &mut PresetUi) {
     let group =
         state.selected.get(PANEL).and_then(|k| app.session.presets.swatches.iter().find(|g| g.items.iter().any(|s| &s.name == k)).map(|g| g.name.clone()));
@@ -235,25 +192,6 @@ fn new_swatch(app: &mut PhotocraftApp, state: &mut PresetUi) {
         state.selected.insert(PANEL.into(), name.clone());
         state.renaming = Some((PANEL.into(), name.clone(), name));
     }
-}
-
-fn new_group(app: &mut PhotocraftApp, state: &mut PresetUi) {
-    if let Some(r) = run(app, "swatches.newGroup", json!({"name": "Group"})) {
-        let g = r["group"].as_str().unwrap_or_default().to_string();
-        state.renaming = Some((PANEL.into(), format!("group:{g}"), g));
-    }
-}
-
-fn new_swatch_from_app(app: &mut PhotocraftApp) {
-    let mut state = std::mem::take(&mut app.ui.presets_ui);
-    new_swatch(app, &mut state);
-    app.ui.presets_ui = state;
-}
-
-fn new_group_from_app(app: &mut PhotocraftApp) {
-    let mut state = std::mem::take(&mut app.ui.presets_ui);
-    new_group(app, &mut state);
-    app.ui.presets_ui = state;
 }
 
 /// Command params for a picked file: a real path keeps the journal small; browser files arrive
@@ -324,43 +262,28 @@ fn export_dialog(app: &mut PhotocraftApp, format: &str) -> Result<Value, String>
 /// Swatches domain actions for the shared picker menu. The shell inserts the boundary before this
 /// extension; separators here are intentional boundaries between create, import/export and reset
 /// action groups, not duplicates of shared-menu section separators.
-pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut PresetUi) {
+pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, _state: &mut PresetUi) {
     let empty = app.session.presets.swatches.iter().all(|g| g.items.is_empty());
     let mut act: Option<&str> = None;
-    if ui.button(tl!("New Swatch…")).clicked() {
-        act = Some("new");
-    }
-    if ui.button(tl!("New Swatch Group…")).clicked() {
-        act = Some("group");
-    }
-    ui.separator();
-    if ui.button(tl!("Import Swatches…")).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Import Swatches…"), true).clicked() {
         act = Some("import");
     }
-    if ui.button(tl!("Replace Swatches…")).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Replace Swatches…"), true).clicked() {
         act = Some("replace");
     }
-    if ui.add_enabled(!empty, egui::Button::new(tl!("Export Swatches…"))).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Export Swatches…"), !empty).clicked() {
         act = Some("aco");
     }
-    if ui.add_enabled(!empty, egui::Button::new(tl!("Export Swatches for Exchange…"))).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Export Swatches for Exchange…"), !empty).clicked() {
         act = Some("ase");
     }
     ui.separator();
-    if ui.button(tl!("Reset Swatches")).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Reset Swatches"), true).clicked() {
         act = Some("reset");
     }
     let Some(a) = act else { return };
     ui.close();
     let r = match a {
-        "new" => {
-            new_swatch(app, state);
-            Ok(Value::Null)
-        }
-        "group" => {
-            new_group(app, state);
-            Ok(Value::Null)
-        }
         "import" => import_dialog(app, false),
         "replace" => import_dialog(app, true),
         "aco" | "ase" => export_dialog(app, a),
@@ -551,6 +474,18 @@ mod tests {
         add_from_picker(&mut app, &f);
         let s = app.session.presets.swatches[0].items.last().unwrap();
         assert_eq!(s.color, photocraft_engine::presets::swatches::SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn shared_browser_action_dispatch_creates_a_swatch_in_the_selected_group() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.presets_ui.selected.insert(PANEL.into(), "Dark Red".into());
+        let handled = crate::pickers::browser::browser_actions::generic(&mut app, PANEL, "swatches", &BrowserAction::New, json!({}));
+
+        assert!(handled);
+        let group = app.session.presets.swatches.iter().find(|group| group.name == "Dark").unwrap();
+        assert_eq!(group.items.last().map(|item| item.name.as_str()), Some("Color Swatch 1"));
+        assert!(app.ui.presets_ui.renaming.is_some());
     }
 
     #[test]

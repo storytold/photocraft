@@ -971,39 +971,51 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
                 dismiss_on_outside_press = true;
             }
         }
-        egui::Popup::menu(&resp).interactable(popup_interactable).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-            ui.set_min_width(180.0);
-            panel_menu(self.app, ui, active);
-            // Docking actions are a separate section owned by this tab-bar implementation.
-            if crate::pickers::panels::shared_docking(&format!("window.panel.{active}")) {
-                ui.separator();
-            }
-            if ui.add_enabled(!locked, egui::Button::new(if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") })).clicked() {
-                self.commands.push(("window.panel.group", json!({"panel":active,"operation":if collapsed {"expand"} else {"collapse"}})));
-                ui.close();
-            }
-            if ui.add_enabled(!locked, egui::Button::new(if floating { tl!("Dock Panel") } else { tl!("Float Panel") })).clicked() {
-                self.commands.push((if floating { "window.panel.dock" } else { "window.panel.float" }, json!({"panel":active})));
-                ui.close();
-            }
-            if !floating {
-                let groups = self.app.ui.docking.as_ref().map(root_groups).unwrap_or_default();
-                let index = groups.iter().position(|g| g.contains(active));
-                for (operation, label, enabled) in
-                    [("up", tl!("Move Group Up"), index.is_some_and(|i| i > 0)), ("down", tl!("Move Group Down"), index.is_some_and(|i| i + 1 < groups.len()))]
-                {
-                    if ui.add_enabled(!locked && enabled, egui::Button::new(label)).clicked() {
-                        self.commands.push(("window.panel.group", json!({"panel":active,"operation":operation})));
+        crate::pickers::picker_panel_menu::panel_menu_popup(&resp)
+            .interactable(popup_interactable)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                crate::menu_keys::with_menu_item_indent(ui, |ui| {
+                    ui.set_min_width(180.0);
+                    panel_menu(self.app, ui, active);
+                    // Docking actions are a separate section owned by this tab-bar implementation.
+                    if crate::pickers::panels::shared_docking(&format!("window.panel.{active}")) {
+                        ui.separator();
+                    }
+                    if crate::menu_keys::menu_item_button(ui, if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") }, !locked)
+                        .clicked()
+                    {
+                        self.commands.push(("window.panel.group", json!({"panel":active,"operation":if collapsed {"expand"} else {"collapse"}})));
                         ui.close();
                     }
-                }
-            }
-            ui.separator();
-            if ui.add_enabled(!locked, egui::Button::new(tl!("Close Tab Group"))).clicked() {
-                self.commands.push(("window.panel.group", json!({"panel":active,"operation":"close"})));
-                ui.close();
-            }
-        });
+                    if crate::menu_keys::menu_item_button(ui, if floating { tl!("Dock Panel") } else { tl!("Float Panel") }, !locked).clicked() {
+                        self.commands.push((if floating { "window.panel.dock" } else { "window.panel.float" }, json!({"panel":active})));
+                        ui.close();
+                    }
+                    if !floating {
+                        let groups = self.app.ui.docking.as_ref().map(root_groups).unwrap_or_default();
+                        let index = groups.iter().position(|g| g.contains(active));
+                        for (operation, label, enabled) in [
+                            ("up", tl!("Move Group Up"), index.is_some_and(|i| i > 0)),
+                            ("down", tl!("Move Group Down"), index.is_some_and(|i| i + 1 < groups.len())),
+                        ] {
+                            if crate::menu_keys::menu_item_button(ui, label, !locked && enabled).clicked() {
+                                self.commands.push(("window.panel.group", json!({"panel":active,"operation":operation})));
+                                ui.close();
+                            }
+                        }
+                    }
+                    ui.separator();
+                    if crate::menu_keys::menu_item_button(ui, tl!("Close"), !locked).clicked() {
+                        self.commands.push(("window.panel.close", json!({"panel":active})));
+                        ui.close();
+                    }
+                    if crate::menu_keys::menu_item_button(ui, tl!("Close Tab Group"), !locked).clicked() {
+                        self.commands.push(("window.panel.group", json!({"panel":active,"operation":"close"})));
+                        ui.close();
+                    }
+                })
+            });
         // Close only after rendering this press frame, so `interactable(false)` can route the
         // initiating press through to the docking surface before the popup disappears.
         if dismiss_on_outside_press {
@@ -1056,16 +1068,16 @@ fn panel_active(layout: &Layout<String>, panel: &str) -> bool {
 pub(crate) fn legacy_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, label: &str) {
     let Some(panel) = normalize(label) else { return };
     let locked = app.session.prefs().workspace_locked;
-    ui.add_enabled_ui(!locked, |ui| {
-        if ui.button(tl!("Float Panel")).clicked() {
-            if let Err(error) = app.run("window.panel.float", json!({"panel":panel})) {
-                app.ui.status = error;
-            }
-            ui.close();
+    if crate::menu_keys::menu_item_button(ui, tl!("Float Panel"), !locked).clicked() {
+        if let Err(error) = app.run("window.panel.float", json!({"panel":panel})) {
+            app.ui.status = error;
         }
-        ui.menu_button(tl!("Group with"), |ui| {
+        ui.close();
+    }
+    ui.menu_button(crate::menu_keys::menu_row_text(ui, false, tl!("Group with"), None), |ui| {
+        crate::menu_keys::with_menu_item_indent(ui, |ui| {
             for &(anchor, label, _) in PANELS {
-                if anchor != panel && ui.button(tl!(label)).clicked() {
+                if anchor != panel && crate::menu_keys::menu_item_button(ui, tl!(label), !locked).clicked() {
                     let result = app
                         .run("window.panel.activate", json!({"panel":anchor}))
                         .and_then(|_| app.run("window.panel.move", json!({"panel":panel,"anchor":anchor})));

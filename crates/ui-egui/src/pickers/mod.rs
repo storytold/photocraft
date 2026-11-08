@@ -2,7 +2,6 @@
 
 pub(crate) mod adapters;
 pub(crate) mod browser;
-pub(crate) mod commands;
 pub(crate) mod footer;
 pub(crate) mod panels;
 pub(crate) mod picker_panel_menu;

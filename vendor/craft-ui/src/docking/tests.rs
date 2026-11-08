@@ -800,6 +800,22 @@ fn group_move_escape_restores_original_geometry() {
 }
 
 #[test]
+fn floating_windows_can_move_partly_offscreen_without_losing_their_grab_area() {
+    let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+    let size = vec2(300.0, 220.0);
+    for min in [pos2(-252.0, 40.0), pos2(752.0, 40.0), pos2(40.0, 572.0)] {
+        let rect = super::surface::clamp_float(Rect::from_min_size(min, size), screen);
+        assert!(rect.left() < screen.left() || rect.right() > screen.right() || rect.top() < screen.top() || rect.bottom() > screen.bottom());
+        assert!(rect.intersect(screen).width() >= 48.0 && rect.intersect(screen).height() >= 28.0, "the window retains a reachable grab area: {rect:?}");
+    }
+    assert_eq!(
+        super::surface::clamp_float(Rect::from_min_size(pos2(40.0, -192.0), size), screen).top(),
+        screen.top(),
+        "the title bar remains reachable at the top edge"
+    );
+}
+
+#[test]
 fn custom_headers_and_labels_render_at_small_and_large_scales() {
     for scale in [0.75, 1.0, 1.5, 2.0] {
         let ctx = Context::default();

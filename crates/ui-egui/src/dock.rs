@@ -598,50 +598,58 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         if dragging == Some(g) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
-        egui::Popup::menu(&resp.menu).show(|ui| {
-            crate::widgets::style_spectrum_popup_menu(ui);
-            ui.set_min_width(170.0);
-            if tabs.get(sel) == Some(&"Layers") {
-                crate::layer_row_ui::panel_menu(app, ui);
-                ui.separator();
-            }
-            if let Some(label) = tabs.get(sel)
-                && let Some(panel) = crate::panel_docking::normalize(label)
-            {
-                if crate::panel_docking::shared_picker_menu(app, ui, panel) {
-                    // The legacy docking actions remain a separate, docking-owned section.
+        crate::pickers::picker_panel_menu::panel_menu_popup(&resp.menu).show(|ui| {
+            crate::menu_keys::with_menu_item_indent(ui, |ui| {
+                crate::widgets::style_spectrum_popup_menu(ui);
+                ui.set_min_width(170.0);
+                if tabs.get(sel) == Some(&"Layers") {
+                    crate::layer_row_ui::panel_menu(app, ui);
                     ui.separator();
                 }
-            }
-            if tabs.get(sel) == Some(&"Brush Settings") {
-                crate::brush_panel::panel_menu(app, ui);
+                if let Some(label) = tabs.get(sel)
+                    && let Some(panel) = crate::panel_docking::normalize(label)
+                {
+                    crate::panel_docking::shared_picker_menu(app, ui, panel);
+                }
+                if tabs.get(sel) == Some(&"Brush Settings") {
+                    crate::brush_panel::panel_menu(app, ui);
+                    ui.separator();
+                }
+                if tabs.get(sel) == Some(&"Actions") {
+                    crate::actions::panel_menu(app, ui);
+                    ui.separator();
+                }
+                if let Some(label) = tabs.get(sel) {
+                    crate::panel_docking::legacy_menu(app, ui, label);
+                }
+                if crate::menu_keys::menu_item_button(ui, if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") }, true).clicked() {
+                    actions.push(Action::ToggleCollapse(g));
+                    ui.close();
+                }
+                let pos = order.iter().position(|x| *x == g).unwrap_or(0);
+                if crate::menu_keys::menu_item_button(ui, tl!("Move Group Up"), !locked && pos > 0).clicked() {
+                    actions.push(Action::Move(g, order.get(pos.saturating_sub(1)).copied()));
+                    ui.close();
+                }
+                if crate::menu_keys::menu_item_button(ui, tl!("Move Group Down"), !locked && pos + 1 < order.len()).clicked() {
+                    actions.push(Action::Move(g, order.get(pos + 2).copied()));
+                    ui.close();
+                }
                 ui.separator();
-            }
-            if tabs.get(sel) == Some(&"Actions") {
-                crate::actions::panel_menu(app, ui);
-                ui.separator();
-            }
-            if let Some(label) = tabs.get(sel) {
-                crate::panel_docking::legacy_menu(app, ui, label);
-            }
-            if ui.button(if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") }).clicked() {
-                actions.push(Action::ToggleCollapse(g));
-                ui.close();
-            }
-            let pos = order.iter().position(|x| *x == g).unwrap_or(0);
-            if ui.add_enabled(!locked && pos > 0, egui::Button::new(tl!("Move Group Up"))).clicked() {
-                actions.push(Action::Move(g, order.get(pos.saturating_sub(1)).copied()));
-                ui.close();
-            }
-            if ui.add_enabled(!locked && pos + 1 < order.len(), egui::Button::new(tl!("Move Group Down"))).clicked() {
-                actions.push(Action::Move(g, order.get(pos + 2).copied()));
-                ui.close();
-            }
-            ui.separator();
-            if ui.button(tl!("Close Tab Group")).clicked() {
-                actions.push(Action::Close(g));
-                ui.close();
-            }
+                if let Some(panel) = tabs.get(sel).and_then(|label| crate::panel_docking::normalize(label))
+                    && crate::menu_keys::menu_item_button(ui, tl!("Close"), !locked).clicked()
+                {
+                    if let Some(Err(error)) = crate::panel_docking::command(app, "window.panel.close", &serde_json::json!({"panel": panel})) {
+                        app.ui.status = error;
+                        app.ui.status_error = true;
+                    }
+                    ui.close();
+                }
+                if crate::menu_keys::menu_item_button(ui, tl!("Close Tab Group"), true).clicked() {
+                    actions.push(Action::Close(g));
+                    ui.close();
+                }
+            });
         });
         // Splitter in the gap below this group: resizes it, pushing the neighbouring groups.
         if i + 1 < rects.len() && !collapsed && rects.iter().skip(i + 1).any(|(n, _)| !app.ui.dock.is_collapsed(*n)) {

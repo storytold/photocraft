@@ -33,7 +33,7 @@ use crate::pickers::shell::{ShellOptions, picker_shell};
 use crate::state::Tool;
 use crate::theme::Tokens;
 
-use crate::pickers::commands::{generic, run};
+use crate::pickers::browser::browser_actions::{generic, run};
 use crate::pickers::preset_previews::{cached_texture, content_fingerprint};
 #[cfg(test)]
 use crate::pickers::state::PresetUi;

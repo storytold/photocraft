@@ -850,7 +850,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 ctx.memory_mut(|memory| memory.request_focus(self.id.with(("tab", self.activation.as_ref().unwrap_or(first)))));
                 self.output.focused = self.activation.clone();
             }
-            egui::Area::new(id).order(egui::Order::Middle).fixed_pos(rect.min).movable(false).constrain_to(screen).show(ctx, |ui| {
+            egui::Area::new(id).order(egui::Order::Middle).fixed_pos(rect.min).movable(false).constrain(false).show(ctx, |ui| {
                 ui.set_min_size(rect.size());
                 let rect = Rect::from_min_size(ui.min_rect().min, rect.size());
                 ui.allocate_rect(rect, Sense::hover());
@@ -1038,12 +1038,17 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     }
 }
 
-fn clamp_float(rect: Rect, screen: Rect) -> Rect {
+pub(super) fn clamp_float(rect: Rect, screen: Rect) -> Rect {
     if !super::targets::usable(screen) {
         return rect;
     }
     let size = rect.size().max(vec2(1.0, 1.0)).min(screen.size());
-    let min = rect.min.max(screen.min).min(screen.max - size);
+    // Keep a small grab area reachable while allowing the window body to leave the viewport.
+    let visible = vec2(48.0, 28.0).min(size);
+    let min = egui::pos2(
+        rect.min.x.clamp(screen.left() - size.x + visible.x, screen.right() - visible.x),
+        rect.min.y.clamp(screen.top(), screen.bottom() - visible.y),
+    );
     Rect::from_min_size(min, size)
 }
 
