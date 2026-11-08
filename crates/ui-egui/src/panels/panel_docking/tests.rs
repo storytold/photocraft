@@ -931,3 +931,14 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert_eq!(columns[0].width, 380.0);
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
+
+/// Every docked panel has its own icon for an iconic column, not the label's initial.
+#[test]
+fn every_panel_has_its_own_icon() {
+    let mut seen = std::collections::HashSet::new();
+    for (panel, _, _) in PANELS {
+        let icon = panel_icon(panel).unwrap_or_else(|| panic!("{panel} has no icon"));
+        assert!(crate::icons::exists(icon), "{panel}'s icon {icon:?} is bundled");
+        assert!(seen.insert(icon), "{panel} shares the icon {icon:?}");
+    }
+}

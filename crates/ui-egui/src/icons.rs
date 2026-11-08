@@ -42,6 +42,11 @@ pub const FOOTER_NEW: &str = "square-plus";
 pub const FOOTER_NEW_GROUP: &str = "folder";
 pub const FOOTER_DELETE: &str = "trash";
 
+/// The image source of an embedded icon, or `None` when no icon has that name.
+pub(crate) fn source(name: &str) -> Option<egui::ImageSource<'static>> {
+    white_icons().contains(name).then(|| white_icons().source(name))
+}
+
 /// An egui image for an icon, tinted.
 pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::new(white_icons().source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
