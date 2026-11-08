@@ -1,6 +1,6 @@
 use super::defaults::{apply, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
 use super::editing::{cancel, commit_with};
-use super::fonts::{font_picker, fonts_ready, selected_style, style_label, styles};
+use super::fonts::{font_picker, font_picker_tip, fonts_ready, selected_style, style_label, styles};
 use super::keys::is_vertical;
 use super::{Color32, LayerId, PhotocraftApp, Stroke, byte_of, insertion_style, json, selected_styles, text_layer};
 
@@ -43,6 +43,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 None => apply(app, ui.ctx(), json!({"font": fam})),
             }
         }
+        font_picker_tip(ui, tl!("Search and select fonts"));
         let style_family = if fam.is_empty() { styles_at(app).map(|(c, _)| c.font_family).unwrap_or_default() } else { fam.clone() };
         let opts: Vec<(String, String)> = styles(&style_family).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
         let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
@@ -50,15 +51,19 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.tool_options.type_style = style.clone();
             apply(app, ui.ctx(), json!({"fontStyle": style}));
         }
+        // The menu's button, by the id its combo box takes from "type-style"; "Style" stays its name.
+        if let Some(menu) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("type-style"))) {
+            menu.on_hover_text(tl!("Set font style"));
+        }
     }
     let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "type", 13.0, t.icon);
     icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Font size")));
     // Photoshop's "T" scrubs the size field beside it, like the Character panel's icons (#6437).
-    crate::widgets::scrub_option_icon(ui, &icon, tl!("Font size"));
+    crate::widgets::scrub_option_icon(ui, &icon, tl!("Set font size"));
     let (unit, label) = type_unit(app);
     let mut display = size * unit;
-    if crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 66.0).changed() {
+    if crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 66.0).on_hover_text(tl!("Set font size")).changed() {
         let size = display / unit;
         app.ui.tool_options.type_size = size;
         apply(app, ui.ctx(), json!({"size": size, "metricsAsShown": true}));
@@ -128,7 +133,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(q(c[0]), q(c[1]), q(c[2])));
     ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
-    let resp = resp.on_hover_text(tl!("Set the text color"));
+    let resp = resp.on_hover_text(tl!("Set text color"));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Set the text color")));
     if resp.clicked() {
         open_color_picker(app, [c[0], c[1], c[2]]);

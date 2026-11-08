@@ -137,6 +137,8 @@ mod canvas_tests;
 mod font_commit_tests;
 #[cfg(test)]
 mod font_picker_tests;
+#[cfg(test)]
+mod options_tooltips_tests;
 
 #[cfg(test)]
 mod tests;

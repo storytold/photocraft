@@ -795,25 +795,26 @@ fn options_bar_t_icon_scrub_stops_at_the_size_limits() {
 }
 
 /// Rests the pointer on the widget named `label` past the tooltip delay; true when its tooltip
-/// (a second node with the same name) shows.
-fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, label: &str) -> bool {
+/// `tip` shows (one more node with that text).
+fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, label: &str, tip: &str) -> bool {
+    let before = h.query_all_by_label(tip).count();
     let at = h.get_by_role_and_label(role, label).rect().center();
     h.hover_at(at);
     h.run_steps(8);
-    h.query_all_by_label(label).count() == 2
+    h.query_all_by_label(tip).count() == before + 1
 }
 
-/// The scrubby "T" icon keeps its "Font size" tooltip: the size field's drag area, laid over the
-/// icon after it, must not take its hover.
+/// The scrubby "T" icon keeps its tooltip ("Set font size", #12057): the size field's drag area,
+/// laid over the icon after it, must not take its hover.
 #[test]
 fn options_bar_t_icon_shows_its_tooltip() {
     let mut app = new_app();
     app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap();
     let mut h = options_harness(app);
-    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Button, "Set the text color"), "the probe sees an ordinary tooltip");
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Button, "Set the text color", "Set text color"), "the probe sees an ordinary tooltip");
     h.hover_at(egui::pos2(890.0, 55.0));
     h.run_steps(4);
-    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Label, "Font size"), "hovering the \"T\" icon shows \"Font size\"");
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Label, "Font size", "Set font size"), "hovering the \"T\" icon shows \"Set font size\"");
 }
 
 /// A point inside glyph `i` of vertical type: `f` of the way down its advance, right of the
