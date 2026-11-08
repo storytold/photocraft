@@ -3286,3 +3286,33 @@ fn fade_dialog_previews_the_faded_layer_and_cancel_keeps_the_document() {
         assert_eq!(st.history.past_len(), steps + 1);
     }
 }
+
+#[test]
+fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() {
+    // Opening the box swapped the canvas to a preview document with no damage for it, so a
+    // gigapixel canvas recomposited in full (over a second) on every ⌘T, and again on Cancel.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 200, "background": "transparent"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(20, 20, 60, 50), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    let rev = app.session.documents()[0].revision;
+    crate::transform_tool::begin(&mut app, &egui::Context::default()).expect("the box opens");
+    let (_, key) = display_doc(&mut app, 0);
+    assert_eq!(key, crate::transform_tool::preview_key(app.transform_preview.as_ref().unwrap().session));
+    let dk = canvas_display(&app, &app.session.documents()[0].doc, None).1;
+    let opened = damage_since(&app, 0, (rev, dk), (rev, key), dk, None).expect("opening the box has a damage area");
+    assert!(opened.contains(20, 20) && opened.contains(59, 49), "{opened:?}");
+    assert!(opened.width() < 400 && opened.height() < 200, "not the whole canvas: {opened:?}");
+    let canceled = damage_since(&app, 0, (rev, key ^ dk), (rev, 0), dk, None).expect("canceling has one too");
+    assert_eq!(canceled, opened);
+    // A commit (one revision later) adds what it changed; anything else redraws everything.
+    let moved = photocraft_geom::Rect::new(100, 20, 140, 50);
+    let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, Some(moved)).expect("committing too");
+    assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
+    assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, Some(moved)).is_none(), "a later revision isn't ours");
+}

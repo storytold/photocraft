@@ -590,6 +590,10 @@ pub struct PhotocraftApp {
     pub(crate) hist_uncached: Option<(DocId, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
+    /// The canvas area the last Free Transform box's preview changes (`transform_tool::damage`).
+    transform_area: Option<crate::transform_tool::OpenArea>,
+    /// A large layer's Free Transform box being prepared in the background.
+    transform_preparing: Option<crate::transform_tool::Preparing>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Cached document for a modal text Style Options color preview.
