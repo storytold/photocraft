@@ -44,6 +44,20 @@ fn georgian_tags_resolve() {
 }
 
 #[test]
+fn hausa_tags_resolve() {
+    let ha = Lang::from_code("ha").expect("ha registered");
+    for tag in ["ha", "ha-NG", "ha_NG", "ha_NG.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(ha), "{tag}");
+    }
+    assert_eq!(ha.name(), "Hausa");
+    assert_eq!(Lang::from_pref("HA"), ha);
+    assert_eq!(tr(ha, "Edit"), "Gyara");
+    assert_eq!(tr(ha, "File"), "Fayil");
+    let forms: Vec<usize> = [0, 1, 2, 5, 21].into_iter().map(ha.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1, 1], "one is n = 1 (CLDR)");
+}
+
+#[test]
 fn indonesian_tags_resolve() {
     for tag in ["id", "id-ID", "id_ID", "id_ID.UTF-8"] {
         assert_eq!(lang_from_tag(tag), Some(ID()), "{tag}");
