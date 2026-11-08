@@ -296,7 +296,6 @@ pub fn warp_patches_surface(
     // `warp_tess`).
     let one_patch = cuts_u.iter().chain(cuts_v).all(|&c| c <= 1e-9 || c >= 1.0 - 1e-9);
     let envelope = (facets == Facets::Envelope || one_patch).then(|| crate::warp_tess::envelope_mesh(&at, facets != Facets::Envelope)).flatten();
-    let envelope_cut = envelope.is_some();
     let (verts, tris) = match envelope {
         Some(m) => {
             let verts = m.uv.iter().zip(&m.pos).map(|(p, &d)| (d, [x0 + sw * p[0], y0 + sh * p[1]])).collect();
@@ -308,10 +307,8 @@ pub fn warp_patches_surface(
             cell_triangles(&at, &leaves, [x0, y0, sw, sh])
         }
     };
-    // The reference application draws an envelope's border half a pixel out (see `Draw::fringe`);
-    // a full mesh's not.
-    let fringe = facets == Facets::Envelope && envelope_cut;
-    triangles(src, src_rect, &verts, &tris, Interp::Bilinear, &Interrupt::NONE, Draw { single: sampling == Sampling::Single, fringe })
+    // The reference application draws a warp's border half a pixel out (see `Draw::fringe`).
+    triangles(src, src_rect, &verts, &tris, Interp::Bilinear, &Interrupt::NONE, Draw { single: sampling == Sampling::Single, fringe: true })
 }
 
 /// The sorted, deduplicated cuts of `0..1` from `inner` (values outside or non-finite dropped).
@@ -639,7 +636,7 @@ struct Draw {
     /// Pixels just outside an edge of the mesh that lies on the source's border are drawn too, from
     /// the nearest such triangle's map carried past the edge, their alpha at most `0.5 − d` for a
     /// centre `d` px out (and the source's transparent surround lowers it further): the outline
-    /// the reference application's envelope renders show (its full meshes draw no such pixels).
+    /// the reference application's warp renders show.
     fringe: bool,
 }
 
@@ -1293,11 +1290,11 @@ mod tests {
         assert!(off * 100 < diff.len() && worst < 1.5 / 255.0, "{off} values differ, worst {worst}");
     }
 
-    /// An envelope moved 0.3 px right ends 0.2 px short of the next pixel's centre: that pixel is
-    /// drawn as fringe, faint (alpha about 0.3), as the reference application draws envelopes; a
-    /// full mesh's border stops at the mesh.
+    /// A warp moved 0.3 px right ends 0.2 px short of the next pixel's centre: that pixel is drawn
+    /// as fringe, faint (alpha about 0.3), as the reference application draws warps; the pixel
+    /// after it (0.7 px out) is not.
     #[test]
-    fn an_envelope_draws_a_fringe_past_its_border() {
+    fn a_warp_draws_a_fringe_past_its_border() {
         let mut src = Surface::new(PixelFormat::RGBA8);
         src.fill_rect(Rect::new(0, 0, 16, 16), &[1.0, 1.0, 1.0, 1.0]);
         let f = |x: f64, y: f64| (x + 0.3, y);
@@ -1307,7 +1304,8 @@ mod tests {
         };
         let fringe = alpha_at(Facets::Envelope, 16);
         assert!((0.2..=0.31).contains(&fringe), "envelope fringe alpha {fringe}");
-        assert_eq!(alpha_at(Facets::Mesh, 16), 0.0);
+        let mesh = alpha_at(Facets::Mesh, 16);
+        assert!((0.2..=0.31).contains(&mesh), "mesh fringe alpha {mesh}");
         assert_eq!(alpha_at(Facets::Envelope, 17), 0.0);
         assert_eq!(alpha_at(Facets::Envelope, 8), 1.0);
     }
