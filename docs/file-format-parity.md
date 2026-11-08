@@ -40,7 +40,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | Portable Bit Map (PBM/PGM/PPM/PNM/PFM/PAM) | R/W | yes | yes | 8/16/32f |
 | FITS | R/W (FITS Liberator plug-in) | yes | yes | 8/16/32f gray or RGB, header cards kept; no fpack, no debayer |
 | Targa | R/W | yes | yes | 8-bit |
-| Photoshop PDF | R/W | no (#2541) | yes, one flattened page (Save As / Save a Copy / CLI, #3401; also print and artboards-to-PDF) | No vector/text PDF, no multi-page save, no PDF presentation, layers are not preserved (FILE-215-10); read still missing (#2541) |
+| Photoshop PDF | R/W | yes, raster pages (craft-pdf; up to 16 pages, 8192 px per side, 64M px per page) | yes, one flattened page (Save As / Save a Copy / CLI, #3401; also print and artboards-to-PDF) | Read renders each page as a raster artboard: no editable text/vector layers yet (craft-pdf `interpret` is the follow-up), no PDF forms or annotations; write is still one flattened page, no multi-page save, no PDF presentation, layers are not preserved (FILE-215-10) |
 | Photoshop EPS, DCS 1.0/2.0, EPS TIFF/PICT preview | R/W | no | no | |
 | Generic EPS / AI | R (rasterize) | no | no | |
 | SVG | R (rasterize) | yes, as editable shape layers or a vector smart object | no | Better than Photoshop for editing; gradients approximated (FILE-215-9) |
@@ -152,6 +152,7 @@ The original reference entry retains its source date and historical totals; curr
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Photoshop PDF read: pages import as raster artboards through the shared craft-pdf (Hayro) renderer, up to 16 pages, 8192 px per side and 64M px per page; editable text/vectors and PDFium are gone. Write is unchanged. |
 | 2026-11-06 | minor | Scripted PSD/PSB saves take `maximizeCompatibility` (Save, Save As, Save a Copy, `app.save`, serve `doc.save`, MCP `doc_save`/`doc_export`, Batch, Image Processor, Layers to Files) over Preferences › File Handling for one save, and the CLI `--no-maximize-compatibility` (#8064). Layer channels and the merged image were already RLE (ZIP with prediction at 32-bit), as Photoshop writes them (#8645) |
 | 2026-10-24 | minor | Hasselblad 3FR/FFF: the X2D II 100C's 16-bit uncompressed CFA decodes; compressed 3FR still opens as the embedded preview |
 | 2026-11-02 | minor | Actions Shear (`Shr `) loads, plays and saves the measured curve points and edge mode; unsafe subranges and unrepresentable forms remain kept steps (#10605). |

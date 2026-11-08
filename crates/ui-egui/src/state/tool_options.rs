@@ -226,6 +226,9 @@ pub struct ToolOptions {
     pub bg_limits: String,
     pub bg_tolerance: f32,
     pub bg_protect_fg: bool,
+    /// The Background Eraser popup's "Tolerance:" pen control (#11910): `off`, `penPressure` (the
+    /// reference's default) or `stylusWheel`.
+    pub bg_tolerance_control: String,
     /// Color Replacement: mode (hue | saturation | color | luminosity), sampling (continuous |
     /// once | backgroundSwatch), limits (discontiguous | contiguous | findEdges), tolerance % and
     /// anti-alias, as `paint.colorReplacement` takes them.
@@ -522,6 +525,7 @@ impl Default for ToolOptions {
             bg_limits: "contiguous".into(),
             bg_tolerance: 50.0,
             bg_protect_fg: false,
+            bg_tolerance_control: "penPressure".into(),
             cr_mode: "color".into(),
             cr_sampling: "continuous".into(),
             cr_limits: "contiguous".into(),
