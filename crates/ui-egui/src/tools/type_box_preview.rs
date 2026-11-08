@@ -712,6 +712,25 @@ mod tests {
         assert!(sync.ui.text_edit.as_ref().unwrap().resize.is_some(), "a sync drag is left going");
     }
 
+    /// Opening or closing a panel (Cmd+T toggles the Character panel while typing) only lays out
+    /// windows, so a held handle keeps dragging.
+    #[test]
+    fn toggling_a_panel_mid_drag_leaves_the_drag_going() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        let ctx = egui::Context::default();
+        press(&mut app);
+        to(&mut app, 520.0);
+        for command in ["type.panels.character", "window.toggle.layers", "window.panel.close"] {
+            let _ = crate::menus::invoke(&mut app, &ctx, command, json!({}));
+            assert!(app.type_box_preview.is_some(), "{command} ended the drag");
+            assert!(app.ui.text_edit.as_ref().unwrap().resize.is_some(), "{command} ended the drag");
+        }
+        to(&mut app, 560.0);
+        release(&mut app, 560.0);
+        assert_eq!(height(&session_layer(&app, id)), 260.0, "the drag carried on to its last move");
+    }
+
     /// The control channel's `engine.execute` runs engine commands without `menus::invoke`, and
     /// `app.save` writes the document directly: both must see the dragged box too.
     #[test]

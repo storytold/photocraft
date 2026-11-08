@@ -44,7 +44,9 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
 /// can't tell them apart: it holds `edit.freeTransform` and `file.save`, which must see the dragged
 /// box, `view.clearSelectedGuides`, which edits the document, and `window.nextDocument`, which
 /// switches to another one mid-drag. So the commands that cannot touch either are listed one by
-/// one; everything else applies the box first, which is harmless when no drag is going.
+/// one, and the panel ones (open, close, arrange: `window.panel.*`, `window.toggle.*` and
+/// `type.panels.*`, the Character panel's Cmd+T among them) by prefix, since they only lay out
+/// windows. Everything else applies the box first, which is harmless when no drag is going.
 fn keeps_box_drag(id: &str) -> bool {
     const VIEW: &[&str] = &[
         "view.zoomIn",
@@ -57,7 +59,7 @@ fn keeps_box_drag(id: &str) -> bool {
         "view.darkenInterface",
         "view.lightenInterface",
     ];
-    VIEW.contains(&id)
+    VIEW.contains(&id) || ["window.panel.", "window.toggle.", "type.panels."].iter().any(|prefix| id.starts_with(prefix))
 }
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
