@@ -328,21 +328,20 @@ fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interacti
         (r.center_bottom(), egui::CursorIcon::ResizeVertical),
         (r.right_center(), egui::CursorIcon::ResizeHorizontal),
         (r.left_center(), egui::CursorIcon::ResizeHorizontal),
-        // Between handles: the rotation band (a point above the top-centre handle is that handle),
-        // where the curved rotate arrow replaces the pointer (#4658).
+        // Just beyond the outward edge band, the curved rotate arrow replaces the pointer (#4658).
         (pos2(r.left() + r.width() * 0.25, r.top() - 12.0), egui::CursorIcon::None),
     ] {
         assert_eq!(transform_controls_cursor(r, p), Some(expected), "hover at {p:?}");
         assert!(transform_controls_hit(r, p), "same region must start a transform");
     }
-    assert_eq!(transform_controls_cursor(r, r.center()), None, "interior stays Move");
-    assert_eq!(transform_controls_cursor(r, pos2(r.center().x, r.top() - 30.0)), None);
-    // The rotate arrow bends round the nearest corner, pointing into the box; handles and the
-    // interior have none.
-    let into = |p: Pos2| transform_controls_turn(r, p).map(|v| (v.x.signum(), v.y.signum()));
-    assert_eq!(into(pos2(r.left() + r.width() * 0.25, r.top() - 12.0)), Some((1.0, 1.0)), "top left");
-    assert_eq!(into(pos2(r.right() + 12.0, r.bottom() - r.height() * 0.25)), Some((-1.0, -1.0)), "bottom right");
-    assert_eq!(into(pos2(r.left() - 12.0, r.bottom() + 12.0)), Some((1.0, -1.0)), "beyond the bottom-left corner");
+    assert_eq!(transform_controls_cursor(r, r.center()), Some(egui::CursorIcon::Default), "interior uses the default arrow");
+    assert_eq!(transform_controls_cursor(r, pos2(r.center().x, r.top() - 30.0)), Some(egui::CursorIcon::None));
+    // The rotate arrow points into the nearest edge or corner. Handles and the interior have none.
+    let into = |p: Pos2| transform_controls_turn(r, p);
+    assert_eq!(into(pos2(r.left() + r.width() * 0.25, r.top() - 12.0)), Some(vec2(0.0, 16.0)), "top edge");
+    assert_eq!(into(pos2(r.right() + 12.0, r.bottom() - r.height() * 0.25)), Some(vec2(-16.0, 0.0)), "right edge");
+    let corner = into(pos2(r.left() - 12.0, r.bottom() + 12.0)).unwrap();
+    assert!(corner.x > 0.0 && corner.y < 0.0, "beyond the bottom-left corner");
     assert_eq!(into(r.left_top()), None);
     assert_eq!(into(r.center()), None);
 
@@ -351,7 +350,7 @@ fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interacti
     let next = transform_controls_rect(&app, &xf).expect("new active shape controls");
     assert_ne!(r, next);
     assert_eq!(transform_controls_cursor(next, next.right_bottom()), Some(egui::CursorIcon::ResizeNwSe));
-    assert_eq!(transform_controls_cursor(next, next.center()), None);
+    assert_eq!(transform_controls_cursor(next, next.center()), Some(egui::CursorIcon::Default));
 }
 
 #[test]

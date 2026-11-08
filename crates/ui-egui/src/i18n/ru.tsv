@@ -996,6 +996,8 @@
 	Match Color…	Подбор цвета…
 	Replace Color…	Замена цвета…
 	Equalize	Выравнивание
+	Equalize Selected Area Only	Выровнять только выделенную область
+	Equalize Entire Image Based On Selected Area	Выровнять всё изображение по выделенной области
 	HDR Toning…	HDR-тонирование…
 	Shadows/Highlights…	Тени/Света…
 	Amount	Эффект
@@ -4789,6 +4791,7 @@ shape	Appearance	Оформление
 	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.
 	A picked document is no longer open.	Один из выбранных документов больше не открыт.
 	A picked document is no longer a grayscale document of the same size.	Один из выбранных документов больше не является документом в градациях серого того же размера.
+	Netscape Gray	Серый Netscape
 # Move tool options bar (#11381)
 	Align top edges	Выровнять верхние края
 	Align vertical centers	Выровнять центры по вертикали
@@ -4798,3 +4801,15 @@ shape	Appearance	Оформление
 	Show layer bounds on hover	Показывать границы слоя при наведении
 	Expand layer group on click	Раскрывать группу слоёв по щелчку
 	Show hover bounds from Layers	Показывать границы при наведении из панели «Слои»
+	Saved Camera Raw settings to {file}	Настройки Camera Raw сохранены в {file}
+	Save the settings to each raw's sidecar without opening it	Сохранить настройки в сопроводительный файл каждого raw, не открывая его
+	No settings saved: these raws can't keep a sidecar here	Ничего не сохранено: у этих raw здесь не может быть сопроводительного файла
+	Some settings could not be saved; the raws stay open	Не удалось сохранить некоторые настройки; raw остаются открытыми
+	Nothing to save: these raws are at their default settings	Нечего сохранять: у этих raw настройки по умолчанию
+# Artboard tool options bar (#11385)
+	Distribute Widths	Распределить ширину
+	Distribute Heights	Распределить высоту
+	Auto-nest Layers	Автоматически вкладывать слои
+	Auto-size Canvas	Автоматически менять размер холста
+	Keep Relative Position During Layer Reordering	Сохранять относительное положение при изменении порядка слоев
+	Shrinkwrap Canvas on Save	Уменьшать холст до содержимого при сохранении
