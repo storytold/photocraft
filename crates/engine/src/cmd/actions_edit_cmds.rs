@@ -134,7 +134,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, "select a set or an action step, not both"));
         }
         let name = set.as_str().ok_or_else(|| bad(cmd, "set must be a name"))?;
-        let slot = set_slot(s, p, Some(name), cmd)?;
+        let slot = if p.get("setSlot").is_none_or(Value::is_null) { None } else { set_slot(s, p, Some(name), cmd)? };
         return duplicate_set(s, name, slot);
     }
     let idx = resolve(&s.actions.list, p, cmd)?;

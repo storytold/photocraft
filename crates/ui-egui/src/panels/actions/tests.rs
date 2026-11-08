@@ -95,6 +95,11 @@ fn duplicate_selected_physical_folder_keeps_occurrences_and_shortcuts() {
     assert!(selected_set_actions(&app).is_empty());
     assert_eq!(app.ui.actions.collapsed_set_slots, [1, 5]);
     assert_eq!(app.session.actions.list[3].set_slot, Some(5));
+
+    let legacy = app.run("actions.duplicate", json!({"set": "Later"})).unwrap();
+    assert_eq!(legacy, json!({"set": "Later copy", "index": 4, "actions": 1}));
+    assert_eq!(app.session.actions.list[4].set_slot, None);
+    assert_eq!(app.session.actions.set_rows.len(), 6);
 }
 
 #[test]
