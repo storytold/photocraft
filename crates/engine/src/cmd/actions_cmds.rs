@@ -514,6 +514,7 @@ fn from_step(p: &Value, len: usize) -> Result<usize> {
     Ok(i)
 }
 
+/// List distinct captions and, when present, the ordered physical occurrences separately.
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     let actions: Vec<Value> = s
         .actions
@@ -577,7 +578,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
             Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
             Some(_) => return Err(bad("actions.record", "\"set\" must be a set name or null")),
         };
-        let set_slot = crate::actions_edit_cmds::set_slot(s, p, set.as_deref(), "actions.record")?;
+        let set_slot = crate::actions_edit_cmds::assignment_slot(s, p, set.as_deref(), "actions.record")?;
         s.actions.list.push(Action { set, set_slot, ..Action::new(name, Vec::new()) });
         s.actions.touch();
         s.actions.list.len() - 1
@@ -1174,7 +1175,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Actions",
             menu: &[],
             shortcut: None,
-            params: "{} → {actions:[{name, steps:count, set:name|null}], sets:[name…] (every set in panel order, empty ones too), recording:name|null, toolRecording:bool}",
+            params: "{} → {actions:[{name, steps:count, set:name|null, setSlot:index?}], sets:[name…] (distinct captions), setRows:[name…]? (ordered physical folders), recording:name|null, toolRecording:bool}",
             enabled: always,
             run: list,
             journal: false,

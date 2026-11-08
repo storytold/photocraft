@@ -101,3 +101,22 @@ fn whole_replace_validates_the_tail_and_keeps_every_set_in_order() {
     s.execute("actions.undoLibrary", json!({})).unwrap();
     assert_eq!(s.actions.list, prior);
 }
+
+/// Caption-only edits infer an explicit folder only when the caption is unambiguous.
+#[test]
+fn recording_and_assignment_infer_only_unambiguous_folder_occurrences() {
+    let mut s = Session::new();
+    s.actions.set_rows = vec!["Exact ".into(), "Shared".into(), "Shared".into(), "Legacy".into()];
+    s.actions.sets.push("Legacy".into());
+    s.execute("actions.record", json!({"name":"Recorded","set":"Exact "})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].set_slot, Some(0));
+    for set in ["Shared", "Legacy"] {
+        s.execute("actions.assignSet", json!({"action":0,"set":set})).unwrap();
+        assert_eq!(s.actions.list[0].set_slot, None);
+    }
+    s.execute("actions.assignSet", json!({"action":0,"set":"Exact ","setSlot":null})).unwrap();
+    assert_eq!(s.actions.list[0].set_slot, None);
+    s.execute("actions.assignSet", json!({"action":0,"set":"Exact "})).unwrap();
+    assert_eq!(s.actions.list[0].set_slot, Some(0));
+}

@@ -154,7 +154,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `type.hitTest` | `{"layer":id?,"x":px,"y":px}`: character under a document point. No `layer` picks the topmost visible type layer there. Result `{"layer","index","line","inside"}` |
 | `type.caret` | `{"layer":id?,"index":char}`: caret segment in document pixels, `{"index","line","segment":[[x,y],[x,y]]}` (rotated and vertical type included) |
 | `type.navigate` | `{"layer":id?,"index":char,"move":"wordPrev\|wordNext\|linePrev\|lineNext\|lineStart\|lineEnd\|start\|end","x":px?}`: neighbouring caret. `x` keeps the column across line moves. Result `{"index"}` |
-| `actions.list` | `{}` → `{actions:[{name, steps}], recording}` (the name being recorded, or null) |
+| `actions.list` | `{}` → `{actions:[{name, steps, set, setSlot?}], sets, setRows?, recording, toolRecording}`. `sets` lists distinct captions, while `setRows` lists physical folders in order, including empty folders and repeated captions. |
 | `actions.get` | `{"action": name or index}` → `{name, steps:[[id, params], …], disabled:[step, …]}`. `steps` is the shape `file.automate.batch` and droplets take; `disabled` lists the 0-based steps playback skips |
 | `actions.record` | `{"name":"Red"}` starts a new action (default name `Action N`). `{"action": name or index}` appends to one that exists |
 | `actions.stop` | `{}` → `{action, steps}`. Copies replayable journal entries since `actions.record` (queries and action-editing commands omitted). For portable playback, an active `layer` id is dropped only when it is the sole selected layer and does not supply source content (`layer.new.frame`, `select.loadSelection`, `type.createSelection`, `edit.checkSpelling`; a Check Spelling step keeps only `allLayers`, as the reference application's step does). Otherwise, including when several layers are selected, it is recorded by its unique name; `layer.select` records `{"name":"Layer","occurrence":0}`. Type tool keystrokes on a new layer fold into its `type.create` step; edits on an existing text layer retain separate replacements so styled text between edited spans survives replay. For commands other than `layer.select`, ambiguous layer names keep the id and require a unique name for portable playback |
@@ -688,7 +688,11 @@ the named call again if desired.
 Actions sit in **set folders** (`set` on `actions.list` / `actions.get`, filled by Load Actions,
 written by Save Actions, changed with `actions.assignSet`): the panel shows loose actions first,
 then each set as a collapsible folder (`ui.actions.collapsedSets`); dropping an action among
-another set's rows moves it into that set. Each step has Photoshop's two toggles: the check
+another set's rows moves it into that set. When recording a new action or assigning it to a folder,
+pass the caption and its zero-based `setSlot` from `setRows` to select a particular occurrence.
+Omitting `setSlot` infers a physical folder only if the caption identifies one occurrence and no
+legacy group shares it. Explicit null keeps name-only assignment. Duplicate uses a physical
+folder only when given its `setSlot`. Each step has Photoshop's two toggles: the check
 (`actions.toggle`, skipped when off) and the **dialog** toggle (`actions.dialog`). Playing a
 step with its dialog on opens that command's dialog seeded with the recorded values and pauses:
 the play result carries `paused: {step, id, dialog}`, OK runs the dialog's values and continues
