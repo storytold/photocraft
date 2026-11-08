@@ -479,6 +479,10 @@ pub struct UiState {
     /// One-frame focus/raise request from an explicit panel reveal.
     #[serde(skip)]
     pub docking_reveal: Option<String>,
+    /// Lay out the Essentials workspace, the dock with a column of panel icons beside it, on the
+    /// next frame, in the theme that frame draws (a first launch, Window › Workspace › Essentials).
+    #[serde(skip)]
+    pub docking_essentials: bool,
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
@@ -650,6 +654,7 @@ impl Default for UiState {
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,
+            docking_essentials: false,
             color_panel: Default::default(),
             color_panel_synced: None,
             brush_section: 0,

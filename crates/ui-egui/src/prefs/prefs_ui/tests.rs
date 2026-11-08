@@ -2374,3 +2374,12 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
 }
+
+/// A first launch, where preferences can be saved but none were, opens the Essentials workspace;
+/// a launch with saved preferences, and an app without storage, keep the native dock.
+#[test]
+fn a_first_launch_opens_the_essentials_workspace() {
+    assert!(app_with_saved(None).0.ui.docking_essentials);
+    assert!(!app_with_saved(Some("{}".into())).0.ui.docking_essentials);
+    assert!(!PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()).ui.docking_essentials);
+}

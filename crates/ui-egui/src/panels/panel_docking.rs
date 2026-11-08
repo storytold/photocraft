@@ -90,6 +90,34 @@ fn default_width(pro: bool) -> f32 {
     if pro { 290.0 } else { 300.0 }
 }
 
+/// How much wider than [`default_width`] the Essentials workspace makes the dock column.
+const ESSENTIALS_EXTRA_WIDTH: f32 = 50.0;
+
+/// The Essentials workspace's column of panel icons beside the dock, one group per entry, top to
+/// bottom.
+const ESSENTIALS_ICONS: [&[&str]; 4] = [&["navigator"], &["history"], &["info"], &["character", "paragraph"]];
+
+/// Window › Workspace › Essentials, and a first launch: the native dock's column, a little
+/// wider, with a column of icons beside it for Navigator, History, Info, and Character with
+/// Paragraph. Each opens as a flyout from its icon, so the canvas keeps its room.
+fn essentials(app: &PhotocraftApp) -> Workspace {
+    let mut layout = legacy(app);
+    if let Some(Node::Split { size, second, .. }) = &mut layout.root
+        && let Node::Dock { columns, .. } = second.as_mut()
+        && let Some(dock) = columns.first_mut()
+    {
+        dock.width += ESSENTIALS_EXTRA_WIDTH;
+        *size = SplitSize::FixedSecond(dock.width);
+        let width = dock.width;
+        let groups = ESSENTIALS_ICONS.iter().map(|panels| craft_ui::docking::Group::new(panels.iter().map(|p| (*p).to_owned()).collect(), 0)).collect();
+        let mut icons = Column::new(groups, width);
+        icons.iconic = true;
+        columns.push(icons);
+    }
+    let hidden = migration_hidden(app, &layout);
+    Workspace { hidden, ..Workspace::new(layout) }
+}
+
 /// The window id of the Studio themes' floating Properties group in a layout built each frame:
 /// the same every time, with the top bit set, where craft-ui's fresh ids never reach.
 const PROPERTIES_WINDOW: u64 = (1 << 63) | 0x5052_4f50;
@@ -528,6 +556,12 @@ fn app_owned(app: &mut PhotocraftApp, command: DockCommand<String>) -> Result<Va
 /// else the native dock's arrangement.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let area = area_id();
+    if std::mem::take(&mut app.ui.docking_essentials) && app.ui.docking.is_none() {
+        app.ui.docking = Some(essentials(app));
+        app.ui.docking_returns.clear();
+        app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
+        sync_visibility(app);
+    }
     let changed_workspace = ui.ctx().data_mut(|data| {
         let previous = data.get_temp::<u64>(area.with("generation"));
         data.insert_temp(area.with("generation"), app.ui.docking_generation);

@@ -163,7 +163,9 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.essentials", json!({})).unwrap();
     h.run_steps(3);
     let default = drawn(&h).0;
-    assert_eq!(h.state().ui.dock, DockLayout::default());
+    // Essentials drops the heights and collapse and lays out its icon column beside the dock.
+    assert!(h.state().ui.dock.heights.is_empty() && h.state().ui.dock.collapsed.is_empty(), "{:?}", h.state().ui.dock);
+    assert!(h.state().ui.docking.as_ref().is_some_and(|w| w.layout.contains(&"navigator".to_owned())), "the icon column");
     h.state_mut().ui.dock.heights.insert(Group::Color, 300.0);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
     h.run_steps(3);

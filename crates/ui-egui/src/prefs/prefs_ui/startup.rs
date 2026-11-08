@@ -42,6 +42,10 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     // Applies Memory Usage and the scratch disks even when the stored preferences were reset.
     app.session.apply_prefs();
+    // A first launch (preferences can be saved, none were) opens the Essentials workspace.
+    if app.services.load_prefs.is_some() && stored.is_none() {
+        app.ui.docking_essentials = true;
+    }
     crate::dock::restore(app);
     crate::color_panel_ui::restore(app);
     crate::brush_picker::restore(app);
