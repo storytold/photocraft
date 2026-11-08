@@ -166,6 +166,13 @@ pub fn purge_cache() -> usize {
     cache().lock().unwrap_or_else(|e| e.into_inner()).clear()
 }
 
+/// Fingerprint of everything [`combined_mask`] reads from `layer` over `canvas` (its pixel mask's
+/// tiles, default, density and feather, and its vector mask): equal fingerprints give equal masks,
+/// so callers that count what a mask reveals can tell when to count again.
+pub fn mask_key(layer: &Layer, canvas: Rect) -> u64 {
+    key(layer, canvas)
+}
+
 fn key(layer: &Layer, canvas: Rect) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     layer.id.0.hash(&mut h);

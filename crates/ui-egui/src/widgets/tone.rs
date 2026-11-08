@@ -230,19 +230,57 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, max_leve
         }
         HistSource::Channel { .. } | HistSource::Colors { .. } => {}
     }
-    let level = cache_level(&d, max_level);
-    let d = if level > 1 { photocraft_compose::proxy::proxy_document(&d, proxy_factor(&d, level)) } else { d };
-    // An adjustment layer's mask limits what the adjustment touches, so only the pixels it reveals
-    // (effective value above one half, density included) are counted. On the proxy path the layer's
-    // mask was reduced with the rest, so band coordinates and mask coordinates agree.
-    let mask = match source {
-        HistSource::BelowLayer(id) => d.layer(id).and_then(|l| l.mask.as_ref()).filter(|m| m.enabled),
+    // An adjustment layer's masks limit what the adjustment touches, so only the pixels they reveal
+    // (effective value above one half) are counted, read the way the compositor reads them: a
+    // feather blurs across the canvas, so a feathered layer reads the compositor's (cached)
+    // canvas-wide combined mask; otherwise each band takes the pixel mask (with density) times the
+    // vector mask rendered for that band.
+    let below = match source {
+        HistSource::BelowLayer(id) => doc.layer(id),
         _ => None,
+    };
+    let level = cache_level(&d, max_level);
+    let k = if level > 1 { proxy_factor(&d, level) } else { 1 };
+    let d = if k > 1 { photocraft_compose::proxy::proxy_document(&d, k) } else { d };
+    // On the proxy every mask is reduced the way its pixels are, so band and mask agree: the
+    // combined and pixel masks with the proxy's own nearest-neighbour sampling, and the vector
+    // mask (which the proxy leaves as it is) read at exactly the document pixels the proxy sampled.
+    // A pixel mask that reveals everything is skipped.
+    let combined = below
+        .filter(|l| photocraft_compose::masks::has_feather(l))
+        .and_then(|l| photocraft_compose::masks::combined_mask(l, doc.bounds()))
+        .map(|s| if k > 1 { photocraft_compose::proxy::downsample(&s, k) } else { s });
+    let pixel = match (source, &combined) {
+        (HistSource::BelowLayer(id), None) => d.layer(id).and_then(|l| l.mask.as_ref()).filter(|m| m.enabled && !reveals_all(m)),
+        _ => None,
+    };
+    let vector = match &combined {
+        None => below.and_then(|l| l.vector_mask.as_ref()).filter(|v| v.enabled).map(photocraft_vector::CompiledVectorMask::new),
+        Some(_) => None,
     };
     let mut revealed = Vec::new();
     let _ = photocraft_compose::render_bands(&d, d.bounds(), 0, |mut band| -> Result<(), ()> {
-        if let Some(m) = mask {
-            m.values_into(band.rect, &mut revealed);
+        let masked = if let Some(s) = &combined {
+            s.read_region_into(band.rect, &mut revealed);
+            true
+        } else {
+            let vector = vector.as_ref().map(|v| sampled_vector_values(v, band.rect, k));
+            match (pixel, vector) {
+                (Some(m), vector) => {
+                    m.values_into(band.rect, &mut revealed);
+                    for (a, b) in revealed.iter_mut().zip(vector.iter().flatten()) {
+                        *a *= b;
+                    }
+                    true
+                }
+                (None, Some(v)) => {
+                    revealed = v;
+                    true
+                }
+                (None, None) => false,
+            }
+        };
+        if masked {
             for (p, v) in band.px.iter_mut().zip(&revealed) {
                 if v.is_nan() || *v <= 0.5 {
                     p[3] = 0.0;
@@ -275,6 +313,33 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, max_leve
         Ok(())
     });
     level
+}
+
+/// The vector mask's values for the proxy pixels in `rect`: each is the value at the document
+/// pixel `k` times its coordinates, which is the one the nearest-neighbour proxy sampled. Only
+/// the sampled document rows are rendered (one row per proxy row), so a mask edge between
+/// samples moves no proxy pixel, as it would if the path were scaled and its coverage averaged.
+fn sampled_vector_values(mask: &photocraft_vector::CompiledVectorMask, rect: photocraft_geom::Rect, k: u32) -> Vec<f32> {
+    if k <= 1 {
+        return mask.render(rect);
+    }
+    let (w, k) = (rect.width() as usize, k as i32);
+    let mut out = Vec::with_capacity(w * rect.height() as usize);
+    for y in rect.y0..rect.y1 {
+        let x0 = rect.x0.saturating_mul(k);
+        // The last proxy column samples x0 + (w - 1)·k: render up to it, not k - 1 past it.
+        let span = (w.saturating_sub(1) as u32).saturating_mul(k as u32).saturating_add(1);
+        let row = mask.render(photocraft_geom::Rect::from_xywh(x0, y.saturating_mul(k), span, 1));
+        out.extend(row.iter().step_by(k as usize).copied().chain(std::iter::repeat(0.0)).take(w));
+    }
+    out
+}
+
+/// Whether a pixel mask reveals every pixel: no painted tiles and a default above one half after
+/// density (counting it then changes nothing, so the per-band pass is skipped).
+fn reveals_all(m: &photocraft_doc::LayerMask) -> bool {
+    let d = m.surface.default_pixel().first().copied().unwrap_or(1.0);
+    m.surface.tile_count() == 0 && 1.0 - m.density * (1.0 - d) > 0.5
 }
 
 /// Bin-wise sum of two sets of histograms (saturating: a hostile canvas can exceed `u32`).
@@ -385,7 +450,13 @@ fn gray_bins(surf: &photocraft_raster::Surface, area: photocraft_geom::Rect) -> 
 pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace) -> Arc<Histograms> {
     let Some(st) = app.session.active() else { return Arc::new(Histograms::default()) };
     let (doc_id, rev) = (st.doc.id, st.revision);
-    let want = tag(source, space);
+    // Counting below an adjustment reads its masks, and editing them can change no pixels (the
+    // layer is hidden, say), so their fingerprint is part of what the cached counts are for.
+    let masks = match source {
+        HistSource::BelowLayer(l) => st.doc.layer(l).map_or(0, |l| photocraft_compose::masks::mask_key(l, st.doc.bounds())),
+        _ => 0,
+    };
+    let want = tag(source, space) ^ masks;
     let layer = match source {
         HistSource::BelowLayer(l) | HistSource::Layer(l) | HistSource::UpTo(l) => l,
         HistSource::Channel { layer, .. } | HistSource::Colors { layer, .. } => layer,
@@ -401,7 +472,9 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
         return h.clone();
     }
     let t0 = crate::gpu_canvas::now_ms();
-    let h = Arc::new(compute_histograms(&st.doc, source, space));
+    let mut h = compute_histograms(&st.doc, source, space);
+    h.tag = want;
+    let h = Arc::new(h);
     app.perf.span("histogram", crate::gpu_canvas::now_ms() - t0);
     app.tone_hist = Some((doc_id, layer, rev, h.clone()));
     h
@@ -729,6 +802,135 @@ mod tests {
         assert_eq!(hist[0], [0; 256]);
         let (lo, hi) = crate::dialogs::adjust_editors::auto_levels(&hist[0]);
         assert!(lo.is_finite() && hi.is_finite() && lo < hi, "{lo} {hi}");
+    }
+
+    /// An adjustment whose pixel mask reveals all and whose vector mask covers only the white right half.
+    fn vector_masked_adjustment(w: u32, h: u32, split: u32) -> (photocraft_engine::Session, LayerId) {
+        let (mut s, id) = masked_adjustment(w, h, split, false);
+        s.edit("vector-right", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            l.mask = None;
+            let path = photocraft_vector::shapes::rect(f64::from(split), 0.0, f64::from(w - split), f64::from(h));
+            l.vector_mask = Some(photocraft_doc::vector::VectorMask::new(path));
+            Ok(())
+        })
+        .unwrap();
+        (s, id)
+    }
+
+    #[test]
+    fn vector_mask_limits_the_counted_area() {
+        let (s, id) = vector_masked_adjustment(64, 64, 32);
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert_eq!(hist.level, 1);
+        assert_eq!((hist[0][0], hist[0][255]), (0, 32 * 64));
+    }
+
+    /// A large document is still counted on the proxy, with the vector mask scaled to it: only the
+    /// revealed right half counts (a canvas-wide mask would exceed its budget on huge documents
+    /// and fall back to a constant that hides everything).
+    #[test]
+    fn vector_mask_on_a_large_document_is_scaled_to_the_proxy() {
+        let (s, id) = vector_masked_adjustment(6000, 3000, 3000);
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert!(hist.level > 1);
+        // Factor 7: an 858 × 429 proxy whose columns 429..=857 sample the white half; the mask is
+        // read at the sampled pixels, so it reveals exactly those columns.
+        assert_eq!((hist[0][0], hist[0][255]), (0, 429 * 429));
+    }
+
+    /// The vector mask lines up with the pixel each proxy pixel samples: an edge just past a
+    /// multiple of the factor hides the proxy column whose sampled pixel it hides.
+    #[test]
+    fn a_proxied_vector_mask_edge_follows_the_sampled_pixels() {
+        // Black left of 3000, white right; the mask reveals from 2997, so black 2997..3000 shows
+        // at full size, but no proxy column samples it (column 428 samples 2996, 429 samples 3003).
+        let (mut s, id) = vector_masked_adjustment(6000, 3000, 3000);
+        s.edit("from-2997", |doc, _| {
+            let path = photocraft_vector::shapes::rect(2997.0, 0.0, 3003.0, 3000.0);
+            doc.layer_mut(id).unwrap().vector_mask = Some(photocraft_doc::vector::VectorMask::new(path));
+            Ok(())
+        })
+        .unwrap();
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert!(hist.level > 1);
+        assert_eq!(hist[0][0], 0, "column 428 samples hidden pixel 2996");
+        assert_eq!(hist[0][255], 429 * 429);
+    }
+
+    /// A feather is read from the compositor's combined mask, reduced onto the proxy: a large
+    /// document keeps its cache level and still counts only what is revealed.
+    #[test]
+    fn a_feathered_mask_on_a_large_document_is_counted_on_the_proxy() {
+        let (mut s, id) = masked_adjustment(6000, 3000, 3000, true);
+        s.edit("feather", |doc, _| {
+            doc.layer_mut(id).unwrap().mask.as_mut().unwrap().feather = 2.0;
+            Ok(())
+        })
+        .unwrap();
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert!(hist.level > 1, "level {}", hist.level);
+        assert_eq!(hist[0][0], 0);
+        assert!(hist[0][255] > 0);
+    }
+
+    /// Editing the mask of a hidden adjustment changes no pixels, yet changes what is counted.
+    #[test]
+    fn a_hidden_adjustment_does_not_keep_the_histogram_on_no_damage() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("hide", |doc, _| {
+            doc.layer_mut(id).unwrap().visible = false;
+            Ok(())
+        })
+        .unwrap();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let first = histograms(&mut app, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert_eq!((first[0][0], first[0][255]), (0, 32 * 64));
+        app.session
+            .edit("reveal all", |doc, _| {
+                doc.layer_mut(id).unwrap().mask.as_mut().unwrap().surface.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.active_mut().unwrap().last_damage = Some(photocraft_geom::Rect::EMPTY);
+        let after = histograms(&mut app, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert_eq!((after[0][0], after[0][255]), (32 * 64, 32 * 64));
+    }
+
+    /// A feathered mask is counted as the compositor blurs it: a two-pixel revealed stripe is
+    /// counted as painted, but a feather spreads it so thin that nothing stays above one half.
+    #[test]
+    fn feathered_mask_is_counted_as_rendered() {
+        let stripe = |feather: f32| {
+            let (mut s, id) = masked_adjustment(64, 64, 32, true);
+            s.edit("stripe", |doc, active| {
+                let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
+                m.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[0.0]);
+                m.surface.fill_rect(photocraft_geom::Rect::new(40, 0, 42, 64), &[1.0]);
+                m.feather = feather;
+                Ok(())
+            })
+            .unwrap();
+            compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb)
+        };
+        let sharp = stripe(0.0);
+        assert_eq!((sharp[0][0], sharp[0][255]), (0, 2 * 64));
+        let soft = stripe(8.0);
+        assert_eq!(soft.level, 1);
+        assert_eq!(soft[0][0], 0, "the hidden black half stays hidden");
+        assert!(soft[0][255] < 2 * 64, "the feather thins the stripe: {}", soft[0][255]);
+    }
+
+    #[test]
+    fn a_mask_revealing_everything_counts_everything() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("reveal", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().mask = Some(photocraft_doc::LayerMask::reveal_all());
+            Ok(())
+        })
+        .unwrap();
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert_eq!((hist[0][0], hist[0][255]), (32 * 64, 32 * 64));
     }
 
     #[test]

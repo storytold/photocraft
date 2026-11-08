@@ -89,7 +89,12 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut l = read_levels(v, chan.key);
     let mut e = Edit::default();
     let mut changed = false;
-    if auto && let Some(h) = &cx.hist {
+    // With nothing counted (a mask that hides everything) Auto has nothing to fit, so it leaves the
+    // levels as they are rather than resetting them and adding a History step.
+    if auto
+        && let Some(h) = &cx.hist
+        && h[hist_i].iter().any(|&c| c > 0)
+    {
         let (lo, hi) = auto_levels(&h[hist_i]);
         l[0] = lo;
         l[2] = hi;

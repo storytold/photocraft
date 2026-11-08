@@ -573,6 +573,31 @@ mod multi_channel_tests {
             assert_eq!(values, base);
         }
     }
+    /// #12247: with nothing counted (a mask hiding everything) Levels' Auto changes nothing.
+    #[test]
+    fn levels_auto_on_an_empty_histogram_leaves_the_levels() {
+        use egui_kittest::kittest::Queryable;
+        let mut cx = context("rgb");
+        cx.hist = Some(Arc::new(tone::Histograms { ch: vec![[0; 256]; 4], level: 1, ..Default::default() }));
+        let mut values = adjust_params::to_params(&adjust_params::default_for("levels", photocraft_doc::ColorMode::Rgb).unwrap());
+        values["inBlack"] = json!(20);
+        values["gamma"] = json!(1.5);
+        values["inWhite"] = json!(230);
+        let base = values.clone();
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                editor(ui, "levels", &mut values, &cx);
+            }
+        });
+        PhotocraftApp::setup_context(&harness.ctx, Default::default());
+        harness.run_steps(4);
+        if harness.ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+            harness.get_by_label("Auto").click();
+            harness.run_steps(2);
+        }
+        drop(harness);
+        assert_eq!(values, base);
+    }
     #[test]
     fn subset_histograms_match_both_editors_in_all_native_spaces_and_depths() {
         use egui_kittest::kittest::Queryable;
