@@ -81,7 +81,7 @@ fn anti_alias_off_has_a_hard_edge() {
 fn anti_alias_on_keeps_the_blended_edge() {
     let s = click(true);
     let full = full();
-    let partial = (55..65).map(|x| px(&s, x, 120)).filter(|c| *c != RED && c.iter().zip(&full).any(|(a, b)| (a - b).abs() > 3)).count();
+    let partial = (58..=60).map(|x| px(&s, x, 120)).filter(|c| *c != RED && c.iter().zip(&full).any(|(a, b)| (a - b).abs() > 3)).count();
     assert!(partial >= 1, "a blended ring at the rim");
 }
 
