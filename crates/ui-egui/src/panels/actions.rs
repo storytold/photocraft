@@ -1726,7 +1726,7 @@ struct DragRow {
 }
 
 /// Drops use an insertion line, converted to the final index expected by actions.move.
-fn drag_row(ui: &egui::Ui, response: &egui::Response, row: DragRow, t: &Tokens) -> Option<(DragRow, usize)> {
+fn drag_row(ui: &egui::Ui, response: &egui::Response, row: DragRow, t: &Tokens) -> Option<(DragRow, usize, usize)> {
     response.dnd_set_drag_payload(row);
     let source = response.dnd_hover_payload::<DragRow>()?;
     if source.step.is_some() != row.step.is_some() || (source.step.is_some() && source.action != row.action) {
@@ -1739,10 +1739,12 @@ fn drag_row(ui: &egui::Ui, response: &egui::Response, row: DragRow, t: &Tokens) 
     let to = if from < slot { slot.saturating_sub(1) } else { slot };
     let y = if after { response.rect.bottom() } else { response.rect.top() };
     ui.painter().line_segment([pos2(response.rect.left() + 22.0, y), pos2(response.rect.right(), y)], Stroke::new(2.0, t.accent));
-    response.dnd_release_payload::<DragRow>().map(|source| (*source, to))
+    response.dnd_release_payload::<DragRow>().map(|source| (*source, to, row.action))
 }
 
-fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
+fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize, target: usize) {
+    let Some(target) = app.session.actions.list.get(target) else { return };
+    let (set, slot) = (target.set.clone(), target.set_slot);
     let mut params = json!({"action": source.action, "to": to});
     if let Some(step) = source.step {
         params["step"] = json!(step);
@@ -1759,12 +1761,8 @@ fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
             app.ui.actions.expanded.insert(to, expanded);
         }
         app.ui.actions.select(to, None);
-        // Dropped among another set's actions: the action joins that set (the row above wins).
-        let list = &app.session.actions.list;
-        let neighbour = to.checked_sub(1).and_then(|j| list.get(j)).or_else(|| list.get(to + 1));
-        let set = neighbour.and_then(|a| a.set.clone());
-        let slot = neighbour.and_then(|a| a.set_slot);
-        if list.get(to).is_some_and(|a| a.set != set || a.set_slot != slot) {
+        // The displayed target owns the drop even when raw list positions interleave folders.
+        if app.session.actions.list.get(to).is_some_and(|a| a.set != set || a.set_slot != slot) {
             let _ = app.run("actions.assignSet", json!({"action": to, "set": set, "setSlot": slot}));
         }
     }
@@ -2234,8 +2232,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((index, name)) = renamed {
         rename_action(app, index, name);
     }
-    if let Some((source, to)) = moved {
-        move_row(app, source, to);
+    if let Some((source, to, target)) = moved {
+        move_row(app, source, to, target);
     }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -2326,7 +2324,7 @@ struct StepRowsContext<'a> {
 
 #[derive(Default)]
 struct StepRowEvents {
-    moved: Option<(DragRow, usize)>,
+    moved: Option<(DragRow, usize, usize)>,
     toggled: Option<(usize, usize)>,
     dialog_toggled: Option<(usize, usize)>,
 }

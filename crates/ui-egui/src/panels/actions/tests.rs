@@ -1897,13 +1897,13 @@ fn moving_an_action_next_to_another_set_joins_it() {
     app.session.actions.list.push(b);
     app.session.actions.list.push(Action::new("C", vec![]));
     // C dropped below B: it joins B's set, "Two".
-    move_row(&mut app, DragRow { action: 2, step: None }, 2);
+    move_row(&mut app, DragRow { action: 2, step: None }, 2, 1);
     assert_eq!(app.session.actions.list[2].set.as_deref(), Some("Two"));
     // B dropped to the top, above A: the row below decides when there is none above.
-    move_row(&mut app, DragRow { action: 1, step: None }, 0);
+    move_row(&mut app, DragRow { action: 1, step: None }, 0, 0);
     assert_eq!((app.session.actions.list[0].name.as_str(), app.session.actions.list[0].set.as_deref()), ("B", Some("One")));
-    // C dropped between A (One) and nothing: the row above wins.
-    move_row(&mut app, DragRow { action: 2, step: None }, 2);
+    // C dropped below the displayed A row: it joins A's set.
+    move_row(&mut app, DragRow { action: 2, step: None }, 2, 1);
     assert_eq!((app.session.actions.list[2].name.as_str(), app.session.actions.list[2].set.as_deref()), ("C", Some("One")));
 }
 
@@ -3084,4 +3084,18 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     let names: Vec<&str> = app.session.actions.list.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["A", "B"]);
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
+}
+
+/// Dropping onto a visible folder member uses that occurrence even if raw rows interleave.
+#[test]
+fn dragging_uses_the_displayed_folder_occurrence() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.actions.set_rows = vec!["Same".into(), "Same".into()];
+    app.session.actions.list = [("A", 0), ("B", 1), ("C", 0)]
+        .into_iter()
+        .map(|(name, slot)| Action { set: Some("Same".into()), set_slot: Some(slot), ..Action::new(name, Vec::new()) })
+        .collect();
+    move_row(&mut app, DragRow { action: 0, step: None }, 1, 2);
+    assert_eq!(app.session.actions.list[1].name, "A");
+    assert_eq!(app.session.actions.list[1].set_slot, Some(0));
 }
