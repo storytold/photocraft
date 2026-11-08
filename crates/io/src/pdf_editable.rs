@@ -160,6 +160,7 @@ fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>) -> Result<(),
             let tolerance = 0.01 * glyph.size_px + 0.01;
             if glyph.text == stroke.text
                 && glyph.font.key == stroke.font.key
+                && glyph.order == stroke.order
                 && (glyph.origin.x - stroke.origin.x).abs() <= tolerance
                 && (glyph.origin.y - stroke.origin.y).abs() <= tolerance
             {
@@ -314,7 +315,10 @@ fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, ctl: &In
             // Re-lock per layer so a text-heavy import does not hold the UI's engine for the
             // whole cache-render loop.
             let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
-            let _ = engine.render_layer(text, dpi as f32, fmt);
+            let rect = engine.render_layer(text, dpi as f32, fmt);
+            if rect.width() == 0 || rect.height() == 0 {
+                return Err(EditableError::Unsupported("a text cache could not be rendered"));
+            }
         }
     }
     Ok(())
@@ -465,18 +469,21 @@ impl PathDevice<'_> {
 }
 
 impl<'a> Device<'a> for PathDevice<'_> {
+    /// A soft mask changes compositing in ways a plain layer cannot express.
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'a>>) {
         if mask.is_some() {
             self.unsupported("soft masks");
         }
     }
 
+    /// Only normal blending is editable.
     fn set_blend_mode(&mut self, blend_mode: BlendMode) {
         if blend_mode != BlendMode::Normal {
             self.unsupported("blend modes");
         }
     }
 
+    /// Turns a filled/stroked path into a shape layer, rejecting paints and strokes it cannot keep.
     fn draw_path(&mut self, path: &BezPath, transform: KurboAffine, paint: &Paint<'a>, draw_mode: &PathDrawMode) {
         if self.unsupported.is_some() {
             return;
@@ -520,6 +527,7 @@ impl<'a> Device<'a> for PathDevice<'_> {
         }
     }
 
+    /// Accepts an axis-aligned clip that contains the artboard; other clips fall back.
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         if self.no_op_clip(clip_path) {
             self.clips.push(true);
@@ -529,6 +537,7 @@ impl<'a> Device<'a> for PathDevice<'_> {
         self.unsupported("clipping paths");
     }
 
+    /// Transparency groups are not represented by the layer model.
     fn push_transparency_group(&mut self, _opacity: f32, mask: Option<SoftMask<'a>>, blend_mode: BlendMode) {
         // A group needs its own blend/opacity/mask handling; until that exists the page is
         // rasterised rather than flattened into the wrong stacking order.
@@ -536,6 +545,7 @@ impl<'a> Device<'a> for PathDevice<'_> {
         self.unsupported("transparency groups");
     }
 
+    /// Records a filled glyph as text, or its stroke copy for fake-bold pairing.
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: KurboAffine, glyph_transform: KurboAffine, paint: &Paint<'a>, draw_mode: &GlyphDrawMode) {
         if self.unsupported.is_some() {
             return;
@@ -627,16 +637,20 @@ impl<'a> Device<'a> for PathDevice<'_> {
         }
     }
 
+    /// Images are not editable at this step.
     fn draw_image(&mut self, _image: Image<'a, '_>, _transform: KurboAffine) {
         self.unsupported("images");
     }
 
+    /// Balances [`Self::push_clip_path`].
     fn pop_clip_path(&mut self) {
         let _ = self.clips.pop();
     }
 
+    /// Balances [`Self::push_transparency_group`].
     fn pop_transparency_group(&mut self) {}
 
+    /// Annotations are not part of the page's editable paint.
     fn begin_annotations(&mut self) {
         self.unsupported("annotations");
     }
@@ -863,15 +877,17 @@ fn to_stroke(stroke: &craft_pdf::interpret::StrokeProps, color: Color, scale: f6
 fn to_path(bez: &BezPath, transform: &Affine, knots: &mut usize) -> Option<Path> {
     let mut subpaths = Vec::new();
     let mut current: Option<Subpath> = None;
+    let mut restarted = false;
     let mut last = Point::new(0.0, 0.0);
     for element in bez.elements() {
         match *element {
             PathEl::MoveTo(p) => {
                 if let Some(subpath) = current.take()
-                    && subpath.knots.len() > 1
+                    && (!restarted || subpath.knots.len() > 1)
                 {
                     subpaths.push(subpath);
                 }
+                restarted = false;
                 current = Some(Subpath { closed: false, knots: vec![Knot::corner(p.x, p.y)], op: PathOp::Combine });
                 last = Point::new(p.x, p.y);
             }
@@ -922,6 +938,9 @@ fn to_path(bez: &BezPath, transform: &Affine, knots: &mut usize) -> Option<Path>
                         } else {
                             subpath.knots[0].in_ctrl = first;
                         }
+                    }
+                    // A single-point closed subpath still paints a dot with a round cap.
+                    if !restarted || subpath.knots.len() > 1 {
                         subpaths.push(subpath);
                     }
                     // A close starts a new subpath at the closed subpath's start point; a
@@ -929,13 +948,16 @@ fn to_path(bez: &BezPath, transform: &Affine, knots: &mut usize) -> Option<Path>
                     if let Some(start) = restart {
                         current = Some(Subpath { closed: false, knots: vec![Knot::corner(start.x, start.y)], op: PathOp::Combine });
                         last = start;
+                        restarted = true;
+                    } else {
+                        restarted = false;
                     }
                 }
             }
         }
     }
     if let Some(subpath) = current
-        && subpath.knots.len() > 1
+        && (!restarted || subpath.knots.len() > 1)
     {
         subpaths.push(subpath);
     }
@@ -1414,13 +1436,31 @@ mod tests {
     }
 
     #[test]
-    fn text_keeps_paint_order_relative_to_paths() {
-        let bytes = text_pdf("BT /F1 24 Tf 20 50 Td (Hi) Tj ET 0 0 1 rg 0 0 200 100 re f");
+    fn text_keeps_paint_order_on_both_sides_of_a_path() {
+        let bytes = text_pdf("BT /F1 24 Tf 20 50 Td (A) Tj ET 0 0 1 rg 0 0 200 100 re f BT /F1 24 Tf 20 20 Td (B) Tj ET");
         let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
         let imported = import_with_options_and_interrupt("order.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
         let layers = children(&imported.document);
-        assert!(matches!(layers[0].content, LayerContent::Text(_)), "text was painted first");
-        assert!(matches!(layers[1].content, LayerContent::Shape(_)), "the covering path comes after");
+        assert_eq!(layers.len(), 3);
+        let text = |layer: &Layer| match &layer.content {
+            LayerContent::Text(text) => text.text.clone(),
+            _ => String::new(),
+        };
+        assert_eq!(text(&layers[0]), "A");
+        assert!(matches!(layers[1].content, LayerContent::Shape(_)), "the path stays between the runs");
+        assert_eq!(text(&layers[2]), "B");
+    }
+
+    #[test]
+    fn a_closed_single_point_subpath_is_retained() {
+        let mut bez = BezPath::new();
+        bez.move_to((10.0, 10.0));
+        bez.close_path();
+        let mut knots = 0;
+        let path = to_path(&bez, &Affine::IDENTITY, &mut knots).expect("a path");
+        assert_eq!(path.subpaths.len(), 1);
+        assert_eq!(path.subpaths[0].knots.len(), 1);
+        assert!(path.subpaths[0].closed);
     }
 
     #[test]
