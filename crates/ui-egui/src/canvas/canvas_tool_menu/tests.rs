@@ -535,7 +535,8 @@ fn zoom_and_hand_right_click_opens_the_view_menu() {
         let inside = screen_of(h.state(), [300.0, 100.0]);
         right_click(&mut h, inside, Modifiers::NONE);
         let menu = h.state().ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: right-click opens no menu"));
-        assert!(rows(&menu) == VIEW_MENU, "{tool:?}: the view menu");
+        // The Hand's menu has only the fixed zooms (#12022).
+        assert!(rows(&menu) == if tool == Tool::Hand { HAND_MENU } else { VIEW_MENU }, "{tool:?}: the view menu");
         assert_eq!(h.state().ui.views[0].zoom, zoom, "{tool:?}: the right-click alone does not zoom");
         assert!(entry_enabled(h.state(), &menu, FILL_SCREEN) && entry_enabled(h.state(), &menu, "view.printSize"));
         // Outside the image the pasteboard colour menu wins, as for the other tools.
@@ -622,7 +623,8 @@ fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
 #[test]
 fn view_menu_zoom_in_centres_the_clicked_point_with_the_preference() {
     let mut app = zoom_app(400, 300);
-    app.ui.tool = Tool::Hand;
+    // Zoom In is on the Zoom tool's menu only (#12022).
+    app.ui.tool = Tool::Zoom;
     app.run("prefs.set", json!({"path": "tools.zoomClickedPointToCenter", "value": true})).unwrap();
     let mut h = harness(app);
     let doc = [300.0, 100.0];

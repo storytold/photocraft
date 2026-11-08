@@ -23,6 +23,8 @@ use super::{
 };
 
 const CMD: &str = "paint.patch";
+/// The History step of applying a patch, in every mode.
+const HISTORY_NAME: &str = "Patch Selection";
 
 /// Largest patch, in pixels of the selection's bounding box. The solve holds the two regions, the
 /// result and per-channel float planes of it (on the order of 150 bytes per pixel with four
@@ -151,6 +153,7 @@ struct Plan {
     /// Shift of the repaired area from the selection, and of the texture from the repaired area.
     dst_shift: (i32, i32),
     src_shift: (i32, i32),
+    /// Destination mode: a hard rectangular selection moves with the patch.
     destination: bool,
     offset: (i32, i32),
 }
@@ -223,7 +226,7 @@ pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
         return patch_content_aware(s, p);
     }
     let plan = plan(s, p)?;
-    let label = if plan.destination { "Patch (Destination)" } else { "Patch" };
+    let label = HISTORY_NAME;
     let dmg = if plan.destination {
         // Destination: a plain rectangular selection moves with the patch, in the same history state.
         let dmg = s.edit(label, |doc, _| {
@@ -287,6 +290,7 @@ fn level(p: &Value, k: &str, default: u8, lo: u8, hi: u8) -> Result<u8> {
 /// docs), as a background job.
 fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
     use super::content_aware_move::{Target, land, mask, read, window};
+    // The job's progress text; its History step is `HISTORY_NAME`.
     const LABEL: &str = "Patch (Content-Aware)";
     let plan = plan(s, p)?;
     let structure = level(p, "structure", 4, 1, 7)?;
@@ -318,7 +322,7 @@ fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
             }
         },
         move |s, (surf, damage)| {
-            s.edit(LABEL, |doc, _| {
+            s.edit(HISTORY_NAME, |doc, _| {
                 *crate::channel_cmds::target_surface(doc, target.id, &p)?.0 = surf;
                 Ok(())
             })?;
