@@ -404,8 +404,7 @@ fn status_on_err(app: &mut PhotocraftApp, r: Result<Value, String>) {
 /// test, with its tolerance), or `None`. The cursor uses it too, so it never says "1" where a click
 /// adds a marker (#11773).
 pub(crate) fn count_marker_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<(usize, usize)> {
-    let doc = app.session.active().map(|d| d.doc.clone())?;
-    nearest_marker(&doc, at, tolerance(app))
+    nearest_marker(&app.session.active()?.doc, at, tolerance(app))
 }
 
 fn nearest_marker(d: &Document, at: [f64; 2], tol: f64) -> Option<(usize, usize)> {
