@@ -1,12 +1,14 @@
 //! File › Open as Smart Object… (#11678): a file opens as a new untitled document with the file's
 //! size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer.
 //!
-//! The layer is built as File › Place Embedded builds one (the same [`Prepared`] layer, inserted
-//! by [`apply_place`]), at the file's own size and position `0, 0`.
+//! The layer is built as File › Place Embedded builds one (an embedded smart object at the file's own
+//! size and position `0, 0`) and put into the document before it is admitted, so the opening
+//! snapshot already shows it.
 
-use super::open::{Prepared, apply_place, import_opened};
+use super::open::import_opened;
 use super::paths::{file_name, read_file, stem, untitled_name};
-use super::{Affine, Arc, Document, EngineError, LayerContent, Result, Session, SmartObject, SmartSource, Value, flattened_checked, json, str_param};
+use super::{Affine, Arc, Document, EngineError, Layer, LayerContent, Result, Session, SmartObject, SmartSource, Value, flattened_checked, json, str_param};
+use crate::layer_place::Place;
 
 const CMD: &str = "file.openAsSmartObject";
 
@@ -49,7 +51,6 @@ fn open_one(s: &mut Session, path: &str) -> Result<Value> {
     let src = import_opened(s, path, &bytes)?;
     // The file as one image: the smart object's rendered contents.
     let pixels = flattened_checked(&src, src.pixel_format(), CMD)?;
-    let (w, h) = (f64::from(src.size.width), f64::from(src.size.height));
     let layer_name = stem(path);
     // "<name>-1", the next free number while a document with that name is open.
     let name = untitled_name(&layer_name, |n| s.documents().iter().any(|d| d.doc.name == n));
@@ -63,26 +64,25 @@ fn open_one(s: &mut Session, path: &str) -> Result<Value> {
     // Embedded (not linked): the original file name keeps its extension, so Edit Contents opens it.
     let source = SmartSource::Embedded { file_name: file_name(path), bytes: Arc::new(bytes) };
     let so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
-    let prepared = Prepared {
-        content: LayerContent::Smart(so),
-        layer_name: layer_name.clone(),
-        label: LABEL,
-        scale: 1.0,
-        bounds: [0.0, 0.0, w, h],
-        smart: true,
-        frame: None,
-    };
+    let layer = Layer::new(layer_name, LayerContent::Smart(so));
+    let layer_id = layer.id;
+    crate::layer_place::insert_new(&mut doc, None, layer, Place::AutoEditable);
+    let index = admit_as_smart_object(s, doc);
+    Ok(json!({"document": index, "name": name, "layer": layer_id.0}))
+}
+
+/// Admits a document built by Open as Smart Object (one smart object layer) as an untitled
+/// document: the opening snapshot already shows the placed layer, is named after it, and the
+/// history is the single state "Open As Smart Object", as File › Open's is one state.
+pub fn admit_as_smart_object(s: &mut Session, doc: Document) -> usize {
+    let layer_name = doc.layers.first().map(|l| l.name.clone());
     // Untitled: no path, so Save asks where to save.
     let index = s.add_document(doc, None);
-    // The opening snapshot is named after the layer, as the reference names it.
-    if let Some(first) = s.active_mut().and_then(|st| st.snapshots.iter_mut().find(|snap| snap.id == 0)) {
-        first.name = layer_name;
-    }
-    match apply_place(s, prepared) {
-        Ok(placed) => Ok(json!({"document": index, "name": name, "layer": placed["layer"]})),
-        Err(e) => {
-            s.close(index);
-            Err(e)
+    if let Some(st) = s.active_mut() {
+        if let (Some(first), Some(name)) = (st.snapshots.iter_mut().find(|snap| snap.id == 0), layer_name) {
+            first.name = name;
         }
+        st.history.set_current_label(LABEL);
     }
+    index
 }
