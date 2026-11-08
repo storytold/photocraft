@@ -63,7 +63,7 @@ pub mod zoom_window_fit;
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
-use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
+use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
@@ -717,6 +717,10 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         input.primary && app.ui.dialogs.last().is_some_and(|d| crate::select_mask_view::owns(&d.fields) && crate::select_mask_view::brush_on(&d.fields));
     // Field Blur's pins are placed and dragged on the image (`blur_pins`).
     let pinning = input.primary && app.ui.dialogs.last().is_some_and(|d| crate::blur_pins::owns(&d.fields));
+    // A filter dialog with a preview window (Smart Sharpen, Unsharp Mask, Reduce Noise…): the image
+    // is its locator, and a click centres the window there (#9648), whatever the tool. Only the
+    // press counts: as in the reference application, dragging on afterwards leaves the window be.
+    let locating = input.primary && crate::filter_preview_ui::locator(app).is_some();
     // Layer Style on a Drop or Inner Shadow page: a drag on the image moves the shadow (#5701).
     let shadow_drag =
         !picking && app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::LayerStyle && crate::layer_style::drags_shadow(&d.fields));
@@ -752,6 +756,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         && !range_picking
         && !refine_brushing
         && !pinning
+        && !locating
         && !shadow_drag
         && !gradient_drag
         && curve_point_press.is_none();
@@ -824,6 +829,15 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     {
         let press = crate::dialogs::free_press(input.ctx, input.rect);
         crate::blur_pins::canvas(app, input.ctx, input.xf, p, press);
+    } else if locating
+        && !input.middle
+        && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect)
+    {
+        input.ctx.set_cursor_icon(preview_locator_cursor(input.ctx, p));
+        if let Some(q) = crate::dialogs::free_press(input.ctx, input.rect).filter(|_| input.ctx.input(|i| i.pointer.primary_pressed())) {
+            let d = input.xf.to_doc(q);
+            crate::filter_preview_ui::center_at(app, d[0], d[1]);
+        }
     } else if refine_brushing
         && !input.middle
         && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect)
