@@ -843,6 +843,14 @@ fn curves_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 fn popup_channels(h: &mut Harness<'static, PhotocraftApp>) -> Vec<String> {
     h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect()
 }
+
+/// The channel the Channel popup (labelled `Channel:`) has selected; no other popup counts.
+fn selected_channel(h: &mut Harness<'static, PhotocraftApp>) -> Option<String> {
+    use egui_kittest::kittest::NodeT;
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Channel:"))
+        .and_then(|n| n.value().map(|s| s.to_string()))
+}
 #[test]
 fn lab_subset_recall_preserves_combined_record_beside_native_lightness() {
     for kind in ["levels", "curves"] {
@@ -1324,11 +1332,16 @@ fn selective_color_editor_survives_malformed_params() {
 /// dialogs, as in Photoshop (#11283).
 #[test]
 fn command_digits_pick_the_levels_and_curves_channel() {
-    let cases: [(&str, &[(egui::Key, &str)]); 3] = [
+    let cases: [(&str, &[(egui::Key, &str)]); 4] = [
         ("rgb", &[(egui::Key::Num3, "Red"), (egui::Key::Num4, "Green"), (egui::Key::Num5, "Blue"), (egui::Key::Num2, "RGB")]),
-        ("cmyk", &[(egui::Key::Num6, "Black"), (egui::Key::Num3, "Cyan"), (egui::Key::Num2, "CMYK")]),
+        (
+            "cmyk",
+            &[(egui::Key::Num6, "Black"), (egui::Key::Num3, "Cyan"), (egui::Key::Num4, "Magenta"), (egui::Key::Num5, "Yellow"), (egui::Key::Num2, "CMYK")],
+        ),
         // Lab lists no composite: ⌘2 leaves the channel as it is.
         ("lab", &[(egui::Key::Num5, "b"), (egui::Key::Num2, "b"), (egui::Key::Num3, "Lightness")]),
+        // Grayscale lists Gray alone: no digit picks anything else.
+        ("gray", &[(egui::Key::Num2, "Gray"), (egui::Key::Num3, "Gray")]),
     ];
     for kind in ["levels", "curves"] {
         for (mode, presses) in cases {
@@ -1340,7 +1353,7 @@ fn command_digits_pick_the_levels_and_curves_channel() {
             for &(key, channel) in presses {
                 h.key_press_modifiers(egui::Modifiers::COMMAND, key);
                 h.run_steps(2);
-                assert!(popup_channels(&mut h).iter().any(|c| c == channel), "{kind} {mode} {key:?}: {:?}", popup_channels(&mut h));
+                assert_eq!(selected_channel(&mut h).as_deref(), Some(channel), "{kind} {mode} {key:?}");
             }
         }
     }
@@ -1356,15 +1369,16 @@ fn command_digits_follow_native_channels_on_a_partial_curves_target() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     open(h.state_mut(), "image.adjustments.curves").unwrap();
     h.run_steps(2);
-    let combined = popup_channels(&mut h);
+    let combined = selected_channel(&mut h);
+    assert!(combined.is_some());
     let mut press = |key| {
         h.key_press_modifiers(egui::Modifiers::COMMAND, key);
         h.run_steps(2);
-        popup_channels(&mut h)
+        selected_channel(&mut h)
     };
     assert_eq!(press(egui::Key::Num3), combined, "⌘3 (Red) isn't listed: nothing changes");
-    assert!(press(egui::Key::Num4).iter().any(|c| c == "Green"), "⌘4 is Green, the first listed channel");
-    assert!(press(egui::Key::Num5).iter().any(|c| c == "Blue"));
-    assert!(press(egui::Key::Num3).iter().any(|c| c == "Blue"), "⌘3 (Red) isn't listed: Blue stays selected");
+    assert_eq!(press(egui::Key::Num4).as_deref(), Some("Green"), "⌘4 is Green, the first listed channel");
+    assert_eq!(press(egui::Key::Num5).as_deref(), Some("Blue"));
+    assert_eq!(press(egui::Key::Num3).as_deref(), Some("Blue"), "⌘3 (Red) isn't listed: Blue stays selected");
     assert_eq!(press(egui::Key::Num2), combined, "⌘2 is the combined entry");
 }
