@@ -109,6 +109,9 @@ pub struct CameraRawDialog {
     raw_source: Option<crate::camera_raw_detail_ui::RawDetail>,
     /// [`Self::proxy`] is [`Self::raw_source`]'s binned frame, so the proxy develops from it.
     raw_proxy: bool,
+    /// The default develop at the preview's size, for Auto when the proxy is the binned frame:
+    /// averaged once, on the first Auto.
+    auto_proxy: std::sync::OnceLock<Vec<[f32; 4]>>,
     /// The proxy develop running on a worker ([`Self::request_render`]).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
@@ -182,9 +185,11 @@ impl CameraRawDialog {
         if !self.raw_proxy {
             return std::borrow::Cow::Borrowed(self.proxy.as_slice());
         }
-        let (surf, area) = self.detail.source();
-        let (w, h) = (area.width() as usize, area.height() as usize);
-        std::borrow::Cow::Owned(convert::box_proxy(surf, area, w, h).0)
+        std::borrow::Cow::Borrowed(self.auto_proxy.get_or_init(|| {
+            let (surf, area) = self.detail.source();
+            let (w, h) = (area.width() as usize, area.height() as usize);
+            convert::box_proxy(surf, area, w, h).0
+        }))
     }
 
     /// Params for the engine: only the settings that differ from the defaults.
