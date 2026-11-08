@@ -565,18 +565,14 @@ pub(super) fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option
     let doc = app.session.active()?.doc.id.0;
     let (name, layer, path) = resume_target(app)?;
     let dist = |k: &photocraft_doc::Knot| (k.anchor.x - x).hypot(k.anchor.y - y);
-    path.subpaths.iter().enumerate().filter(|(_, s)| !s.closed).find_map(|(i, s)| {
-        let last = s.knots.last().map(dist).filter(|d| *d < tol);
-        let first = s.knots.first().map(dist).filter(|d| *d < tol);
-        // With both ends in reach (a short path, zoomed out) the nearer one is carried on.
-        let reversed = match (last, first) {
-            (Some(l), Some(f)) => f < l,
-            (Some(_), None) => false,
-            (None, Some(_)) => true,
-            (None, None) => return None,
-        };
-        Some(resumed(doc, name.clone(), layer, i, s, reversed))
-    })
+    // With several ends in reach (a short path, or ends of two subpaths close together, zoomed
+    // out) the nearest one is carried on; on a tie the last anchor, then the earlier subpath.
+    let ends =
+        path.subpaths.iter().enumerate().filter(|(_, s)| !s.closed).flat_map(|(i, s)| {
+            [(s.knots.last(), false), (s.knots.first(), true)].into_iter().filter_map(move |(k, reversed)| Some((i, s, reversed, dist(k?))))
+        });
+    let (i, s, reversed, _) = ends.filter(|e| e.3 < tol).reduce(|best, e| if e.3 < best.3 { e } else { best })?;
+    Some(resumed(doc, name, layer, i, s, reversed))
 }
 
 /// The endpoint Direct Selection has selected ([`crate::direct_select::selected_open_end`]), as

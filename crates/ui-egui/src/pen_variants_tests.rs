@@ -589,3 +589,24 @@ fn a_press_in_reach_of_both_ends_carries_the_nearer_one_on_and_does_not_close() 
     assert!(!work_path(&app).subpaths[0].closed);
     assert_eq!(ends(&app), Some([20.0, 20.0]), "from the nearer, first anchor");
 }
+
+/// #9396 review: with the ends of two open subpaths both within reach, the press carries on the
+/// subpath whose end is nearest the pointer, not the first one listed.
+#[test]
+fn a_press_in_reach_of_two_subpaths_ends_carries_the_nearest_on() {
+    let mut app = app(Tool::Pen);
+    assert_eq!(app.point_zoom(), 1.0, "a 6 px reach in document pixels");
+    app.ui.tool_options.pen_auto_add_delete = false;
+    click(&mut app, 20.0, 20.0);
+    click(&mut app, 60.0, 20.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    click(&mut app, 100.0, 100.0);
+    click(&mut app, 64.0, 22.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(work_path(&app).subpaths.len(), 2, "two open subpaths");
+    // (63, 21): 3.2 px from the first subpath's last anchor, 1.4 px from the second's.
+    click(&mut app, 63.0, 21.0);
+    let pen = app.ui.pen.as_ref().expect("a resumed draft");
+    assert_eq!(pen.resumes.as_ref().map(|r| r.index), Some(1), "{pen:?}");
+    assert_eq!(pen.knots.last().map(|k| k[0]), Some([64.0, 22.0]), "from the second subpath's nearer end");
+}
