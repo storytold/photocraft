@@ -53,7 +53,7 @@ pub(crate) fn background_eraser_params(app: &PhotocraftApp, points: &[[f64; 3]])
         "points": points,
         "sampling": o.bg_sampling,
         "limits": o.bg_limits,
-        "tolerance": o.bg_tolerance,
+        "tolerance": stored_tolerance(o.bg_tolerance),
         "protectForegroundColor": o.bg_protect_fg,
         "seed": crate::retouch_ui::stroke_seed(points),
     })
@@ -125,11 +125,79 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("findEdges".to_string(), tl!("Find Edges")),
             ];
             widgets::dropdown(ui, "bg-eraser-limits", tl!("Limits:"), &mut o.bg_limits, &limits, 110.0);
+            // The dropdown's button, by the id its combo box takes from "bg-eraser-limits".
+            if let Some(limits) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("bg-eraser-limits"))) {
+                limits.on_hover_text(tl!("How far to let the erasing spread"));
+            }
             opt(ui, tl!("Tolerance:"));
-            widgets::value_field(ui, &mut o.bg_tolerance, 0.0..=100.0, "%", 62.0);
-            widgets::checkbox(ui, &mut o.bg_protect_fg, tl!("Protect Foreground Color"));
+            if tolerance_field(ui, &mut o.bg_tolerance) {
+                open_range_alert(app);
+            }
+            let o = &mut app.ui.tool_options;
+            widgets::checkbox(ui, &mut o.bg_protect_fg, tl!("Protect Foreground Color")).on_hover_text(tl!("Do not erase the foreground swatch color"));
         }
         _ => return false,
     }
     true
+}
+
+/// The alert for a Background Eraser Tolerance typed out of range (#11909).
+pub const TOLERANCE_RANGE_ALERT: &str = "An integer between 1% and 100% is required. Closest value inserted.";
+
+/// The Background Eraser's Tolerance: whole numbers in 1..=100, as the reference application takes
+/// them (#11909). A typed fraction becomes the nearest whole number, a value past the range the
+/// closest one. Returns true when the field is left with a value typed out of range, so the
+/// caller shows [`TOLERANCE_RANGE_ALERT`].
+fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
+    // A restored setting (an older 0, a fraction) shows and erases as the field would store it.
+    *value = stored_tolerance(*value);
+    // While the field has the keyboard it gets back what was typed, not the stored value, so
+    // its text is left alone mid-entry (`0` on the way to `05` must not turn into `1`).
+    let draft_id = ui.make_persistent_id(egui::IdSalt::new("bg-eraser-tolerance-typed"));
+    // The field's own range is wide, so the typed value reaches here unclamped.
+    // A draft only stands while the setting is still the one it stored: a value set elsewhere
+    // meanwhile (a tool preset while the bar was hidden) wins.
+    let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(draft_id));
+    let mut typed = draft.filter(|(_, stored)| *stored == *value).map_or(*value, |(typed, _)| typed);
+    let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(tl!("Erase range of similar colors"));
+    let out_id = r.id.with("out-of-range");
+    // An edit the field never got to finish (the options bar was hidden while it had the
+    // keyboard) has nothing left to say once the field is entered again.
+    if r.gained_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    }
+    if r.changed() && typed.is_finite() {
+        *value = typed.round().clamp(1.0, 100.0);
+        // Only what was typed alerts, also an expression committed as the field is left
+        // (`50*4` and Enter); a scrub past the ends (the field's or its caption's, even while
+        // the field has the keyboard) just stops there.
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
+        let out = typing && !(1.0..=100.0).contains(&typed);
+        ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+        if typing && r.has_focus() {
+            ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, *value)));
+        } else {
+            ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+        }
+    }
+    if !r.has_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+    }
+    r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false)
+}
+
+/// A Tolerance as the field stores it: a whole number in 1..=100, the default 50 for a value
+/// that is no number. Strokes use it too, so a restored setting erases the same before and after
+/// the options bar shows it.
+fn stored_tolerance(v: f32) -> f32 {
+    if v.is_finite() { v.round().clamp(1.0, 100.0) } else { 50.0 }
+}
+
+/// Shows [`TOLERANCE_RANGE_ALERT`]: a modal with OK, once even if more than one pass asks.
+fn open_range_alert(app: &mut PhotocraftApp) {
+    let message = tl!(TOLERANCE_RANGE_ALERT).to_owned();
+    let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
+    if !shown {
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
 }
