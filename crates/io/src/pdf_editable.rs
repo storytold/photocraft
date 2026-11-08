@@ -37,6 +37,8 @@ const MAX_LAYERS: usize = 20_000;
 const MAX_KNOTS: usize = 1_000_000;
 /// Pixel bytes of shape caches one editable page may retain before the rest render on demand.
 const MAX_CACHE_BYTES: u64 = 256 << 20;
+/// Cap on fill/stroke glyph comparisons so hostile pages cannot make pairing quadratic forever.
+const MAX_PAIR_CHECKS: usize = 1_000_000;
 /// How often the watcher copies the interrupt into craft-pdf's cancellation flag.
 const POLL: Duration = Duration::from_millis(5);
 /// Largest gap (in em) inside one run before a space is inserted.
@@ -97,6 +99,7 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
         strokes: Vec::new(),
         fonts: Vec::new(),
         font_keys: HashMap::new(),
+        soft_mask: false,
         clips: Vec::new(),
         knots: 0,
         cached: 0,
@@ -143,9 +146,7 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
     if let Some(reason) = device.unsupported {
         return Err(EditableError::Unsupported(reason));
     }
-    if let Err(reason) = pair_fake_bold(&mut device.glyphs, device.strokes) {
-        return Err(EditableError::Unsupported(reason));
-    }
+    pair_fake_bold(&mut device.glyphs, device.strokes, ctl)?;
     let families = register_fonts(&device.fonts)?;
     let mut layers = merge_text_layers(device.layers, text_layers(&device.glyphs, &families));
     render_text_caches(&mut layers, device.dpi, device.fmt, ctl)?;
@@ -153,10 +154,16 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
 }
 
 /// Removes stroked glyphs that duplicate a fill at the same place, marking that glyph fake bold.
-fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>) -> Result<(), &'static str> {
+fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>, ctl: &Interrupt) -> Result<(), EditableError> {
+    if glyphs.len().saturating_mul(strokes.len()) > MAX_PAIR_CHECKS {
+        return Err(EditableError::Unsupported("too much stroked text"));
+    }
     for stroke in strokes {
         let mut matched = false;
-        for glyph in glyphs.iter_mut() {
+        for (index, glyph) in glyphs.iter_mut().enumerate() {
+            if index % 256 == 0 && ctl.check().is_err() {
+                return Err(EditableError::Cancelled);
+            }
             let tolerance = 0.01 * glyph.size_px + 0.01;
             if glyph.text == stroke.text
                 && glyph.font.key == stroke.font.key
@@ -170,7 +177,7 @@ fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>) -> Result<(),
             }
         }
         if !matched {
-            return Err("stroked text");
+            return Err(EditableError::Unsupported("stroked text"));
         }
     }
     Ok(())
@@ -215,7 +222,7 @@ fn text_layers(glyphs: &[GlyphRun], families: &std::collections::HashMap<u128, S
             i += 1;
         }
         let text = text.trim().to_string();
-        if !text.is_empty() {
+        if !text.is_empty() && has_ink(&text) {
             out.push((first.order, text_layer(text, first, out.len(), &family)));
         }
         if i == start {
@@ -310,7 +317,7 @@ fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, ctl: &In
             return Err(EditableError::Cancelled);
         }
         if let LayerContent::Text(text) = &mut layer.content
-            && !text.text.trim().is_empty()
+            && has_ink(&text.text)
         {
             // Re-lock per layer so a text-heavy import does not hold the UI's engine for the
             // whole cache-render loop.
@@ -349,6 +356,11 @@ fn font_content_key(data: &OutlineFontData) -> u128 {
     u128::from_le_bytes(key)
 }
 
+/// Whether text has a visible character (not only spaces, controls or zero-width marks).
+fn has_ink(text: &str) -> bool {
+    text.chars().any(|c| !c.is_whitespace() && !c.is_control() && !matches!(c, '\u{200B}'..='\u{200F}' | '\u{2060}' | '\u{FEFF}'))
+}
+
 /// The family alias an embedded face is registered under: its PostScript name plus a content
 /// key, so subsets with the same name from different documents cannot replace each other.
 fn font_alias(postscript: &str, key: u128) -> String {
@@ -375,6 +387,8 @@ struct PathDevice<'a> {
     fonts: Vec<(u128, String, String, FontData)>,
     /// Hayro's cheap font identity → our content hash, so bytes are hashed once per face.
     font_keys: HashMap<u128, u128>,
+    /// Whether a soft mask is active; the first paint under one falls back the page.
+    soft_mask: bool,
     /// One entry per clip pushed by the interpreter: `true` for an accepted no-op clip.
     clips: Vec<bool>,
     knots: usize,
@@ -446,6 +460,11 @@ impl PathDevice<'_> {
         if path.is_empty() {
             return;
         }
+        if stroke.as_ref().is_some_and(|stroke| !stroke.dashes.is_empty()) && path.subpaths.iter().any(|subpath| subpath.closed && subpath.knots.len() == 1) {
+            // A dashed zero-length subpath cannot be reproduced as a single point.
+            self.unsupported("a dashed zero-length subpath");
+            return;
+        }
         if self.layers.len() >= MAX_LAYERS {
             self.unsupported("too many objects");
             return;
@@ -469,11 +488,10 @@ impl PathDevice<'_> {
 }
 
 impl<'a> Device<'a> for PathDevice<'_> {
-    /// A soft mask changes compositing in ways a plain layer cannot express.
+    /// A soft mask changes compositing in ways a plain layer cannot express, but it only matters
+    /// if something is painted while it is active.
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'a>>) {
-        if mask.is_some() {
-            self.unsupported("soft masks");
-        }
+        self.soft_mask = mask.is_some();
     }
 
     /// Only normal blending is editable.
@@ -486,6 +504,10 @@ impl<'a> Device<'a> for PathDevice<'_> {
     /// Turns a filled/stroked path into a shape layer, rejecting paints and strokes it cannot keep.
     fn draw_path(&mut self, path: &BezPath, transform: KurboAffine, paint: &Paint<'a>, draw_mode: &PathDrawMode) {
         if self.unsupported.is_some() {
+            return;
+        }
+        if self.soft_mask {
+            self.unsupported("soft masks");
             return;
         }
         if self.ctl.check().is_err() {
@@ -548,6 +570,10 @@ impl<'a> Device<'a> for PathDevice<'_> {
     /// Records a filled glyph as text, or its stroke copy for fake-bold pairing.
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: KurboAffine, glyph_transform: KurboAffine, paint: &Paint<'a>, draw_mode: &GlyphDrawMode) {
         if self.unsupported.is_some() {
+            return;
+        }
+        if self.soft_mask {
+            self.unsupported("soft masks");
             return;
         }
         if self.ctl.check().is_err() {
@@ -932,7 +958,15 @@ fn to_path(bez: &BezPath, transform: &Affine, knots: &mut usize) -> Option<Path>
                         let first = subpath.knots[0].anchor;
                         let last_anchor = subpath.knots.last().map_or(first, |knot| knot.anchor);
                         if (first.x - last_anchor.x).abs() < 1e-9 && (first.y - last_anchor.y).abs() < 1e-9 {
-                            if let Some(knot) = subpath.knots.pop() {
+                            // A straight closing segment can merge into the first knot; a curve
+                            // that returns to its start must keep both knots to preserve the loop.
+                            let straight = subpath.knots.last().is_some_and(|knot| {
+                                knot.in_ctrl.x == knot.anchor.x
+                                    && knot.in_ctrl.y == knot.anchor.y
+                                    && knot.out_ctrl.x == knot.anchor.x
+                                    && knot.out_ctrl.y == knot.anchor.y
+                            });
+                            if straight && let Some(knot) = subpath.knots.pop() {
                                 subpath.knots[0].in_ctrl = knot.in_ctrl;
                             }
                         } else {
@@ -1449,6 +1483,26 @@ mod tests {
         assert_eq!(text(&layers[0]), "A");
         assert!(matches!(layers[1].content, LayerContent::Shape(_)), "the path stays between the runs");
         assert_eq!(text(&layers[2]), "B");
+    }
+
+    #[test]
+    fn fake_bold_does_not_pair_across_a_path() {
+        let bytes = text_pdf("BT /F1 24 Tf 20 50 Td (Hi) Tj ET 0 0 1 rg 0 0 200 100 re f BT /F1 24 Tf 1 Tr 1 w 0 0 1 RG 20 50 Td (Hi) Tj ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("pair.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
+        assert!(imported.warnings.iter().any(|warning| warning.contains("stroked text") && warning.contains("rasterised")), "{:?}", imported.warnings);
+    }
+
+    #[test]
+    fn a_curve_returning_to_its_start_keeps_both_knots() {
+        let mut bez = BezPath::new();
+        bez.move_to((0.0, 0.0));
+        bez.curve_to((10.0, 0.0), (10.0, 10.0), (0.0, 0.0));
+        bez.close_path();
+        let mut knots = 0;
+        let path = to_path(&bez, &Affine::IDENTITY, &mut knots).expect("a path");
+        assert_eq!(path.subpaths.len(), 1);
+        assert!(path.subpaths[0].knots.len() >= 2);
     }
 
     #[test]
