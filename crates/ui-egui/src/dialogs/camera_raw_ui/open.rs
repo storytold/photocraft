@@ -75,7 +75,8 @@ pub fn queue_open_dialog(
         bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
         developed_with: method,
         demosaic: method,
-        crop: None,
+        // Read now: a filmstrip raw that is never shown still opens with its sidecar's crop.
+        crop: path.and_then(read_sidecar).and_then(|(_, report, _)| report.crop),
     };
     let held = super::filmstrip::HeldRaw::new(app, raw);
     app.raw_shelf.push(held);

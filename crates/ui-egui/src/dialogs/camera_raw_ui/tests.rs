@@ -1030,6 +1030,33 @@ fn a_sidecar_crop_crops_the_opened_raw() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #9985 with the filmstrip: raws opened together each open with their own sidecar's crop, also
+/// the one that is never shown and the one that was shown and left.
+#[test]
+fn filmstrip_raws_open_with_their_sidecar_crops() {
+    let lightroom = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HasCrop="True" crs:CropTop="0.25" crs:CropLeft="0.125" crs:CropBottom="0.75" crs:CropRight="0.625" crs:CropAngle="0"/></rdf:RDF></x:xmpmeta>"#;
+    let (mut app, dng, dir, raw_path, _) = raw_with_sidecar("filmcrop", Some(lightroom));
+    let paths: Vec<String> = (1..3).map(|i| dir.join(format!("IMG_010{i}.cr2")).to_string_lossy().into_owned()).collect();
+    for p in &paths {
+        std::fs::write(p, &dng).unwrap();
+        std::fs::write(sidecar_path(p), lightroom).unwrap();
+    }
+    let ctx = egui::Context::default();
+    app.open_file(&raw_path, &dng).unwrap();
+    for p in &paths {
+        app.open_file(p, &dng).unwrap();
+    }
+    assert_eq!(app.raw_shelf.len(), 3);
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 0).unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(3), "{r}");
+    let sizes: Vec<_> = app.session.documents().iter().map(|st| (st.doc.size.width, st.doc.size.height)).collect();
+    assert_eq!(sizes, vec![(24, 16); 3], "shown, shown and left, and never shown: all cropped");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// With Open in Camera Raw off, opening a raw develops it with its sidecar and writes nothing
 /// back: nothing changed.
 #[test]
