@@ -311,8 +311,8 @@
 	Artboard…	آرٹ بورڈ…
 	Artboard from Group…	گروپ سے آرٹ بورڈ…
 	Artboard from Layers…	تہوں سے آرٹ بورڈ…
-	Layer via Copy	کاپی کے ذریعے تہہ
-	Layer via Cut	کٹ کے ذریعے تہہ
+	Layer Via Copy	کاپی کے ذریعے تہہ
+	Layer Via Cut	کٹ کے ذریعے تہہ
 	Layer From Background…	پس منظر سے تہہ…
 	Layer from Background…	پس منظر سے تہہ…
 	Background from Layer	تہہ سے پس منظر
@@ -4018,7 +4018,7 @@ layerLabel	No Color	بلا رنگ
 	Scroll menu down	مینیو نیچے اسکرول کریں
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	آگے بڑھنے سے پہلے اس متن تہہ کو ریسٹرائز کرنا ضروری ہے۔ اس کا متن مزید قابل ترمیم نہیں رہے گا۔ کیا قسم کو ریسٹرائز کریں؟
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	آگے بڑھنے سے پہلے اس شکل تہہ کو ریسٹرائز کرنا ضروری ہے۔ یہ مزید شکل کے طور پر قابل ترمیم نہیں رہے گی۔ کیا شکل کو ریسٹرائز کریں؟
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	آگے بڑھنے سے پہلے اس سمارٹ آبجیکٹ کو ریسٹرائز کرنا ضروری ہے۔ اس کا مواد مزید قابل ترمیم نہیں رہے گا۔ کیا سمارٹ آبجیکٹ کو ریسٹرائز کریں؟
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	آگے بڑھنے سے پہلے اس سمارٹ آبجیکٹ کو ریسٹرائز کرنا ضروری ہے۔ اس کا مواد مزید قابل ترمیم نہیں رہے گا۔ کیا سمارٹ آبجیکٹ کو ریسٹرائز کریں؟
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	آگے بڑھنے سے پہلے اس بھرائی تہہ کو ریسٹرائز کرنا ضروری ہے۔ اس کا بھرائی مواد مزید قابل ترمیم نہیں رہے گا۔ کیا تہہ کو ریسٹرائز کریں؟
 	This layer must be rasterized before proceeding.	آگے بڑھنے سے پہلے اس تہہ کو ریسٹرائز کرنا ضروری ہے۔
 	Color Picker (Background Color)	رنگ چنندہ (پس منظر کا رنگ)

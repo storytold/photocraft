@@ -416,8 +416,8 @@
 	Artboard…	Obszar roboczy…
 	Artboard from Group…	Obszar roboczy z grupy…
 	Artboard from Layers…	Obszar roboczy z warstw…
-	Layer via Copy	Warstwa przez kopiowanie
-	Layer via Cut	Warstwa przez wycięcie
+	Layer Via Copy	Warstwa przez kopiowanie
+	Layer Via Cut	Warstwa przez wycięcie
 	Layer From Background…	Warstwa z tła…
 	Layer from Background…	Warstwa z tła…
 	Background From Layer	Tło z warstwy
@@ -4125,8 +4125,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Pasek skali szarości
 	Current Colors	Bieżące kolory
 	Make Ramp Web Safe	Ogranicz pasek do kolorów internetowych
+	Scroll All Windows	Przewijaj wszystkie okna
 	The path was kept as the Work Path	Ścieżka została zachowana jako ścieżka robocza
 	The path was discarded	Ścieżka została odrzucona
+# Art History Brush (#213).
 	Art History Brush Tool	Narzędzie Pędzel historii artystycznej
 	Tight Short	Ścisły krótki
 	Tight Medium	Ścisły średni
@@ -4224,6 +4226,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Wybierz inny dokument dla każdego kanału.
 	A picked document is no longer open.	Jeden z wybranych dokumentów nie jest już otwarty.
 	A picked document is no longer a grayscale document of the same size.	Jeden z wybranych dokumentów nie jest już dokumentem w skali szarości o tym samym rozmiarze.
+	Netscape Gray	Szarość Netscape
 # Move tool options bar (#11381)
 	Align top edges	Wyrównaj górne krawędzie
 	Align vertical centers	Wyrównaj środki w pionie
