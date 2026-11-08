@@ -516,8 +516,10 @@ fn mip_level(jx: [f64; 2]) -> u32 {
 }
 
 /// Box-filtered premultiplied levels `1..` of a window whose origin lies on the level grid of the
-/// whole source (texels outside the source are transparent): level `k`'s texel `(i, j)` averages
-/// the `2^k`-square texels of level `k - 1` below it, as one pyramid of the whole source would.
+/// whole source: level `k`'s texel `(i, j)` averages the texels of level `k - 1` below it, as one
+/// pyramid of the whole source would. A block the source's far edge cuts averages only the texels
+/// inside it (an odd-sized source's last row and column keep their alpha, as the reference
+/// application's probes at 99 and 90 px show); past the source, a tap reads transparency.
 /// With `steps`, every level is rounded to that many steps per unit, as the reference application
 /// keeps an 8-bit source's levels in 8 bits (its renders match only so).
 fn mip_levels(px: &[f32], fw: usize, fh: usize, n: usize, levels: u32, steps: Option<f32>) -> Vec<(Vec<f32>, usize, usize)> {
@@ -532,12 +534,14 @@ fn mip_levels(px: &[f32], fw: usize, fh: usize, n: usize, levels: u32, steps: Op
         for y in 0..nh {
             for x in 0..nw {
                 let o = (y * nw + x) * n;
+                let (kw, kh) = (if 2 * x + 1 < pw { 2 } else { 1 }, if 2 * y + 1 < ph { 2 } else { 1 });
+                let k = 1.0 / (kw * kh) as f32;
                 for (sy, sx) in [(2 * y, 2 * x), (2 * y, 2 * x + 1), (2 * y + 1, 2 * x), (2 * y + 1, 2 * x + 1)] {
                     if sx < pw && sy < ph {
                         let i = (sy * pw + sx) * n;
                         if let (Some(d), Some(s)) = (next.get_mut(o..o + n), prev.get(i..i + n)) {
                             for (d, s) in d.iter_mut().zip(s) {
-                                *d += 0.25 * s;
+                                *d += k * s;
                             }
                         }
                     }
@@ -1216,17 +1220,18 @@ mod tests {
     }
 
     #[test]
-    fn mip_levels_average_blocks_with_transparency_past_the_edge() {
-        // A 3 x 3 window of one channel: level 1 is 2 x 2, its far blocks part outside.
+    fn mip_levels_average_the_texels_inside_the_source() {
+        // A 3 x 3 window of one channel: level 1 is 2 x 2, its far blocks part outside, averaging
+        // only what is inside.
         let px: Vec<f32> = (1..=9).map(|v| v as f32).collect();
         let m = mip_levels(&px, 3, 3, 1, 2, None);
         assert_eq!((m[0].1, m[0].2), (2, 2));
-        assert_eq!(m[0].0, vec![(1.0 + 2.0 + 4.0 + 5.0) / 4.0, (3.0 + 6.0) / 4.0, (7.0 + 8.0) / 4.0, 9.0 / 4.0]);
+        assert_eq!(m[0].0, vec![(1.0 + 2.0 + 4.0 + 5.0) / 4.0, (3.0 + 6.0) / 2.0, (7.0 + 8.0) / 2.0, 9.0]);
         assert_eq!((m[1].1, m[1].2), (1, 1));
-        assert!((m[1].0[0] - 45.0 / 16.0).abs() < 1e-6);
+        assert!((m[1].0[0] - (3.0 + 4.5 + 7.5 + 9.0) / 4.0).abs() < 1e-6);
         assert!(mip_levels(&[], 0, 0, 4, 3, None).iter().all(|(p, _, _)| p.is_empty()));
-        // In 8 bits: 7 / 255 and three transparent texels average to 1.75 / 255, kept as 2 / 255.
-        let m = mip_levels(&[7.0 / 255.0, 0.0], 2, 1, 1, 1, Some(255.0));
+        // In 8 bits: 7 / 255 and three zeros average to 1.75 / 255, kept as 2 / 255.
+        let m = mip_levels(&[7.0 / 255.0, 0.0, 0.0, 0.0], 2, 2, 1, 1, Some(255.0));
         assert!((m[0].0[0] - 2.0 / 255.0).abs() < 1e-7);
     }
 
