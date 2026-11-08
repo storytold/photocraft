@@ -4,6 +4,8 @@
 //! floats so hue survives greys), so `ui.dialog.set` drives it; OK runs `tools.setColors`.
 //! While it is the top dialog the image is its eyedropper, as in Photoshop: the pointer over the
 //! canvas is a pipette, and a click or drag there samples into the new colour ([`sample_at`]).
+//! A picker for another dialog's colour field or the Crop shield shows its colour there before
+//! OK, and Cancel puts it back ([`live_preview`]).
 
 use egui::{Color32, Mesh, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_color::convert::{hsb_to_rgb, rgb_to_hsb};
@@ -190,19 +192,27 @@ pub fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], com
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
-/// Open the picker on `rgb` for a colour field of another dialog (e.g. Edit › Fill's Color…): OK
-/// writes `"#rrggbb"` into `field` of dialog `dialog`, which stays open; Cancel leaves it alone.
+/// Open the picker on `rgb` for a colour field of another dialog (e.g. Edit › Fill's Color…): the
+/// field shows the picked colour while the picker is open ([`live_preview`]); OK writes
+/// `"#rrggbb"` into `field` of dialog `dialog`, which stays open; Cancel puts it back as it was.
 pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialog: u64, field: &str) -> u64 {
     let mut f = fields_with_web(app, "field", label, rgb);
     f.insert("__dialog".into(), json!(dialog));
     f.insert("__field".into(), json!(field));
-    app.ui.open_dialog(DialogKind::Command, f)
+    let id = app.ui.open_dialog(DialogKind::Command, f);
+    live_preview::begin_field(app, id, dialog, field);
+    id
 }
 
 /// Open the picker on `rgb` for a colour the shell keeps itself (e.g. the Crop shield's custom
-/// colour): OK hands `"#rrggbb"` to `target`'s setter in [`confirm`]; Cancel leaves it alone.
+/// colour): OK hands `"#rrggbb"` to `target`'s setter in [`confirm`]; Cancel leaves it alone. The
+/// Crop shield shows the picked colour while the picker is open ([`live_preview`]).
 pub fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> u64 {
-    app.ui.open_dialog(DialogKind::Command, fields_with_web(app, target, label, rgb))
+    let id = app.ui.open_dialog(DialogKind::Command, fields_with_web(app, target, label, rgb));
+    if target == "cropShield" {
+        live_preview::begin_crop_shield(app, id);
+    }
+    id
 }
 
 /// Set by a dialog body (to the picker's title) to open the Color Picker on its `color` field.
@@ -261,6 +271,10 @@ fn set_field(f: &mut Map<String, Value>, field: &str, value: Value) -> Result<()
 
 /// Opens the Color Picker dialog `id`'s body asked for ([`request`], [`request_field`]), on its
 /// colour: OK sets that field of the dialog (not the foreground), Cancel leaves it as it was.
+///
+/// A dialog can provide `__pickColorDefault` when its field is a non-colour choice that has not
+/// yet been replaced by the picked colour. The temporary default seeds the picker without
+/// changing the parent field; it is removed before the picker opens.
 pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
     let Some(d) = app.ui.dialog_mut(id) else { return };
     let (title, field) = match d.fields.remove(REQUEST) {
@@ -272,7 +286,11 @@ pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
         }
         _ => return,
     };
-    let rgb = field_value(&d.fields, &field).and_then(parse_hex).unwrap_or([0.0; 3]);
+    let rgb = field_value(&d.fields, &field)
+        .and_then(parse_hex)
+        .or_else(|| d.fields.get("__pickColorDefault").and_then(Value::as_str).and_then(parse_hex))
+        .unwrap_or([0.0; 3]);
+    d.fields.remove("__pickColorDefault");
     open_for_field(app, &title, rgb, id, &field);
 }
 
@@ -562,15 +580,15 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     p.rect_filled(cur, 0.0, c32(orig));
     p.rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let click_cur = ui.interact(cur, ui.scope_id().with("cp-current"), Sense::click());
-    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
-    if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
+    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Click to restore the current color")));
+    if click_cur.on_hover_text(tl!("Click to restore the current color")).clicked() {
         set_rgb(f, orig, Keep::Nothing);
     }
     // Photoshop's warnings beside the swatch, each over a chip of the nearest colour that passes
     // (a click takes it): out of gamut for printing on top, not a web colour below.
     let x = sw.right() + 8.0;
-    let gamut = tl!("Out of gamut for printing: click for the nearest printable colour");
-    let web = tl!("Not a web colour: click for the nearest web colour");
+    let gamut = tl!("Out of gamut for printing: click for the nearest printable color");
+    let web = tl!("Not a web color: click for the nearest web color");
     for (slot, warning, tip) in [(0.0, out_of_gamut(rgb), gamut), (34.0, not_web_safe(rgb), web)] {
         let Some(near) = warning else { continue };
         let icon = Rect::from_min_size(pos2(x, sw.top() + 2.0 + slot), vec2(13.0, 13.0));
@@ -983,6 +1001,10 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
         crate::crop_shield::set_custom_color(app, color)?;
         return Ok(json!({ "color": color }));
     }
+    // The Artboard tool's custom background for the boards it draws (#11385).
+    if target == "artboardBackground" {
+        return crate::artboard_tool::bar::set_custom_background_from_picker(app, color, f.get("color") == f.get("__orig"));
+    }
     // The Note tool's colour for new notes (#2144).
     if target == "noteColor" {
         app.ui.analysis.note_color = parse_hex(color).ok_or("not a colour")?;
@@ -1003,6 +1025,8 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
     }
     Ok(r)
 }
+
+pub(crate) mod live_preview;
 
 #[cfg(test)]
 mod tests;
