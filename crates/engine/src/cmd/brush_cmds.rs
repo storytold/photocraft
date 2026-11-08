@@ -249,7 +249,8 @@ fn damage_json(s: &mut Session, dmg: Rect) -> Value {
 fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option<photocraft_doc::LayerId>, BrushSettings, f32)> {
     let gray = is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some();
     let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
-    let brush = if gray && brush.erase { BrushSettings { erase: false, color: s.tools.background, ..brush } } else { brush };
+    let brush =
+        if gray && brush.erase { BrushSettings { erase: false, color: crate::color_cmds::swatch_in_doc(s, s.tools.background), ..brush } } else { brush };
     Ok((id, brush, num(p, "zoom").unwrap_or(1.0)))
 }
 
@@ -271,7 +272,7 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
-    let bg = s.tools.background;
+    let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
@@ -614,7 +615,7 @@ impl LiveStroke {
         let sel = doc.selection.clone();
         let table = crate::mode_cmds::paint_color_table(&doc, p);
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
-        erase_locked(&mut brush, lock, s.tools.background);
+        erase_locked(&mut brush, lock, crate::color_cmds::swatch_in_doc(s, s.tools.background));
         if pencil && flag(p, "autoErase", false) {
             let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);

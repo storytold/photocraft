@@ -344,6 +344,8 @@ mod brush_pressure_size_default_tests;
 #[cfg(test)]
 mod embed_all_linked_tests;
 #[cfg(test)]
+mod eraser_gray_background_tests;
+#[cfg(test)]
 mod fill_layer_mode_tests;
 #[cfg(test)]
 mod pattern_mode_tests;

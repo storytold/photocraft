@@ -560,6 +560,28 @@ pub fn document_profile(doc: &Document) -> Arc<Profile> {
         .unwrap_or_else(|| working_profile(doc.mode))
 }
 
+/// A swatch colour (straight RGB in the RGB working space, as the foreground and background hold
+/// it) as the active document takes it. In a Grayscale document that is the colour's gray in the
+/// document's gray profile, through `photocraft-cms` (relative colorimetric with black point
+/// compensation, Photoshop's default), returned as equal R, G and B so the pixel conversion keeps
+/// it: RGB 0,200,0 becomes gray 153 with the default Dot Gain 20%-compatible profile, not its
+/// Rec.601 luma 117 (#11940; the reference measures 173, an open question on the issue). Other
+/// modes, and a failed conversion, keep the colour.
+pub fn swatch_in_doc(s: &Session, c: [f32; 4]) -> [f32; 4] {
+    let Some(st) = s.active().filter(|st| st.doc.mode == ColorMode::Grayscale) else { return c };
+    let opts = photocraft_cms::TransformOptions { intent: Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let Ok(t) = photocraft_cms::cached(&working_profile(ColorMode::Rgb), &document_profile(&st.doc), opts) else { return c };
+    let mut out = [0.0f32; 16];
+    t.eval(&[c[0], c[1], c[2]], &mut out);
+    let g = out[0];
+    if g.is_finite() {
+        let g = g.clamp(0.0, 1.0);
+        [g, g, g, c[3]]
+    } else {
+        c
+    }
+}
+
 /// Profile describing the compositor's RGB output for this document (see the module docs).
 pub fn composite_profile(doc: &Document) -> Arc<Profile> {
     match mode_space(doc.mode) {
