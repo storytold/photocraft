@@ -875,6 +875,33 @@ fn a_dialogless_export_remembers_its_folder() {
     assert_eq!(app.session.prefs().file_handling.last_save_folder, tmp.path().to_string_lossy());
 }
 
+/// #9656 review: the real Quick Export beside a PSD (Same Folder, no dialog) writes the file and
+/// then remembers that folder, for the preference and for the document; one that cannot be
+/// written remembers nothing.
+#[test]
+fn a_quick_export_beside_the_document_remembers_its_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_string_lossy().into_owned();
+    app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    app.session.active_mut().unwrap().path = Some(joined(&dir, "photo.psd"));
+    assert!(app.session.prefs().file_handling.last_save_folder.is_empty());
+    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(open.borrow().is_empty(), "no dialog");
+    assert!(std::fs::read(tmp.path().join("photo.png")).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"), "the export was written");
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, dir);
+    assert_eq!(app.save_dirs.get(&doc).map(|p| p.to_string_lossy().into_owned()), Some(dir.clone()));
+    // Beside a "folder" that is really a file, the export cannot be written and the remembered
+    // folder stays put.
+    std::fs::write(tmp.path().join("blocker"), b"a file").unwrap();
+    app.session.active_mut().unwrap().path = Some(joined(&joined(&dir, "blocker"), "other.psd"));
+    assert!(menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).is_err());
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, dir, "a failed export moves nothing");
+}
+
 /// #9656 review: a remembered folder that no longer exists is not offered; the dialog starts
 /// beside the document instead.
 #[test]
