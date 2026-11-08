@@ -1,6 +1,6 @@
 use super::curvature::{curvature_hit, curvature_refresh};
 use super::options::selected_shape;
-use super::path_ops::{active_shape_path, targeted_vector_mask, work_path_shown};
+use super::path_ops::{targeted_vector_mask, targeted_vector_mask_id, work_path_shown};
 use super::shapes::{fill_param, stroke_param};
 use super::{Document, LayerContent, Path, PenPath, PhotocraftApp, Resumed, Tokens, Tool, ToolOptions, Value, json, vec2};
 
@@ -34,6 +34,12 @@ pub fn closes_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
     }
 }
 
+/// Would a Pen click at `(x, y)` carry on an open path from its endpoint there (#6593)? The canvas
+/// shows the continue-path pointer there (#9356), as the endpoints look like any anchor.
+pub fn continues_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
+    tool == Tool::Pen && app.ui.pen.as_ref().is_none_or(|p| p.knots.is_empty()) && resume_at(app, x, y, 6.0 / app.point_zoom().max(0.01) as f64).is_some()
+}
+
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles). With ⇧ a new anchor
 /// lands on the nearest 45° ray from the previous one, at the pointer's projection onto it.
@@ -47,10 +53,12 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
     }
     // A press on an endpoint of an open path carries on drawing it, as in Photoshop (#6593): the
     // press then acts on its last anchor, so a drag pulls out the next segment's handle.
+    let mut resuming = false;
     if app.ui.pen.as_ref().is_none_or(|p| p.knots.is_empty())
         && let Some(resumed) = resume_at(app, x, y, tol)
     {
         app.ui.pen = Some(resumed);
+        resuming = true;
     }
     let Some(owner) = capture_pen_owner(app) else { return };
     let pen = app.ui.pen.get_or_insert_with(PenPath::default);
@@ -61,7 +69,10 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
     pen.adjusting_in = false;
     pen.last_pointer = Some([x, y]);
     pen.reposition = false;
+    // The press that carries a path on never closes it, even when its other end is in reach too:
+    // the canvas showed the continue-path pointer there (`continues_path_at`).
     if let Some(first) = pen.knots.first().map(|k| k[0])
+        && !resuming
         && on_closing_anchor(pen, x, y, tol)
     {
         // Pressing the first anchor closes the path on release. Until then a stand-in for it
@@ -509,48 +520,85 @@ fn doc_path<'a>(doc: &'a Document, name: &str) -> Option<&'a Path> {
     if name == "work" { doc.work_path.as_ref() } else { doc.paths.iter().find(|p| p.name == name).map(|p| &p.path) }
 }
 
-/// The open subpath that has its first or last anchor at `(x, y)`, as a Pen path to carry on
-/// drawing from there (#6593): of a targeted vector mask, else in Shape mode of the selected shape
-/// layer, else of the path a new Pen path would join (the one selected in the Paths panel, else
-/// the work path). Its knots run towards that anchor: reversed, handles swapped, when it is the
-/// first.
-fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option<PenPath> {
+/// The path a Pen path carries on (#6593): a targeted vector mask, else in Shape mode the
+/// selected shape layer's, else the path a new Pen path would join (the one selected in the Paths
+/// panel, else the work path). Its Paths-panel name ("layer" for a layer's), layer and path.
+fn resume_target(app: &PhotocraftApp) -> Option<(String, Option<u64>, &Path)> {
     let st = app.session.active()?;
-    let doc = st.doc.id.0;
-    let (name, layer, path) = if let Some((id, p)) = targeted_vector_mask(app) {
-        ("layer".to_string(), Some(id), p)
-    } else if app.ui.tool_options.vector_mode == "shape" {
-        let (id, p) = active_shape_path(app)?;
-        ("layer".to_string(), Some(id), p)
-    } else {
-        let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
-        // A Work Path hidden by Make Selection isn't carried on: a new path replaces it (#6079).
-        if name == "work" && !work_path_shown(app) {
-            return None;
+    // Borrowed, not cloned: the canvas asks on every hover (`continues_path_at`).
+    if let Some(id) = targeted_vector_mask_id(app) {
+        let mask = st.doc.layer(photocraft_doc::LayerId(id))?.vector_mask.as_ref()?;
+        return Some(("layer".to_string(), Some(id), &mask.path));
+    }
+    if app.ui.tool_options.vector_mode == "shape" {
+        let l = st.active_layer.and_then(|id| st.doc.layer(id))?;
+        let LayerContent::Shape(sh) = &l.content else { return None };
+        return Some(("layer".to_string(), Some(l.id.0), &sh.path));
+    }
+    let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
+    // A Work Path hidden by Make Selection isn't carried on: a new path replaces it (#6079).
+    if name == "work" && !work_path_shown(app) {
+        return None;
+    }
+    let p = doc_path(&st.doc, &name)?;
+    Some((name, None, p))
+}
+
+/// Subpath `index` of the path a Pen path carries on, as a Pen path to carry on drawing from its
+/// last anchor, or from its first when `reversed`: then its knots run backwards, handles swapped.
+fn resumed(doc: u64, name: String, layer: Option<u64>, index: usize, sub: &photocraft_doc::vector::Subpath, reversed: bool) -> PenPath {
+    let mut knots: Vec<_> = sub.knots.iter().map(|k| (knot_points(k), k.smooth)).collect();
+    if reversed {
+        knots.reverse();
+        for (k, _) in &mut knots {
+            k.swap(1, 2);
         }
-        let p = doc_path(&st.doc, &name)?.clone();
-        (name, None, p)
+    }
+    let unlinked = knots.iter().enumerate().filter(|(_, (_, smooth))| !smooth).map(|(i, _)| i).collect();
+    let resumes = Resumed { doc, path: name, layer, index, was: sub.clone() };
+    PenPath { knots: knots.into_iter().map(|(k, _)| k).collect(), unlinked, resumes: Some(resumes), ..Default::default() }
+}
+
+/// The open subpath that has its first or last anchor at `(x, y)` in the path a Pen path carries
+/// on ([`resume_target`]), as a Pen path to carry on drawing from there (#6593).
+pub(super) fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option<PenPath> {
+    let doc = app.session.active()?.doc.id.0;
+    let (name, layer, path) = resume_target(app)?;
+    let dist = |k: &photocraft_doc::Knot| (k.anchor.x - x).hypot(k.anchor.y - y);
+    // With several ends in reach (a short path, or ends of two subpaths close together, zoomed
+    // out) the nearest one is carried on; on a tie the last anchor, then the earlier subpath.
+    let ends =
+        path.subpaths.iter().enumerate().filter(|(_, s)| !s.closed).flat_map(|(i, s)| {
+            [(s.knots.last(), false), (s.knots.first(), true)].into_iter().filter_map(move |(k, reversed)| Some((i, s, reversed, dist(k?))))
+        });
+    let (i, s, reversed, _) = ends.filter(|e| e.3 < tol).reduce(|best, e| if e.3 < best.3 { e } else { best })?;
+    Some(resumed(doc, name, layer, i, s, reversed))
+}
+
+/// The endpoint Direct Selection has selected ([`crate::direct_select::selected_open_end`]), as
+/// a Pen path carrying its very subpath on from it (#10726). `None` unless that endpoint is in
+/// the path a Pen path carries on ([`resume_target`]): one in another path starts a new one.
+pub(super) fn resume_selected(app: &PhotocraftApp) -> Option<PenPath> {
+    let (target, index, knot) = crate::direct_select::selected_open_end(app)?;
+    let st = app.session.active()?;
+    let (name, layer, path) = resume_target(app)?;
+    let carried = match layer {
+        Some(id) => crate::direct_select::PathRef::Layer(id),
+        None if name == "work" => crate::direct_select::PathRef::Work,
+        None => crate::direct_select::PathRef::Saved(st.doc.paths.iter().position(|p| p.name == name)?),
     };
-    let near = |k: &photocraft_doc::Knot| (k.anchor.x - x).hypot(k.anchor.y - y) < tol;
-    path.subpaths.iter().enumerate().filter(|(_, s)| !s.closed).find_map(|(i, s)| {
-        let reversed = if s.knots.last().is_some_and(near) {
-            false
-        } else if s.knots.first().is_some_and(near) {
-            true
-        } else {
-            return None;
-        };
-        let mut knots: Vec<_> = s.knots.iter().map(|k| (knot_points(k), k.smooth)).collect();
-        if reversed {
-            knots.reverse();
-            for (k, _) in &mut knots {
-                k.swap(1, 2);
-            }
-        }
-        let unlinked = knots.iter().enumerate().filter(|(_, (_, smooth))| !smooth).map(|(i, _)| i).collect();
-        let resumes = Resumed { doc, path: name.clone(), layer, index: i, was: s.clone() };
-        Some(PenPath { knots: knots.into_iter().map(|(k, _)| k).collect(), unlinked, resumes: Some(resumes), ..Default::default() })
-    })
+    if carried != target {
+        return None;
+    }
+    let sub = path.subpaths.get(index).filter(|s| !s.closed)?;
+    let reversed = if knot + 1 == sub.knots.len() {
+        false
+    } else if knot == 0 {
+        true
+    } else {
+        return None;
+    };
+    Some(resumed(st.doc.id.0, name, layer, index, sub, reversed))
 }
 
 /// The resumed path with its subpath carried on: the one subpath of `drawn` takes the old one's

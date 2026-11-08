@@ -1380,6 +1380,22 @@ fn restored_brush_settings_are_clamped_or_rejected() {
     }
 }
 
+/// #11812: a brush remembered at 0 % opacity (saved before the 1 % floor) reads back at 1 %, the
+/// value its options-bar field shows, so it paints instead of laying down nothing.
+#[test]
+fn restored_brush_opacity_floors_at_one_percent() {
+    let s = Session::new();
+    for opacity in [0.0, -1.0, 0.004] {
+        let b = restored_settings(&s, &json!({"opacity": opacity})).unwrap();
+        assert_eq!(b.opacity, 0.01, "{opacity}");
+    }
+    assert_eq!(restored_settings(&s, &json!({"opacity": 0.37})).unwrap().opacity, 0.37, "values above the floor are kept");
+    let mut t = Session::new();
+    t.prefs.edit(|p| p.last_brush = json!({"brush": {"opacity": 0.0}}));
+    restore_brush(&mut t);
+    assert_eq!(t.tools.brush.opacity, 0.01, "the remembered session brush");
+}
+
 #[test]
 fn remembered_brushes_never_embed_large_bitmaps() {
     use std::sync::Arc;
