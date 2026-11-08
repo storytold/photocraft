@@ -4,6 +4,7 @@
 //! Colours are compared in the surface's own colour channels (RGB, CMYK, Gray, Lab… at any depth),
 //! so nothing is converted through RGB; only alpha changes.
 
+use photocraft_color::{SampleType, read_sample, write_sample};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba};
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,15 @@ fn protected_distance(d: f32, tol: f32, limit: f32) -> f32 {
     d * (tol / limit)
 }
 
+/// `v` as the document stores it: rounded to the 8- or 16-bit levels, unchanged in 32-bit float.
+/// The sampled colour is read from stored pixels, so the foreground is compared at the same
+/// precision; otherwise a foreground between two levels misses its own stored colour (#11903).
+fn at_sample_precision(sample: SampleType, v: f32) -> f32 {
+    let mut bytes = [0u8; 4];
+    write_sample(&mut bytes, sample, 0, v);
+    read_sample(&bytes, sample, 0)
+}
+
 /// Erase along `stroke`. The brush opacity is ignored (Photoshop's Background Eraser has none);
 /// the selection limits the effect. Returns the damaged rectangle; empty when the surface has no
 /// alpha channel.
@@ -90,7 +100,7 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
     let soft = bs.limits != Limits::FindEdges;
     let native = |c: [f32; 4]| -> Vec<f32> { from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec() };
     let swatch = native(bs.background);
-    let fg = native(bs.foreground);
+    let fg: Vec<f32> = native(bs.foreground).into_iter().map(|v| at_sample_precision(fmt.sample, v)).collect();
     let (sampling, limits, protect_foreground) = (bs.sampling, bs.limits, bs.protect_foreground);
     let mut once: Option<Option<Vec<f32>>> = None;
     let match_w = move |d: f32| -> f32 {

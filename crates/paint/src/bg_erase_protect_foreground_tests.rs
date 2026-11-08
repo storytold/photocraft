@@ -130,10 +130,9 @@ fn find_edges_keeps_the_foreground_colour_itself() {
 #[test]
 fn protect_off_is_unchanged() {
     // The drag without protection, as main gives it before the graded erase of #11901: today's
-    // pre-stroke matching over overlapping dabs. Pinned so the protection change cannot leak in.
-    let off = drag(PixelFormat::RGBA8, None);
-    assert_eq!(off[0], 0);
-    assert_eq!(off[7], 255);
+    // pre-stroke matching over overlapping dabs. The whole row is pinned so the protection change
+    // cannot leak in (#11901 will change it to the reference's 0 30 75 114 156 198 238 255).
+    assert_eq!(drag(PixelFormat::RGBA8, None), [0, 0, 0, 0, 0, 0, 92, 255]);
     let mut s = blocks(PixelFormat::RGBA8);
     let mut t = s.clone();
     let on_far = BgEraseSettings { foreground: [0.0, 0.0, 1.0, 1.0], protect_foreground: true, ..settings(None) };
@@ -170,5 +169,39 @@ fn protection_works_in_the_documents_own_channels() {
     assert_eq!(a[0], 0.0, "gray: the sample erased, {a:?}");
     for (i, v) in a.iter().enumerate().skip(3) {
         assert_eq!(*v, 1.0, "gray: block {i} kept, {a:?}");
+    }
+}
+
+#[test]
+fn the_foreground_is_matched_at_the_documents_precision() {
+    // Mid grey 0.5 lies between two 8-bit (and 16-bit) levels and is stored one level up, nearer
+    // white. The stored foreground colour must still count as the foreground, and a foreground
+    // that is stored as the sampled colour must still protect everything.
+    let grey = [0.5, 0.5, 0.5, 1.0];
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let fmt = PixelFormat::new(mode, sample, true);
+            let bs = BgEraseSettings {
+                sampling: Sampling::Once,
+                limits: Limits::FindEdges,
+                tolerance: 1.0,
+                protect_foreground: true,
+                foreground: grey,
+                ..Default::default()
+            };
+            // White (the sample) next to the foreground grey.
+            let mut s = Surface::new(fmt);
+            s.fill_rect(Rect::new(0, 0, 100, 100), &from_rgba(&fmt, [1.0; 4]));
+            s.fill_rect(Rect::new(100, 0, 200, 100), &from_rgba(&fmt, grey));
+            apply_background_eraser(&mut s, &stroke(&[(50.0, 50.0), (150.0, 50.0)]), &bs, None);
+            assert_eq!(s.rgba(50, 50)[3], 0.0, "{fmt:?}: the sample erased");
+            assert_eq!(s.rgba(150, 50)[3], 1.0, "{fmt:?}: the stored foreground colour kept");
+            // The foreground grey is also the sample.
+            let mut s = Surface::new(fmt);
+            s.fill_rect(Rect::new(0, 0, 200, 100), &from_rgba(&fmt, grey));
+            let t = s.clone();
+            apply_background_eraser(&mut s, &stroke(&[(50.0, 50.0), (150.0, 50.0)]), &bs, None);
+            assert_eq!(s, t, "{fmt:?}: a foreground stored as the sample erases nothing");
+        }
     }
 }
