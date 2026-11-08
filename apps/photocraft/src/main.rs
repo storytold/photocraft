@@ -759,11 +759,7 @@ fn main() -> eframe::Result {
         // An error after the window has shown is a lost window (on Wayland, the compositor
         // dropping a client that stopped answering), not a failed start.
         let started = window_shown.load(std::sync::atomic::Ordering::Relaxed);
-        if started {
-            log::error!("PhotoCraft closed unexpectedly: {error}");
-        } else {
-            log::error!("PhotoCraft could not start: {error}");
-        }
+        log::error!("{}: {error}", startup_report::log_headline(started));
         if startup_report::needs_dialog(control_port.is_some()) {
             startup_report::show(&error.to_string(), &started_renderer, started_note.as_deref(), logger.and_then(logging::AppLogger::path).as_deref(), started);
         }

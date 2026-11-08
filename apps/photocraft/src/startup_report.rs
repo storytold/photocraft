@@ -61,21 +61,49 @@ fn body(headline: &str, error: &str, renderer: &str, note: Option<&str>, version
     text
 }
 
-/// Show [`text`] in a native error dialog. Called after the event loop returned, so nothing is
-/// repainting and the launch was about to fail anyway.
-/// `started`: the window had shown its first frames (see [`closed_text`]).
+/// How a launch that ended with an error is reported: after the window had shown its first
+/// frames it closed unexpectedly; before that it could not start.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Report {
+    /// The dialog's title, translated (each wording is a literal at its call, for the catalogs).
+    pub title: &'static str,
+    /// The dialog's text: [`closed_text`] or [`text`].
+    pub body: String,
+    /// Which dialog, for the log.
+    pub kind: &'static str,
+}
+
+/// The log line's headline for a launch that ended with an error, in English like the rest of
+/// the log; `started`: the window had shown its first frames.
+pub fn log_headline(started: bool) -> &'static str {
+    if started { "PhotoCraft closed unexpectedly" } else { "PhotoCraft could not start" }
+}
+
+/// The [`Report`] for a launch that ended with `error`; `started`: the window had shown its first
+/// frames.
+pub fn report(started: bool, error: &str, renderer: &str, note: Option<&str>, version: &str, log: Option<&Path>) -> Report {
+    if started {
+        Report {
+            title: photocraft_ui_egui::i18n::t("PhotoCraft closed unexpectedly"),
+            body: closed_text(error, renderer, note, version, log),
+            kind: "unexpected-exit",
+        }
+    } else {
+        Report { title: photocraft_ui_egui::i18n::t("PhotoCraft could not start"), body: text(error, renderer, note, version, log), kind: "startup-failure" }
+    }
+}
+
+/// Show the [`report`] for a launch that ended with `error` in a native error dialog: "could not
+/// start" when the window never showed its first frames (`started` false), "closed unexpectedly"
+/// when it did. Called after the event loop returned, so nothing is repainting any more.
 pub fn show(error: &str, renderer: &str, note: Option<&str>, log: Option<&Path>, started: bool) {
     let version = photocraft_engine::build_info::long_version();
-    let (body, title) = if started {
-        (closed_text(error, renderer, note, &version, log), "PhotoCraft closed unexpectedly")
-    } else {
-        (text(error, renderer, note, &version, log), "PhotoCraft could not start")
-    };
-    log::info!("showing the {} dialog", if started { "unexpected-exit" } else { "startup-failure" });
+    let report = report(started, error, renderer, note, &version, log);
+    log::info!("showing the {} dialog", report.kind);
     let _ = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
-        .set_title(photocraft_ui_egui::i18n::t(title))
-        .set_description(body)
+        .set_title(report.title)
+        .set_description(report.body)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
 }
@@ -112,11 +140,37 @@ mod tests {
 
     #[test]
     fn a_window_lost_after_starting_does_not_say_it_could_not_start() {
-        let body = closed_text("winit EventLoopError: Exit Failure: 1", "vulkan", None, "0.18.0", None);
-        assert!(body.contains("closed unexpectedly"), "{body:?}");
+        let log = Path::new("/home/me/.config/photocraft/logs/photocraft.log");
+        let note = "the previous start didn't finish on vulkan; using gl";
+        let body = closed_text("winit EventLoopError: Exit Failure: 1", "gl", Some(note), "0.18.0", Some(log));
+        let startup = format!("Startup: {note}");
+        for part in [
+            "closed unexpectedly",
+            "may be offered for recovery at the next start",
+            "winit EventLoopError: Exit Failure: 1",
+            "Renderer: gl",
+            startup.as_str(),
+            "Version: 0.18.0",
+            "Log file: /home/me/.config/photocraft/logs/photocraft.log",
+        ] {
+            assert!(body.contains(part), "{part:?} missing from {body:?}");
+        }
         assert!(!body.contains("could not start"), "{body:?}");
-        assert!(body.contains("Renderer: vulkan"), "{body:?}");
-        assert!(body.contains("may be offered for recovery at the next start"), "{body:?}");
+    }
+
+    #[test]
+    fn the_report_follows_whether_the_window_had_shown() {
+        let closed = report(true, "boom", "vulkan", None, "0.18.0", None);
+        assert_eq!((closed.title, closed.kind), ("PhotoCraft closed unexpectedly", "unexpected-exit"));
+        assert_eq!(closed.body, closed_text("boom", "vulkan", None, "0.18.0", None));
+        assert_eq!(log_headline(true), "PhotoCraft closed unexpectedly");
+
+        let failed = report(false, "boom", "vulkan", None, "0.18.0", None);
+        assert_eq!((failed.title, failed.kind), ("PhotoCraft could not start", "startup-failure"));
+        assert_eq!(failed.body, text("boom", "vulkan", None, "0.18.0", None));
+        assert!(failed.body.contains("could not start"), "{:?}", failed.body);
+        assert!(!failed.body.contains("recovery") && !failed.body.contains("closed unexpectedly"), "{:?}", failed.body);
+        assert_eq!(log_headline(false), "PhotoCraft could not start");
     }
 
     /// A crash fallback is the confusing case: the app picks a renderer the user never chose, so
