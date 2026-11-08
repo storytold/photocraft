@@ -334,6 +334,62 @@ fn text_field_bounds_an_oversized_existing_value() {
     assert!(h.state().chars().count() < super::TEXT_FIELD_LIMIT, "an edit keeps the bounded copy");
 }
 
+/// Draws a text field holding "hello", clicks at `at(field rect)` and types "X": the text after
+/// that, and whether the editor had the focus.
+fn click_text_field_then_type(at: impl Fn(egui::Rect) -> egui::Pos2) -> (String, bool) {
+    let id = egui::Id::unique("tf");
+    let mut h = Harness::new_ui_state(
+        move |ui, s: &mut (String, egui::Rect, bool)| {
+            let before = ui.cursor().min;
+            super::text_field(ui, id, &mut s.0, "", 140.0, false).accessible_name("Value");
+            s.1 = egui::Rect::from_min_size(before, egui::vec2(140.0, super::TEXT_FIELD_H));
+            s.2 = ui.memory(|m| m.has_focus(id));
+        },
+        ("hello".to_owned(), egui::Rect::NOTHING, false),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run();
+    let pos = at(h.state().1);
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run();
+    }
+    let focused = h.state().2;
+    h.event(egui::Event::Text("X".into()));
+    h.run();
+    (h.state().0.clone(), focused)
+}
+
+/// #12302: a click in a text field's padding, on any side, focuses its editor with the caret at
+/// the nearest point inside it: the start from the left, the end from the right. egui hands a
+/// click within `interact_radius` (5 pt) of the editor to it already, so these click half a point
+/// in from the box's edge, past that reach on the 6 pt sides.
+#[test]
+fn text_field_padding_click_focuses_the_editor() {
+    let left = |r: egui::Rect| egui::pos2(r.left() + 0.5, r.center().y);
+    let right = |r: egui::Rect| egui::pos2(r.right() - 0.5, r.center().y);
+    assert_eq!(click_text_field_then_type(left), ("Xhello".to_owned(), true), "left padding");
+    assert_eq!(click_text_field_then_type(right), ("helloX".to_owned(), true), "right padding");
+    // Above and below the text, the caret goes where a click straight down (or up) into the
+    // editor puts it, in the middle of "hello" here.
+    let mid_x = |r: egui::Rect| r.left() + 20.0;
+    let inside = click_text_field_then_type(|r| egui::pos2(mid_x(r), r.center().y));
+    let top = click_text_field_then_type(|r| egui::pos2(mid_x(r), r.top() + 0.5));
+    let bottom = click_text_field_then_type(|r| egui::pos2(mid_x(r), r.bottom() - 0.5));
+    assert_eq!(top, inside, "top padding");
+    assert_eq!(bottom, inside, "bottom padding");
+}
+
+/// #12302: a click inside the editor keeps egui's own focus and caret placement: the box behind
+/// it doesn't take the click.
+#[test]
+fn text_field_editor_click_places_the_caret_at_the_pointer() {
+    let (text, focused) = click_text_field_then_type(|r| egui::pos2(r.left() + 20.0, r.center().y));
+    assert!(focused);
+    assert!(text.starts_with("he") && text.ends_with("lo") && text.len() == 6, "the X lands inside the word: {text:?}");
+}
+
 /// #2150: text queued by the control channel (`ui.type`) joins the input in `raw_input_hook`
 /// and is cut like the OS's, so the cap must run after it is appended.
 #[test]

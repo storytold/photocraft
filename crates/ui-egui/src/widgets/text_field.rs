@@ -76,7 +76,9 @@ fn text_field_in(
     char_limit: Option<usize>,
 ) -> (Response, Rect) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::hover());
+    // The box senses clicks so one in its padding reaches the editor (#12302), but not focus: Tab
+    // still stops on the editor alone.
+    let (rect, frame) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::CLICK);
     surface(ui, rect, t.field, false);
     if !t.bevel {
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
@@ -110,7 +112,21 @@ fn text_field_in(
     // The theme's 24 pt interact height would make the edit taller than the box's inside.
     child.spacing_mut().interact_size.y = inner.height();
     child.style_mut().visuals.selection.bg_fill = t.field_selection();
-    let response = child.add(edit);
+    let output = edit.show(&mut child);
+    let response = output.response.response;
+    // The editor sits on top of the box, so only a click in the padding lands here: it focuses
+    // the editor with the caret where a click at the nearest point inside it would put it.
+    if frame.clicked()
+        && let Some(pos) = frame.interact_pointer_pos()
+    {
+        let at = pos.clamp(response.rect.min, response.rect.max);
+        let cursor = output.galley.cursor_from_pos(at - output.galley_pos + vec2(output.galley.rect.left(), 0.0));
+        let mut state = output.state;
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
+        state.store(ui.ctx(), id);
+        ui.memory_mut(|m| m.request_focus(id));
+        ui.ctx().request_repaint();
+    }
     if let Some(b) = bounded
         && response.changed()
     {
