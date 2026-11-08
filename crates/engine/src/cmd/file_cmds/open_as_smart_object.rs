@@ -87,6 +87,8 @@ fn apply(
     let color = s.color.open_policy(&mut doc, s.prefs().file_handling.ignore_exif_profile_tag);
     let index = admit_as_smart_object(s, doc);
     let id = s.documents().get(index).map(|st| st.doc.id.0);
+    // Admission numbers the document again, so the reply reads the name it was admitted under.
+    let name = s.documents().get(index).map_or(name, |st| st.doc.name.clone());
     Ok(json!({"document": index, "docId": id, "name": name, "layer": layer_id.0, "warnings": warnings, "color": color, "smartObject": true}))
 }
 

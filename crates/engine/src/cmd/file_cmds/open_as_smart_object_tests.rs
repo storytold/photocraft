@@ -349,3 +349,19 @@ fn a_cancelled_hold_frees_its_number_for_the_one_admitted_after_it() {
     admit_as_smart_object(&mut s, b);
     assert_eq!(names(&s), ["photo-1"], "the first free number is taken at admission, with no collision");
 }
+
+#[test]
+fn the_reply_names_the_document_as_admitted() {
+    let dir = tmp("reply-name");
+    let path = write_psd16(&dir, "photo.psd", 20, 20);
+    let mut s = Session::new();
+    s.execute("edit.colorSettings", json!({"askOnMismatch": true})).unwrap();
+    let held = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    assert_eq!(held["name"], "photo-1", "{held}");
+    assert!(held["held"].is_u64(), "{held}");
+    // The next open skips the prompt: photo-1 is held, so the number read was 2, but admission takes the first free one.
+    s.execute("edit.colorSettings", json!({"askOnMismatch": false})).unwrap();
+    let r = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    assert_eq!(names(&s), ["photo-1"], "{r}");
+    assert_eq!(r["name"], "photo-1", "the reply carries the name the document was admitted under: {r}");
+}
