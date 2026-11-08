@@ -20,9 +20,10 @@ pub enum OsEvent {
     Quit,
 }
 
-/// Where files dropped on the window land, as in the reference app. winit 0.30's drops carry no
-/// position, so it comes from the OS ([`Services::cursor_pos`](crate::Services::cursor_pos));
-/// unknown counts as elsewhere.
+/// Where files dropped on the window land, as in the reference app. Drop targeting uses the native
+/// file-drag position (`egui::RawInput::file_drag_pos`) when available, falling back to the OS
+/// cursor service ([`Services::cursor_pos`](crate::Services::cursor_pos)) and, on non-Wayland
+/// platforms, egui's last pointer position; unknown counts as elsewhere.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DropTarget {
     /// The active document's canvas: placed as layers (Place Embedded), each in Free Transform.
@@ -334,10 +335,14 @@ impl PhotocraftApp {
         }
     }
 
-    /// The pointer position, from the OS cursor service when available, falling back to egui's
-    /// last-known pointer position (e.g. on Wayland).
+    /// The pointer position for file-drop routing and hover feedback: uses the native file-drag
+    /// position when present (Wayland `wl_data_device` enter and motion), falling back to the OS
+    /// cursor service ([`Services::cursor_pos`](crate::Services::cursor_pos)) and, on non-Wayland
+    /// platforms, egui's last-known pointer position.
     pub(crate) fn cursor_pos(&mut self, ctx: &egui::Context) -> Option<egui::Pos2> {
-        self.services.cursor_pos.as_mut().and_then(|f| f(ctx)).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
+        ctx.input(|i| i.raw.file_drag_pos)
+            .or_else(|| self.services.cursor_pos.as_mut().and_then(|f| f(ctx)))
+            .or_else(|| (!self.services.is_wayland).then(|| ctx.input(|i| i.pointer.latest_pos())).flatten())
     }
 
     /// Which of the files called `names`, dropped onto the window just now, are placed on the

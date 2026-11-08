@@ -541,9 +541,10 @@ pub struct Services {
     pub append_text: Option<AppendTextFn>,
     /// OS requests (macOS open-documents / quit Apple events), polled every frame.
     pub os_events: Option<OsEventsFn>,
-    /// The pointer position read from the OS (desktop) or from the page's drag events (web):
-    /// file drops carry none, and the window gets no pointer events during an OS drag (see
-    /// `file_open::DropTarget`).
+    /// The pointer position read from the OS (desktop) or from the page's drag events (web), used
+    /// when no native file-drag position (`egui::RawInput::file_drag_pos`) is present: file drops
+    /// on X11, Windows, and macOS carry no position, and the window gets no pointer events during
+    /// an OS drag (see `file_open::DropTarget`).
     pub cursor_pos: Option<CursorPosFn>,
     /// Caps Lock toggled on (desktop; `None` on Wayland and the web). Read once per frame, so
     /// the canvas can show the precise crosshair for painting tools, whatever the preference.

@@ -1734,3 +1734,195 @@ fn open_as_smart_object_opens_in_the_background_in_name_order() {
     assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Send a native `winit::event::WindowEvent` through `egui_winit`'s file-drag converter with a
+/// scaled window factor (`pixels_per_point`).
+fn send_wayland_drag_event(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, pixels_per_point: f32, event: &eframe::winit::event::WindowEvent) {
+    let resp = eframe::egui_winit::on_file_drag_window_event(h.input_mut(), pixels_per_point, event);
+    assert!(resp.repaint && !resp.consumed);
+}
+
+/// Convert a logical window position to physical pixels at `pixels_per_point` (matching `winit`'s
+/// `LogicalPosition::to_physical` in `push_file_drag_moved`) and emit `HoveredFileMoved`.
+fn send_wayland_drag_moved(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, pixels_per_point: f32, logical_pos: egui::Pos2) {
+    let physical = eframe::winit::dpi::LogicalPosition::new(f64::from(logical_pos.x), f64::from(logical_pos.y)).to_physical::<f64>(f64::from(pixels_per_point));
+    send_wayland_drag_event(h, pixels_per_point, &eframe::winit::event::WindowEvent::HoveredFileMoved(physical));
+}
+
+/// Whether `drop_slot_line` in `crates/ui-egui/src/canvas/tabs.rs` painted the vertical accent
+/// insertion line on the left (`after = false`) or right (`after = true`) edge of `tab_rect`.
+fn has_tab_drop_slot_line(ctx: &egui::Context, shapes: &[egui::epaint::ClippedShape], tab_rect: egui::Rect, after: bool) -> bool {
+    /// Recursively checks whether `shape` contains the vertical accent drop-slot line segment.
+    fn visit(shape: &egui::epaint::Shape, x: f32, top: f32, bottom: f32, accent: egui::Color32) -> bool {
+        match shape {
+            egui::epaint::Shape::LineSegment { points, stroke } => {
+                stroke.color == accent
+                    && (stroke.width - 2.0).abs() < 1e-3
+                    && (points[0].x - x).abs() < 0.5
+                    && (points[1].x - x).abs() < 0.5
+                    && (points[0].y - top).abs() < 0.5
+                    && (points[1].y - bottom).abs() < 0.5
+            }
+            egui::epaint::Shape::Vec(nested) => nested.iter().any(|s| visit(s, x, top, bottom, accent)),
+            _ => false,
+        }
+    }
+    let accent = crate::theme::Tokens::get(ctx).accent;
+    let x = if after { tab_rect.right() } else { tab_rect.left() };
+    let (top, bottom) = (tab_rect.top() + 2.0, tab_rect.bottom() - 2.0);
+    shapes.iter().any(|cs| visit(&cs.shape, x, top, bottom, accent))
+}
+
+/// #10225: `PhotocraftApp::dropped_on_canvas` routes through `cursor_pos`, preferring scaled
+/// `file_drag_pos` over a missing or stale ordinary pointer and clearing on `HoveredFileCancelled`.
+#[test]
+fn wayland_file_drag_pos_routes_dropped_on_canvas() {
+    use eframe::winit::dpi::LogicalPosition;
+    use eframe::winit::event::WindowEvent;
+
+    let ctx = egui::Context::default();
+    let run_raw = |raw: egui::RawInput| {
+        ctx.begin_pass(raw);
+        ctx.end_pass().textures_delta.clear();
+    };
+    let mut app = app_with_canvas();
+    app.services.is_wayland = true;
+    app.services.cursor_pos = None;
+    let names = vec!["photo.png".to_string(), "brushes.abr".to_string()];
+
+    // Stale ordinary pointer outside the canvas: nothing is placed on the canvas.
+    let mut raw = egui::RawInput::default();
+    raw.events.push(egui::Event::PointerMoved(egui::pos2(10.0, 10.0)));
+    run_raw(raw);
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false]);
+
+    // Scaled (1.5x fractional HiDPI) HoveredFileMoved over the canvas (400, 300): image is placed, preset is not.
+    let ppp = 1.5_f32;
+    let mut raw = egui::RawInput::default();
+    let canvas_px = LogicalPosition::new(400.0, 300.0).to_physical::<f64>(f64::from(ppp));
+    let resp = eframe::egui_winit::on_file_drag_window_event(&mut raw, ppp, &WindowEvent::HoveredFileMoved(canvas_px));
+    assert!(resp.repaint && !resp.consumed);
+    run_raw(raw);
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [true, false]);
+
+    // HoveredFileCancelled clears file_drag_pos so dropped_on_canvas does not leak the old position.
+    let mut raw = egui::RawInput::default();
+    let resp = eframe::egui_winit::on_file_drag_window_event(&mut raw, ppp, &WindowEvent::HoveredFileCancelled);
+    assert!(resp.repaint && !resp.consumed);
+    run_raw(raw);
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false]);
+}
+
+/// #10225: Wayland `file_drag_pos` routes canvas and tab-strip drops and `drop_slot_line` hover
+/// feedback when driven through `winit::event::WindowEvent` conversion with HiDPI scaling, stale
+/// ordinary pointers, `HoveredFileCancelled` leave cleanup, and delayed drop delivery across frames.
+#[test]
+fn wayland_drag_pos_routes_canvas_and_tabs_with_stale_pointer_and_delayed_delivery() {
+    use eframe::winit::event::WindowEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("layer.png");
+    std::fs::write(&file, png_bytes(32, 24)).unwrap();
+
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut s = photocraft_engine::Session::new();
+        for _ in 0..2 {
+            s.execute("file.new", json!({"width": 320, "height": 240, "background": "white"})).unwrap();
+        }
+        // Wayland: no OS cursor_pos service (None), is_wayland: true.
+        let mut app = PhotocraftApp::new(s, Services { is_wayland: true, ..Default::default() });
+        app.background_jobs = true;
+        app
+    });
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+
+    let strip = h.state().tab_strip.clone().expect("tab strip drawn");
+    let tab0_rect = strip.tabs[0].1;
+    let canvas_center = h.state().drop_canvas_rect.expect("canvas rect drawn").center();
+    let tab0_left = egui::pos2(tab0_rect.left() + 4.0, tab0_rect.center().y);
+    let stale_outside = egui::pos2(4.0, 4.0);
+    let ppp = 2.0_f32;
+    let drop_names = vec!["layer.png".to_string(), "brushes.abr".to_string()];
+
+    assert!(!has_tab_drop_slot_line(&ctx, &h.output().shapes, tab0_rect, false), "no tab drop line before drag");
+
+    // 1. Ordinary pointer is stale (outside canvas and tabs), while a 2x-scaled Wayland drag enters
+    // over tab slot 0: drop_slot_line insertion feedback is drawn and drop routing selects Tabs(0).
+    h.input_mut().events.push(egui::Event::PointerMoved(stale_outside));
+    send_wayland_drag_moved(&mut h, ppp, tab0_left);
+    send_wayland_drag_event(&mut h, ppp, &WindowEvent::HoveredFile(file.clone()));
+    h.step();
+    let at = h.state_mut().cursor_pos(&ctx);
+    assert_eq!(at, Some(tab0_left), "scaled HoveredFileMoved overrides stale ordinary pointer");
+    assert_eq!(h.state().drop_target(&ctx, at), crate::file_open::DropTarget::Tabs(0));
+    assert_eq!(h.state_mut().dropped_on_canvas(&ctx, &drop_names), [false, false]);
+    assert!(has_tab_drop_slot_line(&ctx, &h.output().shapes, tab0_rect, false), "drop_slot_line drawn on tab 0");
+
+    // Deliver the drop through WindowEvent::DroppedFile and verify it opens at tab slot 0.
+    send_wayland_drag_event(&mut h, ppp, &WindowEvent::DroppedFile(file.clone()));
+    h.step();
+    assert!(!has_tab_drop_slot_line(&ctx, &h.output().shapes, tab0_rect, false), "drop_slot_line cleared on drop");
+    let t = std::time::Instant::now();
+    while !h.state().jobs.opens.is_empty() && t.elapsed() < std::time::Duration::from_secs(30) {
+        h.step();
+    }
+    assert!(h.state().jobs.opens.is_empty(), "tab open job timed out");
+    h.run_steps(2);
+    assert_eq!(doc_names(h.state())[0], "layer.png", "tab drop opened at slot 0");
+    assert_eq!(h.state_mut().cursor_pos(&ctx), None, "completed tab drop consumes file_drag_pos");
+
+    // 2. Leave window / cancel drag via WindowEvent::HoveredFileCancelled: clears hovered_files,
+    // drop_slot_line feedback, and file_drag_pos without leaking or falling back to stale pointer.
+    send_wayland_drag_moved(&mut h, ppp, tab0_left);
+    send_wayland_drag_event(&mut h, ppp, &WindowEvent::HoveredFile(file.clone()));
+    h.step();
+    assert!(has_tab_drop_slot_line(&ctx, &h.output().shapes, tab0_rect, false), "drop_slot_line drawn while hovering");
+    send_wayland_drag_event(&mut h, ppp, &WindowEvent::HoveredFileCancelled);
+    h.step();
+    assert!(!has_tab_drop_slot_line(&ctx, &h.output().shapes, tab0_rect, false), "drop_slot_line cleared on cancel");
+    assert_eq!(h.state_mut().cursor_pos(&ctx), None, "HoveredFileCancelled clears file_drag_pos");
+    assert_eq!(h.state_mut().dropped_on_canvas(&ctx, &drop_names), [false, false]);
+
+    // 3. Wayland enter -> motion over canvas -> drop_performed + delayed DroppedFile delivery:
+    // ordinary pointer is stale over tab 0, drag enters at stale_outside and moves to canvas_center.
+    let layers_before = h.state().session.active().unwrap().doc.layers.len();
+    h.input_mut().events.push(egui::Event::PointerMoved(tab0_left));
+    send_wayland_drag_moved(&mut h, ppp, stale_outside);
+    send_wayland_drag_event(&mut h, ppp, &WindowEvent::HoveredFile(file.clone()));
+    send_wayland_drag_moved(&mut h, ppp, canvas_center);
+    h.step();
+    assert_eq!(h.state_mut().dropped_on_canvas(&ctx, &drop_names), [true, false]);
+
+    // Intermediate frame after drop_performed while the data-offer pipe is still being read:
+    // RawInput::take() retains the last HoveredFileMoved position until DroppedFile arrives.
+    h.step();
+    assert_eq!(h.state_mut().cursor_pos(&ctx), Some(canvas_center), "retained across frames until DroppedFile");
+
+    // Pipe EOF delivers WindowEvent::DroppedFile on a subsequent frame: placed as a canvas layer.
+    send_wayland_drag_event(&mut h, ppp, &WindowEvent::DroppedFile(file.clone()));
+    h.run_steps(2);
+    let started = std::time::Instant::now();
+    while h.state().jobs.place.is_some() && started.elapsed() < std::time::Duration::from_secs(30) {
+        h.step();
+    }
+    assert!(h.state().jobs.place.is_none(), "canvas placement job timed out");
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers_before + 1);
+    assert_eq!(h.state().ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    // 4. After the completed canvas drop, file_drag_pos was consumed and does not leak into later frames.
+    h.step();
+    assert_eq!(h.state_mut().cursor_pos(&ctx), None, "completed drop clears file_drag_pos");
+
+    // 5. Non-Wayland Services::cursor_pos and latest_pos fallbacks remain intact when file_drag_pos is None.
+    h.state_mut().services.cursor_pos = Some(Box::new(move |_: &egui::Context| Some(canvas_center)));
+    assert_eq!(h.state_mut().cursor_pos(&ctx), Some(canvas_center));
+    h.state_mut().services.cursor_pos = None;
+    h.state_mut().services.is_wayland = false;
+    h.input_mut().events.push(egui::Event::PointerMoved(tab0_left));
+    h.step();
+    assert_eq!(h.state_mut().cursor_pos(&ctx), Some(tab0_left), "non-Wayland falls back to latest_pos");
+}
