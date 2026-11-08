@@ -116,6 +116,25 @@ fn appearance_defaults_and_legacy_theme_migrate() {
     }
 }
 
+/// The Serbian interface language was saved as `sr` before the catalogs moved to craft-i18n,
+/// where it is `sr-latn`: a saved `sr` (any case) loads as `sr-latn` and is saved as `sr-latn`.
+/// Other codes, and `auto`, load as saved.
+#[test]
+fn a_saved_serbian_language_migrates_to_sr_latn() {
+    for saved in ["sr", "SR"] {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"language": saved}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.language, "sr-latn", "{saved}");
+        let resaved: Value = serde_json::from_str(&s.prefs_to_json()).unwrap();
+        assert_eq!(resaved["interface"]["language"], "sr-latn", "saved under the new code");
+    }
+    for kept in ["sr-latn", "bs", "auto", "en"] {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"language": kept}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.language, kept);
+    }
+}
+
 #[test]
 fn legacy_theme_migration_preserves_saved_theme_slots() {
     for (legacy, slot, saved) in [("proMedium", "darkTheme", "solarizedDark"), ("studioLight", "lightTheme", "adwaita")] {
