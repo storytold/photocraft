@@ -522,6 +522,90 @@ fn textured_quad(painter: &egui::Painter, tex: egui::TextureId, q: [Pos2; 4], uv
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// The offset readout beside the pointer while Content-Aware Move drags a selection: "→| 100 px"
+/// and "↓ 50 px" for 100 px right and 50 px down (#12195).
+pub(super) fn cam_drag_readout(offset: [i32; 2]) -> [String; 2] {
+    [format!("{} px", offset[0]), format!("{} px", offset[1])]
+}
+
+/// The selected pixels, masked by the selection, to draw at the drag offset. `None` when there is
+/// nothing to copy or the area is too large to allocate.
+pub(super) fn cam_drag_copy_image(app: &PhotocraftApp) -> Option<(DRect, egui::ColorImage)> {
+    let st = app.session.active()?;
+    let sel = st.doc.selection.as_ref()?;
+    let surf = st.active_layer.and_then(|id| st.doc.layer(id))?.surface()?;
+    let area = sel.content_bounds().intersect(&st.doc.bounds());
+    if area.is_empty() {
+        return None;
+    }
+    let (w, h) = (usize::try_from(area.width()).ok()?, usize::try_from(area.height()).ok()?);
+    let n = w.checked_mul(h)?;
+    if n == 0 || n > 8_000_000 || w > i32::MAX as usize || h > i32::MAX as usize {
+        return None;
+    }
+    let mut pixels = vec![0u8; n.checked_mul(4)?];
+    for y in 0..h {
+        for x in 0..w {
+            let px = area.x0.saturating_add(x as i32);
+            let py = area.y0.saturating_add(y as i32);
+            let cov = sel.sample_channel(px, py, 0);
+            if cov <= 0.0 {
+                continue;
+            }
+            let c = surf.rgba(px, py);
+            let i = (y * w + x) * 4;
+            let a = (c[3].clamp(0.0, 1.0) * cov.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0);
+            pixels[i] = channel_byte(c[0]);
+            pixels[i + 1] = channel_byte(c[1]);
+            pixels[i + 2] = channel_byte(c[2]);
+            pixels[i + 3] = a as u8;
+        }
+    }
+    Some((area, egui::ColorImage::from_rgba_unmultiplied([w, h], &pixels)))
+}
+
+fn channel_byte(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+#[derive(Clone)]
+struct CamDragTex {
+    key: u64,
+    rect: DRect,
+    tex: egui::TextureHandle,
+}
+
+fn cam_copy_key(app: &PhotocraftApp) -> Option<u64> {
+    let st = app.session.active()?;
+    let sel = st.doc.selection.as_ref()?;
+    let surf = st.active_layer.and_then(|id| st.doc.layer(id))?.surface()?;
+    Some(crate::surface_fingerprint(sel) ^ crate::surface_fingerprint(surf).rotate_left(1) ^ st.doc.id.0 ^ st.revision)
+}
+
+fn cam_drag_texture(app: &PhotocraftApp, ctx: &egui::Context) -> Option<(DRect, egui::TextureId)> {
+    let key = cam_copy_key(app)?;
+    let id = egui::Id::unique("cam-drag-copy");
+    if let Some(cached) = ctx.data(|d| d.get_temp::<CamDragTex>(id))
+        && cached.key == key
+    {
+        return Some((cached.rect, cached.tex.id()));
+    }
+    let (rect, image) = cam_drag_copy_image(app)?;
+    let tex = ctx.load_texture("cam-drag-copy", image, TextureOptions::NEAREST);
+    let tex_id = tex.id();
+    ctx.data_mut(|d| d.insert_temp(id, CamDragTex { key, rect, tex }));
+    Some((rect, tex_id))
+}
+
+fn draw_cam_drag_feedback(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, offset: [i32; 2], at: [f64; 2]) {
+    if let Some((rect, tex)) = cam_drag_texture(app, painter.ctx()) {
+        let moved = rect.translate(offset[0], offset[1]);
+        painter.image(tex, xf.doc_rect(moved), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    }
+    let cursor = xf.to_screen(at[0] as f32, at[1] as f32);
+    super::drag::draw_readout(painter.ctx(), "cam-offset-readout", cursor, ["→|", "↓"], cam_drag_readout(offset));
+}
+
 /// Overlays that persist between gestures: polygonal or magnetic lasso in progress, pending crop box.
 pub(super) fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, hover: Option<Pos2>) {
     crate::magnetic_lasso_ui::draw(app, painter, xf, hover);
@@ -658,9 +742,15 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             crate::tool_feedback::draw_ants(painter, &pts, true);
         }
         // Patch / Content-Aware Move dragging the selection: its outline follows the pointer.
+        // Content-Aware Move also carries a copy of the selected pixels and an offset readout.
         Tool::Patch | Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
             let start = d.start;
-            let [dx, dy] = crate::retouch_ui::patch_offset(app, start, crate::retouch_ui::patch_end(d, last));
+            let at = crate::retouch_ui::patch_end(d, last);
+            let tool = d.tool;
+            let [dx, dy] = crate::retouch_ui::patch_offset(app, start, at);
+            if tool == Tool::ContentAwareMove {
+                draw_cam_drag_feedback(app, painter, xf, [dx, dy], at);
+            }
             if let Some((_, _, segs)) = &app.outline_cache {
                 let moved: Vec<crate::outline::Segment> = segs.iter().map(|(a, b)| ([a[0] + dx, a[1] + dy], [b[0] + dx, b[1] + dy])).collect();
                 marching_ants_segments(painter, xf, &moved, painter.ctx().input(|i| i.time));
