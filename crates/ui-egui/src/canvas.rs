@@ -961,8 +961,11 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
         };
     // The Lasso (and the Freeform Pen, which draws the same way) reads its own presses and
     // drops the moves of a drag it didn't start, so an open Free Transform box takes the
-    // usual drag path instead (#2153).
-    if crate::lasso_ui::owns(tool) && !transform_owns_pointer {
+    // usual drag path instead (#2153). It reads the raw pointer events straight from the
+    // context, so the `buttons` starvation above never reaches it: a press that dismisses the
+    // canvas tool menu would draw a selection. Gate the dispatcher itself, as the Crop press
+    // above is gated (#9841).
+    if crate::lasso_ui::owns(tool) && !transform_owns_pointer && !input.menu_dismiss_press {
         crate::lasso_ui::canvas_input(app, ctx, xf, response);
         (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
     }
