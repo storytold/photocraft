@@ -3910,7 +3910,7 @@ curves	Smooth	నునుపు చేయి
 	Scroll menu down	మెనూను క్రిందికి స్క్రోల్ చేయి
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	కొనసాగడానికి ముందు ఈ టైప్ లేయర్‌ను రాస్టరైజ్ చేయాలి. దాని టెక్స్ట్ ఇకపై సవరించడానికి వీలుపడదు. టైప్‌ను రాస్టరైజ్ చేయాలా?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	కొనసాగడానికి ముందు ఈ ఆకార లేయర్‌ను రాస్టరైజ్ చేయాలి. ఇది ఇకపై ఆకారంగా సవరించడానికి వీలుపడదు. ఆకారాన్ని రాస్టరైజ్ చేయాలా?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	కొనసాగడానికి ముందు ఈ స్మార్ట్ ఆబ్జెక్ట్‌ను రాస్టరైజ్ చేయాలి. దాని కంటెంట్ ఇకపై సవరించడానికి వీలుపడదు. స్మార్ట్ ఆబ్జెక్ట్‌ను రాస్టరైజ్ చేయాలా?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	కొనసాగడానికి ముందు ఈ స్మార్ట్ ఆబ్జెక్ట్‌ను రాస్టరైజ్ చేయాలి. “కంటెంట్‌లను సవరించు” ఇకపై అందుబాటులో ఉండదు. స్మార్ట్ ఆబ్జెక్ట్‌ను రాస్టరైజ్ చేయాలా?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	కొనసాగడానికి ముందు ఈ నింపు లేయర్‌ను రాస్టరైజ్ చేయాలి. దాని నింపు కంటెంట్ ఇకపై సవరించడానికి వీలుపడదు. లేయర్‌ను రాస్టరైజ్ చేయాలా?
 	This layer must be rasterized before proceeding.	కొనసాగడానికి ముందు ఈ లేయర్‌ను రాస్టరైజ్ చేయాలి.
 	Color Picker (Background Color)	రంగు ఎంపిక సాధనం (నేపథ్య రంగు)
@@ -4846,3 +4846,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use relative positioning for reference point	రిఫరెన్స్ పాయింట్ కోసం సాపేక్ష స్థానాన్ని ఉపయోగించు
 	{label} is writing the file and can no longer be canceled	{label} ఫైల్‌ను వ్రాస్తోంది, ఇకపై రద్దు చేయలేము
 @plural	{what}: {n} file failed|{what}: {n} files failed	{what}: {n} ఫైల్ విఫలమైంది|{what}: {n} ఫైళ్లు విఫలమయ్యాయి
+	Click and move left or right to scale using the Zoom Tool (OpenGL only)	జూమ్ సాధనంతో పరిమాణం మార్చడానికి క్లిక్ చేసి ఎడమకు లేదా కుడికి కదపండి (OpenGL మాత్రమే)
+	Resize windows when zooming using the Zoom Tool	జూమ్ సాధనంతో జూమ్ చేసేటప్పుడు విండోల పరిమాణం మార్చు
+	Useful mixer brush combinations	ఉపయోగకరమైన మిక్సర్ బ్రష్ కలయికలు
+	Zoom current window to 1:1	ప్రస్తుత విండోను 1:1కి జూమ్ చేయి
+	Zoom current window to fill the screen	ప్రస్తుత విండో స్క్రీన్‌ను నింపేలా జూమ్ చేయి
+	Zoom current window to screen size	ప్రస్తుత విండోను స్క్రీన్ పరిమాణానికి జూమ్ చేయి
+	brush tool	బ్రష్ సాధనం
