@@ -654,25 +654,13 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
             // Resize Windows to Fit is Preferences › Zoom Resizes Windows itself, as in
             // Photoshop: one setting, shown in both places (zoom_window_fit.rs).
             let mut fit = app.session.prefs().general.zoom_resizes_windows;
-            if widgets::checkbox(ui, &mut fit, tl!("Resize Windows to Fit")).changed() {
+            if widgets::checkbox(ui, &mut fit, tl!("Resize Windows to Fit")).on_hover_text(tl!("Resize windows when zooming using the Zoom Tool")).changed() {
                 app.session.prefs.edit(|p| p.general.zoom_resizes_windows = fit);
             }
-            widgets::checkbox(ui, &mut app.ui.tool_options.zoom_scrubby, tl!("Scrubby Zoom"));
-            hint(
-                ui,
-                &crate::i18n::fmt(
-                    tl!("Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out"),
-                    &[("key", &crate::shortcuts::pretty("Alt"))],
-                ),
-            );
-            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).clicked()
-                && let Some(i) = app.session.active_index()
-            {
-                app.ui.views[i].fit_pending = true;
-                app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
-                app.ui.views[i].zoom_anchor = None;
-            }
-            if widgets::secondary_button(ui, "100%", 0.0).clicked()
+            widgets::checkbox(ui, &mut app.ui.tool_options.zoom_scrubby, tl!("Scrubby Zoom"))
+                .on_hover_text(tl!("Click and move left or right to scale using the Zoom Tool (OpenGL only)"));
+            // The same three buttons as the Hand bar, with the reference tooltips (#12068).
+            if widgets::secondary_button(ui, "100%", 0.0).on_hover_text(tl!("Zoom current window to 1:1")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].zoom = 1.0;
@@ -680,6 +668,22 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 app.ui.views[i].zoom_anchor = None;
                 app.ui.views[i].fit_pending = false;
                 app.ui.views[i].fill_pending = false;
+            }
+            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).on_hover_text(tl!("Zoom current window to screen size")).clicked()
+                && let Some(i) = app.session.active_index()
+            {
+                app.ui.views[i].fit_pending = true;
+                app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                app.ui.views[i].zoom_anchor = None;
+                app.ui.views[i].fill_pending = false;
+            }
+            if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).on_hover_text(tl!("Zoom current window to fill the screen")).clicked()
+                && let Some(i) = app.session.active_index()
+            {
+                app.ui.views[i].fill_pending = true;
+                app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                app.ui.views[i].zoom_anchor = None;
+                app.ui.views[i].fit_pending = false;
             }
         }
         Tool::RotateView => {
@@ -731,6 +735,9 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod zoom_buttons_tests;
 
 /// Width of the Layers panel's Opacity and Fill fields, with room for their pop-up slider's ▾.
 pub(super) const LAYER_PCT_W: f32 = 66.0 + widgets::POPUP_ARROW_W;
