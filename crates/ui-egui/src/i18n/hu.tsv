@@ -12,7 +12,9 @@
 #   Follow the current file as glossary and established catalog choices; keep terminology
 #   and phrasing coherent and consistent across contexts. Translate intent naturally, not word for
 #   word. Omit standalone 'please', but retain natural conventional phrasing (e.g. 'Please wait…' →
-#   'Kis türelmet…').
+#   'Kis türelmet…', 'Please make sure…' → 'Győződjön meg arról, hogy…', 'Apply' → 'Alkalmaz…',
+#   'Applies' → 'Alkalmazása…' but if 'Enter: applies' → 'Enter: Alkalmaz' but if 'Applies at next
+#   launch.' → 'A következő indításkor kerül használatba').
 #
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Hungarian image-editing vocabulary (réteg, maszk, kijelölés ...). No proprietary localisation
@@ -121,7 +123,7 @@
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	{n} stílus importálva. Forrás: {file}
 @plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} stílus exportálva. Cél: {file}
 @id	file.close	Bezárás
-@id	layer.layerMask.apply	Érvényesítés
+@id	layer.layerMask.apply	Alkalmaz
 @id	edit.clear	Kiürítés
 	16 Bits/Channel	16 bit/csatorna
 	180°	180°
@@ -133,8 +135,8 @@
 	Again	Ismétlés
 	AI Integrations…	MI-integrációk…
 	Analysis	Elemzés
-	Apply Data Set…	Adatkészlet érvényesítése…
-	Apply Image…	Kép érvényesítése…
+	Apply Data Set…	Adatkészlet alkalmazása…
+	Apply Image…	Kép alkalmazása…
 	Arbitrary…	Tetszőleges…
 	Artboards to Files…	Rajztáblák fájlokba…
 	Artboards to PDF…	Rajztáblák PDF-be…
@@ -333,7 +335,7 @@
 	WIA Support…	WIA-támogatás…
 	Workspace…	Munkaterület…
 	Align	Igazítás
-	Apply	Érvényesítés
+	Apply	Alkalmaz
 	Arrange	Elrendezés
 	Artboard from Group…	Rajztábla csoportból…
 	Artboard from Layers…	Rajztábla rétegekből…
@@ -523,8 +525,8 @@
 	Anamorphic 2:1 (2)	Anamorfikus 2:1 (2)
 	Anti-Alias	Élsimítás
 	Appearance	Megjelenés
-	Apply Data Set	Adatkészlet érvényesítése
-	Apply Layer Mask	Rétegmaszk érvényesítése
+	Apply Data Set	Adatkészlet alkalmazása
+	Apply Layer Mask	Rétegmaszk alkalmazása
 	Add Mask to Selection	Maszk hozzáadása a kijelöléshez
 	Subtract Mask from Selection	Maszk kivonása a kijelölésből
 	Intersect Mask with Selection	Maszk metszése a kijelöléssel
@@ -984,8 +986,8 @@
 	Angle:	Szög:
 	Anti-alias	Élsimítás
 	Anti-aliasing method	Élsimítási mód
-	Apply Per Tip	Érvényesítés hegyenként
-	Apply the pen's tilt and rotation to the tip shape	A toll dőlését és elforgatását érvényesíti a hegy alakjára
+	Apply Per Tip	Alkalmazás hegyenként
+	Apply the pen's tilt and rotation to the tip shape	A toll dőlését és elforgatását alkalmazza a hegy alakjára
 	Artboard	Rajztábla
 	Artboard Background Color	Rajztábla háttérszíne
 	Artboard from Group	Rajztábla csoportból
@@ -1052,9 +1054,9 @@
 	Clear Selection	Kijelölés törlése
 	Click a red pupil to neutralize it	Kattintson egy vörös pupillára a semlegesítéséhez
 	Click to add a point, right-click to remove	Kattintson a pont hozzáadásához, jobb kattintással pedig távolítsa el
-	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kattintson az érvényesítéshez, {key}+kattintással törölje a felülbírálásokat, dupla kattintással nyissa meg a stílusbeállításokat
+	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kattintson az alkalmazáshoz, {key}+kattintással törölje a felülbírálásokat, dupla kattintással nyissa meg a stílusbeállításokat
 	Click to edit the gradient	Kattintson a színátmenet szerkesztéséhez
-	Click to sample the foreground colour  ·  {key}-click for background	Kattintás: mintavétel az előtérszínhez  ·  {key}+kattintás: a háttérszínhez
+	Click to sample the foreground color  ·  {key}-click for background	Kattintás: mintavétel az előtérszínhez  ·  {key}+kattintás: a háttérszínhez
 	Clone source set at {x}, {y}	Klónozási forrás beállítva: {x}, {y}
 	Clone Stamp	Klónozó bélyegző
 	Close Style Options	Stílusbeállítások bezárása
@@ -1386,7 +1388,7 @@
 	Search fonts	Betűtípusok keresése
 	Select a type layer or click into text to insert glyphs	Glifák beszúrásához jelöljön ki egy szövegréteget, vagy kattintson a szövegbe
 	Select a type layer to edit its character and paragraph settings.	Jelöljön ki egy szövegréteget a karakter- és bekezdésbeállítások szerkesztéséhez.
-	Select text to apply a character style	Karakterstílus érvényesítéséhez jelöljön ki szöveget
+	Select text to apply a character style	Karakterstílus alkalmazásához jelöljön ki szöveget
 	Select the crop presets to delete	Jelölje ki a törlendő körbevágási előbeállításokat
 	Select the crop presets to delete:	Jelölje ki a törlendő körbevágási előbeállításokat:
 	Semi Bold	Középkövér
@@ -1535,11 +1537,11 @@ fontWeight	Thin	Hajszálvékony
 	Angle	Szög
 	Anti-aliased	Élsimítás
 	Appearance (Layer Style)	Megjelenés (rétegstílus)
-	Apply Image	Kép érvényesítése
-	Apply Mask	Maszk érvényesítése
-	Apply next selected layer comp	Következő kijelölt rétegkompozíció érvényesítése
-	Apply previous selected layer comp	Előző kijelölt rétegkompozíció érvényesítése
-	Apply {option}: {state}	Érvényesítés – {option}: {state}
+	Apply Image	Kép alkalmazása
+	Apply Mask	Maszk alkalmazása
+	Apply next selected layer comp	Következő kijelölt rétegkompozíció alkalmazása
+	Apply previous selected layer comp	Előző kijelölt rétegkompozíció alkalmazása
+	Apply {option}: {state}	Alkalmaz – {option}: {state}
 	Bevel & Emboss	Fazetta és domborítás
 	Black & White	Fekete-fehér
 	Blend Clipped Layers as Group	Vágott rétegek keverése csoportként
@@ -2532,7 +2534,7 @@ navigator	Zoom	Nagyítás mértéke
 	Underpainting	Alapozó festés
 	Underwater	Víz alatti
 	Unsharp Mask	Életlenmaszk
-	Use Legacy	Régi módszer használata
+	Use Legacy	Örökölt módszer használata
 	Use Measurement Scale	Mérési méretarány használata
 	Use Selection In Source	Kijelölés használata a forrásban
 	Use Selection In Target	Kijelölés használata a célban
@@ -2741,7 +2743,7 @@ cameraRaw	Yellow	Sárga
 	Answer the unsaved-changes prompt first	Előbb válaszoljon a nem mentett módosításokra vonatkozó kérdésre
 	Appearance Settings…	Megjelenési beállítások…
 	Apple Watch 45mm	Apple Watch 45 mm
-	Applies at next launch.	A következő indításkor lép életbe.
+	Applies at next launch.	A következő indításkor kerül használatba.
 	Art & Illustration	Művészet és illusztráció
 	Artist	Alkotó
 	Ask before saving layered tiff	Kérdés rétegzett TIFF mentése előtt
@@ -3151,9 +3153,9 @@ cameraRaw	Yellow	Sárga
 	Anchor:	Rögzítési pont:
 	Animated zoom	Animált nagyítás
 	Anisotropic	Anizotróp
-	Apply At Canvas Bounds	Érvényesítés a vászonhatárokon
-	Apply auto tone	Automatikus tónus érvényesítése
-	Apply Layer Comp	Rétegkompozíció érvényesítése
+	Apply At Canvas Bounds	Alkalmazás a vászonhatárokon
+	Apply auto tone	Automatikus tónus alkalmazása
+	Apply Layer Comp	Rétegkompozíció alkalmazása
 	Arc	Ív
 	Arch	Boltív
 	Area	Terület
@@ -3795,7 +3797,7 @@ cameraRaw	Yellow	Sárga
 	Alternates for Current Selection	Változatok a jelenlegi kijelöléshez
 	Aperture	Rekesznyílás
 	Apple RGB	Apple RGB
-	Apply to All	Minden érvényesítése
+	Apply to All	Összes alkalmazása
 	Are you sure you want to quit?	Biztosan ki szeretne lépni?
 	Are you sure?	Biztos benne?
 	Arrangement	Elrendezés
@@ -3834,7 +3836,7 @@ cameraRaw	Yellow	Sárga
 	Click the first point or press ↵ to close · Esc cancels	Lezáráshoz kattintson az első pontra, vagy nyomja meg a(z) ↵ billentyűt · Esc: megszakítás
 	Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove	Kattintással pontot adhat hozzá · eltávolítás: lehúzás, ⌘/Ctrl-kattintás vagy Delete
 	Click to add text	Kattintson a szöveg hozzáadásához
-	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Kattintás: Érvényesítés, ⌥-kattintás: felülbírálások törlése, dupla kattintás: stílusbeállítások
+	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Kattintás: Alkalmaz, ⌥-kattintás: felülbírálások törlése, dupla kattintás: stílusbeállítások
 	Click to zoom in  ·  ⌥-click to zoom out	Kattintás: nagyítás  ·  ⌥-kattintás: kicsinyítés
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Kattintás: sarok · Húzás: sima · Kattintás az első pontra: lezárás · {key}: befejezés · Esc: megszakítás
 	Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel	Kattintás: sarok · Húzás: sima · Kattintás az első pontra: lezárás · ↩: befejezés · Esc: megszakítás
@@ -4115,10 +4117,10 @@ cameraRaw	Yellow	Sárga
 	{zoom}%	{zoom}%
 	↑↓ navigate   ↵ run   esc close	↑↓ léptetés   ↵ futtatás   esc bezárás
 	Amount:	Mérték:
-	Apply Vanishing Point ({key})	Enyészpont érvényesítése ({key})
-	Apply the removal ({key})	Eltávolítás érvényesítése ({key})
+	Apply Vanishing Point ({key})	Enyészpont alkalmazása ({key})
+	Apply the removal ({key})	Eltávolítás alkalmazása ({key})
 	Alt-click a plane to set the clone source	Alt-kattintás egy síkra a klónforrás beállításához
-	Too many clone strokes: apply Vanishing Point first	Túl sok klónvonás: először érvényesítse az enyészpontot
+	Too many clone strokes: apply Vanishing Point first	Túl sok klónvonás: először alkalmazza az enyészpontot
 	Drag to draw the curve · {key}-click draws a straight line	Húzással rajzold meg a görbét · {key}+kattintás: egyenes vonal
 	Draw to modify the curve	Rajzoljon a görbe módosításához
 	Edit points to modify the curve	Szerkeszd a pontokat a görbe módosításához
@@ -4341,7 +4343,7 @@ cameraRaw	Yellow	Sárga
 	Take the shortcut from the other command and select it	A billentyűparancs elvétele a másik parancstól, és annak kijelölése
 	Undo Changes	Változások visszavonása
 	{shortcut} is reserved by the system and can't be assigned.	A(z) {shortcut} a rendszer számára fenntartott, nem rendelhető hozzá.
-	Low-Latency Drawing (vsync off, applies at next launch)	Kis késleltetésű rajzolás (vsync nélkül, a következő indításkor lép életbe)
+	Low-Latency Drawing (vsync off, applies at next launch)	Kis késleltetésű rajzolás (vsync nélkül, a következő indításkor kerül használatba)
 	Free Transform is still being applied; try again when it has finished.	A szabad átalakítás használata még folyamatban van; próbálja újra, ha befejeződött.
 	The transform couldn't be applied.	Az átalakítás nem alkalmazható.
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	A rétegeknek {needed} GPU-memória kell; a keret {budget} hagy nekik.
@@ -4354,7 +4356,7 @@ cameraRaw	Yellow	Sárga
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	A dokumentum rétegeinek {needed} kell, de {budget} foglalhatnak: a teljes dokumentum újrarajzolása a CPU-n fut
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
 	Scratch Size Limit (MB, 0 = No Limit)	Lapozólemez méretkorlátja (MB, 0 = nincs korlát)
-	{path}: the path is not valid Unicode; save under another name.	{path}: az elérési út nem érvényes Unicode-szöveg. Mentse más néven.
+	{path}: the path is not valid Unicode; save under another name.	{path}: az elérési út nem egy érvényes Unicode-szöveg. Mentse más néven.
 	{name} was changed by another app after it was opened or saved here.	A(z) {name} fájlt egy másik alkalmazás módosította, miután itt megnyitották vagy mentették.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Cserélje le erre a dokumentumra, vagy válassza a Mégse gombot, és a Fájl › Mentés másként paranccsal tartsa meg mindkettőt.
 	Decrease Brush Size	Ecsetméret csökkentése
@@ -4362,7 +4364,7 @@ cameraRaw	Yellow	Sárga
 	Decrease Brush Hardness	Ecsetkeménység csökkentése
 	Increase Brush Hardness	Ecsetkeménység növelése
 	Demosaic	Demozaikolás
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	A kamera színszűrő-mozaikjának kitöltési módja. A fájl megnyitásakor érvényesül; az előnézet a megnyitáskor használt módszert jeleníti meg.
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	A kamera színszűrő-mozaikjának kitöltési módja. A fájl megnyitásakor kerül alkalmazásra; az előnézet a megnyitáskor használt módszert jeleníti meg.
 	AHD (adaptive homogeneity)	AHD (adaptív homogenitás)
 	Malvar–He–Cutler	Malvar–He–Cutler
 	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: a legtisztább élek és a legkevesebb színes szegély, a leglassabb.
@@ -4379,7 +4381,7 @@ cameraRaw	Yellow	Sárga
 	Per-document RAM limit (MB)	Dokumentumonkénti RAM-korlát (MB)
 	Installed RAM: {ram} MB; this limit: {percent}%	Telepített RAM: {ram} MB; ez a korlát: {percent}%
 	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	Minden nyitott dokumentum pixeljeit és előzményeit korlátozza. A legrégebbi visszavonási állapotok törlődnek a korlát túllépésekor.
-	Applies immediately when saved. Memory is not reserved in advance.	Mentéskor azonnal érvényes. A memória nincs előre lefoglalva.
+	Applies immediately when saved. Memory is not reserved in advance.	Mentéskor azonnal használatba kerül. A memória nincs előre lefoglalva.
 	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	Automatikus GPU-memóriánál a GPU-rétegkeretet is korlátozza. Felső határ a RAM negyede és, ha ismert, a kártyamemória háromnyolcada, minimum 512 MB. Magasabb korlát a GPU-keretet nem növeli.
 	Use	Használat
 	In Front	Elöl
