@@ -1,5 +1,21 @@
 use super::*;
 
+#[test]
+fn system_title_bar_defaults_to_integrated_and_preserves_saved_choices() {
+    let default = false;
+    assert_eq!(Interface::default().system_title_bar, default);
+    for saved in [json!({}), json!({"interface": {}})] {
+        let prefs: Preferences = serde_json::from_value(saved).unwrap();
+        assert_eq!(prefs.interface.system_title_bar, default);
+    }
+    for saved in [false, true] {
+        let prefs: Preferences = serde_json::from_value(json!({"interface": {"systemTitleBar": saved}})).unwrap();
+        assert_eq!(prefs.interface.system_title_bar, saved);
+        let restored: Preferences = serde_json::from_value(prefs.to_json()).unwrap();
+        assert_eq!(restored.interface.system_title_bar, saved);
+    }
+}
+
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
@@ -494,6 +510,20 @@ fn svg_group_rasterization_threshold_is_bounded_by_document_depth() {
     assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 0, "zero disables the preference threshold");
     assert!(s.execute("prefs.set", json!({"path": pref, "value": photocraft_doc::MAX_GROUP_DEPTH + 1})).is_err());
     assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 0, "out-of-range preferences leave the valid value unchanged");
+}
+
+#[test]
+fn tablet_input_pref_defaults_to_windows_ink() {
+    let mut s = session();
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WindowsInk);
+    assert_eq!(s.execute("prefs.get", json!({"path": "tools.tabletInput"})).unwrap(), json!("windowsInk"));
+    assert_eq!(choices("tools.tabletInput"), Some(TabletInput::NAMES));
+    s.execute("prefs.set", json!({"path": "tools.tabletInput", "value": "winTab"})).unwrap();
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WinTab);
+    for bad in [json!("ink"), json!(1), json!(true), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"path": "tools.tabletInput", "value": bad})).is_err());
+    }
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WinTab, "rejected values change nothing");
 }
 
 #[test]
@@ -1010,6 +1040,25 @@ fn a_wrongly_typed_value_resets_only_that_field() {
 }
 
 #[test]
+fn the_removed_enable_animations_preference_still_loads_and_is_unknown() {
+    // #9479: Interface › Enable animations is gone (Photoshop has no such setting). Files saved
+    // with it still load whole, without a reported bad value, and the key isn't written back.
+    let mut s = Session::new();
+    let invalid =
+        s.load_prefs_json(r#"{"version": 2, "interface": {"enableAnimations": false, "showTooltips": false}, "performance": {"historyStates": 20}}"#).unwrap();
+    assert!(invalid.is_empty(), "{invalid:?}");
+    assert!(!s.prefs().interface.show_tooltips, "its neighbours load");
+    assert_eq!(s.prefs().performance.history_states, 20);
+    assert!(!s.prefs_to_json().contains("enableAnimations"));
+    for value in [json!(true), json!(false), json!("nope")] {
+        let e = s.execute("prefs.set", json!({"values": {"interface.enableAnimations": value}})).unwrap_err();
+        assert!(e.to_string().contains("unknown preference"), "{e}");
+        assert!(s.execute("prefs.set", json!({"path": "interface.enableAnimations", "value": value})).is_err());
+    }
+    assert!(s.execute("prefs.get", json!({"path": "interface.enableAnimations"})).is_err());
+}
+
+#[test]
 fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
     let mut s = Session::new();
     let invalid = s
@@ -1032,4 +1081,107 @@ fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
     let deep = format!("{{\"general\": {}1{}}}", "{\"a\":".repeat(100), "}".repeat(100));
     assert!(s.load_prefs_json(&deep).is_ok());
     assert!(s.load_prefs_json(r#"{"interface": {"theme": 3, "uiScale": [1]}, "workspaces": {"x": 1}, "menus": 1}"#).is_ok());
+}
+
+/// A saved Memory Usage is kept as stored, and means the same on desktop; only the web build
+/// caps what it honours.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_history_budget_is_the_stored_memory_usage_on_native() {
+    for mb in [0u32, 1, 1536, 8192, 65536, u32::MAX] {
+        let p = Performance { memory_usage_mb: mb, ..Performance::default() };
+        assert_eq!(p.effective_memory_usage_mb(), mb);
+        assert_eq!(p.history_budget_bytes(), (mb as usize) << 20, "{mb} MB");
+    }
+    let mut s = Session::new();
+    s.load_prefs_json(r#"{"performance": {"memoryUsageMb": 8192}}"#).unwrap();
+    assert_eq!(s.prefs().performance.memory_usage_mb, 8192);
+    assert_eq!(s.prefs().performance.history_budget_bytes(), 8192 << 20);
+}
+
+/// The web build honours Memory Usage up to its cap: below and at it as stored, above it the cap.
+#[test]
+fn the_web_build_caps_memory_usage() {
+    for (stored, honoured) in [
+        (0, 0),
+        (1024, 1024),
+        (WASM_MEMORY_USAGE_CAP_MB, WASM_MEMORY_USAGE_CAP_MB),
+        (WASM_MEMORY_USAGE_CAP_MB + 1, WASM_MEMORY_USAGE_CAP_MB),
+        (8192, WASM_MEMORY_USAGE_CAP_MB),
+        (u32::MAX, WASM_MEMORY_USAGE_CAP_MB),
+    ] {
+        assert_eq!(honoured_memory_usage_mb(stored, true), honoured, "web, {stored} MB");
+        assert_eq!(honoured_memory_usage_mb(stored, false), stored, "desktop, {stored} MB");
+    }
+}
+
+/// The effect cache budget is the stored MB in bytes, at least 16 MB (a hand-edited 0 included),
+/// at most 1536 MB on a 32-bit address space (the web, 32-bit Windows) and 65536 MB elsewhere,
+/// and never wraps: on wasm32 an uncapped 4096 MB shifted into `usize` was 0. Both kinds of
+/// build are checked on every target, in `u64` so the expectations themselves can't overflow a
+/// 32-bit `usize`.
+#[test]
+fn the_effect_cache_budget_is_capped_on_32_bit_builds_and_never_wraps() {
+    const MB: u64 = 1 << 20;
+    let cap = WASM_MEMORY_USAGE_CAP_MB;
+    for (stored, small_mb, large_mb) in [
+        (0, 16, 16),
+        (15, 16, 16),
+        (16, 16, 16),
+        (768, 768, 768),
+        (cap, cap, cap),
+        (cap + 1, cap, cap + 1),
+        (4096, cap, 4096),
+        (65536, cap, 65536),
+        (u32::MAX, cap, 65536),
+    ] {
+        assert_eq!(effect_cache_budget_bytes_for(stored, true), u64::from(small_mb) * MB, "32-bit, {stored} MB");
+        assert_eq!(effect_cache_budget_bytes_for(stored, false), u64::from(large_mb) * MB, "64-bit, {stored} MB");
+    }
+    let p = Performance { effect_cache_mb: 4096, ..Performance::default() };
+    let expected = effect_cache_budget_bytes_for(4096, cfg!(target_pointer_width = "32"));
+    assert_eq!(u64::try_from(p.effect_cache_budget_bytes()).ok(), Some(expected), "fits this target's usize");
+}
+
+/// The Effect Cache field accepts only what the build honours, so the dialog never shows a value
+/// the cache doesn't get.
+#[test]
+fn the_effect_cache_range_matches_the_honoured_budget() {
+    assert_eq!(effect_cache_max_mb(true), WASM_MEMORY_USAGE_CAP_MB);
+    assert_eq!(effect_cache_max_mb(false), 65536);
+    for small in [true, false] {
+        let max = effect_cache_max_mb(small);
+        assert_eq!(effect_cache_budget_bytes_for(max, small), u64::from(max) << 20, "small = {small}: the largest accepted value is honoured");
+    }
+    assert_eq!(effect_cache_budget_bytes_for(EFFECT_CACHE_MIN_MB, false), u64::from(EFFECT_CACHE_MIN_MB) << 20, "the smallest accepted value is honoured");
+    let small = cfg!(target_pointer_width = "32");
+    assert_eq!(range("performance.effectCacheMb"), Some((f64::from(EFFECT_CACHE_MIN_MB), f64::from(effect_cache_max_mb(small)))));
+    assert!(check_value("performance.effectCacheMb", &json!(effect_cache_max_mb(small))).is_ok());
+    assert!(check_value("performance.effectCacheMb", &json!(effect_cache_max_mb(small) + 1)).is_err());
+    assert!(Performance::default().effect_cache_mb <= effect_cache_max_mb(true), "the default fits the 32-bit cap");
+}
+
+/// An Effect Cache the field no longer accepts loads as the nearest value it does: a 32-bit build
+/// took up to 65536 MB before its 1536 MB cap, and Apply from another Preferences tab sends every
+/// value, so the old one rejected the whole change. On every target: the helper for both kinds of
+/// build, and the load and Apply paths for this one.
+#[test]
+fn an_effect_cache_above_the_cap_loads_clamped_and_does_not_block_apply() {
+    let cap = WASM_MEMORY_USAGE_CAP_MB;
+    for (stored, small_mb, large_mb) in [(0, 16, 16), (768, 768, 768), (cap + 1, cap, cap + 1), (4096, cap, 4096), (65536, cap, 65536), (u32::MAX, cap, 65536)]
+    {
+        assert_eq!(accepted_effect_cache_mb(stored, true), small_mb, "32-bit, {stored} MB");
+        assert_eq!(accepted_effect_cache_mb(stored, false), large_mb, "64-bit, {stored} MB");
+    }
+    let max = effect_cache_max_mb(SMALL_ADDRESS_SPACE);
+    for (saved, loaded) in [(u64::from(max) + 1, max), (u64::from(u32::MAX), max), (0, EFFECT_CACHE_MIN_MB), (768, 768)] {
+        let mut s = session();
+        let invalid = s.load_prefs_json(&json!({"performance": {"effectCacheMb": saved}}).to_string()).unwrap();
+        assert!(invalid.is_empty(), "{saved} MB reads, so it isn't reported: {invalid:?}");
+        assert_eq!(s.execute("prefs.get", json!({"path": "performance.effectCacheMb"})).unwrap(), json!(loaded), "{saved} MB");
+        let mut values = s.execute("prefs.get", json!({"path": ""})).unwrap();
+        values["fileHandling"]["recentFileCount"] = json!(7);
+        s.execute("prefs.set", json!({"path": "", "value": values})).unwrap();
+        assert_eq!(s.execute("prefs.get", json!({"path": "fileHandling.recentFileCount"})).unwrap(), json!(7), "{saved} MB");
+    }
 }

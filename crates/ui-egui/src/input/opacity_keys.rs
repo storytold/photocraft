@@ -1,8 +1,9 @@
 //! Number keys set opacity (#352): 1 = 10% … 9 = 90%, 0 = 100%; two digits
-//! typed quickly set an exact value (4 then 5 = 45%, 0 then 0 = 0%). With the Brush, Pencil or
+//! typed quickly set an exact value (4 then 5 = 45%; 0 then 0 = 100% for the Brush and the Pencil, #11812). With the Brush, Pencil or
 //! Eraser they set the brush's Opacity (⇧: Flow; swapped while airbrush build-up is on); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
-//! active layer's Opacity (⇧: Fill). Tools whose number is a strength or exposure are left alone.
+//! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907). Tools whose
+//! number is a strength or exposure are left alone.
 
 use egui::{Event, Key};
 use serde_json::json;
@@ -25,6 +26,8 @@ enum Target {
     },
     /// The Gradient / Paint Bucket opacity option.
     ToolOpacity,
+    /// The Background Eraser's Tolerance option.
+    BgTolerance,
     /// The active layer's opacity (⇧: fill).
     Layer,
     None,
@@ -32,9 +35,10 @@ enum Target {
 
 fn target(tool: Tool) -> Target {
     match tool {
-        Tool::Brush | Tool::Eraser => Target::Brush { flow: true },
+        Tool::Brush | Tool::Eraser | Tool::CloneStamp | Tool::HistoryBrush => Target::Brush { flow: true },
         Tool::Pencil => Target::Brush { flow: false },
         Tool::Gradient | Tool::PaintBucket => Target::ToolOpacity,
+        Tool::BackgroundEraser => Target::BgTolerance,
         // Their options-bar number is a strength, exposure or tolerance, not this opacity.
         t if t.is_brushlike() || t == Tool::MagicEraser => Target::None,
         _ => Target::Layer,
@@ -107,6 +111,13 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
     let shift = shift ^ (build_up && matches!(target(tool), Target::Brush { flow: true }));
     match (target(app.ui.tool), shift) {
         (Target::Brush { .. }, false) => {
+            // The painting tools' Opacity fields (and `tools.setBrush`) start at 1%, so `00` sets the
+            // 1% they actually paint with rather than a 0% they can't do. The Brush's and the
+            // Pencil's `00` is 100%, as in Photoshop (#11812); only `00` gives 0 here.
+            let v = match tool {
+                Tool::Brush | Tool::Pencil if v <= 0.0 => 1.0,
+                _ => v.max(0.01),
+            };
             let _ = app.run("tools.setBrush", json!({ "brush": { "opacity": v } }));
         }
         // The options bar's Flow field starts at 1%.
@@ -114,6 +125,8 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
             let _ = app.run("tools.setBrush", json!({ "brush": { "flow": v.max(0.01) } }));
         }
         (Target::ToolOpacity, false) => app.ui.tool_options.fill_opacity = percent,
+        // The Tolerance field starts at 1%; `00` (0%) keeps today's value rather than guessing.
+        (Target::BgTolerance, false) if percent >= 1.0 => app.ui.tool_options.bg_tolerance = percent,
         (Target::Layer, _) => {
             // The locked Background has no opacity or fill.
             let Some(st) = app.session.active() else { return };
@@ -160,7 +173,7 @@ mod tests {
         press(&mut a, 0, false, 9000.0);
         assert_eq!(a.session.tools.brush.opacity, 1.0, "0 = 100%");
         press(&mut a, 0, false, 9100.0);
-        assert_eq!(a.session.tools.brush.opacity, 0.0, "00 = 0%");
+        assert_eq!(a.session.tools.brush.opacity, 1.0, "00 = 100%");
         press(&mut a, 2, true, 20000.0);
         assert!((a.session.tools.brush.flow - 0.2).abs() < 1e-6);
         press(&mut a, 0, true, 30000.0);
@@ -199,6 +212,28 @@ mod tests {
         press(&mut e, 7, false, 5000.0);
         assert!((e.session.tools.brush.opacity - 0.7).abs() < 1e-6);
         assert!((e.session.tools.brush.flow - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn history_brush_and_clone_stamp_digits_set_brush_opacity_and_flow() {
+        for tool in [Tool::HistoryBrush, Tool::CloneStamp] {
+            let mut a = app(tool);
+            press(&mut a, 7, false, 0.0);
+            assert!((a.session.tools.brush.opacity - 0.7).abs() < 1e-6);
+            press(&mut a, 4, true, 1000.0);
+            assert!((a.session.tools.brush.flow - 0.4).abs() < 1e-6);
+            assert_eq!(layer(&a), (1.0, 1.0), "the layer is untouched");
+        }
+    }
+
+    #[test]
+    fn double_zero_gives_history_brush_and_clone_stamp_their_one_percent_minimum() {
+        for tool in [Tool::HistoryBrush, Tool::CloneStamp] {
+            let mut a = app(tool);
+            press(&mut a, 0, false, 0.0);
+            press(&mut a, 0, false, 100.0);
+            assert!((a.session.tools.brush.opacity - 0.01).abs() < 1e-6, "{tool:?}");
+        }
     }
 
     #[test]
