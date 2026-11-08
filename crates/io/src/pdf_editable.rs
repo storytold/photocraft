@@ -155,15 +155,17 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
 
 /// Removes stroked glyphs that duplicate a fill at the same place, marking that glyph fake bold.
 fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>, ctl: &Interrupt) -> Result<(), EditableError> {
-    if glyphs.len().saturating_mul(strokes.len()) > MAX_PAIR_CHECKS {
-        return Err(EditableError::Unsupported("too much stroked text"));
-    }
+    let mut checks = 0usize;
     for stroke in strokes {
         let mut matched = false;
         for (index, glyph) in glyphs.iter_mut().enumerate() {
             if index % 256 == 0 && ctl.check().is_err() {
                 return Err(EditableError::Cancelled);
             }
+            if checks == MAX_PAIR_CHECKS {
+                return Err(EditableError::Unsupported("too much stroked text"));
+            }
+            checks += 1;
             let tolerance = 0.01 * glyph.size_px + 0.01;
             if glyph.text == stroke.text
                 && glyph.font.key == stroke.font.key
@@ -460,7 +462,7 @@ impl PathDevice<'_> {
         if path.is_empty() {
             return;
         }
-        if stroke.as_ref().is_some_and(|stroke| !stroke.dashes.is_empty()) && path.subpaths.iter().any(|subpath| subpath.closed && subpath.knots.len() == 1) {
+        if stroke.as_ref().is_some_and(|stroke| !stroke.dashes.is_empty()) && path.subpaths.iter().any(is_zero_length) {
             // A dashed zero-length subpath cannot be reproduced as a single point.
             self.unsupported("a dashed zero-length subpath");
             return;
@@ -572,15 +574,15 @@ impl<'a> Device<'a> for PathDevice<'_> {
         if self.unsupported.is_some() {
             return;
         }
+        if matches!(draw_mode, GlyphDrawMode::Invisible) {
+            return;
+        }
         if self.soft_mask {
             self.unsupported("soft masks");
             return;
         }
         if self.ctl.check().is_err() {
             self.cancelled = true;
-            return;
-        }
-        if matches!(draw_mode, GlyphDrawMode::Invisible) {
             return;
         }
         if matches!(draw_mode, GlyphDrawMode::Clip) {
@@ -817,6 +819,11 @@ fn axis_aligned_rect(path: &BezPath) -> Option<(f64, f64, f64, f64)> {
         return None;
     }
     Some((x0, y0, x1, y1))
+}
+
+/// Whether every knot of a subpath shares the first anchor (a zero-length subpath).
+fn is_zero_length(subpath: &Subpath) -> bool {
+    subpath.knots.first().is_some_and(|first| subpath.knots.iter().all(|knot| knot.anchor.x == first.anchor.x && knot.anchor.y == first.anchor.y))
 }
 
 /// Whether a path transform keeps circles circular: both axes the same length and perpendicular.
@@ -1503,6 +1510,18 @@ mod tests {
         let path = to_path(&bez, &Affine::IDENTITY, &mut knots).expect("a path");
         assert_eq!(path.subpaths.len(), 1);
         assert!(path.subpaths[0].knots.len() >= 2);
+    }
+
+    #[test]
+    fn a_dashed_zero_length_line_falls_back() {
+        let bytes = pdf("[1 1] 0 d 10 10 m 20 20 l 30 30 m h S");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("dash.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
+        assert!(
+            imported.warnings.iter().any(|warning| warning.contains("dashed zero-length subpath") && warning.contains("rasterised")),
+            "{:?}",
+            imported.warnings
+        );
     }
 
     #[test]
