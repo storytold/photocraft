@@ -917,6 +917,33 @@ fn render_video_rejects_gif_frames_too_large_to_stage() {
 }
 
 #[test]
+fn render_video_rejects_a_gif_whose_frames_together_are_too_large() {
+    // Each 4000 x 4000 frame is under the per-frame cap, but 100,000 of them keep ~1.6 TB staged.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4000, "height": 4000})).unwrap();
+    s.execute("timeline.create", json!({"duration": 100_000, "fps": 30})).unwrap();
+    let err = s.execute("file.export.renderVideo", json!({"dir": tmpdir("many-gif"), "format": "gif"})).unwrap_err();
+    assert!(err.to_string().contains("staged in total"), "{err}");
+}
+
+#[test]
+fn gif_budget_boundaries() {
+    // Sane work is untouched: a minute of 1080p at 30 fps, and the existing small cases.
+    assert!(check_gif_budget(1920, 1080, 1000).is_ok());
+    assert!(check_gif_budget(16, 12, 1).is_ok());
+    // Exactly at the limit passes, one frame more fails.
+    let per_frame = 1000 * 1000 + 768;
+    let n = MAX_GIF_STAGED_BYTES / per_frame;
+    assert!(check_gif_budget(1000, 1000, n).is_ok());
+    assert!(check_gif_budget(1000, 1000, n + 1).is_err());
+    // The per-frame cap and the 16-bit GIF side still apply, and nothing overflows.
+    assert!(check_gif_budget(9000, 8000, 1).is_err());
+    assert!(check_gif_budget(65_536, 1, 1).is_err());
+    assert!(check_gif_budget(65_535, 65_535, u64::MAX).is_err());
+    assert!(check_gif_budget(1, 1, u64::MAX).is_err());
+}
+
+#[test]
 fn fps_from_delays_picks_most_common_and_breaks_ties_by_first_seen() {
     // Most common delay wins: 100 ms appears twice, 40 ms once -> 10 fps.
     assert_eq!(fps_from_delays(&[100, 40, 100]), Some(10.0));
