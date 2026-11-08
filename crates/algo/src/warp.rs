@@ -233,8 +233,9 @@ pub fn facets_of(warp: &photocraft_geom::warp::Warp) -> Facets {
 /// How [`warp_patches_surface`] samples the source (bilinearly either way).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sampling {
-    /// One sample per pixel, as the reference application's renders of its warps show (also where
-    /// the warp itself squeezes the source).
+    /// One bilinear sample per pixel, as the reference application's renders of its warps show;
+    /// where the warp squeezes the source 2× or more along a destination row, from a box mip
+    /// level (see `mip_level`).
     Single,
     /// The pixel's source footprint averaged, so a strong reduction doesn't alias.
     Footprint,
@@ -497,6 +498,49 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
 const MAX_DST_TILES: u64 = 1 << 20;
 /// Source pixels one destination tile may read densely.
 const MAX_FOOTPRINT_PIXELS: u64 = 1 << 25;
+/// Coarsest mip level a [`Sampling::Single`] warp samples (a 1024× reduction).
+const MAX_MIP_LEVEL: u32 = 10;
+
+/// The mip level a single-sample warp reads where one destination pixel to the right steps `jx`
+/// through the source: `floor(log2 |jx|)`, 0 below a 2× reduction. The reference application's
+/// warp probes pick it from that step alone: a strong vertical squeeze (a top or bottom fold)
+/// stays at full resolution.
+fn mip_level(jx: [f64; 2]) -> u32 {
+    let l = jx[0].hypot(jx[1]);
+    if l.is_finite() && l >= 2.0 { (l.log2().floor() as u32).min(MAX_MIP_LEVEL) } else { 0 }
+}
+
+/// Box-filtered premultiplied levels `1..` of a window whose origin lies on the level grid of the
+/// whole source (texels outside the source are transparent): level `k`'s texel `(i, j)` averages
+/// the `2^k`-square block from the window's origin, as one pyramid of the whole source would.
+fn mip_levels(px: &[f32], fw: usize, fh: usize, n: usize, levels: u32) -> Vec<(Vec<f32>, usize, usize)> {
+    let mut out: Vec<(Vec<f32>, usize, usize)> = Vec::new();
+    for _ in 0..levels {
+        let (prev, pw, ph) = match out.last() {
+            Some((p, w, h)) => (p.as_slice(), *w, *h),
+            None => (px, fw, fh),
+        };
+        let (nw, nh) = (pw.div_ceil(2), ph.div_ceil(2));
+        let mut next = vec![0.0f32; nw * nh * n];
+        for y in 0..nh {
+            for x in 0..nw {
+                let o = (y * nw + x) * n;
+                for (sy, sx) in [(2 * y, 2 * x), (2 * y, 2 * x + 1), (2 * y + 1, 2 * x), (2 * y + 1, 2 * x + 1)] {
+                    if sx < pw && sy < ph {
+                        let i = (sy * pw + sx) * n;
+                        if let (Some(d), Some(s)) = (next.get_mut(o..o + n), prev.get(i..i + n)) {
+                            for (d, s) in d.iter_mut().zip(s) {
+                                *d += 0.25 * s;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out.push((next, nw, nh));
+    }
+    out
+}
 
 fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt, single: bool) -> Surface {
     let mut fmt = src.format();
@@ -594,11 +638,14 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         let mut uv = vec![[f64::NAN; 2]; w * h];
         let mut owner = vec![0u32; w * h];
         let mut jac: Vec<([f64; 4], usize, usize)> = Vec::with_capacity(tris.len());
+        // A single-sample warp's mip level per triangle (see `mip_level`).
+        let mut lev: Vec<u32> = Vec::with_capacity(tris.len());
         for (k, tri) in tris.iter().enumerate() {
             let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
             let det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
             if det.abs() < 1e-12 {
                 jac.push(([0.0; 4], 1, 1));
+                lev.push(0);
                 continue;
             }
             let (d1, d2) = ([s1[0] - s0[0], s1[1] - s0[1]], [s2[0] - s0[0], s2[1] - s0[1]]);
@@ -608,7 +655,9 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 let l = j[0].hypot(j[1]);
                 if l > MAX_SS { [j[0] * MAX_SS / l, j[1] * MAX_SS / l] } else { j }
             };
-            let jx = cap([l1x * d1[0] + l2x * d2[0], l1x * d1[1] + l2x * d2[1]]);
+            let raw_jx = [l1x * d1[0] + l2x * d2[0], l1x * d1[1] + l2x * d2[1]];
+            lev.push(if single && interp == Interp::Bilinear { mip_level(raw_jx) } else { 0 });
+            let jx = cap(raw_jx);
             let jy = cap([l1y * d1[0] + l2y * d2[0], l1y * d1[1] + l2y * d2[1]]);
             let (nx, ny) = (count(jx), count(jy));
             jac.push(if nx * ny == 1 { ([0.0; 4], 1, 1) } else { ([jx[0], jx[1], jy[0], jy[1]], nx, ny) });
@@ -634,9 +683,13 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             }
         }
         // Source footprint of the covered pixels, including the spread of their subsamples.
+        // A mip level's taps reach up to 1.5 texels (of 2^level pixels) from the sample.
         let (mut fx0, mut fy0, mut fx1, mut fy1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for (q, j) in uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(q, &k)| (q, jac[k as usize].0)) {
-            let (ex, ey) = (0.5 * (j[0].abs() + j[2].abs()), 0.5 * (j[1].abs() + j[3].abs()));
+        let mut top_level = 0u32;
+        for (q, j, l) in uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(q, &k)| (q, jac[k as usize].0, lev.get(k as usize).copied().unwrap_or(0))) {
+            top_level = top_level.max(l);
+            let m = if l > 0 { 1.5 * f64::from(1u32 << l) } else { 0.0 };
+            let (ex, ey) = (0.5 * (j[0].abs() + j[2].abs()) + m, 0.5 * (j[1].abs() + j[3].abs()) + m);
             fx0 = fx0.min(q[0] - ex);
             fy0 = fy0.min(q[1] - ey);
             fx1 = fx1.max(q[0] + ex);
@@ -645,7 +698,14 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         if fx0 > fx1 {
             return None;
         }
-        let foot = Rect::new(fx0.floor() as i32 - 3, fy0.floor() as i32 - 3, fx1.ceil() as i32 + 3, fy1.ceil() as i32 + 3).intersect(&src_rect);
+        let mut foot = Rect::new(fx0.floor() as i32 - 3, fy0.floor() as i32 - 3, fx1.ceil() as i32 + 3, fy1.ceil() as i32 + 3).intersect(&src_rect);
+        // Mip levels are built from the window: start it on the source's level grid, so its
+        // blocks are the whole pyramid's (only the source's own far edge leaves part blocks).
+        if top_level > 0 && !foot.is_empty() {
+            let b = 1i32 << top_level;
+            let snap = |v: i32, o: i32| o + (v - o).div_euclid(b) * b;
+            foot = Rect::new(snap(foot.x0, src_rect.x0), snap(foot.y0, src_rect.y0), snap(foot.x1 - 1, src_rect.x0).saturating_add(b), snap(foot.y1 - 1, src_rect.y0).saturating_add(b)).intersect(&src_rect);
+        }
         // Sparse components far apart in the source can land in one tile: the dense window
         // between them is not read (the tile stays empty). The pixel-area cap is checked first:
         // `has_tiles_in` walks the source tile grid, so an oversized footprint must return
@@ -661,6 +721,31 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             }
         }
         let fw = foot.width() as usize;
+        let mips = if top_level > 0 { mip_levels(&px, fw, foot.height() as usize, n, top_level) } else { Vec::new() };
+        // One premultiplied bilinear tap of mip level `l` (>= 1) at source position `q`, with the
+        // reference's 1/256-step weights; texels past the source are transparent.
+        let mip_tap = |l: u32, q: [f64; 2], acc: &mut [f64; 8]| {
+            acc[..n].fill(0.0);
+            let Some((m, mw, mh)) = mips.get(l as usize - 1) else { return };
+            let sc = f64::from(1u32 << l);
+            let (cx, cy) = ((q[0] - f64::from(foot.x0)) / sc - 0.5, (q[1] - f64::from(foot.y0)) / sc - 0.5);
+            let (ix, iy) = (cx.floor(), cy.floor());
+            let (fx, fy) = (((cx - ix) * 256.0).floor() / 255.0, ((cy - iy) * 256.0).floor() / 255.0);
+            for (dy, wy) in [(0.0, 1.0 - fy), (1.0, fy)] {
+                for (dx, wx) in [(0.0, 1.0 - fx), (1.0, fx)] {
+                    let (x, y) = (ix + dx, iy + dy);
+                    if x < 0.0 || y < 0.0 || x >= *mw as f64 || y >= *mh as f64 {
+                        continue;
+                    }
+                    let o = (y as usize * mw + x as usize) * n;
+                    if let Some(p) = m.get(o..o + n) {
+                        for (s, v) in acc.iter_mut().zip(p) {
+                            *s += f64::from(*v) * wx * wy;
+                        }
+                    }
+                }
+            }
+        };
         let at = |x: i32, y: i32, c: usize| -> f64 {
             if x < foot.x0 || y < foot.y0 || x >= foot.x1 || y >= foot.y1 {
                 0.0
@@ -751,7 +836,10 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 continue;
             }
             let (j, nx, ny) = jac[k as usize];
-            if nx * ny == 1 {
+            let l = lev.get(k as usize).copied().unwrap_or(0);
+            if l > 0 {
+                mip_tap(l, *q, &mut acc);
+            } else if nx * ny == 1 {
                 point(interp, q[0] - 0.5, q[1] - 0.5, &mut acc);
             } else {
                 acc[..n].fill(0.0);
@@ -997,6 +1085,88 @@ mod tests {
         assert_eq!(Sampling::for_scale(0.5), Sampling::Single);
         assert_eq!(Sampling::for_scale(0.49), Sampling::Footprint);
         assert_eq!(Sampling::for_scale(f64::NAN), Sampling::Footprint);
+    }
+
+    #[test]
+    fn the_mip_level_follows_the_step_along_a_row() {
+        assert_eq!(mip_level([1.0, 0.0]), 0);
+        assert_eq!(mip_level([1.99, 0.0]), 0);
+        assert_eq!(mip_level([2.0, 0.0]), 1);
+        // A flag's left edge at 100 %: one pixel right is 1 px across and 5.7 px down the source.
+        assert_eq!(mip_level([1.0, 5.72]), 2);
+        assert_eq!(mip_level([0.0, -9.0]), 3);
+        assert_eq!(mip_level([f64::NAN, 0.0]), 0);
+        assert_eq!(mip_level([f64::INFINITY, 0.0]), 0);
+        assert_eq!(mip_level([1e300, 0.0]), MAX_MIP_LEVEL);
+    }
+
+    #[test]
+    fn mip_levels_average_blocks_with_transparency_past_the_edge() {
+        // A 3 x 3 window of one channel: level 1 is 2 x 2, its far blocks part outside.
+        let px: Vec<f32> = (1..=9).map(|v| v as f32).collect();
+        let m = mip_levels(&px, 3, 3, 1, 2);
+        assert_eq!((m[0].1, m[0].2), (2, 2));
+        assert_eq!(m[0].0, vec![(1.0 + 2.0 + 4.0 + 5.0) / 4.0, (3.0 + 6.0) / 4.0, (7.0 + 8.0) / 4.0, 9.0 / 4.0]);
+        assert_eq!((m[1].1, m[1].2), (1, 1));
+        assert!((m[1].0[0] - 45.0 / 16.0).abs() < 1e-6);
+        assert!(mip_levels(&[], 0, 0, 4, 3).iter().all(|(p, _, _)| p.is_empty()));
+    }
+
+    /// The reference application's warp reads a box mip level where it squeezes the source along a
+    /// destination row: 1 px stripes squeezed four times across come out their average grey. A
+    /// squeeze down the columns keeps full resolution (one bilinear sample, so stripes stay).
+    #[test]
+    fn a_warp_squeezed_along_rows_samples_a_mip_level() {
+        let stripes = |vertical: bool, w: i32, h: i32| {
+            let mut src = Surface::new(PixelFormat::RGBA8);
+            let px: Vec<f32> = (0..h).flat_map(|y| (0..w).map(move |x| if (if vertical { x } else { y }) % 2 == 0 { 0.0 } else { 1.0 })).flat_map(|v| [v, v, v, 1.0]).collect();
+            src.write_region(Rect::new(0, 0, w, h), &px);
+            src
+        };
+        let across = Warp::custom(photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, 16.0, 64.0], 1, 1), [0.0, 0.0, 64.0, 64.0]);
+        let out = place_source(&stripes(true, 64, 64), Rect::new(0, 0, 64, 64), &photocraft_geom::Affine::IDENTITY, Some(&across)).unwrap();
+        let o = out.read_region(Rect::new(2, 2, 14, 62));
+        let worst = o.as_chunks::<4>().0.iter().map(|p| (p[0] - 0.5).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 0.01, "squeezed across: worst deviation from grey {worst}");
+        // Three times down: each pixel centre lands on a stripe's centre (4x would land between two).
+        let down = Warp::custom(photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, 64.0, 16.0], 1, 1), [0.0, 0.0, 64.0, 48.0]);
+        let out = place_source(&stripes(false, 64, 48), Rect::new(0, 0, 64, 48), &photocraft_geom::Affine::IDENTITY, Some(&down)).unwrap();
+        let o = out.read_region(Rect::new(2, 2, 62, 14));
+        let worst = o.as_chunks::<4>().0.iter().map(|p| (p[0] - 0.5).abs()).fold(0.0f32, f32::max);
+        assert!(worst > 0.2, "squeezed down: rows are point-sampled, not averaged ({worst})");
+    }
+
+    /// The mip levels are those of one pyramid over the whole source, whatever tiles the output and
+    /// the source fall in: a flag (levels up to 2) drawn from a source moved by an odd offset is
+    /// the same picture moved.
+    #[test]
+    fn mip_levels_follow_the_source_not_the_tile_grid() {
+        let (w, h) = (300, 200);
+        let mut seed = 0x2545_f491u32;
+        let px: Vec<f32> = (0..w * h)
+            .flat_map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                [(seed & 255) as f32 / 255.0, ((seed >> 8) & 255) as f32 / 255.0, ((seed >> 16) & 255) as f32 / 255.0, 1.0]
+            })
+            .collect();
+        let draw = |dx: i32, dy: i32| {
+            let mut src = Surface::new(PixelFormat::RGBA8);
+            let r = Rect::new(dx, dy, dx + w, dy + h);
+            src.write_region(r, &px);
+            let warp = Warp::preset(WarpStyle::Flag, 100.0, [f64::from(dx), f64::from(dy), f64::from(dx + w), f64::from(dy + h)]);
+            let out = place_source(&src, r, &photocraft_geom::Affine::IDENTITY, Some(&warp)).unwrap();
+            out.read_region(Rect::new(dx - 20, dy - 120, dx + w + 20, dy + h + 120))
+        };
+        let (a, b) = (draw(0, 0), draw(37, 11));
+        let diff: Vec<f32> = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).collect();
+        let off = diff.iter().filter(|d| **d > 1e-3).count();
+        let worst = diff.iter().fold(0.0f32, |m, d| m.max(*d));
+        assert!(a.iter().skip(3).step_by(4).filter(|v| **v > 0.5).count() > 40_000, "the flag is drawn");
+        // Float noise from the moved vertices tips a rare weight (well under 1 % of values) by one
+        // 8-bit step; a pyramid on another grid would average other pixels (tenths off).
+        assert!(off * 100 < diff.len() && worst < 1.5 / 255.0, "{off} values differ, worst {worst}");
     }
 
     #[test]
