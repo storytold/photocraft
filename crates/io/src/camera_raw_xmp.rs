@@ -3,8 +3,12 @@
 //! `x:xmpmeta/rdf:RDF/rdf:Description`, as attributes or as child elements.
 //!
 //! Loading applies only the settings the file holds, over the current ones, as Camera Raw's
-//! Load Settings does; settings PhotoCraft has no control for (lens corrections, geometry,
-//! defringe, …) are ignored and named in the report. The same reader fills the dialog from a
+//! Load Settings does; settings PhotoCraft has no control for (lens corrections, defringe, …)
+//! are ignored and named in the report. Geometry maps to `crs:PerspectiveUpright` and the
+//! `crs:Perspective*` sliders; Guided Upright's guides, which Camera Raw keeps in its own
+//! precomputed form, are PhotoCraft's `photocraft:UprightGuides` (see [`PHOTOCRAFT_NS`]).
+//! Camera Raw's cached Upright solution (`crs:UprightTransform_0`, …) is worked out again, not
+//! read, and isn't reported. The same reader fills the dialog from a
 //! raw file's sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`), and the writer keeps it. Saving writes every supported
 //! control, so loading the file in Photoshop reproduces the dialog.
 //!
@@ -15,9 +19,17 @@
 
 use photocraft_algo::camera_raw::{CameraRaw, validate_curve};
 
+/// `crs:PerspectiveUpright` in Camera Raw's numbering (as ExifTool and Lightroom read it), which
+/// is not the order of `UPRIGHT_MODES`.
+const UPRIGHT: [(usize, &str); 6] = [(0, "off"), (1, "auto"), (2, "full"), (3, "level"), (4, "vertical"), (5, "guided")];
+
 /// The Camera Raw settings namespace.
 pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+/// PhotoCraft's own settings namespace: Guided Upright's guides (`photocraft:UprightGuides`, a
+/// JSON array of `[[x, y], [x, y]]` endpoints as fractions of the frame).
+pub const PHOTOCRAFT_NS: &str = "https://photocraft.app/ns/camera-raw/1.0/";
+const GUIDES_ATTR: &str = "UprightGuides";
 /// Largest settings file read; real ones are a few kilobytes.
 pub const MAX_XMP_BYTES: usize = 4 * 1024 * 1024;
 
@@ -109,6 +121,14 @@ const SCALARS: &[(&str, Field, f32, f32)] = &[
     ("GreenSaturation", |p| &mut p.calibration_sat[1], -100.0, 100.0),
     ("BlueHue", |p| &mut p.calibration_hue[2], -100.0, 100.0),
     ("BlueSaturation", |p| &mut p.calibration_sat[2], -100.0, 100.0),
+    // Geometry › Manual Transformations
+    ("PerspectiveVertical", |p| &mut p.transform_vertical, -100.0, 100.0),
+    ("PerspectiveHorizontal", |p| &mut p.transform_horizontal, -100.0, 100.0),
+    ("PerspectiveRotate", |p| &mut p.transform_rotate, -10.0, 10.0),
+    ("PerspectiveScale", |p| &mut p.transform_scale, 50.0, 150.0),
+    ("PerspectiveAspect", |p| &mut p.transform_aspect, -100.0, 100.0),
+    ("PerspectiveX", |p| &mut p.transform_offset_x, -100.0, 100.0),
+    ("PerspectiveY", |p| &mut p.transform_offset_y, -100.0, 100.0),
 ];
 
 type Curve = fn(&mut CameraRaw) -> &mut Vec<[f32; 2]>;
@@ -192,9 +212,21 @@ fn neutral(name: &str, value: &str) -> bool {
     match name {
         "GrainSeed" => true,
         "VignetteMidpoint" => number(v) == Some(50.0),
-        "PerspectiveScale" => number(v) == Some(100.0),
         _ => name.starts_with("Defringe") && name.contains("Hue"),
     }
+}
+
+/// `crs:PerspectiveUpright`'s mode, in Camera Raw's numbering.
+fn upright_mode(value: &str) -> Option<&'static str> {
+    value.trim().parse::<usize>().ok().and_then(|i| UPRIGHT.iter().find(|(n, _)| *n == i)).map(|(_, mode)| *mode)
+}
+
+/// Camera Raw's cached Upright solution (`UprightVersion`, `UprightTransform_0`…, the centre and
+/// focal fields, digests): what it worked out from the mode, which PhotoCraft works out itself,
+/// so it isn't reported as ignored. Its Guided guides (`UprightFourSegments_0`…) are the
+/// user's, and PhotoCraft can't read them, so those still are.
+fn adobe_upright_solution(name: &str) -> bool {
+    name.starts_with("Upright") && !name.starts_with("UprightFourSegments_")
 }
 
 fn apply(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value: &str) {
@@ -214,9 +246,25 @@ fn apply(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value: &st
             }
             None => report.ignored.push(name.to_string()),
         }
+    } else if name == "PerspectiveUpright" {
+        match upright_mode(value) {
+            Some(mode) => {
+                params.upright = mode.into();
+                report.applied += 1;
+            }
+            None => report.ignored.push(name.to_string()),
+        }
+    } else if adobe_upright_solution(name) {
+        // PhotoCraft works the correction out again from the mode (and its own guides).
     } else if !METADATA.contains(&name) && !neutral(name, value) {
         report.ignored.push(name.to_string());
     }
+}
+
+/// `photocraft:UprightGuides`: at most four guides with finite endpoints in `0..=1`.
+fn guides(value: &str) -> Option<Vec<[[f32; 2]; 2]>> {
+    let g: Vec<[[f32; 2]; 2]> = serde_json::from_str(value).ok()?;
+    (g.len() <= 4 && g.iter().flatten().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v))).then_some(g)
 }
 
 /// Apply a Camera Raw settings file over `params`. Fails on input that isn't XMP or holds no
@@ -232,10 +280,29 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
     let mut next = params.clone();
     let mut report = LoadReport::default();
     let mut found = false;
+    // Whether the file chose an Upright mode, and gave PhotoCraft guides.
+    let (mut upright, mut guided) = (false, false);
     for desc in doc.descendants().filter(|n| n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == "Description") {
         for a in desc.attributes().filter(|a| a.namespace() == Some(CRS_NS)) {
             found = true;
+            upright |= a.name() == "PerspectiveUpright" && upright_mode(a.value()).is_some();
             apply(&mut next, &mut report, a.name(), a.value());
+        }
+        // An attribute as PhotoCraft writes it, or a child element as another XMP tool may.
+        let written = desc.attribute((PHOTOCRAFT_NS, GUIDES_ATTR)).or_else(|| {
+            desc.children()
+                .find(|c| c.is_element() && c.tag_name().namespace() == Some(PHOTOCRAFT_NS) && c.tag_name().name() == GUIDES_ATTR)
+                .map(|c| c.text().unwrap_or(""))
+        });
+        if let Some(value) = written {
+            match guides(value) {
+                Some(g) => {
+                    next.upright_guides = g;
+                    guided = true;
+                    report.applied += 1;
+                }
+                None => report.ignored.push(GUIDES_ATTR.to_string()),
+            }
         }
         for c in desc.children().filter(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS)) {
             found = true;
@@ -254,12 +321,19 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
                     report.ignored.push(name.to_string());
                 }
             } else {
-                apply(&mut next, &mut report, name, c.text().unwrap_or(""));
+                let value = c.text().unwrap_or("");
+                upright |= name == "PerspectiveUpright" && upright_mode(value).is_some();
+                apply(&mut next, &mut report, name, value);
             }
         }
     }
     if !found {
         return Err("no Camera Raw settings in the file".into());
+    }
+    // The guides belong to the mode the file chose: without guides of its own (another mode, or
+    // Guided from Camera Raw), the ones drawn before don't carry over.
+    if upright && !guided {
+        next.upright_guides.clear();
     }
     *params = next;
     Ok(report)
@@ -307,7 +381,7 @@ pub fn save(params: &CameraRaw) -> String {
         // Exposure has two decimals in Camera Raw, the sharpening radius one; the rest are levels.
         let text = match *name {
             "Exposure2012" => signed(v, 2),
-            "SharpenRadius" => signed(v, 1),
+            "SharpenRadius" | "PerspectiveRotate" => signed(v, 1),
             _ if *lo < 0.0 => signed(v.round(), 0),
             _ => format!("{:.0}", v.round()),
         };
@@ -315,6 +389,13 @@ pub fn save(params: &CameraRaw) -> String {
     }
     let style = STYLES.iter().find(|(_, s)| *s == p.vignette_style).map_or("1", |(n, _)| n);
     out.push_str(&format!("   crs:PostCropVignetteStyle=\"{}\"\n", escape(style)));
+    let upright = UPRIGHT.iter().find(|(_, m)| *m == p.upright).map_or(0, |(n, _)| *n);
+    out.push_str(&format!("   crs:PerspectiveUpright=\"{upright}\"\n"));
+    if !p.upright_guides.is_empty() {
+        let json = serde_json::to_string(&p.upright_guides).unwrap_or_default();
+        out.push_str(&format!("   photocraft:{GUIDES_ATTR}=\"{}\"\n", escape(&json)));
+        out = out.replacen("    xmlns:crs=", &format!("    xmlns:photocraft=\"{PHOTOCRAFT_NS}\"\n    xmlns:crs="), 1);
+    }
     out.push_str("   crs:ToneCurveName2012=\"Custom\"\n   crs:HasSettings=\"True\">\n");
     for (name, field) in CURVES {
         let points = field(&mut p);
@@ -384,7 +465,7 @@ mod tests {
         assert!(p.point_curve.is_empty());
         assert_eq!(p.point_curve_red, vec![[0.0, 0.0], [128.0, 140.0], [255.0, 255.0]]);
         assert_eq!(p.dehaze, 12.0);
-        // Lens vignetting, calibration and geometry have no counterpart.
+        // Lens vignetting has no counterpart.
         assert_eq!(r.ignored, vec!["VignetteAmount".to_string()], "the Calibration panel's keys load now");
         assert_eq!(p.calibration_hue[0], -5.0);
     }
@@ -425,6 +506,109 @@ mod tests {
         assert_eq!(back, p);
     }
 
+    /// Geometry: Upright's mode and the Manual Transformations are Camera Raw's own fields;
+    /// Guided Upright's guides round-trip through PhotoCraft's namespace.
+    #[test]
+    fn geometry_round_trips_and_reads_camera_raws_fields() {
+        let p = CameraRaw {
+            upright: "guided".into(),
+            upright_guides: vec![[[0.22, 0.1], [0.18, 0.9]], [[0.78, 0.1], [0.82, 0.9]]],
+            transform_rotate: 2.5,
+            transform_scale: 110.0,
+            transform_offset_y: -10.0,
+            ..CameraRaw::default()
+        };
+        let text = save(&p);
+        assert!(text.contains("crs:PerspectiveUpright=\"5\"") && text.contains("crs:PerspectiveRotate=\"+2.5\""), "{text}");
+        assert!(text.contains("xmlns:photocraft=") && is_photocraft_xmp(text.as_bytes()));
+        let mut back = CameraRaw::default();
+        let r = load(&mut back, text.as_bytes()).unwrap();
+        assert!(r.ignored.is_empty(), "{:?}", r.ignored);
+        assert_eq!(back, p);
+        // Without guides there is no PhotoCraft attribute; Camera Raw's Vertical is mode 4.
+        let text = save(&CameraRaw { upright: "vertical".into(), ..CameraRaw::default() });
+        assert!(!text.contains("photocraft:") && text.contains("crs:PerspectiveUpright=\"4\""));
+        // Camera Raw's own numbering, both ways: 2 Full, 3 Level, 4 Vertical.
+        for (n, mode) in [(0, "off"), (1, "auto"), (2, "full"), (3, "level"), (4, "vertical"), (5, "guided")] {
+            let text = save(&CameraRaw { upright: mode.into(), ..CameraRaw::default() });
+            assert!(text.contains(&format!("crs:PerspectiveUpright=\"{n}\"")), "{mode}");
+            let mut back = CameraRaw::default();
+            load(&mut back, text.as_bytes()).unwrap();
+            assert_eq!(back.upright, mode);
+        }
+        let mut q = CameraRaw::default();
+        load(&mut q, FIXTURE.to_vec().as_slice()).unwrap();
+        assert_eq!((q.upright.as_str(), q.transform_scale), ("off", 100.0), "Camera Raw's neutral Scale is 100");
+        // Malformed guides are reported, not applied.
+        let bad = text.replacen(
+            "crs:HasSettings",
+            "photocraft:UprightGuides=\"[[[2,0],[0,0]]]\" xmlns:photocraft=\"https://photocraft.app/ns/camera-raw/1.0/\" crs:HasSettings",
+            1,
+        );
+        let mut q = CameraRaw::default();
+        assert_eq!(load(&mut q, bad.as_bytes()).unwrap().ignored, vec!["UprightGuides".to_string()]);
+        assert!(q.upright_guides.is_empty());
+    }
+
+    /// Camera Raw caches the Upright solution it worked out beside the mode; PhotoCraft works
+    /// it out again, so those fields aren't reported. Its Guided guides are, since PhotoCraft
+    /// can't read them.
+    #[test]
+    fn camera_raws_cached_upright_solution_is_not_reported() {
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PerspectiveUpright="2"
+             crs:UprightVersion="151388160" crs:UprightCenterMode="0" crs:UprightCenterNormX="0.5" crs:UprightCenterNormY="0.5"
+             crs:UprightFocalMode="0" crs:UprightFocalLength35mm="35" crs:UprightPreview="False" crs:UprightTransformCount="6"
+             crs:UprightTransform_0="1.009 0.003 -0.006 0.011 1.002 -0.007 0.024 0.008 1"
+             crs:UprightDependentDigest="0A1B2C3D4E5F" crs:UprightFourSegmentsCount="0"/></rdf:RDF></x:xmpmeta>"#;
+        let mut p = CameraRaw::default();
+        let r = load(&mut p, xmp).unwrap();
+        assert_eq!(r, LoadReport { applied: 1, ignored: vec![] });
+        assert_eq!(p.upright, "full");
+        let guided = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PerspectiveUpright="5"
+             crs:UprightFourSegmentsCount="2" crs:UprightFourSegments_0="0.2,0.1,0.18,0.9" crs:UprightFourSegments_1="0.8,0.1,0.82,0.9"/>
+            </rdf:RDF></x:xmpmeta>"#;
+        let r = load(&mut p, guided).unwrap();
+        assert_eq!(r.ignored, vec!["UprightFourSegments_0".to_string(), "UprightFourSegments_1".to_string()]);
+    }
+
+    /// Load Settings applies over the dialog's settings, but the guides drawn before belong to
+    /// the mode they were drawn for: a file that picks a mode without PhotoCraft guides (another
+    /// mode, or Guided from Camera Raw) clears them, as choosing a mode in the dialog does.
+    #[test]
+    fn loading_an_upright_mode_without_guides_clears_the_old_ones() {
+        let drawn = CameraRaw { upright: "guided".into(), upright_guides: vec![[[0.2, 0.1], [0.2, 0.9]], [[0.8, 0.1], [0.8, 0.9]]], ..CameraRaw::default() };
+        let file = |attrs: &str, children: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:photocraft="https://photocraft.app/ns/camera-raw/1.0/" {attrs}>{children}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        for (attrs, children) in
+            [(r#"crs:PerspectiveUpright="5""#, ""), (r#"crs:PerspectiveUpright="4""#, ""), ("", "<crs:PerspectiveUpright>5</crs:PerspectiveUpright>")]
+        {
+            let mut p = drawn.clone();
+            load(&mut p, file(attrs, children).as_bytes()).unwrap();
+            assert!(p.upright_guides.is_empty(), "{attrs}{children}: {:?}", p.upright_guides);
+        }
+        // The file's own guides replace them, whichever form its mode is in.
+        let theirs = r#"photocraft:UprightGuides="[[[0.3,0.1],[0.3,0.9]]]""#;
+        for (attrs, children) in
+            [(format!(r#"crs:PerspectiveUpright="5" {theirs}"#), ""), (theirs.to_string(), "<crs:PerspectiveUpright>5</crs:PerspectiveUpright>")]
+        {
+            let mut p = drawn.clone();
+            load(&mut p, file(&attrs, children).as_bytes()).unwrap();
+            assert_eq!(p.upright_guides, vec![[[0.3, 0.1], [0.3, 0.9]]], "{attrs}{children}");
+        }
+        // A file that leaves Upright alone (or names no mode PhotoCraft knows) keeps them.
+        for attrs in [r#"crs:Exposure2012="+0.5""#, r#"crs:PerspectiveUpright="9""#] {
+            let mut p = drawn.clone();
+            load(&mut p, file(attrs, "").as_bytes()).unwrap();
+            assert_eq!(p.upright_guides, drawn.upright_guides, "{attrs}");
+        }
+    }
+
     #[test]
     fn load_applies_only_the_settings_in_the_file() {
         let mut p = CameraRaw { contrast: 40.0, ..CameraRaw::default() };
@@ -458,6 +642,23 @@ mod tests {
         let r = load(&mut p, xmp).unwrap();
         assert_eq!(p, before);
         assert_eq!(r.ignored, vec!["Contrast2012".to_string(), "ToneCurvePV2012".to_string()]);
+    }
+
+    /// `photocraft:UprightGuides` as a child element, which another XMP tool may write it as, reads
+    /// like the attribute; bad text is reported as before.
+    #[test]
+    fn upright_guides_as_a_child_element_are_read() {
+        let xmp = |text: &str| {
+            format!(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\" xmlns:photocraft=\"{PHOTOCRAFT_NS}\" crs:PerspectiveUpright=\"5\"><photocraft:{GUIDES_ATTR}>{text}</photocraft:{GUIDES_ATTR}></rdf:Description></rdf:RDF></x:xmpmeta>"
+            )
+        };
+        let mut p = CameraRaw::default();
+        load(&mut p, xmp("[[[0.25,0.5],[0.25,0.75]]]").as_bytes()).unwrap();
+        assert_eq!((p.upright.as_str(), p.upright_guides), ("guided", vec![[[0.25, 0.5], [0.25, 0.75]]]));
+        let mut p = CameraRaw::default();
+        let report = load(&mut p, xmp("not guides").as_bytes()).unwrap();
+        assert!(report.ignored.iter().any(|n| n == GUIDES_ATTR), "{report:?}");
     }
 
     #[test]
