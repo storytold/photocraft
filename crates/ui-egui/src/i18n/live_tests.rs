@@ -336,7 +336,7 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
 
 #[test]
 fn missing_or_unsupported_system_languages_render_english() {
-    for tags in [vec![], vec!["sw-KE", "is-IS"]] {
+    for tags in [vec![], vec!["xh-ZA", "is-IS"]] {
         system::with_system_tags(&tags, || {
             with_language(Lang::EN, || {
                 let h = harness();

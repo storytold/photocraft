@@ -44,6 +44,20 @@ fn georgian_tags_resolve() {
 }
 
 #[test]
+fn swahili_tags_resolve() {
+    let sw = Lang::from_code("sw").expect("sw registered");
+    for tag in ["sw", "sw-KE", "sw-TZ", "sw_KE.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(sw), "{tag}");
+    }
+    assert_eq!(sw.name(), "Kiswahili");
+    assert_eq!(Lang::from_pref("SW"), sw);
+    assert_eq!(tr(sw, "Layer"), "Safu");
+    assert_eq!(tr(sw, "File"), "Faili");
+    let forms: Vec<usize> = [0, 1, 2, 5, 21].into_iter().map(sw.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1, 1], "one is n = 1 (CLDR)");
+}
+
+#[test]
 fn indonesian_tags_resolve() {
     for tag in ["id", "id-ID", "id_ID", "id_ID.UTF-8"] {
         assert_eq!(lang_from_tag(tag), Some(ID()), "{tag}");
