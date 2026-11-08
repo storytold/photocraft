@@ -26,9 +26,10 @@ struct KernSlot {
     coords: Vec<i16>,
     size: f32,
     rtl: bool,
-    /// Whitespace (or the direction mark before the paragraph): no ink, and trailing it is
-    /// outside the line's extent. A ligature's later characters have no glyph of their own but
-    /// are part of the ligature's advance, so they aren't blank.
+    /// Whitespace, a character with nothing drawn (no glyph, such as a joiner the font drops) or
+    /// the direction mark before the paragraph: trailing it is outside the line's extent. A
+    /// ligature's later characters have no glyph of their own either, but are part of the
+    /// ligature's advance, so they aren't blank.
     blank: bool,
     /// Advance along the line (px, horizontal scale included).
     advance: f32,
@@ -136,10 +137,22 @@ fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
             continue;
         }
         line_runs.push(run.index());
+        // Each cluster's own scale: styles that differ only in horizontal scale (applied after
+        // shaping) share a shaping run, and their glyphs are drawn at their own scales. A
+        // ligature's later characters go with its glyph, drawn at its first character's scale.
+        let mut ligature_scale = 1.0;
+        let scales: Vec<(usize, f32)> = run
+            .clusters()
+            .map(|c| {
+                if !c.is_ligature_continuation() {
+                    ligature_scale = cluster_scale(env.styles, &c);
+                }
+                (c.text_range().start, ligature_scale)
+            })
+            .collect();
         for c in run.visual_clusters() {
-            // Each cluster's own scale: styles that differ only in horizontal scale (applied after
-            // shaping) share a shaping run, and their glyphs are drawn at their own scales.
-            let hs = cluster_scale(env.styles, &c);
+            let start = c.text_range().start;
+            let hs = scales.binary_search_by_key(&start, |s| s.0).ok().and_then(|i| scales.get(i)).map_or_else(|| cluster_scale(env.styles, &c), |s| s.1);
             let mut gl = c.glyphs();
             let first = gl.next().map(|g| g.id);
             let last = gl.last().map(|g| g.id).or(first);
@@ -152,7 +165,7 @@ fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
                 coords: run.normalized_coords().to_vec(),
                 size: run.font_size(),
                 rtl: c.is_rtl(),
-                blank: c.is_space_or_nbsp() || c.text_range().end <= para.prefix.len(),
+                blank: c.is_space_or_nbsp() || (first.is_none() && !c.is_ligature_continuation()) || c.text_range().end <= para.prefix.len(),
                 upright: env.vertical && c.first_style().brush.1 != VClass::Rotate as u8,
                 advance: c.advance() * hs,
                 growth: c.advance() * (hs - 1.0),

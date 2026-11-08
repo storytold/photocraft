@@ -434,6 +434,35 @@ fn point_alignment_keeps_a_closing_ligature_in_the_width() {
     assert!(end.abs() < 0.01 && r.lines[0].x1.abs() < 0.01, "ends at the anchor: {end} {:?}", r.lines[0]);
 }
 
+/// A ligature over characters of different horizontal scales is drawn at its first character's
+/// scale, so its later characters count at that scale too: Inter's "->" arrow with the "-" at
+/// 50% and the ">" at 100% (or the other way round) right-aligns with the arrow ending at the
+/// anchor, and the last caret stop is there too (the ">" at its own scale overshot or fell short
+/// by a quarter of the arrow).
+#[test]
+fn point_alignment_scales_a_ligature_by_its_first_character() {
+    let mut e = TextEngine::new();
+    let style = |hs: f32| CharStyle {
+        font_family: "Inter".into(),
+        size_pt: 40.0,
+        horizontal_scale: hs,
+        features: vec![FontFeature { tag: "calt".into(), value: 1 }],
+        ..Default::default()
+    };
+    let full = e.layout(&runs_of("->", &[(2, style(1.0))]), 72.0);
+    assert_eq!(full.glyphs.len(), 1, "the arrow is one glyph");
+    let arrow = full.lines[0].x1;
+    for (first, second) in [(0.5, 1.0), (1.0, 0.5)] {
+        let t = with_para(runs_of("->", &[(1, style(first)), (1, style(second))]), ParagraphStyle { align: TextAlign::Right, ..Default::default() });
+        let l = e.layout(&t, 72.0);
+        assert_eq!(l.glyphs.len(), 1, "{first}/{second}: still one arrow");
+        let end = l.glyphs[0].x + arrow * first;
+        assert!(end.abs() < 0.01 && l.lines[0].x1.abs() < 0.01, "{first}/{second}: ends at the anchor: {end} {:?}", l.lines[0]);
+        let caret = l.clusters.last().map_or(f32::NAN, |c| c.x + c.advance);
+        assert!(caret.abs() < 0.01, "{first}/{second}: last caret stop {caret}");
+    }
+}
+
 #[test]
 fn rtl_text_is_reordered() {
     let mut e = TextEngine::new();
