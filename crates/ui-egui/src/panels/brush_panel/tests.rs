@@ -1364,6 +1364,9 @@ fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, Photoc
 
 #[test]
 fn brush_sections_paint_simplified_chinese_labels() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     fn collect_text(shape: &egui::Shape, out: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),

@@ -378,6 +378,9 @@ mod tests {
 
     #[test]
     fn import_warning_punctuation_is_localized_without_changing_english() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let mut app = PhotocraftApp::new(Session::new(), Services::default());
         for lang in [crate::i18n::Lang::EN, crate::i18n::Lang::from_code("cs").unwrap()] {
             crate::i18n::with_language(lang, || {

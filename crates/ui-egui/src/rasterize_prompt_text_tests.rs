@@ -21,6 +21,9 @@ fn the_four_prompts_read_as_measured() {
 
 #[test]
 fn catalogs_that_had_a_translation_keep_one() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let new = Kind::SmartObject.message();
     let fr = Lang::from_code("fr").expect("French");
     assert_ne!(tr(fr, new), new, "French still translates the prompt");

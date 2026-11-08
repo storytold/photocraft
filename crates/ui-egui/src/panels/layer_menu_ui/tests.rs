@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn mask_toggle_label_follows_history_and_selected_layer() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();

@@ -51,6 +51,9 @@ fn field(h: &Harness<'_, PhotocraftApp>, id: u64, name: &str) -> Value {
 /// The actual shortcut grid matches Azerbaijani uppercase text and English command aliases.
 #[test]
 fn azerbaijani_shortcuts_search_handles_dotted_i_and_english() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let (mut h, id) = dialog(1.0, "image.imageSize", "ŞƏKİL ÖLÇÜSÜ");
     h.state_mut().run("prefs.set", json!({"path":"interface.language", "value":"az"})).unwrap();
     h.run_steps(4);

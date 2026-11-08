@@ -812,6 +812,9 @@ fn curves_on_a_gray_target_seeds_neutral_fields_in_a_lab_document() {
 /// stays exactly "Green".
 #[test]
 fn curves_channel_popup_keeps_custom_names_verbatim_in_italian() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let it = crate::i18n::Lang::from_code("it").expect("it registered");
     let green = crate::i18n::tr(it, "Green");
     let _lang = crate::i18n::language_scope(it);

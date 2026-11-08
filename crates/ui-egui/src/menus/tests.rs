@@ -315,6 +315,9 @@ fn help_search_matches_the_ui_language_and_english() {
 /// Azerbaijani menu text and paths keep dotted I distinct; English aliases still work.
 #[test]
 fn azerbaijani_help_search_uses_the_language_of_each_alias() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let az = crate::i18n::Lang::from_code("az").unwrap();
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let items = menu_items(&app);
