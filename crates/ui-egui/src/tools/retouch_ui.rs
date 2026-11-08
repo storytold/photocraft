@@ -675,6 +675,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("luminosity".to_string(), tl!("Luminosity")),
             ];
             crate::widgets::dropdown(ui, "color-replacement-mode", tl!("Mode"), &mut o.cr_mode, &modes, 100.0);
+            // The reference application's tooltips (#11930), on the dropdowns' buttons by the ids their
+            // combo boxes take.
+            if let Some(mode) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("color-replacement-mode"))) {
+                mode.on_hover_text(tl!("Painting Mode"));
+            }
             crate::widgets::vline(ui, 22.0);
             ui.spacing_mut().item_spacing.x = 2.0;
             for (k, icon, tip) in [
@@ -695,9 +700,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("findEdges".to_string(), tl!("Find Edges")),
             ];
             crate::widgets::dropdown(ui, "color-replacement-limits", tl!("Limits:"), &mut o.cr_limits, &limits, 110.0);
+            if let Some(limits) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("color-replacement-limits"))) {
+                limits.on_hover_text(tl!("Determines the spread of replaced color"));
+            }
             opt(ui, tl!("Tolerance:"));
-            crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
-            crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
+            // Whole numbers 1..=100 with the reference's alert, as the Background Eraser's (#11930).
+            let out_of_range = crate::eraser_ui::whole_tolerance_field(
+                ui,
+                &mut o.cr_tolerance,
+                "color-replacement-tolerance-typed",
+                tl!("Tolerance for choosing related colors"),
+            );
+            crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias")).on_hover_text(tl!("Anti-alias brush application"));
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
+            }
         }
         Tool::HistoryBrush => {
             let label = app.session.active().and_then(|st| match photocraft_engine::history_source_cmds::source(st)? {
@@ -800,3 +817,7 @@ fn pattern_stamp_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../color_replacement_tolerance_field_tests.rs"]
+mod color_replacement_tolerance_field_tests;

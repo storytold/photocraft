@@ -149,17 +149,23 @@ pub const TOLERANCE_RANGE_ALERT: &str = "An integer between 1% and 100% is requi
 /// closest one. Returns true when the field is left with a value typed out of range, so the
 /// caller shows [`TOLERANCE_RANGE_ALERT`].
 fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
+    whole_tolerance_field(ui, value, "bg-eraser-tolerance-typed", tl!("Erase range of similar colors"))
+}
+
+/// [`tolerance_field`]'s field for any tool's whole-number Tolerance (the Color Replacement tool's
+/// too, #11930): `draft` keys its typed-but-not-left text, `hover` is its tooltip.
+pub(crate) fn whole_tolerance_field(ui: &mut egui::Ui, value: &mut f32, draft: &str, hover: &str) -> bool {
     // A restored setting (an older 0, a fraction) shows and erases as the field would store it.
     *value = stored_tolerance(*value);
     // While the field has the keyboard it gets back what was typed, not the stored value, so
     // its text is left alone mid-entry (`0` on the way to `05` must not turn into `1`).
-    let draft_id = ui.make_persistent_id(egui::IdSalt::new("bg-eraser-tolerance-typed"));
+    let draft_id = ui.make_persistent_id(egui::IdSalt::new(draft));
     // The field's own range is wide, so the typed value reaches here unclamped.
     // A draft only stands while the setting is still the one it stored: a value set elsewhere
     // meanwhile (a tool preset while the bar was hidden) wins.
     let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(draft_id));
     let mut typed = draft.filter(|(_, stored)| *stored == *value).map_or(*value, |(typed, _)| typed);
-    let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(tl!("Erase range of similar colors"));
+    let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(hover);
     let out_id = r.id.with("out-of-range");
     // An edit the field never got to finish (the options bar was hidden while it had the
     // keyboard) has nothing left to say once the field is entered again.
@@ -194,7 +200,7 @@ fn stored_tolerance(v: f32) -> f32 {
 }
 
 /// Shows [`TOLERANCE_RANGE_ALERT`]: a modal with OK, once even if more than one pass asks.
-fn open_range_alert(app: &mut PhotocraftApp) {
+pub(crate) fn open_range_alert(app: &mut PhotocraftApp) {
     let message = tl!(TOLERANCE_RANGE_ALERT).to_owned();
     let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
     if !shown {
