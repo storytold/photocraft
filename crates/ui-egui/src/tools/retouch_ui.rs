@@ -337,6 +337,17 @@ pub fn cancel_stale(app: &mut PhotocraftApp) {
     }
 }
 
+/// Where a Patch drag ends: with ⇧ pressed after the press (⇧ at the press adds to the selection
+/// instead, so this never sees it) the end is held to the dominant axis from the start, 0 or 90
+/// degrees only (#12129). Other tools, and a drag without ⇧, end at `end`.
+pub fn patch_end(d: &crate::canvas::Drag, end: [f64; 2]) -> [f64; 2] {
+    if d.tool != Tool::Patch || !d.live.shift {
+        return end;
+    }
+    let (dx, dy) = (end[0] - d.start[0], end[1] - d.start[1]);
+    if dx.abs() >= dy.abs() { [end[0], d.start[1]] } else { [d.start[0], end[1]] }
+}
+
 /// Whole-pixel offset for a drag from `start` to `end`, limited so the dragged outline stays on the
 /// canvas (the engine rejects a patch or move that leaves it).
 pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
