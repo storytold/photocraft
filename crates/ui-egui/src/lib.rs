@@ -634,6 +634,9 @@ pub struct PhotocraftApp {
     /// The session clipboard's RGBA8 pixels, being converted on a worker for the OS clipboard
     /// (see `export_os_clipboard`); `None` when no conversion is running.
     os_clip_export: Option<std::sync::mpsc::Receiver<(u32, u32, Vec<u8>)>>,
+    /// A newer copy arrived while `os_clip_export` was converting: when that conversion lands it
+    /// is dropped and the current clip exported instead, so at most one conversion runs.
+    os_clip_export_again: bool,
     /// The session clipboard currently holds an image imported from the OS clipboard: it has no
     /// original position, so Paste centres it (see `menus` "edit.paste").
     pub(crate) clip_external: bool,

@@ -107,8 +107,12 @@ impl PhotocraftApp {
     /// [`Self::poll_os_clipboard_export`] hands the pixels to the OS clipboard when they are ready.
     pub(crate) fn export_os_clipboard(&mut self) {
         self.clip_unmirrored = true;
-        // A newer copy supersedes one still being converted.
-        self.os_clip_export = None;
+        // One conversion at a time: a newer copy waits for the running one, which is then
+        // dropped (see `poll_os_clipboard_export`), so superseded copies can't pile up workers.
+        if self.os_clip_export.is_some() {
+            self.os_clip_export_again = true;
+            return;
+        }
         if !self.session.prefs().general.export_clipboard || self.services.clipboard_set_image.is_none() {
             return;
         }
@@ -119,6 +123,13 @@ impl PhotocraftApp {
         }
         if !mirrors_to_os(b) {
             log::info!("copy of {}×{} px kept in PhotoCraft: too large for the system clipboard", b.width(), b.height());
+            crate::notices::post(
+                self,
+                "Copy kept in PhotoCraft",
+                vec!["It is too large for the system clipboard: other apps keep what they had, and Paste in PhotoCraft uses this copy.".into()],
+                false,
+                None,
+            );
             return;
         }
         if self.background_jobs {
@@ -143,10 +154,19 @@ impl PhotocraftApp {
         match rx.try_recv() {
             Ok((w, h, bytes)) => {
                 self.os_clip_export = None;
-                self.set_os_clipboard_image(w, h, &bytes);
+                if std::mem::take(&mut self.os_clip_export_again) {
+                    self.export_os_clipboard();
+                } else {
+                    self.set_os_clipboard_image(w, h, &bytes);
+                }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.os_clip_export = None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.os_clip_export = None;
+                if std::mem::take(&mut self.os_clip_export_again) {
+                    self.export_os_clipboard();
+                }
+            }
         }
     }
 

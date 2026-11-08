@@ -156,6 +156,7 @@ impl PhotocraftApp {
             os_clip_svg: None,
             clip_unmirrored: true,
             os_clip_export: None,
+            os_clip_export_again: false,
             clip_external: false,
             clip_read_for_paste: false,
             smart_svg: Default::default(),

@@ -206,6 +206,12 @@ fn active_id(s: &Session) -> Result<LayerId> {
 /// Copy or Select All, Copy costs a pointer per tile; only the other tiles are read and written,
 /// one at a time, instead of the whole area as one `f32` buffer.
 fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
+    lift_checked(src, sel, canvas, &|| Ok(()))
+}
+
+/// [`lift`], calling `check` before each batch of tiles: a cancelled Copy job stops there
+/// instead of converting the rest of a large canvas.
+fn lift_checked(src: &Surface, sel: Option<&Surface>, canvas: Rect, check: &dyn Fn() -> Result<()>) -> Result<Clip> {
     let fmt = src.format();
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
     let area = match sel {
@@ -248,6 +254,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     #[cfg(target_arch = "wasm32")]
     let batch = 1;
     for rects in convert.chunks(batch) {
+        check()?;
         #[cfg(not(target_arch = "wasm32"))]
         let lifted: Vec<Result<Vec<f32>>> = {
             use rayon::prelude::*;
@@ -343,7 +350,7 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
         true,
         move |ctx| {
             ctx.progress(0.0, "Copying pixels");
-            work()
+            work(&|| ctx.check())
         },
         |s, clip| Ok(install_clip(s, clip)),
     )
@@ -351,7 +358,7 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
 
 /// [`copy`] on the calling thread, for Cut, which clears the pixels right after.
 fn copy_now(s: &mut Session) -> Result<Value> {
-    let clip = plan_copy(s, false)?()?;
+    let clip = plan_copy(s, false)?(&|| Ok(()))?;
     Ok(install_clip(s, clip))
 }
 
@@ -363,7 +370,8 @@ fn install_clip(s: &mut Session, clip: Clip) -> Value {
 
 /// Everything [`copy`] needs from the session, checked now; the returned work reads the pixels
 /// and builds the clip, on any thread.
-fn plan_copy(s: &Session, merged: bool) -> Result<impl FnOnce() -> Result<Clip> + Send + 'static> {
+/// `check` is called between steps and tile batches; an error (a cancelled job) stops the work.
+fn plan_copy(s: &Session, merged: bool) -> Result<impl FnOnce(&dyn Fn() -> Result<()>) -> Result<Clip> + Send + 'static> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let selection = d.doc.selection.clone();
@@ -395,12 +403,18 @@ fn plan_copy(s: &Session, merged: bool) -> Result<impl FnOnce() -> Result<Clip> 
         };
         (source, layers, BoardPick::Known(source_board(d, false, Rect::EMPTY)))
     };
-    Ok(move || {
+    Ok(move |check: &dyn Fn() -> Result<()>| {
         let clip = match source {
-            CopySource::Merged(doc) => lift(&merged_surface(&doc), selection.as_ref(), canvas)?,
-            CopySource::Layer(surf) => Clip { components: None, layers, ..lift(&surf, selection.as_ref(), canvas)? },
+            CopySource::Merged(doc) => {
+                let flat = merged_surface(&doc);
+                check()?;
+                lift_checked(&flat, selection.as_ref(), canvas, check)?
+            }
+            CopySource::Layer(surf) => Clip { components: None, layers, ..lift_checked(&surf, selection.as_ref(), canvas, check)? },
             CopySource::Shown(shown) => {
-                let clip = lift(&merged_surface(&shown), None, canvas)?;
+                let flat = merged_surface(&shown);
+                check()?;
+                let clip = lift_checked(&flat, None, canvas, check)?;
                 let bounds = if clip.bounds.is_empty() { canvas } else { clip.bounds };
                 Clip { components: None, layers, bounds, ..clip }
             }
