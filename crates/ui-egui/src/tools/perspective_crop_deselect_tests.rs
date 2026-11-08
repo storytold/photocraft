@@ -77,3 +77,19 @@ fn choosing_the_tool_keeps_the_selection_and_commit_leaves_it_gone() {
     assert!(!selected(&app));
     assert!(app.ui.perspective_crop.is_none(), "committed");
 }
+
+#[test]
+fn a_selection_made_between_corner_clicks_is_kept() {
+    let mut app = app(true);
+    let p = [[20.0, 20.0], [180.0, 25.0], [175.0, 130.0], [25.0, 125.0]];
+    drag(&mut app, p[0], p[0]);
+    // Select All after the first corner: the later clicks belong to the same quad.
+    app.run("select.all", json!({})).unwrap();
+    let before = steps(&app);
+    for c in &p[1..] {
+        drag(&mut app, *c, *c);
+    }
+    assert!(selected(&app), "only the quad's first press deselects");
+    assert_eq!(steps(&app), before, "no second Deselect step");
+    assert!(app.ui.perspective_crop.is_some(), "four clicks made the quad");
+}
