@@ -376,6 +376,8 @@ impl PhotocraftApp {
             }
         }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
+        // A closed document's last shown state would keep its pixels alive.
+        self.canvas_states.retain(|doc, _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
         self.snapshot_thumbs.retain(|(doc, _), _| ids.contains(doc));
         // Closing a document cancels its page work; its GPU pages go with `retain_gpu_documents`.
