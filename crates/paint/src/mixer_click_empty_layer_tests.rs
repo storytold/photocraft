@@ -42,6 +42,8 @@ fn a_wet_click_on_an_empty_layer_is_a_full_strength_dab() {
         let mut s = Surface::new(PixelFormat::RGBA8);
         click(&mut s, wet);
         assert!(alpha(&s, 182, 47) >= 250, "Wet {wet}: centre alpha {}", alpha(&s, 182, 47));
+        let c = s.rgba(182, 47);
+        assert!(c[..3].iter().all(|v| *v < 0.02), "Wet {wet}: the dab is black: {c:?}");
         let (x0, y0, x1, y1) = bounds(&s);
         for (got, want) in [(x0, 153), (y0, 18), (x1, 210), (y1, 75)] {
             assert!((got - want).abs() <= 2, "Wet {wet}: bounds {:?}, expected near 153,18-210,75", (x0, y0, x1, y1));
@@ -57,4 +59,5 @@ fn a_wet_click_on_a_colour_still_mixes_it_in() {
     let c = s.rgba(182, 47);
     assert!(c[0] > 0.3, "the red under the click is mixed in: {c:?}");
     assert!(c[0] < 0.99, "and the black load darkens it: {c:?}");
+    assert!(c[1] < 0.02 && c[2] < 0.02 && c[3] > 0.99, "only red and black, opaque: {c:?}");
 }
