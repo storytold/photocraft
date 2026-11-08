@@ -235,11 +235,9 @@ mod tests {
         // Undo removes just the last line.
         app.session.undo();
         assert!(alpha(&app, 100, 60) == 0.0 && alpha(&app, 60, 60) > 0.9);
-        // The line start survives the undo (as in Photoshop). With smoothing and Catch-up on
-        // Stroke End on (it starts off, #11887), the line still runs from (100, 20) exactly to
-        // the click.
+        // The line start survives the undo (as in Photoshop). With smoothing on, the line still
+        // runs from (100, 20) exactly to the click.
         app.session.tools.brush.smoothing.amount = 0.6;
-        app.session.tools.brush.smoothing.catch_up_on_end = true;
         tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 100.0, pressure: 1.0 }, shift);
         tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 100.0 }, shift);
         assert!(alpha(&app, 20, 100) > 0.9 && alpha(&app, 40, 80) > 0.9 && alpha(&app, 90, 30) > 0.9);
