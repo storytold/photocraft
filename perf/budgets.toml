@@ -858,7 +858,7 @@ budget_ms = 500
 enforce = false  # new; no baseline yet
 
 [[scenario]]
-id = "P85"
+id = "P89"
 title = "App frame after Paste Into on 24 MP (CPU canvas)"
 issue = 9329
 bench = "perf_scenarios"
