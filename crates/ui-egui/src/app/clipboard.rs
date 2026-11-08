@@ -110,6 +110,9 @@ impl PhotocraftApp {
     /// [`Self::poll_os_clipboard_export`] hands the pixels to the OS clipboard when they are ready.
     pub(crate) fn export_os_clipboard(&mut self) {
         self.clip_unmirrored = true;
+        // A new copy: a notice about an older one no longer applies, whatever happens to this one
+        // (export off, a failed write); it is posted again below if this copy is too large too.
+        self.ui.notices.retain(|n| n.title != KEPT_IN_PHOTOCRAFT);
         // One conversion at a time: a newer copy waits for the running one, which is then
         // dropped (see `poll_os_clipboard_export`), so superseded copies can't pile up workers.
         let exporting = self.session.prefs().general.export_clipboard && self.services.clipboard_set_image.is_some();
@@ -156,7 +159,10 @@ impl PhotocraftApp {
         crate::notices::post(
             self,
             KEPT_IN_PHOTOCRAFT,
-            vec!["It is too large for the system clipboard: other apps keep what they had, and Paste in PhotoCraft uses this copy.".into()],
+            vec![
+                "It is too large for the system clipboard, so other apps can't paste it.".into(),
+                "Paste in PhotoCraft may use an image from the system clipboard instead.".into(),
+            ],
             false,
             None,
         );
