@@ -138,6 +138,61 @@ fn undoing_the_state_of_an_unchanged_edit_leaves_the_document_as_it_was() {
     assert_eq!(first_size(&app, id), size, "the style is what it was");
 }
 
+/// Alt+left/right makes Kerning its own step, deliberately not coalesced with the typing session.
+/// Ending that session must leave the one `Kerning` state: an empty `Edit Type` state behind it
+/// would be a History row that undoes nothing (#12050 review, c4502824768).
+#[test]
+fn a_kerned_session_ends_with_its_own_step_and_no_empty_one() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    // A caret between two characters: what Alt+left/right needs.
+    if let Some(ed) = app.ui.text_edit.as_mut() {
+        (ed.caret, ed.anchor) = (2, 2);
+    }
+    let before = history(&app);
+    super::editing::kern_pair(&mut app, id, 2, 20.0);
+    let kerned = history(&app);
+    assert_eq!(kerned.len(), before.len() + 1, "the kerning is its own step, in {kerned:?}");
+    assert_eq!(kerned.last().map(String::as_str), Some("Kerning"));
+    crate::type_tool::commit(&mut app);
+    assert_eq!(history(&app), kerned, "ending the session adds no state of its own");
+}
+
+/// The ⇧⌘ style keys are one step per press for the same reason; the commit must not add an empty
+/// state after them either.
+#[test]
+fn a_styled_session_ends_with_its_own_step_and_no_empty_one() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    let before = history(&app);
+    super::toggle_char_style(&mut app, super::CharToggle::FauxBold);
+    let styled = history(&app);
+    assert_eq!(styled.len(), before.len() + 1, "the style key is its own step, in {styled:?}");
+    crate::type_tool::commit(&mut app);
+    assert_eq!(history(&app), styled, "ending the session adds no state of its own");
+}
+
+/// The "this session already stepped" marker must belong to the session: a *later* unchanged edit
+/// of the same layer still records its own state, even when the state before it came from an
+/// earlier session's un-coalesced step.
+#[test]
+fn an_unchanged_edit_still_records_after_an_earlier_session_stepped() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    if let Some(ed) = app.ui.text_edit.as_mut() {
+        (ed.caret, ed.anchor) = (2, 2);
+    }
+    super::editing::kern_pair(&mut app, id, 2, 20.0);
+    crate::type_tool::commit(&mut app);
+    let before = history(&app);
+    click_into(&mut app, id);
+    crate::type_tool::commit(&mut app);
+    let after = history(&app);
+    assert_eq!(after.len(), before.len() + 1, "the second, unchanged session records, in {after:?}");
+    assert_eq!(after.last().map(String::as_str), Some("Edit Type"));
+    assert_eq!(text_of(&app, id), "Hello");
+}
+
 /// Not measured in #12050, so it keeps today's behaviour: an unchanged session ended because
 /// another layer took the focus records nothing.
 #[test]
