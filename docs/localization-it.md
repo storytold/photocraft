@@ -63,7 +63,7 @@ Emboss, East Asian / Middle Eastern Features, linked smart objects, bit depth la
 
 Engine error and status messages, user document, layer and preset names, and automation
 command IDs stay in English, as in every language. A few dynamic labels the other catalogs carry
-(`Ask Before Saving Saved Embedded`, `Clear Selection`, the `Heal` family) are not used by the
+(`Ask Before Saving Saved Embedded`, the `Heal` family) are not used by the
 current code; they are translated to stay aligned with the other catalogs.
 
 ## Validation

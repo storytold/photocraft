@@ -29,7 +29,7 @@ own meaning. Technology names, units and user-provided names are not translated.
 Generated filter parameter names, symbolic choices, gallery categories/effects,
 job titles, layer-style menus and shortcut labels now go through the catalog.
 Two newly introduced literals, `Enable {name}` and `No patterns`, are present in
-all nine non-English catalogs. Existing fallback behavior is preserved for
+every non-English catalog but Hindi. Existing fallback behavior is preserved for
 untranslated dynamic labels in other languages.
 
 This is not a claim that all application output is localized. Engine error
