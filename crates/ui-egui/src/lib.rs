@@ -279,6 +279,7 @@ pub use tools::artboard_tool;
 pub use tools::bg_eraser_popup;
 pub(crate) use tools::brush_cursor;
 pub use tools::brush_picker;
+pub use tools::brush_refusal;
 pub use tools::brush_resize;
 use tools::cam_transform;
 pub use tools::cas_transform;
