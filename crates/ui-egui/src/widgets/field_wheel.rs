@@ -11,7 +11,8 @@
 //!   ([`hover_notches`]).
 //! - Each window keeps its own record (a panel floated into a window of its own has input of its
 //!   own), and its own fractions of a notch; [`FieldWheel`] starts every window's pass with
-//!   [`begin_frame`].
+//!   [`begin_frame`]. The app installs it; a widget drawn without the app's setup installs it the
+//!   first time it asks for the wheel, so it steps there as it always has.
 
 use egui::{Context, Event, Id, MouseWheelUnit, Rect, Ui, Vec2};
 
@@ -49,6 +50,10 @@ fn taken_id(ctx: &Context) -> Id {
     Id::unique("pc-field-wheel-taken").with(ctx.viewport_id())
 }
 
+fn pass_id(ctx: &Context) -> Id {
+    Id::unique("pc-field-wheel-pass").with(ctx.viewport_id())
+}
+
 /// A wheel event a field takes: plain or Shift, not the view's Alt or Ctrl/Cmd zoom, nor a plain
 /// sideways scroll (a trackpad swipe pans the view; Shift+wheel can arrive sideways). An event
 /// with no delta at all counts: macOS starts a trackpad gesture with one, and it is what lets a
@@ -59,10 +64,16 @@ fn for_field(e: &Event) -> bool {
 }
 
 /// Before this frame's UI is laid out: hand the wheel to the focused value field, if any, and
-/// follow which gesture the wheel is in. The app runs it through [`FieldWheel`].
+/// follow which gesture the wheel is in. The app runs it through [`FieldWheel`]. Once a pass:
+/// a second call in the same pass does nothing, since running again would drop the wheel the
+/// first kept for a focused field and count a new gesture as one that no field took.
 pub fn begin_frame(ctx: &Context) {
     // (outside the closures below: the viewport id is read under the context's lock)
-    let (gesture_key, taken_key) = (gesture_id(ctx), taken_id(ctx));
+    let (gesture_key, taken_key, pass_key, pass) = (gesture_id(ctx), taken_id(ctx), pass_id(ctx), ctx.cumulative_pass_nr());
+    if ctx.data(|d| d.get_temp::<u64>(pass_key)) == Some(pass) {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(pass_key, pass));
     ctx.data_mut(|d| d.remove::<Vec<Event>>(taken_key));
     // (the field's widget id, its slot id): focus is the widget's, a gesture the slot's.
     let focused_key = focused_id(ctx);
@@ -105,8 +116,7 @@ pub fn begin_frame(ctx: &Context) {
 }
 
 /// Runs [`begin_frame`] at the start of every pass of every window (egui viewport), the main
-/// window's and each floated panel's, before anything in it is laid out. Once a pass: a second
-/// call would drop the wheel the first kept for a focused field.
+/// window's and each floated panel's, before anything in it is laid out.
 pub(crate) struct FieldWheel;
 
 impl egui::plugin::Plugin for FieldWheel {
@@ -116,6 +126,16 @@ impl egui::plugin::Plugin for FieldWheel {
 
     fn on_begin_pass(&mut self, ui: &mut Ui) {
         begin_frame(ui.ctx());
+    }
+}
+
+/// Install [`FieldWheel`] where it isn't yet: a widget drawn without the app's setup (another
+/// app, a test) steps with the wheel as it did before the wheel followed gestures. Its hook
+/// starts the next pass; this one, already under way, gets [`begin_frame`] now.
+fn install(ctx: &Context) {
+    if ctx.plugin_opt::<FieldWheel>().is_none() {
+        ctx.add_plugin(FieldWheel);
+        begin_frame(ctx);
     }
 }
 
@@ -138,6 +158,7 @@ pub fn set_focused(ctx: &Context, id: Id, field: Id) {
 /// Wheel notches for the value field `field` in `rect` this frame (up positive, Shift ×10):
 /// all of the wheel while it is `focused`, else a gesture that started with the pointer over it.
 pub fn notches(ui: &Ui, field: Id, focused: bool, rect: Rect) -> f32 {
+    install(ui.ctx());
     let events: Vec<Event> = if focused {
         let taken_key = taken_id(ui.ctx());
         ui.data_mut(|d| d.remove_temp::<Vec<Event>>(taken_key)).unwrap_or_default()
@@ -155,6 +176,7 @@ pub fn notches(ui: &Ui, field: Id, focused: bool, rect: Rect) -> f32 {
 /// off the control is the view's from then on. Unlike a value field, it takes the wheel with any
 /// modifier (Photoshop's dialog sliders step one a notch with Ctrl or Alt).
 pub fn hover_notches(ui: &Ui, id: Id, rect: Rect, shift_notches: f32) -> f32 {
+    install(ui.ctx());
     let events = hovered_events(ui, id, rect, |e| matches!(e, Event::MouseWheel { .. }));
     crate::widgets::count_notches(ui, id.with("wheel-acc"), &wheel_of(&events), shift_notches)
 }
@@ -382,6 +404,32 @@ mod tests {
             assert_eq!((h.state().0, h.state().1), want, "{role:?}");
             assert_eq!(h.state().2, 0.0, "{role:?}: the panel didn't scroll");
         }
+    }
+
+    /// A slider drawn without the app's setup, neither [`super::FieldWheel`] nor
+    /// [`super::begin_frame`], still steps with the wheel over it, as it did before the wheel
+    /// followed gestures: the widget installs what it needs the first time it asks.
+    #[test]
+    fn a_slider_drawn_without_the_apps_setup_steps_with_the_wheel() {
+        let mut h = Harness::builder().with_size(vec2(300.0, 100.0)).build_ui_state(
+            |ui, v: &mut f32| {
+                let g = crate::widgets::RowGestures { wheel_step: Some(1.0), ..Default::default() };
+                crate::widgets::slider_row_with(ui, "Amount", v, 0.0..=100.0, "", None, g);
+            },
+            50.0,
+        );
+        h.run();
+        h.hover_at(h.get_by_role(Role::Slider).rect().center());
+        h.run_steps(1);
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(4);
+        assert_eq!(*h.state(), 49.0);
     }
 
     /// A gesture that steps a dropdown or slider, then wheels on with the pointer off it, is the

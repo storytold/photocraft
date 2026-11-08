@@ -1407,8 +1407,6 @@ const MODES: [(usize, &str); 4] = [(0, "Normal"), (1, "Dissolve"), (2, "Darken")
 fn mode_dropdown(wheel: bool) -> Harness<'static, usize> {
     Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
         move |ui, selected: &mut usize| {
-            // As the app's frame does: the wheel is a gesture over the dropdown or past it (#11353).
-            crate::field_wheel::begin_frame(ui.ctx());
             if wheel {
                 super::dropdown_wheel_hovered(ui, "blend-mode", tl!("Blend Mode"), selected, &MODES, 120.0);
             } else {
@@ -1457,7 +1455,6 @@ fn fractional_wheel_deltas_add_up_to_whole_mode_steps() {
 fn the_wheel_over_a_wheel_dropdown_does_not_scroll_its_container() {
     let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
         |ui, selected: &mut usize| {
-            crate::field_wheel::begin_frame(ui.ctx());
             egui::ScrollArea::vertical().max_height(80.0).show(ui, |ui| {
                 super::dropdown_wheel_hovered(ui, "blend-mode", tl!("Blend Mode"), selected, &MODES, 120.0);
                 ui.add_space(400.0);
