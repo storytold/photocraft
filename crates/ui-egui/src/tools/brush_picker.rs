@@ -178,8 +178,27 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // panel, a key, the control channel), so it is kept here in the frame loop too.
     // While the pointer is on the open picker's row, a brush picked there keeps its place, so the
     // tiles don't shift under the pointer; it goes to the front once the pointer leaves the row.
-    let current = if pointer_on_recent_row(ctx) { None } else { app.session.tools.current_preset.as_deref() };
-    note_recent(&mut app.ui.brush_picker_list, current, &app.session.tools.presets);
+    // Each brush picked there meanwhile is remembered in order, so all of them count then.
+    let held = recent_row_id().with("held");
+    let current = app.session.tools.current_preset.clone();
+    if pointer_on_recent_row(ctx) {
+        if let Some(cur) = current {
+            ctx.data_mut(|d| {
+                let picked = d.get_temp_mut_or_default::<Vec<String>>(held);
+                picked.retain(|name| name != &cur);
+                picked.push(cur);
+                if picked.len() > RECENT_MAX {
+                    picked.remove(0);
+                }
+            });
+        }
+        note_recent(&mut app.ui.brush_picker_list, None, &app.session.tools.presets);
+    } else {
+        for name in ctx.data_mut(|d| d.remove_temp::<Vec<String>>(held)).unwrap_or_default() {
+            note_recent(&mut app.ui.brush_picker_list, Some(&name), &app.session.tools.presets);
+        }
+        note_recent(&mut app.ui.brush_picker_list, current.as_deref(), &app.session.tools.presets);
+    }
     if ctx.input(|i| i.pointer.any_down()) {
         return;
     }

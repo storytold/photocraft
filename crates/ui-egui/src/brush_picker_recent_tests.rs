@@ -248,3 +248,31 @@ fn a_clicked_recent_tile_stays_under_the_pointer_until_it_leaves_the_row() {
     assert_eq!(recent(h.state()), [n[3].clone(), n[1].clone()], "off the row, the picked brush goes to the front");
     assert!(h.state().ui.brush_picker.is_some(), "the picker stays open");
 }
+
+#[test]
+fn every_brush_picked_on_the_row_counts_once_the_pointer_leaves() {
+    // Two brushes picked one after the other with the pointer on the row: the row holds still,
+    // and once the pointer leaves, the last one is at the front and the one before it second.
+    let mut app = app();
+    let n = names(&app);
+    pick(&mut app, &n[5]);
+    pick(&mut app, &n[3]);
+    pick(&mut app, &n[1]);
+    let mut h = harness(app);
+    assert_eq!(recent(h.state()), [n[1].clone(), n[3].clone(), n[5].clone()]);
+    for name in [&n[5], &n[3]] {
+        let p = h.get_by_label(&tile(name)).rect().center();
+        h.hover_at(p);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(name.as_str()), "the click picks `{name}`");
+    }
+    assert_eq!(recent(h.state()), [n[1].clone(), n[3].clone(), n[5].clone()], "the row holds its order under the pointer");
+    let below = h.get_by_label("Brush Preset Options").rect().center() + egui::vec2(0.0, 200.0);
+    h.hover_at(below);
+    h.run_steps(2);
+    assert_eq!(recent(h.state()), [n[3].clone(), n[5].clone(), n[1].clone()], "both picks count, the last one first");
+}
