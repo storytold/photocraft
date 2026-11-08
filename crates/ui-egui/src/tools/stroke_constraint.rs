@@ -244,6 +244,30 @@ mod tests {
     }
 
     #[test]
+    fn shift_click_line_ends_at_the_click_with_catch_up_on_stroke_end_off() {
+        // Measured in Photoshop (#11887): smoothing doesn't apply to a ⇧-click line, whatever
+        // Smoothing and Catch-up on Stroke End are set to.
+        let mut app = app();
+        app.ui.tool = Tool::Brush;
+        app.session.tools.brush.smoothing.amount = 0.6;
+        app.session.tools.brush.smoothing.catch_up_on_end = false;
+        let none = egui::Modifiers::NONE;
+        // A plain two-point drag at this smoothing ends short of the release point.
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 60.0, pressure: 1.0 }, none);
+        tool_event(&mut app, ToolEvent::Move { x: 100.0, y: 60.0, pressure: 1.0 }, none);
+        tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 60.0 }, none);
+        assert!(alpha(&app, 100, 60) == 0.0, "a smoothed drag lags");
+        // ⇧-click: the line runs from the drag's release point all the way to the click.
+        let shift = egui::Modifiers::SHIFT;
+        tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 110.0, pressure: 1.0 }, shift);
+        tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 110.0 }, shift);
+        assert_eq!(last_stroke_points(&app), vec![[100.0, 60.0], [100.0, 110.0]]);
+        assert!(alpha(&app, 100, 62) > 0.9 && alpha(&app, 100, 85) > 0.9 && alpha(&app, 100, 110) > 0.9);
+        // The options bar's Smoothing is unchanged.
+        assert_eq!(app.session.tools.brush.smoothing.amount, 0.6);
+    }
+
+    #[test]
     fn shift_click_interpolates_from_previous_strokes_endpoint_pressure() {
         let mut app = app();
         app.ui.tool = Tool::Brush;

@@ -578,7 +578,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
-            let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
+            let mut drag = Drag { clear, line: from.is_some(), ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
             drag.capture_selection_at_press(app);
             drag.document = super::drag::DragDocument::capture(app);

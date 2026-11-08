@@ -293,10 +293,14 @@ pub(super) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke
 }
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
-/// stroke smoothing is the session brush's (the options bar's Smoothing %).
+/// stroke smoothing is the session brush's (the options bar's Smoothing %), except on a ⇧-click
+/// line, which isn't smoothed (#11887).
 pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
     let tool = d.tool;
     let mut p = json!({ "points": points, "erase": d.erase, "zoom": app.point_zoom(), "target": paint_target(app) });
+    if d.line {
+        p["smoothing"] = json!(0.0);
+    }
     if d.clear {
         p["mode"] = json!("clear");
     }
