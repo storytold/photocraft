@@ -23,6 +23,9 @@ pub(crate) struct ScanUi {
     open: bool,
     devices: Vec<crate::ScanDevice>,
     selected: usize,
+    /// Id of the scanner the dialog should return to. A failed refresh clears `devices`, so the
+    /// id has to live beside the list.
+    selected_id: Option<String>,
     resolution: u32,
     /// 0 colour, 1 gray, 2 black and white.
     mode: u8,
@@ -32,7 +35,7 @@ pub(crate) struct ScanUi {
 
 impl Default for ScanUi {
     fn default() -> Self {
-        Self { open: false, devices: Vec::new(), selected: 0, resolution: 300, mode: 0, status: String::new(), phase: Phase::Idle }
+        Self { open: false, devices: Vec::new(), selected: 0, selected_id: None, resolution: 300, mode: 0, status: String::new(), phase: Phase::Idle }
     }
 }
 
@@ -42,6 +45,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) {
         open: true,
         devices: Vec::new(),
         selected: 0,
+        selected_id: None,
         resolution: 300,
         mode: 0,
         status: tl!("Looking for scanners…").to_string(),
@@ -142,6 +146,9 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             });
         });
     app.scan.selected = selected;
+    if let Some(device) = app.scan.devices.get(app.scan.selected) {
+        app.scan.selected_id = Some(device.id.clone());
+    }
     app.scan.resolution = resolution;
     app.scan.mode = mode;
     if close {
@@ -168,21 +175,34 @@ fn mode_key(mode: u8) -> &'static str {
     }
 }
 
+fn remember_selected(scan: &mut ScanUi) {
+    if let Some(device) = scan.devices.get(scan.selected) {
+        scan.selected_id = Some(device.id.clone());
+    }
+}
+
 fn list_now(app: &mut PhotocraftApp) {
     let Some(list) = app.services.scan_list.as_ref() else {
+        remember_selected(&mut app.scan);
         app.scan.devices.clear();
         app.scan.status = tl!("Scanning needs the desktop app on this computer.").to_string();
         return;
     };
     match list(std::time::Duration::from_secs(3)) {
         Ok(devices) => {
-            let previous = app.scan.devices.get(app.scan.selected).map(|device| device.id.clone());
+            let previous = app.scan.devices.get(app.scan.selected).map(|device| device.id.clone()).or_else(|| app.scan.selected_id.clone());
             app.scan.devices = devices;
-            app.scan.selected = previous.and_then(|id| app.scan.devices.iter().position(|device| device.id == id)).unwrap_or(0);
+            app.scan.selected = previous.as_ref().and_then(|id| app.scan.devices.iter().position(|device| &device.id == id)).unwrap_or(0);
+            if let Some(device) = app.scan.devices.get(app.scan.selected) {
+                app.scan.selected_id = Some(device.id.clone());
+            } else if let Some(id) = previous {
+                app.scan.selected_id = Some(id);
+            }
             app.scan.status =
                 if app.scan.devices.is_empty() { tl!("No scanner is connected. Check the cable, then press Refresh.").to_string() } else { String::new() };
         }
         Err(err) => {
+            remember_selected(&mut app.scan);
             app.scan.devices.clear();
             app.scan.status = err;
         }
@@ -310,6 +330,43 @@ mod tests {
         advance(&mut app);
         advance(&mut app);
         assert_eq!(app.scan.devices.get(app.scan.selected).map(|device| device.id.as_str()), Some("net"));
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_the_selected_scanner() {
+        let calls = std::cell::Cell::new(0u8);
+        let services = Services {
+            scan_list: Some(Box::new(move |_| {
+                let n = calls.get();
+                calls.set(n.saturating_add(1));
+                match n {
+                    0 => Ok(vec![ScanDevice { id: "usb".into(), name: "USB".into() }, ScanDevice { id: "net".into(), name: "Network".into() }]),
+                    1 => Err("the scanner did not answer".into()),
+                    2 => Ok(vec![ScanDevice { id: "other".into(), name: "Other".into() }, ScanDevice { id: "net".into(), name: "Network".into() }]),
+                    _ => Ok(vec![ScanDevice { id: "other".into(), name: "Other".into() }]),
+                }
+            })),
+            ..Default::default()
+        };
+        let (mut app, ctx) = app(services);
+        crate::menus::invoke(&mut app, &ctx, "file.import.scan", json!({})).unwrap();
+        advance(&mut app);
+        advance(&mut app);
+        app.scan.selected = 1;
+        app.scan.phase = Phase::ArmList;
+        advance(&mut app);
+        advance(&mut app);
+        assert!(app.scan.devices.is_empty());
+        assert_eq!(app.scan.selected_id.as_deref(), Some("net"));
+        assert!(app.scan.status.contains("did not answer"));
+        app.scan.phase = Phase::ArmList;
+        advance(&mut app);
+        advance(&mut app);
+        assert_eq!(app.scan.devices.get(app.scan.selected).map(|device| device.id.as_str()), Some("net"));
+        app.scan.phase = Phase::ArmList;
+        advance(&mut app);
+        advance(&mut app);
+        assert_eq!(app.scan.devices.get(app.scan.selected).map(|device| device.id.as_str()), Some("other"));
     }
 
     #[test]
