@@ -208,10 +208,16 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
         // ⌘↩ / Ctrl+Enter (#306): load the path selected in the Paths panel (or the one being
         // drawn) as a selection.
         "path.toSelection" if params.get("name").is_none() => crate::vector_ui::path_to_selection(app, params.clone()),
-        // ⌘⇧↩ / ⌘⌥↩ load the same path, adding it to or subtracting it from the selection.
-        "path.addToSelection" | "path.subtractFromSelection" if params.get("name").is_none() => {
+        // ⌘⇧↩ / ⌘⌥↩ / ⇧⌥⌘↩ load the same path, adding it to, subtracting it from or intersecting
+        // it with the selection.
+        "path.addToSelection" | "path.subtractFromSelection" | "path.intersectWithSelection" if params.get("name").is_none() => {
             let mut p = params.as_object().cloned().unwrap_or_default();
-            p.insert("mode".into(), json!(if id == "path.addToSelection" { "add" } else { "subtract" }));
+            let mode = match id {
+                "path.addToSelection" => "add",
+                "path.subtractFromSelection" => "subtract",
+                _ => "intersect",
+            };
+            p.insert("mode".into(), json!(mode));
             crate::vector_ui::path_to_selection(app, Value::Object(p))
         }
         // Layer › Rename Layer from a menu starts in-place renaming in the Layers panel.
@@ -451,6 +457,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let dialog = crate::channel_options_ui::open_new_spot(app).ok_or("no document is open")?;
             Ok(json!({"dialog": dialog}))
         }
+        // Select › Find Layers: the Layers panel's Name filter (#10884).
+        "select.findLayers" => crate::layer_filter_ui::find::invoke(app, ctx, params),
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
         "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog": crate::color_range_ui::open(app)})),
@@ -687,6 +695,10 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
             Some(crate::sizing::open(app, sz).map(|dialog| json!({"dialog": dialog})).ok_or_else(|| "no document".to_string()))
         }
         "view.newGuide" if params.as_object().is_none_or(|object| object.is_empty()) => Some(Ok(json!({"dialog": crate::new_guide_ui::open(app)}))),
+        // Image › Adjustments › Equalize with a selection asks what to equalize, as in Photoshop.
+        crate::equalize_ui::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) && crate::equalize_ui::asks(app) => {
+            Some(Ok(json!({"dialog": crate::equalize_ui::open(app)})))
+        }
         fl if crate::filter_dialog::has_dialog(fl) && params.as_object().is_none_or(|object| object.is_empty()) => {
             Some(Ok(json!({"dialog": crate::filter_dialog::open(app, fl)})))
         }
