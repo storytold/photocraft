@@ -299,7 +299,9 @@ impl ResolvedSource {
     /// gigapixel canvas that is tens of gigabytes of working memory and seconds of conversion,
     /// even for a layer that covers a corner. This reads the alpha samples alone, only inside
     /// the layer's tiles, in parallel rows.
-    pub(super) fn transparency_band(&self) -> Option<(photocraft_geom::Rect, Vec<f32>)> {
+    /// `canceled` is asked between batches of rows: once it says so the rest are left unread
+    /// (the caller then drops the result).
+    pub(super) fn transparency_band(&self, canceled: &dyn Fn() -> bool) -> Option<(photocraft_geom::Rect, Vec<f32>)> {
         if self.r != ChanRef::Transparency || self.merged_transparency || self.invert {
             return None;
         }
@@ -320,14 +322,21 @@ impl ResolvedSource {
         }
         let w = band.width() as usize;
         let mut plane = vec![0.0f32; w * band.height() as usize];
-        let row = |(i, out): (usize, &mut [f32])| s.sample_row_strided(band.y0 + i as i32, band.x0, 1, a, out);
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use rayon::prelude::*;
-            plane.par_chunks_mut(w).enumerate().for_each(row);
+        // Rows in parallel, a batch at a time, checking for cancellation between batches.
+        const BATCH_ROWS: usize = 256;
+        for (k, batch) in plane.chunks_mut(w * BATCH_ROWS).enumerate() {
+            if canceled() {
+                break;
+            }
+            let row = |(i, out): (usize, &mut [f32])| s.sample_row_strided(band.y0 + (k * BATCH_ROWS + i) as i32, band.x0, 1, a, out);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                batch.par_chunks_mut(w).enumerate().for_each(row);
+            }
+            #[cfg(target_arch = "wasm32")]
+            batch.chunks_mut(w).enumerate().for_each(row);
         }
-        #[cfg(target_arch = "wasm32")]
-        plane.chunks_mut(w).enumerate().for_each(row);
         Some((band, plane))
     }
 

@@ -105,7 +105,9 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     // keeps only the canvas: take the band path only when that is the same thing (the old
     // selection lies within the canvas, as it does unless a transform moved it past an edge).
     let keeps_outside = matches!(mode, SelectionMode::Add | SelectionMode::Subtract);
-    let band_matches = !keeps_outside || old.as_ref().is_none_or(|m| m.content_bounds().intersect(&area) == m.content_bounds());
+    // An imported selection may not be GRAY8: the full-canvas path quantizes it as before.
+    let band_matches =
+        !keeps_outside || old.as_ref().is_none_or(|m| m.format() == PixelFormat::GRAY8 && m.content_bounds().intersect(&area) == m.content_bounds());
     let label_owned = label.to_string();
     crate::jobs::run(
         s,
@@ -115,7 +117,7 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
             ctx.progress(0.0, "Reading channel");
             // A layer's transparency (⌘-click its thumbnail): only the part the layer covers,
             // combined as a band, never a canvas-sized plane (see `transparency_band`).
-            if let Some((band, plane)) = src.transparency_band().filter(|_| band_matches) {
+            if let Some((band, plane)) = band_matches.then(|| src.transparency_band(&|| ctx.cancelled())).flatten() {
                 ctx.check()?;
                 ctx.progress(0.5, "Making selection");
                 return Ok(sel::combine_band(old.as_ref(), &plane, band, mode));
