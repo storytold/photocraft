@@ -59,14 +59,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     hsl[5] = -40.0;
     let sets = [
         (
-            "Basic (WB, Exposure, Contrast, Whites, Blacks)",
-            CameraRaw { temperature: 20.0, exposure: 0.4, contrast: 25.0, whites: 30.0, blacks: -20.0, pixel_scale: scale, ..Default::default() },
+            "Basic (Exposure, Contrast, Whites, Blacks)",
+            CameraRaw { exposure: 0.4, contrast: 25.0, whites: 30.0, blacks: -20.0, pixel_scale: scale, ..Default::default() },
         ),
         (
             "every per-pixel stage",
             CameraRaw {
-                temperature: 20.0,
-                tint: 5.0,
                 exposure: 0.4,
                 contrast: 25.0,
                 whites: 30.0,
@@ -106,11 +104,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  GPU, source cached (slider drag)     {cached:7.2} ms");
         println!("  Whites/Blacks points on the CPU      {points_ms:7.2} ms (cached per WB/Exposure/Contrast in the dialog)");
     }
-    let shadows = CameraRaw { shadows: 50.0, pixel_scale: scale, ..Default::default() };
-    let cpu = time(runs.min(10), || {
-        let mut px = src.clone();
-        develop(&mut px, w, h, &shadows, false);
-    });
-    println!("for reference, Shadows +50 (CPU only): {cpu:.2} ms");
+    // Stages the pass doesn't run (per_pixel declines them), timed on the CPU only.
+    let cpu_only = [
+        ("Shadows +50", CameraRaw { shadows: 50.0, pixel_scale: scale, ..Default::default() }),
+        ("Temperature +20, Tint +5", CameraRaw { temperature: 20.0, tint: 5.0, pixel_scale: scale, ..Default::default() }),
+    ];
+    for (name, p) in &cpu_only {
+        let cpu = time(runs.min(10), || {
+            let mut px = src.clone();
+            develop(&mut px, w, h, p, false);
+        });
+        println!("for reference, {name} (CPU only): {cpu:.2} ms");
+    }
     Ok(())
 }

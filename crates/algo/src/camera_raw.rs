@@ -641,9 +641,10 @@ pub fn white_balance_gains(temperature: f32, tint: f32) -> [f32; 3] {
 }
 
 /// Runs the Camera Raw pipeline on straight RGBA pixels (`w × h`, display-encoded RGB).
-/// `float` keeps values above 1 (32-bit documents).
+/// `float` keeps values above 1 (32-bit documents). Pixels that don't fill `w × h` exactly are
+/// left unchanged.
 pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
-    if px.is_empty() || p.is_identity() {
+    if px.is_empty() || p.is_identity() || px.len() != w.saturating_mul(h) {
         return;
     }
     let ps = p.pixel_scale.clamp(0.01, 1.0);
@@ -789,7 +790,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
 /// The image's 1st, 50th and 99th percentiles and the mean of the log2 luminance, on cells of
 /// a copy at most 384 pixels across (each the log of its pixels' mean
 /// luminance, so a preview proxy and the full image agree), interpolated between ranks. `map` is
-/// applied to each pixel first.
+/// applied to each pixel first. Fully transparent pixels hold no colour and are left out.
 fn tone_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding, map: impl Fn([f32; 4]) -> [f32; 4] + Sync) -> contrast::Tones {
     const FLOOR: f32 = 1.0 / 65536.0;
     let f = w.max(h).div_ceil(384).max(1);
@@ -799,7 +800,8 @@ fn tone_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding, map: impl Fn(
         let mut sum = vec![(0.0f64, 0u32); sw];
         for y in sy * f..((sy + 1) * f).min(h) {
             for x in 0..w {
-                let q = map(px[y * w + x]);
+                let Some(&q) = px.get(y * w + x).filter(|q| q[3] > 0.0) else { continue };
+                let q = map(q);
                 let s = &mut sum[x / f];
                 s.0 += f64::from(luma([0, 1, 2].map(|c| enc.decode(q[c]))).max(0.0));
                 s.1 += 1;
@@ -848,12 +850,13 @@ fn add_haze(px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
     }
     let a = (-v).min(100.0);
     let k: [f32; 3] = if a <= 50.0 { AT_50.map(|x| x * a / 50.0) } else { std::array::from_fn(|i| AT_50[i] + (AT_100[i] - AT_50[i]) * (a - 50.0) / 50.0) };
-    // The haze colour from a ≤ 256 px linear copy.
+    // The haze colour from a ≤ 256 px linear copy of the visible pixels (a fully transparent
+    // one holds no colour).
     let s = w.max(h).div_ceil(256).max(1);
     let (sw, sh) = (w.div_ceil(s), h.div_ceil(s));
     let mut small = vec![0.0f32; sw * sh * 3];
     let mut count = vec![0.0f32; sw * sh];
-    for (i, q) in px.iter().enumerate() {
+    for (i, q) in px.iter().enumerate().filter(|(_, q)| q[3] > 0.0) {
         let j = (i / w / s) * sw + (i % w) / s;
         for c in 0..3 {
             if let Some(d) = small.get_mut(j * 3 + c) {
@@ -1096,6 +1099,38 @@ mod tests {
         add_haze(&mut odd, 2, 2, -80.0, Encoding(0.0));
     }
 
+    /// The colour hidden under fully transparent pixels takes no part in the haze colour or in
+    /// the tones Contrast and Whites adapt to.
+    #[test]
+    fn transparent_pixels_do_not_count() {
+        let (w, h) = (64usize, 64usize);
+        let visible = |i: usize| i % w < 32;
+        let scene = |hidden: [f32; 4]| -> Vec<[f32; 4]> {
+            (0..w * h).map(|i| if visible(i) { [0.2 + 0.6 * ((i / w) as f32 / h as f32), 0.3, 0.25, 1.0] } else { hidden }).collect()
+        };
+        let (white, black) = (scene([1.0, 1.0, 1.0, 0.0]), scene([0.0, 0.0, 0.0, 0.0]));
+        assert_eq!(tone_points(&white, w, h, Encoding(0.0), |q| q), tone_points(&black, w, h, Encoding(0.0), |q| q));
+        let (mut a, mut b) = (white.clone(), black.clone());
+        add_haze(&mut a, w, h, -100.0, Encoding(0.0));
+        add_haze(&mut b, w, h, -100.0, Encoding(0.0));
+        for i in (0..w * h).filter(|i| visible(*i)) {
+            assert_eq!(a[i], b[i], "pixel {i}");
+        }
+        // Everything transparent: the fallback tones.
+        let clear = vec![[0.5, 0.5, 0.5, 0.0]; w * h];
+        assert_eq!(tone_points(&clear, w, h, Encoding(0.0), |q| q), [-16.0, -1.0, 0.0, -1.0]);
+    }
+
+    /// Fewer pixels than the dimensions claim: no panic, the pixels unchanged.
+    #[test]
+    fn a_short_buffer_is_left_alone() {
+        let px = vec![[0.5, 0.4, 0.3, 1.0]; 3];
+        assert!(tone_points(&px, 2, 2, Encoding(0.0), |q| q).iter().all(|v| v.is_finite()));
+        let mut short = px.clone();
+        develop(&mut short, 2, 2, &CameraRaw { contrast: 50.0, whites: 40.0, ..Default::default() }, false);
+        assert_eq!(short, px);
+    }
+
     #[test]
     fn dehaze_leaves_no_halo_beside_dark_objects() {
         let (w, h) = (600usize, 400usize);
@@ -1248,7 +1283,7 @@ mod tests {
         hs[0] = -100.0;
         develop(&mut a, w, h, &CameraRaw { hsl_sat: hs, ..Default::default() }, false);
         // Photoshop: (0.81, 0.19, 0.19) → (0.59, 0.42, 0.42); Reds alone never grey a red fully.
-        assert!(a[0][0] - a[0][1] < 0.25 && a[0][0] < 0.65, "reds desaturated: {:?}", a[0]);
+        assert!(a[0][0] - a[0][1] < 0.25 && a[0][0] - a[0][1] > 0.08 && a[0][0] < 0.65, "reds desaturated: {:?}", a[0]);
         let blues: Vec<[f32; 4]> = vec![[0.2, 0.2, 0.8, 1.0]; w * h];
         let mut b = blues.clone();
         develop(&mut b, w, h, &CameraRaw { hsl_sat: hs, ..Default::default() }, false);

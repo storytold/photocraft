@@ -2,10 +2,12 @@
 //!
 //! Measured as a black box on the Camera Raw Filter of Photoshop 2026 (Camera Raw 18.6), as
 //! Exposure was (see `exposure`): the 256-level grey ramp at every 25 from −100 to 100; no Adobe
-//! code or data was used. Contrast is one global curve per slider value, the same on every image
-//! (a photograph and the ramp agree to 0.2 levels), applied like Exposure's: hue-preserving in
-//! linear ProPhoto. On a photograph that leaves ΔE76 0.4 against Photoshop at +50, where the
-//! earlier luminance S-curve left 2.8.
+//! code or data was used. Contrast is one global curve per slider value, applied like
+//! Exposure's: hue-preserving in linear ProPhoto. On the ramp the curve is the measured one
+//! ([`row`]); on an image it adapts to the image's tones ([`adaptive_row`], fitted on
+//! photographs), with the ramp's curve as the fallback when the tones are missing or not finite.
+//! On a photograph the fixed curve left ΔE76 0.4 against Photoshop at +50, where the earlier
+//! luminance S-curve left 2.8.
 
 use super::exposure::{STEPS, interpolate};
 

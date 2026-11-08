@@ -99,8 +99,18 @@ fn lstar(y: f32) -> f32 {
     if y > 216.0 / 24389.0 { 116.0 * y.cbrt() - 16.0 } else { 24389.0 / 27.0 * y }
 }
 
+/// `n` copies of `v`, or `None` when that much memory can't be had (the stage is then skipped
+/// rather than aborting the app).
+fn filled<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(n).ok()?;
+    out.resize(n, v);
+    Some(out)
+}
+
 /// Applies `model` at slider `v` (−100 … 100) to straight RGBA pixels (`w × h`, encoded with
-/// `enc`).
+/// `enc`). Without the memory for its working planes (about 80 bytes a pixel for Texture) the
+/// pixels are left unchanged.
 pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
     let Some(k) = model.coefficients(v) else { return };
     let n = w.saturating_mul(h);
@@ -112,11 +122,15 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
     let from = |x: f32| if enc.0 > 0.0 { enc.encode(srgb_to_linear(x)) } else { x };
     // Planes: encoded luminance, then (Texture) each channel's colour (channel − luminance).
     let np = if model.colour { 4 } else { 1 };
-    let mut planes = vec![0.0f32; n * np];
-    let mut knot = vec![(0usize, 0.0f32); n];
-    let mut lum = vec![0.0f32; n];
+    let Some(planes_len) = n.checked_mul(np) else { return };
+    let (Some(mut planes), Some(mut knot), Some(mut lum), Some(mut mv), Some(mut blur)) =
+        (filled(planes_len, 0.0f32), filled(n, (0usize, 0.0f32)), filled(n, 0.0f32), filled(n, [0.0f32; 3]), filled(planes_len, 0.0f32))
+    else {
+        return;
+    };
     for (i, q) in px.iter().enumerate() {
-        let s = [to(q[0]), to(q[1]), to(q[2])];
+        // A value that is not a number would spread through the blurs to its neighbours.
+        let s = [0, 1, 2].map(|c| Some(to(q[c])).filter(|v| v.is_finite()).unwrap_or(0.0));
         let lin = s.map(srgb_to_linear);
         let y = (0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]).max(0.0);
         let sy = linear_to_srgb(y);
@@ -145,12 +159,10 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
         v
     };
     // Moves: one per channel (Texture) or one for the luminance (Clarity, in `mv[i][0]`).
-    let mut mv = vec![[0.0f32; 3]; n];
     for (i, m) in mv.iter_mut().enumerate() {
         *m = [coef(0, i); 3];
     }
     let ns = model.scales.len();
-    let mut blur = vec![0.0f32; n * np];
     for (si, s) in model.scales.iter().enumerate() {
         blur.copy_from_slice(&planes);
         gauss_blur_n(&mut blur, w, h, np, s * long);
@@ -186,6 +198,29 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn working_planes_too_large_for_memory_are_refused() {
+        assert!(filled(usize::MAX / 2, 0.0f32).is_none());
+        assert_eq!(filled(3, 1u8), Some(vec![1, 1, 1]));
+    }
+
+    /// A pixel that is not a number stays its own problem: its neighbours develop as without it.
+    #[test]
+    fn a_nan_pixel_does_not_spread() {
+        let (w, h) = (48, 48);
+        for m in [&TEXTURE, &CLARITY] {
+            let mut clean = image(w, h);
+            let mut bad = clean.clone();
+            bad[24 * w + 24] = [f32::NAN, f32::INFINITY, 0.5, 1.0];
+            apply(m, &mut clean, w, h, 80.0, Encoding(0.0));
+            apply(m, &mut bad, w, h, 80.0, Encoding(0.0));
+            for (i, q) in bad.iter().enumerate().filter(|(i, _)| *i != 24 * w + 24) {
+                assert!(q[..3].iter().all(|v| v.is_finite()), "pixel {i}: {q:?}");
+            }
+            assert!(bad[0][..3].iter().zip(&clean[0][..3]).all(|(a, b)| (a - b).abs() < 1e-6));
+        }
+    }
 
     fn image(w: usize, h: usize) -> Vec<[f32; 4]> {
         (0..w * h)

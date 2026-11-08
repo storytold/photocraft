@@ -302,7 +302,7 @@ what an agent can't finish alone.
   a 33³ cube (every slider at ±25…±100, all bands at once, mixes): each slider is a fixed
   function of the colour in HSV of linear ProPhoto; per hue the bands of one kind combine into
   one effective value (adding the bands' effects missed by up to 9 ΔE with all bands moved);
-  Hue, Saturation and Luminance add. `camera_raw/color_mixer.rs` + `data/camera_raw_hsl.bin`
+  the three kinds apply one after the other (Luminance, then Saturation, then Hue). `camera_raw/color_mixer.rs` + `data/camera_raw_hsl.bin`
   (427 KB), on CPU and GPU. Mean ΔE76 on 17 images: Hue −100/+100 1.57/1.40 → 0.11/0.12,
   Saturation 1.37/1.64 → 0.24/0.26, Luminance 1.73/1.25 → 0.20/0.11; worst picture 2.0 (Oranges
   saturation −100, effect 11). The kinds apply one after the other, Luminance, Saturation, Hue,

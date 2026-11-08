@@ -25,9 +25,9 @@ pub struct HsvMap {
 }
 
 impl HsvMap {
-    /// A map from its dimensions tag, its data and its encoding tag (0 linear, 1 sRGB); `None`
-    /// when the dimensions and data don't agree or hold a value the specification excludes.
-    pub fn new(dims: &[u32], data: &[f64], encoding: u32) -> Option<HsvMap> {
+    /// The number of values (three per entry) the dimensions tag `dims` calls for, when it is a
+    /// shape [`HsvMap::new`] accepts: checked before the data is read.
+    pub(crate) fn values_for(dims: &[u32]) -> Option<usize> {
         let [h, s, v] = dims else { return None };
         let (hue_divs, sat_divs, val_divs) = (*h as usize, *s as usize, *v as usize);
         // The value axis may have one division (the map ignores value); saturation needs two.
@@ -35,7 +35,16 @@ impl HsvMap {
             return None;
         }
         let entries = hue_divs.checked_mul(sat_divs)?.checked_mul(val_divs)?;
-        if entries > MAX_ENTRIES || data.len() != entries.checked_mul(3)? {
+        (entries <= MAX_ENTRIES).then(|| entries.checked_mul(3)).flatten()
+    }
+
+    /// A map from its dimensions tag, its data and its encoding tag (0 linear, 1 sRGB); `None`
+    /// when the dimensions and data don't agree or hold a value the specification excludes, or
+    /// a map with a value axis has an encoding the specification doesn't define.
+    pub fn new(dims: &[u32], data: &[f64], encoding: u32) -> Option<HsvMap> {
+        let [h, s, v] = dims else { return None };
+        let (hue_divs, sat_divs, val_divs) = (*h as usize, *s as usize, *v as usize);
+        if data.len() != Self::values_for(dims)? || (val_divs > 1 && encoding > 1) {
             return None;
         }
         let data: Vec<[f32; 3]> = data
@@ -43,8 +52,10 @@ impl HsvMap {
             .0
             .iter()
             .map(|e| {
-                let ok = e.iter().all(|x| x.is_finite()) && e[1] >= 0.0 && e[2] >= 0.0;
-                ok.then(|| [e[0] as f32, e[1] as f32, e[2] as f32])
+                // Finite as f32 too: a huge f64 narrows to infinity.
+                let v = [e[0] as f32, e[1] as f32, e[2] as f32];
+                let ok = v.iter().all(|x| x.is_finite()) && v[1] >= 0.0 && v[2] >= 0.0;
+                ok.then_some(v)
             })
             .collect::<Option<_>>()?;
         Some(HsvMap { hue_divs, sat_divs, val_divs, data, srgb_value: encoding == 1 })
@@ -97,8 +108,17 @@ impl HsvMap {
         if v0 == v1 { plane(v0) } else { lerp(plane(v0), plane(v1), vt) }
     }
 
-    /// Applies the map to a linear ProPhoto RGB colour.
+    /// Applies the map to a linear ProPhoto RGB colour. A negative (out-of-gamut) channel is
+    /// left out of the colour the map sees and kept as it is, so it can't shift the others.
     pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
+        if rgb.iter().any(|v| *v < 0.0) {
+            let out = self.apply_nonnegative(rgb.map(|v| v.max(0.0)));
+            return std::array::from_fn(|k| out[k] + rgb[k].min(0.0));
+        }
+        self.apply_nonnegative(rgb)
+    }
+
+    fn apply_nonnegative(&self, rgb: [f32; 3]) -> [f32; 3] {
         let [r, g, b] = rgb;
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);
@@ -192,6 +212,10 @@ pub(crate) fn tone_curve(values: &[f64]) -> Option<Vec<[f32; 2]>> {
         return None;
     }
     let pts: Vec<(f64, f64)> = values.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
+    // The specification's endpoints: a curve that doesn't keep black and white is malformed.
+    if pts.first() != Some(&(0.0, 0.0)) || pts.last() != Some(&(1.0, 1.0)) {
+        return None;
+    }
     if pts.iter().any(|(x, y)| !x.is_finite() || !y.is_finite() || !(0.0..=1.0).contains(x) || !(0.0..=1.0).contains(y))
         || pts.windows(2).any(|w| w[1].0 <= w[0].0)
     {
@@ -296,6 +320,38 @@ mod tests {
         let m = HsvMap::new(&[4, 2, 1], &data, 0).unwrap();
         let o = m.apply([0.5, 0.0, 0.0]);
         assert!(o[0].abs() < 1e-5 && (o[1] - 0.5).abs() < 1e-5 && o[2].abs() < 1e-5, "{o:?}");
+    }
+
+    #[test]
+    fn negative_channels_pass_through_an_identity_map() {
+        let m = HsvMap::new(&[6, 3, 1], &identity(6, 3, 1), 0).unwrap();
+        for c in [[1.0f32, 0.0, -1.0], [0.6, 0.3, -0.05], [-0.2, 0.5, 0.1]] {
+            let o = m.apply(c);
+            assert!(o.iter().zip(c).all(|(a, b)| (a - b).abs() < 1e-5), "{c:?} -> {o:?}");
+        }
+    }
+
+    #[test]
+    fn entries_too_large_for_f32_are_rejected() {
+        let mut data = identity(6, 2, 1);
+        data[2] = 1e300;
+        assert!(HsvMap::new(&[6, 2, 1], &data, 0).is_none());
+    }
+
+    #[test]
+    fn value_axes_need_a_defined_encoding() {
+        assert!(HsvMap::new(&[6, 2, 3], &identity(6, 2, 3), 2).is_none());
+        assert!(HsvMap::new(&[6, 2, 3], &identity(6, 2, 3), 1).is_some());
+        // Without a value axis the encoding does not matter.
+        assert!(HsvMap::new(&[6, 2, 1], &identity(6, 2, 1), 2).is_some());
+    }
+
+    #[test]
+    fn tone_curves_keep_black_and_white() {
+        assert!(tone_curve(&[0.0, 0.0, 0.5, 0.6, 1.0, 1.0]).is_some());
+        assert!(tone_curve(&[0.0, 0.2, 1.0, 0.8]).is_none());
+        assert!(tone_curve(&[0.0, 0.0, 0.5, 0.6, 1.0, 0.9]).is_none());
+        assert!(tone_curve(&[0.1, 0.0, 1.0, 1.0]).is_none());
     }
 
     #[test]

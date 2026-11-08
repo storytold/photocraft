@@ -37,7 +37,7 @@ const KNOT_STEP: f32 = 0.1;
 /// Gaussian sigmas of the surroundings, as a share of the long side.
 const SCALES: [f32; 5] = [0.01, 0.03, 0.1, 0.3, 1.0];
 /// A move never exceeds this many stops (a guard for images unlike any measured).
-const MAX_MOVE: f32 = 6.0;
+pub(super) const MAX_MOVE: f32 = 6.0;
 
 /// The fitted coefficients for one slider value: row 0 is `k0`, then `k+` and `k−` per scale.
 struct Table {
@@ -131,7 +131,8 @@ fn quantile_lerp(v: &[f32], q: f32) -> f32 {
 /// 1st and 99th percentiles of `u` averaged over blocks so that at most 256 remain across
 /// (whole blocks only).
 fn range(u: &Plane) -> (f32, f32) {
-    let f = u.w.max(u.h).div_ceil(256).max(1);
+    // No larger than the short side, so a thin plane (768 × 2) still has a row of blocks.
+    let f = u.w.max(u.h).div_ceil(256).min(u.w.min(u.h)).max(1);
     let (bw, bh) = (u.w / f, u.h / f);
     if bw == 0 || bh == 0 {
         return (0.0, 0.0);
@@ -323,6 +324,14 @@ pub(super) const SHADOWS: Tables = Tables {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plane thinner than the block size (a 768 × 2 strip) still measures its tonal range.
+    #[test]
+    fn a_thin_plane_has_a_range() {
+        let u = Plane { w: 768, h: 2, v: (0..1536).map(|i| (i % 768) as f32 / 64.0 - 12.0).collect() };
+        let (lo, hi) = range(&u);
+        assert!(hi - lo > 10.0, "{lo} {hi}");
+    }
 
     #[test]
     fn box_inside_keeps_a_constant_and_spreads_a_spike() {

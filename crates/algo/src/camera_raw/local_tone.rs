@@ -118,7 +118,8 @@ fn guided_upsample(small: &Plane, d: &[f32], full: &Plane) -> Vec<f32> {
             let sx = (x as f32 + 0.5) * fx - 0.5;
             let av = crate::photo_util::bilinear(&ma, sw, sh, 1, 0, sx, sy);
             let bv = crate::photo_util::bilinear(&mb, sw, sh, 1, 0, sx, sy);
-            *o = av * full.v[y * full.w + x] + bv;
+            // The guide may lie far outside the proxy's tones (float images): keep the guard.
+            *o = (av * full.v[y * full.w + x] + bv).clamp(-multiscale::MAX_MOVE, multiscale::MAX_MOVE);
         }
     });
     out
@@ -129,6 +130,18 @@ mod tests {
     use super::*;
 
     const SRGB: Encoding = Encoding(0.0);
+
+    /// A full-size guide far outside the proxy's tones (a float image's highlight) cannot pull
+    /// the upsampled move past the six-stop guard.
+    #[test]
+    fn upsampled_moves_keep_the_guard() {
+        let small = Plane { w: 4, h: 4, v: (0..16).map(|i| (i % 4) as f32 - 2.0).collect() };
+        let d: Vec<f32> = small.v.iter().map(|u| 0.5 * u).collect();
+        let full = Plane { w: 8, h: 8, v: (0..64).map(|i| if i == 27 { 400.0 } else { ((i % 8) / 2) as f32 - 2.0 }).collect() };
+        let out = guided_upsample(&small, &d, &full);
+        assert!(out.iter().all(|m| m.abs() <= multiscale::MAX_MOVE), "{out:?}");
+        assert!(out[27] > 1.0, "the move still follows the guide: {}", out[27]);
+    }
 
     fn grey(w: usize, h: usize, f: impl Fn(usize, usize) -> f32) -> Vec<[f32; 4]> {
         (0..w * h).map(|i| f(i % w, i / w)).map(|v| [v, v, v, 1.0]).collect()
@@ -185,7 +198,7 @@ mod tests {
         let mut px = image(0.5);
         apply(&mut px, n, n, 0.0, -100.0, SRGB);
         let got = px[175 * n + 100][0] * 255.0;
-        assert!(got > 95.0 && got < 128.0, "highlights: grey {got}");
+        assert!(got > 95.0 && got < 126.0, "highlights: grey {got}");
         let white = px[(n - 13) * n + n - 13][0] * 255.0;
         assert!(white < 240.0 && white > 200.0, "highlights: white corner {white}");
     }

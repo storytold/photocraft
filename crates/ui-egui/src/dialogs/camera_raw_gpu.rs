@@ -93,8 +93,15 @@ pub(crate) fn source_key() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The source key and the settings the black and white points depend on.
-type PointsKey = (u64, [u32; 5]);
+/// The source key and the settings the black and white points depend on: the ones before
+/// Contrast, Contrast, and whether Whites is raised (the Whites tones are only measured then).
+type PointsKey = (u64, [u32; 5], bool);
+
+/// The [`PointsKey`] of `p` on the source `key`.
+#[cfg(not(target_arch = "wasm32"))]
+fn points_key(key: u64, p: &CameraRaw) -> PointsKey {
+    (key, [p.temperature, p.tint, p.exposure, p.contrast, p.encoding_gamma].map(f32::to_bits), p.whites > 0.0)
+}
 /// The last [`PointsKey`] and its points.
 type Points = Option<(PointsKey, Option<photocraft_algo::camera_raw::TonePoints>)>;
 
@@ -154,7 +161,7 @@ impl CameraRawGpu {
             return None;
         }
         let Some(key) = key else { return photocraft_algo::camera_raw::white_black_points(px, w, h, p) };
-        let key = (key, [p.temperature, p.tint, p.exposure, p.contrast, p.encoding_gamma].map(f32::to_bits));
+        let key = points_key(key, p);
         let mut cache = self.points.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((k, points)) = *cache
             && k == key
@@ -172,6 +179,17 @@ mod tests {
     use super::*;
     use photocraft_algo::camera_raw::develop;
     use serde_json::json;
+
+    /// Raising Whites after a Contrast-only preview measures the Whites tones: the cached points
+    /// of the Contrast-only settings (Whites tones left at zero) are not reused.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raising_whites_misses_the_points_cache() {
+        let contrast = CameraRaw { contrast: 40.0, ..Default::default() };
+        let raised = CameraRaw { whites: 30.0, ..contrast.clone() };
+        assert_ne!(points_key(1, &contrast), points_key(1, &raised));
+        assert_eq!(points_key(1, &raised), points_key(1, &CameraRaw { whites: 60.0, ..raised.clone() }));
+    }
 
     /// The pass evaluates develop's expressions in f32 (see `photocraft-gpu`'s Camera Raw tests).
     const TOL: f32 = 1.0 / 4096.0;
