@@ -221,7 +221,7 @@ fn web_sliders_snap_and_take_hex() {
     // Not a web colour: the cube alert snaps it.
     type_into(&mut h, egui::accesskit::Role::TextInput, 1, "C8");
     assert_eq!(bytes(h.state().session.tools.foreground), [0x66, 0xC8, 0]);
-    let alert = h.get_by_label("Not a web colour: click for the nearest web colour").rect().center();
+    let alert = h.get_by_label("Not a web color: click for the nearest web color").rect().center();
     press(&mut h, alert, Modifiers::NONE);
     assert_eq!(bytes(h.state().session.tools.foreground), [0x66, 0xCC, 0]);
 }
@@ -230,7 +230,7 @@ fn web_sliders_snap_and_take_hex() {
 fn cube_modes_warn_when_the_colour_cannot_print() {
     // #8672: Photoshop's Hue and Brightness Cube show the ⚠ and the nearest printable colour under
     // the chips, as the slider modes do; a click takes that colour.
-    const GAMUT: &str = "Out of gamut for printing: click for the nearest printable colour";
+    const GAMUT: &str = "Out of gamut for printing: click for the nearest printable color";
     for mode in [ColorPanelMode::HueCube, ColorPanelMode::BrightnessCube] {
         let mut h = color_tab(ThemeKind::Classic, mode, [0.0, 1.0, 0.0, 1.0]);
         let near = crate::color_picker_ui::out_of_gamut([0.0, 1.0, 0.0]).expect("pure green can't print");
@@ -559,4 +559,47 @@ fn every_slider_mode_recolours_the_selected_shape() {
         assert_eq!(bytes(h.state().session.tools.foreground), [255, 255, 255], "{mode:?}");
         assert_eq!(shape_fill(h.state()), [255, 255, 255], "{mode:?}");
     }
+}
+
+/// #9592: the Color panel's options survive a restart (they ride in the preferences), as in
+/// Photoshop; preferences without them keep the defaults.
+#[test]
+fn color_panel_options_survive_a_restart() {
+    let mut first = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    first.ui.color_panel.mode = ColorPanelMode::HsbSliders;
+    first.ui.color_panel.ramp = ColorRamp::GrayscaleRamp;
+    crate::color_panel_ui::persist(&mut first);
+    let saved = first.session.prefs().clone();
+
+    let mut next = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    next.session.prefs.edit(|p| *p = saved);
+    crate::color_panel_ui::restore(&mut next);
+    assert_eq!((next.ui.color_panel.mode, next.ui.color_panel.ramp), (ColorPanelMode::HsbSliders, ColorRamp::GrayscaleRamp));
+
+    let mut fresh = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    crate::color_panel_ui::restore(&mut fresh);
+    assert_eq!(fresh.ui.color_panel.mode, ColorPanelMode::HueCube, "no saved options: the default");
+}
+
+/// CodeRabbit on #9606: a preference change made outside the panel (`prefs.set`, a reset) is kept.
+/// The next frame takes it into the live panel instead of writing the panel's old options back.
+#[test]
+fn an_outside_preference_change_reaches_the_live_panel() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.ui.color_panel.mode = ColorPanelMode::HsbSliders;
+    crate::color_panel_ui::persist(&mut app);
+    // As prefs.set or a reset to defaults would: the stored options change under the panel.
+    let mut other = app.ui.color_panel;
+    other.mode = ColorPanelMode::GrayscaleSlider;
+    app.session.prefs.edit(|p| p.color_panel = serde_json::to_value(other).unwrap());
+    crate::color_panel_ui::persist(&mut app);
+    assert_eq!(app.ui.color_panel.mode, ColorPanelMode::GrayscaleSlider, "the live panel follows the preference");
+    let stored: crate::state::ColorPanelState = serde_json::from_value(app.session.prefs().color_panel.clone()).unwrap();
+    assert_eq!(stored.mode, ColorPanelMode::GrayscaleSlider, "and the preference isn't overwritten");
+    // A reset to defaults clears the stored options: the panel goes back to its defaults too.
+    app.session.prefs.edit(|p| p.color_panel = serde_json::Value::Null);
+    crate::color_panel_ui::persist(&mut app);
+    assert_eq!(app.ui.color_panel.mode, ColorPanelMode::HueCube, "reset: the default mode");
+    crate::color_panel_ui::persist(&mut app);
+    assert_eq!(app.ui.color_panel.mode, ColorPanelMode::HueCube, "and it stays reset");
 }
