@@ -44,6 +44,20 @@ fn georgian_tags_resolve() {
 }
 
 #[test]
+fn telugu_tags_resolve() {
+    let te = Lang::from_code("te").expect("te registered");
+    for tag in ["te", "te-IN", "te_IN", "te_IN.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(te), "{tag}");
+    }
+    assert_eq!(te.name(), "తెలుగు");
+    assert_eq!(Lang::from_pref("TE"), te);
+    assert_eq!(tr(te, "Layer"), "లేయర్");
+    assert_eq!(tr(te, "File"), "ఫైల్");
+    let forms: Vec<usize> = [0, 1, 2, 5, 21].into_iter().map(te.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1, 1], "one is n = 1 (CLDR)");
+}
+
+#[test]
 fn indonesian_tags_resolve() {
     for tag in ["id", "id-ID", "id_ID", "id_ID.UTF-8"] {
         assert_eq!(lang_from_tag(tag), Some(ID()), "{tag}");
