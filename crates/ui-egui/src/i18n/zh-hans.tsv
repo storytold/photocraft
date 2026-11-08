@@ -3298,6 +3298,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	请为每个通道选择不同的文档。
 	A picked document is no longer open.	所选的一个文档已不再打开。
 	A picked document is no longer a grayscale document of the same size.	所选的一个文档已不再是同样大小的灰度文档。
+	Netscape Gray	Netscape 灰色
 # Move tool options bar (#11381)
 	Align top edges	顶端对齐
 	Align vertical centers	垂直居中对齐

@@ -3090,7 +3090,7 @@ cameraRaw	Yellow	Sárga
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	A folytatáshoz a kitöltőréteget raszterizálni kell. A kitöltés tartalma ezután nem lesz szerkeszthető. Raszterizálod a réteget?
 	This layer must be rasterized before proceeding.	A folytatáshoz a réteget raszterizálni kell.
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	A folytatáshoz az alakzatréteget raszterizálni kell. Ezután alakzatként nem lesz szerkeszthető. Raszterizálod az alakzatot?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	A folytatáshoz az intelligens objektumot raszterizálni kell. A tartalma ezután nem lesz szerkeszthető. Raszterizálod az intelligens objektumot?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	A folytatáshoz az intelligens objektumot raszterizálni kell. A tartalma ezután nem lesz szerkeszthető. Raszterizálod az intelligens objektumot?
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	A folytatáshoz a szövegréteget raszterizálni kell. A szöveg ezután nem lesz szerkeszthető. Raszterizálod a szöveget?
 	TIFF Options	TIFF-beállítások
 	Top:	Felső:
@@ -4513,6 +4513,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
 	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
 	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
+	Netscape Gray	Netscape-szürke
 # Move tool options bar (#11381)
 	Align top edges	Felső szélek igazítása
 	Align vertical centers	Függőleges középpontok igazítása
