@@ -13,9 +13,18 @@ use std::{
 };
 
 /// Publication failure distinguishes an unchanged destination from a published file whose cleanup or directory flush failed.
+///
+/// With `published: false` the destination is unchanged (for example `AlreadyExists` when another
+/// file got there first), so the caller may pick another name or retry. With `published: true` the
+/// destination already holds the complete, flushed bytes; only cleanup or the directory flush
+/// failed. Don't retry that as unpublished: a retry would fail with `AlreadyExists` against the
+/// caller's own file. Report the write as done but not confirmed durable instead.
 #[derive(Debug)]
 pub struct PublishNewError {
+    /// Whether the destination name now exists with the complete bytes despite the error.
     pub published: bool,
+    /// The failed operation: staging, writing or the rename when `published` is false; source
+    /// cleanup or the directory flush when it is true.
     pub error: io::Error,
 }
 
