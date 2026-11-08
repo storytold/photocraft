@@ -133,11 +133,13 @@ fn is_selection_tool(tool: Tool) -> bool {
 }
 
 /// The fields of [`option_keys`] that Reset Tool leaves as they are, as the reference app does
-/// (the Patch tool's Structure and Color, #12127). They stay in [`option_keys`], so a tool preset
-/// still stores them, and Reset All Tools still resets them (it starts from the defaults).
+/// (the Patch tool's Structure and Color, #12127; the Content-Aware Move tool's Mode, #12183).
+/// They stay in [`option_keys`], so a tool preset still stores them, and Reset All Tools still
+/// resets them (it starts from the defaults).
 fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
     match tool {
         Tool::Patch => &["patch_structure", "patch_color"],
+        Tool::ContentAwareMove => &["cam_mode"],
         _ => &[],
     }
 }
