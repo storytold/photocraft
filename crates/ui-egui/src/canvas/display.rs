@@ -131,6 +131,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(shown) = crate::type_font_preview::display_doc(app, idx) {
         return shown;
     }
+    // A paragraph-box handle drag, rendered in the background (#7032).
+    if let Some(shown) = crate::type_box_preview::display_doc(app, idx) {
+        return shown;
+    }
     // Vanishing Point's strokes over the document as it is now (the Layers panel may have
     // changed it since the options bar synced them this frame).
     crate::vp_ui::sync_preview(app);

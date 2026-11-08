@@ -49,6 +49,7 @@ pub(super) mod tool_reset;
 pub mod transform_fx;
 pub mod transform_tex;
 pub mod transform_tool;
+pub(super) mod type_box_preview;
 pub(super) mod type_font_preview;
 pub mod type_tool;
 pub(super) mod type_transform;

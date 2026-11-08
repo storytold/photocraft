@@ -141,6 +141,7 @@ impl PhotocraftApp {
             type_layout: None,
             type_clicks: None,
             type_transform_preview: None,
+            type_box_preview: None,
             type_font_preview: None,
             color_picker_preview: None,
             guide_drag: None,

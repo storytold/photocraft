@@ -1,0 +1,594 @@
+//! Paragraph-box handle drags of the Type tool, rendered off the UI thread (#7032).
+//!
+//! Applying a dragged box with `type.edit` lays the text out and rasterizes it, which on a big
+//! paragraph takes tens of milliseconds, and the canvas sends one pointer move per frame. So while
+//! a handle is dragged the document is left alone: the moves only say which box is wanted, a
+//! worker lays out and rasterizes a copy of the layer in that box, and the canvas shows the
+//! document with that copy. One render runs at a time and the newest box wins: a result for an
+//! older box is still shown (it is newer than what is on screen), then the next render starts for
+//! the box wanted now. Releasing (or anything else that ends the drag) runs the same `type.edit`
+//! a synchronous drag would have run for its last move, so the finished document and its history
+//! are exactly what they were before this preview existed.
+//!
+//! Only with background jobs on a native build; otherwise every move runs `type.edit` as before.
+
+use std::collections::VecDeque;
+use std::panic::AssertUnwindSafe;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::{Arc, PoisonError};
+
+use photocraft_color::PixelFormat;
+use photocraft_doc::{DocId, Document, LayerContent, LayerId, TextLayer};
+use photocraft_geom::{Affine, Rect};
+use photocraft_raster::Surface;
+use serde_json::json;
+
+use crate::PhotocraftApp;
+
+/// Preview keys: `BASE + n`, one per result shown (see `canvas::display_doc`).
+const BASE: u64 = 1 << 46;
+/// How often a running render is polled for its result when its thread can't wake the canvas.
+const POLL_MS: u64 = 30;
+/// Results whose damage areas are remembered for canvas invalidation.
+const MAX_AREAS: usize = 128;
+
+/// Test-only controls of the worker. Empty (and free) outside tests.
+#[derive(Clone, Default)]
+struct Hooks {
+    /// While `Some` and closed, a render waits before computing, so a test can hold one in flight.
+    #[cfg(test)]
+    gate: Option<Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>>,
+}
+
+impl Hooks {
+    #[allow(clippy::unused_self)]
+    fn wait(&self) {
+        #[cfg(test)]
+        {
+            if let Some(gate) = &self.gate {
+                let mut open = gate.0.lock().unwrap_or_else(PoisonError::into_inner);
+                while !*open {
+                    open = gate.1.wait(open).unwrap_or_else(PoisonError::into_inner);
+                }
+            }
+        }
+    }
+}
+
+/// The render that is computing: the box it draws and where its surface arrives.
+struct Running {
+    boxed: [f64; 4],
+    rx: Receiver<Option<Surface>>,
+    /// Test-only notification sent after the worker has sent its result.
+    #[cfg(test)]
+    finished: Receiver<()>,
+}
+
+/// The newest result: the box it shows, the document with it, and its canvas key.
+struct Shown {
+    boxed: [f64; 4],
+    doc: Arc<Document>,
+    key: u64,
+}
+
+pub(crate) struct TypeBoxPreview {
+    /// The document, its revision and the layer at the press: if any of them changes, the drag's
+    /// box is not applied to something else.
+    document: DocId,
+    revision: u64,
+    layer: LayerId,
+    /// The edit session's coalescing key, for the `type.edit` that applies the box.
+    session: String,
+    /// The box (`[x, y, width, height]`, document px, as `type.edit`'s `box`) the pointer wants.
+    wanted: Option<[f64; 4]>,
+    /// A box whose render failed: not tried again (the release still renders it).
+    failed: Option<[f64; 4]>,
+    running: Option<Running>,
+    shown: Option<Shown>,
+    serial: u64,
+    /// The layer's pixel bounds in the document (key 0), and in each result shown, for damage.
+    original_area: Rect,
+    areas: VecDeque<(u64, Rect)>,
+    /// To wake the canvas when a render finishes; set by [`wake`] on a canvas frame.
+    ctx: Option<egui::Context>,
+    hooks: Hooks,
+    /// Test-only count of renders started.
+    #[cfg(test)]
+    spawned: usize,
+}
+
+/// Whether handle drags render in the background here.
+fn enabled(app: &PhotocraftApp) -> bool {
+    cfg!(not(target_arch = "wasm32")) && app.background_jobs
+}
+
+/// A handle drag of `p`'s layer is in progress.
+fn dragging(app: &PhotocraftApp, p: &TypeBoxPreview) -> bool {
+    app.ui.tool.is_type() && app.ui.text_edit.as_ref().is_some_and(|e| e.layer == p.layer.0 && e.resize.is_some())
+}
+
+fn text_of(doc: &Document, layer: LayerId) -> Option<&TextLayer> {
+    match &doc.layer(layer)?.content {
+        LayerContent::Text(t) => Some(t),
+        _ => None,
+    }
+}
+
+/// A handle drag of text layer `layer` starts: remember the document as it is now. Does nothing
+/// when drags apply the box as they go.
+pub(crate) fn begin(app: &mut PhotocraftApp, layer: LayerId, session: String) {
+    // A drag left over from before (its release never came) still owes its box to the document.
+    flush(app);
+    if !enabled(app) {
+        return;
+    }
+    let Some(st) = app.session.active() else { return };
+    if text_of(&st.doc, layer).is_none() {
+        return;
+    }
+    let original_area = st.doc.layer(layer).and_then(|l| l.surface()).map_or(Rect::EMPTY, |s| s.tile_bounds());
+    app.type_box_preview = Some(TypeBoxPreview {
+        document: st.doc.id,
+        revision: st.revision,
+        layer,
+        session,
+        wanted: None,
+        failed: None,
+        running: None,
+        shown: None,
+        serial: 0,
+        original_area,
+        areas: VecDeque::new(),
+        ctx: None,
+        hooks: Hooks::default(),
+        #[cfg(test)]
+        spawned: 0,
+    });
+}
+
+/// The drag moved the box to `boxed`. Returns false when no background drag is in progress for
+/// `layer` (or the box isn't a plain finite one): the caller then applies it with `type.edit`.
+pub(crate) fn want(app: &mut PhotocraftApp, layer: LayerId, boxed: [f64; 4]) -> bool {
+    let Some(p) = app.type_box_preview.as_ref() else { return false };
+    let current = p.layer == layer
+        && boxed.iter().all(|v| v.is_finite())
+        && app.session.documents().iter().any(|st| st.doc.id == p.document && st.revision == p.revision && text_of(&st.doc, layer).is_some());
+    if !current {
+        // Something else changed the document or layer since the press: the preview would show
+        // a stale copy, so drop it (the box then goes through the command like any edit).
+        app.type_box_preview = None;
+        return false;
+    }
+    if let Some(p) = app.type_box_preview.as_mut() {
+        p.wanted = Some(boxed);
+    }
+    spawn_if_idle(app);
+    true
+}
+
+/// The box the pointer wants while a background drag of `layer` is in progress, for the overlay.
+/// The text layout, caret and overflow mark still come from the document, which has not changed.
+pub(crate) fn wanted_box(app: &PhotocraftApp, layer: LayerId) -> Option<[f64; 4]> {
+    let p = app.type_box_preview.as_ref().filter(|p| p.layer == layer && dragging(app, p))?;
+    p.wanted
+}
+
+/// Start a render of the wanted box if none runs and it isn't what is shown already.
+fn spawn_if_idle(app: &mut PhotocraftApp) {
+    let Some(p) = app.type_box_preview.as_ref() else { return };
+    let Some(boxed) = p.wanted else { return };
+    if p.running.is_some() || p.failed == Some(boxed) || p.shown.as_ref().is_some_and(|s| s.boxed == boxed) {
+        return;
+    }
+    let Some(st) = app.session.documents().iter().find(|st| st.doc.id == p.document && st.revision == p.revision) else { return };
+    let Some(t) = text_of(&st.doc, p.layer) else { return };
+    let mut layer = t.clone();
+    photocraft_engine::type_cmds::apply_box(&mut layer, boxed);
+    let (dpi, format) = (st.doc.resolution_dpi, st.doc.pixel_format());
+    let (ctx, hooks) = (p.ctx.clone(), p.hooks.clone());
+    let running = spawn(layer, dpi, format, boxed, ctx, hooks);
+    if let Some(p) = app.type_box_preview.as_mut() {
+        #[cfg(test)]
+        {
+            p.spawned += 1;
+        }
+        if running.is_none() {
+            p.failed = Some(boxed);
+        }
+        p.running = running;
+    }
+}
+
+/// Lay out and rasterize `layer` like `TextEngine::render`, but holding the shared engine only
+/// for the layout: the UI thread locks it every frame, and the rasterizing is most of the time.
+fn render(layer: &TextLayer, dpi: f32, format: PixelFormat) -> Surface {
+    let layout = {
+        let mut engine = photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner);
+        engine.layout(layer, dpi)
+    };
+    let warp = photocraft_text::render::layout_deform(&layout, layer);
+    photocraft_text::render::rasterize_warped(&layout, &layer.transform, format, layer.antialias, warp.as_ref()).surface
+}
+
+fn spawn(layer: TextLayer, dpi: f32, format: PixelFormat, boxed: [f64; 4], ctx: Option<egui::Context>, hooks: Hooks) -> Option<Running> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    #[cfg(test)]
+    let (finished_tx, finished) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("type-box-preview".into())
+        .spawn(move || {
+            hooks.wait();
+            // A panic leaves no preview; the release still renders the box on the UI thread.
+            let surface = std::panic::catch_unwind(AssertUnwindSafe(|| render(&layer, dpi, format))).ok();
+            // The receiver is gone when the drag ended meanwhile.
+            let _ = tx.send(surface);
+            #[cfg(test)]
+            let _ = finished_tx.send(());
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        })
+        .ok()?;
+    Some(Running {
+        boxed,
+        rx,
+        #[cfg(test)]
+        finished,
+    })
+}
+
+/// Take a finished render, if there is one, and make its document the one shown.
+fn poll(app: &mut PhotocraftApp) {
+    let Some(p) = app.type_box_preview.as_mut() else { return };
+    let Some(r) = p.running.as_ref() else { return };
+    let result = match r.rx.try_recv() {
+        Ok(surface) => surface,
+        Err(TryRecvError::Disconnected) => None,
+        Err(TryRecvError::Empty) => return,
+    };
+    let Some(done) = p.running.take() else { return };
+    match result {
+        Some(surface) => publish(app, done.boxed, surface),
+        None => p.failed = Some(done.boxed),
+    }
+}
+
+/// Show the session document with its layer in `boxed`, drawn as `surface`.
+fn publish(app: &mut PhotocraftApp, boxed: [f64; 4], surface: Surface) {
+    let Some(p) = app.type_box_preview.as_ref() else { return };
+    let (document, revision, layer) = (p.document, p.revision, p.layer);
+    let Some(st) = app.session.documents().iter().find(|st| st.doc.id == document && st.revision == revision) else { return };
+    let mut doc = (*st.doc).clone();
+    let area = surface.tile_bounds();
+    {
+        let Some(l) = doc.layer_mut(layer) else { return };
+        let LayerContent::Text(t) = &mut l.content else { return };
+        photocraft_engine::type_cmds::apply_box(t, boxed);
+        t.cache = Some(surface);
+    }
+    let doc = Arc::new(photocraft_engine::mode_cmds::display_document(&doc).unwrap_or(doc));
+    let Some(p) = app.type_box_preview.as_mut() else { return };
+    p.serial += 1;
+    let key = BASE + p.serial;
+    if p.areas.len() >= MAX_AREAS {
+        p.areas.pop_front();
+    }
+    p.areas.push_back((key, area));
+    p.shown = Some(Shown { boxed, doc, key });
+}
+
+/// The document to show for document `idx`: the session document with the dragged box applied,
+/// once a render of one has arrived. `None` (and the preview dropped, if it is stale) otherwise.
+pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    let p = app.type_box_preview.as_ref()?;
+    let st = app.session.documents().get(idx)?;
+    if st.doc.id != p.document {
+        return None;
+    }
+    let stale = st.revision != p.revision || text_of(&st.doc, p.layer).is_none();
+    let drag = dragging(app, p);
+    if stale {
+        app.type_box_preview = None;
+        return None;
+    }
+    // A drag that ended some other way is settled by `settle`, not here: this runs while the
+    // canvas is being drawn.
+    if !drag {
+        return None;
+    }
+    poll(app);
+    spawn_if_idle(app);
+    let s = app.type_box_preview.as_ref()?.shown.as_ref()?;
+    Some((s.doc.clone(), s.key))
+}
+
+/// Keep frames coming while a render computes, and remember the context to wake from the worker.
+pub(crate) fn wake(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(p) = app.type_box_preview.as_mut() else { return };
+    if p.ctx.is_none() {
+        p.ctx = Some(ctx.clone());
+    }
+    if p.running.is_some() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(POLL_MS));
+    }
+}
+
+/// The drag ends: apply the box it wanted with `type.edit`, exactly as a synchronous drag has by
+/// now (one render, in the edit session's history step), and drop the preview. Nothing happens
+/// without a preview, if it never got a box, or if the document, its revision or the layer is no
+/// longer the one the drag started on.
+pub(crate) fn flush(app: &mut PhotocraftApp) {
+    let Some(p) = app.type_box_preview.take() else { return };
+    let Some(boxed) = p.wanted else { return };
+    let Some(i) = app.session.documents().iter().position(|st| st.doc.id == p.document && st.revision == p.revision && text_of(&st.doc, p.layer).is_some())
+    else {
+        return;
+    };
+    // The drag's document may no longer be the active one (a tab switched mid-drag).
+    let current = app.session.active_index();
+    if current != Some(i) {
+        app.session.set_active(i);
+    }
+    let _ = app.run("type.edit", json!({"layer": p.layer.0, "box": boxed, "coalesce": p.session}));
+    if let Some(c) = current.filter(|c| *c != i) {
+        app.session.set_active(c);
+    }
+}
+
+/// The edit was cancelled: its session is undone, so the box the drag wanted is not applied.
+pub(crate) fn discard(app: &mut PhotocraftApp) {
+    app.type_box_preview = None;
+}
+
+/// Once a frame: a drag that ended without a release reaching the Type tool (focus lost, a Free
+/// Transform started, the tool switched, the edit replaced) keeps the box it had reached, as it
+/// did when every move was applied. If the document changed meanwhile, the box is dropped.
+pub(crate) fn settle(app: &mut PhotocraftApp) {
+    if app.type_box_preview.as_ref().is_some_and(|p| !dragging(app, p)) {
+        flush(app);
+    }
+}
+
+/// Where the layer's pixels were and are, between two keys the canvas showed (0: the document).
+pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, before: u64, after: u64) -> Option<Rect> {
+    if before == after {
+        return None;
+    }
+    let p = app.type_box_preview.as_ref().filter(|p| p.document == doc && p.revision == revision)?;
+    let area = |key| if key == 0 { Some(p.original_area) } else { p.areas.iter().find(|(k, _)| *k == key).map(|(_, r)| *r) };
+    Some(area(before)?.union(&area(after)?))
+}
+
+/// The preview's box as the overlay draws it: the layer's transform moved to the box's origin.
+pub(crate) fn overlay_affine(aff: Affine, boxed: [f64; 4]) -> Affine {
+    Affine { m: [aff.m[0], aff.m[1], aff.m[2], aff.m[3], boxed[0], boxed[1]] }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canvas::{ToolEvent, tool_event};
+    use crate::state::Tool;
+    use egui::Modifiers;
+    use photocraft_doc::text::TextShape;
+
+    fn app_with_box() -> (PhotocraftApp, LayerId) {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
+        app.sync_views();
+        app.ui.extras.rulers = false;
+        app.ui.extras.snap = false;
+        app.ui.tool = Tool::Type;
+        let id = LayerId(
+            app.run("type.create", json!({"text": "Hello é世界\nSecond line", "size": 32, "x": 300, "y": 420, "box": [300, 300, 240, 180]})).unwrap()["layer"]
+                .as_u64()
+                .unwrap(),
+        );
+        app.run("type.edit", json!({"layer": id.0, "transform": [1.0, 0.0, 0.0, 1.0, 300.0, 300.0]})).unwrap();
+        crate::type_tool::edit_active(&mut app).unwrap();
+        (app, id)
+    }
+
+    // The bottom edge's handle sits at the midpoint of the box's lower edge.
+    fn press(app: &mut PhotocraftApp) {
+        tool_event(app, ToolEvent::Down { x: 420.0, y: 480.0, pressure: 1.0 }, Modifiers::NONE);
+    }
+    fn to(app: &mut PhotocraftApp, y: f64) {
+        tool_event(app, ToolEvent::Move { x: 420.0, y, pressure: 1.0 }, Modifiers::NONE);
+    }
+    fn release(app: &mut PhotocraftApp, y: f64) {
+        tool_event(app, ToolEvent::Up { x: 420.0, y }, Modifiers::NONE);
+    }
+    fn revision(app: &PhotocraftApp) -> u64 {
+        app.session.active().unwrap().revision
+    }
+    fn layer_of(doc: &Document, id: LayerId) -> TextLayer {
+        text_of(doc, id).unwrap().clone()
+    }
+    fn session_layer(app: &PhotocraftApp, id: LayerId) -> TextLayer {
+        layer_of(&app.session.active().unwrap().doc, id)
+    }
+    fn height(t: &TextLayer) -> f32 {
+        match t.shape {
+            TextShape::Box { height, .. } => height,
+            ref s => panic!("not a box: {s:?}"),
+        }
+    }
+    fn same_pixels(a: &TextLayer, b: &TextLayer) -> bool {
+        let (a, b) = (a.cache.as_ref().unwrap(), b.cache.as_ref().unwrap());
+        let r = a.content_bounds();
+        r == b.content_bounds() && (r.y0..r.y1).all(|y| (r.x0..r.x1).all(|x| a.rgba(x, y) == b.rgba(x, y)))
+    }
+    fn background(app: &mut PhotocraftApp) {
+        app.background_jobs = true;
+    }
+    fn open_gate(gate: &Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>) {
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+    }
+    /// Hold every render back until the returned gate opens.
+    fn hold(app: &mut PhotocraftApp) -> Arc<(std::sync::Mutex<bool>, std::sync::Condvar)> {
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        app.type_box_preview.as_mut().unwrap().hooks.gate = Some(gate.clone());
+        gate
+    }
+    /// Wait for each render in turn (their threads signal when done), polling after each, until
+    /// none runs: the document shown then is for the newest box.
+    fn wait_idle(app: &mut PhotocraftApp) -> Option<(Arc<Document>, u64)> {
+        let mut out = None;
+        for _ in 0..16 {
+            if let Some(r) = app.type_box_preview.as_ref().and_then(|p| p.running.as_ref()) {
+                let _ = r.finished.recv_timeout(std::time::Duration::from_secs(300));
+            }
+            out = display_doc(app, 0);
+            if app.type_box_preview.as_ref().is_none_or(|p| p.running.is_none()) {
+                break;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn an_async_drag_leaves_the_document_alone_until_release_and_ends_as_the_sync_drag() {
+        let (mut sync, id) = app_with_box();
+        press(&mut sync);
+        to(&mut sync, 520.0);
+        to(&mut sync, 560.0);
+        release(&mut sync, 560.0);
+        let want = session_layer(&sync, id);
+        assert_eq!(height(&want), 260.0);
+
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        let (rev, steps) = (revision(&app), app.session.active().unwrap().history.past_len());
+        press(&mut app);
+        to(&mut app, 520.0);
+        to(&mut app, 560.0);
+        assert_eq!(revision(&app), rev, "moves leave the document alone");
+        assert_eq!(height(&session_layer(&app, id)), 180.0);
+        let (shown, key) = wait_idle(&mut app).expect("a preview once the render arrived");
+        assert!(key > BASE);
+        let preview = layer_of(&shown, id);
+        assert_eq!(height(&preview), 260.0, "the newest box");
+        assert!(preview.cache.is_some());
+        assert_eq!(revision(&app), rev, "showing it changes nothing");
+
+        release(&mut app, 560.0);
+        assert_eq!(revision(&app), rev + 1, "release is one edit");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+        assert!(app.type_box_preview.is_none());
+        let got = session_layer(&app, id);
+        assert_eq!(got.shape, want.shape);
+        assert_eq!(got.transform.m, want.transform.m);
+        assert!(same_pixels(&got, &want), "the finished layer is the sync drag's");
+        assert!(same_pixels(&got, &preview), "and what the preview showed");
+    }
+
+    #[test]
+    fn the_newest_box_wins_with_one_render_at_a_time() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        press(&mut app);
+        let gate = hold(&mut app);
+        to(&mut app, 500.0);
+        to(&mut app, 520.0);
+        to(&mut app, 560.0);
+        assert_eq!(app.type_box_preview.as_ref().unwrap().spawned, 1, "moves while a render runs start no other");
+        open_gate(&gate);
+        let (shown, _) = wait_idle(&mut app).expect("a preview");
+        assert_eq!(app.type_box_preview.as_ref().unwrap().spawned, 2, "the first render, then one for the newest box");
+        assert_eq!(height(&layer_of(&shown, id)), 260.0);
+        release(&mut app, 560.0);
+    }
+
+    #[test]
+    fn a_sync_drag_applies_every_move_at_once() {
+        let (mut app, id) = app_with_box();
+        let rev = revision(&app);
+        press(&mut app);
+        assert!(app.type_box_preview.is_none());
+        to(&mut app, 520.0);
+        assert_eq!(revision(&app), rev + 1);
+        to(&mut app, 560.0);
+        assert_eq!(revision(&app), rev + 2);
+        assert_eq!(height(&session_layer(&app, id)), 260.0);
+        release(&mut app, 560.0);
+    }
+
+    #[test]
+    fn one_undo_restores_the_box_after_an_async_drag() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        let steps = app.session.active().unwrap().history.past_len();
+        press(&mut app);
+        to(&mut app, 560.0);
+        wait_idle(&mut app);
+        release(&mut app, 560.0);
+        assert_eq!(height(&session_layer(&app, id)), 260.0);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(height(&session_layer(&app, id)), 180.0);
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    }
+
+    #[test]
+    fn committing_mid_drag_keeps_the_dragged_box_and_cancelling_drops_it() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        press(&mut app);
+        to(&mut app, 560.0);
+        crate::type_tool::commit(&mut app);
+        assert!(app.type_box_preview.is_none() && app.ui.text_edit.is_none());
+        assert_eq!(height(&session_layer(&app, id)), 260.0, "the box the drag reached");
+
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        press(&mut app);
+        to(&mut app, 560.0);
+        crate::type_tool::cancel(&mut app);
+        assert!(app.type_box_preview.is_none() && app.ui.text_edit.is_none());
+        assert_eq!(height(&session_layer(&app, id)), 180.0, "cancelling leaves the box");
+    }
+
+    #[test]
+    fn a_drag_that_ends_without_a_release_is_applied_by_the_frame_step() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        press(&mut app);
+        to(&mut app, 560.0);
+        settle(&mut app);
+        assert!(app.type_box_preview.is_some(), "still dragging");
+        assert_eq!(height(&session_layer(&app, id)), 180.0);
+        // As `cancel_drag` does when the window loses focus.
+        app.ui.text_edit.as_mut().unwrap().resize = None;
+        assert!(display_doc(&mut app, 0).is_none());
+        settle(&mut app);
+        assert!(app.type_box_preview.is_none());
+        assert_eq!(height(&session_layer(&app, id)), 260.0);
+
+        // Something else edited the document meanwhile: the box isn't applied over it.
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        press(&mut app);
+        to(&mut app, 560.0);
+        app.run("layer.setProps", json!({"layer": id.0, "opacity": 0.5})).unwrap();
+        app.ui.text_edit.as_mut().unwrap().resize = None;
+        settle(&mut app);
+        assert!(app.type_box_preview.is_none());
+        assert_eq!(height(&session_layer(&app, id)), 180.0);
+    }
+
+    #[test]
+    fn deleting_the_layer_mid_drag_clears_the_preview_without_a_panic() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        press(&mut app);
+        to(&mut app, 520.0);
+        wait_idle(&mut app);
+        app.session.execute("layer.delete", json!({"layer": id.0})).unwrap();
+        assert!(display_doc(&mut app, 0).is_none());
+        assert!(app.type_box_preview.is_none());
+        to(&mut app, 560.0);
+        release(&mut app, 560.0);
+        assert!(app.type_box_preview.is_none());
+    }
+}

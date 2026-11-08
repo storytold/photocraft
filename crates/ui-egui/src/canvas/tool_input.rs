@@ -586,6 +586,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             feed_live_stroke(app);
         }
         ToolEvent::Up { x, y } => {
+            // Before `resize` is cleared: a background box drag applies its box now.
+            crate::type_box_preview::flush(app);
             if tool.is_type()
                 && let Some(e) = app.ui.text_edit.as_mut()
             {
