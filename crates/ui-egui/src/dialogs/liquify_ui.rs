@@ -27,6 +27,68 @@ const LEFT_W: f32 = 48.0;
 const RIGHT_W: f32 = 292.0;
 const REDO_STACK_LIMIT: usize = 100;
 
+/// Native component sampling keeps the other components and opacity at the destination. Work
+/// stays bounded by the dirty proxy/viewport rectangle; a dab never scans the full source.
+#[allow(clippy::too_many_arguments)]
+fn render_components(
+    source: &Surface,
+    source_bounds: Rect,
+    field: &LiquifyField,
+    scale: f64,
+    target: &Value,
+    bounds: Rect,
+    dirty: Rect,
+    out: &mut [[u8; 4]],
+) -> bool {
+    let Ok(Some(colors)) = photocraft_engine::color_channels::explicit(&json!({"target":target}), source.format().mode.color_channels()) else { return false };
+    let width = bounds.width() as usize;
+    if source_bounds.is_empty() || bounds.is_empty() || !scale.is_finite() || scale <= 0.0 || width.checked_mul(bounds.height() as usize) != Some(out.len()) {
+        return false;
+    }
+    let fmt = source.format();
+    let mut native = vec![0.0; fmt.channels()];
+    let dirty = dirty.intersect(&bounds);
+    for y in dirty.y0..dirty.y1 {
+        for x in dirty.x0..dirty.x1 {
+            let px = f64::from(field.bounds.x0) + (f64::from(x.saturating_sub(source_bounds.x0)) + 0.5) * scale;
+            let py = f64::from(field.bounds.y0) + (f64::from(y.saturating_sub(source_bounds.y0)) + 0.5) * scale;
+            let displacement = field.sample(px, py);
+            let sx = (f64::from(x) + displacement[0] / scale).clamp(f64::from(source_bounds.x0), f64::from(source_bounds.x1 - 1));
+            let sy = (f64::from(y) + displacement[1] / scale).clamp(f64::from(source_bounds.y0), f64::from(source_bounds.y1 - 1));
+            let (x0, y0) = (sx.floor() as i32, sy.floor() as i32);
+            let (fx, fy) = ((sx - f64::from(x0)) as f32, (sy - f64::from(y0)) as f32);
+            let taps = [
+                (x0, y0, (1.0 - fx) * (1.0 - fy)),
+                (x0.saturating_add(1).min(source_bounds.x1 - 1), y0, fx * (1.0 - fy)),
+                (x0, y0.saturating_add(1).min(source_bounds.y1 - 1), (1.0 - fx) * fy),
+                (x0.saturating_add(1).min(source_bounds.x1 - 1), y0.saturating_add(1).min(source_bounds.y1 - 1), fx * fy),
+            ];
+            let alpha_index = fmt.mode.color_channels();
+            let alpha = |tx, ty| if fmt.alpha { source.sample_channel(tx, ty, alpha_index) } else { 1.0 };
+            let warped_alpha: f32 = taps.iter().map(|(tx, ty, w)| alpha(*tx, *ty) * w).sum();
+            for (channel, value) in native.iter_mut().enumerate() {
+                *value = if colors.contains(channel) {
+                    if warped_alpha > 0.0 {
+                        taps.iter().map(|(tx, ty, w)| source.sample_channel(*tx, *ty, channel) * alpha(*tx, *ty) * w).sum::<f32>() / warped_alpha
+                    } else {
+                        0.0
+                    }
+                } else {
+                    source.sample_channel(x, y, channel)
+                };
+            }
+            let rgba = photocraft_raster::to_rgba(&fmt, &native);
+            let a = rgba[3].clamp(0.0, 1.0);
+            let encoded = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            let index = (y - bounds.y0) as usize * width + (x - bounds.x0) as usize;
+            if let Some(pixel) = out.get_mut(index) {
+                *pixel = encoded;
+            }
+        }
+    }
+    true
+}
+
 /// Options shown in the properties panel (and settable over the control channel).
 #[derive(Clone, Debug)]
 pub struct LiquifyOpts {
@@ -129,8 +191,11 @@ impl LiquifyOpts {
         if let Some(t) = v.get("tool") {
             let tool: LiquifyTool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
             // Strokes can twirl counterclockwise, but no tool does: hold Alt with Twirl Clockwise.
-            if !LiquifyTool::ALL.contains(&tool) {
+            if tool == LiquifyTool::TwirlCcw {
                 return Err(format!("{t} is not a Liquify tool: choose twirlCw and hold Alt (Option) to twirl counterclockwise"));
+            }
+            if !LiquifyTool::ALL.contains(&tool) {
+                return Err(format!("{t} is not a Liquify tool"));
             }
             self.tool = tool;
         }
@@ -173,6 +238,8 @@ pub struct LiquifyDialog {
     lasso: Option<(bool, Vec<[f64; 2]>)>,
     proxy: ProxyImage,
     source: Surface,
+    target: Value,
+    native_proxy: Option<Surface>,
     out: Vec<[u8; 4]>,
     tex: Option<TextureHandle>,
     /// Proxy pixels to re-render and upload (x0, y0, x1, y1).
@@ -201,6 +268,12 @@ pub struct LiquifyDialog {
     pub preview_ms: f64,
     /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
     smart_filter: Option<usize>,
+    /// Preview (P): off, the image is drawn unwarped while strokes still change the field, as
+    /// Photoshop's Preview checkbox does (#7905). Every opening starts with it on.
+    pub preview: bool,
+    /// The undisplaced field drawn while Preview is off. It is as large as `field`, so it exists
+    /// only while Preview is off: made when Preview is turned off, freed when it's turned back on.
+    identity: Option<LiquifyField>,
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -233,6 +306,7 @@ impl LiquifyDialog {
             "strokes": self.strokes.len() + usize::from(self.cur.is_some()),
             "redo": self.redo.len(),
             "meshSize": self.cell,
+            "preview": self.preview,
             "maxDisplacement": self.field.max_displacement(),
             "proxy": [self.proxy.w, self.proxy.h],
             "dabMs": self.dab_ms,
@@ -374,8 +448,27 @@ impl LiquifyDialog {
     /// Re-renders the dirty proxy pixels into `out` (the texture upload happens in `show`).
     fn render_dirty(&mut self) {
         if let Some(r) = self.dirty {
-            self.proxy.render(&self.field, r, &mut self.out);
+            let field = self.identity.as_ref().filter(|_| !self.preview).unwrap_or(&self.field);
+            if let Some(source) = &self.native_proxy {
+                let bounds = Rect::new(0, 0, self.proxy.w as i32, self.proxy.h as i32);
+                let dirty = Rect::new(r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
+                render_components(source, bounds, field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
+            } else {
+                self.proxy.render(field, r, &mut self.out);
+            }
         }
+    }
+
+    /// Turns Preview on or off: the whole preview is redrawn with, or without, the warp.
+    pub fn set_preview(&mut self, on: bool) {
+        if on == self.preview {
+            return;
+        }
+        self.identity = (!on).then(|| LiquifyField::new(self.canvas, self.cell));
+        self.preview = on;
+        self.dirty = Some([0, 0, self.proxy.w, self.proxy.h]);
+        self.render_dirty();
+        self.view_dirty = self.view_bounds;
     }
 
     /// Builds or updates the visible source-resolution viewport. At ordinary zoom the whole-layer
@@ -424,7 +517,12 @@ impl LiquifyDialog {
             return;
         }
         let started = crate::gpu_canvas::now_ms();
-        let rendered = ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch);
+        let field = self.identity.as_ref().filter(|_| !self.preview).unwrap_or(&self.field);
+        let rendered = if self.native_proxy.is_some() {
+            render_components(&self.source, self.canvas, field, 1.0, &self.target, bounds, dirty, &mut self.view_out)
+        } else {
+            ProxyImage::render_full_resolution(&self.source, field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch)
+        };
         if !rendered {
             self.view_bounds = None;
             self.view_tex = None;
@@ -461,9 +559,12 @@ impl LiquifyDialog {
 
     fn upload(&mut self, ctx: &egui::Context) {
         let (w, h) = (self.proxy.w, self.proxy.h);
+        if self.tex.is_none() {
+            self.dirty = Some([0, 0, w, h]);
+            self.render_dirty();
+        }
         match (&mut self.tex, self.dirty.take()) {
             (None, _) => {
-                self.proxy.render(&self.field, [0, 0, w, h], &mut self.out);
                 let img = egui::ColorImage::new([w, h], self.out.iter().map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])).collect());
                 self.tex = Some(ctx.load_texture("liquify-proxy", img, egui::TextureOptions::LINEAR));
             }
@@ -496,7 +597,7 @@ impl LiquifyDialog {
 
 /// Opens the dialog on the active layer.
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    let (layer, surf, _) = crate::distort_ui::active_filter_target(app)?;
     let canvas = app.session.active().ok_or("no document")?.doc.bounds();
     open_on(app, ctx, layer, surf, Vec::new(), auto_cell(canvas), None)
 }
@@ -534,6 +635,9 @@ fn open_on(
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
+    let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
+    let colors = photocraft_engine::color_channels::explicit(&json!({"target":target}), surf.format().mode.color_channels()).map_err(|e| e.to_string())?;
+    let native_proxy = colors.map(|_| crate::gallery_ui::reduce(&surf, canvas, proxy.scale as u32));
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
@@ -549,6 +653,8 @@ fn open_on(
         lasso: None,
         proxy,
         source: surf,
+        target,
+        native_proxy,
         out,
         tex: None,
         dirty: None,
@@ -569,12 +675,19 @@ fn open_on(
         dab_ms: 0.0,
         preview_ms: 0.0,
         smart_filter,
+        preview: true,
+        identity: None,
     };
     // A sensible starting brush (about a tenth of the image), then the settings last used, so
     // Liquify opens as it was left (#418). Saved values are clamped; a bad one is skipped.
     d.opts.size = ((canvas.width().max(canvas.height()) as f32) / 10.0).round().clamp(10.0, 1500.0);
     if let Some(saved) = app.session.prefs().dialogs.get(REMEMBERED) {
-        let _ = d.opts.apply(saved);
+        // Older versions had a Twirl Counterclockwise tool; its saved choice is Twirl Clockwise now.
+        let mut saved = saved.clone();
+        if saved.get("tool").and_then(Value::as_str) == Some("twirlCcw") {
+            saved["tool"] = json!("twirlCw");
+        }
+        let _ = d.opts.apply(&saved);
     }
     // Layer ids belong to one document: a remembered backdrop Use starts at All Layers.
     d.opts.backdrop_layer = None;
@@ -612,7 +725,7 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<(), String> {
     if d.strokes.is_empty() {
         return Ok(());
     }
-    let p = json!({"strokes": d.strokes, "meshSize": d.cell, "layer": d.layer.0});
+    let p = crate::distort_ui::with_filter_target(json!({"strokes": d.strokes, "meshSize": d.cell, "layer": d.layer.0}), &d.target);
     app.run("filter.liquify", p).map(|_| ())
 }
 
@@ -638,6 +751,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     applied?;
     let num = |k: &str| ui.get(k).and_then(Value::as_f64).map(|v| v as f32);
     let flag = |k: &str| ui.get(k).and_then(Value::as_bool);
+    if let Some(on) = flag("preview") {
+        d.set_preview(on);
+    }
     if flag("undo") == Some(true) {
         d.undo();
     }
@@ -756,6 +872,11 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
             "view.fitOnScreen" => 0.0,
             _ => 1.0,
         };
+    }
+    // P toggles Preview, as in Photoshop (#7905).
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::P)) {
+        let on = !d.preview;
+        d.set_preview(on);
     }
     // Ctrl+H (Hide Extras) toggles the red freeze-mask overlay; the mask itself stays active.
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::H)) {
@@ -996,7 +1117,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
         painter.rect_filled(right, 0.0, t.dock);
         painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 12.0))));
+        // The properties scroll above the Preview row and the buttons.
+        let props_rect = ERect::from_min_max(right.min + vec2(14.0, 12.0), pos2(right.right() - 14.0, (right.bottom() - 84.0).max(right.top() + 12.0)));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(props_rect));
         egui::ScrollArea::vertical().id_salt("liquify-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             widgets::section_label(ui, tl!("Brush Tool Options"));
@@ -1071,6 +1194,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 .size(11.0),
             );
         });
+        // Preview, centred above OK and Cancel as in Photoshop (#7905).
+        let label_w = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Preview").to_owned(), egui::TextStyle::Body.resolve(ui.style()), t.text).size().x);
+        let row_w = (label_w + 30.0).min(RIGHT_W - 28.0);
+        let preview_row = ERect::from_center_size(pos2(right.center().x, right.bottom() - 64.0), vec2(row_w, 24.0));
+        let mut pr = ui.new_child(egui::UiBuilder::new().max_rect(preview_row).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let mut preview = d.preview;
+        if widgets::checkbox(&mut pr, &mut preview, tl!("Preview")).changed() {
+            d.set_preview(preview);
+        }
         // Footer buttons.
         let foot = ERect::from_min_size(pos2(right.left() + 14.0, right.bottom() - 48.0), vec2(RIGHT_W - 28.0, 32.0));
         let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
