@@ -48,7 +48,8 @@ pub fn without_develop_note(warnings: &[String]) -> Vec<String> {
 }
 
 /// Queues the open-time dialog for the document whose import completed, independent of the
-/// active tab. A delayed completion for a closed document must not review another photograph.
+/// active tab: the dialog shows on the next frame, or adds it to its filmstrip when it is already
+/// open. A delayed completion for a closed document must not review another photograph.
 /// `warnings` are the import's: its note says which demosaic method the open developed with.
 pub fn queue_open_dialog(
     app: &mut PhotocraftApp,
@@ -64,7 +65,10 @@ pub fn queue_open_dialog(
     // The method the open actually used (`jobs::import_options` at the job's start), from its
     // note: the preference may have changed while a background open ran.
     let method = photocraft_io::raw::developed_demosaic(warnings).unwrap_or_else(|| app.session.prefs().raw_defaults.demosaic.method());
-    app.pending_raw_open = Some(RawOpen {
+    if app.raw_shelf.iter().any(|h| h.raw.document == document) {
+        return Ok(());
+    }
+    let raw = RawOpen {
         document,
         name: name.to_string(),
         path: path.map(str::to_string),
@@ -72,15 +76,32 @@ pub fn queue_open_dialog(
         developed_with: method,
         demosaic: method,
         decoded: None,
-    });
+    };
+    let held = super::filmstrip::HeldRaw::new(app, raw);
+    app.raw_shelf.push(held);
     Ok(())
 }
 
-/// Opens the queued open-time dialog on its document's (only) layer.
-pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, mut raw: RawOpen) -> Result<(), String> {
+/// Opens the open-time dialog on a queued raw's (only) layer.
+#[cfg(test)]
+pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Result<(), String> {
+    open_raw_with(app, ctx, raw, None)
+}
+
+/// [`open_raw`], or with `kept` settings and the settings they started from (a filmstrip raw
+/// shown again).
+pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen, kept: Option<(CameraRaw, CameraRaw)>) -> Result<(), String> {
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    if let Some((params, original)) = kept {
+        open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
+        if let Some(d) = app.camera_raw.as_mut() {
+            d.original = original;
+        }
+        attach_raw(app, raw);
+        return Ok(());
+    }
     // The file's sidecar (`IMG_0001.xmp` beside it) fills the dialog, as Camera Raw's does; the
     // status bar names what it could not apply.
     let mut params = CameraRaw::default();
@@ -107,17 +128,27 @@ pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, mut raw: Ra
         photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut d.params);
         d.dirty = true;
     }
-    // The decode the open kept, else (a file opened before the dialog could keep it) one made now.
+    attach_raw(app, raw);
+    Ok(())
+}
+
+/// Gives the open dialog its raw: the file name, the camera tone curve it was developed with, and
+/// the decode (the open's kept one, else one made now) the preview and Open's re-develop share.
+fn attach_raw(app: &mut PhotocraftApp, mut raw: RawOpen) {
     let file = match (&raw.bytes, &raw.path) {
+        _ if raw.decoded.is_some() => None,
         (Some(b), _) => Some(std::borrow::Cow::Borrowed(b.as_slice())),
         #[cfg(not(target_arch = "wasm32"))]
         (None, Some(p)) => std::fs::read(p).ok().map(std::borrow::Cow::Owned),
         _ => None,
     };
-    let decoded =
-        file.as_deref().and_then(|b| photocraft_io::raw::take_kept_decode(b).or_else(|| photocraft_io::raw::RawDecode::new(b).ok().map(std::sync::Arc::new)));
-    let curve = file.map(|_| decoded.as_ref().map(|d| d.tone_curve().to_vec()).unwrap_or_default());
-    raw.decoded = decoded;
+    let curve = match file {
+        Some(b) => {
+            raw.decoded = photocraft_io::raw::take_kept_decode(&b).or_else(|| photocraft_io::raw::RawDecode::new(&b).ok().map(std::sync::Arc::new));
+            Some(raw.decoded.as_ref().map(|d| d.tone_curve().to_vec()).unwrap_or_default())
+        }
+        None => raw.decoded.as_ref().map(|d| d.tone_curve().to_vec()),
+    };
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
         // The full-size preview retones the whole frame with it, as Open will.
@@ -126,7 +157,6 @@ pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, mut raw: Ra
         d.raw_curve = curve;
         d.raw_open = Some(raw);
     }
-    Ok(())
 }
 
 pub(super) fn document_index(app: &PhotocraftApp, id: photocraft_doc::DocId) -> Option<usize> {
@@ -162,6 +192,9 @@ pub struct Redevelop {
     filter_step: bool,
     /// The Camera Raw Defaults the open started with, for the conversions after the filter step.
     defaults: photocraft_engine::prefs::RawDefaults,
+    /// The dialog's Open started this, from these settings: if the re-develop fails, the raw goes
+    /// back to the filmstrip to be tried again or cancelled.
+    back_to_filmstrip: Option<CameraRaw>,
 }
 
 /// The sliders a raw open applies while developing, before the tone curve (as Camera Raw does).
@@ -238,11 +271,20 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         }
         photocraft_engine::jobs::Started::Job(job) => {
             let defaults = app.session.prefs().raw_defaults.clone();
-            app.raw_redevelop.push(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false, defaults });
+            app.raw_redevelop.push(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false, defaults, back_to_filmstrip: None });
             app.ui.status = label;
             app.ui.status_error = false;
             Ok(json!({"job": job.0, "pending": true}))
         }
+    }
+}
+
+/// `reply` is [`commit_open_raw`]'s from the dialog's Open: if it started a background re-develop
+/// and that fails, the raw comes back to the filmstrip, its settings having started from `original`.
+pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, original: &CameraRaw) {
+    let job = reply.get("job").and_then(Value::as_u64);
+    if let Some(pending) = app.raw_redevelop.iter_mut().find(|r| Some(r.job.0) == job && !r.filter_step) {
+        pending.back_to_filmstrip = Some(original.clone());
     }
 }
 
@@ -337,7 +379,7 @@ fn finish_open_raw(
             && let Some(job) = r.get("job").and_then(Value::as_u64)
         {
             let job = photocraft_engine::jobs::JobId(job);
-            app.raw_redevelop.push(Redevelop { job, params: rest.clone(), raw: raw.clone(), filter_step: true, defaults: d.clone() });
+            app.raw_redevelop.push(Redevelop { job, params: rest.clone(), raw: raw.clone(), filter_step: true, defaults: d.clone(), back_to_filmstrip: None });
             result["filter"] = r;
             mark_unmodified(app, index);
             return Ok(result);
@@ -387,7 +429,7 @@ pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, 
 
 /// Every k-th pixel of a surface's content, k chosen so the longer side has about `max_side`
 /// samples: enough for a histogram (Auto tone) without reading a whole raw.
-fn sample_pixels(surf: &photocraft_raster::Surface, max_side: usize) -> Vec<[f32; 4]> {
+pub(super) fn sample_pixels(surf: &photocraft_raster::Surface, max_side: usize) -> Vec<[f32; 4]> {
     let area = surf.content_bounds();
     let (w, h) = (area.x1.saturating_sub(area.x0).max(0) as usize, area.y1.saturating_sub(area.y0).max(0) as usize);
     if w == 0 || h == 0 {
@@ -449,7 +491,15 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
             Err(err) => crate::notices::error(app, format!("{}: {err}", e.label)),
         },
         photocraft_engine::jobs::JobOutcome::Failed(err) => {
-            // The document stays open, developed with the defaults.
+            // The document stays open, developed with the defaults; from the dialog, it goes back
+            // to the filmstrip with its settings, which may have no sidecar to keep them.
+            if let Some(original) = pending.back_to_filmstrip
+                && document_index(app, pending.raw.document).is_some()
+            {
+                let mut held = super::filmstrip::HeldRaw::new(app, pending.raw);
+                held.kept = Some((pending.params, original));
+                app.raw_shelf.push(held);
+            }
             app.sync_views();
             crate::notices::error(app, format!("{}: {err}", e.label));
         }
@@ -461,13 +511,18 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
     true
 }
 
-/// Cancel: closes the dialog; for the open-time dialog also the document it was opening.
+/// Cancel: closes the dialog; for the open-time dialog also the documents it was opening (every
+/// raw in its filmstrip).
 pub(super) fn cancel(app: &mut PhotocraftApp) {
     let Some(d) = app.camera_raw.take() else { return };
-    if let (Target::OpenRaw, Some(raw)) = (d.target, &d.raw_open)
-        && let Some(index) = document_index(app, raw.document)
-    {
-        app.session.close(index);
+    if let (Target::OpenRaw, Some(raw)) = (d.target, &d.raw_open) {
+        let mut opening: Vec<_> = std::mem::take(&mut app.raw_shelf).into_iter().map(|h| h.raw.document).collect();
+        opening.push(raw.document);
+        for id in opening {
+            if let Some(index) = document_index(app, id) {
+                app.session.close(index);
+            }
+        }
         app.sync_views();
         app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &raw.name)]);
         app.ui.status_error = false;
