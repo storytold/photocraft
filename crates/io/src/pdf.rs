@@ -144,14 +144,16 @@ fn print_pdf_pages(
         out.extend_from_slice(b"\nendobj\n");
     };
     let n = pages.len();
-    let selections_on = pages.iter().any(|p| p.page_label.is_some());
+    // A label tree is written only for a non-empty name: an all-empty tree would be `/Nums []`,
+    // and filtering the first empty name away would start the tree at page index 1, not 0.
+    let labels_on = pages.iter().any(|p| p.page_label.as_deref().is_some_and(|label| !label.is_empty()));
     // 1 catalog, 2 pages, then per page: page, contents, image; then the shared font/ICC/selection.
     let font_obj = 3 + n * 3;
     let icc = first.image.icc.as_ref();
     let icc_obj = icc.map(|_| font_obj + 1);
     let selection_base = font_obj + if icc.is_some() { 2 } else { 1 };
     let selection_objects = selection_font.objects(selection_base);
-    let labels_obj = selections_on.then_some((selection_base + selection_objects.len()) as u32);
+    let labels_obj = labels_on.then_some((selection_base + selection_objects.len()) as u32);
     obj(&mut out, format!("<< /Type /Catalog /Pages 2 0 R{} >>", labels_obj.map(|o| format!(" /PageLabels {o} 0 R")).unwrap_or_default()).as_bytes());
     let kids = (0..n).map(|i| format!("{} 0 R", 3 + i * 3)).collect::<Vec<_>>().join(" ");
     obj(&mut out, format!("<< /Type /Pages /Kids [{kids}] /Count {n} >>").as_bytes());
@@ -226,10 +228,16 @@ fn print_pdf_pages(
         obj(&mut out, body);
     }
     if labels_obj.is_some() {
+        // Every page gets an entry: a number-tree range runs until the next key, so omitting an
+        // empty name would make that page inherit the previous page's label. An empty
+        // dictionary gives the page the default (decimal) label instead.
         let nums = pages
             .iter()
             .enumerate()
-            .filter_map(|(i, p)| p.page_label.as_deref().filter(|l| !l.is_empty()).map(|l| format!("{i} << /P {} >>", pdf_unicode_string(l))))
+            .map(|(i, p)| match p.page_label.as_deref().filter(|label| !label.is_empty()) {
+                Some(label) => format!("{i} << /P {} >>", pdf_unicode_string(label)),
+                None => format!("{i} << >>"),
+            })
             .collect::<Vec<_>>()
             .join(" ");
         obj(&mut out, format!("<< /Nums [{nums}] >>").as_bytes());
@@ -315,6 +323,11 @@ fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::Selectio
     (layers, selection_font)
 }
 
+/// Pixels in `rect`, saturating on overflow.
+fn rect_pixels(rect: photocraft_geom::Rect) -> u64 {
+    u64::from(rect.width()).saturating_mul(u64::from(rect.height()))
+}
+
 /// File › Save As / Save a Copy › PDF (#3401): the flattened document at its print size
 /// (pixels ÷ resolution × 72 pt). One page per artboard when the document has artboards, else one
 /// page for the whole document. Layers and transparency are dropped — the warning says so — and
@@ -341,8 +354,13 @@ pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result
     if !artboards.is_empty() {
         // Every page's encoded pixels are kept until the PDF is assembled; bound that peak.
         const MAX_PDF_EXPORT_BYTES: u64 = 1 << 30;
-        let pixels: u64 = artboards.iter().map(|(_, _, a)| u64::from(a.rect.width()) * u64::from(a.rect.height())).sum();
-        let estimate = pixels.saturating_mul(device as u64) + w as u64 * h as u64 * n as u64 * 4;
+        let page_pixels: u64 = artboards.iter().fold(0u64, |bytes, (_, _, a)| bytes.saturating_add(rect_pixels(a.rect)));
+        let retained = page_pixels.saturating_mul(device as u64);
+        // One page renders at a time: its f32 composite surface plus the region read back from
+        // it, both `n` channels at 4 bytes per pixel. The whole-document canvas is never held.
+        let largest = artboards.iter().map(|(_, _, a)| rect_pixels(a.rect)).max().unwrap_or(0);
+        let temporary = largest.saturating_mul(n as u64).saturating_mul(4).saturating_mul(2);
+        let estimate = retained.saturating_add(temporary);
         if estimate > MAX_PDF_EXPORT_BYTES {
             return Err(IoError::Unsupported(format!(
                 "PDF export would need about {} MB for {} artboards; export them in smaller batches",
@@ -350,6 +368,12 @@ pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result
                 artboards.len()
             )));
         }
+        // One document shell is reused for every page. Each page renders a document holding only
+        // its artboard group (the same isolation as `artboard_document`), so an overlapping board
+        // cannot paint on another board's page. Layer pixels are shared with `doc`; this one
+        // clone and the per-page group clone hold no new pixel buffers, but they are outside the
+        // 1 GiB estimate because they are not retained page data.
+        let mut one = doc.clone();
         let mut pages = Vec::with_capacity(artboards.len());
         for (id, name, artboard) in &artboards {
             ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -360,19 +384,13 @@ pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result
             }
             // A hidden artboard still gets its page, rendered from its own content rather than
             // left blank by the group's visibility.
-            let shown;
-            let doc = if doc.layer(*id).is_some_and(|l| !l.visible) {
-                let mut copy = doc.clone();
-                if let Some(layer) = copy.layer_mut(*id) {
-                    layer.visible = true;
-                }
-                shown = copy;
-                &shown
-            } else {
-                doc
-            };
+            let Some(layer) = doc.layer(*id) else { continue };
+            let mut group = layer.clone();
+            group.visible = true;
+            one.layers.clear();
+            one.layers.push(group);
             // Render only this artboard's rect; the surface never holds the whole document.
-            let surface = photocraft_compose::composite_to_surface(doc, rect, PixelFormat::new(fmt.mode, fmt.sample, true), None);
+            let surface = photocraft_compose::composite_to_surface(&one, rect, PixelFormat::new(fmt.mode, fmt.sample, true), None);
             let values = surface.read_region(rect);
             let mut data = Vec::with_capacity((aw as usize * ah as usize).saturating_mul(device));
             for px in values.chunks(n) {

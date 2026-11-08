@@ -5,8 +5,7 @@
 //! a blue rectangle sampled from the raster, and the renderer's side/pixel limits respected by
 //! lowering the effective DPI on a huge page.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use lopdf::{Document as PdfDocument, Object, Stream, dictionary};
 use photocraft_doc::LayerContent;
@@ -164,34 +163,34 @@ fn huge_pages_lower_the_effective_dpi_within_the_renderer_bounds() {
     assert!((print_width - 3000.0).abs() < 1.0, "print width {print_width:.1} pt should stay 3000 pt");
 }
 
-/// Cancelling on the last page check or the public boundary returns Cancelled, never a document.
+/// Cancelling at the public boundary or between pages returns Cancelled, never a document.
+///
+/// The renderer's watcher polls the interrupt while a page is being interpreted, so the number
+/// of checks is not fixed any more; these triggers do not depend on counting them.
 #[test]
-fn cancelling_on_the_last_checks_is_reported() {
+fn cancelling_before_and_between_pages_is_reported() {
     let pdf = variant_pdf();
     let options = ImportOptions { pdf_dpi: 72.0, ..Default::default() };
-    let count = AtomicUsize::new(0);
-    let cancel = || {
-        count.fetch_add(1, Ordering::SeqCst);
-        false
-    };
-    let ctl = Interrupt::cancel_only(&cancel);
-    let result = import_with_options_and_interrupt("variants.pdf", &pdf, &options, &ctl);
-    assert!(result.is_ok(), "uncancelled import failed: {:?}", result.err());
-    let total = count.load(Ordering::SeqCst);
-    assert!(total >= 3, "a complete import should check cancellation at least three times, got {total}");
-    for (label, threshold) in [("the last page check", total - 1), ("the public boundary check", total)] {
-        let seen = AtomicUsize::new(0);
-        let cancel = || seen.fetch_add(1, Ordering::SeqCst) + 1 >= threshold;
-        let ctl = Interrupt::cancel_only(&cancel);
-        let started = Instant::now();
-        let result = import_with_options_and_interrupt("variants.pdf", &pdf, &options, &ctl);
-        let elapsed = started.elapsed();
-        assert_eq!(seen.load(Ordering::SeqCst), threshold, "cancelling on {label} should stop at check {threshold} of {total}");
-        match result {
-            Err(IoError::Cancelled) => {}
-            Ok(_) => panic!("cancelling on {label} returned a document"),
-            Err(error) => panic!("cancelling on {label} returned {error:?}"),
+
+    // The boundary check before dispatch: already cancelled.
+    let always = || true;
+    let ctl = Interrupt::cancel_only(&always);
+    match import_with_options_and_interrupt("variants.pdf", &pdf, &options, &ctl) {
+        Err(IoError::Cancelled) => {}
+        other => panic!("an already-cancelled import returned {:?}", other.map(|_| ())),
+    }
+
+    // The per-page loop's check: the first page's progress cancels the next iteration.
+    let cancelled = AtomicBool::new(false);
+    let cancel = || cancelled.load(Ordering::SeqCst);
+    let progress = |fraction: f32| {
+        if fraction > 0.0 {
+            cancelled.store(true, Ordering::SeqCst);
         }
-        assert!(elapsed < Duration::from_secs(10), "cancelling on {label} took {elapsed:?}");
+    };
+    let ctl = Interrupt::new(&cancel, &progress);
+    match import_with_options_and_interrupt("variants.pdf", &pdf, &options, &ctl) {
+        Err(IoError::Cancelled) => {}
+        other => panic!("cancelling after the first page returned {:?}", other.map(|_| ())),
     }
 }

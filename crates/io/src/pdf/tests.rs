@@ -1,8 +1,9 @@
 //! PDF export: structure, pixel oracle, colour modes and refusal paths.
 
 use super::*;
+use lopdf::{Object, StringFormat};
 use photocraft_color::{PixelFormat, SampleType};
-use photocraft_doc::{Layer, LayerContent, Size};
+use photocraft_doc::{Artboard, Group, Layer, LayerContent, Size};
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
 
@@ -419,4 +420,128 @@ fn artboards_export_as_one_page_each() {
         assert!((w - 20.0).abs() < 0.01 && (h - 30.0).abs() < 0.01, "page {w}x{h}");
     }
     assert_eq!(out.bytes.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 2);
+}
+
+/// Side-by-side 2x2 artboards at 72 dpi, named by `names` (empty names are kept).
+fn artboard_doc(names: &[&str]) -> Document {
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    let width = (names.len() as u32).saturating_mul(2).max(2);
+    let mut d = Document::new("labels.pdf", Size { width, height: 2 }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 72.0;
+    for (index, name) in names.iter().enumerate() {
+        let x0 = (index as i32) * 2;
+        let rect = Rect::new(x0, 0, x0 + 2, 2);
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, rect.x0, rect.y0, rect.x1, rect.y1, &[0.5, 0.5, 0.5, 1.0])));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers.push(Layer::new(*name, LayerContent::Group(group)));
+    }
+    d
+}
+
+/// The decompressed samples of page `id`'s first image XObject (`/Im0`).
+fn page_image(pdf: &lopdf::Document, id: lopdf::ObjectId) -> Vec<u8> {
+    let page = pdf.get_dictionary(id).expect("page dictionary");
+    let resources = page.get(b"Resources").expect("page resources").as_dict().expect("resources dictionary");
+    let xobjects = resources.get(b"XObject").expect("xobjects").as_dict().expect("xobject dictionary");
+    let image = xobjects.get(b"Im0").expect("Im0").as_reference().expect("image reference");
+    pdf.get_object(image).expect("image object").as_stream().expect("image stream").decompressed_content().expect("image samples")
+}
+
+/// A named artboard gives every page a `/PageLabels` entry, and an empty name gets an empty
+/// label dictionary rather than inheriting the previous name.
+#[test]
+fn page_labels_name_every_page_and_an_empty_name_does_not_inherit() {
+    let d = artboard_doc(&["A", "", "C"]);
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
+    check_structure(&pdf);
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    let labels = parsed
+        .catalog()
+        .unwrap()
+        .get(b"PageLabels")
+        .expect("a named artboard gives the PDF page labels")
+        .as_reference()
+        .expect("the label tree is an indirect object");
+    let nums = parsed.get_dictionary(labels).unwrap().get(b"Nums").unwrap().as_array().unwrap();
+    assert_eq!(nums.len(), 6, "one key and one label dictionary per page");
+    for page in 0..3 {
+        assert_eq!(nums[page * 2].as_i64().unwrap(), page as i64, "the tree starts at page index 0 and covers every page");
+    }
+    let label = |page: usize| nums[page * 2 + 1].as_dict().unwrap();
+    assert_eq!(label(0).get(b"P").unwrap(), &Object::String(vec![0xFE, 0xFF, 0x00, 0x41], StringFormat::Hexadecimal), "page 1 is A");
+    assert!(label(1).get(b"P").is_err(), "the empty name gets an empty dictionary, not A");
+    assert_eq!(label(2).get(b"P").unwrap(), &Object::String(vec![0xFE, 0xFF, 0x00, 0x43], StringFormat::Hexadecimal), "page 3 is C");
+    assert_eq!(parsed.get_pages().len(), 3);
+}
+
+/// With no non-empty name there is no label tree at all: an empty `/Nums` would be invalid.
+#[test]
+fn an_all_empty_artboard_names_document_has_no_page_labels_tree() {
+    let d = artboard_doc(&["", "", ""]);
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
+    check_structure(&pdf);
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    assert!(parsed.catalog().unwrap().get(b"PageLabels").is_err(), "no names means no /PageLabels");
+    assert!(!has(&pdf, "/PageLabels"));
+    assert_eq!(parsed.get_pages().len(), 3, "the pages themselves are still written");
+}
+
+/// Two artboards at the same rectangle: each page must hold only its own board's pixels, not
+/// the other board composited over it.
+#[test]
+fn overlapping_artboards_export_only_their_own_pixels() {
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    let mut d = Document::new("overlap.pdf", Size { width: 2, height: 2 }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 72.0;
+    for (name, color) in [("Red", [1.0, 0.0, 0.0, 1.0]), ("Blue", [0.0, 0.0, 1.0, 1.0])] {
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, 0, 0, 2, 2, &color)));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(Rect::new(0, 0, 2, 2))), frame_stroke: None };
+        d.layers.push(Layer::new(name, LayerContent::Group(group)));
+    }
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    let pages = parsed.get_pages();
+    let images = pages.values().map(|id| page_image(&parsed, *id)).collect::<Vec<_>>();
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0], [255u8, 0, 0].repeat(4), "the bottom board's page is red, not blue over red");
+    assert_eq!(images[1], [0u8, 0, 255].repeat(4), "the top board's page is blue");
+}
+
+/// A large, mostly empty canvas must not be charged as if its whole area were rendered.
+#[test]
+fn sparse_canvas_artboards_export_without_a_false_memory_limit() {
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    let mut d = Document::new("sparse.pdf", Size { width: 9000, height: 9000 }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 72.0;
+    for index in 0..2 {
+        let x0 = index * 10;
+        let rect = Rect::new(x0, 0, x0 + 2, 2);
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, rect.x0, 0, rect.x1, 2, &[1.0, 0.0, 0.0, 1.0])));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers.push(Layer::new("Page", LayerContent::Group(group)));
+    }
+    let out = export(&d, &Interrupt::NONE).expect("two 2x2 boards on a 9000x9000 canvas must fit the export budget");
+    let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
+    assert_eq!(parsed.get_pages().len(), 2);
+}
+
+/// Seven US Letter boards at 300 dpi with the importer's gaps: the pages are retained as encoded
+/// data, but no whole-canvas buffer exists, so the old whole-canvas charge rejected this.
+#[test]
+fn seven_us_letter_artboards_export_without_a_false_memory_limit() {
+    const PAGE_W: u32 = 2550;
+    const PAGE_H: u32 = 3300;
+    const GAP: u32 = 80;
+    const PAGES: u32 = 7;
+    let mut d = Document::new("letters.pdf", Size { width: PAGES * PAGE_W + (PAGES - 1) * GAP, height: PAGE_H }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 300.0;
+    for index in 0..PAGES {
+        let x0 = (index * (PAGE_W + GAP)) as i32;
+        let rect = Rect::new(x0, 0, x0 + PAGE_W as i32, PAGE_H as i32);
+        let group = Group { children: Vec::new(), expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers.push(Layer::new(format!("Letter {}", index + 1), LayerContent::Group(group)));
+    }
+    let out = export(&d, &Interrupt::NONE).expect("seven US Letter pages at 300 dpi fit the export budget");
+    let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
+    assert_eq!(parsed.get_pages().len(), 7);
 }

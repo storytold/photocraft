@@ -8,6 +8,9 @@
 //!
 //! The renderer is pure Rust and runs on every desktop platform: no shared library is loaded
 //! or shipped, and a malformed file is reported as an error rather than taking the process down.
+//!
+//! Pages are drawn with the interpreter's default annotation settings, so annotations and
+//! filled-in form fields are rendered; comments are not hidden.
 
 use crate::{ImportOptions, ImportResult, IoError};
 #[cfg(not(target_arch = "wasm32"))]
@@ -23,6 +26,12 @@ use photocraft_geom::{Rect, Size};
 use photocraft_raster::Interrupt;
 #[cfg(not(target_arch = "wasm32"))]
 use photocraft_raster::Surface;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 /// `%PDF-` magic. `.ai` files that start with it are PDFs and render through this importer.
 pub fn is_pdf(bytes: &[u8]) -> bool {
@@ -139,18 +148,25 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
             return Err(IoError::Unsupported(format!("PDF page {page_number} is too large at {dpi:.0} dpi; lower the import DPI")));
         }
         let cache = RenderCache::new();
-        let settings = InterpreterSettings::default();
         let options = raster::Options {
             scale: [(dpi / 72.0) as f32; 2],
             size: Some([width, height]),
             offset: [0.0, 0.0],
             // PDF pages composite onto white, as every PDF viewer and the previous importer did.
+            // craft-pdf returns premultiplied RGBA8; an opaque background makes alpha 1, so the
+            // bytes below can be written as straight alpha. A transparent background would need
+            // un-premultiplying (dividing each colour by alpha) first.
             background: [255, 255, 255, 255],
             color_replacement: None,
         };
-        let rendered = raster::render(page, &cache, &settings, &options).map_err(|error| render_error(page_number, dpi, error))?;
+        let rendered = render_page(page, &cache, &options, ctl).map_err(|error| render_error(page_number, dpi, error))?;
         if rendered.diagnostics.image_decode_failed {
             warnings.push(format!("PDF page {page_number}: an image could not be decoded and is missing"));
+        }
+        // craft-pdf's hayro backend does not emit this flag yet (its README says so); keep the
+        // warning ready so a backend that starts reporting font substitution needs no change here.
+        if rendered.diagnostics.unsupported_font {
+            warnings.push(format!("PDF page {page_number}: a font could not be used and was substituted, so text may look different"));
         }
         if rendered.diagnostics.content_truncated {
             warnings.push(format!("PDF page {page_number}: some content was omitted (a decode or memory limit)"));
@@ -185,6 +201,43 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     }
 
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
+}
+
+/// Renders one page, forwarding `ctl`'s cancellation to craft-pdf while it interprets content.
+///
+/// craft-pdf checks `InterpreterSettings::cancelled` between content operators, so a dense
+/// vector page (CAD, maps) can be stopped part-way through. `Interrupt` is a borrowed callback
+/// while the setting needs an owned flag, so a scoped watcher thread copies one into the other
+/// every few milliseconds until the render returns.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_page<'a>(
+    page: &'a craft_pdf::syntax::page::Page<'a>,
+    cache: &RenderCache<'a>,
+    options: &raster::Options,
+    ctl: &Interrupt,
+) -> Result<raster::Raster, raster::Error> {
+    if ctl.cancelled() {
+        return Err(raster::Error::Cancelled);
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let finished = Arc::new(AtomicBool::new(false));
+    let settings = InterpreterSettings { cancelled: Some(Arc::clone(&cancelled)), ..InterpreterSettings::default() };
+    std::thread::scope(|scope| {
+        let flag = Arc::clone(&cancelled);
+        let done = Arc::clone(&finished);
+        let ctl = *ctl;
+        scope.spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                if ctl.cancelled() {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let rendered = raster::render(page, cache, &settings, options);
+        finished.store(true, Ordering::Relaxed);
+        rendered
+    })
 }
 
 /// One page's raster width or height in pixels at `dpi`, at least one.
@@ -247,5 +300,71 @@ fn render_error(page: usize, dpi: f64, error: raster::Error) -> IoError {
         Error::Allocation => IoError::Unsupported(format!("PDF page {page} needs more memory than is available")),
         Error::BackendPanic => IoError::Unsupported(format!("PDF renderer failed on page {page}; it may be damaged")),
         Error::InvalidOptions | Error::BufferLength => IoError::Unsupported(format!("PDF page {page} could not be rendered")),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use lopdf::{Document as PdfDocument, Object, Stream, dictionary};
+
+    use super::*;
+
+    /// A one-page PDF whose content stream is `operators` short strokes: rendering costs time
+    /// per operator, not per pixel.
+    fn dense_operator_pdf(operators: usize) -> Result<Vec<u8>, lopdf::Error> {
+        let mut pdf = PdfDocument::with_version("1.5");
+        let pages_id = pdf.new_object_id();
+        let mut content = String::with_capacity(operators.saturating_mul(24));
+        content.push_str("0 0 1 RG 0.5 w\n");
+        for i in 0..operators {
+            let x = (i % 200) as f32 * 0.5;
+            let y = ((i / 200) % 100) as f32 * 0.5;
+            content.push_str(&format!("{x:.1} {y:.1} m {:.1} {y:.1} l S\n", x + 0.4));
+        }
+        let content_id = pdf.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let page_id = pdf.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => Object::Array(vec![Object::Real(0.0), Object::Real(0.0), Object::Real(200.0), Object::Real(100.0)]),
+            "Contents" => content_id,
+            "Resources" => dictionary! {},
+        });
+        pdf.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => Object::Array(vec![Object::Reference(page_id)]),
+                "Count" => 1,
+            }),
+        );
+        let catalog = pdf.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        pdf.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        pdf.save_to(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Hundreds of thousands of path operators take far longer than the watcher's polling
+    /// interval, so the interrupt lands mid-render and the page reports Cancelled.
+    #[test]
+    fn a_dense_page_stops_when_the_interrupt_fires_mid_render() {
+        let pdf = dense_operator_pdf(300_000).expect("writing the dense PDF");
+        let document = craft_pdf::open_slice_with_options(&pdf, None, &craft_pdf::OpenOptions::default()).expect("the dense PDF opens");
+        let cache = RenderCache::new();
+        let options =
+            raster::Options { scale: [1.0, 1.0], size: Some([200, 100]), offset: [0.0, 0.0], background: [255, 255, 255, 255], color_replacement: None };
+        let polls = AtomicUsize::new(0);
+        // `render_page` checks once before spawning; the watcher then polls every 5 ms. Ten
+        // polls put the cancellation about 45 ms into a render that takes much longer.
+        let cancel = || polls.fetch_add(1, Ordering::SeqCst) >= 9;
+        let ctl = Interrupt::cancel_only(&cancel);
+        let error = match render_page(&document.pages()[0], &cache, &options, &ctl) {
+            Err(error) => error,
+            Ok(_) => panic!("the dense page rendered to completion before the interrupt fired"),
+        };
+        assert!(matches!(render_error(1, 72.0, error), IoError::Cancelled), "the render error maps to Cancelled");
+        assert!(polls.load(Ordering::SeqCst) >= 10, "the watcher must keep polling the interrupt");
     }
 }
