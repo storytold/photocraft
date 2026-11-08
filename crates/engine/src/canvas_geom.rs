@@ -242,8 +242,10 @@ pub(crate) fn transform_doc_marks(doc: &mut Document, a: &Affine) {
     if let Some(wp) = &mut doc.work_path {
         *wp = wp.transform(a);
     }
-    // A note's icon point maps with the pixels; its popup moves with it and keeps its size and its
-    // offset from the icon, as Photoshop's does under Image Size, Canvas Size and turns (#11795).
+    // A note's icon point maps with the pixels; its popup keeps its size (#11795). Under Image Size
+    // and Canvas Size it also keeps its offset from the icon, as Photoshop's does. Where it sits
+    // after a turn or flip wasn't measured, so it keeps today's origin there: the top-left of the
+    // mapped rectangle.
     for n in &mut doc.notes {
         // An all-zero popup means none is stored (PSD export writes its default one): keep it.
         if n.popup == [0.0; 4] {
@@ -253,8 +255,14 @@ pub(crate) fn transform_doc_marks(doc: &mut Document, a: &Affine) {
         let [px, py] = n.position;
         let (dx, dy, w, h) = (n.popup[0] - px, n.popup[1] - py, n.popup[2] - n.popup[0], n.popup[3] - n.popup[1]);
         n.position = map_pt(a, n.position);
-        let [x, y] = n.position;
-        n.popup = [x + dx, y + dy, x + dx + w, y + dy + h];
+        let [m0, m1, m2, m3, ..] = a.m;
+        let [x, y] = if m1.abs() < EPS && m2.abs() < EPS && m0 > 0.0 && m3 > 0.0 {
+            [n.position[0] + dx, n.position[1] + dy]
+        } else {
+            let [l, t, ..] = map_box(a, n.popup);
+            [l, t]
+        };
+        n.popup = [x, y, x + w, y + h];
     }
     for g in &mut doc.measurement.count_groups {
         for p in &mut g.points {

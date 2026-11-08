@@ -74,7 +74,6 @@ fn canvas_size_and_a_quarter_turn_keep_the_popup_size() {
     s.execute("image.imageRotation.90cw", json!({})).unwrap();
     let r = note(&s, 0);
     assert_eq!([r.popup[2] - r.popup[0], r.popup[3] - r.popup[1]], [240.0, 140.0], "a turn doesn't swap the popup's sides");
-    assert_eq!([r.popup[0] - r.position[0], r.popup[1] - r.position[1]], [8.0, 10.0], "the popup moves with its icon");
 }
 
 #[test]
@@ -84,6 +83,23 @@ fn a_mode_change_leaves_notes_alone() {
     let before = note(&s, 0);
     s.execute("image.mode.cmyk", json!({})).unwrap();
     assert_eq!(note(&s, 0), before);
+}
+
+#[test]
+fn a_turn_keeps_todays_popup_origin_and_the_popup_size() {
+    // Where the popup sits after a turn wasn't measured (#11795), so it keeps today's origin (the
+    // top-left of the turned rectangle) and only the size rule applies.
+    let mut s = session(600, 400);
+    s.execute("notes.add", json!({"x": 100, "y": 100})).unwrap();
+    // The popup [108, 110, 348, 250] turned 90° clockwise on a 400 px tall canvas spans x 150..290,
+    // y 108..348; it starts there and stays 240 × 140.
+    s.execute("image.imageRotation.90cw", json!({})).unwrap();
+    assert_eq!(note(&s, 0).popup, [150.0, 108.0, 390.0, 248.0]);
+    // A flip keeps today's mirrored popup, which already has its size.
+    let mut s = session(600, 400);
+    s.execute("notes.add", json!({"x": 100, "y": 100})).unwrap();
+    s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap();
+    assert_eq!(note(&s, 0).popup, [252.0, 110.0, 492.0, 250.0]);
 }
 
 #[test]
