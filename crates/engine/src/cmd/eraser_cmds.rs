@@ -140,7 +140,7 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
     let bs = BgEraseSettings {
         sampling: enum_param(p, CMD, "sampling", Sampling::Continuous, "continuous|once|backgroundSwatch")?,
         limits: enum_param(p, CMD, "limits", Limits::Contiguous, "discontiguous|contiguous|findEdges")?,
-        tolerance: number(p, CMD, "tolerance", 50.0, 0.0..=100.0)? as f32 / 100.0,
+        tolerance: number(p, CMD, "tolerance", 50.0, 1.0..=100.0)? as f32 / 100.0,
         protect_foreground: flag(p, "protectForegroundColor", false),
         foreground: s.tools.foreground,
         background: s.tools.background,
@@ -267,7 +267,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Background Eraser",
             menu: &[],
             shortcut: None,
-            params: r##"{"points":[[x,y,pressure?],…],"size":px?,"hardness":0..1?,"brush":{…}?,"preset":name?,"sampling":"continuous|once|backgroundSwatch"="continuous","limits":"discontiguous|contiguous|findEdges"="contiguous","tolerance":0..100=50,"protectForegroundColor":bool=false,"seed":u64?}"##,
+            params: r##"{"points":[[x,y,pressure?],…],"size":px?,"hardness":0..1?,"brush":{…}?,"preset":name?,"sampling":"continuous|once|backgroundSwatch"="continuous","limits":"discontiguous|contiguous|findEdges"="contiguous","tolerance":1..100=50,"protectForegroundColor":bool=false,"seed":u64?}"##,
             enabled: has_pixel_layer,
             run: background_eraser,
             journal: true,
