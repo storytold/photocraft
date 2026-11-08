@@ -655,15 +655,19 @@ pub fn refresh_at(dpi: f32, format: PixelFormat, t: &mut TextLayer) {
     t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));
 }
 
-/// Makes `t` paragraph text in the box `[x, y, width, height]` (document px): the box sits at the
-/// text-space origin and the layer transform moves it to `(x, y)`, keeping its linear part.
+/// Makes `t` paragraph text in the box `[x, y, width, height]`: the box sits at the text-space
+/// origin and the layer transform moves it to `(x, y)`, keeping its linear part. `x` and `y` are
+/// document px (the transform's translation); `width` and `height` are text-space px, so under a
+/// scaled transform they are scaled by its linear part.
 /// `type.edit`'s `box` param and the Type tool's live box-drag preview both use it, so the preview
 /// shows exactly the layer the command would make. Non-finite numbers count as 0, as a JSON
-/// `null` does in the command (a width or height of 0 becomes the 1 px minimum).
+/// `null` does in the command (a width or height of 0 becomes the 1 px minimum). The stored size
+/// is clamped to `1.0..=f32::MAX` so a huge input can't become an infinite `f32`.
 pub fn apply_box(t: &mut TextLayer, b: [f64; 4]) {
     let [x, y, w, h] = b.map(|v| if v.is_finite() { v } else { 0.0 });
+    let size = |v: f64| v.clamp(1.0, f64::from(f32::MAX)) as f32;
     let lin = t.transform.m;
-    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: w.max(1.0) as f32, height: h.max(1.0) as f32 };
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: size(w), height: size(h) };
     t.transform = Affine { m: [lin[0], lin[1], lin[2], lin[3], x, y] };
 }
 

@@ -46,6 +46,10 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     {
         authorize(id, &params)?;
     }
+    // A held Type box handle applies its box before anything but a view command runs.
+    if !super::UI_COMMANDS.iter().any(|c| c.0 == id) {
+        crate::type_box_preview::end_drag(app);
+    }
     if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
     }

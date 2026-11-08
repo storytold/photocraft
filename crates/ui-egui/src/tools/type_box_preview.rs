@@ -10,7 +10,13 @@
 //! a synchronous drag would have run for its last move, so the finished document and its history
 //! are exactly what they were before this preview existed.
 //!
-//! Only with background jobs on a native build; otherwise every move runs `type.edit` as before.
+//! A command that starts while a handle is held (Free Transform, a menu item, a shortcut) ends the
+//! drag first ([`end_drag`]), so it sees the box applied. If the document changed some other way
+//! during the drag, the preview is dropped and the gesture ends: the press-time box is never
+//! applied over that change.
+//!
+//! Only with background jobs on a native build, and not for Type Mask edits (their overlay is
+//! drawn from the document's layout); otherwise every move runs `type.edit` as before.
 
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
@@ -119,7 +125,8 @@ fn text_of(doc: &Document, layer: LayerId) -> Option<&TextLayer> {
 pub(crate) fn begin(app: &mut PhotocraftApp, layer: LayerId, session: String) {
     // A drag left over from before (its release never came) still owes its box to the document.
     flush(app);
-    if !enabled(app) {
+    // The mask overlay is drawn from the document's layout, which a background drag leaves stale.
+    if !enabled(app) || app.ui.text_edit.as_ref().is_some_and(|e| e.mask) {
         return;
     }
     let Some(st) = app.session.active() else { return };
@@ -146,16 +153,32 @@ pub(crate) fn begin(app: &mut PhotocraftApp, layer: LayerId, session: String) {
     });
 }
 
-/// The drag moved the box to `boxed`. Returns false when no background drag is in progress for
-/// `layer` (or the box isn't a plain finite one): the caller then applies it with `type.edit`.
+/// End the handle-drag gesture of `layer`'s edit session, as a release does.
+fn end_gesture(app: &mut PhotocraftApp, layer: LayerId) {
+    if let Some(e) = app.ui.text_edit.as_mut().filter(|e| e.layer == layer.0) {
+        e.resize = None;
+        e.dragging = false;
+    }
+}
+
+/// The drag moved the box to `boxed`. Returns true when the move is dealt with: it is recorded for
+/// the preview, or the preview was stale and the drag ended with it. Returns false when no
+/// background drag is in progress for `layer` (or the box isn't a plain finite one): the caller
+/// then applies it with `type.edit`.
 pub(crate) fn want(app: &mut PhotocraftApp, layer: LayerId, boxed: [f64; 4]) -> bool {
     let Some(p) = app.type_box_preview.as_ref() else { return false };
-    let current = p.layer == layer
-        && boxed.iter().all(|v| v.is_finite())
-        && app.session.documents().iter().any(|st| st.doc.id == p.document && st.revision == p.revision && text_of(&st.doc, layer).is_some());
+    let current =
+        p.layer == layer && app.session.documents().iter().any(|st| st.doc.id == p.document && st.revision == p.revision && text_of(&st.doc, layer).is_some());
     if !current {
-        // Something else changed the document or layer since the press: the preview would show
-        // a stale copy, so drop it (the box then goes through the command like any edit).
+        // Something else changed the document or layer since the press. The preview would show a
+        // stale copy and `type.edit` from the press-time box would run over that change, so drop
+        // the preview and end the drag; the rest of the gesture does nothing.
+        app.type_box_preview = None;
+        end_gesture(app, layer);
+        return true;
+    }
+    if !boxed.iter().all(|v| v.is_finite()) {
+        // Not a box the preview can draw: the command decides what it means.
         app.type_box_preview = None;
         return false;
     }
@@ -288,7 +311,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     let stale = st.revision != p.revision || text_of(&st.doc, p.layer).is_none();
     let drag = dragging(app, p);
     if stale {
+        // As in `want`: the document moved on, so the held handle no longer has a box to apply.
+        let layer = p.layer;
         app.type_box_preview = None;
+        end_gesture(app, layer);
         return None;
     }
     // A drag that ended some other way is settled by `settle`, not here: this runs while the
@@ -333,6 +359,15 @@ pub(crate) fn flush(app: &mut PhotocraftApp) {
     if let Some(c) = current.filter(|c| *c != i) {
         app.session.set_active(c);
     }
+}
+
+/// A command other than a pure view one starts while a handle may be held: apply the box the drag
+/// reached and end the gesture, so the command (Free Transform capturing the document, say) works
+/// on the box, not the press-time one. Does nothing without a background drag.
+pub(crate) fn end_drag(app: &mut PhotocraftApp) {
+    let Some(layer) = app.type_box_preview.as_ref().map(|p| p.layer) else { return };
+    flush(app);
+    end_gesture(app, layer);
 }
 
 /// The edit was cancelled: its session is undone, so the box the drag wanted is not applied.
@@ -399,6 +434,16 @@ mod tests {
     fn release(app: &mut PhotocraftApp, y: f64) {
         tool_event(app, ToolEvent::Up { x: 420.0, y }, Modifiers::NONE);
     }
+    // The right edge's handle sits at the midpoint of the box's right edge.
+    fn press_right(app: &mut PhotocraftApp) {
+        tool_event(app, ToolEvent::Down { x: 540.0, y: 390.0, pressure: 1.0 }, Modifiers::NONE);
+    }
+    fn to_x(app: &mut PhotocraftApp, x: f64) {
+        tool_event(app, ToolEvent::Move { x, y: 390.0, pressure: 1.0 }, Modifiers::NONE);
+    }
+    fn release_x(app: &mut PhotocraftApp, x: f64) {
+        tool_event(app, ToolEvent::Up { x, y: 390.0 }, Modifiers::NONE);
+    }
     fn revision(app: &PhotocraftApp) -> u64 {
         app.session.active().unwrap().revision
     }
@@ -411,6 +456,12 @@ mod tests {
     fn height(t: &TextLayer) -> f32 {
         match t.shape {
             TextShape::Box { height, .. } => height,
+            ref s => panic!("not a box: {s:?}"),
+        }
+    }
+    fn width(t: &TextLayer) -> f32 {
+        match t.shape {
+            TextShape::Box { width, .. } => width,
             ref s => panic!("not a box: {s:?}"),
         }
     }
@@ -590,5 +641,105 @@ mod tests {
         to(&mut app, 560.0);
         release(&mut app, 560.0);
         assert!(app.type_box_preview.is_none());
+    }
+
+    #[test]
+    fn a_width_drag_rewraps_the_preview_and_ends_as_the_sync_drag() {
+        let (mut sync, id) = app_with_box();
+        press_right(&mut sync);
+        to_x(&mut sync, 480.0);
+        to_x(&mut sync, 420.0);
+        release_x(&mut sync, 420.0);
+        let want = session_layer(&sync, id);
+        assert_eq!(width(&want), 120.0);
+
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        let original = session_layer(&app, id);
+        let rev = revision(&app);
+        press_right(&mut app);
+        assert!(app.type_box_preview.is_some(), "a background drag started");
+        to_x(&mut app, 480.0);
+        to_x(&mut app, 420.0);
+        assert_eq!(revision(&app), rev, "moves leave the document alone");
+        let (shown, _) = wait_idle(&mut app).expect("a preview once the render arrived");
+        let preview = layer_of(&shown, id);
+        assert_eq!(width(&preview), 120.0, "the newest box");
+        assert!(!same_pixels(&preview, &original), "the narrower box wraps the text differently");
+
+        release_x(&mut app, 420.0);
+        let got = session_layer(&app, id);
+        assert_eq!(got.shape, want.shape);
+        assert_eq!(got.transform.m, want.transform.m);
+        assert!(same_pixels(&got, &want), "the finished layer is the sync drag's");
+    }
+
+    #[test]
+    fn a_command_mid_drag_applies_the_box_and_ends_the_drag_but_a_view_command_does_not() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        let ctx = egui::Context::default();
+        let steps = app.session.active().unwrap().history.past_len();
+        press(&mut app);
+        to(&mut app, 560.0);
+        assert_eq!(height(&session_layer(&app, id)), 180.0, "not applied yet");
+
+        // A pure view command leaves the drag going.
+        crate::menus::invoke(&mut app, &ctx, "view.zoomIn", json!({})).unwrap();
+        assert!(app.type_box_preview.is_some());
+        assert!(app.ui.text_edit.as_ref().unwrap().resize.is_some());
+        assert_eq!(height(&session_layer(&app, id)), 180.0);
+
+        // Any other command sees the box applied, in the drag's one history step.
+        crate::menus::invoke(&mut app, &ctx, "layer.setProps", json!({"layer": id.0, "opacity": 0.5})).unwrap();
+        let t = session_layer(&app, id);
+        assert_eq!(height(&t), 260.0, "the dragged box was applied before the command ran");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 2, "the drag's step, then the command");
+        assert!(app.type_box_preview.is_none());
+        let e = app.ui.text_edit.as_ref().unwrap();
+        assert!(e.resize.is_none() && !e.dragging);
+
+        // Without a background drag nothing changes.
+        let (mut sync, _) = app_with_box();
+        press(&mut sync);
+        let rev = revision(&sync);
+        end_drag(&mut sync);
+        assert_eq!(revision(&sync), rev);
+        assert!(sync.ui.text_edit.as_ref().unwrap().resize.is_some(), "a sync drag is left going");
+    }
+
+    #[test]
+    fn a_stale_preview_ends_the_drag_instead_of_applying_the_press_time_box() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        press(&mut app);
+        to(&mut app, 520.0);
+        app.run("layer.setProps", json!({"layer": id.0, "opacity": 0.5})).unwrap();
+        let (rev, steps) = (revision(&app), app.session.active().unwrap().history.past_len());
+        to(&mut app, 560.0);
+        assert_eq!(revision(&app), rev, "the move applied nothing over the other edit");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+        assert_eq!(height(&session_layer(&app, id)), 180.0);
+        assert!(app.type_box_preview.is_none());
+        let e = app.ui.text_edit.as_ref().unwrap();
+        assert!(e.resize.is_none() && !e.dragging, "the gesture ended");
+        // The rest of the gesture does nothing either.
+        to(&mut app, 600.0);
+        release(&mut app, 600.0);
+        assert_eq!(revision(&app), rev);
+    }
+
+    #[test]
+    fn a_type_mask_edit_keeps_the_synchronous_drag() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        app.ui.text_edit.as_mut().unwrap().mask = true;
+        let rev = revision(&app);
+        press(&mut app);
+        assert!(app.type_box_preview.is_none(), "no background drag for a mask edit");
+        to(&mut app, 520.0);
+        assert_eq!(revision(&app), rev + 1, "the move was applied");
+        assert_eq!(height(&session_layer(&app, id)), 220.0);
+        release(&mut app, 520.0);
     }
 }
