@@ -286,11 +286,38 @@ pub fn start_open(
         // once. A preflight keeps the slot and set order in its memory prompt.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
         Started::Job(job) => {
-            app.jobs.opens.push(OpenTab { job, name: name.to_string(), path, slot, order });
-            app.jobs.focus = Some(job);
-            app.ui.chrome.home = None;
-            app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", name)]);
-            app.ui.status_error = false;
+            track_open(app, OpenTab { job, name: name.to_string(), path, slot, order });
+            Ok(())
+        }
+    }
+}
+
+/// A file opening in the background gets its tab: focused, with the status line naming it.
+fn track_open(app: &mut PhotocraftApp, tab: OpenTab) {
+    app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", &tab.name)]);
+    app.jobs.focus = Some(tab.job);
+    app.jobs.opens.push(tab);
+    app.ui.chrome.home = None;
+    app.ui.status_error = false;
+}
+
+/// File › Open as Smart Object… for one file: `file.openAsSmartObject` as a tracked open job, so
+/// the result goes through File › Open's completion ([`finish_open`]: the profile prompt, the
+/// Camera Raw open dialog for a raw, the import warnings). The document is untitled, so
+/// Open Recent is untouched. Inline (background jobs off, or the web) it finishes at once.
+pub(crate) fn start_open_as_smart_object(app: &mut PhotocraftApp, path: &str, order: Option<OpenOrder>) -> Result<(), String> {
+    let name = crate::file_open::display_name(path);
+    // `confirmDamage`: a damaged PSD waits for the user's answer, as in File › Open.
+    let params = json!({"path": path, "confirmDamage": true});
+    let started = if app.background_jobs {
+        app.session.start("file.openAsSmartObject", params).map_err(|e| e.to_string())?
+    } else {
+        Started::Done(app.session.execute("file.openAsSmartObject", params).map_err(|e| e.to_string())?)
+    };
+    match started {
+        Started::Done(v) => finish_open(app, &name, None, &v, None, order),
+        Started::Job(job) => {
+            track_open(app, OpenTab { job, name, path: None, slot: None, order });
             Ok(())
         }
     }
@@ -608,7 +635,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         finish_save(app, ctx, save, &e.label, e.outcome);
         return;
     }
-    if e.command == OPEN_JOB {
+    if e.command == OPEN_JOB || app.jobs.opens.iter().any(|o| o.job == e.id) {
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);
         match e.outcome {
@@ -703,6 +730,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         order,
         question,
         policy_applied,
+        smart_object: v.get("smartObject").and_then(Value::as_bool).unwrap_or(false),
     };
     // Held back for the profile prompt (Ask When Opening).
     if let Some(id) = v.get("held").and_then(Value::as_u64) {

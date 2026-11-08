@@ -431,8 +431,8 @@
 	Artboard…	Radna tabla…
 	Artboard from Group…	Radna tabla od grupe…
 	Artboard from Layers…	Radna tabla od slojeva…
-	Layer via Copy	Sloj kopiranjem
-	Layer via Cut	Sloj isecanjem
+	Layer Via Copy	Sloj kopiranjem
+	Layer Via Cut	Sloj isecanjem
 	Layer From Background…	Sloj od pozadine…
 	Layer from Background…	Sloj od pozadine…
 	Background From Layer	Pozadina od sloja
@@ -4143,7 +4143,7 @@ layerLabel	No Color	Bez boje
 	Scroll menu down	Pomeri meni nadole
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Ovaj tekstualni sloj mora da se rasterizuje pre nastavka. Njegov tekst više neće moći da se uređuje. Rasterizovati tekst?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Ovaj sloj oblika mora da se rasterizuje pre nastavka. Više neće moći da se uređuje kao oblik. Rasterizovati oblik?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Ovaj pametni objekat mora da se rasterizuje pre nastavka. Njegov sadržaj više neće moći da se uređuje. Rasterizovati pametni objekat?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Ovaj pametni objekat mora da se rasterizuje pre nastavka. Njegov sadržaj više neće moći da se uređuje. Rasterizovati pametni objekat?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Ovaj sloj popune mora da se rasterizuje pre nastavka. Njegov sadržaj popune više neće moći da se uređuje. Rasterizovati sloj?
 	This layer must be rasterized before proceeding.	Ovaj sloj mora da se rasterizuje pre nastavka.
 	Color Picker (Background Color)	Birač boja (boja pozadine)

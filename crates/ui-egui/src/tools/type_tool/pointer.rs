@@ -140,7 +140,7 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
             }
             return true;
         }
-        // ⇧/⌥ on that click combine a Type Mask with the selection.
+        // A Type Mask replaces the selection with ⇧ or ⌥ on that click too (#12073).
         commit_with(app, mods);
         return true; // Photoshop: a click outside commits without starting new text
     }

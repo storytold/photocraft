@@ -125,6 +125,10 @@ pub(crate) struct ConvertArgs {
     /// PDF pages to import, 1-based: "3" or "2-7" (default all)
     #[arg(long)]
     pub(crate) pdf_pages: Option<String>,
+    /// Import PDF paths and embedded-font text as editable layers (experimental; unsupported
+    /// pages fall back to raster, and embedded fonts may change when edited or reopened)
+    #[arg(long)]
+    pub(crate) pdf_editable: bool,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]

@@ -183,8 +183,8 @@
 	Trap…	Överfyllning…
 
 # Layer
-	Layer via Copy	Lager via kopiering
-	Layer via Cut	Lager via urklippning
+	Layer Via Copy	Lager via kopiering
+	Layer Via Cut	Lager via urklippning
 	Duplicate Layer…	Duplicera lager…
 	Duplicate…	Duplicera…
 	Delete	Ta bort
@@ -4491,7 +4491,7 @@ curves	Smooth	Jämna ut
 	The file could not be saved.	Det gick inte att spara filen.
 	Thickness	Tjocklek
 	This Layer:	Det här lagret:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Det här smarta objektet måste rasteriseras innan du fortsätter. Innehållet går inte längre att redigera. Vill du rasterisera det smarta objektet?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Det här smarta objektet måste rasteriseras innan du fortsätter. Innehållet går inte längre att redigera. Vill du rasterisera det smarta objektet?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Den här justeringen ({key}) behålls som den importerades och kan inte redigeras ännu.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Det här fyllningslagret måste rasteriseras innan du fortsätter. Fyllningsinnehållet går inte längre att redigera. Vill du rasterisera lagret?
 	This layer must be rasterized before proceeding.	Det här lagret måste rasteriseras innan du fortsätter.
