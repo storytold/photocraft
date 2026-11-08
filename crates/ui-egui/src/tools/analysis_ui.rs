@@ -596,10 +596,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             // scrubs the field after it when dragged. The catalogs translate the names without
             // the colon (main's captions), so the colon follows the translation.
             let caption = |ui: &mut egui::Ui, text: &str| crate::panels::opt_label(ui, &format!("{text}:"));
+            // Each caption names its field (the scrub link), so a screen reader reads what is shown.
             caption(ui, tl!("Marker Size"));
-            let a = crate::widgets::value_field_whole(ui, &mut ms, 1.0..=10.0, "", 40.0).accessible_name(tl!("Marker Size"));
+            let a = crate::widgets::value_field_whole(ui, &mut ms, 1.0..=10.0, "", 40.0);
             caption(ui, tl!("Label Size"));
-            let b = crate::widgets::value_field_whole(ui, &mut ls, 8.0..=72.0, "", 44.0).accessible_name(tl!("Label Size"));
+            let b = crate::widgets::value_field_whole(ui, &mut ls, 8.0..=72.0, "", 44.0);
             // One undo step per scrub (of a field or its caption), as the Gradient tool's Opacity.
             let drag = |r: &egui::Response| {
                 let key = r.id.with("count-size-drag");

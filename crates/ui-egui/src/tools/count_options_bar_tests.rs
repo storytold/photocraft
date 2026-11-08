@@ -221,3 +221,12 @@ fn the_size_captions_are_translated() {
         assert!(!caption_node(&h, english), "not the English {english}");
     }
 }
+
+#[test]
+fn the_size_fields_are_named_by_their_visible_captions() {
+    let h = harness(app(1));
+    for caption in ["Marker Size:", "Label Size:"] {
+        let fields = h.query_all(egui_kittest::kittest::by().label(caption).predicate(|n| n.role() != egui::accesskit::Role::Label)).count();
+        assert_eq!(fields, 1, "one field named {caption}, as its caption reads");
+    }
+}
