@@ -147,6 +147,7 @@ fn releasing_alt_mid_corner_drag_puts_the_neighbours_back() {
     assert!(pointer(&mut app, ToolEvent::Move { x: 740.0, y: 430.0, pressure: 1.0 }, ALT));
     assert_eq!(app.ui.perspective_crop, rect(100.0, 100.0, 740.0, 430.0));
     assert!(pointer(&mut app, ToolEvent::Move { x: 700.0, y: 450.0, pressure: 1.0 }, Modifiers::NONE));
+    assert_eq!(app.ui.perspective_crop, Some([q[0], q[1], [700.0, 450.0], q[3]]), "the preview during the drag");
     assert!(pointer(&mut app, ToolEvent::Up { x: 700.0, y: 450.0 }, Modifiers::NONE));
     assert_eq!(app.ui.perspective_crop, Some([q[0], q[1], [700.0, 450.0], q[3]]));
 }
