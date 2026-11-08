@@ -343,13 +343,16 @@ fn readout_text(value: Option<Value>) -> String {
 }
 
 /// The hover badge's text for the pointer's sample: R G B, or L a b with Show Lab Color Readouts.
+/// Returns `None` when there is no pointer sample, the pixel there is transparent or not finite
+/// (no readout), or the readout has no `values`.
 pub(crate) fn hover_badge_text(d: &CameraRawDialog, lab: bool) -> Option<String> {
     let position = d.scope.pointer_sample?;
     let reading = d.readout(position, lab)?;
     Some(badge_text_of(reading.get("values")?, lab))
 }
 
-/// Formats a readout's `values` array. A component that is not a number (the readout
+/// Formats a readout's `values` array: indices 0, 1, 2 are R, G, B (0..255, whole numbers) or
+/// L, a, b (one decimal). A component that is not a number (the readout
 /// serialises an overflowed one as null) shows `--` rather than a made-up 0.
 pub(crate) fn badge_text_of(values: &Value, lab: bool) -> String {
     let part = |i: usize, precision: usize| match values.as_array().and_then(|a| a.get(i)).and_then(Value::as_f64) {
@@ -360,7 +363,8 @@ pub(crate) fn badge_text_of(values: &Value, lab: bool) -> String {
 }
 
 /// The badge's font size: the usual 11, scaled down (never below 8) when the text laid out at 11
-/// is wider than the space inside the badge.
+/// is wider than the space inside the badge. Both parameters are widths in points; the result is
+/// clamped to 8.0..=11.0, and a non-finite or non-positive width gives 11.0.
 pub(crate) fn badge_font_size(text_width_at_11: f32, available: f32) -> f32 {
     if !text_width_at_11.is_finite() || !available.is_finite() || text_width_at_11 <= available || text_width_at_11 <= 0.0 {
         return 11.0;
@@ -415,19 +419,20 @@ fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeSt
     let corner = 18.0;
     if let Some(sample) = d.hover_sample(false) {
         crate::rgb_histogram::paint_sample(ui.painter(), plot, sample.rgb, &t);
-        let text = hover_badge_text(d, view.lab).unwrap_or_default();
-        let font = crate::theme::mono(11.0);
-        let max_width = (rect.width() - 2.0 * corner - 4.0).max(1.0);
-        let mut galley = ui.painter().layout_no_wrap(text.clone(), font, t.text);
-        let size = badge_font_size(galley.size().x, max_width - 6.0);
-        if size < 11.0 {
-            galley = ui.painter().layout_no_wrap(text, crate::theme::mono(size), t.text);
+        if let Some(text) = hover_badge_text(d, view.lab).filter(|t| !t.is_empty()) {
+            let font = crate::theme::mono(11.0);
+            let max_width = (rect.width() - 2.0 * corner - 4.0).max(1.0);
+            let mut galley = ui.painter().layout_no_wrap(text.clone(), font, t.text);
+            let size = badge_font_size(galley.size().x, max_width - 6.0);
+            if size < 11.0 {
+                galley = ui.painter().layout_no_wrap(text, crate::theme::mono(size), t.text);
+            }
+            let width = (galley.size().x + 12.0).min(max_width);
+            let badge = Rect::from_center_size(pos2(rect.center().x, rect.top() + 13.0), vec2(width, 20.0));
+            ui.painter().rect_filled(badge, t.radius_sm, t.card.gamma_multiply(0.65));
+            ui.painter().rect_stroke(badge, t.radius_sm, Stroke::new(0.7, t.field_border.gamma_multiply(0.55)), egui::StrokeKind::Inside);
+            ui.painter().with_clip_rect(badge.shrink(2.0)).galley(badge.center() - galley.size() * 0.5, galley, t.text);
         }
-        let width = (galley.size().x + 12.0).min(max_width);
-        let badge = Rect::from_center_size(pos2(rect.center().x, rect.top() + 13.0), vec2(width, 20.0));
-        ui.painter().rect_filled(badge, t.radius_sm, t.card.gamma_multiply(0.65));
-        ui.painter().rect_stroke(badge, t.radius_sm, Stroke::new(0.7, t.field_border.gamma_multiply(0.55)), egui::StrokeKind::Inside);
-        ui.painter().with_clip_rect(badge.shrink(2.0)).galley(badge.center() - galley.size() * 0.5, galley, t.text);
     }
     let sh = d.histogram().shadows.iter().enumerate().fold(0u8, |m, (c, n)| m | if *n > 0 { 1 << c } else { 0 });
     let hi = d.histogram().highlights.iter().enumerate().fold(0u8, |m, (c, n)| m | if *n > 0 { 1 << c } else { 0 });

@@ -1276,6 +1276,8 @@ fn hover_badge_shows_lab_values_with_lab_readouts() {
     let d = app.camera_raw.as_mut().unwrap();
     assert_eq!(hover_badge_text(d, false), None);
     assert_eq!(hover_badge_text(d, true), None);
+    d.scope.pointer_sample = Some([-1.0, 2.0]);
+    assert_eq!(hover_badge_text(d, false), None);
     d.scope.pointer_sample = Some([0.25, 0.25]);
     let value = |lab: bool| -> Vec<f64> {
         let r = d.readout([0.25, 0.25], lab).unwrap();
