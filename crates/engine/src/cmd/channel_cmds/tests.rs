@@ -594,6 +594,16 @@ fn new_channel_indicates_selected_areas_initializes_white() {
     let r3 = s.execute("channel.new", json!({"indicates": "selected", "fill": "black"})).unwrap();
     let i3 = r3["channel"].as_u64().unwrap() as usize;
     assert_eq!(chan(&s, i3, 5, 5), 0.0);
+
+    // Multi-tile canvas (width > 256): verify white value across tile boundaries and canvas edges.
+    let mut s_wide = Session::new();
+    s_wide.execute("file.new", json!({"width": 300, "height": 300, "depth": 8})).unwrap();
+    let r_wide = s_wide.execute("channel.new", json!({"indicates": "selected"})).unwrap();
+    let i_wide = r_wide["channel"].as_u64().unwrap() as usize;
+    assert_eq!(chan(&s_wide, i_wide, 5, 5), 1.0);
+    assert_eq!(chan(&s_wide, i_wide, 255, 50), 1.0);
+    assert_eq!(chan(&s_wide, i_wide, 256, 50), 1.0);
+    assert_eq!(chan(&s_wide, i_wide, 299, 299), 1.0);
 }
 
 #[test]
