@@ -80,7 +80,8 @@ pub(super) fn reset(out: &mut CameraRaw, d: &CameraRaw) {
     out.upright_guides = d.upright_guides.clone();
     (out.perspective_vertical, out.perspective_horizontal, out.perspective_rotate, out.perspective_aspect) =
         (d.perspective_vertical, d.perspective_horizontal, d.perspective_rotate, d.perspective_aspect);
-    (out.perspective_scale, out.perspective_x, out.perspective_y, out.constrain_crop) = (d.perspective_scale, d.perspective_x, d.perspective_y, d.constrain_crop);
+    (out.perspective_scale, out.perspective_x, out.perspective_y, out.constrain_crop) =
+        (d.perspective_scale, d.perspective_x, d.perspective_y, d.constrain_crop);
 }
 
 /// Adds a guide (0 … 1 image coordinates) for Guided Upright; the oldest goes past four, as in

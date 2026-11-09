@@ -211,7 +211,11 @@ pub(crate) fn control(ctx: &egui::Context, p: &CameraRaw, v: &Value) -> Result<(
             "selected" | "component" => {}
             "tool" => {
                 let name = val.as_str().ok_or("masks.tool: expected a name")?;
-                s.tool = TOOLS.iter().find(|(_, n)| *n == name).map(|(t, _)| *t).ok_or_else(|| format!("masks.tool: one of {}", TOOLS.map(|(_, n)| n).join(", ")))?;
+                s.tool = TOOLS
+                    .iter()
+                    .find(|(_, n)| *n == name)
+                    .map(|(t, _)| *t)
+                    .ok_or_else(|| format!("masks.tool: one of {}", TOOLS.map(|(_, n)| n).join(", ")))?;
             }
             "overlayMode" => {
                 let name = val.as_str().ok_or("masks.overlayMode: expected a name")?;
@@ -467,7 +471,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut bool
             if widgets::checkbox(ui, &mut s.overlay, trc("Show Overlay")).changed() {
                 s.overlay_tex = None;
             }
-            let options = [(Overlay::Color, trc("Color Overlay")), (Overlay::ImageOnBlack, trc("Image on Black")), (Overlay::ImageOnWhite, trc("Image on White"))];
+            let options =
+                [(Overlay::Color, trc("Color Overlay")), (Overlay::ImageOnBlack, trc("Image on Black")), (Overlay::ImageOnWhite, trc("Image on White"))];
             if widgets::dropdown(ui, "mask-overlay", "", &mut s.overlay_mode, &options, 130.0) {
                 s.overlay_tex = None;
             }
@@ -775,7 +780,12 @@ fn pins(painter: &egui::Painter, m: &Mask, selected: Option<usize>, r: ERect, ac
                 painter.circle_filled(screen(r, *center), 4.0, col);
             }
             Shape::Objects { rect } => {
-                painter.rect_stroke(ERect::from_two_pos(screen(r, [rect[0], rect[1]]), screen(r, [rect[2], rect[3]])), 0.0, Stroke::new(1.0, col), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    ERect::from_two_pos(screen(r, [rect[0], rect[1]]), screen(r, [rect[2], rect[3]])),
+                    0.0,
+                    Stroke::new(1.0, col),
+                    egui::StrokeKind::Inside,
+                );
             }
             _ => {}
         }
@@ -1053,7 +1063,13 @@ fn guide_drag(s: &mut MaskUi, d: &mut CameraRawDialog, frame: (ERect, usize, usi
 /// preview share it).
 pub(crate) fn set_guide_tool(ctx: &egui::Context, on: bool) {
     let mut s = load(ctx);
-    s.tool = if on { DrawTool::Guide } else if s.tool == DrawTool::Guide { DrawTool::None } else { s.tool };
+    s.tool = if on {
+        DrawTool::Guide
+    } else if s.tool == DrawTool::Guide {
+        DrawTool::None
+    } else {
+        s.tool
+    };
     store(ctx, s);
 }
 
@@ -1084,9 +1100,15 @@ mod tests {
 
     #[test]
     fn control_channel_settings_are_validated() {
-        let ok = CameraRaw { masks: vec![Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Sky }], ..Mask::default() }], ..CameraRaw::default() };
+        let ok = CameraRaw {
+            masks: vec![Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Sky }], ..Mask::default() }],
+            ..CameraRaw::default()
+        };
         assert!(ok.validate_changes(&CameraRaw::default()).is_ok());
-        let depth = CameraRaw { masks: vec![Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Depth { range: [0.0, 1.0] } }], ..Mask::default() }], ..CameraRaw::default() };
+        let depth = CameraRaw {
+            masks: vec![Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Depth { range: [0.0, 1.0] } }], ..Mask::default() }],
+            ..CameraRaw::default()
+        };
         assert!(depth.validate_changes(&CameraRaw::default()).is_err());
         let guides = CameraRaw { upright_guides: vec![[[0.1, 0.1], [0.1, 0.9]]; 5], ..CameraRaw::default() };
         assert!(guides.validate_changes(&CameraRaw::default()).is_err());
@@ -1122,7 +1144,8 @@ mod tests {
         let mut p = CameraRaw::default();
         let mut s = MaskUi::default();
         create(&mut p, &mut s, "Brush", None);
-        control(&ctx, &p, &json!({"open": true, "selected": 0, "tool": "radial", "overlayMode": "imageOnWhite", "brush": {"size": 9, "autoMask": true}})).unwrap();
+        control(&ctx, &p, &json!({"open": true, "selected": 0, "tool": "radial", "overlayMode": "imageOnWhite", "brush": {"size": 9, "autoMask": true}}))
+            .unwrap();
         let d = describe(&ctx);
         assert_eq!(d["open"], true);
         assert_eq!(d["tool"], "radial");
@@ -1273,7 +1296,10 @@ mod tests {
     #[test]
     fn the_selection_follows_the_settings_and_each_dialog_starts_afresh() {
         let ctx = egui::Context::default();
-        let three = CameraRaw { masks: vec![Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Sky }], ..Mask::default() }; 3], ..CameraRaw::default() };
+        let three = CameraRaw {
+            masks: vec![Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Sky }], ..Mask::default() }; 3],
+            ..CameraRaw::default()
+        };
         control(&ctx, &three, &json!({"open": true, "selected": 2, "component": 0, "brush": {"size": 0.1}})).unwrap();
         reconcile(&ctx, &three);
         assert_eq!((load(&ctx).selected, load(&ctx).component), (Some(2), Some(0)), "still there");

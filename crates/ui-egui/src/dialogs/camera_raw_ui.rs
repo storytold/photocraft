@@ -197,8 +197,6 @@ impl CameraRawDialog {
         self.panels.effective(&self.params)
     }
 
-
-
     fn image(px: &[[f32; 4]], w: usize, h: usize, display: &photocraft_engine::display_color::CanvasDisplay) -> egui::ColorImage {
         // Bands copied straight from `px`, converted in parallel (#4682), not a whole copy of the
         // proxy converted on one thread.
