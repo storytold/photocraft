@@ -90,6 +90,49 @@ fn opt(ui: &mut egui::Ui, text: &str) {
     crate::widgets::scrub_option_label(ui, &label);
 }
 
+/// The reference application's alert for a Background Eraser Angle typed outside −180…180.
+pub(crate) const ANGLE_RANGE_MESSAGE: &str = "An integer between -180 ° and 180 ° is required. Closest value inserted.";
+
+/// The Background Eraser's Angle: an angle icon and a whole-degree field on the brush tip's
+/// angle, −180…180, default 0. Returns true when a typed value was out of range and was clamped
+/// (400 → 180): the caller shows [`ANGLE_RANGE_MESSAGE`] once the entry is committed.
+fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let tip = tl!("Set the brush angle");
+    ui.add(icons::image("rotate-cw", 15.0, t.text_dim)).on_hover_text(tip);
+    // A wider range than the angle's, so a typed 400 reaches us and can be told apart from 180.
+    let mut a = b.angle;
+    // Read before the field: it consumes the arrow keys it steps with, and the wheel it steps
+    // with while focused never shows in the scroll delta (a view's scroll does, and is no step).
+    let arrow_or_wheel =
+        ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_field_wheeled(ui.ctx());
+    let r = widgets::value_field_named(ui, tl!("Angle"), &mut a, -ANGLE_TYPED_MAX..=ANGLE_TYPED_MAX, "°", 52.0);
+    let out_of_range = r.id.with("bg-eraser-angle-out-of-range");
+    // The flag lives only while an entry is being typed: drawn without the keyboard, the field
+    // drops it, so an entry the tool switch cut off (never committed) can't alert on a later one.
+    // The widget's own focus, not `has_focus()`: that is false while the window is in the
+    // background, and switching away mid-entry must keep the alert for the commit.
+    if !ui.memory(|m| m.has_focus(r.id)) && !r.lost_focus() {
+        ui.data_mut(|d| d.remove_temp::<bool>(out_of_range));
+    }
+    if r.changed() && a.is_finite() {
+        let whole = a.trunc();
+        let clamped = whole.clamp(-180.0, 180.0);
+        b.angle = clamped;
+        // Only typing alerts: a scrub or an arrow-key step past the end just stops there.
+        let stepped = r.dragged() || arrow_or_wheel;
+        // A wheel step over the field without its focus is no entry either.
+        let typed_out = whole != clamped && !stepped && (r.has_focus() || r.lost_focus());
+        ui.data_mut(|d| d.insert_temp(out_of_range, typed_out));
+    }
+    let r = r.on_hover_text(tip);
+    // Enter (or a click away) commits the entry: the alert comes then, not mid-typing.
+    r.lost_focus() && ui.data_mut(|d| d.remove_temp::<bool>(out_of_range)).unwrap_or(false)
+}
+
+/// How far the Angle field lets a typed number through before [`angle_field`] clamps it.
+const ANGLE_TYPED_MAX: f32 = 1.0e6;
+
 /// Options bar for the Magic Eraser and Background Eraser. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     let o = &mut app.ui.tool_options;
@@ -133,8 +176,22 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if tolerance_field(ui, &mut o.bg_tolerance) {
                 open_range_alert(app);
             }
-            let o = &mut app.ui.tool_options;
-            widgets::checkbox(ui, &mut o.bg_protect_fg, tl!("Protect Foreground Color")).on_hover_text(tl!("Do not erase the foreground swatch color"));
+            // Angle and Pressure for Size edit the tool's own brush (the shell swaps one in per
+            // tool), through `tools.setBrush` like the Brush Settings panel.
+            let before = app.session.tools.brush.clone();
+            let mut brush = before.clone();
+            if angle_field(ui, &mut brush) {
+                let message = tl!(ANGLE_RANGE_MESSAGE).to_string();
+                app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+            }
+            widgets::checkbox(ui, &mut app.ui.tool_options.bg_protect_fg, tl!("Protect Foreground Color"))
+                .on_hover_text(tl!("Do not erase the foreground swatch color"));
+            let name = tl!("Always use pressure for size");
+            let pressure = icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), brush.pressure_size, name, false);
+            if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
+                brush.pressure_size = !brush.pressure_size;
+            }
+            crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
         }
         _ => return false,
     }

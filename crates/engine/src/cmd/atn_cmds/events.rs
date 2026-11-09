@@ -616,6 +616,9 @@ pub(super) const EVENTS: &[Event] = &[
     Event { code: "GEfc", name: "filterGallery", label: "Filter Gallery", ids: GALLERY_IDS, from: gallery_from, to: gallery_to },
     // What Photoshop needs in a written step (process version, the full settings set) is
     // unverified, so only an imported step saves back, as its recorded descriptor while unedited.
+    // The label is interchange data, not a display name: Save Actions writes it into the step's
+    // dictionary (convert.rs), so it stays Photoshop's wording and a loaded step round-trips. The
+    // menu item and window title come from `lens_cmds` and read "RAW Develop Filter".
     Event { code: "", name: "Adobe Camera Raw Filter", label: "Camera Raw Filter", ids: &[crate::lens_cmds::RAW], from: camera_raw_from, to: camera_raw_to },
     // Video, Other, Average and matting (#10607).
     Event {
