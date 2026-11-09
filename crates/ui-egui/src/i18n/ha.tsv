@@ -200,7 +200,6 @@
 	Plug-ins…	Plug-in…
 	Type…	Rubutu…
 	Enhanced Controls…	Ingantattun sarrafawa…
-	Camera Raw…	Camera Raw…
 	Raw Defaults…	Saitunan asali na Raw…
 	Integrations…	Haɗin kai…
 	AI Integrations…	Haɗin kai na AI…
@@ -511,7 +510,6 @@
 	Last Filter	Filtar ƙarshe
 	Filter Gallery…	Tarin filta…
 	Adaptive Wide Angle…	Kusurwa mai faɗi mai daidaitawa…
-	Camera Raw Filter…	Filtar Camera Raw…
 	Liquify…	Narkar…
 	Vanishing Point…	Wurin ɓacewa…
 	Blur	Dusashe
@@ -861,7 +859,6 @@
 	Brush Reconstruct Options	Zaɓuɓɓukan burushin sake ginawa
 	Brush Tool Options	Zaɓuɓɓukan kayan aikin burushi
 	Cache Level:	Matakin ajiyar wucin gadi:
-	Camera Raw isn't open	Camera Raw ba a buɗe yake ba
 	Cancel	Soke
 	Cancel (Esc)	Soke (Esc)
 	Cancel any current edits (Esc)	Soke duk wani gyara na yanzu (Esc)
@@ -1812,7 +1809,6 @@
 	Brush preview color	Launin duban farko na burushi
 	Cache levels	Matakan maʼajiya
 	Cache tile size	Girman tayil na maʼajiya
-	Camera Raw Defaults	Saitunan asali na Camera Raw
 	Canvas border	Iyakar fagen zane
 	Show canvas dots	Nuna ɗigon fagen zane
 	Canvas color	Launin fagen zane
@@ -1892,7 +1888,6 @@
 	Never	Ba taɓa ba
 	Normal tip	Bakin na alʼada
 	Open as smart object	Buɗe a matsayin abu mai wayo
-	Open in camera raw	Buɗe a Camera Raw
 	Open documents as tabs	Buɗe daftarori a matsayin shafuka
 	Overscroll	Wuce iyakar gungurawa
 	Performance	Aiki da sauri
@@ -2276,8 +2271,6 @@
 	Roman Hanging Punctuation	Rataye alamomin rubutu na Roman
 	Avoid Widows/Orphans	Guji layukan kaɗaici
 	Compose	Tsara rubutu
-	Adobe Single-line Composer	Adobe Single-line Composer
-	Adobe Every-line Composer	Adobe Every-line Composer
 	Justification	Daidaita gefuna
 	Word Spacing	Tazarar kalmomi
 	Letter Spacing	Tazarar haruffa
@@ -2530,7 +2523,6 @@
 	Intersect with	Mahaɗa da
 	Capture Comp	Ɗauki tsarin layer
 	No Layer Comps	Babu tsarin layer
-	Adobe PDF Presets…	Saitunan shiryayyu na Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Duban farko na fasaha…
 	Background from Layer	Bango daga layer
@@ -2618,8 +2610,6 @@
 	Tone Histogram	Histogram na haske
 	Show Selected Region	Nuna yankin da aka zaɓa
 cameraRaw	Light	Haske
-	Camera Raw Filter ({layer})	Filtar Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Wurare masu haske
 cameraRaw	Darks	Wurare masu duhu
 cameraRaw	Blacks	Baƙaƙe
@@ -3582,8 +3572,6 @@ layerLabel	No Color	Babu launi
 	Border	Iyaka
 	Box Blur	Dusashe na akwati
 	Calculations	Lissafi
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Filtar Camera Raw
 	Channel1	Tasha1
 	Channel2	Tasha2
 	Channel3	Tasha3
@@ -4056,7 +4044,6 @@ shape	Appearance	Kamanni
 	Add Mask to Selection	Ƙara mask zuwa yankin zaɓi
 	Add Open Files	Ƙara fayilolin da ke buɗe
 	Add to Dictionary	Ƙara zuwa ƙamus
-	All shortcuts reset to Photoshop defaults.	An sake saita duk gajerun hanyoyi zuwa na asali na Photoshop.
 	Allow Continue	Bada damar ci gaba
 	Attempt to Automatically Align Source Images	Yi ƙoƙarin jera hotunan tushe ta atomatik
 	Auto Add/Delete	Ƙara/Share ta atomatik
@@ -4075,7 +4062,6 @@ shape	Appearance	Kamanni
 	Color Indicates:	Launi yana nuna:
 	Copy Texture to Other Tools	Kwafi yanayin fuska zuwa sauran kayan aiki
 	Create Smart Object after Loading Layers	Ƙirƙira abu mai wayo bayan loda layer
-	Default Photoshop Size	Girman Photoshop na asali
 	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Ja akwatin datsewa · ja a ciki don matsarwa · gefuna suna canja girma (rabo {ratio}, tsakiya {centre}) · Space yana matsarwa yayin zane · {commit} yana tabbatarwa · Esc yana sokewa
 	Drag to pan · Scroll to zoom · Double-click to fit	Ja don gungurawa · Gungura don zuƙowa · Danna sau biyu don daidaitawa
 	Drag: draw freehand · Release on the start point: close	Ja: zana sakaka · Saki a wurin farawa: rufe
@@ -4094,8 +4080,6 @@ shape	Appearance	Kamanni
 	Load Actions…	Loda ayyuka…
 	Load Settings…	Loda saituna…
 	Load settings from a Camera Raw .xmp file	Loda saituna daga fayil na Camera Raw .xmp
-	Loaded Camera Raw settings from {file}	An loda saitunan Camera Raw daga {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	An loda saitunan Camera Raw daga {file} ({n} ba a tallafa ba)
 	Mask Channel	Tashar mask
 	Message:	Saƙo:
 	No Spelling Suggestions	Babu shawarwarin haruffan kalma
@@ -4546,9 +4530,6 @@ layerLabel	Magenta	Magenta
 @plural	{n} document|{n} documents	daftari {n}|daftarori {n}
 @plural	{n} pixel|{n} pixels	pikseli {n}|pikseli {n}
 cameraRaw	Before (Y)	Kafin (Y)
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Filtar Camera Raw ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw ba a buɗe yake ba
 cameraRaw	Cancel	Soke
 cameraRaw	Cancelled opening {name}	An soke buɗe {name}
 cameraRaw	Cancelled {label}	An soke {label}
@@ -4560,7 +4541,6 @@ cameraRaw	Highlight Clipping Warning (O)	Gargaɗin yanke wurare masu haske (O)
 cameraRaw	Highlight Priority	Fifikon wurare masu haske
 cameraRaw	Load Settings…	Loda saituna…
 cameraRaw	Load settings from a Camera Raw .xmp file	Loda saituna daga fayil na Camera Raw .xmp
-cameraRaw	Loaded Camera Raw settings from {file}	An loda saitunan Camera Raw daga {file}
 cameraRaw	Noise Reduction	Rage ɗigo-ɗigo
 cameraRaw	OK	To
 cameraRaw	Open	Buɗe
@@ -4821,7 +4801,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Sample: foreground color	Samfuri: launin gaba
 	Save canceled	An soke ajiyewa
 	Save the settings to each raw's sidecar without opening it	Ajiye saitunan a fayil na rakiya na kowane raw ba tare da buɗe shi ba
-	Saved Camera Raw settings to {file}	An ajiye saitunan Camera Raw a {file}
 	Select an action first.	Zaɓi aiki da farko.
 	Select an action step first.	Zaɓi matakin aiki da farko.
 	Selected Slices	Gutsuttsuran da aka zaɓa
@@ -4873,3 +4852,24 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Set the brush angle	Saita kusurwar burushi
 	The preference could not be saved: {error}	An kasa ajiye fifikon: {error}
 	Top align text	Jera rubutu a sama
+# RAW Develop (renamed from Camera Raw), notes, toolbar side, layer thumbnail menu
+	RAW Develop	Sarrafa RAW
+	RAW Develop Filter	Filtar Sarrafa RAW
+	RAW Develop Filter…	Filtar Sarrafa RAW…
+	RAW Defaults	Saitunan asali na RAW
+	RAW Defaults…	Saitunan asali na RAW…
+	RAW Develop ({name})	Sarrafa RAW ({name})
+cameraRaw	RAW Develop ({name})	Sarrafa RAW ({name})
+	RAW Develop Filter ({layer})	Filtar Sarrafa RAW ({layer})
+cameraRaw	RAW Develop Filter ({layer})	Filtar Sarrafa RAW ({layer})
+	RAW Develop isn't open	Sarrafa RAW ba a buɗe yake ba
+cameraRaw	RAW Develop isn't open	Sarrafa RAW ba a buɗe yake ba
+	Loaded RAW Develop settings from {file}	An loda saitunan Sarrafa RAW daga {file}
+cameraRaw	Loaded RAW Develop settings from {file}	An loda saitunan Sarrafa RAW daga {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	An loda saitunan Sarrafa RAW daga {file} ({n} ba a tallafa ba)
+	Saved RAW Develop settings to {file}	An ajiye saitunan Sarrafa RAW a {file}
+	Are you sure you want to delete all notes?	Kun tabbata kuna son share duk bayanan kula?
+	Move Toolbar to the Left	Matsar da sandar kayan aiki zuwa hagu
+	Move Toolbar to the Right	Matsar da sandar kayan aiki zuwa dama
+	Select Pixels	Zaɓa pikseli
+	The document changed. Please choose Clear All again.	Daftarin ya canja. Da fatan za a sake zaɓar "Goge duka".
