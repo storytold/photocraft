@@ -97,8 +97,11 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     let canvas = app.session.active().ok_or("no document")?.doc.bounds();
     // The develop's ProPhoto pixels in the document's colours (the open policy may have converted it).
-    let to_document = app.session.active().and_then(|st| super::convert::raw_to_document(app, &st.doc));
-    let raw_detail = raw_source(&raw, canvas, &surf).map(|source| crate::camera_raw_detail_ui::RawDetail {
+    // Without that conversion the sensor pixels can't stand in for the document's: the dialog
+    // previews the developed pixels, as for a raw it can't read.
+    let to_document = app.session.active().map(|st| super::convert::raw_to_document(app, &st.doc));
+    let raw_detail = to_document.and_then(Result::ok).and_then(|to_document| raw_source(&raw, canvas, &surf).map(|source| (source, to_document)));
+    let raw_detail = raw_detail.map(|(source, to_document)| crate::camera_raw_detail_ui::RawDetail {
         source,
         demosaic: raw.developed_with,
         to_document: to_document.clone(),
