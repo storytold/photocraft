@@ -183,10 +183,11 @@ pub fn params(f: &Map<String, Value>) -> Value {
     Value::Object(p)
 }
 
-/// How many recorded colours `__kept` still holds (`color` is one, `colors` its length).
+/// How many recorded colours `__kept` still holds. The engine adds one fixed sample whenever `color`
+/// is present (string, array, null or anything else), plus one per entry of `colors`.
 fn kept_colors(f: &Map<String, Value>) -> usize {
     let Some(kept) = f.get(KEPT).and_then(Value::as_object) else { return 0 };
-    usize::from(kept.get("color").is_some_and(Value::is_string)) + kept.get("colors").and_then(Value::as_array).map_or(0, Vec::len)
+    usize::from(kept.contains_key("color")) + kept.get("colors").and_then(Value::as_array).map_or(0, Vec::len)
 }
 
 /// The (added, subtracted) samples the dialog shows: clicked points plus recorded colours.
@@ -291,17 +292,15 @@ fn query_key(app: &PhotocraftApp, params: &Value) -> u64 {
 
 /// Keep the accelerated preview paths in sync with the engine's Color Range replacement.
 /// A recorded `mode` of add, subtract or intersect combines the sampled mask with the document's
-/// selection, as OK does; otherwise the mask is limited to the selection.
+/// selection (none counts as empty), as OK does; otherwise the mask is limited to the selection.
 fn scope_preview(proxy: &Document, params: &Value, mask: &mut [f32]) {
     let mode = photocraft_algo::selection::SelectionMode::parse(params.get("mode").and_then(Value::as_str).unwrap_or("replace"));
     if mode != photocraft_algo::selection::SelectionMode::Replace {
-        if let Some(selection) = proxy.selection.as_ref() {
-            let area = proxy.bounds();
-            let combined = photocraft_algo::selection::combine(Some(selection), mask, area, mode);
-            let combined = photocraft_algo::selection::mask_from_surface(combined.as_ref(), area);
-            if combined.len() == mask.len() {
-                mask.copy_from_slice(&combined);
-            }
+        let area = proxy.bounds();
+        let combined = photocraft_algo::selection::combine(proxy.selection.as_ref(), mask, area, mode);
+        let combined = photocraft_algo::selection::mask_from_surface(combined.as_ref(), area);
+        if combined.len() == mask.len() {
+            mask.copy_from_slice(&combined);
         }
         return;
     }

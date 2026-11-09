@@ -584,3 +584,30 @@ fn color_range_preview_applies_recorded_subtract() {
     app.run(COMMAND, params).unwrap();
     assert!(coverage(&app, 5, 5) < 0.01 && coverage(&app, 30, 5) > 0.99, "OK leaves the same selection");
 }
+
+#[test]
+fn color_range_preview_matches_ok_without_selection() {
+    for mode in ["subtract", "intersect", "add"] {
+        let mut app = app_with_doc();
+        let mut f = Map::new();
+        load_step(&mut f, &json!({"select": "sampledColors", "color": "#ff0000", "mode": mode, "fuzziness": 10}));
+        let params = super::params(&f);
+        let doc = app.session.active().unwrap().doc.clone();
+        assert!(doc.selection.is_none());
+        let mask = proxy_mask(&app, &doc, 1, &params).unwrap();
+        let w = doc.size.width as usize;
+        app.run(COMMAND, params).unwrap();
+        for (x, y) in [(5usize, 5usize), (30, 5)] {
+            let want = coverage(&app, x as _, y as _);
+            assert!((mask[y * w + x] - want).abs() < 0.01, "{mode}: preview {} vs OK {want} at {x},{y}", mask[y * w + x]);
+        }
+    }
+}
+
+#[test]
+fn color_range_array_color_counts_as_a_sample() {
+    let mut f = Map::new();
+    load_step(&mut f, &json!({"select": "sampledColors", "color": [1, 0, 0]}));
+    assert_eq!(kept_colors(&f), 1);
+    assert_eq!(sample_counts(&f), (1, 0));
+}
