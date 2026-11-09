@@ -363,6 +363,7 @@ fn background_in_a_multiple_selection_keeps_align_and_distribute() {
     assert_eq!(b.y0, 30, "only horizontally");
 }
 
+/// Shape layers use the registered vector icon; raster and text mappings stay unchanged.
 #[test]
 fn shape_properties_uses_vector_shape_icon() {
     let (session, layers) = kinds();
@@ -385,6 +386,7 @@ fn shape_properties_uses_vector_shape_icon() {
     }
 }
 
+/// Headers paint the expected 15 px icons, and the shape glyph has four hollow anchors.
 #[test]
 fn shape_header_paints_correct_icon() {
     let (session, layers) = kinds();
