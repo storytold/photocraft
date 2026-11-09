@@ -300,6 +300,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     );
     app.ui.presets_ui = st;
     let fill = shape_fill(app);
+    let pixel_align_stroke = app.ui.tool_options.pixel_align_stroke;
     for e in events {
         match &e {
             Ev::Select(k) => {
@@ -310,11 +311,11 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             Ev::Activate(k) => {
                 app.ui.presets_ui.custom_shape = k.clone();
-                run(app, "shape.presets.place", json!({"preset": k, "fill": fill}));
+                run(app, "shape.presets.place", json!({"preset": k, "fill": fill, "pixelAlignStroke": pixel_align_stroke}));
             }
             Ev::Drop(k, pos) => {
                 app.ui.presets_ui.custom_shape = k.clone();
-                let mut p = json!({"preset": k, "fill": fill});
+                let mut p = json!({"preset": k, "fill": fill, "pixelAlignStroke": pixel_align_stroke});
                 if let (Some(c), Some(d)) = (crate::canvas::doc_point_at(app, *pos), app.session.active()) {
                     let side = (d.doc.size.width.min(d.doc.size.height) as f64 * 0.3).max(8.0);
                     p["rect"] = json!([c[0] - side / 2.0, c[1] - side / 2.0, side, side]);

@@ -31,7 +31,8 @@ struct Run {
     end: f64,
 }
 impl PixelRuns {
-    /// Quantize only dash cap coverage on isolated axis runs. Sampling neighbors
+    /// Quantize only dash cap coverage on isolated axis runs. Butt caps sample the
+    /// compiled outline at pixel centers; extended caps retain area selection. Sampling neighbors
     /// resolves an exact half-pixel tie consistently: round both boundaries toward
     /// increasing document coordinates. A 9px dash therefore stays 9 opaque pixels,
     /// including when its phase alternates between integer and half-integer starts.
@@ -42,8 +43,9 @@ impl PixelRuns {
         rect: Rect,
         coverage: &mut [f32],
         threshold: f32,
-        sample: impl Fn(Rect) -> Vec<f32>,
-        biased_sample: impl Fn(Rect) -> Vec<f32>,
+        rasterizer: &crate::raster::Rasterizer,
+        biased_rasterizer: Option<&crate::raster::Rasterizer>,
+        sample_centers: bool,
     ) {
         let width = rect.width() as usize;
         for run in &self.0 {
@@ -55,12 +57,29 @@ impl PixelRuns {
             if visible.is_empty() {
                 continue;
             }
+            // Probe the original outline at the centerline and along-axis pixel centers.
+            // The small negative bias preserves the existing positive-coordinate tie policy.
+            let centers_rect = if run.horizontal { Rect::new(visible.x0, c, visible.x1, c + 1) } else { Rect::new(c, visible.y0, c + 1, visible.y1) };
+            let offset = if run.horizontal { (0.5 - 1e-6, 0.0) } else { (0.0, 0.5 - 1e-6) };
+            if sample_centers {
+                let centers = rasterizer.point_samples(centers_rect, offset);
+                for y in visible.y0..visible.y1 {
+                    for x in visible.x0..visible.x1 {
+                        let index = (y - rect.y0) as usize * width + (x - rect.x0) as usize;
+                        let sample = if run.horizontal { x - visible.x0 } else { y - visible.y0 } as usize;
+                        if let Some(out) = coverage.get_mut(index).filter(|out| **out > 0.0) {
+                            *out = centers.get(sample).copied().unwrap_or(0.0);
+                        }
+                    }
+                }
+                continue;
+            }
             let source = if run.horizontal {
                 Rect::new(visible.x0.saturating_sub(1), c - 1, visible.x1.saturating_add(1), c + 1)
             } else {
                 Rect::new(c - 1, visible.y0.saturating_sub(1), c + 1, visible.y1.saturating_add(1))
             };
-            let values = sample(source);
+            let values = rasterizer.render(source);
             let mut biased = None;
             let sw = source.width() as usize;
             let sum = |p: i32| {
@@ -86,7 +105,7 @@ impl PixelRuns {
                         if (before - after).abs() > 1e-5 {
                             f32::from(before > after)
                         } else {
-                            let values = biased.get_or_insert_with(|| biased_sample(source));
+                            let values = biased.get_or_insert_with(|| biased_rasterizer.map_or_else(Vec::new, |r| r.render(source)));
                             let k = if run.horizontal { (p - source.x0) as usize } else { (p - source.y0) as usize * sw };
                             let adjacent = if run.horizontal { k + sw } else { k + 1 };
                             f32::from(values.get(k).copied().unwrap_or(0.0) + values.get(adjacent).copied().unwrap_or(0.0) > threshold)

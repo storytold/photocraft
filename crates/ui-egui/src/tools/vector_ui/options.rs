@@ -322,10 +322,10 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         });
         let mut pixel_align_stroke = sh.pixel_align_stroke;
         if crate::widgets::checkbox(ui, &mut pixel_align_stroke, tl!("Pixel Align Stroke")).changed() {
-            edit = Some(json!({
-                "pixelAlignStroke": pixel_align_stroke,
-                "coalesce": coalesce("pixel-align-stroke")
-            }));
+            // Losing width-field focus can commit an expression in this same click.
+            let edit = edit.get_or_insert_with(|| json!({}));
+            edit["pixelAlignStroke"] = json!(pixel_align_stroke);
+            edit["coalesce"] = json!(coalesce("pixel-align-stroke"));
         }
 
         let style = sh.stroke.as_ref().map(crate::shape_stroke_ui::StrokeOptions::from).unwrap_or_default();

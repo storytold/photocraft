@@ -153,7 +153,21 @@ struct DocumentDragCache {
 
 /// Clip source coverage before choosing its bounded texture layout.
 fn document_preview_bounds(compiled: &photocraft_vector::CompiledShape, visible: photocraft_geom::Rect) -> Option<photocraft_geom::Rect> {
-    let bounds = compiled.bounds()?.intersect(&visible);
+    let source = compiled.bounds()?;
+    let clipped = source.intersect(&visible);
+    if clipped.is_empty() {
+        return None;
+    }
+    // Linear filtering needs transparent neighbors outside the tight shape bounds.
+    // Reserve one reduced texel too, without exceeding the existing texture limit.
+    let padding = clipped.width().max(clipped.height()).div_ceil(document_preview::TEXTURE_EDGE - 2).max(1) as i32;
+    let bounds = photocraft_geom::Rect::new(
+        source.x0.saturating_sub(padding),
+        source.y0.saturating_sub(padding),
+        source.x1.saturating_add(padding),
+        source.y1.saturating_add(padding),
+    )
+    .intersect(&visible);
     (!bounds.is_empty()).then_some(bounds)
 }
 
@@ -190,7 +204,7 @@ fn new_document_preview(
         size: layout.size,
         factor: layout.factor,
         reduction,
-        painted_pass: painter.ctx().cumulative_pass_nr(),
+        painted_pass: painter.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT),
     })
 }
 
@@ -262,7 +276,7 @@ pub(crate) fn paint_document_shape_preview(
     }
     mesh.indices.extend([0, 1, 2, 0, 2, 3]);
     painter.add(egui::Shape::mesh(mesh));
-    cache.painted_pass = painter.ctx().cumulative_pass_nr();
+    cache.painted_pass = painter.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT);
     painter.ctx().data_mut(|d| d.insert_temp(id, cache));
 }
 
@@ -282,7 +296,8 @@ pub(super) fn mark_rendered(ctx: &egui::Context, key: &str) {
 pub(crate) fn finish_frame(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
     // A released/cancelled drag must not retain a large, unfinished accumulator.
     let preview_id = egui::Id::unique("shape-document-drag-render");
-    let pass = ctx.cumulative_pass_nr();
+    // Floating document viewports have independent pass counters.
+    let pass = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
     ctx.data_mut(|d| {
         if d.get_temp::<DocumentDragCache>(preview_id).is_some_and(|c| c.painted_pass != pass) {
             d.remove::<DocumentDragCache>(preview_id);

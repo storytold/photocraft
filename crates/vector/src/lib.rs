@@ -583,6 +583,7 @@ pub struct CompiledShape {
     pixel_stroke: pixel_align::PixelRuns,
     pixel_dash_caps: pixel_align::PixelRuns,
     pixel_dash_threshold: f32,
+    pixel_dash_centers: bool,
     pixel_dash_bias: Option<Rasterizer>,
     pixel_rectangle: Option<(f64, f64, f64, f64)>,
     fill: Option<(FillCoverage, Paint)>,
@@ -659,7 +660,8 @@ impl CompiledShape {
         if shape.path.inverted && shape.fill.is_some() {
             bounds = Some(Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4));
         }
-        CompiledShape { fill, stroke, align, bounds, pixel_stroke, pixel_dash_caps, pixel_dash_threshold, pixel_dash_bias, pixel_rectangle }
+        let pixel_dash_centers = shape.stroke.as_ref().is_some_and(|s| s.cap == photocraft_doc::LineCap::Butt);
+        CompiledShape { fill, stroke, align, bounds, pixel_stroke, pixel_dash_caps, pixel_dash_threshold, pixel_dash_centers, pixel_dash_bias, pixel_rectangle }
     }
 
     /// Pixel bounds of the rendering (`None` = nothing visible).
@@ -699,13 +701,7 @@ impl CompiledShape {
                     *c = (*c * clip * scale).min(1.0);
                 }
             }
-            self.pixel_dash_caps.sharpen_dash_caps(
-                rect,
-                &mut cov,
-                self.pixel_dash_threshold,
-                |region| r.render(region),
-                |region| self.pixel_dash_bias.as_ref().map_or_else(Vec::new, |biased| biased.render(region)),
-            );
+            self.pixel_dash_caps.sharpen_dash_caps(rect, &mut cov, self.pixel_dash_threshold, r, self.pixel_dash_bias.as_ref(), self.pixel_dash_centers);
             for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
                 if *c <= 0.0 {
                     continue;

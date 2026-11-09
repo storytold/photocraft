@@ -1,5 +1,97 @@
 use super::*;
 
+/// Filtered fill edges need transparent texels on every side of the projected quad.
+#[test]
+fn pixel_align_preview_pads_fill_texture_before_fractional_projection() {
+    use photocraft_geom::{Affine, Rect as PixelRect};
+    for side in [40.0, 4096.0] {
+        let shape = photocraft_doc::ShapeLayer {
+            path: photocraft_vector::shapes::rect(20.0, 20.0, side, 30.0),
+            fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
+            pixel_align_stroke: true,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let transform = Affine::scale(0.125).then(&Affine::translate(10.25, 10.25));
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 100.0)));
+            paint_document_shape_preview(&painter, &shape, &transform, PixelRect::new(0, 0, 5000, 200));
+        });
+        let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(egui::Id::unique("shape-document-drag-render"))).unwrap();
+        let delta = output.textures_delta.set.get(&cache.texture.id()).unwrap().last().unwrap();
+        let egui::ImageData::Color(image) = &delta.image;
+        let [w, h] = image.size;
+        assert!(w <= 2048 && h <= 2048);
+        assert!(image.pixels[..w].iter().all(|p| p.a() == 0), "top border");
+        assert!(image.pixels[(h - 1) * w..].iter().all(|p| p.a() == 0), "bottom border");
+        assert!((0..h).all(|y| image.pixels[y * w].a() == 0 && image.pixels[y * w + w - 1].a() == 0), "side borders");
+        assert!(image.pixels.iter().any(|p| p.a() > 0));
+        assert!(cache.bounds.x0 <= 20 - cache.factor as i32);
+        assert!(cache.bounds.y0 <= 20 - cache.factor as i32);
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == cache.texture.id() => Some(mesh),
+                _ => None,
+            })
+            .unwrap();
+        let corner = transform.apply(photocraft_geom::Point::new(f64::from(cache.bounds.x0), f64::from(cache.bounds.y0)));
+        assert_eq!(mesh.vertices[0].pos, egui::pos2(corner.x as f32, corner.y as f32));
+        output.textures_delta.clear();
+    }
+}
+
+/// A floating viewport can have a different pass count while a root frame owns cleanup.
+#[test]
+fn pixel_align_floating_preview_survives_root_cleanup_and_completes() {
+    use photocraft_geom::{Affine, Rect as PixelRect};
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    egui::Context::set_immediate_viewport_renderer(|ctx, mut viewport| {
+        let id = viewport.ids.this;
+        let mut input = egui::RawInput { viewport_id: id, ..Default::default() };
+        input.viewports.insert(id, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), ..Default::default() });
+        let mut output = ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui));
+        output.textures_delta.clear();
+    });
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for _ in 0..3 {
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+    }
+    let shape = photocraft_doc::ShapeLayer {
+        path: photocraft_vector::shapes::rect(0.0, 0.0, 2050.0, 2050.0),
+        fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
+        pixel_align_stroke: true,
+        ..Default::default()
+    };
+    let id = egui::Id::unique("shape-document-drag-render");
+    let mut accumulator = None;
+    for frame in 0..2 {
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.ctx().show_viewport_immediate(egui::ViewportId::from_hash_of("floating-preview"), Default::default(), |ui, _| {
+                assert_ne!(ui.ctx().cumulative_pass_nr(), ui.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT));
+                let painter =
+                    ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)));
+                paint_document_shape_preview(&painter, &shape, &Affine::scale(0.125).then(&Affine::translate(10.0, 10.0)), PixelRect::new(0, 0, 2050, 2050));
+            });
+            finish_frame(&mut app, ui.ctx());
+        });
+        output.textures_delta.clear();
+        let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(id)).expect("root cleanup must retain the floating preview");
+        if frame == 0 {
+            accumulator = Some(Arc::downgrade(cache.reduction.as_ref().expect("unfinished first pass")));
+        } else {
+            assert!(cache.reduction.is_none(), "the second pass must finish rather than restart");
+        }
+    }
+    assert!(accumulator.unwrap().upgrade().is_none(), "completion releases the accumulator");
+    let mut output = ctx.run_ui(Default::default(), |ui| finish_frame(&mut app, ui.ctx()));
+    output.textures_delta.clear();
+    assert!(ctx.data(|d| d.get_temp::<DocumentDragCache>(id)).is_none(), "ending the drag releases its texture");
+}
+
 /// Canvas-aligned gradient paint must not use the clipped preview coverage as its frame.
 #[test]
 fn pixel_align_preview_preserves_canvas_gradient_frame() {

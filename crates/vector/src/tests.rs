@@ -1321,6 +1321,71 @@ fn pixel_aligned_dashes_have_uniform_opaque_lengths_with_half_pixel_periods() {
     }
 }
 
+/// Fractional butt dashes are selected by their centers, not their integrated area.
+#[test]
+fn pixel_aligned_fractional_butt_dashes_select_pixel_centers() {
+    let clip = Rect::new(0, 0, 80, 80);
+    for rectangle in [false, true] {
+        for reversed in [false, true] {
+            for vertical in [false, true] {
+                for (length, gap, offset) in [(0.25, 1.75, -0.375), (0.75, 1.25, 0.125), (1.25, 0.75, -0.25)] {
+                    let mut path = if rectangle {
+                        shapes::rect(10.0, 10.0, 60.0, 60.0)
+                    } else {
+                        let points = if vertical { [(20.0, 10.0), (20.0, 70.0)] } else { [(10.0, 20.0), (70.0, 20.0)] };
+                        Path::new(vec![Subpath::polyline(&points)])
+                    };
+                    if reversed {
+                        path.subpaths[0].knots.reverse();
+                        for knot in &mut path.subpaths[0].knots {
+                            std::mem::swap(&mut knot.in_ctrl, &mut knot.out_ctrl);
+                        }
+                    }
+                    let shape = ShapeLayer {
+                        path: path.clone(),
+                        pixel_align_stroke: true,
+                        stroke: Some(ShapeStroke { width: 1.0, dashes: vec![length, gap], dash_offset: offset, ..Default::default() }),
+                        ..Default::default()
+                    };
+                    let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+                    let pixels = compiled.render_rgba(clip);
+                    for p in 14..66 {
+                        let probe = f64::from(p) + 0.5 - 1e-6;
+                        let distance = match (rectangle, vertical, reversed) {
+                            (true, false, true) => 120.0 + 70.0 - probe,
+                            (true, true, true) => 60.0 + 70.0 - probe,
+                            (true, true, false) => 60.0 + probe - 10.0,
+                            (_, _, true) => 70.0 - probe,
+                            _ => probe - 10.0,
+                        };
+                        let (x, y) = if rectangle {
+                            if vertical { (69, p) } else { (p, 10) }
+                        } else if vertical {
+                            (20, p)
+                        } else {
+                            (p, 20)
+                        };
+                        let expected = f32::from((distance + f64::from(offset)).rem_euclid(f64::from(length + gap)) < f64::from(length));
+                        assert_eq!(
+                            pixels[(y * 80 + x) as usize][3],
+                            expected,
+                            "p={p}, rectangle={rectangle}, vertical={vertical}, reversed={reversed}, length={length}"
+                        );
+                    }
+                    let tile = Rect::new(19, 19, 60, 60);
+                    let part = compiled.render_rgba(tile);
+                    for y in tile.y0..tile.y1 {
+                        for x in tile.x0..tile.x1 {
+                            assert_eq!(part[((y - tile.y0) * 41 + x - tile.x0) as usize], pixels[(y * 80 + x) as usize]);
+                        }
+                    }
+                    assert_eq!(shape.path, path);
+                }
+            }
+        }
+    }
+}
+
 /// Half-shifted one-pixel dashes stay alternating, even when every area sample is one half.
 #[test]
 fn pixel_aligned_one_pixel_dashes_keep_phase_at_half_offsets() {
