@@ -1,9 +1,10 @@
 //! A separate process keeps the alternate Skin Smooth manifest out of the shared unit-test registry.
+use egui_kittest::kittest::Queryable;
 use photocraft_ui_egui::{PhotocraftApp, Services, menus};
 use serde_json::{Value, json};
 
 #[test]
-fn skin_only_is_independent_of_presets_without_the_specialized_ui() {
+fn skin_only_and_samples_are_independent_of_presets_without_the_specialized_ui() {
     const ID: &str = "local.skinsmooth.skin-smooth";
     let mut bytes = include_bytes!("../../plugins/tests/fixtures/skin-smooth.wasm").to_vec();
     let start = bytes.windows(8).position(|w| w == b"{\n  \"id\"").unwrap();
@@ -24,4 +25,30 @@ fn skin_only_is_independent_of_presets_without_the_specialized_ui() {
     let fields = &app.ui.dialogs.last().unwrap().fields;
     assert_eq!(fields["fine"], 13.0);
     assert_eq!(fields["skinOnly"], true);
+    let positive = json!([[0.7, 0.5, 0.4]]);
+    let negative = json!([[0.2, 0.3, 0.5]]);
+    app.ui.dialogs[0].fields.insert("positiveColors".into(), positive.clone());
+    app.ui.dialogs[0].fields.insert("negativeColors".into(), negative.clone());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1280.0, 1000.0))
+        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
+        .build_ui_state(|ui, app| photocraft_ui_egui::dialogs::show(app, ui.ctx()), app);
+    h.run_steps(6);
+    assert_eq!(h.state().ui.dialogs[0].fields["__presetDirty"], false, "samples are not preset edits");
+    h.state_mut().ui.dialogs[0].fields.insert("fine".into(), json!(12));
+    h.run_steps(3);
+    h.get_by_label("Reset preset").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.dialogs[0].fields["fine"], 13.0);
+    for name in ["Natural", "Alternate"] {
+        h.query_all_by_label("Preset").last().unwrap().click();
+        h.run_steps(3);
+        h.get_by_label(name).click();
+        h.run_steps(3);
+        let fields = &h.state().ui.dialogs[0].fields;
+        assert_eq!(fields["positiveColors"], positive);
+        assert_eq!(fields["negativeColors"], negative);
+        assert_eq!(fields["skinOnly"], true);
+        assert_eq!(fields["__presetDirty"], false);
+    }
 }

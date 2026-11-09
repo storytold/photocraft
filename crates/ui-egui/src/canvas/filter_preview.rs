@@ -68,8 +68,8 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     // Only the preview copy gets this region. OK still dispatches the dialog's full parameters.
     if cmd == photocraft_engine::plugin_cmds::RUN
         && !multiple_views
-        // Cooperative/web sessions reuse a fixed proxy, so panning never runs a plug-in.
-        // Native sessions can refresh a clipped region.
+        // Only a background worker may refilter on pan. Inline/web sessions reuse a full proxy.
+        && app.background_jobs
         && !cfg!(target_arch = "wasm32")
         && !app.session.cooperative_jobs()
         && !app.ui.view.pattern_preview
@@ -78,7 +78,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     {
         let r = visible.intersect(&st.doc.bounds());
         // Retain completed coverage while it contains the viewport. A tile of overscan
-        // avoids synchronous refiltering when a web view pans around a tile boundary.
+        // avoids redundant worker requests when a native view pans around a tile boundary.
         let q = (k as i32).saturating_mul(photocraft_geom::TILE_SIZE).max(1);
         let up = |x: i32| x.div_euclid(q).saturating_add(i32::from(x.rem_euclid(q) != 0)).saturating_mul(q);
         let previous = app

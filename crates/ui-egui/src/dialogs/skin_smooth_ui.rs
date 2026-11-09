@@ -69,10 +69,11 @@ pub(crate) fn tick(app: &mut PhotocraftApp) {
 /// Rejects channel/mask targets and masked or clipped ancestors whose visible weight is not represented.
 fn supported(app: &PhotocraftApp) -> Result<LayerId, &'static str> {
     let st = app.session.active().ok_or("Open an RGB image to sample skin colours.")?;
+    // Profile rejection also applies to Quick Mask and smart objects; show it before target guidance.
+    photocraft_engine::plugin_cmds::skin_smooth_color_supported(&st.doc)?;
     if st.channel_view.target != ChannelTarget::Composite || st.doc.quick_mask.is_some() || app.layer_mask_targeted() || app.filter_mask_targeted() {
         return Err("Skin sampling and Mask require the RGB composite view, with layer pixels targeted.");
     }
-    photocraft_engine::plugin_cmds::skin_smooth_color_supported(&st.doc)?;
     let id = st.active_layer.ok_or("Select an RGB pixel layer to sample skin colours.")?;
     let path = st.doc.path_of(id).ok_or("The source layer is no longer available.")?;
     for end in 1..=path.len() {

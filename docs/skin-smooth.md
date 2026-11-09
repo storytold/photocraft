@@ -22,7 +22,7 @@ Mask/sampling support unmasked, unclipped RGB raster layers in Composite view at
 
 ## Preview and invalidation
 
-Native filter previews run on one background worker with cancellation of stale requests. Ordinary plug-in previews use the visible region plus context and an appropriate proxy. Web/cooperative sessions reuse a full proxy while panning, without rerunning the plug-in. OK handles the full image/selection. Reduced previews remain approximate. Smart-filter stack previews keep their stack processing rules.
+Native filter previews run on one background worker with cancellation of stale requests. Ordinary plug-in previews use the visible region plus context and an appropriate proxy. Web/cooperative and explicitly inline sessions reuse a full proxy while panning, without rerunning the plug-in. OK handles the full image/selection. Reduced previews remain approximate. Smart-filter stack previews keep their stack processing rules.
 
 Mask has a separate worker and texture, limited to at most 1M visible/proxy pixels and does not run smoothing. Its request identity covers the source revision/target, dialog, samples, tolerance, Skin Only, viewport and scale. Closed dialogs and invalid sources cancel work; stale results cannot paint over another request. It does not write pixels, selection or history.
 

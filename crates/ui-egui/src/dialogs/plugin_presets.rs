@@ -71,8 +71,6 @@ fn values(app: &PhotocraftApp, fields: &Map<String, Value>, selection: &str) -> 
     // These switches are independent of preset selection and Reset.
     if m.id == "local.skinsmooth.skin-smooth" {
         values.remove("skinOnly");
-    }
-    if super::skin_smooth_ui::owns(fields) {
         values.remove("positiveColors");
         values.remove("negativeColors");
     }

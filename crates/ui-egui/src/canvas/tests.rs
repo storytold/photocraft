@@ -278,10 +278,11 @@ fn plugin_preview_review_regression_keeps_canonical_region_across_views() {
 }
 
 /// Canvas-produced document regions must cover the visible proxy pixels before and after panning.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn panned_plugin_preview_matches_full_preview_at_factor_four() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.background_jobs = false;
+    app.background_jobs = true;
     app.run("file.new", json!({"width": 6000, "height": 4000, "background": "#204060"})).unwrap();
     app.session
         .edit("pattern", |doc, active| {
@@ -317,6 +318,10 @@ fn panned_plugin_preview_matches_full_preview_at_factor_four() {
         })
         .textures_delta
         .clear();
+        assert!(app.filter_preview_worker.busy(), "each uncovered pan returns while filtering runs on the worker");
+        drive_until(&mut app, &ctx, "the panned region", |app| {
+            app.filter_preview.as_ref().is_some_and(|p| p.key.params["__previewRegion"] == json!(region) && p.result.is_some())
+        });
         let preview = app.filter_preview.as_ref().unwrap();
         assert_eq!(preview.key.k, 4);
         assert_eq!(preview.key.params["__previewRegion"], json!(region), "document coordinates at {center:?}");
@@ -3463,49 +3468,52 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
 }
 
 #[test]
-fn cooperative_plugin_preview_never_refilters_on_pan() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.background_jobs = false;
-    app.session.set_cooperative_jobs(true);
-    app.run("file.new", json!({"width":2048,"height":128,"background":"#204060"})).unwrap();
-    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
-    crate::filter_dialog::open_with_spec(
-        &mut app,
-        "plugin.run",
-        "Invert",
-        "{}",
-        json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
-    );
-    let ctx = egui::Context::default();
-    let doc = app.session.active().unwrap().doc.clone();
-    let set_region = |r| ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("plugin-preview-region", doc.id)), r));
-    set_region(DRect::new(200, 0, 300, 128));
-    ensure_filter_preview(&mut app, 0, &ctx).unwrap();
-    let first = app.filter_preview.as_ref().unwrap().result.clone().unwrap();
-    assert!(app.filter_preview.as_ref().unwrap().key.params.get("__previewRegion").is_none());
-    for x in [230, 1024, 1800, 260, 200] {
-        set_region(DRect::new(x, 0, x + 100, 128));
-        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
-        assert!(
-            std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()),
-            "panning must not run a synchronous plug-in in cooperative/web sessions"
+fn inline_plugin_preview_never_refilters_on_pan() {
+    for cooperative in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.background_jobs = false;
+        app.session.set_cooperative_jobs(cooperative);
+        app.run("file.new", json!({"width":2048,"height":128,"background":"#204060"})).unwrap();
+        app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+        crate::filter_dialog::open_with_spec(
+            &mut app,
+            "plugin.run",
+            "Invert",
+            "{}",
+            json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
         );
+        let ctx = egui::Context::default();
+        let doc = app.session.active().unwrap().doc.clone();
+        let set_region = |r| ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("plugin-preview-region", doc.id)), r));
+        set_region(DRect::new(200, 0, 300, 128));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        let first = app.filter_preview.as_ref().unwrap().result.clone().unwrap();
+        assert!(app.filter_preview.as_ref().unwrap().key.params.get("__previewRegion").is_none());
+        for x in [230, 1024, 1800, 260, 200] {
+            set_region(DRect::new(x, 0, x + 100, 128));
+            ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+            assert!(
+                std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()),
+                "panning must not run a synchronous plug-in in cooperative/web sessions"
+            );
+        }
+        app.ui.dialogs[0].fields.insert("amount".into(), json!(0.5));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()), "changed parameters invalidate reuse");
+        app.ui.view.pattern_preview = true;
+        set_region(DRect::new(3000, 0, 3100, 128));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        let preview = app.filter_preview.as_ref().unwrap();
+        assert!(preview.key.params.get("__previewRegion").is_none());
+        assert_ne!(preview.result.as_ref().unwrap().layers[0].surface().unwrap().pixel(1, 1), doc.layers[0].surface().unwrap().pixel(1, 1));
     }
-    app.ui.dialogs[0].fields.insert("amount".into(), json!(0.5));
-    ensure_filter_preview(&mut app, 0, &ctx).unwrap();
-    assert!(!std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()), "changed parameters invalidate reuse");
-    app.ui.view.pattern_preview = true;
-    set_region(DRect::new(3000, 0, 3100, 128));
-    ensure_filter_preview(&mut app, 0, &ctx).unwrap();
-    let preview = app.filter_preview.as_ref().unwrap();
-    assert!(preview.key.params.get("__previewRegion").is_none());
-    assert_ne!(preview.result.as_ref().unwrap().layers[0].surface().unwrap().pixel(1, 1), doc.layers[0].surface().unwrap().pixel(1, 1));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_failed_plugin_preview_does_not_retain_its_large_region() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.background_jobs = false;
+    app.background_jobs = true;
     app.run("file.new", json!({"width":2048,"height":1024,"background":"#204060"})).unwrap();
     app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"),"/../plugins/tests/fixtures/invert.wasm")})).unwrap();
     crate::filter_dialog::open_with_spec(
@@ -3519,10 +3527,10 @@ fn a_failed_plugin_preview_does_not_retain_its_large_region() {
     let doc = app.session.active().unwrap().doc.id;
     let region = egui::Id::unique(("plugin-preview-region", doc));
     ctx.data_mut(|d| d.insert_temp(region, DRect::new(0, 0, 2048, 1024)));
-    ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+    drive_until(&mut app, &ctx, "the large preview", |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
     app.filter_preview.as_mut().unwrap().result = None;
     ctx.data_mut(|d| d.insert_temp(region, DRect::new(0, 0, 128, 128)));
     app.ui.dialogs[0].fields.insert("amount".into(), json!(0.5));
-    ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+    drive_until(&mut app, &ctx, "the smaller preview", |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
     assert_eq!(app.filter_preview.as_ref().unwrap().key.params["__previewRegion"], json!([0, 0, 512, 512]));
 }

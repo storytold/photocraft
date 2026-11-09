@@ -438,3 +438,26 @@ fn untagged_skin_sampling_and_mask_follow_the_host_default_profile() {
     let mask = mask_buffer(&state.doc, state.active_layer.unwrap(), &app.ui.dialogs[0].fields, state.doc.bounds(), 1, &|| false).unwrap();
     assert!(mask.get(2, 3)[0] > 0.0);
 }
+
+/// Quick Mask's target warning must not hide a profile rejection before OK.
+#[test]
+fn quick_mask_on_a_smart_layer_shows_the_profile_rejection() {
+    for profile in [photocraft_cms::builtin::Builtin::DisplayP3.profile().to_bytes(), Arc::new(vec![0; 128])] {
+        let mut state = app();
+        state.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        state.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
+        Arc::make_mut(&mut state.session.active_mut().unwrap().doc).icc_profile = Some(profile);
+        let expected = photocraft_engine::plugin_cmds::skin_smooth_color_supported(&state.session.active().unwrap().doc).unwrap_err();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1100.0, 900.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
+            .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), state);
+        h.run_steps(6);
+        h.get_by_label(expected);
+        assert_eq!(h.state().ui.dialogs.len(), 1, "the error is visible before confirmation");
+        Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).icc_profile = Some(photocraft_cms::builtin::Builtin::Srgb.profile().to_bytes());
+        h.run_steps(3);
+        assert!(h.query_by_label(expected).is_none(), "a corrected profile must clear the error");
+        h.get_by_label("Skin sampling and Mask require the RGB composite view, with layer pixels targeted.");
+    }
+}
