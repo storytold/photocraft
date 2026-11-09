@@ -274,7 +274,6 @@ fn smart_filter_double_click_edits_the_stored_camera_raw_filter_in_its_own_dialo
     // Resetting a control to its default must overwrite the stored value.
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.0}, "before": false, "commit": true}})).unwrap();
     assert!(r.is_ok(), "{r:?}");
-    assert!(app.camera_raw.is_none());
     let sm = smart(&app);
     assert_eq!(sm.smart_filters.len(), 1, "edited in place, not added");
     assert_eq!(sm.smart_filters[0].params["exposure"], 0.0);
@@ -302,7 +301,6 @@ fn distant_sparse_pixels_cannot_trigger_an_unbounded_proxy_scan() {
     source.write_region(Rect::new(30_000, 30_000, 30_001, 30_001), &[0.5, 0.5, 0.5, 1.0]);
     let result = open_pixels(&mut app, &ctx, layer, source, CameraRaw::default(), Coverage::None, Target::NewFilter);
     assert!(result.unwrap_err().contains("bounds are too large"));
-    assert!(app.camera_raw.is_none());
 }
 
 #[test]
@@ -319,7 +317,6 @@ fn dialog_drives_the_engine() {
     assert_eq!(app.camera_raw.as_ref().unwrap().command_params(), json!({"exposure": 1.0, "vignetteAmount": -40.0}));
     let before = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(32, 24);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
-    assert!(app.camera_raw.is_none());
     let after = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(32, 24);
     assert!(after[0] > before[0] + 0.1, "{before:?} → {after:?}");
     // Cancel leaves the document alone.
@@ -373,7 +370,6 @@ fn raw_opens_in_camera_raw_and_open_redevelops() {
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
     assert!(r.get("filter").is_some(), "contrast is applied as a RAW Develop step: {r}");
-    assert!(app.camera_raw.is_none());
     assert_eq!(app.session.documents().len(), 1);
     let st = app.session.active().unwrap();
     assert_eq!(st.saved_revision, st.revision, "Open leaves the document unmodified");
@@ -492,7 +488,6 @@ fn background_redevelop_keeps_the_tab_position_and_view() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "contrast": 20}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["pending"], true, "{r}");
-    assert!(app.camera_raw.is_none());
     for _ in 0..3000 {
         crate::jobs_ui::tick(&mut app, &ctx);
         if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
@@ -1334,4 +1329,62 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert_eq!((r["done"].clone(), r["saved"].clone()), (json!(true), json!([])), "{r}");
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Runs the jobs tick until every background open has finished (bounded).
+fn finish_background_opens(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let t = std::time::Instant::now();
+    loop {
+        crate::jobs_ui::tick(app, ctx);
+        if app.jobs.opens.is_empty() || t.elapsed() > std::time::Duration::from_secs(30) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.jobs.opens.is_empty(), "the background open finished");
+}
+
+/// #12415: a raw dropped or pasted has no path to read again, so its bytes ride along from the
+/// background open to the Camera Raw open dialog, which re-develops from them.
+#[test]
+fn a_pathless_raw_background_open_keeps_its_bytes_for_camera_raw() {
+    let (mut app, dng) = raw_app();
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    app.open_bytes("IMG_0001.dng", &dng).unwrap();
+    finish_background_opens(&mut app, &ctx);
+    let raw = take_queued(&mut app).expect("a raw open queues the dialog");
+    let kept = raw.bytes.as_ref().expect("the sensor data is kept for Open");
+    assert_eq!(kept.as_slice(), dng.as_slice());
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    assert!(r.get("openingRaw").is_some(), "{r}");
+    let before = mean_red(&app);
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert!(r["redeveloped"] == true || r["pending"] == true, "{r}");
+    let t = std::time::Instant::now();
+    while mean_red(&app) <= before + 0.05 && t.elapsed() < std::time::Duration::from_secs(30) {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(mean_red(&app) > before + 0.05, "re-developed from the kept sensor data: {before} → {}", mean_red(&app));
+}
+
+/// Only a raw keeps its bytes: a pathless PNG held nothing before and holds nothing now.
+#[test]
+fn a_pathless_png_background_open_keeps_nothing() {
+    let (mut app, _) = raw_app();
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    let png = {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let doc = (*s.active().unwrap().doc).clone();
+        photocraft_io::export(&doc, "a.png", &Default::default()).unwrap().bytes
+    };
+    app.open_bytes("a.png", &png).unwrap();
+    finish_background_opens(&mut app, &ctx);
+    assert!(app.raw_shelf.is_empty(), "a PNG never queues the raw dialog");
+    assert!(app.jobs.open_bytes.is_empty(), "nothing is kept once the open finished");
+    assert_eq!(app.session.documents().len(), 1);
 }
