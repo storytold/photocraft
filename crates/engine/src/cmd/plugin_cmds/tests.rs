@@ -485,6 +485,46 @@ fn skin_smooth_checks_icc_before_editing_at_every_depth() {
     }
 }
 
+/// A +1-stop, tone-only run has an independent RGB oracle: double the input, then clamp.
+/// Keep the fractional selection and its processing bounds; check the fully selected band.
+#[test]
+fn skin_smooth_full_selection_matches_independent_exposure_oracle_at_every_depth() {
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    for depth in [8, 16, 32] {
+        let mut s = doc(depth);
+        select_partial(&mut s);
+        let before = pixels(&s);
+        s.execute(
+            RUN,
+            json!({"id":"local.skinsmooth.skin-smooth", "params":{
+                "preset":"manual", "fine":0,"medium":0,"large":0,"detail":0,
+                "skinOnly":false,"brightness":100,"warmth":0,"redness":0
+            }}),
+        )
+        .unwrap();
+        let after = pixels(&s);
+        let tolerance = match depth {
+            8 => 1.0 / 255.0,
+            16 => 1.0 / 65535.0,
+            _ => 1e-6,
+        };
+        let mut largest_change = 0.0_f32;
+        for (i, (original, filtered)) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0.iter()).enumerate() {
+            let (x, y) = (i % 40, i / 40);
+            if (4..30).contains(&x) && (9..20).contains(&y) {
+                assert_eq!(filtered[3], original[3]);
+                for channel in 0..3 {
+                    // The plug-in preserves hidden RGB on fully transparent pixels.
+                    let expected = if original[3] == 0.0 { original[channel] } else { (original[channel] * 2.0).min(1.0) };
+                    assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: full-strength RGB at {x},{y}, channel {channel}");
+                    largest_change = largest_change.max((expected - original[channel]).abs());
+                }
+            }
+        }
+        assert!(largest_change > 4.0 * tolerance, "{depth}: the reference must exercise a visible RGB change");
+    }
+}
+
 #[test]
 fn skin_smooth_smart_rerender_checks_profile_before_using_cached_stages() {
     use photocraft_cms::builtin::Builtin;
