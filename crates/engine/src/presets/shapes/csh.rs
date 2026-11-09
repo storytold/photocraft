@@ -59,7 +59,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 // renders the stored name, so keep the text after `=`.
                 let shown = photocraft_doc::pattern::display_name(&shape.name);
                 let name = if shown.trim().is_empty() { "Shape".to_owned() } else { shown.to_owned() };
-                items.push(ShapePreset { name, path });
+                // Keep opaque IDs unchanged. An anonymous preset remains usable by name;
+                // repeated IDs are checked against geometry when a filter resolves them.
+                let id = (!shape.id.is_empty()).then_some(shape.id);
+                items.push(ShapePreset { name, path, id });
             }
             let group = group.unwrap_or_else(|| if stem.is_empty() { "Imported Shapes".into() } else { stem });
             Ok((group, items))
