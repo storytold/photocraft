@@ -2228,7 +2228,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let scroll_source = crate::scroll_all_windows::source(app, idx);
     // A glide keeps the drag's choice after Space, Shift or the button is let go; a menu-dismissal
     // press is no pan, so it neither arms the glide nor moves the other views.
-    let glide_scroll_all = crate::scroll_all_windows::glide_choice(&ctx, flick_id.with("scroll-all"), hand_drag && !stroke_dismissal && !menu_dismiss_press, scroll_all);
+    let glide_scroll_all =
+        crate::scroll_all_windows::glide_choice(&ctx, flick_id.with("scroll-all"), hand_drag && !stroke_dismissal && !menu_dismiss_press, scroll_all);
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_drag && !stroke_dismissal && !menu_dismiss_press, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
         let before = view.center;
