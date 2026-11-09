@@ -366,7 +366,7 @@ fn a_committed_stroke_repaints_a_gradient_overlay_over_the_whole_layer() {
     let c = app.committed_stroke.as_ref().expect("the commit took the live stroke's pixels");
     assert_eq!(c.revision, st.revision);
     // A cache that showed the live stroke's last step.
-    let missed = crate::canvas::damage_since(app, idx, (st.revision - 1, c.last_key()), (st.revision, 0), 0, st.last_damage).unwrap();
+    let missed = crate::canvas::damage_since(app, idx, (st.revision - 1, c.last_key()), (st.revision, 0), 0, (st.damage_from(), st.last_damage)).unwrap();
     assert!(missed.contains(25, 25), "the gradient around the first stroke is repainted: {missed:?}");
 }
 
