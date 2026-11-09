@@ -48,7 +48,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("adobe-assets", Class::Standalone),
     // Pen tablet input (the one isolated `unsafe` helper: AppKit interop on macOS).
     ("tablet", Class::Standalone),
-    // Windows Explorer PSD thumbnail provider (COM server DLL; the second isolated `unsafe` crate).
+    // Windows Explorer PSD/PSB/PhotoCraft thumbnail provider (COM server DLL; the second isolated `unsafe` crate).
     ("shell", Class::Standalone),
     ("doc", Class::Layer(1)),
     ("ops", Class::Layer(2)),

@@ -5,21 +5,26 @@ use crate::psd::Extent;
 const MAX_PREFIX: usize = 16 * 1024 * 1024;
 const MAX_PNG: usize = 4 * 1024 * 1024;
 
+/// Reads a little-endian `u16` at `at`, or `None` when out of range.
 fn u16_at(b: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_le_bytes(b.get(at..at.checked_add(2)?)?.try_into().ok()?))
 }
+/// Reads a little-endian `u32` at `at`, or `None` when out of range.
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at.checked_add(4)?)?.try_into().ok()?))
 }
 
-/// Locate the thumbnail in the native writer's manifest-first ZIP layout. Repacked/deflated
-/// archives and ZIP64 deliberately fall back to an icon rather than decompressing arbitrary data.
+/// The thumbnail's byte range and CRC in the ZIP prefix.
 struct Thumbnail {
     start: usize,
     end: usize,
     crc: u32,
 }
 
+/// Locates the thumbnail in the manifest-first ZIP layout, or reports how much prefix is needed.
+///
+/// Repacked/deflated archives and ZIP64 deliberately fall back to an icon rather than
+/// decompressing arbitrary data.
 fn locate(head: &[u8]) -> Option<(Extent, Option<Thumbnail>)> {
     let mut at = 0usize;
     for entry in 0..4 {
@@ -67,10 +72,12 @@ fn locate(head: &[u8]) -> Option<(Extent, Option<Thumbnail>)> {
     None
 }
 
+/// How much of the file's start is needed to read the thumbnail entry.
 pub fn thumbnail_extent(head: &[u8]) -> Option<Extent> {
     locate(head).map(|(extent, _)| extent)
 }
 
+/// Returns validated `thumb.png` bytes borrowed from `head`.
 pub fn find_thumbnail_png(head: &[u8]) -> Option<&[u8]> {
     let (_, Some(Thumbnail { start, end, crc })) = locate(head)? else {
         return None;
@@ -89,6 +96,7 @@ pub fn find_thumbnail_png(head: &[u8]) -> Option<&[u8]> {
     Some(png)
 }
 
+/// CRC-32 (IEEE) of `bytes`, as stored in ZIP entries.
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = !0u32;
     for &b in bytes {

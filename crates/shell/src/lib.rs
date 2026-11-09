@@ -23,4 +23,4 @@ mod registration;
 mod windows_thumbnail;
 
 #[cfg(target_os = "windows")]
-pub use registration::{enable_explorer_thumbnails, ensure_explorer_thumbnails};
+pub use registration::{enable_explorer_thumbnails, ensure_explorer_thumbnails, with_registration_lock};

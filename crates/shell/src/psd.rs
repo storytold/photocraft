@@ -316,4 +316,14 @@ mod tests {
         huge[26..30].copy_from_slice(&u32::MAX.to_be_bytes());
         assert!(matches!(resources_extent(&huge), None | Some(Extent::NeedAtLeast(_))));
     }
+
+    #[test]
+    fn thumbnail_before_a_huge_resource_section_is_found_in_a_capped_prefix() {
+        let jpeg = jpeg(160, 90);
+        let mut psd = sample(&jpeg);
+        let declared: u32 = 20 * 1024 * 1024;
+        psd[30..34].copy_from_slice(&declared.to_be_bytes());
+        assert_eq!(resources_extent(&psd), Some(Extent::Known(34 + declared as usize)));
+        assert_eq!(find_thumbnail_jpeg(&psd), Some(jpeg.as_slice()));
+    }
 }

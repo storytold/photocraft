@@ -9,7 +9,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS, WAIT_ABANDONED, WAIT_OBJECT_0};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW, GetModuleHandleExW,
 };
@@ -17,9 +17,10 @@ use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyValueW,
     RegDeleteTreeW, RegGetValueW, RegSetValueExW,
 };
+use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
 use windows_sys::Win32::UI::Shell::{ASSOCSTR_PROGID, AssocQueryStringW, SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
 
-/// CLSID of the PhotoCraft PSD thumbnail provider.
+/// CLSID of the PhotoCraft PSD/PSB/PhotoCraft thumbnail provider.
 pub const CLSID_STR: &str = "{8D6B2D5C-3F41-4B7A-9C0E-5A17E2B94D63}";
 
 /// CLSID registry values are case-insensitive, even when returned as strings.
@@ -28,13 +29,16 @@ fn is_our_clsid(value: &str) -> bool {
 }
 const EXTENSIONS: [&str; 3] = [".psd", ".psb", ".pcraft"];
 const THUMBNAIL_IID: &str = "{E357FCCD-A995-4576-B01F-234630154E96}";
+/// Registry path under HKCR/HKCU `Software\Classes` for the thumbnail handler of `ext`.
 fn handler_key(ext: &str) -> String {
     format!(r"{ext}\ShellEx\{THUMBNAIL_IID}")
 }
+/// Per-user form of [`handler_key`], under `HKEY_CURRENT_USER\Software\Classes`.
 fn user_handler_key(ext: &str) -> String {
     format!(r"Software\Classes\{}", handler_key(ext))
 }
 // Keep the original PSD backup location, including when upgrading the PSD-only provider.
+/// Location of saved previous handler and badge state for `ext`.
 fn state_key(ext: &str) -> String {
     if ext == ".psd" { class_key() } else { format!(r"{}\Formats\{ext}", class_key()) }
 }
@@ -67,6 +71,40 @@ pub fn enable_explorer_thumbnails(enable: bool, show_logo: bool) -> Result<(), S
     } else {
         unregister()
     }
+}
+
+/// Runs `f` under a per-user, cross-process lock for registry changes.
+///
+/// If the lock cannot be created or acquired within five seconds, `f` still runs.
+pub fn with_registration_lock<T>(f: impl FnOnce() -> T) -> T {
+    struct LockGuard {
+        handle: windows_sys::Win32::Foundation::HANDLE,
+        held: bool,
+    }
+
+    impl Drop for LockGuard {
+        fn drop(&mut self) {
+            // SAFETY: the handle was returned by CreateMutexW and is closed exactly once.
+            unsafe {
+                if self.held {
+                    ReleaseMutex(self.handle);
+                }
+                CloseHandle(self.handle);
+            }
+        }
+    }
+
+    let name = wide(r"Local\PhotoCraft.ExplorerThumbnails");
+    // SAFETY: `name` is NUL-terminated and remains alive for the call.
+    let handle = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
+    if handle.is_null() {
+        return f();
+    }
+
+    // SAFETY: `handle` is a live mutex handle returned by CreateMutexW.
+    let held = matches!(unsafe { WaitForSingleObject(handle, 5000) }, WAIT_OBJECT_0 | WAIT_ABANDONED);
+    let _guard = LockGuard { handle, held };
+    f()
 }
 
 /// The default-on behaviour at startup: registers the thumbnails unless another program already
@@ -117,6 +155,7 @@ pub(crate) fn register(dll: &Path, show_logo: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Registers the COM class and takes over `ext`'s thumbnail handler, remembering the previous one.
 fn register_extension(dll: &Path, show_logo: bool, ext: &str) -> Result<(), String> {
     let class_key = class_key();
     set_value(&class_key, None, FRIENDLY_NAME)?;
@@ -137,19 +176,22 @@ fn register_extension(dll: &Path, show_logo: bool, ext: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// Removes the `.psd` association (only when it is ours), the badge setting and the COM class.
+/// Removes the thumbnail association of every extension (only where it is ours), the badge
+/// settings and the COM class.
+///
+/// Every extension is attempted even when one fails, and the first error is returned; the class
+/// key is deleted only when all of them succeeded.
 ///
 /// The association comes first: it is what makes Explorer load the provider, so a failure to put the
 /// cosmetic badge setting back must not leave the provider enabled. When only the badge restore
 /// fails, the class key (which remembers what to restore) is kept and the error is returned, so a
 /// later call can finish the job.
 pub(crate) fn unregister() -> Result<(), String> {
-    for ext in EXTENSIONS {
-        unregister_extension(ext)?;
-    }
+    for_each_keep_going(EXTENSIONS, unregister_extension)?;
     delete_tree(&class_key())
 }
 
+/// Removes `ext`'s association if it is ours, restoring the previous handler and badge setting.
 fn unregister_extension(ext: &str) -> Result<(), String> {
     let class_key = state_key(ext);
     let ours = read_default(HKEY_CURRENT_USER, &user_handler_key(ext)).as_deref().is_some_and(is_our_clsid);
@@ -172,6 +214,17 @@ fn unregister_extension(ext: &str) -> Result<(), String> {
         notify_shell();
     }
     result
+}
+
+/// Runs `step` for every item and returns the first error, if any.
+fn for_each_keep_going<T>(items: impl IntoIterator<Item = T>, mut step: impl FnMut(T) -> Result<(), String>) -> Result<(), String> {
+    let mut first_error = None;
+    for item in items {
+        if let Err(error) = step(item) {
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 /// The key that holds the badge setting: the file type (ProgID) Windows resolves for `.psd`, whose
@@ -362,7 +415,25 @@ fn notify_shell() {
 
 #[cfg(test)]
 mod tests {
-    use super::{CLSID_STR, is_our_clsid};
+    use super::{CLSID_STR, for_each_keep_going, is_our_clsid};
+
+    #[test]
+    fn a_failing_step_does_not_skip_the_rest_and_the_first_error_wins() {
+        let mut seen = Vec::new();
+        let result = for_each_keep_going([".psd", ".psb", ".pcraft"], |ext| {
+            seen.push(ext);
+            if ext == ".pcraft" {
+                Err("last".into())
+            } else if ext == ".psd" {
+                Err("first".into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(seen, [".psd", ".psb", ".pcraft"]);
+        assert_eq!(result, Err("first".to_string()));
+        assert_eq!(for_each_keep_going([1, 2], |_| Ok(())), Ok(()));
+    }
 
     #[test]
     fn every_extension_has_its_own_handler_and_backup() {

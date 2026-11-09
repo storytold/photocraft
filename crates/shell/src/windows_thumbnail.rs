@@ -50,7 +50,7 @@ use windows_sys::core::{GUID, HRESULT};
 use crate::psd;
 use crate::registration::{self};
 
-/// CLSID of the PhotoCraft PSD thumbnail provider (same value as `registration::CLSID_STR`).
+/// CLSID of the PhotoCraft PSD/PSB/PhotoCraft thumbnail provider (same value as `registration::CLSID_STR`).
 const CLSID: GUID = GUID::from_u128(0x8D6B2D5C_3F41_4B7A_9C0E_5A17E2B94D63);
 
 /// Never read more than this from the start of a file: its image resources have to fit.
@@ -277,10 +277,9 @@ unsafe fn read_prefix(stream: *mut c_void) -> Option<Vec<u8>> {
             // Enough to see the header: now the exact amount the image resources need.
             let (psd::Extent::Known(end) | psd::Extent::NeedAtLeast(end)) =
                 if out.starts_with(b"PK\x03\x04") { crate::pcraft::thumbnail_extent(&out)? } else { psd::resources_extent(&out)? };
-            if end > MAX_PREFIX_BYTES {
-                return None;
-            }
-            want = end;
+            // The thumbnail can precede large XMP blocks, so parse a capped prefix instead of
+            // rejecting the whole file when the resource section extends beyond the read limit.
+            want = end.min(MAX_PREFIX_BYTES);
         }
     }
     Some(out)
@@ -517,7 +516,9 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
 /// `regsvr32 /u` entry point: removes the registration.
 #[unsafe(no_mangle)]
 pub extern "system" fn DllUnregisterServer() -> HRESULT {
-    guard(|| match registration::unregister() {
+    // Under the same cross-process lock as the app's registration changes, so `regsvr32 /u` from
+    // the MSI cannot interleave with a running instance.
+    guard(|| match registration::with_registration_lock(registration::unregister) {
         Ok(()) => S_OK,
         Err(_) => E_FAIL,
     })

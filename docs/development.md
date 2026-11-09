@@ -720,7 +720,7 @@ files are automatically removed on Windows; CUPS needs none.
 
 ### Extended document thumbnails
 
-The integration branch also registers `.psb` and `.pcraft`. Photoshop-compatible PSD/PSB resource 1036 is read irrespective of the application that saved it. Native `.pcraft` files use the existing 256 px `thumb.png`, emitted directly after `manifest.json` in a STORE ZIP. The provider bounds its prefix read to 16 MiB and the PNG to 4 MiB/2048 px per side, validates the ZIP payload CRC, and never decodes document layers. Repacked/deflated native bundles, oversized manifests and files without embedded previews fall back to the icon. PNG transparency is composited onto white by GDI+.
+The same provider also registers `.psb` and `.pcraft`. Photoshop-compatible PSD/PSB resource 1036 is read irrespective of the application that saved it. Native `.pcraft` files use the existing 256 px `thumb.png`, emitted directly after `manifest.json` in a STORE ZIP. The provider bounds its prefix read to 16 MiB and the PNG to 4 MiB/2048 px per side, validates the ZIP payload CRC, and never decodes document layers. Repacked/deflated native bundles, oversized manifests and files without embedded previews fall back to the icon. PNG transparency is composited onto white by GDI+.
 
 Registration and saved previous handlers are separate for all three extensions. Automatic startup preserves other programs' handlers; an explicit preference change may replace them. Turning the feature off restores each previous per-user handler. Portable/custom-config runs do not register handlers. Re-save older files with Image Previews enabled and allow Explorer to refresh its thumbnail cache.
 

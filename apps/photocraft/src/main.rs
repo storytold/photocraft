@@ -39,7 +39,7 @@ mod caption_style;
 mod control_server;
 mod crash_guard;
 mod cursor;
-// Windows: PSD thumbnails in File Explorer (the photocraft-shell DLL), toggled in the preferences.
+// Windows: PSD/PSB/PhotoCraft thumbnails in File Explorer (the photocraft-shell DLL), toggled in the preferences.
 #[cfg(target_os = "windows")]
 mod explorer_thumbnails;
 mod file_dialog_probe;
