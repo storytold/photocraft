@@ -376,6 +376,12 @@ fn paint_color_glyphs(
     let keep_range = |v: f32| if format.sample == SampleType::F32 && v.is_finite() { v } else { v.clamp(0.0, 1.0) };
     for g in &layout.glyphs {
         let (Some(st), Some(face)) = (layout.styles.get(g.style as usize), layout.faces.get(g.face as usize)) else { continue };
+        // A glyph the text colour's opacity hides paints nothing; walking it would only spend the
+        // budget the visible text needs (as the plain passes skip it, `visible_color_passes`).
+        let opacity = st.color.alpha.clamp(0.0, 1.0);
+        if opacity.is_nan() || opacity <= 0.0 {
+            continue;
+        }
         let Ok(font) = skrifa::FontRef::from_index(face.font.data.as_ref(), face.font.index) else { continue };
         let coords: Vec<NormalizedCoord> = face.coords.iter().map(|&c| NormalizedCoord::from_bits(c)).collect();
         let Some(color) = color_glyph(&font, GlyphId::new(g.id), &coords) else { continue };
@@ -398,6 +404,9 @@ fn paint_color_glyphs(
         let palettes = font.color_palettes();
         let palette = palettes.get(0);
         let [r, gr, bl] = st.color.to_rgb();
+        // Pixels in the text colour alone keep its own components, as plain glyphs do (a CMYK
+        // black stays K only instead of coming back from sRGB as a four-colour black).
+        let native = (format.mode != ColorMode::Rgb).then(|| color_in(format, &st.color));
         let outline = |shape: Shape, m: &Xform, s: &mut Coverage| shape_into(&font, &coords, shape, unit.mul(m), &to_window, bend, s);
         let ink = Ink { palette: palette.as_ref().map_or(&[][..], |p| p.colors()), foreground: [r, gr, bl, 1.0] };
         let mut painter = Painter::new(ww, wh, outline, to_window.mul(&unit), ink, antialias, limits);
@@ -406,13 +415,17 @@ fn paint_color_glyphs(
         }
         // Compositing the window into the text is one more pass over it.
         limits.work = painter.work_left().checked_sub((ww as u64).checked_mul(wh as u64)?)?;
-        let opacity = st.color.alpha.clamp(0.0, 1.0);
         for (i, s) in painter.finish()?.iter().enumerate() {
             let a = s[3] * opacity;
             let o = ((wy0 + i / ww) * w + wx0 + i % ww) * stride;
             let (true, Some(px)) = (a > 0.0, acc.get_mut(o..o + stride)) else { continue };
-            let rgb = [s[0] / s[3], s[1] / s[3], s[2] / s[3]].map(keep_range);
-            let comps = if format.mode == ColorMode::Rgb { rgb.to_vec() } else { photocraft_raster::from_rgba(&opaque, [rgb[0], rgb[1], rgb[2], 1.0]) };
+            let straight = [s[0] / s[3], s[1] / s[3], s[2] / s[3]];
+            let rgb = straight.map(keep_range);
+            let comps = match &native {
+                None => rgb.to_vec(),
+                Some(c) if straight.iter().zip([r, gr, bl]).all(|(v, f)| (v - f).abs() < 1e-5) => c.iter().copied().map(keep_range).collect(),
+                Some(_) => photocraft_raster::from_rgba(&opaque, [rgb[0], rgb[1], rgb[2], 1.0]),
+            };
             let keep = 1.0 - a;
             for (p, c) in px.iter_mut().zip(&comps).take(n) {
                 *p = c * a + *p * keep;

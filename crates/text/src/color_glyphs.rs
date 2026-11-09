@@ -164,6 +164,16 @@ impl Paint {
                 let c = px * px + py * py - r0 * r0;
                 let ok = |t: f32| t.is_finite() && r0 + t * dr >= 0.0;
                 if a.abs() < 1e-6 {
+                    if b == 0.0 && c == 0.0 {
+                        // Every circle passes through p (the shared point of touching circles),
+                        // so the largest t wins: where shrinking circles reach radius 0, or the
+                        // end of the colour line when they grow. Equal circles paint nothing.
+                        return match dr.partial_cmp(&0.0) {
+                            Some(std::cmp::Ordering::Less) => Some(line.at(-r0 / dr)),
+                            Some(std::cmp::Ordering::Greater) => line.stops.last().map(|s| s.1),
+                            _ => None,
+                        };
+                    }
                     let t = c / (2.0 * b);
                     return ok(t).then(|| line.at(t));
                 }
@@ -372,7 +382,9 @@ impl<'a, F: FnMut(Shape, &Xform, &mut Coverage)> Painter<'a, F> {
         if self.clips.len() > base { self.clips.last() } else { None }
     }
 
-    /// Rasterises `shape` into a clip mask, intersected with the clip around it in this layer.
+    /// Rasterises `shape` into a clip mask, intersected with the clip around it in this layer:
+    /// the smaller coverage per pixel, so a glyph clipped by its own outline again (or by a box
+    /// around it) keeps its anti-aliased edge instead of squaring it.
     fn push_shape(&mut self, shape: Shape) {
         // A mask is kept at one f32 per pixel; while it is built, the coverage accumulator and
         // the finished vector are live side by side.
@@ -396,7 +408,7 @@ impl<'a, F: FnMut(Shape, &Xform, &mut Coverage)> Painter<'a, F> {
         let mode = self.antialias;
         c.iter_mut().for_each(|v| *v = shape_antialias_coverage(*v, mode));
         if let Some(outer) = self.layer_clip() {
-            c.iter_mut().zip(outer).for_each(|(v, o)| *v *= o);
+            c.iter_mut().zip(outer).for_each(|(v, o)| *v = v.min(*o));
         }
         self.clips.push(c);
     }
@@ -818,6 +830,35 @@ mod tests {
         let p = Paint::Radial { c0: (0.0, 0.0), r0: 1.0, cd: (4.0, 0.0), dr: 0.0, line: line(Extend::Pad) };
         assert_eq!(p.at(2.0, 50.0), None);
         assert!(p.at(2.0, 0.5).is_some());
+    }
+
+    #[test]
+    fn touching_circles_paint_their_shared_point() {
+        // Circles grow from radius 0 at the origin to the right, all through the origin: there
+        // the largest t is unbounded, the end of the colour line (it used to divide 0 by 0).
+        let p = Paint::Radial { c0: (0.0, 0.0), r0: 0.0, cd: (1.0, 0.0), dr: 1.0, line: line(Extend::Pad) };
+        assert_eq!(p.at(0.0, 0.0), Some(BLUE));
+        assert!(p.at(1.0, 0.0).is_some());
+        // Shrinking circles, all through (2, 0): the largest t is where the radius reaches 0.
+        let p = Paint::Radial { c0: (0.0, 0.0), r0: 2.0, cd: (2.0, 0.0), dr: -2.0, line: line(Extend::Pad) };
+        assert_eq!(p.at(2.0, 0.0), Some(BLUE));
+        // Equal circles in the same place: no cone, nothing painted, not even on the circle.
+        let p = Paint::Radial { c0: (0.0, 0.0), r0: 1.0, cd: (0.0, 0.0), dr: 0.0, line: line(Extend::Pad) };
+        assert_eq!(p.at(1.0, 0.0), None);
+    }
+
+    #[test]
+    fn a_glyph_clipped_by_its_own_outline_keeps_its_edge() {
+        // The same half-covered outline twice: the edge stays half opaque, not a quarter.
+        let mut p =
+            Painter::new(1, 1, |_: Shape, m: &Xform, c: &mut Coverage| rect_to(c, m, 0.0, 0.0, 0.5, 1.0), Xform::IDENTITY, ink(), AntiAlias::Smooth, PLENTY);
+        p.push_clip_glyph(GlyphId::new(1));
+        p.push_clip_glyph(GlyphId::new(1));
+        p.fill(solid(0));
+        p.pop_clip();
+        p.pop_clip();
+        let a = p.finish().unwrap_or_default().first().map_or(0.0, |c| c[3]);
+        assert!((a - 0.5).abs() < 1e-5, "{a}");
     }
 
     #[test]

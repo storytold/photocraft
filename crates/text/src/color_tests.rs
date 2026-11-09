@@ -305,3 +305,90 @@ fn colour_glyphs_keep_extended_text_colours_in_float_documents() {
     let int = pixels(&layout_with("H", font, color), PixelFormat::RGBA8);
     assert!(int.iter().filter(|p| p[3] > 0.01).all(|p| p[0] == 1.0 && p[1] == 0.0));
 }
+
+/// A COLR v1 table whose `base` paints `paint` (format bytes, offsets relative to each table).
+fn colr_v1(base: u16, paint: &[u8]) -> Vec<u8> {
+    let mut t = Vec::new();
+    for v in [1u16, 0] {
+        t.extend_from_slice(&v.to_be_bytes());
+    }
+    t.extend_from_slice(&0u32.to_be_bytes());
+    t.extend_from_slice(&0u32.to_be_bytes());
+    t.extend_from_slice(&0u16.to_be_bytes());
+    t.extend_from_slice(&34u32.to_be_bytes());
+    for _ in 0..4 {
+        t.extend_from_slice(&0u32.to_be_bytes());
+    }
+    t.extend_from_slice(&1u32.to_be_bytes());
+    t.extend_from_slice(&base.to_be_bytes());
+    t.extend_from_slice(&10u32.to_be_bytes());
+    t.extend_from_slice(paint);
+    t
+}
+
+/// `depth` PaintComposites, each with the next one as both its source and its backdrop, over
+/// `base` filled with palette entry `entry`: 2^depth fills from a few dozen bytes.
+fn fan_out(base: u16, depth: usize, entry: u16) -> Vec<u8> {
+    let mut p = Vec::new();
+    for _ in 0..depth {
+        // PaintComposite (format 32): source 8 bytes in, SrcOver, backdrop 8 bytes in.
+        p.extend_from_slice(&[32, 0, 0, 8, 3, 0, 0, 8]);
+    }
+    // PaintGlyph (format 10) of `base`, then PaintSolid (format 2), alpha 1.
+    p.extend_from_slice(&[10, 0, 0, 6]);
+    p.extend_from_slice(&base.to_be_bytes());
+    p.push(2);
+    p.extend_from_slice(&entry.to_be_bytes());
+    p.extend_from_slice(&(1i16 << 14).to_be_bytes());
+    p
+}
+
+#[test]
+fn a_colour_glyph_that_fans_out_draws_its_outline() {
+    // A small graph that reuses both children of every composite would be walked 65536 times
+    // over (for the bounds, the ink and the paint); skrifa stops after a fixed number of paints
+    // and the glyph keeps its plain outline, as with a cycle.
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let h = gid(inter, 'H');
+    let font = with_tables(inter, &[(*b"COLR", colr_v1(h, &fan_out(h, 16, 0))), (*b"CPAL", cpal(&[RED]))]);
+    let green = Color::rgb(0.0, 1.0, 0.0);
+    let px = pixels(&layout_with("H", font, green), PixelFormat::RGBA8);
+    let solid: Vec<_> = px.iter().filter(|p| p[3] > 0.99).collect();
+    assert!(solid.len() > 100, "{} pixels", solid.len());
+    assert!(solid.iter().all(|p| p[1] > 0.98 && p[0] < 0.02), "{:?}", solid.first());
+}
+
+#[test]
+fn a_hidden_colour_glyph_does_not_spend_the_visible_texts_budget() {
+    // A huge colour H at opacity 0 whose paint alone would overrun the pixel budget, then a
+    // plain I in green: the H paints nothing anyway, and the I still shows.
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let h = gid(inter, 'H');
+    let font = with_tables(inter, &[(*b"COLR", colr_v1(h, &fan_out(h, 11, 0))), (*b"CPAL", cpal(&[RED]))]);
+    let style = |color| CharStyle { size_pt: 600.0, color, ..Default::default() };
+    let runs = vec![TextRun { len: 1, style: style(Color::TRANSPARENT) }, TextRun { len: 1, style: style(Color::rgb(0.0, 1.0, 0.0)) }];
+    let layer = TextLayer { text: "HI".into(), font_family: "Inter".into(), runs, ..Default::default() };
+    let mut l = TextEngine::new().layout(&layer, 72.0);
+    for f in &mut l.faces {
+        f.font = parley::FontData::new(parley::fontique::Blob::new(Arc::new(font.clone())), 0);
+    }
+    let px = pixels(&l, PixelFormat::RGBA8);
+    let green = px.iter().filter(|p| p[3] > 0.99 && p[1] > 0.98 && p[0] < 0.02).count();
+    assert!(green > 1000, "{green} green pixels");
+    assert!(px.iter().all(|p| p[3] < 0.01 || p[0] < 0.02), "the hidden H showed");
+}
+
+#[test]
+fn colour_glyph_layers_in_the_text_colour_keep_its_cmyk_components() {
+    // In a CMYK document a K-only text colour stays K only in a 0xFFFF layer, as in plain text,
+    // instead of coming back from sRGB as a four-colour black.
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let h = gid(inter, 'H');
+    let font = with_tables(inter, &[(*b"COLR", colr_v0(h, &[(h, 0xFFFF)])), (*b"CPAL", cpal(&[RED]))]);
+    let k = Color { mode: ColorMode::Cmyk, c: [0.0, 0.0, 0.0, 1.0], alpha: 1.0 };
+    let r = rasterize(&layout_with("H", font, k), &Affine::IDENTITY, PixelFormat::CMYKA8, AntiAlias::Sharp);
+    let data = r.surface.read_region(r.rect);
+    let solid: Vec<&[f32; 5]> = data.as_chunks::<5>().0.iter().filter(|p| p[4] > 0.99).collect();
+    assert!(solid.len() > 100, "{} pixels", solid.len());
+    assert!(solid.iter().all(|p| p[0] < 0.01 && p[1] < 0.01 && p[2] < 0.01 && p[3] > 0.99), "{:?}", solid.first());
+}
