@@ -1878,6 +1878,110 @@ fn checkboxes_show_a_pressed_state_from_their_label() {
 }
 
 #[test]
+fn spacing_row_edits_route_only_the_changed_fields_through_the_brush_command() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let mut h = harness(0, 0);
+    h.state_mut().run("tools.setBrush", json!({"brush": {"spacing": 0.427, "spacingEnabled": false}})).unwrap();
+    h.run_steps(2);
+    let journal = h.state().session.journal.len();
+    let spacing = h.state().session.tools.brush.spacing;
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
+    checkbox.click();
+    h.run_steps(2);
+    assert!(h.state().session.tools.brush.spacing_enabled);
+    assert_eq!(h.state().session.tools.brush.spacing, spacing);
+    assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacingEnabled": true}));
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(43.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacing": 0.44_f32}));
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
+    checkbox.click();
+    h.run_steps(2);
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacingEnabled": false}));
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(44.0)).unwrap();
+    assert!(field.accesskit_node().is_disabled());
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(h.state().session.journal.len(), journal + 3, "disabled input adds no command");
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
+    checkbox.click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(h.state().session.journal.len(), journal + 4);
+}
+
+#[test]
+fn scatter_header_edits_route_to_the_correct_brush_block_and_disabled_sections_ignore_input() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    for section in [2, 4] {
+        let block = if section == 2 { "scattering" } else { "dualBrush" };
+        let mut h = harness(0, section);
+        let mut initial = json!({});
+        initial[block] = if section == 2 {
+            json!({"enabled": true, "bothAxes": false, "scatter": {"jitter": 2.137, "control": "penPressure"}, "count": 5})
+        } else {
+            json!({"enabled": true, "bothAxes": false, "scatter": 2.137, "count": 7})
+        };
+        h.state_mut().run("tools.setBrush", json!({"brush": initial})).unwrap();
+        h.run_steps(3);
+        let journal = h.state().session.journal.len();
+        let before = h.state().session.tools.brush.clone();
+        h.get_by_label("Both Axes").click();
+        h.run_steps(2);
+        let mut expected = json!({});
+        expected[block] = json!({"bothAxes": true});
+        assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+        assert_eq!(last_journal(h.state()).unwrap().1["brush"], expected);
+        let mut after = before;
+        if section == 2 {
+            after.scattering.both_axes = true;
+        } else {
+            after.dual_brush.both_axes = true;
+        }
+        assert_eq!(h.state().session.tools.brush, after, "toggle changes only the matching axis flag");
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(214.0)).unwrap();
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(2);
+        expected[block] = if section == 2 { json!({"scatter": {"jitter": 2.15_f32}}) } else { json!({"scatter": 2.15_f32}) };
+        assert_eq!(last_journal(h.state()).unwrap().1["brush"], expected);
+        if section == 2 {
+            after.scattering.scatter.jitter = 2.15;
+        } else {
+            after.dual_brush.scatter = 2.15;
+        }
+        assert_eq!(h.state().session.tools.brush, after);
+        assert_eq!(h.state().session.journal.len(), journal + 2);
+        let mut off = json!({});
+        off[block] = json!({"enabled": false});
+        h.state_mut().run("tools.setBrush", json!({"brush": off})).unwrap();
+        h.run_steps(2);
+        let before = h.state().session.tools.brush.clone();
+        let journal = h.state().session.journal.len();
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(215.0)).unwrap();
+        assert!(field.accesskit_node().is_disabled());
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.event(egui::Event::Text("999".into()));
+        h.key_press(egui::Key::Enter);
+        h.get_by_label("Both Axes").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.tools.brush, before, "the disabled header retains both values");
+        assert_eq!(h.state().session.journal.len(), journal, "disabled edits add no command");
+    }
+}
+
+#[test]
 fn tip_geometry_edits_and_arrow_drag_route_only_changed_fields_through_the_brush_command() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::{NodeT, Queryable};

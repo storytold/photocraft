@@ -1,7 +1,7 @@
 use super::commit::{cancel, commit, start_steps};
 #[cfg(test)]
 use super::draw::texture_quad;
-use super::preview::{Above, preview_image};
+use super::preview::{Above, AbovePlan, preview_image};
 use super::{
     Arc, BezierMesh, CAS_ONLY_SCALES, Color32, DocId, Document, Follow, Homography, LOCKED, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Steps,
     TransformPreview, TransformSession, Warp, WarpStyle, corners, default_interpolation, json,
@@ -10,6 +10,9 @@ use super::{
 /// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
 /// layer mask, alpha channel or Quick Mask.
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if app.transform_preparing.is_some() {
+        return Err("Free Transform is still preparing the layer".into());
+    }
     if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
         return begin_path(app, ctx, params, path);
     }
@@ -71,53 +74,191 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     // egui reports the renderer's limit in the app; offscreen harnesses only through the device.
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
     // The layers covering the moving pixels draw over them instead of under them.
-    let above = Above::new(ctx, format!("transform-{session}-above"), &doc, id, max_side);
-    above.hide_in(&mut pd.layers);
+    let plan = AbovePlan::new(&doc, id);
+    plan.hide_in(&mut pd.layers);
+    // What the preview document changes: the moving layer and the covering layers it leaves
+    // out, so the canvas redraws only there (`transform_tool::damage`), not the whole document.
+    let canvas = doc.bounds();
+    let area = std::iter::once(id)
+        .chain(plan.ids.iter().copied())
+        .map(|l| doc.layer(l).map_or(Some(canvas), |l| photocraft_compose::change_bounds(l, canvas)))
+        .try_fold(photocraft_geom::Rect::EMPTY, |r, b| {
+            let b = b?;
+            Some(if r.is_empty() {
+                b
+            } else if b.is_empty() {
+                r
+            } else {
+                r.union(&b)
+            })
+        });
     // A style is drawn again from the pixels as the box moves them, so they are read without it.
     // Not for the selected part of a layer: its style belongs to that part and the rest together.
     let styled = lifted.is_none() && photocraft_compose::effects::has_effects(layer);
-    let (image, uv) = preview_image(&doc, id, lifted.as_ref(), b, max_side, styled);
-    let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
-    app.transform_preview = Some(TransformPreview {
-        session,
-        doc: if frame_only { doc.clone() } else { Arc::new(pd) },
-        texture,
-        opacity: layer.opacity * layer.fill_opacity,
-        above: (!frame_only).then_some(above),
-        styled: (styled && !frame_only).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
-        follow: Some(Follow { revision, hidden: if lifted.is_none() && !frame_only { vec![id] } else { Vec::new() }, selected: selected_now(app) }),
-        committing: None,
-        gesture: None,
-        warp_drag: None,
-        split_tool: None,
-        split_pointer: None,
-        split_placing: false,
-        split_quick: false,
-        steps: Steps::default(),
-        tool: app.ui.tool,
-        path: None,
-        content_aware: None,
-        several: None,
-    });
-    app.ui.transform = Some(TransformSession {
-        session,
-        layer: id.0,
-        rect,
-        quad: corners(rect),
-        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: default_interpolation(app).into(),
-        warp: None,
-        selection: false,
-        target: frame_only.then(|| json!({"frame": id.0})),
-        path: None,
-        made: None,
-        mode: Default::default(),
-        content_aware: None,
-        skew_v: 0.0,
-        layers: Vec::new(),
-    });
-    start_steps(app);
-    Ok(())
+    let opacity = layer.opacity * layer.fill_opacity;
+    let whole = lifted.is_none();
+    // Reading the moving pixels and compositing the layers over them is the heavy part: hundreds
+    // of megapixels on a large canvas. Done on the UI thread, the window stopped answering for
+    // long enough that a Wayland compositor dropped it, so a large layer prepares as a job
+    // (with the jobs window's progress) and the box opens when it lands (`on_prepared`).
+    let big = plan_pixels(&plan).saturating_add(b.size().area()) >= PREPARE_IN_BACKGROUND_PX;
+    let source = doc.clone();
+    let doc_id = doc.id;
+    let finish_ctx = ctx.clone();
+    let selected = selected_now(app);
+    let finish = move |app: &mut PhotocraftApp, prepared: Prepared| -> Result<(), String> {
+        let ctx = &finish_ctx;
+        // The document is locked while preparing; still, never open a box on another state (or
+        // in another tab). The revision is read again: the job itself may have moved it on.
+        let Some(revision) = app.session.active().filter(|st| Arc::ptr_eq(&st.doc, &doc) && st.active_layer == Some(id)).map(|st| st.revision) else {
+            return Err("Free Transform: the document changed while it was preparing".into());
+        };
+        // Nor over a layer the Layers panel no longer has selected.
+        if selected_now(app) != selected {
+            return Err("Free Transform: the layer selection changed while it was preparing".into());
+        }
+        let Prepared { plan, above, image: (image, uv) } = prepared;
+        let above = Above::from_plan(ctx, format!("transform-{session}-above"), max_side, plan, above);
+        app.transform_area = area.map(|area| super::OpenArea { doc: doc.id, key: super::preview_key(session), revision, area });
+        let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
+        app.transform_preview = Some(TransformPreview {
+            session,
+            doc: if frame_only { doc.clone() } else { Arc::new(pd) },
+            texture,
+            opacity,
+            above: (!frame_only).then_some(above),
+            styled: (styled && !frame_only).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
+            follow: Some(Follow { revision, hidden: if whole && !frame_only { vec![id] } else { Vec::new() }, selected: selected_now(app) }),
+            committing: None,
+            gesture: None,
+            warp_drag: None,
+            split_tool: None,
+            split_pointer: None,
+            split_placing: false,
+            split_quick: false,
+            steps: Steps::default(),
+            tool: app.ui.tool,
+            path: None,
+            content_aware: None,
+            several: None,
+        });
+        app.ui.transform = Some(TransformSession {
+            session,
+            layer: id.0,
+            rect,
+            quad: corners(rect),
+            pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
+            interpolation: default_interpolation(app).into(),
+            warp: None,
+            selection: false,
+            target: frame_only.then(|| json!({"frame": id.0})),
+            path: None,
+            made: None,
+            mode: Default::default(),
+            content_aware: None,
+            skew_v: 0.0,
+            layers: Vec::new(),
+        });
+        start_steps(app);
+        Ok(())
+    };
+    // `canceled` is asked between the two images, so a canceled job doesn't make the second.
+    let prepare = move |canceled: &dyn Fn() -> bool| -> Option<Prepared> {
+        let above = plan.image(max_side);
+        if canceled() {
+            return None;
+        }
+        Some(Prepared { above, image: preview_image(&source, id, lifted.as_ref(), b, max_side, styled), plan })
+    };
+    if !(big && app.background_jobs) {
+        let prepared = prepare(&|| false).ok_or("Free Transform: nothing was prepared")?;
+        return finish(app, prepared);
+    }
+    // The worker leaves its result here; the job's own result is only the jobs window's.
+    let out = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let slot = out.clone();
+    let started = app
+        .session
+        .start_job(
+            "edit.freeTransform",
+            json!({}),
+            tl!("Preparing Free Transform"),
+            true,
+            move |job| {
+                job.progress(0.0, "Reading the layer");
+                let prepared = prepare(&|| job.cancelled());
+                job.check()?;
+                if let Ok(mut s) = slot.lock() {
+                    *s = prepared;
+                }
+                Ok(())
+            },
+            |_, ()| Ok(json!({})),
+        )
+        .map_err(|e| e.to_string())?;
+    match started {
+        photocraft_engine::jobs::Started::Job(job) => {
+            app.transform_preparing = Some(super::Preparing { job, out, finish: Box::new(finish), layer: (doc_id, id), made: None });
+            Ok(())
+        }
+        // Ran inline after all (a session without workers).
+        photocraft_engine::jobs::Started::Done(_) => {
+            let prepared = out.lock().ok().and_then(|mut o| o.take()).ok_or("Free Transform: nothing was prepared")?;
+            finish(app, prepared)
+        }
+    }
+}
+
+/// A layer box whose moving and covering pixels add up to this many prepares in the background
+/// (16 MP: about a 4096 × 4096 layer, a few tenths of a second to read and composite).
+const PREPARE_IN_BACKGROUND_PX: u64 = 16 << 20;
+
+/// What a box's preview images are made from and the images themselves: the worker's result.
+pub(crate) struct Prepared {
+    plan: AbovePlan,
+    above: Option<(egui::ColorImage, [f32; 2])>,
+    image: (egui::ColorImage, [f32; 2]),
+}
+
+fn plan_pixels(plan: &AbovePlan) -> u64 {
+    plan.area()
+}
+
+/// The preparing job of a large layer's box ended: open the box, or drop it (canceled, failed).
+/// `true` when the event was that job's.
+pub(crate) fn on_prepared(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) -> bool {
+    if app.transform_preparing.as_ref().is_none_or(|p| p.job != e.id) {
+        return false;
+    }
+    let Some(p) = app.transform_preparing.take() else { return true };
+    let (made, (document, layer)) = (p.made, p.layer);
+    let prepared = if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) { p.out.lock().ok().and_then(|mut o| o.take()) } else { None };
+    let opened = match prepared.map(|prepared| (p.finish)(app, prepared)) {
+        Some(Ok(())) => true,
+        Some(Err(err)) => {
+            crate::notices::error(app, err);
+            false
+        }
+        None => false,
+    };
+    // As `mark_made` would have done at once, had the box opened inline.
+    if let Some(made) = made {
+        if opened && let Some(t) = app.ui.transform.as_mut() {
+            t.made = Some(made);
+        } else {
+            take_back_made(app, document, layer);
+        }
+    }
+    true
+}
+
+/// Mark the box `begin` opened, or the one it is still preparing, as made for `made`.
+fn mark_made(app: &mut PhotocraftApp, made: MadeLayer) {
+    if let Some(t) = app.ui.transform.as_mut() {
+        t.made = Some(made);
+    } else if let Some(p) = app.transform_preparing.as_mut() {
+        p.made = Some(made);
+    }
 }
 
 pub(super) fn interpolation_preference(interpolation: &str) -> Option<photocraft_engine::prefs::Interpolation> {
@@ -287,9 +428,7 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
         }
         return Err(e);
     }
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.made = Some(MadeLayer::Copy);
-    }
+    mark_made(app, MadeLayer::Copy);
     Ok(())
 }
 
@@ -301,9 +440,7 @@ pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), 
         return Ok(());
     }
     begin(app, ctx)?;
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.made = Some(MadeLayer::Place);
-    }
+    mark_made(app, MadeLayer::Place);
     Ok(())
 }
 

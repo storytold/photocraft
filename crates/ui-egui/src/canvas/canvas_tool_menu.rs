@@ -365,8 +365,8 @@ pub fn cycle_canvas_color(app: &mut PhotocraftApp, backward: bool) -> Result<(),
     app.run("prefs.set", json!({"values": {"interface.canvasColor": name}})).map(|_| ())
 }
 
-/// The Zoom and Hand tools' context menu: the fixed zooms of the View menu (plus the Hand tool's
-/// Fill Screen), then the zoom steps last, in Photoshop's order (#6005).
+/// The Zoom tool's context menu: the fixed zooms of the View menu (plus Fill Screen), then the
+/// zoom steps last, in Photoshop's order (#6005).
 pub const VIEW_MENU: &[Row] = &[
     Some(("Fit on Screen", "view.fitOnScreen")),
     Some(("Fill Screen", FILL_SCREEN)),
@@ -376,6 +376,14 @@ pub const VIEW_MENU: &[Row] = &[
     None,
     Some(("Zoom In", "view.zoomIn")),
     Some(("Zoom Out", "view.zoomOut")),
+];
+
+/// The Hand tool's context menu: only the fixed zooms, as measured in the reference application (#12022).
+pub const HAND_MENU: &[Row] = &[
+    Some(("Fit on Screen", "view.fitOnScreen")),
+    Some(("100%", "view.actualPixels")),
+    Some(("200%", "view.twoHundredPercent")),
+    Some(("Print Size", "view.printSize")),
 ];
 
 /// The view menu's Fill Screen row. Photoshop has no View menu command for it, so the menu sets
@@ -394,8 +402,8 @@ pub const SELECTION_MENU: &[Row] = &[
     Some(("Save Selection…", "select.saveSelection")),
     Some(("Make Work Path…", "select.toWorkPath")),
     None,
-    Some(("Layer via Copy", "layer.new.layerViaCopy")),
-    Some(("Layer via Cut", "layer.new.layerViaCut")),
+    Some(("Layer Via Copy", "layer.new.layerViaCopy")),
+    Some(("Layer Via Cut", "layer.new.layerViaCut")),
     Some(("New Layer…", "layer.new.layer")),
     None,
     Some(("Free Transform", "edit.freeTransform")),
@@ -558,7 +566,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     } else if menu.transform {
         TRANSFORM_MENU
     } else if menu.anchor.is_some() {
-        VIEW_MENU
+        if menu.tool == Tool::Hand { HAND_MENU } else { VIEW_MENU }
     } else if menu.text {
         TYPE_EDIT_MENU
     } else if menu.type_layer {
@@ -992,8 +1000,8 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
     true
 }
 
-/// A view menu row. Zoom In and Zoom Out step about the right-clicked point, as a Zoom tool click
-/// does; the other rows run their View menu command.
+/// A view menu row. The non-temporary Zoom tool's steps keep the view centre unless clicked-point
+/// centring is enabled. Other view-tool cases retain their pressed-point anchoring.
 fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
     let i = app.session.active_index().ok_or("no document")?;
     if command == FILL_SCREEN {
@@ -1011,6 +1019,9 @@ fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, co
     }
     let (Some((zoom0, c)), Some(d)) = (before, menu.anchor) else { return Ok(()) };
     let center_on_point = app.session.prefs().tools.zoom_clicked_point_to_center;
+    if menu.tool == Tool::Zoom && app.ui.tool == Tool::Zoom && app.ui.spring.is_none() && crate::hold_keys::held_tool(app, ctx).is_none() && !center_on_point {
+        return Ok(());
+    }
     let Some(v) = app.ui.views.get_mut(i) else { return Ok(()) };
     let d = [d[0] as f32, d[1] as f32];
     // The view scales about the centre, so the point keeps its screen position when its offset
@@ -1301,8 +1312,27 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         choose(app, ctx, &command);
     } else if crate::canvas_popup::outside_pressed(ctx, id, area.response.rect) {
         app.ui.canvas_tool_menu = None;
+        // A fast click can press and release in one frame: the canvas input above already
+        // suppressed its action through the open-menu hit test, and the deferred release clear
+        // (in `canvas_view`, below the click handling) would never fire after this frame. Don't
+        // arm the flag then, or it would eat the next ordinary click (CodeRabbit, #9841).
+        app.ui.canvas_tool_menu_dismissed = !ctx.input(|i| i.pointer.any_released());
     }
+}
+
+/// Returns the menu rect if the canvas tool menu is currently open, for hit-testing
+/// outside-click dismissal in the click handler.
+pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rect> {
+    let menu = app.ui.canvas_tool_menu.as_ref()?;
+    let id = menu_id();
+    let screen = ctx.content_rect();
+    let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(210.0, 140.0), |r| r.size());
+    let pos = egui::pos2(menu.pos[0].min(screen.right() - size.x).max(screen.left()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top()));
+    Some(egui::Rect::from_min_size(pos, size))
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hand_menu_entries_tests;
