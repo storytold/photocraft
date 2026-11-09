@@ -440,6 +440,15 @@ fn shape_header_paints_correct_icon() {
         if kind == "shape" {
             let image = crate::icons::rasterize_svg(icon, 15, 15).expect("shape icon rasterized");
             assert!(image.pixels.iter().any(|pixel| pixel.a() > 0), "shape icon must have nontransparent pixels");
+
+            // Native SVG dimensions keep anchor centres clear of antialiased edges.
+            let anchors = crate::icons::rasterize_svg(icon, 24, 24).expect("shape anchors rasterized");
+            for (x, y) in [(6, 6), (18, 6), (6, 18), (18, 18)] {
+                assert_eq!(anchors[(x, y)].a(), 0, "anchor at ({x}, {y}) must be hollow");
+                for (edge_x, edge_y) in [(x - 2, y), (x + 2, y), (x, y - 2), (x, y + 2)] {
+                    assert!(anchors[(edge_x, edge_y)].a() > 0, "anchor at ({x}, {y}) must have four visible sides");
+                }
+            }
         }
     }
 }
