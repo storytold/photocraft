@@ -59,7 +59,10 @@ pub fn warp_bounds(doc: &Document, layer: &Layer) -> Rect {
     crate::transform_cmds::transform_bounds(doc, layer)
 }
 
-/// A smart object's stored warp expressed in document space (for editing), if it has one.
+/// A smart object's stored warp expressed in document space (for editing), if it has one. A
+/// cylinder under a placement that only scales and moves stays a cylinder, with its seven values
+/// in document space, so Warp mode shows its own handles; under any other placement it is its
+/// mesh, a custom warp, like every other stored warp.
 pub fn smart_warp_doc_space(layer: &Layer) -> Option<Warp> {
     let LayerContent::Smart(sm) = &layer.content else { return None };
     sm.warp.as_ref().map(|w| placed_warp(sm, w))
@@ -116,22 +119,46 @@ pub fn smart_unplaced_contents(doc: &Document, layer: &Layer) -> Option<(Surface
 }
 
 /// Where Free Transform's box opens on a smart object: its contents' corners as the placement
-/// puts them, rotated, skewed or distorted, as Photoshop keeps them (#3649). `None` for other
-/// layers, or when the source can't be read.
+/// puts them, rotated, skewed or distorted, as Photoshop keeps them (#3649). A warped smart object
+/// is framed by its warp's control points instead (the box the reference stores as its corners),
+/// so the box takes in what the warp bends out. `None` for other layers, or when the source can't
+/// be read.
 pub fn smart_box(doc: &Document, layer: &Layer) -> Option<[[f64; 2]; 4]> {
     let LayerContent::Smart(sm) = &layer.content else { return None };
-    let b = crate::smart_cmds::source_box(doc, sm)?;
+    let source = crate::smart_cmds::source_box(doc, sm)?;
+    let b = match sm.warp.as_ref().filter(|w| !w.is_identity()) {
+        Some(w) => {
+            let pts = w.to_mesh(1, 1).points;
+            let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            if b.iter().all(|v| v.is_finite()) && b[2] > b[0] && b[3] > b[1] { b } else { source }
+        }
+        None => source,
+    };
     let t = crate::smart_cmds::placement(sm);
     let corners = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(|p| hom_apply(&t, p));
     corners.iter().flatten().all(|v| v.is_finite()).then_some(corners)
 }
 
+/// Whether a smart object's placement only scales (positively) and moves: its warp is then exactly
+/// the same in document space, where Warp mode edits it (with the cylinder editor's handles,
+/// #4112); a rotated, skewed, flipped or distorted one is edited in its contents' space (#8927).
+pub fn smart_placement_axis_aligned(layer: &Layer) -> bool {
+    let LayerContent::Smart(sm) = &layer.content else { return false };
+    let m = crate::smart_cmds::placement(sm).0;
+    m[8] != 0.0 && m[1] == 0.0 && m[3] == 0.0 && m[6] == 0.0 && m[7] == 0.0 && m[0] / m[8] > 0.0 && m[4] / m[8] > 0.0
+}
+
 /// `w`, in the smart object's source space, mapped through its placement.
 fn placed_warp(sm: &photocraft_doc::SmartObject, w: &Warp) -> Warp {
     let t = crate::smart_cmds::placement(sm);
-    let mesh = w.to_mesh(1, 1).map_points(|p| hom_apply(&t, p));
     let corners = [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(&t, p));
     let b = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    // A cylinder under a placement that only scales and moves stays a cylinder, so Warp mode
+    // shows its own handles; under any other placement it is its mesh, a custom warp.
+    if let Some(c) = cylinder_through(w, &t, b) {
+        return c;
+    }
+    let mesh = w.to_mesh(1, 1).map_points(|p| hom_apply(&t, p));
     Warp::custom(mesh, b)
 }
 
@@ -193,41 +220,60 @@ const CYLINDER_VALUES: &str =
     "a cylinder needs `values`: seven numbers [left, bottom, right, top, top depth, bottom depth, wrap 0..1], the right silhouette right of the left one";
 const CYLINDER_SHAPE: &str = "a cylinder is horizontal, with no hDistort or vDistort";
 
-/// A document-space cylinder `w` stored on a smart object, whose placement's inverse is `inv` and
-/// whose warp box `w.bounds` lands on `sb` in source space. A placement that only scales and
-/// moves keeps it a cylinder (written to PSD as one): the silhouettes and edges map, and the
-/// ellipses' depth, in units of the half axis, follows the change of aspect. Otherwise (rotated,
-/// skewed, flipped, in perspective) it becomes its mesh, a custom warp.
-fn cylinder_in_source(w: &Warp, inv: &Homography, sb: [f64; 4]) -> Option<Warp> {
-    let m = inv.0;
+/// The cylinder `w` carried through `h` over the box `b` (its warp box's image), when `h` only
+/// scales and moves: the silhouettes and edges map, and the ellipses' depth, in units of the half
+/// axis, follows the change of aspect. `None` for any other map (rotated, skewed, flipped, in
+/// perspective), or when `w` is not a cylinder: the mesh is the only way to carry it then.
+fn cylinder_through(w: &Warp, h: &Homography, b: [f64; 4]) -> Option<Warp> {
+    let m = h.0;
     let axis_aligned = m[8] != 0.0 && m[1] == 0.0 && m[3] == 0.0 && m[6] == 0.0 && m[7] == 0.0;
     let (sx, sy) = (m[0] / m[8], m[4] / m[8]);
-    if axis_aligned && sx > 0.0 && sy > 0.0 && w.values.len() == 7 {
-        let v = &w.values;
-        let (x, y) = (|v: f64| sx * v + m[2] / m[8], |v: f64| sy * v + m[5] / m[8]);
-        let k = sy / sx;
-        if let Some(c) = Warp::cylinder(&[x(v[0]), y(v[1]), x(v[2]), y(v[3]), v[4] * k, v[5] * k, v[6]], sb) {
-            return Some(c);
-        }
+    if w.style != WarpStyle::Cylinder || !axis_aligned || !(sx > 0.0 && sy > 0.0) {
+        return None;
+    }
+    let v: [f64; 7] = w.values.as_slice().try_into().ok()?;
+    let (x, y) = (|v: f64| sx * v + m[2] / m[8], |v: f64| sy * v + m[5] / m[8]);
+    let k = sy / sx;
+    Warp::cylinder(&[x(v[0]), y(v[1]), x(v[2]), y(v[3]), v[4] * k, v[5] * k, v[6]], b)
+}
+
+/// A document-space cylinder `w` stored on a smart object, whose placement's inverse is `inv` and
+/// whose warp box `w.bounds` lands on `sb` in source space. A placement that only scales and
+/// moves keeps it a cylinder (written to PSD as one, [`cylinder_through`]). Otherwise (rotated,
+/// skewed, flipped, in perspective) it becomes its mesh, a custom warp.
+fn cylinder_in_source(w: &Warp, inv: &Homography, sb: [f64; 4]) -> Option<Warp> {
+    if let Some(c) = cylinder_through(w, inv, sb) {
+        return Some(c);
     }
     let mesh = w.to_mesh(1, 1).map_points(|p| hom_apply(inv, p));
     Some(Warp::custom(mesh, sb))
 }
 
-/// Whether the custom warp `w` is exactly what Warp mode shows for `layer`'s stored cylinder
-/// ([`smart_warp_doc_space`]: its mesh over the same box), so committing it untouched changes
-/// nothing. Stored as a custom warp instead, the cylinder would be lost, as a PSD keeps it only
-/// as `warpCylinder` (#4112).
+/// Whether `w` is exactly what Warp mode shows for `layer`'s stored cylinder
+/// ([`smart_warp_doc_space`]): the same cylinder over the same box, or its mesh (what a rotated
+/// placement shows, and what Warp mode showed before it had a cylinder editor), so committing it
+/// untouched changes nothing. Stored as a custom warp instead, the cylinder would be lost, as a
+/// PSD keeps it only as `warpCylinder` (#4112).
 fn is_stored_cylinder(layer: &Layer, w: &Warp) -> bool {
     let LayerContent::Smart(sm) = &layer.content else { return false };
-    if w.style != WarpStyle::Custom || sm.warp.as_ref().is_none_or(|s| s.style != WarpStyle::Cylinder) {
+    if sm.warp.as_ref().is_none_or(|s| s.style != WarpStyle::Cylinder) {
         return false;
     }
-    let (Some(shown), Some(m)) = (smart_warp_doc_space(layer), w.mesh.as_ref()) else { return false };
+    let Some(shown) = smart_warp_doc_space(layer) else { return false };
     let Some(o) = shown.mesh.as_ref() else { return false };
     let tol = 1e-6 * (1.0 + o.points.iter().flatten().chain(&shown.bounds).fold(0.0f64, |a, v| a.max(v.abs())));
     let near = |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol);
-    o.us == m.us && o.vs == m.vs && near(&shown.bounds, &w.bounds) && near(o.points.as_flattened(), m.points.as_flattened())
+    // A cylinder's depths and wrap are dimensionless: at a large document offset the coordinate
+    // tolerance would pass off a change of wrap as none.
+    let near_values =
+        |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).enumerate().all(|(i, (x, y))| (x - y).abs() <= if i < 4 { tol } else { 1e-9 });
+    match (w.style, w.mesh.as_ref()) {
+        (WarpStyle::Cylinder, _) => shown.style == WarpStyle::Cylinder && near(&shown.bounds, &w.bounds) && near_values(&shown.values, &w.values),
+        (WarpStyle::Custom, Some(m)) => {
+            o.us == m.us && o.vs == m.vs && near(&shown.bounds, &w.bounds) && near(o.points.as_flattened(), m.points.as_flattened())
+        }
+        _ => false,
+    }
 }
 
 /// A Background is turned into a normal layer by the caller first

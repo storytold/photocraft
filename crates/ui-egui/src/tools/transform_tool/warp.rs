@@ -1,4 +1,5 @@
 use super::begin::warps_type;
+use super::cylinder::cylinder_pointer;
 use super::{BezierMesh, CursorIcon, PhotocraftApp, SplitTool, ToolEvent, ViewXform, Warp, WarpDrag, WarpStyle, json};
 
 /// An anchor or a handle on a section line. The inner control points of a patch are not shown.
@@ -126,7 +127,7 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
     if warps_type(app) {
         return;
     }
-    // A smart object's warp is in its contents' space (#8927): the pointer is taken there.
+    // A smart object's warp may be in its contents' space (#8927): the pointer is taken there.
     let (ev, tol, unit) = match app.ui.transform.as_ref().filter(|t| t.warp_place.is_some()) {
         Some(t) => {
             let scale = t.warp_scale_at(event_point(ev));
@@ -134,6 +135,10 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
         }
         None => (ev, tol, 1.0),
     };
+    // A cylinder has its own handles, and no splits (#4112).
+    if app.ui.transform.as_ref().and_then(|t| t.warp.as_ref()).is_some_and(|w| w.style == WarpStyle::Cylinder) {
+        return cylinder_pointer(app, ev, tol);
+    }
     if split_gesture(app, ev, mods) {
         return;
     }

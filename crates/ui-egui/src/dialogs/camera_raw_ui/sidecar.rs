@@ -130,9 +130,9 @@ fn existing_sidecar_is_ours(_: &str) -> Option<bool> {
 
 /// Save Settings…: the dialog's settings as a Camera Raw `.xmp` settings file.
 pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     let bytes = photocraft_io::camera_raw_xmp::save(&d.params).into_bytes();
-    app.pick_save("Camera Raw Settings.xmp", move |app, path| {
+    app.pick_save("RAW Develop Settings.xmp", move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         Ok(json!({"path": path}))
@@ -142,10 +142,10 @@ pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Load Settings…: applies a Camera Raw `.xmp` settings file's supported settings over the
 /// dialog's; the status bar names how many were not supported.
 pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
-    app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     app.pick_file_bytes_filtered(&["xmp"], |app, name, bytes| {
         let file = crate::file_open::display_name(&name);
-        let d = app.camera_raw.as_mut().ok_or(tl!("Camera Raw isn't open"))?;
+        let d = app.camera_raw.as_mut().ok_or(tl!("RAW Develop isn't open"))?;
         let mut next = d.params.clone();
         let mut report = photocraft_io::camera_raw_xmp::load(&mut next, &bytes).map_err(|e| format!("{file}: {e}"))?;
         // A crop only applies as a raw file opens; the filter has none, so it is not supported.
@@ -164,9 +164,9 @@ pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
         }
         app.ui.status_error = false;
         app.ui.status = if report.ignored.is_empty() {
-            crate::i18n::fmt(tl!("Loaded Camera Raw settings from {file}"), &[("file", &file)])
+            crate::i18n::fmt(tl!("Loaded RAW Develop settings from {file}"), &[("file", &file)])
         } else {
-            let template = "Loaded Camera Raw settings from {file} ({n} not supported)";
+            let template = "Loaded RAW Develop settings from {file} ({n} not supported)";
             crate::i18n::fmt(tl!(template), &[("file", &file), ("n", &report.ignored.len().to_string())])
         };
         Ok(json!({"applied": report.applied, "ignored": report.ignored}))
