@@ -244,20 +244,30 @@ pub fn try_from_global_blocks(doc: &Document) -> Result<Vec<Pattern>, String> {
 /// [`repair_legacy_blocks`]), else the raw pattern blocks replaced by one written from the
 /// document (at the first one's position).
 pub fn export_global_blocks(doc: &Document) -> Result<Vec<photocraft_doc::PsdGlobalBlock>, String> {
+    export_global_blocks_with_limit(doc, photocraft_doc::pattern::MAX_WORKING_BYTES)
+}
+
+/// The strict exporter with an explicit dense-plane allowance, so tests can exercise shared
+/// admission using tiny patterns instead of allocating the production-sized budget.
+pub(crate) fn export_global_blocks_with_limit(doc: &Document, limit: u64) -> Result<Vec<photocraft_doc::PsdGlobalBlock>, String> {
     let mut warnings = Vec::new();
-    let blocks = export_global_blocks_with_warnings(doc, &mut warnings);
+    let blocks = export_global_blocks_with_warnings_limit(doc, &mut warnings, limit);
     if warnings.is_empty() { Ok(blocks) } else { Err(warnings.join("; ")) }
 }
 
 /// Export patterns through the PSD model's warning contract: unsafe dense replacements
 /// are omitted with their names and reasons; unchanged raw pattern blocks stay verbatim.
 pub fn export_global_blocks_with_warnings(doc: &Document, warnings: &mut Vec<String>) -> Vec<photocraft_doc::PsdGlobalBlock> {
+    export_global_blocks_with_warnings_limit(doc, warnings, photocraft_doc::pattern::MAX_WORKING_BYTES)
+}
+
+fn export_global_blocks_with_warnings_limit(doc: &Document, warnings: &mut Vec<String>, limit: u64) -> Vec<photocraft_doc::PsdGlobalBlock> {
     let raw = &doc.metadata.psd_global_blocks;
     if from_global_blocks(doc) == doc.patterns {
         return repair_legacy_blocks(raw);
     }
     let key = block_key(psd_depth(doc.depth));
-    let mut remaining = photocraft_doc::pattern::MAX_WORKING_BYTES;
+    let mut remaining = limit;
     let patterns: Vec<PsdPattern> = doc
         .patterns
         .iter()
@@ -448,6 +458,27 @@ mod unpaintable_tests {
 #[cfg(test)]
 mod allocation_tests {
     use super::*;
+
+    #[test]
+    fn shared_small_export_budget_is_an_error_without_warnings_and_explicit_with_warnings() {
+        let mut doc = Document::new("Patterns", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        for name in ["First", "Second"] {
+            let mut surface = Surface::new(PixelFormat::RGBA8);
+            surface.fill_rect(Rect::new(0, 0, 2, 2), &[1., 0., 0., 1.]);
+            doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, surface });
+        }
+        let before = doc.clone();
+        let error = export_global_blocks_with_limit(&doc, 16).unwrap_err();
+        assert!(error.contains("Second") && error.contains("memory budget"), "{error}");
+        let mut warnings = Vec::new();
+        let blocks = export_global_blocks_with_warnings_limit(&doc, &mut warnings, 16);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("Second") && warnings[0].contains("omitted from PSD/PSB"), "{warnings:?}");
+        let mut restored = doc.clone();
+        restored.metadata.psd_global_blocks = blocks;
+        assert_eq!(from_global_blocks(&restored), vec![doc.patterns[0].clone()]);
+        assert_eq!(doc, before);
+    }
 
     #[test]
     /// Preserve oversized native pattern declarations while refusing dense exports or reporting named PSD omissions.
