@@ -1099,7 +1099,9 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         other => return Err(bad(CMD, format!("unknown source `{other}` (auto|selection|ruler|count)"))),
     };
     // Numbered only once the rows exist, so a failed measurement does not use up a label.
-    let label = format!("Measurement {}", s.analysis.next_measurement + 1);
+    // A count's row is "Count N" (#11775); the number is the shared one.
+    let word = if source == "count" { "Count" } else { "Measurement" };
+    let label = format!("{word} {}", s.analysis.next_measurement + 1);
     let now = p.get("dateTime").and_then(Value::as_str).map(str::to_string).unwrap_or_else(now_iso);
     let factor = d.measurement.scale.factor();
     let mut rows: Vec<Map<String, Value>> = Vec::new();
