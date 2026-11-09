@@ -21,8 +21,8 @@ pub const MAX_SIDE: u32 = 160;
 pub const HEADER_LEN: usize = 28;
 
 /// The 1036 resource for `doc`: its composite reduced to at most [`MAX_SIDE`] with its spot inks
-/// printed over it, converted to sRGB through the document's profile, matted over white and
-/// JPEG-compressed.
+/// printed over it (with the Spot dot gain, as Photoshop saves it), converted to sRGB through the
+/// document's profile, matted over white and JPEG-compressed.
 pub(crate) fn resource(doc: &Document) -> Result<ImageResource, IoError> {
     let mut buf = photocraft_compose::multichannel::thumbnail_with_inks(doc, MAX_SIDE);
     let (w, h) = (buf.rect.width(), buf.rect.height());

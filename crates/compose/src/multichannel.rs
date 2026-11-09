@@ -12,7 +12,8 @@
 //!
 //! Like Photoshop, the ink preview adds the Spot working space's dot gain (Edit › Color Settings ›
 //! Spot, [`set_spot_dot_gain`]): a 50 % dot shows as 50 % plus the gain, as it prints on press.
-//! The saved thumbnail ([`thumbnail_with_inks`]) prints the inks as stored.
+//! The saved thumbnail ([`thumbnail_with_inks`]) adds it too, as Photoshop bakes the gain set at
+//! save time into a document's preview.
 
 //! This is a screen approximation, not a press proof: stored RGB alternate colours are taken as
 //! sRGB and, like Lab/gray alternates, converted into an RGB document's own profile; CMYK
@@ -195,8 +196,8 @@ pub(crate) fn backdrop(doc: &Document, rect: Rect) -> Buffer {
 }
 
 /// [`crate::thumbnail_buffer`] of an RGB or CMYK document with its spot channels printed over it
-/// (matted over white, so opaque, where there is ink): the document's preview, as the reference
-/// editor saves it.
+/// (matted over white, so opaque, where there is ink) with the Spot dot gain ([`spot_dot_gain`]):
+/// the document's preview, as the reference editor saves it.
 /// Unchanged when no spot channel has ink.
 pub fn thumbnail_with_inks(doc: &Document, max_side: u32) -> Buffer {
     let mut buf = crate::thumbnail_buffer(doc, max_side);
@@ -218,8 +219,9 @@ pub fn thumbnail_with_inks(doc: &Document, max_side: u32) -> Buffer {
             *p = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0];
         }
     }
+    let gain = spot_dot_gain();
     for (ink, vals) in inks {
-        ink.apply(&mut buf.px, vals);
+        ink.apply_with_gain(&mut buf.px, vals, gain);
     }
     buf
 }
