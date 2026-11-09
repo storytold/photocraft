@@ -4,7 +4,7 @@
 //! Colours are compared in the surface's own colour channels (RGB, CMYK, Gray, Lab… at any depth),
 //! so nothing is converted through RGB; only alpha changes.
 
-use photocraft_color::{SampleType, read_sample, write_sample};
+use photocraft_color::{ColorMode, SampleType, read_sample, write_sample};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba};
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,15 @@ pub struct BgEraseSettings {
     pub foreground: [f32; 4],
     /// Straight RGBA background swatch (for [`Sampling::BackgroundSwatch`]).
     pub background: [f32; 4],
+    /// The inks `foreground` was picked as (its sRGB colour, the CMYK values), for a CMYK target:
+    /// Protect Foreground Color compares against exactly these, since an sRGB round trip does not
+    /// give them back (#12352). Only valid while `foreground` is that sRGB colour.
+    #[serde(skip)]
+    pub foreground_cmyk: Option<([f32; 3], [f32; 4])>,
+    /// The inks `background` was picked as, like [`Self::foreground_cmyk`] (for
+    /// [`Sampling::BackgroundSwatch`]).
+    #[serde(skip)]
+    pub background_cmyk: Option<([f32; 3], [f32; 4])>,
 }
 
 impl Default for BgEraseSettings {
@@ -44,6 +53,8 @@ impl Default for BgEraseSettings {
             protect_foreground: false,
             foreground: [0.0, 0.0, 0.0, 1.0],
             background: [1.0; 4],
+            foreground_cmyk: None,
+            background_cmyk: None,
         }
     }
 }
@@ -121,9 +132,18 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
     let a = alpha_index(&fmt)?;
     let nc = a;
     let tol = if bs.tolerance.is_finite() { bs.tolerance.clamp(0.0, 1.0) } else { 0.0 };
-    let native = |c: [f32; 4]| -> Vec<f32> { from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec() };
-    let swatch = native(bs.background);
-    let fg: Vec<f32> = native(bs.foreground).into_iter().map(|v| at_sample_precision(fmt.sample, v)).collect();
+    // A colour picked as CMYK is compared by its inks in a CMYK target (#12352), at the precision
+    // the document stores them.
+    let native = |c: [f32; 4], picked: Option<([f32; 3], [f32; 4])>| -> Vec<f32> {
+        match picked {
+            Some((rgb, inks)) if fmt.mode == ColorMode::Cmyk && rgb == [c[0], c[1], c[2]] => {
+                inks.iter().take(nc).map(|&v| at_sample_precision(fmt.sample, v)).collect()
+            }
+            _ => from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec(),
+        }
+    };
+    let swatch = native(bs.background, bs.background_cmyk);
+    let fg: Vec<f32> = native(bs.foreground, bs.foreground_cmyk).into_iter().map(|v| at_sample_precision(fmt.sample, v)).collect();
     let (sampling, limits, protect_foreground) = (bs.sampling, bs.limits, bs.protect_foreground);
     let float = fmt.sample == SampleType::F32;
     let mut once: Option<Option<Vec<f32>>> = None;
@@ -364,6 +384,62 @@ mod tests {
         let bs = BgEraseSettings { sampling: Sampling::Once, tolerance: 0.05, protect_foreground: true, foreground: GREEN, ..Default::default() };
         apply_background_eraser(&mut t, &stroke(&[(20.0, 20.0)]), &bs, None);
         assert_eq!(t, s);
+    }
+
+    #[test]
+    fn cmyk_targets_compare_the_picked_inks() {
+        // #12352: cyan inks whose sRGB stand-in converts back to other inks.
+        const STAND_IN: [f32; 4] = [0.0, 0.68, 0.94, 1.0];
+        let picked = Some(([STAND_IN[0], STAND_IN[1], STAND_IN[2]], [1.0, 0.0, 0.0, 0.0]));
+        let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::U8, true);
+        let mut s = Surface::new(fmt);
+        s.fill_rect(Rect::new(0, 0, 80, 40), &from_rgba(&fmt, [1.0; 4]));
+        s.fill_rect(Rect::new(30, 0, 50, 40), &[1.0, 0.0, 0.0, 0.0, 1.0]);
+        let st = stroke(&[(10.0, 20.0), (70.0, 20.0)]);
+        let base = BgEraseSettings { limits: Limits::Discontiguous, tolerance: 0.01, ..Default::default() };
+        let protect = BgEraseSettings { protect_foreground: true, foreground: STAND_IN, foreground_cmyk: picked, ..base.clone() };
+        let mut t = s.clone();
+        apply_background_eraser(&mut t, &st, &protect, None);
+        assert_eq!(alpha(&t, 40, 20), 1.0, "the picked foreground inks are protected");
+        assert_eq!(alpha(&t, 10, 20), 0.0, "white erased");
+        let swatch = BgEraseSettings { sampling: Sampling::BackgroundSwatch, background: STAND_IN, background_cmyk: picked, ..base.clone() };
+        let mut t = s.clone();
+        apply_background_eraser(&mut t, &st, &swatch, None);
+        assert_eq!(alpha(&t, 40, 20), 0.0, "the picked background inks are erased fully");
+        assert_eq!(alpha(&t, 10, 20), 1.0, "white kept");
+        // Inks picked for another colour, and non-CMYK targets, use the stand-in as before.
+        let stale = BgEraseSettings { background_cmyk: Some(([0.5; 3], [1.0, 0.0, 0.0, 0.0])), ..swatch.clone() };
+        let mut t = s.clone();
+        apply_background_eraser(&mut t, &st, &stale, None);
+        assert_eq!(alpha(&t, 40, 20), 1.0, "stale inks are ignored");
+        let rgb = PixelFormat::RGBA8;
+        let mut r = Surface::new(rgb);
+        r.fill_rect(Rect::new(0, 0, 80, 40), &from_rgba(&rgb, STAND_IN));
+        let (mut with, mut without) = (r.clone(), r.clone());
+        apply_background_eraser(&mut with, &st, &swatch, None);
+        apply_background_eraser(&mut without, &st, &BgEraseSettings { background_cmyk: None, ..swatch }, None);
+        assert_eq!(with, without, "an RGB target ignores the inks");
+    }
+
+    #[test]
+    fn picked_swatch_inks_match_their_stored_levels() {
+        // #12352: typed inks between two 8-bit levels (30% is stored as 77/255) still match the
+        // pixels filled with them, as the foreground already does.
+        const INKS: [f32; 4] = [0.3, 0.0, 0.0, 0.0];
+        const STAND_IN: [f32; 4] = [0.7, 1.0, 1.0, 1.0];
+        let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::U8, true);
+        let mut s = Surface::new(fmt);
+        s.fill_rect(Rect::new(0, 0, 80, 40), &[INKS[0], INKS[1], INKS[2], INKS[3], 1.0]);
+        let bs = BgEraseSettings {
+            sampling: Sampling::BackgroundSwatch,
+            limits: Limits::Discontiguous,
+            tolerance: 0.01,
+            background: STAND_IN,
+            background_cmyk: Some(([STAND_IN[0], STAND_IN[1], STAND_IN[2]], INKS)),
+            ..Default::default()
+        };
+        apply_background_eraser(&mut s, &stroke(&[(10.0, 20.0), (70.0, 20.0)]), &bs, None);
+        assert_eq!(alpha(&s, 40, 20), 0.0, "the stored inks are erased fully");
     }
 
     #[test]

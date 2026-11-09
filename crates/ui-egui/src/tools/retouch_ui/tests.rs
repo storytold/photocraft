@@ -147,7 +147,7 @@ fn clone_stamp_brush_opacity_and_flow_reach_the_painted_pixels() {
     app.ui.clone_source = Some([10.0, 10.0]);
     app.ui.tool_options.clone_sample = "all".into();
     app.run("tools.setBrush", json!({"brush": {"opacity": 0.5, "flow": 0.5}})).unwrap();
-    assert!(finish_stroke(&mut app, Tool::CloneStamp, &[[50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::CloneStamp, &[[50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     let pixel = active(&app).surface().unwrap().rgba(50, 30);
     assert!(pixel[0] > 0.9 && pixel[3] > 0.0 && pixel[3] < 0.5, "partial-opacity, partial-flow red stamp: {pixel:?}");
@@ -224,7 +224,7 @@ fn clone_without_a_source_names_the_platform_modifier() {
     for tool in [Tool::CloneStamp, Tool::Healing] {
         let mut app = app();
         app.ui.tool = tool;
-        assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+        assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
         assert!(app.ui.status_error, "{tool:?}");
         let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
         assert!(app.ui.status.starts_with(want), "{tool:?}: {}", app.ui.status);
@@ -1041,7 +1041,7 @@ fn s_group_is_clone_stamp_then_pattern_stamp() {
 #[test]
 fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
     let mut app = app();
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[20.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[20.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.patternStamp"));
     assert!(app.ui.pattern_stamp_phase.is_some());
@@ -1049,7 +1049,7 @@ fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
     assert!(px[3] > 0.5, "the stamp paints through the brush: {px:?}");
     app.ui.tool_options.pattern_stamp_aligned = false;
     app.ui.pattern_stamp_phase = None;
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[70.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[70.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(app.ui.pattern_stamp_phase.is_none(), "unaligned strokes do not keep phase");
 }
 
@@ -1057,7 +1057,7 @@ fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
 fn pattern_stamp_does_not_require_a_clone_source() {
     let mut app = app();
     assert!(app.ui.clone_source.is_none());
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert!(app.ui.clone_source.is_none());
 }
@@ -1147,7 +1147,7 @@ fn history_brush_opacity_and_flow_reach_the_painted_pixels() {
     app.run("paint.pencil", json!({"points": [[10, 10]], "size": 16, "color": "#00ff00"})).unwrap();
     app.ui.tool = Tool::HistoryBrush;
     app.run("tools.setBrush", json!({"brush": {"opacity": 0.5, "flow": 0.5}})).unwrap();
-    assert!(finish_stroke(&mut app, Tool::HistoryBrush, &[[10.0, 10.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::HistoryBrush, &[[10.0, 10.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     let (id, params) = app.session.journal.last().unwrap();
     assert_eq!(id, "paint.historyBrush");
