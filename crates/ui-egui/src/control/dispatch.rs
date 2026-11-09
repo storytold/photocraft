@@ -614,6 +614,10 @@ fn crop_fill_param(p: &Value) -> std::result::Result<Option<bool>, String> {
 /// keeps a pin and `{"pinned": true}` keeps a dragged position (#10890).
 fn panels_patch(app: &PhotocraftApp, patch: Option<&Value>) -> std::result::Result<Option<Value>, String> {
     let Some(mut patch) = patch.cloned() else { return Ok(None) };
+    // Saved panels read an unknown side as the default; a control request is still refused.
+    if let Some(side) = patch.get("toolbar_side") {
+        serde_json::from_value::<crate::state::ToolbarSide>(side.clone()).map_err(|e| format!("panels.toolbar_side: {e}"))?;
+    }
     if let Some(obj) = patch.as_object_mut()
         && let Some(bar) = obj.get("task_bar")
     {
@@ -725,11 +729,12 @@ impl PanelSet {
         }
     }
 
+    /// Applies the Color panel state and queues the requested end-dock width for the next frame.
     fn apply_color_and_width(&mut self, app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some(v) = self.color_panel.take() {
             app.ui.color_panel = v;
         }
-        // Right dock width in points (clamped to the dock's 250..=520 range), applied next frame.
+        // End dock width in points, clamped to its window-dependent range and applied next frame.
         if let Some(w) = self.dock_width {
             crate::panels::request_dock_width(ctx, w as f32);
         }

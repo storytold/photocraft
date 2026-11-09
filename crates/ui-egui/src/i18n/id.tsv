@@ -3659,6 +3659,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ubah ukuran kanvas otomatis
 	Keep Relative Position During Layer Reordering	Pertahankan posisi relatif saat mengurutkan ulang layer
 	Shrinkwrap Canvas on Save	Kecilkan kanvas sesuai konten saat menyimpan
+	Move Toolbar to the Right	Pindahkan bilah alat ke kanan
+	Move Toolbar to the Left	Pindahkan bilah alat ke kiri
 
 # RAW Develop feature labels
 	RAW Develop	Pengembangan RAW
