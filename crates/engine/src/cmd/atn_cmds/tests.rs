@@ -742,7 +742,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
         ("file.automate.createDroplet", json!({"path": "/d/Sharpen.pcdroplet", "action": "Sharpen", "set": "Tools", "output": "/d/out", "overrideOpen": true})),
-        ("filter.distort.displace", json!({"horizontal":-999,"vertical":999,"fit":"stretch","undefinedAreas":"repeat","mapPath":r"C:\map.psd"})),
+        ("filter.distort.displace", json!({"horizontal":-999,"vertical":999,"fit":"stretch","undefinedAreas":"repeat","mapPath":LOCAL_MAP})),
         ("filter.distort.shear", json!({"points": [[0,0], [0.5,0.25], [1,0]], "undefinedAreas": "repeat"})),
         ("filter.distort.pinch", json!({"amount": -30})),
         ("filter.distort.polarCoordinates", json!({"mode": "polarToRectangular"})),
@@ -5635,6 +5635,17 @@ fn custom_outside_the_commands_range_is_kept_and_refused() {
     }
 }
 
+/// A local absolute map path on this platform: playback may read only such a path.
+#[cfg(windows)]
+const LOCAL_MAP: &str = r"C:\máp.psd";
+#[cfg(not(windows))]
+const LOCAL_MAP: &str = "/máp.psd";
+/// [`LOCAL_MAP`] as a `txtu` path, encoded independently of the production path writer.
+#[cfg(windows)]
+const LOCAL_MAP_WIRE: &[u8] = b"txtu\x22\0\0\0\x0b\0\0\0C\0:\0\\\0m\0\xe1\0p\0.\0p\0s\0d\0\0\0";
+#[cfg(not(windows))]
+const LOCAL_MAP_WIRE: &[u8] = b"txtu\x1e\0\0\0\x09\0\0\0/\0m\0\xe1\0p\0.\0p\0s\0d\0\0\0";
+
 /// The selected-map descriptor measured in a Windows Displace recording.
 fn displace_descriptor(path: D) -> Descriptor {
     desc("null")
@@ -5648,29 +5659,42 @@ fn displace_descriptor(path: D) -> Descriptor {
 /// Preserve the typed path and materialize native defaults when saving sparse steps.
 #[test]
 fn recorded_displace_round_trips_text_event_and_typed_path() {
-    // Synthetic Windows path, encoded independently of the production path writer.
-    let wire = b"txtu\x22\0\0\0\x0b\0\0\0C\0:\0\\\0m\0\xe1\0p\0.\0p\0s\0d\0\0\0";
-    let descriptor = displace_descriptor(D::Path(wire.to_vec()));
+    let descriptor = displace_descriptor(D::Path(LOCAL_MAP_WIRE.to_vec()));
     let data = set_of("Maps", vec![("A", vec![item("displace", "Displace", Some(descriptor.clone()))])]);
     let imported = import(&photocraft_paint::tile::b64_decode(&data).unwrap()).unwrap();
     assert!(imported.unsupported.is_empty());
     let (id, params) = &imported.actions[0].steps[0];
     assert_eq!(id, "filter.distort.displace");
-    assert_eq!(*params, json!({"horizontal":10,"vertical":10,"fit":"stretch","undefinedAreas":"repeat","mapPath":r"C:\máp.psd"}));
+    assert_eq!(*params, json!({"horizontal":10,"vertical":10,"fit":"stretch","undefinedAreas":"repeat","mapPath":LOCAL_MAP}));
     let exported = export_item(id, params, "Maps").unwrap();
     assert_eq!(exported.event, AtnEvent::name("displace"));
     assert_eq!(exported.descriptor, Some(descriptor.clone()));
-    let minimal = json!({"mapPath":r"C:\máp.psd"});
+    let minimal = json!({"mapPath":LOCAL_MAP});
     assert_eq!(export_item(id, &minimal, "Maps").unwrap().descriptor, Some(descriptor.clone()));
     for key in ["horizontal", "vertical", "fit", "undefinedAreas"] {
         let mut sparse = params.clone();
         sparse.as_object_mut().unwrap().remove(key);
         assert_eq!(export_item(id, &sparse, "Maps").unwrap().descriptor, Some(descriptor.clone()), "{key}");
     }
-    let custom = json!({"horizontal":-7,"mapPath":r"C:\máp.psd"});
+    let custom = json!({"horizontal":-7,"mapPath":LOCAL_MAP});
     let mut expected = descriptor;
     expected.items[0].1 = D::Integer(-7);
     assert_eq!(export_item(id, &custom, "Maps").unwrap().descriptor, Some(expected));
+}
+
+/// A shared action file must not make playback open a network share, a device or a path taken
+/// from the working directory: such a map path stays a kept step with its bytes.
+#[test]
+fn displace_map_paths_a_document_may_not_name_stay_kept_steps() {
+    let refused = [r"\\server\share\map.psd", "//server/share/map.psd", r"\\?\UNC\server\share\map.psd", r"\\.\COM1", "file://server/share/map.psd", "map.psd"];
+    let cases: Vec<_> = refused.iter().map(|path| item("displace", "Displace", Some(displace_descriptor(path_value(path))))).collect();
+    let data = set_of("Maps", vec![("A", cases.clone())]);
+    let imported = import(&photocraft_paint::tile::b64_decode(&data).unwrap()).unwrap();
+    assert_eq!(imported.unsupported.len(), cases.len());
+    for ((id, params), expected) in imported.actions[0].steps.iter().zip(cases) {
+        assert_eq!(id, PHOTOSHOP_STEP, "{params}");
+        assert_eq!(export_item(id, params, "Maps").unwrap().descriptor, expected.descriptor);
+    }
 }
 
 /// Keep unmeasured inputs intact and refuse settings that would be changed by export.

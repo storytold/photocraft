@@ -66,6 +66,10 @@ fn displace_params(d: &Descriptor) -> Option<Value> {
     if path.contains('\0') || &path_value(&path) != wire {
         return None;
     }
+    // An action file is shared like a document, and playback reads this path. Map only a path a
+    // document may name: a local absolute file. Others stay kept steps, so playing a downloaded
+    // set never opens a network share (which sends the user's credentials) or a device.
+    crate::doc_path::resolve_in(&path, None).ok()?;
     Some(json!({"horizontal":horizontal,"vertical":vertical,"fit":"stretch","undefinedAreas":"repeat","mapPath":path}))
 }
 

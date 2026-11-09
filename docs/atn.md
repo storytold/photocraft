@@ -1951,7 +1951,7 @@ The TEXT event `displace` with descriptor class `null` maps to `filter.distort.d
 
 The measured Windows recording uses `HrzS` and `VrtS` (32-bit integers, −999 to 999), `DspM.StrF` (stretch to fit), `UndA.RptE` (repeat edge pixels), and `DspF` (`Pth `, a `txtu` header with little-endian length and a NUL-terminated UTF-16LE path). Import preserves the map path as text. Playback opens the map through the native Displace command.
 
-Alias paths, other enum values, and malformed or incomplete descriptors stay as kept Photoshop steps. Export supports the measured path and settings for a pixel target.
+Alias paths, other enum values, and malformed or incomplete descriptors stay as kept Photoshop steps. So does a map path a document may not name (a network share, a device, a URL or a relative path): playing a shared action file never opens it. Export supports the measured path and settings for a pixel target.
 
 ### Group D: The Stylize and Pixelate filters
 
