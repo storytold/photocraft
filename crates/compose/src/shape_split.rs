@@ -62,6 +62,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     (sh.density.to_bits(), sh.feather.to_bits()).hash(&mut h);
     sh.pixel_align_stroke.hash(&mut h);
     sh.psd_raw.is_some().hash(&mut h);
+    sh.psd_coordinate_frame.hash(&mut h);
     if let Some(c) = &sh.cache {
         format!("{:?}{:?}", c.format(), c.default_pixel()).hash(&mut h);
         for (k, t) in c.tiles() {

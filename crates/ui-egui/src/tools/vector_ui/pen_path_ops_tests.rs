@@ -701,3 +701,29 @@ fn make_shape_on_a_resumed_shape_layer_draft_keeps_its_other_subpaths() {
     assert_eq!(after.subpaths[1], before.subpaths[1]);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
 }
+
+#[test]
+fn pixel_align_rejected_pen_edit_preserves_new_layer_preference() {
+    let mut app = app();
+    app.run("shape.create", json!({"rect":[20,20,60,60],"pixelAlignStroke":false})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(id).unwrap().locks.all = true;
+    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.pen_path_op = "combine".into();
+    app.ui.tool_options.pixel_align_stroke = true;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(4);
+    h.get_by_label("Pixel Align Stroke").click();
+    h.run_steps(3);
+    assert!(h.state().ui.status_error);
+    assert!(h.state().ui.tool_options.pixel_align_stroke);
+    assert_eq!(h.get_by_label("Pixel Align Stroke").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+}

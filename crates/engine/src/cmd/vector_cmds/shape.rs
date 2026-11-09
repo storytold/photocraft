@@ -204,6 +204,10 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
 
     sh.path = sh.path.transform(a);
     let [m0, m1, m2, m3, tx, ty] = a.m;
+    // Only integer translations preserve the original quantization error per axis.
+    if m0 != 1.0 || m1 != 0.0 || m2 != 0.0 || m3 != 1.0 || !tx.is_finite() || !ty.is_finite() || tx != tx.round() || ty != ty.round() {
+        sh.psd_coordinate_frame = None;
+    }
     let axis_aligned = m1.abs() < 1e-12 && m2.abs() < 1e-12 && m0 > 0.0 && m3 > 0.0;
     // The path has already received the exact affine transform. Drop live arrow
     // parameters if later edits would regenerate a different, unskewed head.
@@ -365,6 +369,7 @@ pub(crate) fn map_shape(sh: &mut ShapeLayer, h: Option<&photocraft_algo::transfo
     sh.path = map_path(&sh.path, h, warp)?;
     sh.live = None;
     sh.psd_raw = None;
+    sh.psd_coordinate_frame = None;
     Ok(())
 }
 
@@ -457,6 +462,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
             }
             sh.live = None;
             sh.psd_raw = None;
+            sh.psd_coordinate_frame = None;
             vector::flatten::validate_shape(&sh.path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
             Ok(())
         })?;
@@ -556,6 +562,7 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
             sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
             sh.live = None;
             sh.psd_raw = None;
+            sh.psd_coordinate_frame = None;
         }
         let geom_keys = [
             "kind",
@@ -587,6 +594,7 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
                 sh.path = vector::shapes::live_path(&l);
                 sh.live = Some(l);
                 sh.psd_raw = None;
+                sh.psd_coordinate_frame = None;
             }
         }
         if let Some(m) = nums::<6>(p, "transform") {
@@ -662,6 +670,7 @@ fn bake_components(sh: &mut ShapeLayer, tol: f64) -> Result<()> {
     sh.path = bake_path(&sh.path, tol)?;
     sh.live = None;
     sh.psd_raw = None;
+    sh.psd_coordinate_frame = None;
     Ok(())
 }
 
@@ -746,7 +755,7 @@ fn merge_shape_layers(s: &mut Session, ids: &[LayerId], op: Option<PathOp>, labe
         let LayerContent::Shape(sh) = &mut l.content else {
             return Err(EngineError::Other(format!("layer {} is not a shape layer", keep.0)));
         };
-        let mut merged = ShapeLayer { path, live: None, psd_raw: None, cache: None, ..sh.clone() };
+        let mut merged = ShapeLayer { path, live: None, psd_raw: None, psd_coordinate_frame: None, cache: None, ..sh.clone() };
         if let Some(tol) = bake {
             bake_components(&mut merged, tol)?;
         }

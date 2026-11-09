@@ -340,6 +340,9 @@ pub struct ShapeLayer {
     pub stroke: Option<ShapeStroke>,
     /// Opt-in pixel alignment; false preserves legacy stroke rendering.
     pub pixel_align_stroke: bool,
+    /// Original PSD coordinate grid, retained independently of the export block.
+    /// Supplies the half-quantum alignment allowance after an integer translation.
+    pub psd_coordinate_frame: Option<[u32; 2]>,
     pub live: Option<LiveShape>,
     /// Rasterized appearance (from PSD or `photocraft-vector`).
     pub cache: Option<Surface>,
@@ -360,6 +363,7 @@ impl Default for ShapeLayer {
             fill: None,
             stroke: None,
             pixel_align_stroke: false,
+            psd_coordinate_frame: None,
             live: None,
             cache: None,
             psd_raw: None,

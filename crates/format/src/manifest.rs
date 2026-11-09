@@ -285,6 +285,8 @@ pub enum ContentM {
         /// Optional pixel alignment; absent in legacy files.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pixel_align_stroke: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        psd_coordinate_frame: Option<[u32; 2]>,
         #[serde(default)]
         live: Option<LiveShape>,
         /// Arrow parameters stored separately for backward compatibility.

@@ -184,7 +184,7 @@ fn pen_pixel_align_option(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .and_then(|st| target.and_then(|id| st.doc.layer(id)))
         .and_then(|layer| if let LayerContent::Shape(shape) = &layer.content { Some(shape.pixel_align_stroke) } else { None });
     let mut enabled = draft.or(layer_value).unwrap_or(app.ui.tool_options.pixel_align_stroke);
-    let previous = enabled;
+    let previous = app.ui.tool_options.pixel_align_stroke;
     if !crate::widgets::checkbox(ui, &mut enabled, tl!("Pixel Align Stroke")).changed() {
         return;
     }
@@ -357,6 +357,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             }
         }
     }
+    // Geometry fields may commit on the same click as the alignment checkbox.
+    let pixel_align_edit = edit.as_ref().and_then(|patch| patch.get("pixelAlignStroke")).cloned();
     if let Some(live) = &sh.live
         && crate::props_layout::section(ui, "liveShape", tl!("Shape"))
     {
@@ -487,6 +489,9 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         });
     }
     if let Some(mut p) = edit {
+        if let Some(value) = pixel_align_edit {
+            p["pixelAlignStroke"] = value;
+        }
         p["layer"] = json!(id.0);
 
         match app.run("shape.edit", p) {

@@ -1137,3 +1137,35 @@ fn selection_tools_ignore_the_shape_tools_path_mode() {
         }
     }
 }
+
+#[test]
+fn pixel_align_properties_keeps_pending_live_geometry_expression() {
+    for label in ["W", "Corner radius", "Top Left"] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"rect":[20,20,60,40],"stroke":{"width":1}})).unwrap();
+        let mut h = harness(app, true);
+        let before = shape(h.state()).clone();
+        let history = h.state().session.active().unwrap().history.past_len();
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, label).click();
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.event(Event::Text("2+2".into()));
+        h.run();
+        let at = h.get_by_label("Pixel Align Stroke").rect().center();
+        h.hover_at(at);
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        }
+        h.step();
+        h.run_steps(2);
+        let after = shape(h.state()).clone();
+        assert!(after.pixel_align_stroke, "{label}");
+        assert_ne!(after.path, before.path, "{label}");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(shape(h.state()), &before);
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        assert_eq!(shape(h.state()), &after);
+    }
+}

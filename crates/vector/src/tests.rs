@@ -1559,3 +1559,24 @@ fn pixel_aligned_rotated_dashes_preserve_legacy_antialiasing() {
         }
     }
 }
+
+#[test]
+fn pixel_alignment_reflected_live_line_accepts_reversed_outline_but_rejects_stale_metadata() {
+    let live = photocraft_doc::LiveShape::Line { from: [10.0, 20.0], to: [54.0, 20.0], weight: 1.0 };
+    let reflect = photocraft_geom::Affine { m: [-1.0, 0.0, 0.0, 1.0, 64.0, 0.0] };
+    let mut shape = ShapeLayer {
+        path: shapes::live_path(&live).transform(&reflect),
+        live: Some(photocraft_doc::LiveShape::Line { from: [54.0, 20.0], to: [10.0, 20.0], weight: 1.0 }),
+        fill: Some(Fill::Solid(Color::BLACK)),
+        pixel_align_stroke: true,
+        ..Default::default()
+    };
+    assert_ne!(shape.path, shapes::live_path(shape.live.as_ref().unwrap()));
+    assert!(pixel_aligned_line_fill_path(&shape).is_some());
+    let clip = Rect::new(0, 0, 64, 64);
+    let pixels = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    assert_eq!(pixels[19 * 64 + 30][3], 0.0);
+    assert_eq!(pixels[20 * 64 + 30][3], 1.0);
+    shape.path.subpaths[0].knots[0].out_ctrl.x += 0.25;
+    assert!(pixel_aligned_line_fill_path(&shape).is_none());
+}

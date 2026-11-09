@@ -175,3 +175,40 @@ fn custom_shape_presets_forward_pixel_alignment_without_changing_preset_geometry
         }
     }
 }
+
+#[test]
+fn pixel_align_psd_integer_translation_retains_coordinate_allowance() {
+    use photocraft_doc::{Color, Fill, LayerContent, ShapeLayer, ShapeStroke};
+    use photocraft_geom::{Affine, Rect};
+    use photocraft_vector::{CompiledShape, DEFAULT_TOLERANCE, shapes};
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":1000,"height":1000})).unwrap();
+    let result = s.execute("shape.create", json!({"rect":[10,10,60,60]})).unwrap();
+    let id = photocraft_doc::LayerId(result["layer"].as_u64().unwrap());
+    let quantize = |v: f64| (v / 1000.0 * 16_777_216.0).round() / 16_777_216.0 * 1000.0;
+    let sh = ShapeLayer {
+        path: shapes::rect(quantize(10.0), quantize(10.0), quantize(70.0) - quantize(10.0), quantize(70.0) - quantize(10.0)),
+        fill: None,
+        stroke: Some(ShapeStroke { width: 1.0, paint: Fill::Solid(Color::BLACK), ..Default::default() }),
+        pixel_align_stroke: true,
+        psd_raw: Some(std::sync::Arc::new(Vec::new())),
+        psd_coordinate_frame: Some([1000, 1000]),
+        ..Default::default()
+    };
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content = LayerContent::Shape(sh.clone());
+    let canvas = Rect::new(0, 0, 1000, 1000);
+    let before = CompiledShape::new(&sh, DEFAULT_TOLERANCE, canvas).render_rgba(Rect::new(0, 0, 80, 80));
+    s.execute("shape.edit", json!({"layer":id.0,"transform":[1,0,0,1,3,5]})).unwrap();
+    let LayerContent::Shape(moved) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("shape") };
+    assert!(moved.psd_raw.is_none());
+    assert_eq!(moved.psd_coordinate_frame, Some([1000, 1000]));
+    assert_eq!(moved.path, sh.path.transform(&Affine::translate(3.0, 5.0)));
+    assert_eq!(CompiledShape::new(moved, DEFAULT_TOLERANCE, canvas).render_rgba(Rect::new(3, 5, 83, 85)), before);
+    s.undo();
+    let LayerContent::Shape(restored) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("shape") };
+    assert_eq!(restored.path, sh.path);
+    s.redo();
+    s.execute("shape.edit", json!({"layer":id.0,"transform":[1,0,0,1,0.25,0]})).unwrap();
+    let LayerContent::Shape(fractional) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("shape") };
+    assert!(fractional.psd_coordinate_frame.is_none());
+}

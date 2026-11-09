@@ -1105,6 +1105,7 @@ fn pixel_align_stroke_roundtrips_and_defaults_for_legacy_files() {
             path: photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(10.0, 10.0), (70.0, 10.0), (70.0, 70.0), (10.0, 70.0)])]),
             stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
             pixel_align_stroke: true,
+            psd_coordinate_frame: Some([1000, 2000]),
             ..Default::default()
         }),
     ));

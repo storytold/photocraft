@@ -4693,3 +4693,28 @@ fn softer_outer_glow_fades_out_before_its_size() {
         }
     }
 }
+
+#[test]
+fn pixel_align_psd_effect_layer_roi_matches_document_frame() {
+    use photocraft_doc::effects::{Effect, FxCommon};
+    use photocraft_doc::{ShapeLayer, ShapeStroke};
+    let quantize = |v: f64| (v / 1000.0 * 16_777_216.0).round() / 16_777_216.0 * 1000.0;
+    let shape = ShapeLayer {
+        path: photocraft_vector::shapes::rect(quantize(10.0), quantize(10.0), quantize(70.0) - quantize(10.0), quantize(70.0) - quantize(10.0)),
+        fill: Some(Fill::Solid(Color::WHITE)),
+        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        pixel_align_stroke: true,
+        psd_raw: Some(std::sync::Arc::new(Vec::new())),
+        psd_coordinate_frame: Some([1000, 1000]),
+        ..Default::default()
+    };
+    let mut layer = Layer::new("PSD rectangle", LayerContent::Shape(shape));
+    layer.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 0.25), color: Color::BLACK });
+    let full = render_layer(&layer, Rect::new(0, 0, 1000, 1000));
+    let roi = render_layer(&layer, Rect::new(0, 0, 80, 80));
+    for y in 0..80 {
+        for x in 0..80 {
+            assert_eq!(roi.px[y * 80 + x], full.px[y * 1000 + x], "{x},{y}");
+        }
+    }
+}

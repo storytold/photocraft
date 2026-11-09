@@ -516,6 +516,7 @@ pub fn shape_from_blocks(sh: &mut ShapeLayer, block: &dyn Fn(&[u8; 4]) -> Option
         && let Some((p, _)) = path_from_vmsk(&d, w, h)
     {
         sh.path = p;
+        sh.psd_coordinate_frame = Some([w, h]);
     }
     if let Some(f) = block(b"vscg").and_then(|d| fill_from_vscg(&d)) {
         sh.fill = Some(f);
@@ -851,6 +852,7 @@ mod pixel_align_tests {
             // The importer retains the original vector mask block alongside the decoded path.
             let mut loaded = ShapeLayer { psd_raw: lookup(b"vsms").or_else(|| lookup(b"vmsk")).map(std::sync::Arc::new), ..Default::default() };
             shape_from_blocks(&mut loaded, &lookup, side, side, 72.0);
+            assert_eq!(loaded.psd_coordinate_frame, Some([side, side]));
             let stored = loaded.path.clone();
             assert_ne!(stored, original.path, "test must exercise quantized coordinates");
             loaded.stroke.as_mut().unwrap().paint = Fill::Solid(Color::rgb(0.4, 0.2, 0.7));

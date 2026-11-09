@@ -158,6 +158,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             path: s.path.clone(),
             stroke: s.stroke.clone(),
             pixel_align_stroke: s.pixel_align_stroke,
+            psd_coordinate_frame: s.psd_coordinate_frame,
             // Older PhotoCraft versions cannot deserialize ArrowLine.
             // The saved path preserves the arrow's visual appearance.
             live: match &s.live {
@@ -492,17 +493,20 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, pixel_align_stroke, live, arrow_live, density, feather } => LayerContent::Shape(ShapeLayer {
-                path: path.clone(),
-                fill: fill.clone(),
-                stroke: stroke.clone(),
-                pixel_align_stroke: *pixel_align_stroke,
-                live: arrow_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. })).cloned().or_else(|| live.clone()),
-                cache: self.opt_surface(cache)?,
-                psd_raw: self.opt_blob(psd_raw)?,
-                density: *density,
-                feather: *feather,
-            }),
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, pixel_align_stroke, psd_coordinate_frame, live, arrow_live, density, feather } => {
+                LayerContent::Shape(ShapeLayer {
+                    path: path.clone(),
+                    fill: fill.clone(),
+                    stroke: stroke.clone(),
+                    pixel_align_stroke: *pixel_align_stroke,
+                    psd_coordinate_frame: *psd_coordinate_frame,
+                    live: arrow_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. })).cloned().or_else(|| live.clone()),
+                    cache: self.opt_surface(cache)?,
+                    psd_raw: self.opt_blob(psd_raw)?,
+                    density: *density,
+                    feather: *feather,
+                })
+            }
             ContentM::Smart {
                 contents_id,
                 source,

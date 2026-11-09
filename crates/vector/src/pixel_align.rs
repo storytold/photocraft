@@ -12,14 +12,17 @@ fn same(a: f64, b: f64) -> bool {
 }
 
 /// A PSD path is rounded to signed 8.24 fractions of the document dimensions. Only
-/// retained PSD geometry gets its half-quantum allowance; native paths keep the strict epsilon.
+/// imported PSD geometry gets its half-quantum allowance; native paths keep the strict epsilon.
 pub(crate) fn coordinate_tolerance(shape: &ShapeLayer, canvas: Rect) -> (f64, f64) {
-    if shape.psd_raw.is_none() {
-        return (ALIGN_EPSILON, ALIGN_EPSILON);
-    }
+    let [width, height] = match shape.psd_coordinate_frame {
+        Some(frame) => frame,
+        // Compatibility with shapes loaded from older native files.
+        None if shape.psd_raw.is_some() => [canvas.width(), canvas.height()],
+        None => return (ALIGN_EPSILON, ALIGN_EPSILON),
+    };
     // Valid PSB dimensions need less than 0.009 px; cap hostile oversized frames too.
     let epsilon = |side: u32| (f64::from(side) / 33_554_432.0).clamp(ALIGN_EPSILON, 1.0 / 64.0);
-    (epsilon(canvas.width()), epsilon(canvas.height()))
+    (epsilon(width), epsilon(height))
 }
 
 #[derive(Default)]
@@ -237,7 +240,7 @@ pub(crate) fn line_fill_path(shape: &ShapeLayer) -> Option<Path> {
         LiveShape::Line { from, to, weight } | LiveShape::ArrowLine { from, to, weight, .. } => (from, to, weight),
         _ => return None,
     };
-    if *weight != 1.0 || crate::shapes::live_path(live) != shape.path {
+    if *weight != 1.0 || !equivalent_live_path(&crate::shapes::live_path(live), &shape.path) {
         return None;
     }
     let horizontal = same(from[1], to[1]) && !same(from[0], to[0]);
@@ -247,6 +250,34 @@ pub(crate) fn line_fill_path(shape: &ShapeLayer) -> Option<Path> {
         return None;
     }
     Some(shape.path.transform(&photocraft_geom::Affine::translate(if vertical { 0.5 } else { 0.0 }, if horizontal { 0.5 } else { 0.0 })))
+}
+
+/// Reflections reverse closed outlines and can change their first knot. Compare all
+/// controls too, so stale live metadata cannot qualify a different filled shape.
+fn equivalent_live_path(expected: &Path, stored: &Path) -> bool {
+    if expected == stored {
+        return true;
+    }
+    if expected.fill_rule != stored.fill_rule || expected.inverted != stored.inverted || expected.subpaths.len() != stored.subpaths.len() {
+        return false;
+    }
+    expected.subpaths.iter().zip(&stored.subpaths).all(|(a, b)| {
+        if !a.closed || !b.closed || a.op != b.op || a.knots.len() != b.knots.len() {
+            return false;
+        }
+        let mut reversed = a.knots.clone();
+        reversed.reverse();
+        for knot in &mut reversed {
+            std::mem::swap(&mut knot.in_ctrl, &mut knot.out_ctrl);
+        }
+        for _ in 0..reversed.len() {
+            if reversed == b.knots {
+                return true;
+            }
+            reversed.rotate_left(1);
+        }
+        false
+    })
 }
 
 /// Reject a run when another source segment or its control bounds enter its coverage strip.

@@ -151,6 +151,14 @@ struct DocumentDragCache {
     painted_pass: u64,
 }
 
+fn document_preview_id(viewport: egui::ViewportId, layer: egui::LayerId) -> egui::Id {
+    egui::Id::unique("shape-document-drag-render").with((viewport, layer))
+}
+
+fn document_preview_registry() -> egui::Id {
+    egui::Id::unique("shape-document-drag-views")
+}
+
 /// Clip source coverage before choosing its bounded texture layout.
 fn document_preview_bounds(compiled: &photocraft_vector::CompiledShape, visible: photocraft_geom::Rect) -> Option<photocraft_geom::Rect> {
     let source = compiled.bounds()?;
@@ -229,7 +237,13 @@ pub(crate) fn paint_document_shape_preview(
         (points.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max).ceil() as i32).saturating_add(1),
         (points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max).ceil() as i32).saturating_add(1),
     );
-    let id = egui::Id::unique("shape-document-drag-render");
+    let id = document_preview_id(painter.ctx().viewport_id(), painter.layer_id());
+    painter.ctx().data_mut(|d| {
+        let views = d.get_temp_mut_or_default::<Vec<egui::Id>>(document_preview_registry());
+        if !views.contains(&id) {
+            views.push(id);
+        }
+    });
     // Exact pixel-grid zooms stay crisp. Other transforms filter document coverage just as
     // displaying a rotated or fractionally positioned rasterized document requires.
     let integer = |v: f64| (v - v.round()).abs() < 1e-6;
@@ -295,13 +309,18 @@ pub(super) fn mark_rendered(ctx: &egui::Context, key: &str) {
 /// Called after all options bars and Properties windows have had a chance to draw.
 pub(crate) fn finish_frame(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
     // A released/cancelled drag must not retain a large, unfinished accumulator.
-    let preview_id = egui::Id::unique("shape-document-drag-render");
     // Floating document viewports have independent pass counters.
     let pass = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
     ctx.data_mut(|d| {
-        if d.get_temp::<DocumentDragCache>(preview_id).is_some_and(|c| c.painted_pass != pass) {
-            d.remove::<DocumentDragCache>(preview_id);
-        }
+        let mut views = d.get_temp::<Vec<egui::Id>>(document_preview_registry()).unwrap_or_default();
+        views.retain(|id| {
+            let current = d.get_temp::<DocumentDragCache>(*id).is_some_and(|c| c.painted_pass == pass);
+            if !current {
+                d.remove::<DocumentDragCache>(*id);
+            }
+            current
+        });
+        d.insert_temp(document_preview_registry(), views);
     });
     let Some(e) = &app.ui.stroke_editor else { return };
     let shown = ctx.data(|d| d.get_temp::<u64>(egui::Id::unique(("shape-stroke-rendered", e.key.as_str()))));

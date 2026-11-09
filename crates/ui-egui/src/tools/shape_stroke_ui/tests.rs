@@ -17,7 +17,7 @@ fn pixel_align_preview_pads_fill_texture_before_fractional_projection() {
             let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 100.0)));
             paint_document_shape_preview(&painter, &shape, &transform, PixelRect::new(0, 0, 5000, 200));
         });
-        let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(egui::Id::unique("shape-document-drag-render"))).unwrap();
+        let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(document_preview_id(egui::ViewportId::ROOT, egui::LayerId::background()))).unwrap();
         let delta = output.textures_delta.set.get(&cache.texture.id()).unwrap().last().unwrap();
         let egui::ImageData::Color(image) = &delta.image;
         let [w, h] = image.size;
@@ -66,7 +66,7 @@ fn pixel_align_floating_preview_survives_root_cleanup_and_completes() {
         pixel_align_stroke: true,
         ..Default::default()
     };
-    let id = egui::Id::unique("shape-document-drag-render");
+    let id = document_preview_id(egui::ViewportId::from_hash_of("floating-preview"), egui::LayerId::background());
     let mut accumulator = None;
     for frame in 0..2 {
         let mut output = ctx.run_ui(Default::default(), |ui| {
@@ -123,7 +123,7 @@ fn pixel_align_preview_preserves_canvas_gradient_frame() {
             ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(egui::Rect::from_min_max(egui::pos2(30.0, 25.0), egui::pos2(90.0, 65.0)));
         paint_document_shape_preview(&painter, &shape, &Affine::IDENTITY, canvas);
     });
-    let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(egui::Id::unique("shape-document-drag-render"))).unwrap();
+    let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(document_preview_id(egui::ViewportId::ROOT, egui::LayerId::background()))).unwrap();
     assert_ne!(cache.visible, canvas, "test requires distinct coverage and paint frames");
     let image = &output.textures_delta.set.get(&cache.texture.id()).unwrap()[0].image;
     let egui::ImageData::Color(image) = image;
@@ -174,7 +174,7 @@ fn pixel_align_oversized_preview_preserves_document_coverage() {
                     ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 60.0)));
                 paint_document_shape_preview(&painter, &shape, &transform, canvas);
             });
-            let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(egui::Id::unique("shape-document-drag-render")));
+            let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(document_preview_id(egui::ViewportId::ROOT, egui::LayerId::background())));
             let image = cache.as_ref().and_then(|c| output.textures_delta.set.get(&c.texture.id())).and_then(|d| d.last()).map(|d| d.image.clone());
             output.textures_delta.clear();
             let cache = cache.expect("large previews must keep aligned document coverage instead of using the legacy proxy");
@@ -230,8 +230,9 @@ fn pixel_align_preview_texture_matches_document_coverage_before_zoom() {
                                 ctx.layer_painter(egui::LayerId::background()).with_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, 300.0)));
                             paint_document_shape_preview(&painter, &shape, &transform, PixelRect::new(0, 0, 200, 200));
                         });
-                        let cache =
-                            ctx.data(|d| d.get_temp::<DocumentDragCache>(egui::Id::unique("shape-document-drag-render"))).expect("document preview cache");
+                        let cache = ctx
+                            .data(|d| d.get_temp::<DocumentDragCache>(document_preview_id(egui::ViewportId::ROOT, egui::LayerId::background())))
+                            .expect("document preview cache");
                         let image = output.textures_delta.set.get(&cache.texture.id()).expect("uploaded preview");
                         let egui::ImageData::Color(image) = &image[0].image;
                         let compiled = photocraft_vector::CompiledShape::new(&shape, photocraft_vector::DEFAULT_TOLERANCE, cache.visible);
@@ -317,7 +318,7 @@ fn pixel_align_large_preview_completes_in_bounded_passes() {
             let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)));
             paint_document_shape_preview(&painter, &shape, &transform, bounds);
         });
-        let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(egui::Id::unique("shape-document-drag-render"))).unwrap();
+        let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(document_preview_id(egui::ViewportId::ROOT, egui::LayerId::background()))).unwrap();
         let image = output.textures_delta.set.get(&cache.texture.id()).and_then(|d| d.last()).map(|d| d.image.clone());
         output.textures_delta.clear();
         if frame == 0 {
@@ -352,7 +353,7 @@ fn pixel_align_large_preview_completes_in_bounded_passes() {
         finish_frame(&mut app, ui.ctx());
     });
     output.textures_delta.clear();
-    let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(egui::Id::unique("shape-document-drag-render"))).unwrap();
+    let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(document_preview_id(egui::ViewportId::ROOT, egui::LayerId::background()))).unwrap();
     let unfinished = Arc::downgrade(cache.reduction.as_ref().expect("pending replacement preview"));
     drop(cache);
     let mut output = ctx.run_ui(Default::default(), |ui| finish_frame(&mut app, ui.ctx()));
@@ -987,4 +988,42 @@ fn hidden_controls_and_collapsed_appearance_release_popup_and_keyboard_ownership
         h.run_steps(3);
         assert_eq!(h.state().app.ui.tool, crate::state::Tool::Brush, "tool shortcuts resume after the hidden popup closes");
     }
+}
+
+#[test]
+fn pixel_align_preview_views_progress_independently_and_release_hidden_view() {
+    use photocraft_geom::{Affine, Rect as PixelRect};
+    let ctx = egui::Context::default();
+    let shape = photocraft_doc::ShapeLayer {
+        path: photocraft_vector::shapes::rect(0.0, 0.0, 2050.0, 2050.0),
+        fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
+        pixel_align_stroke: true,
+        ..Default::default()
+    };
+    let layers = [egui::LayerId::background(), egui::LayerId::new(egui::Order::Middle, egui::Id::unique("focused-view"))];
+    let ids = layers.map(|layer| document_preview_id(egui::ViewportId::ROOT, layer));
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut textures = Vec::new();
+    for frame in 0..3 {
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            for (index, layer) in layers.into_iter().enumerate().take(if frame == 2 { 1 } else { 2 }) {
+                let painter = ui.ctx().layer_painter(layer).with_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 600.0)));
+                paint_document_shape_preview(&painter, &shape, &Affine::scale(if index == 0 { 0.125 } else { 0.25 }), PixelRect::new(0, 0, 2050, 2050));
+            }
+            finish_frame(&mut app, ui.ctx());
+        });
+        output.textures_delta.clear();
+        for id in ids.into_iter().take(if frame == 2 { 1 } else { 2 }) {
+            let cache = ctx.data(|d| d.get_temp::<DocumentDragCache>(id)).unwrap();
+            if frame == 0 {
+                assert!(cache.reduction.is_some());
+                textures.push(cache.texture.id());
+            } else {
+                assert!(cache.reduction.is_none(), "each view must finish instead of restarting");
+                assert!(textures.contains(&cache.texture.id()));
+            }
+        }
+    }
+    assert!(ctx.data(|d| d.get_temp::<DocumentDragCache>(ids[1])).is_none());
+    assert!(ctx.data(|d| d.get_temp::<DocumentDragCache>(ids[0])).is_some());
 }
