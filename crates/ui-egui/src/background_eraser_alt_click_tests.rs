@@ -164,6 +164,8 @@ fn a_click_without_alt_still_erases() {
 #[cfg(not(target_arch = "wasm32"))]
 fn alt_shows_the_eyedropper_cursor() {
     let mut h = background_eraser();
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}})).unwrap();
+    h.state_mut().run("prefs.set", json!({"path": "cursors.painting", "value": "fullSizeTip"})).unwrap();
     let p = screen(&h, 150.0, 50.0);
     let cursor = |h: &mut Harness<'static, PhotocraftApp>, m: Modifiers| {
         mods(h, m);
@@ -175,8 +177,18 @@ fn alt_shows_the_eyedropper_cursor() {
     let pipette = cursor(&mut h, Modifiers::ALT);
     assert_eq!(pipette.0, egui::CursorIcon::Crosshair, "the native pipette has a visible OS fallback");
     assert!(pipette.1.is_some(), "⌥ uses an OS pipette bitmap");
-    assert_ne!(cursor(&mut h, Modifiers::NONE), pipette, "without ⌥: the eraser's own tip");
-    assert_ne!(cursor(&mut h, Modifiers::ALT | Modifiers::CTRL), pipette, "Control+⌥ is not the Eyedropper");
+    for modifiers in [Modifiers::NONE, Modifiers::ALT | Modifiers::CTRL] {
+        let tip = cursor(&mut h, modifiers);
+        assert_ne!(tip, pipette);
+        assert_eq!(tip.0, egui::CursorIcon::Crosshair, "eraser tip has a visible OS fallback");
+        let image = tip.1.expect("the eraser's circular tip remains visible");
+        let [x, y] = image.hotspot;
+        let alpha = |x, y| image.rgba[(usize::from(y) * usize::from(image.size[0]) + usize::from(x)) * 4 + 3];
+        assert!(alpha(x, y) > 230, "Background Eraser retains the centre cross");
+        for (dx, dy) in [(20, 0), (-20, 0), (0, 20), (0, -20)] {
+            assert!(alpha((i32::from(x) + dx) as u16, (i32::from(y) + dy) as u16) > 230, "40 px circular eraser tip at {modifiers:?}");
+        }
+    }
     assert_eq!(cursor(&mut h, Modifiers::ALT), pipette, "⌥ again: the same pipette bitmap");
 }
 

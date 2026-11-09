@@ -34,6 +34,7 @@ fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
     h.state().current_zoom()
 }
 
+/// Check the bitmap contract, not merely that some custom cursor reached the backend.
 fn assert_pipette(h: &Harness<'static, PhotocraftApp>) {
     let output = &h.output().platform_output;
     if cfg!(target_arch = "wasm32") {
@@ -41,7 +42,14 @@ fn assert_pipette(h: &Harness<'static, PhotocraftApp>) {
         assert!(output.cursor_image.is_none());
     } else {
         assert_eq!(output.cursor_icon, egui::CursorIcon::Crosshair, "visible fallback underneath the native pipette");
-        assert!(output.cursor_image.is_some(), "the pipette must reach the OS");
+        let image = output.cursor_image.as_ref().expect("the pipette must reach the OS");
+        let scale = if cfg!(target_os = "macos") { h.ctx.zoom_factor() } else { h.ctx.pixels_per_point() };
+        // 23 logical points of reach, 1.5 of stroke padding, then one bitmap pixel for AA.
+        let hot = (24.5 * scale + 1.0).ceil() as u16;
+        assert_eq!(image.size, [2 * hot + 1; 2]);
+        assert_eq!(image.hotspot, [hot; 2]);
+        let i = (usize::from(hot) * usize::from(image.size[0]) + usize::from(hot)) * 4;
+        assert!(image.rgba[i + 3] > 230, "the SVG sampling tip occupies the hotspot");
     }
 }
 
@@ -1542,10 +1550,24 @@ fn text_color_picker_pipette_is_native_cached_and_released_over_dialog() {
     h.run_steps(1);
     let moved = h.output().platform_output.cursor_image.as_ref().unwrap();
     assert!(std::sync::Arc::ptr_eq(&image.rgba, &moved.rgba), "pointer motion must reuse the OS cursor bitmap");
+
+    h.ctx.set_zoom_factor(1.5);
+    h.run_steps(3);
+    let r = h.state().last_canvas_rect;
+    h.hover_at(pos2(r.left() + 30.0, r.center().y));
+    h.run_steps(1);
+    assert_pipette(&h);
+    let scaled = h.output().platform_output.cursor_image.as_ref().unwrap();
+    assert_ne!(scaled.size, image.size, "UI scale change replaces the displayed bitmap");
+    assert!(!std::sync::Arc::ptr_eq(&image.rgba, &scaled.rgba));
+
     h.hover_at(r.center());
     h.run_steps(1);
     assert!(h.output().platform_output.cursor_image.is_none(), "dialog widgets release the pipette");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "dialog keeps its arrow");
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state().ui.dialogs.is_empty());
+    assert!(h.output().platform_output.cursor_image.is_none(), "Escape releases the pipette");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "the Type tool regains its I-beam");
 }
