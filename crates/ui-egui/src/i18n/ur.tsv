@@ -224,7 +224,7 @@
 	Plug-ins…	پلگ انز…
 	Type…	متن…
 	Enhanced Controls…	بہتر کنٹرولز…
-	Camera Raw…	کیمرہ را…
+	RAW Defaults…	RAW ڈیفالٹس…
 	Raw Defaults…	را ڈیفالٹس…
 	Integrations…	انضمام…
 	AI Integrations…	AI انضمام…
@@ -554,7 +554,7 @@
 	Last Filter	آخری فلٹر
 	Filter Gallery…	فلٹر گیلری…
 	Adaptive Wide Angle…	اڈاپٹیو وائیڈ اینگل…
-	Camera Raw Filter…	کیمرہ را فلٹر…
+	RAW Develop Filter…	RAW ڈیولپمنٹ فلٹر…
 	Liquify…	لیکویفائی…
 	Vanishing Point…	وینشنگ پوائنٹ…
 	Blur	دھندلا پن
@@ -902,8 +902,8 @@
 	Load Settings…	ترتیبات لوڈ کریں…
 	Save these settings as a Camera Raw .xmp file	ان ترتیبات کو کیمرہ را .xmp فائل کے طور پر محفوظ کریں
 	Load settings from a Camera Raw .xmp file	کیمرہ را .xmp فائل سے ترتیبات لوڈ کریں
-	Loaded Camera Raw settings from {file}	{file} سے کیمرہ را ترتیبات لوڈ ہو گئیں
-	Loaded Camera Raw settings from {file} ({n} not supported)	{file} سے کیمرہ را ترتیبات لوڈ ہو گئیں ({n} سپورٹڈ نہیں)
+	Loaded RAW Develop settings from {file}	{file} سے RAW ڈیولپمنٹ ترتیبات لوڈ ہو گئیں
+	Loaded RAW Develop settings from {file} ({n} not supported)	{file} سے RAW ڈیولپمنٹ ترتیبات لوڈ ہو گئیں ({n} سپورٹڈ نہیں)
 	Begin recording	ریکارڈنگ شروع کریں
 	Bend:	موڑ:
 	Bicubic	بائی کیوبک
@@ -931,7 +931,7 @@
 	Brush Reconstruct Options	برش ری کنسٹرکٹ کے اختیارات
 	Brush Tool Options	برش ٹول کے اختیارات
 	Cache Level:	کیشے لیول:
-	Camera Raw isn't open	کیمرہ را کھلا نہیں ہے
+	RAW Develop isn't open	RAW ڈیولپمنٹ کھلا نہیں ہے
 	Cancel	منسوخ کریں
 	Cancel (Esc)	منسوخ کریں (Esc)
 	Manage submitted jobs in the system print queue	سسٹم پرنٹ قطار میں جمع شدہ کام منظم کریں
@@ -1902,7 +1902,7 @@
 	Brush preview color	برش پیش منظر کا رنگ
 	Cache levels	کیشے لیولز
 	Cache tile size	کیشے ٹائل حجم
-	Camera Raw Defaults	کیمرہ را ڈیفالٹس
+	RAW Defaults	RAW ڈیفالٹس
 	Canvas border	کینوس بارڈر
 	Show canvas dots	کینوس نقطے دکھائیں
 	Clip thumbnails to layer bounds	تھمب نیلز کو تہہ کی حدود میں کلپ کریں
@@ -1984,7 +1984,6 @@
 	Never	کبھی نہیں
 	Normal tip	نارمل ٹپ
 	Open as smart object	سمارٹ آبجیکٹ کے طور پر کھولیں
-	Open in camera raw	کیمرہ را میں کھولیں
 	Open documents as tabs	دستاویزات کو ٹیبز کے طور پر کھولیں
 	Overscroll	اوور اسکرول
 	Performance	کارکردگی
@@ -2345,8 +2344,8 @@
 	Tone Histogram	ٹون ہسٹوگرام
 	Show Selected Region	منتخب خطہ دکھائیں
 cameraRaw	Light	روشنی
-	Camera Raw Filter ({layer})	کیمرہ را فلٹر ({layer})
-	Camera Raw ({name})	کیمرہ را ({name})
+	RAW Develop Filter ({layer})	RAW ڈیولپمنٹ فلٹر ({layer})
+	RAW Develop ({name})	RAW ڈیولپمنٹ ({name})
 cameraRaw	Lights	روشن حصے
 cameraRaw	Darks	تاریک حصے
 cameraRaw	Red	سرخ
@@ -2943,8 +2942,6 @@ curves	Smooth	ہموار
 	Roman Hanging Punctuation	رومن ہینگنگ رموز اوقاف
 	Avoid Widows/Orphans	ودوز/اورفنز سے گریز کریں
 	Compose	کمپوز کریں
-	Adobe Single-line Composer	Adobe سنگل لائن کمپوزر
-	Adobe Every-line Composer	Adobe ایوری لائن کمپوزر
 	Word Spacing	لفظ کا وقفہ
 	Letter Spacing	حرف کا وقفہ
 	Glyph Scaling	گلف اسکیلنگ
@@ -3140,7 +3137,6 @@ curves	Smooth	ہموار
 	Intersect with	کے ساتھ جوڑیں
 	Capture Comp	کمپوزیشن قبضہ کریں
 	No Layer Comps	کوئی تہہ کمپوزیشن نہیں
-	Adobe PDF Presets…	Adobe PDF پری سیٹس…
 	3D…	3D…
 	Technology Previews…	ٹیکنالوجی پیش منظر…
 	Add a mask  (from the selection; ⌥ inverts)	ماسک شامل کریں (انتخاب سے؛ ⌥ الٹ دیتا ہے)
@@ -3757,8 +3753,8 @@ layerLabel	No Color	بلا رنگ
 	Border	بارڈر
 	Box Blur	باکس دھندلاپن
 	Calculations	حسابات
-	Camera Raw	کیمرہ را
-	Camera Raw Filter	کیمرہ را فلٹر
+	RAW Develop	RAW ڈیولپمنٹ
+	RAW Develop Filter	RAW ڈیولپمنٹ فلٹر
 	Channel1	چینل1
 	Channel2	چینل2
 	Channel3	چینل3
@@ -4572,3 +4568,6 @@ navigator	Zoom	زوم
 @plural	{n} action file loaded|{n} action files loaded	{n} ایکشن فائل لوڈ ہوئی|{n} ایکشن فائلیں لوڈ ہوئیں
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} فائل لوڈ نہیں ہو سکی: {errors}|{n} فائلیں لوڈ نہیں ہو سکیں: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} تصویری اثاثہ آؤٹ پٹ ناکام ہوا|{what}: {n} تصویری اثاثے آؤٹ پٹس ناکام ہوئے
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	RAW ڈیولپمنٹ کی ترتیبات {file} میں محفوظ ہو گئیں
