@@ -120,7 +120,7 @@ impl PhotocraftApp {
         if hovering > 0 {
             ctx.request_repaint();
         }
-        file_open::log_drag_over(ctx, hovering);
+        crate::file_open::log_drag_over(ctx, hovering);
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if !dropped.is_empty() {
             let at = self.cursor_pos(ctx);
