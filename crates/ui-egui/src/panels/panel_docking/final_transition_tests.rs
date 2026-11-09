@@ -155,12 +155,7 @@ fn capture_final_review_transitions() {
             h.run_steps(6);
             assert!((body_rect(&h, "color").height() - height).abs() < 1.1);
             save(&mut h, "full-detached");
-            h.state_mut()
-                .run(
-                    "window.panel.edge",
-                    json!({"panel":"history","edge":"top","individual":true,"collapsed":true}),
-                )
-                .unwrap();
+            h.state_mut().run("window.panel.edge", json!({"panel":"history","edge":"top","individual":true,"collapsed":true})).unwrap();
             h.run_steps(5);
             save(&mut h, "top-collapsed");
             click(&mut h, area_id().with(("full-chevron", "history")));
