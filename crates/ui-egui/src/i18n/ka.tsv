@@ -276,8 +276,8 @@
 	Artboard…	სამუშაო დაფა…
 	Artboard from Group…	სამუშაო დაფა ჯგუფიდან…
 	Artboard from Layers…	სამუშაო დაფა შრეებიდან…
-	Layer via Copy	შრე კოპირებით
-	Layer via Cut	შრე ამოჭრით
+	Layer Via Copy	შრე კოპირებით
+	Layer Via Cut	შრე ამოჭრით
 	Layer From Background…	შრე ფონიდან…
 	Layer from Background…	შრე ფონიდან…
 	Background From Layer	ფონი შრიდან
@@ -3949,7 +3949,7 @@ curves	Smooth	გაგლუვება
 	Scroll menu down	მენიუს ქვემოთ გადახვევა
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	გასაგრძელებლად ეს ტექსტის შრე უნდა დარასტრირდეს. მისი ტექსტი აღარ იქნება რედაქტირებადი. დავარასტრირო ტექსტი?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	გასაგრძელებლად ეს ფიგურის შრე უნდა დარასტრირდეს. ის ფიგურად აღარ იქნება რედაქტირებადი. დავარასტრირო ფიგურა?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	გასაგრძელებლად ეს ჭკვიანი ობიექტი უნდა დარასტრირდეს. მისი შიგთავსი აღარ იქნება რედაქტირებადი. დავარასტრირო ჭკვიანი ობიექტი?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	გასაგრძელებლად ეს ჭკვიანი ობიექტი უნდა დარასტრირდეს. მისი შიგთავსი აღარ იქნება რედაქტირებადი. დავარასტრირო ჭკვიანი ობიექტი?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	გასაგრძელებლად ეს შევსების შრე უნდა დარასტრირდეს. მისი შევსება აღარ იქნება რედაქტირებადი. დავარასტრირო შრე?
 	This layer must be rasterized before proceeding.	გასაგრძელებლად ეს შრე უნდა დარასტრირდეს.
 	Color Picker (Background Color)	ფერის ამრჩევი (ფონის ფერი)
