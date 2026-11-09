@@ -109,10 +109,30 @@ pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: 
         return false;
     }
     let Some((kind, layer)) = needed(app) else { return false };
+    if tool == Tool::Gradient
+        && let Some(message) = gradient_refusal(kind)
+    {
+        let message = tl!(message).to_owned();
+        let shown = app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(Value::as_str) == Some(&message));
+        if !shown {
+            app.ui.open_dialog(DialogKind::Error, Map::from_iter([("message".to_string(), json!(message))]));
+        }
+        return true;
+    }
     if !app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
         open(app, kind, layer, tool, [x, y, f64::from(pressure)]);
     }
     true
+}
+
+/// The Classic gradient doesn't offer to rasterize a type layer or a Smart Object: the reference
+/// application says why it can't paint and changes nothing (#12016). Other kinds still ask.
+pub fn gradient_refusal(kind: Kind) -> Option<&'static str> {
+    match kind {
+        Kind::Type => Some("Could not use the gradient tool because the pixels in a type layer cannot be edited without first rasterizing the layer."),
+        Kind::SmartObject => Some("Could not use the gradient tool because the smart object is not directly editable."),
+        Kind::Shape | Kind::Fill => None,
+    }
 }
 
 /// Open the prompt for `layer`; OK rasterizes it, then `tool` paints at `at` (x, y, pressure).
@@ -250,6 +270,9 @@ pub fn run_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+#[cfg(test)]
+#[path = "gradient_rasterize_alert_tests.rs"]
+mod gradient_rasterize_alert_tests;
 #[cfg(test)]
 mod tests;
 
