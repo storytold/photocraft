@@ -56,6 +56,27 @@ fn os_clipboard_honours_export_clipboard_preference() {
     assert!(os.lock().unwrap().is_none(), "copy does not mirror to OS clipboard when export_clipboard is off");
 }
 
+/// The web build can't put a copy on the system clipboard, so it hears of every copy instead
+/// (#7842): Copy, Cut and Copy Merged, with Export Clipboard on or off.
+#[test]
+fn every_copy_is_announced_even_when_it_is_not_exported() {
+    let copies = Arc::new(Mutex::new(0));
+    let heard = copies.clone();
+    let services = Services { clipboard_copied: Some(Box::new(move || *heard.lock().unwrap() += 1)), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.session.execute("file.new", serde_json::json!({"width": 32, "height": 32})).unwrap();
+    app.sync_views();
+    app.run("select.rect", serde_json::json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+    app.run("edit.copy", serde_json::json!({})).unwrap();
+    app.run("edit.copyMerged", serde_json::json!({})).unwrap();
+    app.session.execute("prefs.set", serde_json::json!({"values": {"general.exportClipboard": false}})).unwrap();
+    app.run("edit.cut", serde_json::json!({})).unwrap();
+    assert_eq!(*copies.lock().unwrap(), 3);
+    // A paste is not a copy.
+    app.run("edit.paste", serde_json::json!({})).unwrap();
+    assert_eq!(*copies.lock().unwrap(), 3);
+}
+
 type OsClip = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
 
 const CLIP_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><path d="M1 1 C2 0 6 0 7 1 L7 5 L1 5 Z" fill="#e03020"/></svg>"##;

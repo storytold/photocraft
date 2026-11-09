@@ -304,6 +304,9 @@ pub type ClipboardGetSvgFn = Box<dyn FnMut() -> Result<Option<Vec<u8>>, String>>
 /// Whether the last clipboard read found no way to reach the OS clipboard at all.
 pub type ClipboardUnreadableFn = Box<dyn Fn() -> bool>;
 
+/// Told of each copy PhotoCraft makes ([`Services::clipboard_copied`]).
+pub type ClipboardCopiedFn = Box<dyn FnMut()>;
+
 /// An editor selected by the user, never an executable supplied by document metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExternalSvgEditor {
@@ -509,6 +512,10 @@ pub struct Services {
     /// True when the last `clipboard_get_image` read had no clipboard to read, as in a Flatpak on
     /// Wayland (#5031), rather than a clipboard that holds no image. `None` where that can't happen.
     pub clipboard_unreadable: Option<ClipboardUnreadableFn>,
+    /// Told of each Edit › Copy, Cut and Copy Merged, whether or not it reaches the OS clipboard.
+    /// The browser can't put the copy there, so it learns here that the copy is newer than the
+    /// image the system clipboard holds, which a later paste must not bring back (#7842).
+    pub clipboard_copied: Option<ClipboardCopiedFn>,
     /// Preferences persistence: the platform config directory on native, browser storage on
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,

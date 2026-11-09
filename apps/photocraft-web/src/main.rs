@@ -9,7 +9,9 @@
 //! - file pickers return browser file contents asynchronously through `Services::file_dialog`;
 //!   this includes File → Open and commands such as Place Embedded;
 //! - saving/exporting triggers a browser download;
-//! - dropped files are read asynchronously by `web::WebShell` and delivered through `Services::inbox`.
+//! - dropped files are read asynchronously by `web::WebShell` and delivered through `Services::inbox`;
+//! - an image on the system clipboard is read from the browser's `paste` event (Ctrl+V), and
+//!   copies made in PhotoCraft stay in PhotoCraft (`clipboard`).
 //!
 //! URL query flags: `?cpu` forces the CPU canvas path (same as `PHOTOCRAFT_CPU_CANVAS=1`);
 //! `?webgl` forces the WebGL2 backend instead of WebGPU; `?free-mb=N` pretends only N MiB can be
@@ -17,6 +19,9 @@
 //! images (diagnostics only).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+#[cfg(any(target_arch = "wasm32", test))]
+mod clipboard;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod diagnostics;

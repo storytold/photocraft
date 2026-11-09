@@ -80,6 +80,9 @@ impl PhotocraftApp {
 
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     pub(super) fn export_os_clipboard(&mut self) {
+        if let Some(copied) = self.services.clipboard_copied.as_mut() {
+            copied();
+        }
         self.clip_unmirrored = true;
         if !self.session.prefs().general.export_clipboard {
             return;

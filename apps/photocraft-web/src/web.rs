@@ -102,7 +102,10 @@ pub fn start() {
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let clipboard = crate::clipboard::WebClipboard::default();
+                    crate::clipboard::listen(&clipboard, &cc.egui_ctx);
+                    let services = services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag), clipboard.clone());
+                    let mut app = PhotocraftApp::new(session, services);
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -116,7 +119,8 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, ui_language: "" }))
+                    let held = crate::clipboard::Held::default();
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, clipboard, held, unsaved, served, database, presets, ui_language: "" }))
                 }),
             )
             .await;
@@ -346,6 +350,10 @@ struct WebShell {
     inbox: Inbox,
     /// Dropped files to place on the active document's canvas.
     place_inbox: PlaceInbox,
+    /// What pastes have shown of the system clipboard (#7842).
+    clipboard: crate::clipboard::WebClipboard,
+    /// Keyboard events waiting while a pasted image is read.
+    held: crate::clipboard::Held,
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
     served: Served,
@@ -418,6 +426,8 @@ impl eframe::App for WebShell {
         // A tap reaches eframe as Pointer Events and Touch Events: keep one press per tap, or the
         // twin press closes the menu the first one opened (#2095).
         photocraft_ui_egui::touch_twins::drop_twins(ctx, raw_input);
+        // Ctrl+V reaches us before the image it pastes has been read: hold the keys until it has.
+        self.held.hold_or_release(self.clipboard.reading(), &mut raw_input.events);
         // The browser build has no TCP control server, so `inject_synthetic` finds an empty
         // queue, but the clipboard key mapping (`Event::PasteImage`), legacy pinch, pen-hold and
         // titlebar normalization live in the app hook and must run here too.
@@ -499,7 +509,8 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
+fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn, clipboard: crate::clipboard::WebClipboard) -> Services {
+    let pasted = clipboard.clone();
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
@@ -554,6 +565,11 @@ fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egu
         inbox: Some(inbox),
         place_inbox: Some(place_inbox),
         cursor_pos: Some(cursor_pos),
+        // The image the last paste showed on the system clipboard, unless a copy made here is
+        // newer (`clipboard`, #7842). This build doesn't put images on the system clipboard yet,
+        // so there is no `clipboard_set_image`.
+        clipboard_get_image: Some(Box::new(move || pasted.image())),
+        clipboard_copied: Some(Box::new(move || clipboard.copied())),
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
         save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
