@@ -751,7 +751,7 @@ fn every_mapped_command_exports_and_imports_back() {
         (
             "filter.distort.wave",
             json!({"type": "square", "generators": 3, "wavelengthMin": 20, "wavelengthMax": 200, "amplitudeMin": 4, "amplitudeMax": 40,
-                "undefinedAreas": "wrap", "seed": 4_000_000_000_u32}),
+                "scaleHorizontal": 60, "scaleVertical": 1, "undefinedAreas": "wrap", "seed": 4_000_000_000_u32}),
         ),
         ("filter.distort.zigZag", json!({"amount": -20, "ridges": 12, "style": "aroundCenter"})),
         ("filter.video.deInterlace", json!({"eliminate": "evenFields", "createBy": "duplication"})),
@@ -5891,7 +5891,7 @@ fn distort_filter_steps_load_clamp_play_and_save_back() {
             wave,
             "filter.distort.wave",
             json!({"type": "sine", "generators": 5, "wavelengthMin": 10, "wavelengthMax": 120, "amplitudeMin": 5, "amplitudeMax": 35,
-                "undefinedAreas": "repeat", "seed": 4_294_967_289_u32}),
+                "scaleHorizontal": 100, "scaleVertical": 100, "undefinedAreas": "repeat", "seed": 4_294_967_289_u32}),
         ),
         ("ZgZg", zigzag, "filter.distort.zigZag", json!({"amount": 10, "ridges": 5, "style": "pondRipples"})),
     ];
@@ -5916,6 +5916,8 @@ fn distort_filter_steps_load_clamp_play_and_save_back() {
     assert_eq!(one_step(distort("Twrl", desc("null").with("Angl", D::Integer(-5000)))).1, json!({"angle": -999}));
     assert_eq!(one_step(distort("ZgZg", desc("null").with("NmbR", D::Integer(40)))).1["ridges"], 20);
     assert_eq!(one_step(distort("Wave", desc("null").with("NmbG", D::Integer(0)))).1["generators"], 1);
+    let scaled = one_step(distort("Wave", desc("null").with("SclH", D::Integer(0)).with("SclV", D::Integer(250)))).1;
+    assert_eq!((&scaled["scaleHorizontal"], &scaled["scaleVertical"]), (&json!(1), &json!(100)), "{scaled}");
 }
 
 /// PhotoCraft's renderer draws at most `MAX_WAVE_GENERATORS` (64) generators, so a Wave step
@@ -5934,17 +5936,16 @@ fn wave_generators_past_what_photocraft_draws_keep_the_step() {
     assert!(export_item("filter.distort.wave", &json!({"generators": 64}), "S").is_some());
 }
 
-/// What the commands cannot play keeps the Photoshop step: an unknown enumeration value, a Wave
-/// scaled below 100 % (the command has no scale), or a key the event does not have (#10605).
+/// What the commands cannot play keeps the Photoshop step: an unknown enumeration value or a
+/// key the event does not have (#10605). A scaled Wave plays: the command has Photoshop's scales.
 #[test]
 fn distort_filter_steps_the_commands_cannot_play_are_kept() {
     let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
     assert!(kept(distort("Sphr", desc("null").with("SphM", enm("SphM", "Dgnl")))));
     assert!(kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "Sprl")))));
-    assert!(kept(distort("Wave", desc("null").with("SclH", D::Integer(50)))));
     assert!(kept(distort("Wave", desc("null").with("UndA", enm("UndA", "Trns")))));
     assert!(kept(distort("Pnch", desc("null").with("Rds ", D::Integer(3)))));
-    // A scale of 100 % (or above, which Photoshop clamps to 100) plays.
+    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(50)))));
     assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(250)))));
 }
 
@@ -6001,6 +6002,9 @@ fn distort_filter_steps_outside_photoshops_range_are_refused() {
         ("filter.distort.zigZag", json!({"ridges": -1})),
         ("filter.distort.wave", json!({"generators": 0})),
         ("filter.distort.wave", json!({"amplitudeMax": 1000})),
+        ("filter.distort.wave", json!({"scaleHorizontal": 0})),
+        ("filter.distort.wave", json!({"scaleVertical": 101})),
+        ("filter.distort.wave", json!({"scaleVertical": 50.5})),
     ] {
         assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
     }
@@ -6010,6 +6014,7 @@ fn distort_filter_steps_outside_photoshops_range_are_refused() {
         ("filter.distort.twirl", json!({"angle": 999})),
         ("filter.distort.zigZag", json!({"ridges": 0})),
         ("filter.distort.wave", json!({"generators": 64, "wavelengthMin": 1})),
+        ("filter.distort.wave", json!({"scaleHorizontal": 1, "scaleVertical": 100})),
     ] {
         assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
     }
@@ -6103,15 +6108,25 @@ fn wave_values_the_command_rejects_are_kept_or_refused() {
     }
 }
 
-/// Wave saves its scales as the integer 100, so a fractional scale, even one that rounds or
-/// clamps to 100, stays a Photoshop step instead of saving back as 100 (#10605).
+/// Wave's scales are integer percentages, as its other keys: a recorded fraction loads rounded
+/// and clamped to 1..100 like them, and a scaled step plays and saves back with its scales.
 #[test]
-fn wave_with_a_fractional_scale_is_kept() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    for (key, n) in [("SclH", 99.6), ("SclV", 99.5), ("SclH", 100.4)] {
-        assert!(kept(distort("Wave", desc("null").with(key, D::Double(n)))), "{key} {n} was mapped");
+fn wave_scales_load_play_and_save_back() {
+    for (key, n, param, want) in [("SclH", 37.4, "scaleHorizontal", 37), ("SclV", 99.5, "scaleVertical", 100), ("SclH", 0.4, "scaleHorizontal", 1)] {
+        let p = one_step(distort("Wave", desc("null").with(key, D::Double(n)))).1;
+        assert_eq!(p[param], json!(want), "{key} {n}: {p}");
     }
-    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(100)))));
+    let d = desc("null").with("SclH", D::Integer(25)).with("SclV", D::Integer(70));
+    let (id, p) = one_step(distort("Wave", d));
+    assert_eq!((&p["scaleHorizontal"], &p["scaleVertical"]), (&json!(25), &json!(70)), "{p}");
+    let back = export_item(&id, &p, "S").unwrap().descriptor.unwrap();
+    assert_eq!((get_num(&back, "SclH"), get_num(&back, "SclV")), (Some(25.0), Some(70.0)));
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    s.actions.list.push(Action::new("Scaled", vec![(id, p.clone())]));
+    let played = s.execute("actions.play", json!({"action": "Scaled"})).unwrap();
+    assert_eq!(played["ran"], 1, "{p}: {played}");
 }
 
 /// A Pattern Fill step whose `Ptrn` holds `id` and `name`, as the reference application records it.
