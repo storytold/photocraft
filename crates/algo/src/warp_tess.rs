@@ -300,9 +300,13 @@ pub(crate) fn envelope_mesh(at: &dyn Fn(f64, f64) -> P, full: bool) -> Option<En
     let net = if swap { stored.transposed() } else { stored };
     let surf = |u: f64, v: f64| if swap { at(v, u) } else { at(u, v) };
     let twisty = net.nu.max(net.nv) == 4;
-    let rules = Rules { start: if full { START_FULL } else { START }, force_down: true, twist_spreads: false, fixed_level: 2 };
+    let rules = if full {
+        Rules { start: START_FULL, force_down: true, twist_spreads: false, fixed_level: 1, curved_makers: false }
+    } else {
+        Rules { start: START, force_down: true, twist_spreads: false, fixed_level: 2, curved_makers: true }
+    };
     let (leaves, log) = cells(&net, twisty, swap, &rules);
-    let mesh = triangulate(&net, &surf, &leaves, &log, rules.fixed_level);
+    let mesh = triangulate(&net, &surf, &leaves, &log, &rules);
     Some(if swap {
         EnvelopeMesh {
             uv: mesh.uv.iter().map(|p| [p[1], p[0]]).collect(),
@@ -326,9 +330,9 @@ pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMes
         return None;
     }
     let net = cubic_net(at);
-    let rules = Rules { start: 1, force_down: false, twist_spreads: true, fixed_level: 0 };
+    let rules = Rules { start: 1, force_down: false, twist_spreads: true, fixed_level: 0, curved_makers: false };
     let (leaves, log) = cells(&net, true, false, &rules);
-    Some(triangulate(&net, at, &leaves, &log, rules.fixed_level))
+    Some(triangulate(&net, at, &leaves, &log, &rules))
 }
 
 /// What differs between cutting a one-patch warp and a patch of a quilt.
@@ -341,8 +345,11 @@ struct Rules {
     /// A cell split down for its twist splits the other cells cut from its parent down too.
     twist_spreads: bool,
     /// Grid lines up to this many halvings in stay where they are on the surface (a T-junction
-    /// further in sits on the chord of the edge it lies on).
+    /// further in sits on the chord of the edge it lies on): the starting grid's.
     fixed_level: u32,
+    /// A T-junction between cells that both split across for their rows' curvature stays on the
+    /// surface (envelopes only).
+    curved_makers: bool,
 }
 
 /// The parent cell of `c` (one halving up both ways), as a comparable key.
@@ -456,7 +463,8 @@ fn cells(net: &Net, twisty: bool, swap: bool, rules: &Rules) -> (Vec<Cell>, Vec<
 }
 
 /// Vertices, their places and the quads of `leaves` (stored frame).
-fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[Split], fixed_level: u32) -> EnvelopeMesh {
+fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[Split], rules: &Rules) -> EnvelopeMesh {
+    let fixed_level = rules.fixed_level;
     // Every corner, and the corners along each horizontal (by v) and vertical (by u) line.
     let mut keys: Vec<P> = Vec::new();
     let mut seen: HashMap<(u64, u64), ()> = HashMap::new();
@@ -519,7 +527,7 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
         let makers: Vec<&Split> = log.iter().filter(|s| s.across && (s.cell[0] - a).abs() < 1e-9 && (s.cell[1] - b).abs() < 1e-9).collect();
         let above: Vec<&&Split> = makers.iter().filter(|s| (s.cell[3] - v).abs() < 1e-9).collect();
         let below: Vec<&&Split> = makers.iter().filter(|s| (s.cell[2] - v).abs() < 1e-9).collect();
-        if !above.is_empty() && !below.is_empty() && above.iter().chain(&below).all(|s| s.curved_across) {
+        if rules.curved_makers && !above.is_empty() && !below.is_empty() && above.iter().chain(&below).all(|s| s.curved_across) {
             continue;
         }
         if need(&segment(&net.row(v), a, b)) < 1.0 - EPS {
@@ -625,7 +633,8 @@ mod tests {
             }
             o
         };
-        let (leaves, log) = cells(&net_of(&at, true), true, false, &Rules { start: START_FULL, force_down: true, twist_spreads: false, fixed_level: 2 });
+        let (leaves, log) =
+            cells(&net_of(&at, true), true, false, &Rules { start: START_FULL, force_down: true, twist_spreads: false, fixed_level: 1, curved_makers: false });
         assert!(log.iter().any(|s| s.cell == [0.0, 0.25, 0.0, 0.25]), "the corner cell splits");
         assert!(leaves.contains(&[0.75, 1.0, 0.0, 0.25]), "{leaves:?}");
     }
@@ -785,9 +794,43 @@ mod tests {
             let (leaves, _) = cells(&cubic_net(&wave), true, false, rules);
             leaves.iter().filter(|c| c[2] >= 0.5 - 1e-9).map(|c| c[3] - c[2]).fold(0.0, f64::max)
         };
-        let quilt = Rules { start: 1, force_down: false, twist_spreads: true, fixed_level: 0 };
+        let quilt = Rules { start: 1, force_down: false, twist_spreads: true, fixed_level: 0, curved_makers: false };
         assert!(tallest(&quilt) <= 0.25 + 1e-9, "bottom cells {}", tallest(&quilt));
         let alone = Rules { twist_spreads: false, ..quilt };
         assert!(tallest(&alone) >= 0.5 - 1e-9, "without the rule the bottom cells stay half the patch");
+    }
+
+    /// A full mesh starts as 2 × 2 cells, so only its halfway lines stay on the surface: a point at
+    /// a quarter the row didn't need sits on the row's chord, also between two cells that split
+    /// across for their rows' curvature (that exception is an envelope's). Measured on a ripple
+    /// (control points moved by (6 sin 3πv, 5 sin 2π(u + v)) px over a 128 px box): the reference
+    /// puts (¼, ½) 0.15 px off the surface, on the chord from (0, ½) to (½, ½).
+    #[test]
+    fn a_full_mesh_puts_quarter_points_on_the_row_chord() {
+        let pi = std::f64::consts::PI;
+        let mut p = [[0.0f64; 2]; 16];
+        for (k, q) in p.iter_mut().enumerate() {
+            let (u, v) = ((k % 4) as f64 / 3.0, (k / 4) as f64 / 3.0);
+            *q = [128.0 * u + 6.0 * (3.0 * pi * v).sin(), 128.0 * v + 5.0 * (2.0 * pi * (u + v)).sin()];
+        }
+        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
+        let at = |u: f64, v: f64| {
+            let (bu, bv) = (b(u), b(v));
+            let mut o = [0.0; 2];
+            for (j, wv) in bv.iter().enumerate() {
+                for (i, wu) in bu.iter().enumerate() {
+                    o[0] += wu * wv * p[j * 4 + i][0];
+                    o[1] += wu * wv * p[j * 4 + i][1];
+                }
+            }
+            o
+        };
+        let m = envelope_mesh(&at, true).expect("finite");
+        let find = |u: f64, v: f64| m.uv.iter().position(|q| (q[0] - u).abs() < 1e-12 && (q[1] - v).abs() < 1e-12).map(|k| m.pos[k]);
+        let (a, c, mid) = (find(0.0, 0.5).expect("left"), find(0.5, 0.5).expect("middle"), find(0.25, 0.5).expect("quarter"));
+        let chord = [(a[0] + c[0]) / 2.0, (a[1] + c[1]) / 2.0];
+        assert!((mid[0] - chord[0]).abs() < 1e-9 && (mid[1] - chord[1]).abs() < 1e-9, "{mid:?} vs chord {chord:?}");
+        let surf = at(0.25, 0.5);
+        assert!((surf[1] - mid[1]).abs() > 0.1, "the chord is off the surface here");
     }
 }
