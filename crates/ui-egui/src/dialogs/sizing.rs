@@ -13,8 +13,9 @@ use crate::theme::Tokens;
 const UNITS: [(&str, &str); 7] =
     [("px", "Pixels"), ("percent", "Percent"), ("in", "Inches"), ("cm", "Centimeters"), ("mm", "Millimeters"), ("pt", "Points"), ("pica", "Picas")];
 
-/// Width-only unit: columns of Preferences › Units & Rulers › Column Size, as in Photoshop's
-/// Image Size and Canvas Size (height has no Columns).
+/// Width-only unit of Image Size and Canvas Size (height has no Columns). Image Size measures it
+/// in columns of Preferences › Units & Rulers › Column Size; Canvas Size in whole inches (see
+/// [`canvas_columns_to_px`]).
 const COLUMNS: (&str, &str) = ("col", "Columns");
 
 /// Decimal places a Columns field shows.
@@ -48,6 +49,18 @@ fn columns_to_px(n: f64, res: f64, ppi: f64, (w, g): (f64, f64), relative: bool)
     let span = |n: f64| n * (w + g) - g;
     let pt = if relative { if n == 0.0 { 0.0 } else { n.signum() * span(n.abs()).max(0.0) } } else { span(n) };
     pt / ppi * res.max(1.0)
+}
+
+/// Canvas Size's Columns, measured in the reference application: one column is one inch at the
+/// document resolution, whatever Column Size says, and only whole columns count (1.5 is 2; a
+/// 1001 px canvas at 300 ppi shows as 3). Relative deltas the same way.
+fn canvas_columns_to_px(n: f64, res: f64) -> f64 {
+    n.round() * res.max(1.0)
+}
+
+/// Pixels → Canvas Size columns, rounded for display; the inverse of [`canvas_columns_to_px`].
+fn canvas_px_to_columns(px: f64, res: f64) -> f64 {
+    (px / res.max(1.0)).round()
 }
 
 /// Dialog unit for the Units & Rulers preference.
@@ -221,6 +234,16 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
     let orig = num(f, orig_key);
     let px = num(f, key);
     let ppi = pt_per_in(f);
+    if unit == COLUMNS.0 && f.get("__command").and_then(Value::as_str) == Some("image.canvasSize") {
+        let mut v = canvas_px_to_columns(px, res) as f32;
+        let lim = (300000.0 / res.max(1.0)).ceil() as f32;
+        let changed = crate::widgets::value_field_prec(ui, &mut v, -lim..=lim, "", 90.0, 0).accessible_name(tl!("Width")).changed();
+        if changed {
+            f.insert(key.into(), json!(canvas_columns_to_px(v as f64, res)));
+        }
+        let _ = id;
+        return changed;
+    }
     if unit == COLUMNS.0 {
         let cols = column_size(f);
         let relative = f.get("relative").and_then(Value::as_bool).unwrap_or(false);
