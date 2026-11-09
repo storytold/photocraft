@@ -16,6 +16,9 @@ pub struct Drag {
     pub clear: bool,
     /// ⇧ constraint of a painting stroke (stroke_constraint.rs).
     pub constrain: Option<crate::stroke_constraint::Axis>,
+    /// A ⇧-click line from the previous stroke's end. Smoothing doesn't apply to it, so it ends
+    /// at the click whatever Catch-up on Stroke End is set to, as in Photoshop (#11887).
+    pub line: bool,
     /// Modifiers held now (updated on every pointer event of the gesture).
     pub live: egui::Modifiers,
     /// Which of the modifiers held at the press have been released since.
@@ -55,6 +58,7 @@ impl Drag {
             erase,
             clear: false,
             constrain: None,
+            line: false,
             live: modifiers,
             released: egui::Modifiers::NONE,
             reposition: false,

@@ -62,3 +62,5 @@ pub mod zoom_tool;
 mod count_show_extras_tests;
 #[cfg(test)]
 mod crop_options_labels_tests;
+#[cfg(test)]
+mod gradient_options_bar_mode_tests;
