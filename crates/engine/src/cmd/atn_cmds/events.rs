@@ -893,6 +893,7 @@ pub(super) const EVENTS: &[Event] = &[
         name: "set",
         label: "Set",
         ids: &[
+            super::steps_measurement::SET_SCALE,
             "select.all",
             "select.deselect",
             "select.reselect",

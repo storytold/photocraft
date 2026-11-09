@@ -858,6 +858,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("type.loadDefaultTypeStyles", json!({})),
         ("type.saveDefaultTypeStyles", json!({})),
         ("image.analysis.recordMeasurements", json!({})),
+        ("image.analysis.setMeasurementScale", json!({"preset": "custom", "pixelLength": 120, "logicalLength": 2.5, "units": "mm"})),
         ("layer.videoLayers.insertBlankFrame", json!({})),
         ("layer.videoLayers.duplicateFrame", json!({})),
         ("layer.videoLayers.deleteFrame", json!({})),
