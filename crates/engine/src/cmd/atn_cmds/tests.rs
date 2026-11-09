@@ -685,6 +685,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("select.rect", json!({"x":1,"y":2,"width":3,"height":4,"mode":"intersect"})),
         ("edit.pasteSpecial.pasteInto", json!({})),
         ("edit.pasteSpecial.pasteOutside", json!({})),
+        ("file.import.videoFramesToLayers", json!({"path": "C:/Footage/clip.mov"})),
         (
             "edit.contentAwareFill",
             json!({"sampling":"rectangular","sampleAllLayers":true,"colorAdaptation":"default",

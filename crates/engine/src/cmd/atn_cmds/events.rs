@@ -960,6 +960,15 @@ pub(super) const EVENTS: &[Event] = &[
         from: |_| Mapped::Unsupported { harmless: true },
         to: |_, _| None,
     },
+    // File › Import › Video Frames to Layers (#10723).
+    Event {
+        code: "",
+        name: "importVideoToLayers",
+        label: "Video Frames to Layers",
+        ids: &[super::steps_video_import::COMMAND],
+        from: super::steps_video_import::from,
+        to: super::steps_video_import::to,
+    },
     Event { code: "", name: "clearEvent", label: "Clear", ids: &["select.editInQuickMaskMode", "history.clear"], from: clear_from, to: clear_to },
     Event {
         code: "Trnf",

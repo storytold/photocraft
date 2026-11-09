@@ -218,6 +218,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | applyImageStackPluginRenderer | Smart Object Stack Mode | `layer.smartObjects.stackMode.*` (eleven measured modes) |
 | (string ID only) | imageStackConvertSmartObject | Stack Mode: None | `layer.smartObjects.stackMode.none` |
 | (string ID only) | vibrance | Vibrance | `image.adjustments.vibrance` |
+| (string ID only) | importVideoToLayers | Video Frames to Layers | `file.import.videoFramesToLayers` (Make Frame Animation off, no frame limit) |
 | `Wave` | wave | Wave | `filter.distort.wave` |
 | `ZgZg` | zigZag | ZigZag | `filter.distort.zigZag` |
 | (string ID only) | reverse | Reverse | `layer.arrange.reverse` |
@@ -284,6 +285,14 @@ A positive integer `LyrI` is a recording-session hint, never a PhotoCraft layer
 identity, and is omitted on save under the normalization rule below. Undecodable
 paths or extra keys keep the entire step. File access happens at playback; a
 missing or unusable file reports the native command's error.
+
+File › Import › Video Frames to Layers (`importVideoToLayers`) plays as
+`file.import.videoFramesToLayers` when Make Frame Animation is off: `Usng` is the
+video's path in Open/Place's `Pth `/`txtu` encoding, followed by `makeAnimation`
+false, with no other key. Every frame becomes a layer. PhotoCraft has no frame
+animation and no frame limit, so a step with `makeAnimation` true or a `frameSkip`
+stays a kept step, as does any other form. A native step writes those two keys and
+refuses export with any setting besides its path.
 
 Stack Mode uses the active Smart Object. For `applyImageStackPluginRenderer`,
 the measured `imageStackPlugin` class selects the mode; the localized `Nm  `
