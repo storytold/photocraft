@@ -112,6 +112,7 @@ pub use canvas::pixel_grid;
 pub use canvas::quick_pick;
 pub use canvas::rotate_view;
 pub use canvas::rulers;
+pub use canvas::scroll_all_windows;
 pub use canvas::scrollbars;
 pub use canvas::select_mask_view;
 pub use canvas::snap_ui;
@@ -262,8 +263,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn,
-    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable,
+    RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -276,8 +277,10 @@ use tools::align_bar;
 pub use tools::analysis_ui;
 pub use tools::anchor_tools;
 pub use tools::artboard_tool;
+pub use tools::bg_eraser_popup;
 pub(crate) use tools::brush_cursor;
 pub use tools::brush_picker;
+pub use tools::brush_refusal;
 pub use tools::brush_resize;
 use tools::cam_transform;
 pub use tools::cas_transform;
@@ -485,6 +488,9 @@ pub struct PhotocraftApp {
     /// Window › Arrange: the first document of the shown run of tiles, when there are more
     /// documents than tiles (`canvas::arranged_cells`).
     pub(crate) arrange_start: usize,
+    /// The document window (`DocWindow::id`) whose canvas `canvas::extra_windows` is drawing.
+    /// `scroll_all_windows::source` reads it to skip the view that a Hand drag moves itself.
+    pub(crate) drawing_window: Option<u64>,
     /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`, which
     /// folds in both the display scale and Interface › UI Scale). The canvas maps document pixels
     /// to physical pixels, so point-space geometry divides the view zoom by this (see
@@ -584,6 +590,10 @@ pub struct PhotocraftApp {
     pub(crate) hist_uncached: Option<(DocId, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
+    /// The canvas area the last Free Transform box's preview changes (`transform_tool::damage`).
+    transform_area: Option<crate::transform_tool::OpenArea>,
+    /// A large layer's Free Transform box being prepared in the background.
+    transform_preparing: Option<crate::transform_tool::Preparing>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Cached document for a modal text Style Options color preview.
@@ -781,6 +791,10 @@ mod brush_options_tooltips_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
+mod cam_no_pixels_alert_tests;
+#[cfg(test)]
+mod patch_shift_constrain_tests;
+#[cfg(test)]
 mod shape_bounds_box_tests;
 
 #[cfg(test)]
@@ -904,10 +918,16 @@ mod color_tab_theme_tests;
 mod new_layer_button_tests;
 
 #[cfg(test)]
+mod layer_via_label_tests;
+
+#[cfg(test)]
 mod smart_filter_rows_tests;
 
 #[cfg(test)]
 mod blur_pins_tests;
+
+#[cfg(test)]
+mod filter_preview_locator_tests;
 
 #[cfg(test)]
 mod move_outline_tests;
@@ -985,6 +1005,8 @@ mod status_bar_tests;
 mod stroke_timing_tests;
 
 #[cfg(test)]
+mod patch_tool_history_names_tests;
+#[cfg(test)]
 mod polygon_lasso_step_snap_tests;
 #[cfg(test)]
 mod polygon_lasso_tests;
@@ -1012,11 +1034,15 @@ mod pen_path_ownership_tests;
 #[cfg(test)]
 mod artboard_options_bar_tests;
 #[cfg(test)]
+mod background_eraser_bar_angle_tests;
+#[cfg(test)]
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
 mod layers_empty_area_menu_tests;
+#[cfg(test)]
+mod pencil_auto_erase_tooltip_tests;
 #[cfg(test)]
 mod preferences_submenu_tests;
 #[cfg(test)]
