@@ -197,7 +197,6 @@
 	Plug-ins…	Programu-jalizi…
 	Type…	Maandishi…
 	Enhanced Controls…	Vidhibiti vilivyoboreshwa…
-	Camera Raw…	Camera Raw…
 	Raw Defaults…	Machaguo-msingi ya Raw…
 	Integrations…	Miunganisho…
 	AI Integrations…	Miunganisho ya AI…
@@ -508,7 +507,6 @@
 	Last Filter	Kichujio cha mwisho
 	Filter Gallery…	Matunzio ya vichujio…
 	Adaptive Wide Angle…	Pembe pana inayojirekebisha…
-	Camera Raw Filter…	Kichujio cha Camera Raw…
 	Liquify…	Yeyusha…
 	Vanishing Point…	Nukta ya kutoweka…
 	Blur	Ukungu
@@ -858,7 +856,6 @@
 	Brush Reconstruct Options	Machaguo ya brashi ya kujenga upya
 	Brush Tool Options	Machaguo ya zana ya brashi
 	Cache Level:	Kiwango cha akiba:
-	Camera Raw isn't open	Camera Raw haijafunguliwa
 	Cancel	Ghairi
 	Cancel (Esc)	Ghairi (Esc)
 	Cancel any current edits (Esc)	Ghairi uhariri wowote wa sasa (Esc)
@@ -1809,7 +1806,6 @@
 	Brush preview color	Rangi ya kuhakiki brashi
 	Cache levels	Viwango vya akiba
 	Cache tile size	Ukubwa wa kigae cha akiba
-	Camera Raw Defaults	Machaguo-msingi ya Camera Raw
 	Canvas border	Mpaka wa turubai
 	Show canvas dots	Onyesha nukta za turubai
 	Canvas color	Rangi ya turubai
@@ -1889,7 +1885,6 @@
 	Never	Kamwe
 	Normal tip	Ncha ya kawaida
 	Open as smart object	Fungua kama kitu erevu
-	Open in camera raw	Fungua katika Camera Raw
 	Open documents as tabs	Fungua hati kama vichupo
 	Overscroll	Usogezaji zaidi ya mpaka
 	Performance	Utendaji
@@ -2273,8 +2268,6 @@
 	Roman Hanging Punctuation	Alama za uakifishaji za Roman zinazoning'inia
 	Avoid Widows/Orphans	Epuka mistari pweke
 	Compose	Tunga
-	Adobe Single-line Composer	Mtunzi wa mstari mmoja wa Adobe
-	Adobe Every-line Composer	Mtunzi wa kila mstari wa Adobe
 	Justification	Uhalalishaji
 	Word Spacing	Nafasi kati ya maneno
 	Letter Spacing	Nafasi kati ya herufi
@@ -2527,7 +2520,6 @@
 	Intersect with	Katiza na
 	Capture Comp	Nasa muundo
 	No Layer Comps	Hakuna miundo ya safu
-	Adobe PDF Presets…	Mipangilio-awali ya Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Hakiki za teknolojia…
 	Background from Layer	Mandharinyuma kutoka safu
@@ -2615,8 +2607,6 @@
 	Tone Histogram	Histogramu ya toni
 	Show Selected Region	Onyesha eneo lililochaguliwa
 cameraRaw	Light	Mwanga
-	Camera Raw Filter ({layer})	Kichujio cha Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Maeneo angavu
 cameraRaw	Darks	Maeneo meusi
 cameraRaw	Blacks	Weusi
@@ -3579,8 +3569,6 @@ layerLabel	No Color	Bila rangi
 	Border	Mpaka
 	Box Blur	Ukungu wa kisanduku
 	Calculations	Hesabu za chaneli
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Kichujio cha Camera Raw
 	Channel1	Chaneli1
 	Channel2	Chaneli2
 	Channel3	Chaneli3
@@ -4053,7 +4041,6 @@ shape	Appearance	Mwonekano
 	Add Mask to Selection	Ongeza barakoa kwenye uteuzi
 	Add Open Files	Ongeza faili zilizo wazi
 	Add to Dictionary	Ongeza kwenye kamusi
-	All shortcuts reset to Photoshop defaults.	Mikato yote imewekwa upya kwa machaguo-msingi ya Photoshop.
 	Allow Continue	Ruhusu kuendelea
 	Attempt to Automatically Align Source Images	Jaribu kulinganisha picha chanzo kiotomatiki
 	Auto Add/Delete	Ongeza/futa kiotomatiki
@@ -4072,7 +4059,6 @@ shape	Appearance	Mwonekano
 	Color Indicates:	Rangi inaonyesha:
 	Copy Texture to Other Tools	Nakili umbile kwa zana nyingine
 	Create Smart Object after Loading Layers	Unda kitu erevu baada ya kupakia safu
-	Default Photoshop Size	Ukubwa chaguo-msingi wa Photoshop
 	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Buruta kisanduku cha kupunguza · buruta ndani ili kusogeza · kingo hubadilisha ukubwa (uwiano {ratio}, katikati {centre}) · Space husogeza wakati wa kuchora · {commit} hukamilisha · Esc hughairi
 	Drag to pan · Scroll to zoom · Double-click to fit	Buruta ili kusogeza · Sogeza gurudumu ili kukuza · Bofya mara mbili ili kutosheleza
 	Drag: draw freehand · Release on the start point: close	Buruta: chora kwa mkono huru · Achilia kwenye nukta ya mwanzo: funga
@@ -4091,8 +4077,6 @@ shape	Appearance	Mwonekano
 	Load Actions…	Pakia vitendo…
 	Load Settings…	Pakia mipangilio…
 	Load settings from a Camera Raw .xmp file	Pakia mipangilio kutoka faili ya .xmp ya Camera Raw
-	Loaded Camera Raw settings from {file}	Mipangilio ya Camera Raw imepakiwa kutoka {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Mipangilio ya Camera Raw imepakiwa kutoka {file} ({n} haitumiki)
 	Mask Channel	Chaneli ya barakoa
 	Message:	Ujumbe:
 	No Spelling Suggestions	Hakuna mapendekezo ya tahajia
@@ -4543,9 +4527,6 @@ layerLabel	Magenta	Majenta
 @plural	{n} document|{n} documents	Hati {n}|Hati {n}
 @plural	{n} pixel|{n} pixels	Pikseli {n}|Pikseli {n}
 cameraRaw	Before (Y)	Kabla (Y)
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Kichujio cha Camera Raw ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw haijafunguliwa
 cameraRaw	Cancel	Ghairi
 cameraRaw	Cancelled opening {name}	Kufungua {name} kumeghairiwa
 cameraRaw	Cancelled {label}	{label} imeghairiwa
@@ -4557,7 +4538,6 @@ cameraRaw	Highlight Clipping Warning (O)	Onyo la kukatwa kwa sehemu angavu (O)
 cameraRaw	Highlight Priority	Kipaumbele cha sehemu angavu
 cameraRaw	Load Settings…	Pakia mipangilio…
 cameraRaw	Load settings from a Camera Raw .xmp file	Pakia mipangilio kutoka faili ya .xmp ya Camera Raw
-cameraRaw	Loaded Camera Raw settings from {file}	Mipangilio ya Camera Raw imepakiwa kutoka {file}
 cameraRaw	Noise Reduction	Upunguzaji wa kelele
 cameraRaw	OK	Sawa
 cameraRaw	Open	Fungua
@@ -4818,7 +4798,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Sample: foreground color	Sampuli: rangi ya mbele
 	Save canceled	Kuhifadhi kumeghairiwa
 	Save the settings to each raw's sidecar without opening it	Hifadhi mipangilio kwenye faili kando ya kila faili ghafi bila kuifungua
-	Saved Camera Raw settings to {file}	Mipangilio ya Camera Raw imehifadhiwa kwenye {file}
 	Select an action first.	Chagua kitendo kwanza.
 	Select an action step first.	Chagua hatua ya kitendo kwanza.
 	Selected Slices	Vipande vilivyochaguliwa
@@ -4870,3 +4849,24 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Set the brush angle	Weka pembe ya brashi
 	The preference could not be saved: {error}	Mapendeleo hayakuweza kuhifadhiwa: {error}
 	Top align text	Panga maandishi juu
+# RAW Develop (renamed from Camera Raw), notes, toolbar side, layer thumbnail menu
+	RAW Develop	Kusafisha RAW
+	RAW Develop Filter	Kichujio cha Kusafisha RAW
+	RAW Develop Filter…	Kichujio cha Kusafisha RAW…
+	RAW Defaults	Machaguo-msingi ya RAW
+	RAW Defaults…	Machaguo-msingi ya RAW…
+	RAW Develop ({name})	Kusafisha RAW ({name})
+cameraRaw	RAW Develop ({name})	Kusafisha RAW ({name})
+	RAW Develop Filter ({layer})	Kichujio cha Kusafisha RAW ({layer})
+cameraRaw	RAW Develop Filter ({layer})	Kichujio cha Kusafisha RAW ({layer})
+	RAW Develop isn't open	Kusafisha RAW hakujafunguliwa
+cameraRaw	RAW Develop isn't open	Kusafisha RAW hakujafunguliwa
+	Loaded RAW Develop settings from {file}	Mipangilio ya Kusafisha RAW imepakiwa kutoka {file}
+cameraRaw	Loaded RAW Develop settings from {file}	Mipangilio ya Kusafisha RAW imepakiwa kutoka {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Mipangilio ya Kusafisha RAW imepakiwa kutoka {file} ({n} haitumiki)
+	Saved RAW Develop settings to {file}	Mipangilio ya Kusafisha RAW imehifadhiwa kwenye {file}
+	Are you sure you want to delete all notes?	Una uhakika unataka kufuta madokezo yote?
+	Move Toolbar to the Left	Sogeza upau wa zana kushoto
+	Move Toolbar to the Right	Sogeza upau wa zana kulia
+	Select Pixels	Chagua pikseli
+	The document changed. Please choose Clear All again.	Hati imebadilika. Tafadhali chagua "Safisha zote" tena.
