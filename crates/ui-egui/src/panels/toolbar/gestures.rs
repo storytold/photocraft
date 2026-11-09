@@ -484,6 +484,8 @@ impl Input {
     /// Apply eligible tool and flyout releases in input order, independently of row drawing order.
     /// Geometry storage is bounded by TOOL_SECTIONS, not by the number of incoming events.
     /// Input borrows end before hit tests and dispatch; transient slot data commits afterward.
+    /// Record every accepted choice in shared history before a later event can replace it, so
+    /// inactive slots, tool letters and restart persistence retain intermediate batch choices.
     pub(super) fn apply(&self, ui: &egui::Ui, app: &mut PhotocraftApp, controls: &[Control<'_>]) {
         if controls.is_empty() {
             return;
@@ -551,6 +553,7 @@ impl Input {
                     (key, tool)
                 }
             };
+            app.ui.remember_group_tool(pick);
             if let Some(memory) = memories.iter_mut().find(|m| m.key == key) {
                 memory.tool = pick;
                 memory.changed = true;

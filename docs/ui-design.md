@@ -133,10 +133,13 @@ primary clicks on the same toolbar slot, using egui's configured time and distan
 Modified clicks do not join that pair, including when a modifier is released before the
 button. An ordinary pair immediately after Alt/Option-click remains usable; a third rapid
 ordinary click does not repeat the action. Keyboard and accessibility activation only select
-the tool. Completed gestures run in input order, including when several arrive in one frame.
+the tool. Gesture replay applies collected toolbar actions in input order, including when
+several arrive in one frame.
 Clicks retain egui’s configured interaction radius outside a button's painted box. Batched
 pointer replay resolves each endpoint’s nearest eligible widget, preserving click/drag priority,
 clipping, foreground areas and modals in both the previous and current layouts.
+Each accepted toolbar choice updates shared tool history before later input can replace it.
+Intermediate choices in a batch remain available to inactive slots and tool letters after restart.
 
 A completed touch release retains its position and flyout ownership through the immediate
 pointer disappearance emitted by the native and web integrations. Standalone disappearance,

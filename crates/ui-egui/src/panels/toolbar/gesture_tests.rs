@@ -10,10 +10,16 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 
 /// Settle a toolbar fixture at the requested theme, column count and display scale.
 fn configured_harness(kind: theme::ThemeKind, double: bool, scale: f32) -> Harness<'static, PhotocraftApp> {
+    harness_on_side(kind, double, scale, ToolbarSide::Start)
+}
+
+/// Settle the toolbar at its chosen dock side before looking up any pointer targets.
+fn harness_on_side(kind: theme::ThemeKind, double: bool, scale: f32, side: ToolbarSide) -> Harness<'static, PhotocraftApp> {
     let mut ready = false;
     let builder = Harness::builder().with_size(vec2(1200.0, 1500.0)).with_pixels_per_point(scale).with_step_dt(1.0 / 60.0);
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.ui.panels.toolbar_double = double;
+    app.ui.panels.toolbar_side = side;
     let mut h = builder.build_ui_state(
         move |ui, app: &mut PhotocraftApp| {
             if !ready {
@@ -131,27 +137,31 @@ fn touch_cancellation_cannot_join_the_next_ordinary_pair() {
     }
 }
 
-/// Pointer disappearance after a held touch release must retain flyout ownership of that release.
+/// A held touch release selects the flyout row on either dock side even after hover disappears.
 #[test]
 fn touch_end_selects_the_held_flyout_row() {
-    for web in [false, true] {
-        let mut h = harness();
-        crate::tool_memory::select(h.state_mut(), Tool::Brush);
-        h.run_steps(1);
-        let at = h.get_by_label("Brush Tool  (B)").rect().center();
-        touch(&mut h, at, egui::TouchPhase::Start, web);
-        h.run_steps(24);
-        assert!(flyout_open(&h));
-        let (key, _) = h.ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout"))).unwrap();
-        let area = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
-        let margin = egui::Frame::popup(&h.ctx.global_style()).total_margin();
-        let gap = (area.height() - margin.top - margin.bottom - 4.0 * 26.0) / 3.0;
-        let pencil = pos2(area.center().x, area.top() + margin.top + 26.0 + gap + 13.0);
-        assert!(area.contains(pencil));
-        touch(&mut h, pencil, egui::TouchPhase::Move, web);
-        touch(&mut h, pencil, egui::TouchPhase::End, web);
-        assert_eq!(h.state().ui.tool, Tool::Pencil, "web={web}");
-        assert!(!flyout_open(&h));
+    for (side, flyout_to_right) in [(ToolbarSide::Left, true), (ToolbarSide::Right, false)] {
+        for web in [false, true] {
+            let mut h = harness_on_side(theme::ThemeKind::Studio, false, 1.0, side);
+            crate::tool_memory::select(h.state_mut(), Tool::Brush);
+            h.run_steps(1);
+            let at = h.get_by_label("Brush Tool  (B)").rect().center();
+            touch(&mut h, at, egui::TouchPhase::Start, web);
+            h.run_steps(24);
+            assert!(flyout_open(&h));
+            let (key, _) = h.ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout"))).unwrap();
+            let area = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
+            let margin = egui::Frame::popup(&h.ctx.global_style()).total_margin();
+            let gap = (area.height() - margin.top - margin.bottom - 4.0 * 26.0) / 3.0;
+            let pencil = pos2(area.center().x, area.top() + margin.top + 26.0 + gap + 13.0);
+            assert!(area.contains(pencil));
+            let opens_toward_canvas = if flyout_to_right { area.left() > at.x } else { area.right() < at.x };
+            assert!(opens_toward_canvas, "side={side:?}: the flyout opens toward the canvas");
+            touch(&mut h, pencil, egui::TouchPhase::Move, web);
+            touch(&mut h, pencil, egui::TouchPhase::End, web);
+            assert_eq!(h.state().ui.tool, Tool::Pencil, "side={side:?}, web={web}");
+            assert!(!flyout_open(&h));
+        }
     }
 }
 
@@ -653,6 +663,164 @@ fn batched_hand_pairs_and_alt_clicks_keep_the_final_selection() {
             assert!(!h.state().ui.views[0].fit_pending, "one further click is not a new pair");
         }
     }
+}
+
+/// Load serialized tool and toolbar preferences into a fresh app without carrying egui's
+/// temporary slot entries across the restart. Both production consumers must use shared history.
+fn restore_tool_history(app: &PhotocraftApp) -> PhotocraftApp {
+    let saved_tool = app.session.prefs().selected_tool.clone();
+    let saved_groups = app.session.prefs().group_tools.clone();
+    let hidden = app.session.prefs().toolbar.hidden.clone();
+    let mut restored = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    restored.session.edit_prefs(|prefs| {
+        prefs.selected_tool = saved_tool;
+        prefs.group_tools = saved_groups;
+        prefs.toolbar.hidden = hidden;
+    });
+    crate::tool_memory::restore(&mut restored);
+    restored
+}
+
+/// Dispatch a complete letter tap and its following frame so spring-loaded key cleanup cannot
+/// mask a wrong permanent selection. The shortcut handler, not direct tool assignment, owns it.
+fn tap_tool_letter(app: &mut PhotocraftApp, key: egui::Key) {
+    let ctx = egui::Context::default();
+    let events = [true, false]
+        .into_iter()
+        .map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE })
+        .collect();
+    for (time, events) in [(1.0, events), (1.01, Vec::new())] {
+        ctx.begin_pass(egui::RawInput { time: Some(time), events, ..Default::default() });
+        crate::shortcuts::handle(app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+    }
+}
+
+/// Persist once after a batch, then restore a fresh app and exercise both consumers of the
+/// remembered tool: the inactive slot's displayed tool and its letter shortcut. An intermediate
+/// Pencil choice must survive even though a later click selects Zoom or returns to Move.
+fn assert_batched_pencil_choice_survives_restart(held_row: bool, final_tool: Tool) {
+    let mut h = harness();
+    h.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    h.state_mut().ui.remember_group_tool(Tool::Brush);
+    h.state_mut().ui.views[0].fit_pending = false;
+    h.state_mut().ui.views[0].zoom = 0.5;
+    h.run_steps(1);
+    let ctx = h.ctx.clone();
+    crate::tool_memory::persist(h.state_mut(), &ctx);
+    let brush = h.get_by_label("Brush Tool  (B)").rect().center();
+    let later = h.get_by_label(if final_tool == Tool::Zoom { "Zoom Tool  (Z)" } else { "Move Tool  (V)" }).rect().center();
+    let original = h.state().session.active().unwrap().clone();
+    if held_row {
+        pointer(&mut h, brush, true, egui::Modifiers::NONE);
+        h.run_steps(24);
+        assert!(flyout_open(&h));
+        let (key, _) = h.ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout"))).unwrap();
+        let area = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
+        let margin = egui::Frame::popup(&h.ctx.global_style()).total_margin();
+        let gap = (area.height() - margin.top - margin.bottom - 4.0 * 26.0) / 3.0;
+        let pencil = pos2(area.center().x, area.top() + margin.top + 26.0 + gap + 13.0);
+        assert!(area.contains(pencil));
+        h.input_mut().events.extend([
+            egui::Event::PointerMoved(pencil),
+            egui::Event::PointerButton { pos: pencil, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+        ]);
+    } else {
+        h.input_mut().events.push(egui::Event::PointerMoved(brush));
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos: brush,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::ALT,
+            });
+        }
+    }
+    h.input_mut().events.push(egui::Event::PointerMoved(later));
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos: later, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(1);
+    assert_eq!(h.state().ui.tool, final_tool, "held_row={held_row}");
+    assert_eq!(h.state().ui.views[0].zoom, 0.5, "the later ordinary click only selects");
+    assert!(!h.state().ui.views[0].fit_pending);
+    assert!(!flyout_open(&h));
+    let ctx = h.ctx.clone();
+    crate::tool_memory::persist(h.state_mut(), &ctx);
+    let doc = h.state().session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&doc.doc, &original.doc));
+    assert_eq!(doc.revision, original.revision);
+    assert_eq!(doc.history.entries(), original.history.entries());
+    let mut restored = restore_tool_history(h.state());
+    assert_eq!(restored.ui.tool, final_tool);
+    let brush_slot = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).find(|slot| slot.contains(&Tool::Brush)).unwrap();
+    assert_eq!(slot_tool(restored.ui.tool, &restored.ui.group_tools, brush_slot), Tool::Pencil, "held_row={held_row}: the intermediate choice survives");
+    assert_eq!(restored.ui.group_tool('B'), Some(Tool::Pencil));
+    tap_tool_letter(&mut restored, egui::Key::B);
+    assert_eq!(restored.ui.tool, Tool::Pencil, "B restores the same remembered tool after restart");
+}
+
+/// An Alt-clicked Pencil remains remembered when a later slot is clicked in the same frame.
+#[test]
+fn integration_batched_alt_choice_survives_restart() {
+    for final_tool in [Tool::Zoom, Tool::Move] {
+        assert_batched_pencil_choice_survives_restart(false, final_tool);
+    }
+}
+
+/// A held flyout choice also updates shared history before a later ordinary click replaces it.
+#[test]
+fn integration_batched_held_row_choice_survives_restart() {
+    for final_tool in [Tool::Zoom, Tool::Move] {
+        assert_batched_pencil_choice_survives_restart(true, final_tool);
+    }
+}
+
+/// A restored custom slot still selects its displayed tool on an ordinary click, cycles only
+/// visible tools with Alt, and keeps that choice for the next restart and its letter shortcut.
+#[test]
+fn integration_restored_custom_slot_keeps_pointer_and_key_choices() {
+    let mut h = harness();
+    h.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    h.state_mut().session.edit_prefs(|prefs| {
+        prefs.selected_tool = json!("Zoom");
+        prefs.group_tools = json!(["Pencil"]);
+        prefs.toolbar.hidden = vec!["Brush".to_owned(), "ColorReplacement".to_owned()];
+    });
+    crate::tool_memory::restore(h.state_mut());
+    h.state_mut().ui.views[0].fit_pending = false;
+    h.state_mut().ui.views[0].zoom = 0.5;
+    h.run_steps(1);
+    let original = h.state().session.active().unwrap().clone();
+    for (modifiers, expected) in [(egui::Modifiers::NONE, Tool::Pencil), (egui::Modifiers::ALT, Tool::MixerBrush)] {
+        let at = h.get_by_label("Pencil Tool  (B)").rect().center();
+        pointer(&mut h, at, true, modifiers);
+        pointer(&mut h, at, false, modifiers);
+        assert_eq!(h.state().ui.tool, expected);
+        assert_eq!(h.state().ui.views[0].zoom, 0.5);
+        assert!(!h.state().ui.views[0].fit_pending);
+        let ctx = h.ctx.clone();
+        crate::tool_memory::persist(h.state_mut(), &ctx);
+    }
+    let zoom = h.get_by_label("Zoom Tool  (Z)").rect().center();
+    pointer(&mut h, zoom, true, egui::Modifiers::NONE);
+    pointer(&mut h, zoom, false, egui::Modifiers::NONE);
+    assert_eq!(h.state().ui.tool, Tool::Zoom);
+    assert_eq!(h.state().ui.views[0].zoom, 0.5);
+    assert!(!h.state().ui.views[0].fit_pending);
+    let ctx = h.ctx.clone();
+    crate::tool_memory::persist(h.state_mut(), &ctx);
+    let doc = h.state().session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&doc.doc, &original.doc));
+    assert_eq!(doc.revision, original.revision);
+    assert_eq!(doc.history.entries(), original.history.entries());
+    let mut restored = restore_tool_history(h.state());
+    let sections = visible_sections(&restored.session.prefs().toolbar.hidden);
+    let (_, brush_slot) = sections.iter().flat_map(|s| s.iter()).find(|(_, slot)| slot.contains(&Tool::Pencil)).unwrap();
+    assert_eq!(brush_slot.as_slice(), &[Tool::Pencil, Tool::MixerBrush]);
+    assert_eq!(slot_tool(restored.ui.tool, &restored.ui.group_tools, brush_slot), Tool::MixerBrush);
+    tap_tool_letter(&mut restored, egui::Key::B);
+    assert_eq!(restored.ui.tool, Tool::MixerBrush);
 }
 
 /// Mouse viewport exit breaks click history without stealing a held flyout drag's later release.

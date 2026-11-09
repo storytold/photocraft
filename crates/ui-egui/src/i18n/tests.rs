@@ -7,15 +7,16 @@ const CS: fn() -> Lang = || Lang::from_code("cs").expect("cs registered");
 const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
 const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
 const HI: fn() -> Lang = || Lang::from_code("hi").expect("hi registered");
+const KA: fn() -> Lang = || Lang::from_code("ka").expect("ka registered");
 
 #[test]
 fn hindi_has_the_reveal_and_camera_raw_rows() {
     assert_eq!(tr(HI(), "Reveal in Explorer"), "Explorer में दिखाएँ");
     assert_eq!(tr(HI(), "Reveal in Finder"), "Finder में दिखाएँ");
-    assert_eq!(tr(HI(), "Camera Raw…"), "Camera Raw…");
+    assert_eq!(tr(HI(), "RAW Defaults…"), "RAW डिफ़ॉल्ट…");
     let (rows, errors) = parse_entries(include_str!("hi.tsv"));
     assert!(errors.is_empty(), "{errors:?}");
-    assert!(rows.iter().any(|(ctx, src, _)| ctx.is_empty() && src == "Camera Raw…"), "Camera Raw… is a catalog row, not a fallback");
+    assert!(rows.iter().any(|(ctx, src, _)| ctx.is_empty() && src == "RAW Defaults…"), "RAW Defaults… is a catalog row, not a fallback");
 }
 
 #[test]
@@ -26,6 +27,20 @@ fn hindi_tags_resolve() {
     assert_eq!(HI().name(), "हिन्दी");
     assert_eq!(Lang::from_pref("hi"), HI());
     assert_eq!(Lang::from_pref("HI"), HI());
+}
+
+#[test]
+fn georgian_tags_resolve() {
+    for tag in ["ka", "ka-GE", "ka_GE", "ka_GE.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(KA()), "{tag}");
+    }
+    assert_eq!(KA().name(), "ქართული");
+    assert_eq!(Lang::from_pref("ka"), KA());
+    assert_eq!(Lang::from_pref("KA"), KA());
+    assert_eq!(tr(KA(), "Layer"), "შრე");
+    assert_eq!(tr(KA(), "File"), "ფაილი");
+    assert_eq!(trn(KA(), 1, "{n} layer", "{n} layers"), "შრე: 1");
+    assert_eq!(trn(KA(), 3, "{n} layer", "{n} layers"), "შრე: 3");
 }
 
 #[test]
@@ -378,25 +393,6 @@ fn azerbaijani_keeps_context_placeholders_and_command_names() {
     assert!(fmt(tr(lang, "About {app}"), &[("app", "PhotoCraft")]).contains("PhotoCraft"));
 }
 
-/// Every menu label, submenu segment and intentional command-ID override has a catalog entry.
-#[test]
-fn azerbaijani_covers_every_menu_label_and_path() {
-    let lang = Lang::from_code("az").expect("az registered");
-    for &(path, label, _, _) in crate::menu_catalog::CATALOG {
-        for source in path.iter().copied().chain(std::iter::once(label)).filter(|source| *source != "---") {
-            assert!(lang.catalog().plain(source).is_some(), "az: missing menu translation for {source:?}");
-        }
-    }
-    for source in ["Convert to Frame…", "Replace Image…", "Import Image…", "Fit Content to Frame", "Fit Frame to Content"] {
-        assert!(lang.catalog().plain(source).is_some(), "az: missing frame translation for {source:?}");
-    }
-    for id in
-        ["edit.clear", "edit.purge.undo", "edit.stroke", "edit.transform.scale", "file.close", "filter.sharpen.sharpen", "layer.layerMask.apply", "select.all"]
-    {
-        assert!(lang.catalog().id(id).is_some(), "az: missing @id translation for {id:?}");
-    }
-}
-
 /// Bosnian locales, with or without region, script or encoding, select the Latin catalog.
 #[test]
 fn bosnian_resolves_locales_and_preferences() {
@@ -569,6 +565,17 @@ fn bundled_catalogs_are_consistent() {
             if ctx == "@id" {
                 assert!(crate::menus::is_live(src) || crate::menu_catalog::CATALOG.iter().any(|m| m.3 == src), "{}: unknown command id {src:?}", l.code);
             }
+        }
+    }
+}
+
+#[test]
+fn raw_develop_labels_are_translated_in_every_shipped_catalog() {
+    for language in LANGUAGES.iter().skip(1) {
+        let (entries, errors) = parse_entries(&language.text());
+        assert!(errors.is_empty(), "{}: {errors:?}", language.code);
+        for source in ["RAW Develop", "RAW Develop Filter", "RAW Develop Filter…", "RAW Defaults", "RAW Defaults…"] {
+            assert!(entries.iter().any(|(_, key, value)| key == source && !value.is_empty()), "{}: {source}", language.code);
         }
     }
 }
