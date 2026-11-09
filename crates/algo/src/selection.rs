@@ -315,7 +315,6 @@ pub(crate) fn similar_to_seed(target: [u8; 4], tol: i32, p: [u8; 4], distance: C
     (target[3] == 0 && p[3] == 0) || (distance.rgb(p, target) <= tol && (i32::from(p[3]) - i32::from(target[3])).abs() <= tol)
 }
 
-
 /// How a wand-style fill measures how far an 8-bit colour is from the clicked one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorDistance {
