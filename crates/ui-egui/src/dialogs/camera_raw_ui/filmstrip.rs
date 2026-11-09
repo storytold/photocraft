@@ -608,8 +608,9 @@ struct ThumbBuild {
     bounds: photocraft_geom::Rect,
     raw: RawOpen,
     encoding_gamma: f32,
-    /// ProPhoto to the document's colours ([`crate::camera_raw_detail_ui::RawDetail::to_document`]).
-    to_document: Option<std::sync::Arc<photocraft_cms::Transform>>,
+    /// ProPhoto to the document's colours ([`crate::camera_raw_detail_ui::RawDetail::to_document`]);
+    /// `Err` when it can't be built: the thumbnail then shrinks the developed pixels.
+    to_document: Result<Option<std::sync::Arc<photocraft_cms::Transform>>, String>,
 }
 
 fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
@@ -675,7 +676,8 @@ fn draw_thumb(job: ThumbJob) -> Option<(std::sync::Arc<ThumbSource>, egui::Color
         gpu: None,
         source_key: 0,
     }
-    .run();
+    .run()
+    .ok()?;
     Some((source, frame.image))
 }
 
@@ -717,13 +719,15 @@ fn thumb_source(build: &ThumbBuild) -> Option<ThumbSource> {
         (None, Some(p)) => std::fs::read(p).ok(),
         _ => None,
     };
-    let source = bytes.and_then(|b| photocraft_io::raw::RawSource::proxy_only(&b, k).ok()).map(|s| crate::camera_raw_detail_ui::RawDetail {
-        source: std::sync::Arc::new(s),
-        demosaic: raw.developed_with,
-        to_document: to_document.clone(),
+    let source = to_document.as_ref().ok().and_then(|to_document| {
+        bytes.and_then(|b| photocraft_io::raw::RawSource::proxy_only(&b, k).ok()).map(|s| crate::camera_raw_detail_ui::RawDetail {
+            source: std::sync::Arc::new(s),
+            demosaic: raw.developed_with,
+            to_document: to_document.clone(),
+        })
     });
     let as_opened = photocraft_io::raw::RawTuning { demosaic: raw.developed_with, ..Default::default() };
-    let developed = source.as_ref().and_then(|s| super::convert::raw_proxy(s, &as_opened, tw, th));
+    let developed = source.as_ref().and_then(|s| super::convert::raw_proxy(s, &as_opened, tw, th).ok().flatten());
     let (px, size, raw_source, curve) = match (developed, source) {
         (Some((px, _)), Some(s)) => {
             let curve = std::sync::Arc::new(s.source.tone_curve().to_vec());
