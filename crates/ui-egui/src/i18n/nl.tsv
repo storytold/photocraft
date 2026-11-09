@@ -4380,6 +4380,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Canvasgrootte automatisch aanpassen
 	Keep Relative Position During Layer Reordering	Relatieve positie behouden bij het wijzigen van de laagvolgorde
 	Shrinkwrap Canvas on Save	Canvas bij opslaan verkleinen tot de inhoud
+	Move Toolbar to the Right	Werkbalk naar rechts verplaatsen
+	Move Toolbar to the Left	Werkbalk naar links verplaatsen
 	Arrow color	Pijlkleur
 	Arrowheads	Pijlpunten
 	Concavity	Holheid
