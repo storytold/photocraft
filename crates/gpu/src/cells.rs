@@ -641,7 +641,7 @@ mod pattern_upload_tests {
             });
             device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(30)) }).unwrap();
             receive.recv_timeout(std::time::Duration::from_secs(1)).unwrap().unwrap();
-            let data = buffer.slice(..).get_mapped_range();
+            let data = buffer.slice(..).get_mapped_range().unwrap();
             for y in 0..5 {
                 for x in 0..3 {
                     let pixel = p.surface.pixel(x, y);
