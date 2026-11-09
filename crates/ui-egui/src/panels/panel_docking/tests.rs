@@ -1080,6 +1080,14 @@ fn the_toolbar_side_toggle_works_in_every_interface_theme() {
         assert_eq!(h.state().ui.panels.toolbar_side, ToolbarSide::Right, "{kind:?}: the button moves the toolbar right");
         let right = h.get_by_label("Toolbar").rect().center().x;
         assert!(right > 640.0, "{kind:?}: right toolbar at {right}");
+        // A grouped tool's flyout opens towards the canvas, to the left of its button.
+        h.query_by_label_contains("Rectangular Marquee Tool").expect("the marquee slot").click_secondary();
+        h.run_steps(2);
+        let (key, button) = h.ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout"))).expect("the flyout is open");
+        let flyout = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).expect("the flyout is drawn");
+        assert!(flyout.right() <= button.left(), "{kind:?}: flyout {flyout:?} left of its button {button:?}");
+        h.query_by_label_contains("Rectangular Marquee Tool").expect("the marquee slot").click_secondary();
+        h.run_steps(2);
 
         h.get_by_label("Move Toolbar to the Left").click();
         h.run_steps(2);
@@ -1232,6 +1240,8 @@ fn disabling_the_ui_cancels_a_dock_edge_drag() {
     assert_eq!(h.state().session.prefs().panel_layout, before, "a held drag is not saved");
 
     disabled.store(true, Ordering::Relaxed);
+    h.run_steps(1);
+    assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "disabling cancels the held drag before any release");
     h.event(Event::PointerButton { pos: pos2(edge + 40.0, 400.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "a disabled UI clears the stored drag");
@@ -1846,6 +1856,8 @@ fn all_iconic_totals_stop_at_both_bounds_without_losing_expanded_widths() {
     let expanded: Vec<_> = end_columns(&app).iter().map(|column| column.width).collect();
     for (requested, expected) in [(1000.0, 480.0), (1.0, 72.0), (300.0, 300.0)] {
         assert!((set_end_dock_total(&mut app, requested).unwrap() - expected).abs() < 0.5);
+        let stored: f32 = end_columns(&app).iter().map(display_width).sum();
+        assert!((stored - expected).abs() < 1.0, "the columns store the {expected}-point total, got {stored}");
         for (column, expanded) in end_columns(&app).iter().zip(&expanded) {
             assert!((ICONIC_WIDTH..=ICONIC_MAX_WIDTH).contains(&display_width(column)));
             assert_eq!(column.width, *expanded);
@@ -2267,26 +2279,35 @@ fn explicit_legacy_noop_width_supersedes_native_migration_after_canvas_becomes_r
 /// after which the explicit request wins.
 #[test]
 fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspace_recovery() {
-    let mut h = dock_edge_harness(app(), vec2(1280.0, 800.0));
-    let requested = dock_width(h.state());
-    let key = remember_native_width_for_request_test(&h.ctx, 380.0);
-    let invalid = Workspace::new(Layout { root: None, floating: Vec::new() });
-    assert!(!valid_workspace(&invalid));
-    h.state_mut().ui.docking = Some(invalid.clone());
-    let ctx = h.ctx.clone();
-    assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
-    apply_pending_dock_width(h.state_mut(), &ctx);
-    assert_eq!(h.state().ui.docking, Some(invalid));
-    assert_eq!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())), Some(requested));
-    assert!(
-        h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(),
-        "neither queued request nor native state is consumed before recovery"
-    );
-    h.run_steps(1);
-    assert_eq!(dock_width(h.state()), requested, "the restored legacy workspace honors the explicit no-op instead of the saved native width");
-    assert!(h.state().ui.docking.is_none());
-    assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
-    assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
+    // The current width (a legacy no-op) and a changed one.
+    for changed in [false, true] {
+        let mut h = dock_edge_harness(app(), vec2(1280.0, 800.0));
+        let requested = if changed { 520.0 } else { dock_width(h.state()) };
+        let key = remember_native_width_for_request_test(&h.ctx, 380.0);
+        let invalid = Workspace::new(Layout { root: None, floating: Vec::new() });
+        assert!(!valid_workspace(&invalid));
+        h.state_mut().ui.docking = Some(invalid.clone());
+        let ctx = h.ctx.clone();
+        assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
+        apply_pending_dock_width(h.state_mut(), &ctx);
+        assert_eq!(h.state().ui.docking, Some(invalid));
+        assert_eq!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())), Some(requested));
+        assert!(
+            h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(),
+            "neither queued request nor native state is consumed before recovery"
+        );
+        h.run_steps(1);
+        assert!(
+            (dock_width(h.state()) - requested).abs() < 0.5,
+            "changed={changed}: the restored workspace honors the explicit request instead of the saved native width, got {}",
+            dock_width(h.state())
+        );
+        if !changed {
+            assert!(h.state().ui.docking.is_none(), "the legacy no-op does not customize the workspace");
+        }
+        assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none(), "changed={changed}: the queued request is consumed");
+        assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "changed={changed}: the native state is retired");
+    }
 }
 
 /// A consumed request retires the native state even when it is clamped or the dock is empty.
