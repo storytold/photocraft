@@ -411,10 +411,16 @@ pub fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>
     let mut shown = (*doc).clone();
     if cmd == cmds::CREATE {
         let mut l = cmds::new_layer(&app.session, &doc, &p).ok()?;
-        l.id = PREVIEW_LAYER;
         // Where the committed layer will go, so the preview doesn't jump on release.
         let active = app.session.active().and_then(|s| s.active_layer);
-        photocraft_engine::layer_place::insert_new(&mut shown, active, l, photocraft_engine::layer_place::Place::AutoEditable);
+        if let Some(old) = cmds::convert_target(&shown, active) {
+            let id = cmds::convert_in_place(&mut shown, old, l).ok()?;
+            let at = shown.layer_mut(id)?;
+            at.id = PREVIEW_LAYER;
+        } else {
+            l.id = PREVIEW_LAYER;
+            photocraft_engine::layer_place::insert_new(&mut shown, active, l, photocraft_engine::layer_place::Place::AutoEditable);
+        }
     } else {
         let l = doc.layer(layer)?;
         let f = edited_fill(app, l, doc.bounds(), cmd, &p)?;
