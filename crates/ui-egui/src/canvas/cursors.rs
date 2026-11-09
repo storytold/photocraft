@@ -10,7 +10,7 @@ pub(super) fn visible_crosshair(icon: egui::CursorIcon, painter: &egui::Painter,
     if !draw || icon != egui::CursorIcon::Crosshair {
         return icon;
     }
-    crate::tool_cursor::crosshair(painter, p, 8.0, 2.0)
+    crate::tool_cursor::standard_crosshair(painter, p)
 }
 
 /// The Pencil's cursor at `doc` (document pixels): the whole-pixel square its dab fills
@@ -112,10 +112,11 @@ pub(super) fn eyedropper_ring(app: &mut PhotocraftApp, painter: &egui::Painter, 
 const RING_GREY: Color32 = Color32::from_gray(127);
 
 /// Tools on which holding ⌥ (Alt) switches to the Eyedropper: a click or drag sets the
-/// foreground colour, as with the Eyedropper itself (#417).
+/// foreground colour, as with the Eyedropper itself (#417, the Background Eraser #11906, the Color
+/// Replacement tool #11914).
 pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     // Control+Alt is the brush-resize drag (`brush_resize`), not sampling.
-    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket)
+    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::BackgroundEraser | Tool::ColorReplacement)
 }
 
 /// Preferences › Cursors › Other Cursors asks for the precise crosshair, or Caps Lock swaps the
@@ -125,8 +126,12 @@ pub(super) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
 }
 
 /// A pen tool's standard cursor: its toolbar icon with the nib (the Convert Point tool: the
-/// anchor) on `p`. Draws it at `p` and returns the OS cursor to set (hidden).
-pub(crate) fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon {
+/// anchor) on `p`. Uses an OS cursor bitmap where supported so its movement tracks hardware
+/// pointer input without waiting for canvas frames (#9122); falls back to drawing the tooltip icon.
+pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon {
+    if let Some(icon) = crate::tool_cursor::pen(ctx, tool) {
+        return icon;
+    }
     // Where each icon's point is in its 24-unit box: the full-size pen's nib at (2.3, 2.3); the
     // Freeform and Curvature pens draw it at 0.68 × from (7, 7); Convert Point's apex anchor.
     let hot = match tool {
@@ -146,12 +151,53 @@ pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     egui::CursorIcon::None
 }
 
-/// The Paint Bucket's cursor: a bucket whose pouring corner is the filled pixel. Draws it at `p`
-/// and returns the OS cursor to set (hidden).
-pub(crate) fn paint_bucket_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
-    // The left corner of the icon's bucket is at (2, 12) of its 24-unit box.
-    crate::icons::cursor(ctx, "paint-bucket", p, vec2(2.0, 12.0) / 24.0, 22.0);
+/// The filter dialogs' preview locator: a small square centred on `p`, the point a click centres
+/// the dialog's preview window on (#9648), white between dark edges so it reads on any image.
+/// Draws it at `p` and returns the OS cursor to set (hidden).
+pub(crate) fn preview_locator_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    const SIDE: f32 = 9.0;
+    let rect = Rect::from_center_size(p, vec2(SIDE, SIDE));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-preview-locator")));
+    let dark = Stroke::new(1.0, Color32::from_black_alpha(200));
+    painter.rect_stroke(rect.expand(1.0), 0.0, dark, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect.shrink(1.0), 0.0, dark, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
     egui::CursorIcon::None
+}
+
+/// The Paint Bucket artwork and target share one cached cursor image. Report rasterization
+/// failures once per distinct message, with the same concise error in the dialog and status bar.
+pub(crate) fn paint_bucket_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
+    let ctx = painter.ctx();
+    let id = egui::Id::unique("photocraft-bucket-cursor-error");
+    match crate::tool_cursor::bucket(painter, p) {
+        Ok(icon) => {
+            // The failure belonged to another scale: its status goes, and a new one reports again.
+            if let Some(error) = ctx.data(|data| data.get_temp::<String>(id)) {
+                ctx.data_mut(|data| data.remove::<String>(id));
+                if app.ui.status == error {
+                    app.ui.status.clear();
+                    app.ui.status_error = false;
+                }
+            }
+            icon
+        }
+        Err(error) => {
+            if ctx.data(|data| data.get_temp::<String>(id)).as_ref() != Some(&error) {
+                if !app.ui.dialogs.iter().any(|dialog| {
+                    dialog.kind == crate::state::DialogKind::Error && dialog.fields.get("message").and_then(serde_json::Value::as_str) == Some(&error)
+                }) {
+                    let mut fields = serde_json::Map::new();
+                    fields.insert("message".into(), json!(error));
+                    app.ui.open_dialog(crate::state::DialogKind::Error, fields);
+                }
+                ctx.data_mut(|data| data.insert_temp(id, error.clone()));
+            }
+            app.ui.status = error;
+            app.ui.status_error = true;
+            egui::CursorIcon::Default
+        }
+    }
 }
 
 /// Decided when the press starts, so ⌥ pressed or released mid-stroke never switches between
@@ -172,14 +218,51 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
     true
 }
 
+/// Sample the image or targeted raster mask at (x, y) using the configured Sample Size.
+/// Write a valid sample to the foreground swatch, or to the background swatch with Alt.
 pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    if let Some(mut rgb) = eyedropper_color(app, x, y) {
-        if super::paint_target(app) != json!("pixels") {
-            rgb = [photocraft_color::convert::rgb_to_gray(rgb); 3];
-        }
+    let rgb = if let Some((surface, canvas)) = eyedropper_mask_source(app) {
+        sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size)
+    } else {
+        eyedropper_color(app, x, y).map(|rgb| if super::paint_target(app) == json!("pixels") { rgb } else { [photocraft_color::convert::rgb_to_gray(rgb); 3] })
+    };
+    if let Some(rgb) = rgb {
         let key = if mods.alt { "background" } else { "foreground" };
         let _ = app.run("tools.setColors", json!({ key: [rgb[0],rgb[1],rgb[2],1.0] }));
     }
+}
+
+/// Only the Eyedropper's Current Layer and Current & Below modes pick the targeted raster mask.
+fn eyedropper_mask_source(app: &PhotocraftApp) -> Option<(&photocraft_raster::Surface, photocraft_geom::Rect)> {
+    use photocraft_engine::{channel_cmds::ChannelTarget, mask_view_cmds};
+
+    if app.active_tool() != Tool::Eyedropper
+        || app.ui.vector_mask_target
+        || !matches!(app.ui.tool_options.eyedropper_sample.as_str(), "current" | "currentAndBelow")
+    {
+        return None;
+    }
+    let st = app.session.active()?;
+    // Painting can implicitly edit an adjustment's mask even with its content thumbnail selected.
+    let targeted = app.ui.mask_target || st.channel_view.target == ChannelTarget::LayerMask || mask_view_cmds::current(st).is_some_and(|v| !v.filter);
+    if !targeted || st.doc.quick_mask.is_some() || !app.layer_mask_targeted() {
+        return None;
+    }
+    let mask = st.doc.layer(st.active_layer?)?.mask.as_ref()?;
+    Some((&mask.surface, st.doc.bounds()))
+}
+
+/// Read the stored mask channel, including its sparse default, rather than its composited coverage.
+fn sample_layer_mask(surface: &photocraft_raster::Surface, canvas: photocraft_geom::Rect, x: f64, y: f64, size: u32) -> Option<[f32; 3]> {
+    let rect = photocraft_engine::cmd::sample_cmds::sample_rect(x, y, size, canvas)?;
+    let mut sum = 0.0;
+    for y in rect.y0..rect.y1 {
+        for x in rect.x0..rect.x1 {
+            sum += f64::from(surface.sample_channel(x, y, 0));
+        }
+    }
+    let gray = (sum / (f64::from(rect.width()) * f64::from(rect.height()))) as f32;
+    gray.is_finite().then_some([gray; 3])
 }
 
 /// The colour at document point (x, y) with the Eyedropper's Sample Size (the composite pixel,
@@ -217,3 +300,15 @@ pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {
 pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
     alt_samples(tool, mods) || alt_loads_mixer(tool, mods)
 }
+
+#[cfg(test)]
+#[path = "../eyedropper_mask_sample_tests.rs"]
+mod eyedropper_mask_sample_tests;
+
+#[cfg(test)]
+#[path = "../color_replacement_alt_click_tests.rs"]
+mod color_replacement_alt_click_tests;
+
+#[cfg(test)]
+#[path = "../background_eraser_alt_click_tests.rs"]
+mod background_eraser_alt_click_tests;
