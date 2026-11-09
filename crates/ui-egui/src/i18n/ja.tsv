@@ -4297,6 +4297,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	カンバスサイズを自動調整
 	Keep Relative Position During Layer Reordering	レイヤーの並べ替え中も相対位置を保持
 	Shrinkwrap Canvas on Save	保存時にカンバスを内容に合わせて縮小
+	Move Toolbar to the Right	ツールバーを右へ移動
+	Move Toolbar to the Left	ツールバーを左へ移動
+
 
 
 

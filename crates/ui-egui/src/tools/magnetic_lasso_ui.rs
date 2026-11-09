@@ -483,16 +483,23 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, hover:
     }
 }
 
-/// The cursor over the canvas: a crosshair; Preferences › Cursors › Other Cursors › Precise also
-/// shows the detection width around it.
+/// The cursor over the canvas: the tool's icon with its top-left tip on the point; Preferences ›
+/// Cursors › Other Cursors › Precise shows the detection width around a crosshair instead, and
+/// Caps Lock swaps the preference either way, as in Photoshop (#11690).
 pub fn cursor(app: &PhotocraftApp, painter: &egui::Painter, p: Pos2, zoom: f32) -> egui::CursorIcon {
-    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-        let r = (app.ui.tool_options.magnetic_width.clamp(1.0, 256.0) * zoom).max(2.0);
-        painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-        painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+    if !crate::canvas::precise_other_cursor(app) {
+        // The icon's lasso tip is at (1.8, 3.6) of its 24-unit box.
+        crate::icons::cursor(painter.ctx(), crate::icons::tool_icon(Tool::MagneticLasso), p, vec2(1.8, 3.6) / 24.0, 22.0);
+        return egui::CursorIcon::None;
     }
+    let r = (app.ui.tool_options.magnetic_width.clamp(1.0, 256.0) * zoom).max(2.0);
+    painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
+    painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
     egui::CursorIcon::Crosshair
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod caps_lock_cursor_tests;

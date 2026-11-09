@@ -693,6 +693,8 @@ cameraRaw	Yellow	पीला
 	Auto-size Canvas	कैनवास का आकार स्वचालित रूप से बदलें
 	Keep Relative Position During Layer Reordering	लेयर्स का क्रम बदलते समय सापेक्ष स्थिति बनाए रखें
 	Shrinkwrap Canvas on Save	सहेजते समय कैनवास को सामग्री के अनुसार छोटा करें
+	Move Toolbar to the Right	टूलबार को दाएँ ले जाएँ
+	Move Toolbar to the Left	टूलबार को बाएँ ले जाएँ
 	RAW Defaults	RAW डिफ़ॉल्ट
 
 # RAW Develop feature labels
