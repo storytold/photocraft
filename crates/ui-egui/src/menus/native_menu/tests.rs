@@ -56,6 +56,7 @@ fn simplified_chinese_translates_the_mac_app_menu() {
             assert_eq!(item.label, label);
             assert_eq!(item.shortcut, english.find(id).unwrap().shortcut, "translating {id} keeps its shortcut");
         }
+        assert_eq!(chinese.find(HIDE).unwrap().shortcut.as_deref(), Some("Ctrl+Cmd+H"));
         for (standard, source, label) in
             [(Standard::Services, "Services", "服务"), (Standard::HideOthers, "Hide Others", "隐藏其他"), (Standard::ShowAll, "Show All", "全部显示")]
         {

@@ -254,6 +254,8 @@ impl Backend for MacMenu {
 pub fn install(ctx: &egui::Context, app: &photocraft_ui_egui::PhotocraftApp) -> Option<native_menu::NativeMenu> {
     let language = &app.session.prefs().interface.language;
     let lang = photocraft_ui_egui::i18n::Lang::from_pref(language);
+    // AppKit's standard items translate before the first frame sets the drawing language.
+    let _menu_language = photocraft_ui_egui::i18n::language_scope(lang);
     let bar = native_menu::photocraft_layout(&photocraft_ui_egui::menus::menu_items(app), lang, language).bar;
     // Never crash for a menu: if AppKit refuses, keep the in-window menus.
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
