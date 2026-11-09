@@ -76,9 +76,7 @@ fn text_field_in(
     char_limit: Option<usize>,
 ) -> (Response, Rect) {
     let t = Tokens::get(ui.ctx());
-    // The box senses clicks so one in its padding reaches the editor (#12302), but not focus: Tab
-    // still stops on the editor alone.
-    let (rect, frame) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::CLICK);
+    let (rect, _) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::hover());
     surface(ui, rect, t.field, false);
     if !t.bevel {
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
@@ -86,6 +84,10 @@ fn text_field_in(
     let font = if mono { theme::mono(12.0) } else { egui::FontId::proportional(12.5) };
     let mut inner = rect.shrink2(TEXT_FIELD_PAD);
     inner.max.x = (inner.max.x - trailing).max(inner.min.x + 1.0);
+    // The editor covers the whole box but the trailing space, with the padding as its own margin,
+    // so a click in the padding is a click in the editor: it focuses it and places the caret, in
+    // a scrolled value too, as a click on the text does (#12302).
+    let editor = inner.expand2(TEXT_FIELD_PAD);
     let limit = char_limit.unwrap_or(TEXT_FIELD_LIMIT);
     // A value already past the limit (restored from a state file, set by automation) is shown and
     // edited as its first `limit` characters, so it is never laid out whole; the caller's string
@@ -100,33 +102,19 @@ fn text_field_in(
     let edit = egui::TextEdit::singleline(shown)
         .id(id)
         .hint_text(hint.to_owned())
-        .frame(egui::Frame::NONE)
+        .frame(egui::Frame::NONE.inner_margin(TEXT_FIELD_PAD))
         .font(font)
-        .min_size(inner.size())
+        .min_size(editor.size())
         .align(egui::Align2::LEFT_CENTER)
         .char_limit(limit);
     // A child Ui keeps the field's selection colour local: `Visuals::selection` also fills selected
     // list rows and slider trails, which must keep the theme's.
     let layout = egui::Layout::centered_and_justified(egui::Direction::TopDown);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(layout));
-    // The theme's 24 pt interact height would make the edit taller than the box's inside.
-    child.spacing_mut().interact_size.y = inner.height();
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(editor).layout(layout));
+    // The theme's 24 pt interact height would make the edit taller than the box.
+    child.spacing_mut().interact_size.y = editor.height();
     child.style_mut().visuals.selection.bg_fill = t.field_selection();
-    let output = edit.show(&mut child);
-    let response = output.response.response;
-    // The editor sits on top of the box, so only a click in the padding lands here: it focuses
-    // the editor with the caret where a click at the nearest point inside it would put it.
-    if frame.clicked()
-        && let Some(pos) = frame.interact_pointer_pos()
-    {
-        let at = pos.clamp(response.rect.min, response.rect.max);
-        let cursor = output.galley.cursor_from_pos(at - output.galley_pos + vec2(output.galley.rect.left(), 0.0));
-        let mut state = output.state;
-        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
-        state.store(ui.ctx(), id);
-        ui.memory_mut(|m| m.request_focus(id));
-        ui.ctx().request_repaint();
-    }
+    let response = child.add(edit);
     if let Some(b) = bounded
         && response.changed()
     {

@@ -153,7 +153,8 @@ fn type_controls_fill_the_panel_at_every_width_and_scale() {
                 .map(|n| n.rect())
                 .find(|r| r.top() >= header.bottom() && r.left() >= header.left() - 1.0)
                 .expect("editable family field");
-            let mut family = name.expand2(egui::vec2(6.0, 2.0));
+            // The editor covers the field's box but the popup arrow's space (#12302).
+            let mut family = name;
             family.max.x += crate::widgets::POPUP_ARROW_W;
             assert!((family.left() - header.left()).abs() <= 2.0 && (family.right() - header.right()).abs() <= 2.0, "{what}: {family:?} vs {header:?}");
             let combos: Vec<Rect> = h
