@@ -224,7 +224,7 @@
 	Plug-ins…	תוספים…
 	Type…	טקסט…
 	Enhanced Controls…	פקדים משופרים…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	ברירות מחדל RAW…
 	Raw Defaults…	ברירות מחדל ל-Raw…
 	Integrations…	שילובים…
 	AI Integrations…	שילובי בינה מלאכותית…
@@ -554,7 +554,7 @@
 	Last Filter	המסנן האחרון
 	Filter Gallery…	גלריית מסננים…
 	Adaptive Wide Angle…	זווית רחבה אדפטיבית…
-	Camera Raw Filter…	מסנן Camera Raw…
+	RAW Develop Filter…	מסנן פיתוח RAW…
 	Liquify…	נזילות…
 	Vanishing Point…	נקודת היעלמות…
 	Blur	טשטוש
@@ -902,8 +902,8 @@
 	Load Settings…	טען הגדרות…
 	Save these settings as a Camera Raw .xmp file	שמור הגדרות אלה כקובץ ‎.xmp של Camera Raw
 	Load settings from a Camera Raw .xmp file	טען הגדרות מקובץ ‎.xmp של Camera Raw
-	Loaded Camera Raw settings from {file}	נטענו הגדרות Camera Raw מתוך {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	נטענו הגדרות Camera Raw מתוך {file} ({n} לא נתמכות)
+	Loaded RAW Develop settings from {file}	נטענו הגדרות פיתוח RAW מתוך {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	נטענו הגדרות פיתוח RAW מתוך {file} ({n} לא נתמכות)
 	Begin recording	התחל הקלטה
 	Bend:	כיפוף:
 	Bicubic	דו-מעוקב (Bicubic)
@@ -931,7 +931,7 @@
 	Brush Reconstruct Options	אפשרויות שחזור מברשת
 	Brush Tool Options	אפשרויות כלי מברשת
 	Cache Level:	רמת מטמון:
-	Camera Raw isn't open	Camera Raw אינו פתוח
+	RAW Develop isn't open	פיתוח RAW אינו פתוח
 	Cancel	ביטול
 	Cancel (Esc)	ביטול (Esc)
 	Manage submitted jobs in the system print queue	נהל עבודות שנשלחו בתור ההדפסה של המערכת
@@ -1902,7 +1902,7 @@
 	Brush preview color	צבע תצוגה מקדימה של מברשת
 	Cache levels	רמות מטמון
 	Cache tile size	גודל אריח מטמון
-	Camera Raw Defaults	ברירות מחדל של Camera Raw
+	RAW Defaults	ברירות מחדל RAW
 	Canvas border	גבול קנבס
 	Show canvas dots	הצג נקודות קנבס
 	Clip thumbnails to layer bounds	גזור תמונות ממוזערות לגבולות השכבה
@@ -1984,7 +1984,6 @@
 	Never	לעולם לא
 	Normal tip	קצה רגיל
 	Open as smart object	פתח כאובייקט חכם
-	Open in camera raw	פתח ב-Camera Raw
 	Open documents as tabs	פתח מסמכים כלשוניות
 	Overscroll	גלילת יתר
 	Performance	ביצועים
@@ -2345,8 +2344,8 @@
 	Tone Histogram	היסטוגרמת גוון
 	Show Selected Region	הצג אזור נבחר
 cameraRaw	Light	אור
-	Camera Raw Filter ({layer})	מסנן Camera Raw ‏({layer})
-	Camera Raw ({name})	Camera Raw ‏({name})
+	RAW Develop Filter ({layer})	מסנן פיתוח RAW ‏({layer})
+	RAW Develop ({name})	פיתוח RAW ‏({name})
 cameraRaw	Lights	בהירים
 cameraRaw	Darks	כהים
 cameraRaw	Red	אדום
@@ -2943,8 +2942,6 @@ curves	Smooth	החלק
 	Roman Hanging Punctuation	פיסוק תלוי רומי
 	Avoid Widows/Orphans	הימנע משורות יתומות/אלמנות
 	Compose	הרכב
-	Adobe Single-line Composer	מרכיב שורה בודדת של Adobe
-	Adobe Every-line Composer	מרכיב כל השורות של Adobe
 	Word Spacing	ריווח מילים
 	Letter Spacing	ריווח אותיות
 	Glyph Scaling	שינוי קנה מידה של גליפים
@@ -3140,7 +3137,6 @@ curves	Smooth	החלק
 	Intersect with	חתוך עם
 	Capture Comp	לכוד קומפ
 	No Layer Comps	אין קומפים של שכבות
-	Adobe PDF Presets…	ערכות PDF של Adobe…
 	3D…	3D…
 	Technology Previews…	תצוגות מקדימות של טכנולוגיה…
 	Add a mask  (from the selection; ⌥ inverts)	הוסף מסכה  (מהבחירה; ⌥ הופך)
@@ -3757,8 +3753,8 @@ layerLabel	No Color	בלי צבע
 	Border	גבול
 	Box Blur	טשטוש קופסה
 	Calculations	חישובים
-	Camera Raw	Camera Raw
-	Camera Raw Filter	מסנן Camera Raw
+	RAW Develop	פיתוח RAW
+	RAW Develop Filter	מסנן פיתוח RAW
 	Channel1	ערוץ1
 	Channel2	ערוץ2
 	Channel3	ערוץ3
@@ -4572,3 +4568,8 @@ navigator	Zoom	תקריב
 @plural	{n} action file loaded|{n} action files loaded	נטען {n} קובץ פעולות|נטענו {n} קובצי פעולות
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	לא ניתן היה לטעון {n} קובץ: {errors}|לא ניתן היה לטעון {n} קבצים: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} פלט נכסי תמונה נכשל|{what}: {n} פלטי נכסי תמונה נכשלו
+	Move Toolbar to the Right	העבר את סרגל הכלים ימינה
+	Move Toolbar to the Left	העבר את סרגל הכלים שמאלה
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	הגדרות פיתוח RAW נשמרו ב־{file}
