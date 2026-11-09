@@ -179,6 +179,7 @@ pub use dialogs::replace_prompt;
 use dialogs::rgb_histogram;
 pub use dialogs::screen_picker;
 pub use dialogs::select_mask_ui;
+pub use dialogs::selection_channel_ui;
 pub use dialogs::shape_dialog;
 pub(crate) use dialogs::shape_fill_ui;
 use dialogs::sizing;

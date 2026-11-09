@@ -318,6 +318,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::mask_trash_prompt::owns(fields) => crate::mask_trash_prompt::body(ui, fields),
         _ if crate::rasterize_prompt::owns(fields) => crate::rasterize_prompt::body(ui, fields),
         _ if crate::duplicate_layer_ui::owns(fields) => crate::duplicate_layer_ui::body(app, ui, fields),
+        _ if crate::selection_channel_ui::owns(fields) => crate::selection_channel_ui::body(app, ui, fields),
         _ if crate::stack_dialog::owns(fields) => crate::stack_dialog::body(app, ui, fields, d.id),
         _ if crate::tool_reset::owns(fields) => crate::tool_reset::body(ui),
         _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
@@ -897,6 +898,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::mask_trash_prompt::owns,
     crate::rasterize_prompt::owns,
     crate::duplicate_layer_ui::owns,
+    crate::selection_channel_ui::owns,
     crate::stack_dialog::owns,
     crate::tool_reset::owns,
     crate::crop_presets::owns,
@@ -1107,6 +1109,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
         _ if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
         _ if crate::duplicate_layer_ui::owns(&d.fields) => crate::duplicate_layer_ui::confirm(app, &d.fields),
+        _ if crate::selection_channel_ui::owns(&d.fields) => crate::selection_channel_ui::confirm(app, &d.fields),
         _ if crate::stack_dialog::owns(&d.fields) => crate::stack_dialog::confirm(app, &d.fields),
         _ if crate::tool_reset::owns(&d.fields) => crate::tool_reset::confirm(app),
         _ if crate::crop_presets::owns(&d.fields) => crate::crop_presets::confirm(app, &d.fields),
@@ -1304,6 +1307,7 @@ pub mod replace_prompt;
 pub(super) mod rgb_histogram;
 pub mod screen_picker;
 pub mod select_mask_ui;
+pub mod selection_channel_ui;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
 pub(super) mod sizing;

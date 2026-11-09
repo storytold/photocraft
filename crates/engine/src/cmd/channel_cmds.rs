@@ -26,6 +26,9 @@ use crate::{DocState, EngineError, Result, Session};
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod save_selection_tests;
+
 // ---------------------------------------------------------------------------------------------
 // Enabled predicates
 
@@ -146,7 +149,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save Selection…",
             ["Select"],
             None,
-            r##"{"name":str?,"channel":"new"|index|name="new","document":index?,"operation":"new|replace|add|subtract|intersect"="new"}"##,
+            r##"{"name":str?,"channel":"new"|index|name="new","document":index|"new"? (default: the active document; "new": a new Multichannel document, channel and operation "new" only),"operation":"new|replace|add|subtract|intersect"="new"}"##,
             has_selection,
             save_selection
         ),
