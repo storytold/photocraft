@@ -213,9 +213,11 @@ fn footage_and_reload_steps_play() {
     play(&mut s);
     assert_eq!(pixels(&s, id, false), [vec![0.0, 0.0, 1.0, 1.0], vec![1.0, 1.0, 1.0, 1.0]]);
 
-    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
-    assert_ne!(pixels(&s, id, false)[0], vec![0.0, 0.0, 1.0, 1.0]);
+    // The fill lands on the displayed frame, which the next video edit stores into the stack.
+    s.execute("edit.fill", json!({"color": "#ffff00"})).unwrap();
+    assert_eq!(display(&s, id), [1.0, 1.0, 0.0, 1.0]);
     load(&mut s, item("reloadFrame", Some(Descriptor::default())));
     play(&mut s);
-    assert_eq!(pixels(&s, id, false)[0], vec![0.0, 0.0, 1.0, 1.0], "the frame comes back from the file");
+    assert_eq!(pixels(&s, id, false), [vec![0.0, 0.0, 1.0, 1.0], vec![1.0, 1.0, 1.0, 1.0]], "the frames come back from the file");
+    assert_eq!(display(&s, id), [0.0, 0.0, 1.0, 1.0]);
 }
