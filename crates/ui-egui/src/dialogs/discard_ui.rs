@@ -23,6 +23,14 @@ pub struct Prompt {
     docs: Vec<DocId>,
     /// The document whose question has already put keyboard focus on its default answer.
     focused: Option<DocId>,
+    /// "Apply to All" is ticked. It is only offered while more than one document is left to ask about.
+    apply_all: bool,
+    /// The answer given to every document still to ask about, once "Apply to All" was used.
+    auto: Option<Answer>,
+    /// The document `auto` answered last: if it is asked about again, its save didn't go through.
+    auto_answered: Option<DocId>,
+    /// `auto` came from a control client (`saveAll`): its Saves are judged as automation.
+    auto_control: bool,
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -79,7 +87,17 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         log::warn!("quitting a window that lost its GPU device before its unsaved work could be saved for recovery");
         return false;
     }
-    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, focused: None };
+    let prompt = Prompt {
+        id: id.to_string(),
+        params: params.clone(),
+        target,
+        docs,
+        focused: None,
+        apply_all: false,
+        auto: None,
+        auto_answered: None,
+        auto_control: false,
+    };
     match &app.discard {
         None => ask(app, prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -180,6 +198,8 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
             show_tab(app, rest.first().copied());
             if let Some(p) = app.discard.as_mut() {
                 p.docs = rest;
+                // Apply to All covered the documents asked about; these are asked about afresh.
+                (p.apply_all, p.auto, p.auto_answered, p.auto_control) = (false, None, None, false);
             }
             return;
         }
@@ -271,11 +291,38 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &app.discard else { return };
     let Some(&doc) = p.docs.first() else { return };
     let (exits, reverts) = (p.id == EXIT, p.id == "file.revert");
+    let (focus, offer_all) = (p.focused != Some(doc), p.docs.len() > 1 && !reverts);
     let Some(name) = index_of(app, doc).map(|i| app.session.documents()[i].doc.name.clone()) else {
         // Closed by something else while the prompt was up: nothing left to ask about.
         advance(app, ctx);
         return;
     };
+    // "Apply to All" answers the rest one document per frame, as Photoshop does. A document that
+    // comes back (its save was cancelled or failed) is asked about normally again, so a save that
+    // can't succeed never repeats on its own.
+    // An Apply to All a control client chose keeps judging each Save as that client's.
+    match app.discard.as_ref().and_then(|p| p.auto.map(|a| (a, p.auto_answered == Some(doc), p.auto_control))) {
+        Some((answer, false, from_control)) => {
+            if let Some(p) = app.discard.as_mut() {
+                p.auto_answered = Some(doc);
+            }
+            // A refused Save leaves this document first: the next frame asks about it normally.
+            if let Err(e) = apply(app, ctx, doc, answer, from_control) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+            ctx.request_repaint();
+            return;
+        }
+        Some((_, true, _)) => {
+            if let Some(p) = app.discard.as_mut() {
+                p.auto = None;
+                p.auto_control = false;
+                p.apply_all = false;
+            }
+        }
+        None => {}
+    }
     let (title, message) = if reverts {
         ("Revert", crate::i18n::fmt(tl!("Revert “{name}” to the last saved version? Your changes will be lost."), &[("name", &name)]))
     } else {
@@ -288,7 +335,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     // Each question comes up with its default answer focused, as in Photoshop: the arrow keys then
     // move between the answers and Enter presses the focused one (#6441).
-    let focus = p.focused != Some(doc);
+    let mut apply_all = app.discard.as_ref().is_some_and(|p| p.apply_all);
     if let Some(p) = app.discard.as_mut() {
         p.focused = Some(doc);
     }
@@ -321,6 +368,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
         ui.label(message);
+        ui.add_space(8.0);
+        if offer_all {
+            crate::widgets::checkbox(ui, &mut apply_all, tl!("Apply to All"));
+        }
         ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
@@ -336,11 +387,30 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if answer.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)) {
         answer = buttons.iter().find(|b| b.0 == ButtonRole::Default).map(|b| b.4);
     }
-    if let Some(answer) = answer
-        && let Err(e) = apply(app, ctx, doc, answer, false)
-    {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    if let Some(p) = app.discard.as_mut() {
+        p.apply_all = apply_all;
+    }
+    if let Some(answer) = answer {
+        if apply_all && offer_all {
+            apply_to_rest(app, doc, answer, false);
+        }
+        if let Err(e) = apply(app, ctx, doc, answer, false) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+/// Makes a Save or Don't Save answer about `doc` the answer for every document still to ask about.
+/// `from_control` says a control client gave it, so each later Save is judged as automation too.
+fn apply_to_rest(app: &mut PhotocraftApp, doc: DocId, answer: Answer, from_control: bool) {
+    if !matches!(answer, Answer::Save | Answer::Discard) {
+        return;
+    }
+    if let Some(p) = app.discard.as_mut() {
+        p.auto = Some(answer);
+        p.auto_answered = Some(doc);
+        p.auto_control = from_control;
     }
 }
 
@@ -395,7 +465,8 @@ pub fn inspect(app: &PhotocraftApp) -> Option<Value> {
     let doc = *p.docs.first()?;
     let name = index_of(app, doc).and_then(|i| app.session.documents().get(i)).map(|d| d.doc.name.clone())?;
     let reverts = p.id == "file.revert";
-    let (choices, default): (&[&str], _) = if reverts { (&["dontSave", "cancel"], "dontSave") } else { (&["save", "dontSave", "cancel"], "save") };
+    let choices = choices(reverts, p.docs.len() > 1);
+    let default = if reverts { "dontSave" } else { "save" };
     Some(json!({
         "id": CONTROL_ID,
         "kind": "unsavedChanges",
@@ -410,9 +481,21 @@ pub fn pending_command(app: &PhotocraftApp) -> Option<(String, Value)> {
     app.discard.as_ref().map(|p| (p.id.clone(), p.params.clone()))
 }
 
+/// The answers a control client can give: `save`, `dontSave` and `cancel`, plus `saveAll` and
+/// `dontSaveAll` (the "Apply to All" box) while more than one document is left to ask about.
+/// Revert takes `dontSave` or `cancel` only.
+fn choices(reverts: bool, several: bool) -> Vec<&'static str> {
+    match (reverts, several) {
+        (true, _) => vec!["dontSave", "cancel"],
+        (false, false) => vec!["save", "dontSave", "cancel"],
+        (false, true) => vec!["save", "saveAll", "dontSave", "dontSaveAll", "cancel"],
+    }
+}
+
 /// Answers the prompt for a control client: `save`, `dontSave` or `cancel` (Revert takes
-/// `dontSave` or `cancel`). Like the buttons, Save may first ask for a path in the save dialog.
-/// Save is always judged as automation for `file.save`, whatever gate the request installed.
+/// `dontSave` or `cancel`); `saveAll` and `dontSaveAll` answer for every document still to ask
+/// about. Like the buttons, Save may first ask for a path in the save dialog. Save is always
+/// judged as automation for `file.save`, whatever gate the request installed.
 pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str) -> Result<Value, String> {
     answer_choice(app, ctx, choice, true)
 }
@@ -427,15 +510,26 @@ pub(crate) fn answer_choice(app: &mut PhotocraftApp, ctx: &egui::Context, choice
         return Err("the unsaved-changes prompt is waiting for a save to finish".into());
     }
     let reverts = app.discard.as_ref().is_some_and(|p| p.id == "file.revert");
-    let answer = match choice {
-        "save" if !reverts => Answer::Save,
-        "dontSave" => Answer::Discard,
-        "cancel" => Answer::Cancel,
+    let several = app.discard.as_ref().is_some_and(|p| p.docs.len() > 1);
+    let (answer, all) = match choice {
+        "save" if !reverts => (Answer::Save, false),
+        "saveAll" if !reverts && several => (Answer::Save, true),
+        "dontSave" => (Answer::Discard, false),
+        "dontSaveAll" if !reverts && several => (Answer::Discard, true),
+        "cancel" => (Answer::Cancel, false),
         other => {
-            let choices = if reverts { "dontSave or cancel" } else { "save, dontSave or cancel" };
-            return Err(format!("unknown choice `{other}`: {choices}"));
+            let choices = choices(reverts, several);
+            let (last, rest) = choices.split_last().unwrap_or((&"cancel", &[]));
+            return Err(format!("unknown choice `{other}`: {} or {last}", rest.join(", ")));
         }
     };
+    // The client's answer replaces one Apply to All left behind (a save that failed at once).
+    if let Some(p) = app.discard.as_mut() {
+        (p.apply_all, p.auto, p.auto_answered, p.auto_control) = (false, None, None, false);
+    }
+    if all {
+        apply_to_rest(app, doc, answer, from_control);
+    }
     apply(app, ctx, doc, answer, from_control)?;
     Ok(json!({"open": app.discard.is_some(), "fileDialog": app.file_dialog_open()}))
 }
@@ -456,7 +550,8 @@ fn button_label(mac: bool, label: &str, key: Option<Key>) -> String {
 /// The labels of one dialog's buttons, each with its key in the same style: "(Y)es" when every
 /// translation starts with its key, otherwise appended to all ("Ja (Y)", "Nein (N)") (#5564).
 fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<String> {
-    let starts_with_key = |label: &str, k: Key| label.split_at_checked(1).is_some_and(|(first, _)| first.eq_ignore_ascii_case(k.name()));
+    let starts_with_key =
+        |label: &str, k: Key| label.chars().next().and_then(crate::menu_keys::label_key).is_some_and(|c| k.name().chars().eq(std::iter::once(c)));
     let inline = buttons.iter().all(|&(label, key)| key.is_none_or(|k| starts_with_key(tl!(label), k)));
     buttons
         .iter()
@@ -465,7 +560,7 @@ fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<String> {
             match key {
                 None => text.to_string(),
                 Some(_) if mac => text.to_string(),
-                Some(k) => match text.split_at_checked(1) {
+                Some(k) => match text.chars().next().and_then(|c| text.split_at_checked(c.len_utf8())) {
                     Some((first, rest)) if inline => format!("({first}){rest}"),
                     _ => format!("{text} ({})", k.name()),
                 },
