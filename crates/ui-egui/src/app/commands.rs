@@ -6,6 +6,7 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -30,6 +31,13 @@ impl PhotocraftApp {
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
+        }
+        // Find Layers sets the Layers panel's Name filter however it runs: the menu, the shortcut,
+        // `engine.execute` or an action step (#10884).
+        if id == "select.findLayers"
+            && let Ok(reply) = &result
+        {
+            crate::layer_filter_ui::find::apply(self, reply);
         }
         result
     }
@@ -264,6 +272,7 @@ impl PhotocraftApp {
                     | "path.toSelection"
                     | "path.addToSelection"
                     | "path.subtractFromSelection"
+                    | "path.intersectWithSelection"
             )
             && self.session.active().is_some_and(|st| st.doc.selection.is_some())
         {
@@ -331,6 +340,7 @@ impl PhotocraftApp {
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
+        crate::retouch_ui::cancel_stale(self);
         // A polygon under construction belongs to the Polygonal Lasso tool, not the next tool.
         if self.ui.tool != Tool::PolygonLasso {
             self.ui.polygon.clear();
@@ -377,6 +387,10 @@ impl PhotocraftApp {
         if !self.channel_views.is_empty() {
             let docs = self.session.documents();
             self.channel_views.retain(|id, _| docs.iter().any(|d| d.doc.id.0 == *id));
+        }
+        // With no document left, no canvas paints the Levels clipping display to drop its cache.
+        if self.session.documents().is_empty() {
+            self.levels_clipping = None;
         }
         // Commands may close and reopen a preserved-ID document before the next repaint.
         canvas::retain_gpu_documents(self);
