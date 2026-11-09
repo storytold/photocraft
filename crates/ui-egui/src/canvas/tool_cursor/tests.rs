@@ -1218,7 +1218,7 @@ fn pipette_bitmap_uses_the_platform_cursor_units_at_high_dpi() {
         ctx.set_zoom_factor(zoom);
         let mut input = egui::RawInput::default();
         input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native_ppp);
-        let output = ctx.run_ui(input, |ui| {
+        let mut output = ctx.run_ui(input, |ui| {
             let icon = pipette(ui.ctx(), egui::pos2(100.0, 100.0));
             ui.ctx().set_cursor_icon(icon);
         });
@@ -1228,6 +1228,8 @@ fn pipette_bitmap_uses_the_platform_cursor_units_at_high_dpi() {
         assert_eq!(image.size, [side; 2]);
         assert_eq!(image.hotspot, [hot; 2]);
         assert!(alpha(&image, hot, hot) > 230);
+        // No renderer consumes font/texture uploads in this output-only test.
+        output.textures_delta.clear();
     }
 }
 
@@ -1275,12 +1277,13 @@ fn pipette_failed_bitmap_keeps_a_visible_fallback() {
     });
     let mut input = egui::RawInput { viewport_id: child, ..Default::default() };
     input.viewports.entry(child).or_default();
-    let output = ctx.run_ui(input, |ui| {
+    let mut output = ctx.run_ui(input, |ui| {
         let icon = pipette(ui.ctx(), egui::pos2(100.0, 100.0));
         ui.ctx().set_cursor_icon(icon);
     });
     assert!(output.platform_output.cursor_image.is_none());
     assert_eq!(output.platform_output.cursor_icon, CursorIcon::Crosshair);
+    output.textures_delta.clear();
 }
 
 /// Exercise the same painted path used on the web and in immediate child viewports.
@@ -1309,17 +1312,23 @@ fn pipette_painted_fallback_keeps_its_hotspot_and_reuses_textures_across_frames_
         assert_eq!(rect.min + Vec2::splat((hot + 0.5) / scale), at, "centre of hotspot texel follows the pointer");
         (texture, output.textures_delta)
     };
-    let (first, _) = draw(1.0, egui::pos2(100.0, 100.0), 53.0, 26.0);
-    let (moved, delta) = draw(1.0, egui::pos2(120.0, 140.0), 53.0, 26.0);
+    let (first, mut delta) = draw(1.0, egui::pos2(100.0, 100.0), 53.0, 26.0);
+    // This headless test checks upload reuse without a renderer. Acknowledge every delta,
+    // including the initial upload and the new-density upload, before dropping it.
+    delta.clear();
+    let (moved, mut delta) = draw(1.0, egui::pos2(120.0, 140.0), 53.0, 26.0);
     assert_eq!(first, moved);
     assert!(!delta.set.iter().any(|(id, _)| *id == first), "no repeated upload on movement");
     assert!(!delta.free.contains(&first), "context retains the texture handle between frames");
-    let (retina, _) = draw(2.0, egui::pos2(120.0, 140.0), 101.0, 50.0);
+    delta.clear();
+    let (retina, mut delta) = draw(2.0, egui::pos2(120.0, 140.0), 101.0, 50.0);
     assert_ne!(first, retina, "different density uses a different texture");
-    let (back, delta) = draw(1.0, egui::pos2(140.0, 160.0), 53.0, 26.0);
+    delta.clear();
+    let (back, mut delta) = draw(1.0, egui::pos2(140.0, 160.0), 53.0, 26.0);
     assert_eq!(back, first, "alternating viewport densities retain both textures");
     assert!(!delta.set.iter().any(|(id, _)| *id == first));
     assert!(!delta.free.contains(&retina));
+    delta.clear();
 }
 
 /// Painted viewports must keep the artwork even above every platform's native cursor limit.
@@ -1332,7 +1341,7 @@ fn pipette_painted_fallback_survives_high_display_scales() {
         let at = egui::pos2(100.0, 100.0);
         let mut input = egui::RawInput { viewport_id: child, ..Default::default() };
         input.viewports.entry(child).or_default().native_pixels_per_point = Some(display_scale);
-        let output = ctx.run_ui(input, |ui| {
+        let mut output = ctx.run_ui(input, |ui| {
             let icon = pipette(ui.ctx(), at);
             ui.ctx().set_cursor_icon(icon);
         });
@@ -1350,6 +1359,8 @@ fn pipette_painted_fallback_survives_high_display_scales() {
         let expected = egui::Rect::from_min_size(at - Vec2::splat((hot + 0.5) / raster_scale), Vec2::splat(side as f32 / raster_scale));
         assert!(meshes[0].1.min.distance(expected.min) < 0.001);
         assert!(meshes[0].1.max.distance(expected.max) < 0.001);
+        // Inspect the upload above, then discard it intentionally: no GPU renderer is attached.
+        output.textures_delta.clear();
     }
 }
 
