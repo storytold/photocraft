@@ -33,10 +33,12 @@ fn sampled_colour_ranges_match_gpu_and_wasm_including_subtract_only() {
             for tolerance in [0, 55, 100] {
                 let params = json!({"positiveColors":positive,"negativeColors":negative,"tolerance":tolerance,"brightness":35,"warmth":12});
                 let expected = plugin.apply(&source, rect, None, &params).unwrap();
+                backend.reported.store(false, Ordering::Relaxed);
                 let result = {
                     let _scope = acceleration::scope(Some(backend.clone()));
                     plugin.apply(&source, rect, None, &params).unwrap()
                 };
+                assert!(backend.reported.load(Ordering::Relaxed), "each parity case must execute on GPU");
                 let max = expected.read_region(rect).iter().zip(result.read_region(rect)).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
                 let epsilon = match sample {
                     SampleType::U8 => 1.0 / 255.0 + 3e-6,
@@ -47,7 +49,6 @@ fn sampled_colour_ranges_match_gpu_and_wasm_including_subtract_only() {
             }
         }
     }
-    assert!(backend.reported.load(Ordering::Relaxed));
     assert!(!backend.failed.load(Ordering::Relaxed));
 }
 
@@ -90,10 +91,12 @@ fn gpu_bands_match_wasm_for_depths_offsets_seams_selection_and_alpha() {
             mask.fill_rect(Rect::new(37, 43, 989, 251), &[0.4]);
             let selection = selected.then_some(&mask);
             let expected = plugin.apply(&input, canvas, selection, &params).unwrap();
+            backend.reported.store(false, Ordering::Relaxed);
             let result = {
                 let _scope = acceleration::scope(Some(backend.clone()));
                 plugin.apply(&input, canvas, selection, &params).unwrap()
             };
+            assert!(backend.reported.load(Ordering::Relaxed), "each band case must execute on GPU");
             let (a, b) = (expected.read_region(rect), result.read_region(rect));
             let tolerance = match sample {
                 SampleType::U8 => 1. / 255. + 2e-6,
@@ -111,7 +114,6 @@ fn gpu_bands_match_wasm_for_depths_offsets_seams_selection_and_alpha() {
             assert!(max <= tolerance, "{sample:?} offset {x},{y}, delta {max}");
         }
     }
-    assert!(backend.reported.load(Ordering::Relaxed), "GPU must actually execute");
     assert!(!backend.failed.load(Ordering::Relaxed));
 }
 
@@ -211,10 +213,12 @@ fn session_jobs_preview_and_cpu_preference_route_to_the_correct_backend() {
     assert_ne!(px(&s), original);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(px(&s), original);
+    backend.reported.store(false, Ordering::Relaxed);
     let preview = {
         let _scope = acceleration::scope(Some(backend.clone()));
         crate::filter_dialog::preview_document(&before, layer, "plugin.run", &params, 1).unwrap()
     };
+    assert!(backend.reported.load(Ordering::Relaxed), "the preview must execute on GPU");
     assert_ne!(preview.layer(layer.unwrap()).unwrap().surface().unwrap().pixel(1, 1), original);
     assert_eq!(px(&s), original);
     backend.reported.store(false, Ordering::Relaxed);
@@ -332,4 +336,39 @@ fn built_in_presets_override_sliders_on_gpu_and_wasm() {
     }
     assert!(backend.reported.load(Ordering::Relaxed));
     assert!(!backend.failed.load(Ordering::Relaxed));
+}
+
+#[test]
+fn review_oversized_band_keeps_the_gpu_available() {
+    let _gpu_lock = photocraft_testkit::gpu_lock();
+    let mut setup = crate::gpu_canvas::wgpu_setup();
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut setup {
+        create.device_descriptor = Arc::new(|adapter| {
+            let mut descriptor = crate::gpu_canvas::device_descriptor(adapter);
+            descriptor.required_limits.max_storage_buffer_binding_size = 1 << 20;
+            descriptor
+        });
+    }
+    let rs = egui_kittest::wgpu::create_render_state(setup, Default::default());
+    let backend = Backend {
+        device: rs.device.clone(),
+        queue: rs.queue.clone(),
+        health: DeviceHealth::watch(&rs.device),
+        pass: Mutex::new(None),
+        failed: AtomicBool::new(false),
+        reported: AtomicBool::new(false),
+    };
+    let plugin = Plugin::load(WASM, Limits::default()).unwrap();
+    let params = Value::Object(plugin.manifest().resolve_params(&json!({"preset":"manual","brightness":15})).unwrap());
+    for (size, expected) in [([4, 4], true), ([512, 257], false), ([4, 4], true)] {
+        let mut pixels = [0.7, 0.48, 0.36, 1.0].repeat(size[0] as usize * size[1] as usize);
+        let before = pixels.clone();
+        let band = Band { pixels: &mut pixels, size, channels: 4, format: 8 | 256 | (3 << 16), params: &params };
+        assert_eq!(backend.filter(band, &Interrupt::NONE).unwrap(), expected);
+        assert!(!backend.failed.load(Ordering::Relaxed));
+        assert!(backend.pass.lock().unwrap().is_some(), "a refused band must retain the warmed pass");
+        if !expected {
+            assert_eq!(pixels, before);
+        }
+    }
 }

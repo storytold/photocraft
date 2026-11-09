@@ -1351,6 +1351,7 @@ pub(crate) fn preview_document_for_target(
     let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
     let mut proxy = crate::proxy::proxy_document(doc, run_k);
     let selection = proxy.selection.clone();
+    let mut p = params.clone();
     if command == photocraft_engine::plugin_cmds::RUN
         && let Some(rect) = params.get("__previewRegion")
     {
@@ -1373,8 +1374,10 @@ pub(crate) fn preview_document_for_target(
             mask.write_region(row, &values);
         }
         proxy.selection = Some(mask);
+        // A renderable smart object has its own shared filter mask. Carry the region to
+        // the new stage too, so that mask keeps its coverage, density and feather.
+        p["__previewRegion"] = json!([region.x0, region.y0, region.x1, region.y1]);
     }
-    let mut p = params.clone();
     if is_smart_edit(command) {
         let layer = match params.get("layer") {
             Some(id) => photocraft_doc::LayerId(id.as_u64()?),

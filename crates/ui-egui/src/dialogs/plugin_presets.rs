@@ -59,15 +59,18 @@ pub(super) fn restore_choices(app: &PhotocraftApp, fields: &mut Map<String, Valu
 fn values(app: &PhotocraftApp, fields: &Map<String, Value>, selection: &str) -> Option<Map<String, Value>> {
     let plugin = fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get)?;
     let m = plugin.manifest();
-    let input = if let Some(name) = selection.strip_prefix("builtin:") {
+    let mut input = if let Some(name) = selection.strip_prefix("builtin:") {
         Value::Object(m.preset_values.get(name)?.clone())
     } else {
         app.session.prefs().dialogs.get(&format!("plugin.presets.{}", plugin.id()))?.get(selection.strip_prefix("saved:")?)?.clone()
     };
+    if !m.preset_values.is_empty() {
+        input.as_object_mut()?.insert("preset".into(), json!("manual"));
+    }
     let mut values = m.resolve_params(&input).ok()?;
     // These switches are independent of preset selection and Reset.
-    values.remove("skinOnly");
     if super::skin_smooth_ui::owns(fields) {
+        values.remove("skinOnly");
         values.remove("positiveColors");
         values.remove("negativeColors");
     }

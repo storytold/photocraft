@@ -208,6 +208,7 @@ fn control_pointer_review_regression_guarded_down_does_not_arm_moves() {
 }
 
 /// Supersedes a pending mask, retries the cancelled request and verifies dialog cancellation releases preview state.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn background_mask_discards_stale_samples_and_cancel_releases_it() {
     let mut app = app();
@@ -237,12 +238,24 @@ fn background_mask_discards_stale_samples_and_cancel_releases_it() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+    let texture = app.skin_smooth_mask.as_ref().unwrap().texture.as_ref().unwrap().id();
+    let mut initial = ctx.tex_manager().write().take_delta();
+    assert!(initial.set.get(&texture).is_some_and(|updates| updates.iter().any(|delta| match &delta.image {
+        egui::ImageData::Color(image) => image.pixels.iter().any(|p| *p != Color32::BLACK),
+    })));
+    initial.clear();
     field(&mut app, NEGATIVE, json!([[0.7, 0.5, 0.4]]));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while overlay(&mut app, &ctx, doc.id, doc.bounds()).is_none() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+    let mut updated = ctx.tex_manager().write().take_delta();
+    let image = updated.set.get(&texture).and_then(|updates| updates.last()).expect("changed samples must upload new pixels");
+    let egui::ImageData::Color(image) = &image.image;
+    assert_eq!(image.size, [32, 24]);
+    assert!(image.pixels.iter().all(|p| *p == Color32::BLACK), "excluding this uniform source removes all coverage");
+    updated.clear();
     assert_eq!(app.skin_smooth_mask.as_ref().unwrap().key.as_ref().unwrap().params["values"][NEGATIVE], json!([[0.7, 0.5, 0.4]]));
     let id = app.ui.dialogs[0].id;
     crate::dialogs::cancel(&mut app, id).unwrap();

@@ -538,18 +538,15 @@ fn a_value_dialog_opens_on_its_first_number_selected_and_remembers_it() {
 #[test]
 fn plugin_enter_commits_the_number_and_focus_switch_keeps_dialog_open() {
     use egui_kittest::kittest::Queryable;
-    let mut h = dialog_harness(egui::vec2(1280.0, 800.0), "filter.blur.gaussianBlur");
-    let d = h.state_mut().ui.dialogs.last_mut().unwrap();
-    d.fields.insert("__command".into(), json!("plugin.run"));
-    d.fields.insert("__spec".into(), json!(r#"{"fine":0..100=45}"#));
-    d.fields.insert("fine".into(), json!(45));
-    d.fields.insert("__preview".into(), json!(false));
-    // Reopen so first-field focus targets the plugin number.
-    let fields = d.fields.clone();
-    h.state_mut().ui.dialogs.clear();
-    h.state_mut().ui.open_dialog(DialogKind::Command, fields);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/skin-smooth.wasm")})).unwrap();
+    app.run("file.new", json!({"width":32,"height":24,"background":"#b17d62"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "plugin.filter.local.skinsmooth.skin-smooth", json!({})).unwrap();
     h.run_steps(4);
-    assert!(h.get_by_role(egui::accesskit::Role::SpinButton).is_focused());
+    assert!(h.query_all_by_role(egui::accesskit::Role::SpinButton).any(|n| n.is_focused()), "the real dialog opens on a numeric field");
     let revision = h.state().session.active().unwrap().revision;
     h.event(egui::Event::Text("72".into()));
     h.run_steps(1);

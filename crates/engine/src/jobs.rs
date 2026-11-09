@@ -809,12 +809,14 @@ pub fn run_stepped<T: Send + 'static>(
     if !(s.jobs.spawn && s.jobs.cooperative) {
         return run(s, label, lock_document, move |ctx| drive(work, ctx), apply);
     }
+    let accelerator = s.effective_plugin_accelerator();
     let authorization = s.authorize.or_else(|| RENDER_AUTHORIZATION.with(std::cell::Cell::get));
     let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
     let (label_w, mut work) = (label.to_string(), work);
     // The slices run under the requesting session's authority and document, as a worker would.
     job.stepper = Some(Box::new(move |ctx, deadline| {
+        let _acceleration = photocraft_plugins::acceleration::scope(accelerator.clone());
         let _authorization = AuthorizationScope::enter(authorization);
         let _document = crate::doc_path::scope(document.as_deref());
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.step(ctx, deadline)))

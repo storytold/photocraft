@@ -1655,3 +1655,44 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn cooperative_steps_install_the_registered_session_accelerator() {
+    use photocraft_plugins::acceleration::{self, Accelerator, Band};
+    struct Backend;
+    impl Accelerator for Backend {
+        fn algorithm(&self) -> &str {
+            "test.cooperative"
+        }
+        fn filter(&self, _: Band<'_>, _: &photocraft_raster::Interrupt<'_>) -> photocraft_plugins::Result<bool> {
+            Ok(false)
+        }
+    }
+    struct Work(Option<std::sync::Arc<dyn Accelerator>>);
+    impl StepWork<()> for Work {
+        fn step(&mut self, _: &JobCtx, _: std::time::Instant) -> Result<Option<()>> {
+            let current = acceleration::current();
+            assert_eq!(current.is_some(), self.0.is_some());
+            if let (Some(current), Some(expected)) = (current, &self.0) {
+                assert!(std::sync::Arc::ptr_eq(&current, expected));
+            }
+            Ok(Some(()))
+        }
+    }
+    let ambient: std::sync::Arc<dyn Accelerator> = std::sync::Arc::new(Backend);
+    let _scope = acceleration::scope(Some(ambient.clone()));
+    for enabled in [true, false] {
+        let expected = enabled.then(|| std::sync::Arc::new(Backend) as std::sync::Arc<dyn Accelerator>);
+        let mut s = session(8, 8);
+        s.jobs.spawn = true;
+        s.set_cooperative_jobs(true);
+        s.plugin_accelerator = expected.clone();
+        run_stepped(&mut s, "Accelerator", false, Work(expected), |_, ()| Ok(Value::Null)).unwrap();
+        s.plugin_accelerator = None; // Registration captures the choice; a later preference cannot change it.
+        let mut job = s.jobs.pending.take().unwrap();
+        for _ in 0..2 {
+            job.stepper.as_mut().unwrap()(&job.ctx, std::time::Instant::now()).unwrap();
+        }
+        assert!(std::sync::Arc::ptr_eq(&acceleration::current().unwrap(), &ambient));
+    }
+}

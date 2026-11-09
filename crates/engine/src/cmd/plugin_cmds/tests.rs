@@ -524,3 +524,20 @@ fn untagged_skin_smooth_matches_the_same_pixels_tagged_with_the_host_default() {
         assert_eq!(pixels(&untagged), before);
     }
 }
+
+#[test]
+fn smart_plugin_progress_keeps_the_stacks_progress_interval() {
+    let plugin = photocraft_plugins::Plugin::load(INVERT, Default::default()).unwrap();
+    let id = plugin.id().to_string();
+    registry::install(plugin);
+    let canvas = photocraft_geom::Rect::new(0, 0, 32, 24);
+    let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surface.fill_rect(canvas, &[0.2, 0.4, 0.6, 1.0]);
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.progress(0.25, "stack");
+    let result = crate::filters::apply_filter_to_surface_in(RUN, &json!({"id":id}), &surface, canvas, None, canvas, &ctx).unwrap().unwrap();
+    assert_ne!(result.pixel(1, 1), surface.pixel(1, 1));
+    assert_eq!(ctx.fraction(), 0.25, "a plugin cannot complete the rest of the stack");
+    ctx.cancel();
+    assert!(matches!(crate::filters::apply_filter_to_surface_in(RUN, &json!({"id":id}), &surface, canvas, None, canvas, &ctx), Err(EngineError::Cancelled)));
+}

@@ -239,3 +239,32 @@ fn preset_header_and_new_dialog_fit_all_themes_and_short_windows() {
         }
     }
 }
+
+#[test]
+fn another_plugins_skin_only_colors_survive_builtin_preset_restore() {
+    // Reuse the sandbox fixture with same-length, padded manifest data; its filter is never run.
+    let mut bytes = include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm").to_vec();
+    let start = bytes.windows(8).position(|w| w == b"{\n  \"id\"").unwrap();
+    let mut stream = serde_json::Deserializer::from_slice(&bytes[start..]).into_iter::<Value>();
+    let mut manifest = stream.next().unwrap().unwrap();
+    let length = stream.byte_offset();
+    manifest["id"] = json!("test.presets.colors");
+    manifest["accelerator"] = json!("");
+    manifest["params"]["skinOnly"] = json!({"type":"colors"});
+    for values in manifest["presetValues"].as_object_mut().unwrap().values_mut() {
+        values["skinOnly"] = json!([]);
+    }
+    let colors = json!([[0.7, 0.5, 0.4]]);
+    manifest["presetValues"]["soft"]["skinOnly"] = colors.clone();
+    let encoded = serde_json::to_vec(&manifest).unwrap();
+    assert!(encoded.len() <= length);
+    bytes[start..start + length].fill(b' ');
+    bytes[start..start + encoded.len()].copy_from_slice(&encoded);
+    photocraft_plugins::registry::install_bytes(&bytes).unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.prefs.edit(|p| p.dialogs.insert("plugin.choices.test.presets.colors".into(), json!({"__pluginPreset":"builtin:soft"})));
+    let mut fields = json!({"id":"test.presets.colors","__command":"plugin.run","skinOnly":[]}).as_object().unwrap().clone();
+    restore_choices(&app, &mut fields);
+    assert_eq!(fields["skinOnly"], colors);
+    assert_eq!(crate::filter_dialog::params_of(&fields)["skinOnly"], colors);
+}

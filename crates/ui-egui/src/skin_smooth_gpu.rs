@@ -123,6 +123,17 @@ impl Accelerator for Backend {
             packed = (top..bottom).flat_map(|y| rgba.get(y * w + left..y * w + right).unwrap_or(&[]).iter().copied()).collect();
             packed.as_slice()
         };
+        // A single oversized band falls back to WASM without retiring a healthy warmed pass.
+        let limits = self.device.limits();
+        let count = pixels.len() as u64;
+        if (pixels.len().next_power_of_two() as u64) * 16 > limits.max_storage_buffer_binding_size
+            || count.div_ceil(64) > u64::from(limits.max_compute_workgroups_per_dimension)
+            || (right - left).max(bottom - top) as u64 > u64::from(limits.max_compute_workgroups_per_dimension)
+            || right - left > 8192
+            || bottom - top > 8192
+        {
+            return Ok(false);
+        }
         let mut lock = loop {
             if ctl.cancelled() {
                 return Err(Error::Cancelled);

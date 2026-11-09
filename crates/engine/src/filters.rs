@@ -216,7 +216,9 @@ pub(crate) fn apply_filter_to_surface_in(
     }
     // WebAssembly plug-in smart filters (plugin_cmds).
     if id == crate::plugin_cmds::RUN {
-        return ctx.stage(0.0, 1.0, "Filtering", |ctl| crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas, ctl));
+        // The stack owns progress; a plug-in must not finish the job before later filters.
+        let cancelled = || ctx.cancelled();
+        return crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas, &photocraft_raster::Interrupt::cancel_only(&cancelled));
     }
     let Some(mut fp) = params_for(id, params) else { return Ok(None) };
     // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an

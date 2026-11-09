@@ -307,10 +307,9 @@ fn panned_plugin_preview_matches_full_preview_at_factor_four() {
     let proxy = crate::proxy::proxy_document(&original, 4);
     let ctx = egui::Context::default();
     let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 128.0));
-    for (center, region, visible) in [
-        ([1800.0, 1200.0], [1024, 0, 3072, 2048], DRect::new(322, 236, 578, 364)),
-        ([4200.0, 2700.0], [3072, 2048, 5120, 3072], DRect::new(922, 611, 1178, 739)),
-    ] {
+    for (center, region, visible) in
+        [([1800.0, 1200.0], [0, 0, 4096, 3072], DRect::new(322, 236, 578, 364)), ([4200.0, 2700.0], [2048, 1024, 6000, 4000], DRect::new(922, 611, 1178, 739))]
+    {
         let view = View { zoom: 0.25, center, doc_size: [6000, 4000], fit_pending: false, ..Default::default() };
         app.ui.views[0] = view.clone();
         ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
@@ -3461,4 +3460,39 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, Some(moved)).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, Some(moved)).is_none(), "a later revision isn't ours");
+}
+
+#[test]
+fn review_plugin_preview_reuses_nearby_pans_and_filters_pattern_copies() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = false;
+    app.run("file.new", json!({"width":2048,"height":128,"background":"#204060"})).unwrap();
+    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
+    );
+    let ctx = egui::Context::default();
+    let doc = app.session.active().unwrap().doc.clone();
+    let set_region = |r| ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("plugin-preview-region", doc.id)), r));
+    set_region(DRect::new(200, 0, 300, 128));
+    ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+    let first = app.filter_preview.as_ref().unwrap().result.clone().unwrap();
+    for x in [230, 260, 230, 200] {
+        set_region(DRect::new(x, 0, x + 100, 128));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()), "a nearby pan should reuse completed pixels");
+    }
+    app.ui.dialogs[0].fields.insert("amount".into(), json!(0.5));
+    ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()), "changed parameters invalidate reuse");
+    app.ui.view.pattern_preview = true;
+    set_region(DRect::new(3000, 0, 3100, 128));
+    ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+    let preview = app.filter_preview.as_ref().unwrap();
+    assert!(preview.key.params.get("__previewRegion").is_none());
+    assert_ne!(preview.result.as_ref().unwrap().layers[0].surface().unwrap().pixel(1, 1), doc.layers[0].surface().unwrap().pixel(1, 1));
 }

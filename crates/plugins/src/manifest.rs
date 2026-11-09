@@ -213,7 +213,9 @@ impl Manifest {
                 {
                     return Err(Error::Manifest(format!("invalid preset {name:?}")));
                 }
-                self.resolve_params(&Value::Object(values.clone())).map_err(|e| Error::Manifest(e.to_string()))?;
+                let mut values = values.clone();
+                values.insert("preset".into(), json!("manual"));
+                self.resolve_params(&Value::Object(values)).map_err(|e| Error::Manifest(e.to_string()))?;
             }
         }
         Ok(())
@@ -255,7 +257,13 @@ impl Manifest {
             _ => return Err(Error::Params("plug-in parameters must be a JSON object".into())),
         };
         // A saved named preset must contain the values that the built-in choice actually uses.
-        let preset_params = given.get("preset").and_then(Value::as_str).and_then(|key| self.preset_values.get(key)).map(|values| {
+        let preset = given.get("preset").filter(|v| !v.is_null()).and_then(Value::as_str).or_else(|| {
+            self.params.iter().find_map(|(key, spec)| match spec {
+                ParamSpec::Choice { options, default } if key == "preset" => default.as_deref().or_else(|| options.first().map(String::as_str)),
+                _ => None,
+            })
+        });
+        let preset_params = preset.and_then(|key| self.preset_values.get(key)).map(|values| {
             let mut p = given.clone();
             p.extend(values.clone());
             p
@@ -335,6 +343,11 @@ impl Manifest {
     /// below that minimum. A clamped value would change the feature size (as for built-in filters,
     /// #2063), so such a preview runs less reduced instead. Always at least 1.
     pub fn preview_factor(&self, params: &Map<String, Value>, k: u32) -> u32 {
+        if self.pixel_params().next().is_none() {
+            return k.max(1);
+        }
+        let resolved = if self.preset_values.is_empty() { None } else { self.resolve_params(&Value::Object(params.clone())).ok() };
+        let params = resolved.as_ref().unwrap_or(params);
         self.pixel_params().fold(k.max(1), |k, (key, min, max, default, _)| match Self::pixel_value(params, key, min, max, default) {
             Some(v) if min > 0.0 => k.min((v / min).floor().max(1.0).min(f64::from(k)) as u32),
             Some(v) if max < 0.0 => k.min((v / max).floor().max(1.0).min(f64::from(k)) as u32),
@@ -348,8 +361,16 @@ impl Manifest {
     /// document pixels as OK applies (#7524). Unitless parameters, unknown keys and values of the
     /// wrong type (which [`Manifest::resolve_params`] rejects) are left as they are.
     pub fn scale_for_preview(&self, params: &mut Map<String, Value>, k: u32) {
-        if k <= 1 {
+        if k <= 1 || self.pixel_params().next().is_none() {
             return;
+        }
+        // Host-managed presets require a manual choice. Expand once, then keep the scaled
+        // editable values through subsequent command/runtime resolution.
+        if !self.preset_values.is_empty()
+            && let Ok(resolved) = self.resolve_params(&Value::Object(params.clone()))
+        {
+            params.extend(resolved);
+            params.insert("preset".into(), json!("manual"));
         }
         let k = f64::from(k);
         for (key, min, max, default, int) in self.pixel_params() {
@@ -847,6 +868,43 @@ mod tests {
         for values in [json!({"__command":"file.exit"}), json!({"id":"other.plugin"}), json!({"fine":"wrong"}), json!({"preset":"soft"})] {
             value["presetValues"]["soft"] = values;
             assert!(Manifest::parse(value.to_string().as_bytes()).is_err());
+        }
+    }
+    fn preset_manifest() -> Manifest {
+        Manifest::parse(
+            br#"{"id":"test.preset-pixels","name":"Preset pixels","kind":"filter",
+          "params":{"preset":{"type":"choice","options":["manual","soft"],"default":"soft"},
+          "radius":{"type":"number","min":1,"max":100,"default":8,"unit":"px"},
+          "fine":{"type":"number","min":0,"max":100,"default":45}},
+          "presetValues":{"soft":{"radius":12,"fine":70}}}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn default_preset_is_expanded_for_missing_and_null_choices() {
+        let m = preset_manifest();
+        for input in [Value::Null, json!({}), json!({"preset":null}), json!({"preset":"soft"})] {
+            let first = m.resolve_params(&input).unwrap();
+            assert_eq!(first["fine"], 70.0);
+            assert_eq!(first["radius"], 12.0);
+            assert_eq!(m.resolve_params(&Value::Object(first.clone())).unwrap(), first);
+        }
+        assert!(m.resolve_params(&json!({"preset":"invalid"})).is_err());
+        assert!(m.resolve_params(&json!({"preset":true})).is_err());
+    }
+
+    #[test]
+    fn named_presets_keep_scaled_pixels_after_repeated_resolution() {
+        let m = preset_manifest();
+        for input in [json!({}), json!({"preset":"soft","radius":99})] {
+            let mut p = input.as_object().unwrap().clone();
+            assert_eq!(m.preview_factor(&p, 16), 12);
+            m.scale_for_preview(&mut p, 4);
+            let resolved = m.resolve_params(&Value::Object(p)).unwrap();
+            assert_eq!(resolved["radius"], 3.0);
+            assert_eq!(resolved["fine"], 70.0);
+            assert_eq!(m.resolve_params(&Value::Object(resolved.clone())).unwrap(), resolved);
         }
     }
 }

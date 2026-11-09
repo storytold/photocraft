@@ -1761,7 +1761,7 @@ fn plugin_viewport_preserves_selection_alpha_and_final_full_run() {
     use photocraft_color::{PixelFormat, SampleType};
     use photocraft_geom::Rect;
     use photocraft_raster::Surface;
-    let plugin = photocraft_plugins::Plugin::load(include_bytes!("../../../../plugins/tests/fixtures/invert.wasm"), Default::default()).unwrap();
+    let plugin = photocraft_plugins::Plugin::load(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm"), Default::default()).unwrap();
     let id = plugin.id().to_string();
     photocraft_plugins::registry::install(plugin);
     for depth in [8, 16, 32] {
@@ -1785,11 +1785,26 @@ fn plugin_viewport_preserves_selection_alpha_and_final_full_run() {
             Ok(())
         })
         .unwrap();
+        s.execute("edit.assignProfile", json!({"profile":"srgb"})).unwrap();
         let st = s.active().unwrap();
         let (doc, active) = (st.doc.clone(), st.active_layer);
-        let full = preview_document(&doc, active, "plugin.run", &json!({"id":id}), 1).unwrap();
+        let full = preview_document(
+            &doc,
+            active,
+            "plugin.run",
+            &json!({"id":id,"preset":"manual","skinOnly":false,"fine":100,"medium":100,"large":100,"detail":0}),
+            1,
+        )
+        .unwrap();
         let region = Rect::new(237, 199, 623, 401);
-        let local = preview_document(&doc, active, "plugin.run", &json!({"id":id,"__previewRegion":[237,199,623,401]}), 1).unwrap();
+        let local = preview_document(
+            &doc,
+            active,
+            "plugin.run",
+            &json!({"id":id,"preset":"manual","skinOnly":false,"fine":100,"medium":100,"large":100,"detail":0,"__previewRegion":[237,199,623,401]}),
+            1,
+        )
+        .unwrap();
         let surface = |d: &photocraft_doc::Document| d.layer(active.unwrap()).unwrap().surface().unwrap().clone();
         let (original, expected, result) = (surface(&doc), surface(&full), surface(&local));
         assert_ne!(expected.pixel(237, 199), original.pixel(237, 199), "{depth}: the full preview changes the opaque input pixel");
@@ -1799,13 +1814,27 @@ fn plugin_viewport_preserves_selection_alpha_and_final_full_run() {
             assert_eq!(result.pixel(x, y).last(), original.pixel(x, y).last());
         }
         // The dialog's final command has no preview-only region: pixels outside it also change.
-        s.execute("plugin.run", json!({"id":id})).unwrap();
+        s.execute("plugin.run", json!({"id":id,"preset":"manual","skinOnly":false,"fine":100,"medium":100,"large":100,"detail":0})).unwrap();
         assert_eq!(surface(&s.active().unwrap().doc).read_region(doc.bounds()), expected.read_region(doc.bounds()));
 
         // At factor 4, right=623 and bottom=401 must round outward to proxy bounds (156, 101).
         let proxy = crate::proxy::proxy_document(&doc, 4);
-        let full = preview_document(&doc, active, "plugin.run", &json!({"id":id}), 4).unwrap();
-        let local = preview_document(&doc, active, "plugin.run", &json!({"id":id,"__previewRegion":[237,199,623,401]}), 4).unwrap();
+        let full = preview_document(
+            &doc,
+            active,
+            "plugin.run",
+            &json!({"id":id,"preset":"manual","skinOnly":false,"fine":100,"medium":100,"large":100,"detail":0}),
+            4,
+        )
+        .unwrap();
+        let local = preview_document(
+            &doc,
+            active,
+            "plugin.run",
+            &json!({"id":id,"preset":"manual","skinOnly":false,"fine":100,"medium":100,"large":100,"detail":0,"__previewRegion":[237,199,623,401]}),
+            4,
+        )
+        .unwrap();
         let (original, expected, result) = (surface(&proxy), surface(&full), surface(&local));
         assert_eq!(local.selection.as_ref().unwrap().read_region(proxy.bounds()), proxy.selection.as_ref().unwrap().read_region(proxy.bounds()));
         for (x, y) in [(155, 80), (80, 100)] {
@@ -1896,4 +1925,49 @@ fn indexed_matte_cancel_keeps_the_previous_choice() {
     let parent = harness.state().ui.dialogs.iter().find(|dialog| dialog.id == id).expect("Indexed Color dialog");
     assert_eq!(parent.fields.get("matte").and_then(Value::as_str), None, "cancel restores the previous None choice");
     assert!(!parent.fields.contains_key("__pickColorDefault"));
+}
+
+#[test]
+fn review_smart_plugin_region_keeps_existing_mask_and_other_pixels() {
+    let plugin = photocraft_plugins::Plugin::load(include_bytes!("../../../../plugins/tests/fixtures/invert.wasm"), Default::default()).unwrap();
+    let id = plugin.id().to_string();
+    photocraft_plugins::registry::install(plugin);
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width":128,"height":64,"depth":32,"background":"#804020"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    s.edit("mask", |doc, _| {
+        let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(layer).unwrap().content else { panic!("smart object") };
+        let mut mask = photocraft_doc::LayerMask::reveal_all();
+        mask.density = 0.6;
+        mask.feather = 2.0;
+        mask.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 128, 64), &[0.4]);
+        sm.filter_mask = Some(mask);
+        Ok(())
+    })
+    .unwrap();
+    let doc = &s.active().unwrap().doc;
+    for k in [1, 4] {
+        let full = preview_document(doc, Some(layer), "plugin.run", &json!({"id":id}), k).unwrap();
+        let local = preview_document(doc, Some(layer), "plugin.run", &json!({"id":id,"__previewRegion":[32,16,96,48]}), k).unwrap();
+        let proxy = crate::proxy::proxy_document(doc, k);
+        let cache = |d: &photocraft_doc::Document| match &d.layer(layer).unwrap().content {
+            photocraft_doc::LayerContent::Smart(sm) => sm.cache.as_ref().unwrap().clone(),
+            _ => panic!("smart"),
+        };
+        let photocraft_doc::LayerContent::Smart(original_sm) = &proxy.layer(layer).unwrap().content else { panic!("smart") };
+        let original = photocraft_engine::smart_cmds::render(&proxy, original_sm).unwrap().unwrap();
+        let photocraft_doc::LayerContent::Smart(local_sm) = &local.layer(layer).unwrap().content else { panic!("smart") };
+        let (before_mask, after_mask) = (original_sm.filter_mask.as_ref().unwrap(), local_sm.filter_mask.as_ref().unwrap());
+        assert_eq!((before_mask.density, before_mask.feather), (after_mask.density, after_mask.feather));
+        assert_eq!(before_mask.surface.read_region(proxy.bounds()), after_mask.surface.read_region(proxy.bounds()));
+        let (full, local) = (cache(&full), cache(&local));
+        let r = photocraft_geom::Rect::new(32 / k as i32, 16 / k as i32, 96 / k as i32, 48 / k as i32);
+        assert_ne!(full.pixel(r.x0, r.y0), original.pixel(r.x0, r.y0));
+        for y in 0..64 / k as i32 {
+            for x in 0..128 / k as i32 {
+                assert_eq!(local.pixel(x, y), if r.contains(x, y) { full.pixel(x, y) } else { original.pixel(x, y) }, "factor {k} at {x},{y}");
+            }
+        }
+    }
 }

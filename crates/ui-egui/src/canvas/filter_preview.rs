@@ -68,14 +68,26 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     // Only the preview copy gets this region. OK still dispatches the dialog's full parameters.
     if cmd == photocraft_engine::plugin_cmds::RUN
         && !multiple_views
+        && !app.ui.view.pattern_preview
         && let Some(visible) = ctx.data(|data| data.get_temp::<photocraft_geom::Rect>(egui::Id::unique(("plugin-preview-region", st.doc.id))))
         && let Some(p) = params.as_object_mut()
     {
         let r = visible.intersect(&st.doc.bounds());
-        // Snap outward to preview tiles so small pans reuse a completed computation.
+        // Retain completed coverage while it contains the viewport. A tile of overscan
+        // avoids synchronous refiltering when a web view pans around a tile boundary.
         let q = (k as i32).saturating_mul(photocraft_geom::TILE_SIZE).max(1);
         let up = |x: i32| x.div_euclid(q).saturating_add(i32::from(x.rem_euclid(q) != 0)).saturating_mul(q);
-        let r = photocraft_geom::Rect::new(r.x0.div_euclid(q) * q, r.y0.div_euclid(q) * q, up(r.x1), up(r.y1)).intersect(&st.doc.bounds());
+        let previous = app
+            .filter_preview
+            .as_ref()
+            .filter(|p| p.key.doc == st.doc.id && p.key.k == k)
+            .and_then(|p| p.key.params.get("__previewRegion"))
+            .and_then(|v| serde_json::from_value::<[i32; 4]>(v.clone()).ok())
+            .map(|[x0, y0, x1, y1]| photocraft_geom::Rect::new(x0, y0, x1, y1))
+            .filter(|previous| previous.intersect(&r) == r);
+        let r = previous.unwrap_or_else(|| {
+            photocraft_geom::Rect::new(r.x0.div_euclid(q) * q, r.y0.div_euclid(q) * q, up(r.x1), up(r.y1)).inflate(q).intersect(&st.doc.bounds())
+        });
         p.insert("__previewRegion".into(), serde_json::json!([r.x0, r.y0, r.x1, r.y1]));
     }
     let request = crate::filter_dialog::FilterPreviewKey {

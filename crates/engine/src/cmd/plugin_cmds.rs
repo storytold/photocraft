@@ -181,13 +181,16 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 }
                 LayerContent::Smart(_) => {
-                    let sf = SmartFilter {
+                    let mut sf = SmartFilter {
                         command: RUN.into(),
                         params: json!({"id": id, "params": resolved}),
                         blend: photocraft_color::BlendMode::Normal,
                         opacity: 1.0,
                         visible: true,
                     };
+                    if let Some(region) = p.get("__previewRegion") {
+                        sf.params["__previewRegion"] = region.clone();
+                    }
                     crate::smart_cmds::add_smart_filter_in(doc, layer, sf, selection.as_ref(), ctx)
                 }
                 other => {
@@ -214,7 +217,14 @@ pub(crate) fn apply_to_surface(
         return Ok(None);
     }
     let Some(plugin) = params.get("id").and_then(Value::as_str).and_then(registry::get) else { return Ok(None) };
-    match plugin.apply_with(surf, canvas, selection, params.get("params").unwrap_or(&Value::Null), ctl) {
+    let region_mask = params.get("__previewRegion").filter(|_| selection.is_none()).and_then(|v| serde_json::from_value::<[i32; 4]>(v.clone()).ok()).map(
+        |[x0, y0, x1, y1]| {
+            let mut mask = Surface::new(photocraft_color::PixelFormat::GRAY8);
+            mask.fill_rect(photocraft_geom::Rect::new(x0, y0, x1, y1).intersect(&canvas), &[1.0]);
+            mask
+        },
+    );
+    match plugin.apply_with(surf, canvas, selection.or(region_mask.as_ref()), params.get("params").unwrap_or(&Value::Null), ctl) {
         Ok(out) => Ok(Some(out)),
         Err(photocraft_plugins::Error::Cancelled) => Err(EngineError::Cancelled),
         Err(_) => Ok(None),
