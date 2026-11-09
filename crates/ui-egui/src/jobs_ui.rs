@@ -46,6 +46,9 @@ pub struct OpenTab {
     pub slot: Option<usize>,
     /// Its place in a set of files opened together, when it is one of several (see [`OpenOrder`]).
     pub order: Option<OpenOrder>,
+    /// The file's bytes when it has no path (a drop, a web picker): a raw's Camera Raw dialog
+    /// develops from them, as it does for a file opened inline.
+    pub bytes: Option<Arc<Vec<u8>>>,
 }
 
 /// A file's place in a set opened together (File › Open with several files, paths on the command
@@ -281,12 +284,16 @@ pub fn start_open(
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
     let name = &app.open_name(name);
+    let bytes = match (&source, &path) {
+        (OpenSource::Bytes(b), None) => Some(b.clone()),
+        _ => None,
+    };
     match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
-        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
+        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order, bytes),
         Started::Job(job) => {
-            track_open(app, OpenTab { job, name: name.to_string(), path, slot, order });
+            track_open(app, OpenTab { job, name: name.to_string(), path, slot, order, bytes });
             Ok(())
         }
     }
@@ -315,9 +322,9 @@ pub(crate) fn start_open_as_smart_object(app: &mut PhotocraftApp, path: &str, or
         Started::Done(app.session.execute("file.openAsSmartObject", params).map_err(|e| e.to_string())?)
     };
     match started {
-        Started::Done(v) => finish_open(app, &name, None, &v, None, order),
+        Started::Done(v) => finish_open(app, &name, None, &v, None, order, None),
         Started::Job(job) => {
-            track_open(app, OpenTab { job, name, path: None, slot: None, order });
+            track_open(app, OpenTab { job, name, path: None, slot: None, order, bytes: None });
             Ok(())
         }
     }
@@ -371,7 +378,7 @@ pub(crate) fn tab_slot(app: &mut PhotocraftApp, slot: Option<usize>, order: Opti
 /// [`JobsUi::opens`]: the document goes to the tab's slot, or to its place in its set. A memory
 /// preflight keeps both in its prompt.
 pub(crate) fn finish_open_tab(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value) -> Result<(), String> {
-    let r = finish_open(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order);
+    let r = finish_open(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order, tab.bytes.clone());
     end_batch(app);
     r
 }
@@ -696,7 +703,16 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 /// (`{document, docId, warnings, color}` or `{held, …}`). `slot` and `order` are the tab position
 /// and set place the file keeps: through a memory prompt, a profile/damage prompt and the final
 /// document, so an inline completion lands where a background tab would.
-fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
+/// `bytes` are the file's when it has no path, kept for a raw's Camera Raw dialog.
+fn finish_open(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<&str>,
+    v: &Value,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+    bytes: Option<Arc<Vec<u8>>>,
+) -> Result<(), String> {
     if let Some(preflight_id) = v.get("pendingPreflight").and_then(Value::as_u64) {
         let estimated = v.get("estimated").and_then(Value::as_u64).unwrap_or(0);
         let available = v.get("availableRam").and_then(Value::as_u64);
@@ -718,6 +734,8 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    // Only a developed raw develops again from its bytes.
+    let bytes = bytes.filter(|_| path.is_none() && warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)));
     let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
         doc,
         read_only,
@@ -725,7 +743,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         name: name.to_string(),
         path: path.map(str::to_string),
         warnings: warnings.clone(),
-        bytes: None,
+        bytes: bytes.clone(),
         slot,
         order,
         question,
@@ -754,7 +772,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     if let Some(slot) = tab_slot(app, slot, order) {
         let _ = app.run("document.move", json!({"document": index, "to": slot}));
     }
-    after_open(app, document, name, path, &warnings, None)
+    after_open(app, document, name, path, &warnings, bytes.as_deref().map(Vec::as_slice))
 }
 
 /// What every open does for its admitted document: remember where it came from, say

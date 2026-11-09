@@ -1274,6 +1274,25 @@ fn two_raws_opened_back_to_back_both_finish_their_open() {
     }
 }
 
+/// A raw with no path opened in the background keeps its bytes for the dialog, as one opened
+/// inline does: without them Open could not develop the raw-stage settings from the sensor data.
+#[test]
+fn a_raw_opened_from_bytes_in_the_background_keeps_its_bytes() {
+    let ctx = egui::Context::default();
+    let (mut app, dng) = raw_app();
+    app.background_jobs = true;
+    app.open_bytes("bytes.dng", &dng).unwrap();
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.jobs.opens.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let raw = take_queued(&mut app).expect("the raw waits for the dialog");
+    assert_eq!(raw.bytes.as_deref().map(Vec::len), Some(dng.len()));
+}
+
 /// A sidecar is read only from a regular file of at most `MAX_XMP_BYTES`: a folder, or a file
 /// one byte larger, is not read (a pipe or device named like one would never end).
 #[test]

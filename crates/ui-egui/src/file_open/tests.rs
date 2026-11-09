@@ -1427,7 +1427,14 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
     let (mut app, _) = app_with(Vec::new());
     app.open_bytes("existing.psd", b"x").unwrap();
     let batch = jobs_ui::begin_batch(&mut app);
-    let tab = |seq: usize| OpenTab { job: JobId(100 + seq as u64), name: format!("f{seq}.psd"), path: None, slot: None, order: Some(OpenOrder { batch, seq }) };
+    let tab = |seq: usize| OpenTab {
+        job: JobId(100 + seq as u64),
+        name: format!("f{seq}.psd"),
+        path: None,
+        slot: None,
+        order: Some(OpenOrder { batch, seq }),
+        bytes: None,
+    };
     app.jobs.opens.extend((0..4).map(tab));
     // f1 opened at once (a preset file, say, or background jobs off for it).
     app.jobs.opens.remove(1);
@@ -1449,11 +1456,11 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
     assert_eq!(app.ui.views.len(), 5, "views follow their documents");
     assert!(app.jobs.batches.is_empty(), "forgotten once every member opened");
     // A tab with a slot (dropped on the tabs) keeps it; one from a forgotten set goes to the end.
-    let dropped = OpenTab { job: JobId(200), name: "dropped.psd".into(), path: None, slot: Some(0), order: None };
+    let dropped = OpenTab { job: JobId(200), name: "dropped.psd".into(), path: None, slot: Some(0), order: None, bytes: None };
     let index = app.session.add_document(Document::new("dropped.psd", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
     let id = app.session.documents()[index].doc.id;
     jobs_ui::finish_open_tab(&mut app, &dropped, &json!({"document": index, "docId": id.0})).unwrap();
-    let late = OpenTab { job: JobId(201), name: "late.psd".into(), path: None, slot: None, order: Some(OpenOrder { batch: 999, seq: 0 }) };
+    let late = OpenTab { job: JobId(201), name: "late.psd".into(), path: None, slot: None, order: Some(OpenOrder { batch: 999, seq: 0 }), bytes: None };
     let index = app.session.add_document(Document::new("late.psd", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
     let id = app.session.documents()[index].doc.id;
     jobs_ui::finish_open_tab(&mut app, &late, &json!({"document": index, "docId": id.0})).unwrap();
