@@ -2610,8 +2610,8 @@ cameraRaw	Yellow	पीला
 	Layer Mask Hides Effects	लेयर मास्क इफ़ेक्ट्स छिपाता है
 	Layer Properties	लेयर गुण
 	Layer Styles	लेयर स्टाइल्स
-	Layer via Copy	कॉपी द्वारा लेयर
-	Layer via Cut	कट द्वारा लेयर
+	Layer Via Copy	कॉपी द्वारा लेयर
+	Layer Via Cut	कट द्वारा लेयर
 	Layers Panel Options	लेयर्स पैनल विकल्प
 	Layers to Files	लेयर्स से फ़ाइलें
 	Layers to Files…	लेयर्स से फ़ाइलें…
@@ -4817,3 +4817,61 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The document or its notes changed. Please delete the note again.	दस्तावेज़ या उसके नोट्स बदल गए हैं। कृपया नोट फिर से हटाएँ।
 	Working CMY Plates	वर्किंग CMY प्लेट्स
 @plural	{what}: {n} file failed|{what}: {n} files failed	{what}: {n} फ़ाइल विफल रही|{what}: {n} फ़ाइलें विफल रहीं
+
+# Keys added on main since 2026-11-07
+	Allow Tool Recording	टूल रिकॉर्डिंग की अनुमति दें
+	Allows rotation and scaling of selection	चयन को घुमाने और स्केल करने देता है
+	Bottom align text	टेक्स्ट नीचे संरेखित करें
+	Choose a menu command. Playback asks for its settings when needed.	एक मेनू कमांड चुनें। ज़रूरत पड़ने पर प्लेबैक उसकी सेटिंग्स पूछता है।
+	Choose a remix mode	रीमिक्स मोड चुनें
+	Click and move left or right to scale using the Zoom Tool (OpenGL only)	ज़ूम टूल से स्केल करने के लिए क्लिक करके बाएँ या दाएँ खींचें (केवल OpenGL)
+	Confirm or cancel the pending Record Again editor first.	पहले लंबित फिर से रिकॉर्ड संपादक की पुष्टि करें या उसे रद्द करें।
+	Confirm or cancel the pending menu item first.	पहले लंबित मेनू आइटम की पुष्टि करें या उसे रद्द करें।
+	Copy CSS	CSS कॉपी करें
+	Could not use the type tool because the layer is locked.	टाइप टूल का उपयोग नहीं हो सका क्योंकि लेयर लॉक है।
+	Do not erase the foreground swatch color	फ़ोरग्राउंड स्वॉच का रंग न मिटाएँ
+	Draws background color over foreground colors	फ़ोरग्राउंड रंगों पर बैकग्राउंड रंग बनाता है
+	Enable to remix all layers	सभी लेयर्स का रीमिक्स करने के लिए चालू करें
+	Erase range of similar colors	मिलते-जुलते रंगों को मिटाने की सीमा
+	How far to let the erasing spread	मिटाने को कितनी दूर तक फैलने दें
+	Insert Menu Item…	मेनू आइटम डालें…
+	Insert Path	पाथ डालें
+	No document.	कोई दस्तावेज़ नहीं।
+	No menu item belongs to this chooser.	इस चयनकर्ता से कोई मेनू आइटम संबंधित नहीं है।
+	No menu item is waiting.	कोई मेनू आइटम प्रतीक्षा में नहीं है।
+	No pixels are selected.	कोई पिक्सेल चयनित नहीं हैं।
+	No recorded step belongs to this editor.	कोई रिकॉर्ड किया गया चरण इस संपादक का नहीं है।
+	No settings saved: these raws can't keep a sidecar here	कोई सेटिंग सहेजी नहीं गई: ये Raw फ़ाइलें यहाँ साइडकार फ़ाइल नहीं रख सकतीं।
+	No step is waiting.	कोई चरण प्रतीक्षा में नहीं है।
+	Nothing to save: these raws are at their default settings	सहेजने के लिए कुछ नहीं: ये Raw फ़ाइलें अपनी डिफ़ॉल्ट सेटिंग्स पर हैं।
+	Open as Smart Object…	स्मार्ट ऑब्जेक्ट के रूप में खोलें…
+	Preparing Free Transform	मुक्त रूपांतरण तैयार हो रहा है
+	Record Again	फिर से रिकॉर्ड करें
+	Resize windows when zooming using the Zoom Tool	ज़ूम टूल से ज़ूम करते समय विंडो का आकार बदलें
+	Save the settings to each raw's sidecar without opening it	बिना खोले हर Raw फ़ाइल की साइडकार में सेटिंग्स सहेजें
+	Saved Camera Raw settings to {file}	{file} में Camera Raw सेटिंग्स सहेजी गईं
+	Scroll all open document windows when using the hand tool	हैंड टूल का उपयोग करते समय सभी खुली दस्तावेज़ विंडो स्क्रॉल करें
+	Search and select fonts	फ़ॉन्ट खोजें और चुनें
+	Select an action first.	पहले एक एक्शन चुनें।
+	Select an action step first.	पहले एक एक्शन चरण चुनें।
+	Set font size	फ़ॉन्ट साइज़ सेट करें
+	Set font style	फ़ॉन्ट शैली सेट करें
+	Set text color	टेक्स्ट का रंग सेट करें
+	Set the brush angle	ब्रश का कोण सेट करें
+	Some settings could not be saved; the raws stay open	कुछ सेटिंग्स सहेजी नहीं जा सकीं; Raw फ़ाइलें खुली रहती हैं।
+	The Record Again command changed.	फिर से रिकॉर्ड कमांड बदल गया।
+	The action or insertion command changed. Request Insert Menu Item again.	एक्शन या डालने का कमांड बदल गया। मेनू आइटम डालें को फिर से चलाएँ।
+	The actions changed. Request Record Again again.	एक्शन्स बदल गए। फिर से रिकॉर्ड करें को फिर से चलाएँ।
+	The command permissions changed. Request Insert Menu Item again.	कमांड की अनुमतियाँ बदल गईं। मेनू आइटम डालें को फिर से चलाएँ।
+	The command permissions changed. Request Record Again again.	कमांड की अनुमतियाँ बदल गईं। फिर से रिकॉर्ड करें को फिर से चलाएँ।
+	The document changed. Request Record Again again.	दस्तावेज़ बदल गया। फिर से रिकॉर्ड करें को फिर से चलाएँ।
+	The preference could not be saved: {error}	प्राथमिकता सहेजी नहीं जा सकी: {error}
+	The step editor could not be opened.	चरण संपादक खोला नहीं जा सका।
+	The step has no command editor.	इस चरण का कोई कमांड संपादक नहीं है।
+	Top align text	टेक्स्ट ऊपर संरेखित करें
+	Use relative positioning for reference point	संदर्भ बिंदु के लिए सापेक्ष स्थिति का उपयोग करें
+	Useful mixer brush combinations	उपयोगी मिक्सर ब्रश संयोजन
+	Zoom current window to 1:1	वर्तमान विंडो को 1:1 पर ज़ूम करें
+	Zoom current window to fill the screen	वर्तमान विंडो को स्क्रीन भरने तक ज़ूम करें
+	Zoom current window to screen size	वर्तमान विंडो को स्क्रीन साइज़ पर ज़ूम करें
+	brush tool	ब्रश टूल
