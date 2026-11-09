@@ -406,8 +406,8 @@
 	Artboard…	Prancheta…
 	Artboard from Group…	Prancheta a partir de grupo…
 	Artboard from Layers…	Prancheta a partir de camadas…
-	Layer via Copy	Camada via cópia
-	Layer via Cut	Camada via recorte
+	Layer Via Copy	Camada via cópia
+	Layer Via Cut	Camada via recorte
 	Layer From Background…	Camada a partir do plano de fundo…
 	Layer from Background…	Camada a partir do plano de fundo…
 	Background From Layer	Plano de fundo a partir da camada
@@ -4321,7 +4321,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	This layer must be rasterized before proceeding.	Esta camada precisa ser rasterizada antes de continuar.
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Esta camada de texto precisa ser rasterizada antes de continuar. O texto não poderá mais ser editado. Rasterizar o texto?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Esta camada de forma precisa ser rasterizada antes de continuar. Ela não poderá mais ser editada como forma. Rasterizar a forma?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
 	Graphics adapter: {adapter}	Adaptador gráfico: {adapter}
 	Backend: {backend} ({type})	Backend: {backend} ({type})
@@ -4433,8 +4433,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+	Scroll All Windows	Rolar todas as janelas
 	The path was kept as the Work Path	O demarcador foi mantido como demarcador de trabalho
 	The path was discarded	O demarcador foi descartado
+# Art History Brush (#213).
 	Art History Brush Tool	Ferramenta Pincel do histórico da arte
 	Tight Short	Curto cerrado
 	Tight Medium	Médio cerrado
@@ -4520,6 +4522,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Escolha um documento diferente para cada canal.
 	A picked document is no longer open.	Um dos documentos escolhidos não está mais aberto.
 	A picked document is no longer a grayscale document of the same size.	Um dos documentos escolhidos não é mais um documento em tons de cinza do mesmo tamanho.
+	Netscape Gray	Cinza Netscape
 # Move tool options bar (#11381)
 	Align top edges	Alinhar bordas superiores
 	Align vertical centers	Alinhar centros verticais
