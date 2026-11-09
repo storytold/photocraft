@@ -4716,3 +4716,35 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW დამუშავების პარამეტრები შენახულია {file}-ში
+
+# Native XCF import report
+	Import Conversion Report	იმპორტის კონვერტაციის ანგარიში
+	Import-time outcomes. Editing uses native PhotoCraft rules.	იმპორტის შედეგები. რედაქტირებისას გამოიყენება PhotoCraft-ის საკუთარი წესები.
+	A newer report format is retained. Its details cannot be displayed.	შენახულია ანგარიშის უფრო ახალი ფორმატი. მისი დეტალების ჩვენება შეუძლებელია.
+	No conversion report was recorded.	კონვერტაციის ანგარიში არ ჩაწერილა.
+	No entries on this page.	ამ გვერდზე ჩანაწერები არ არის.
+	Layer mask	შრის ნიღაბი
+	Source item	წყაროს ელემენტი
+	{first}–{last} of {total}	{first}–{last}, სულ {total}
+	Native equivalent	საკუთარი ეკვივალენტი
+	Native approximation	საკუთარი მიახლოება
+	Retained, not applied	შენახულია, არ გამოყენებულა
+	Nonessential data skipped	არაარსებითი მონაცემები გამოტოვებულია
+	Unknown outcome	უცნობი შედეგი
+	Native rules	საკუთარი წესები
+	Native capability limit	საკუთარი შესაძლებლობების ზღვარი
+	Conversion not implemented	კონვერტაცია არ არის განხორციელებული
+	Resource unavailable	რესურსი მიუწვდომელია
+	Invalid optional data	არასწორი არასავალდებულო მონაცემები
+	Retention limit	შენახვის ზღვარი
+	Precision conversion	სიზუსტის გარდაქმნა
+	Unknown reason	უცნობი მიზეზი
+	Native layer {id} (removed; historical reference)	საკუთარი შრე {id} (წაშლილია; ისტორიული მითითება)
+	Native layer: {name}	საკუთარი შრე: {name}
+	Alpha Percentile	ალფას პერცენტილი
+	Alpha Weighted	ალფით შეწონილი
+	Color Percentile	ფერის პერცენტილი
+	Connectivity	დაკავშირებადობა
+	Disc	წრიული სამეზობლო
+	Each	თითოეული
+	Value	მნიშვნელობა

@@ -4632,3 +4632,35 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW emalı ayarları {file} faylında saxlanıldı
+
+# Native XCF import report
+	Import Conversion Report	İdxal çevirmə hesabatı
+	Import-time outcomes. Editing uses native PhotoCraft rules.	İdxal zamanı nəticələr. Redaktə PhotoCraft-un daxili qaydalarına əsaslanır.
+	A newer report format is retained. Its details cannot be displayed.	Daha yeni hesabat formatı saxlanılıb. Onun təfərrüatlarını göstərmək mümkün deyil.
+	No conversion report was recorded.	Çevirmə hesabatı qeydə alınmayıb.
+	No entries on this page.	Bu səhifədə qeyd yoxdur.
+	Layer mask	Qat maskası
+	Source item	Mənbə elementi
+	{first}–{last} of {total}	{first}–{last} / {total}
+	Native equivalent	Daxili ekvivalent
+	Native approximation	Daxili təxmini uyğunluq
+	Retained, not applied	Saxlanılıb, tətbiq edilməyib
+	Nonessential data skipped	Vacib olmayan məlumatlar ötürülüb
+	Unknown outcome	Naməlum nəticə
+	Native rules	Daxili qaydalar
+	Native capability limit	Daxili imkanların həddi
+	Conversion not implemented	Çevirmə həyata keçirilməyib
+	Resource unavailable	Resurs əlçatan deyil
+	Invalid optional data	Yanlış əlavə məlumatlar
+	Retention limit	Saxlama həddi
+	Precision conversion	Dəqiqlik çevirməsi
+	Unknown reason	Naməlum səbəb
+	Native layer {id} (removed; historical reference)	Daxili qat {id} (silinib; tarixçədəki istinad)
+	Native layer: {name}	Daxili qat: {name}
+	Alpha Percentile	Alfa persentili
+	Alpha Weighted	Alfa ilə çəkiləndirilmiş
+	Color Percentile	Rəng persentili
+	Connectivity	Əlaqəlilik
+	Disc	Dairəvi qonşuluq
+	Each	Hər biri
+	Value	Dəyər

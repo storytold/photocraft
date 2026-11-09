@@ -4772,3 +4772,35 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	บันทึกการตั้งค่าการปรับแต่ง RAW ไปยัง {file} แล้ว
+
+# Native XCF import report
+	Import Conversion Report	รายงานการแปลงเมื่อนำเข้า
+	Import-time outcomes. Editing uses native PhotoCraft rules.	ผลลัพธ์ขณะนำเข้า การแก้ไขใช้กฎภายในของ PhotoCraft
+	A newer report format is retained. Its details cannot be displayed.	เก็บรายงานรูปแบบที่ใหม่กว่าไว้แล้ว ไม่สามารถแสดงรายละเอียดได้
+	No conversion report was recorded.	ไม่มีการบันทึกรายงานการแปลง
+	No entries on this page.	ไม่มีรายการในหน้านี้
+	Layer mask	มาสก์เลเยอร์
+	Source item	รายการต้นฉบับ
+	{first}–{last} of {total}	{first}–{last} จาก {total}
+	Native equivalent	เทียบเท่าภายในโปรแกรม
+	Native approximation	ค่าประมาณภายในโปรแกรม
+	Retained, not applied	เก็บไว้ แต่ไม่ได้นำไปใช้
+	Nonessential data skipped	ข้ามข้อมูลที่ไม่จำเป็น
+	Unknown outcome	ผลลัพธ์ที่ไม่ทราบ
+	Native rules	กฎภายในโปรแกรม
+	Native capability limit	ขีดจำกัดความสามารถภายในโปรแกรม
+	Conversion not implemented	ยังไม่ได้พัฒนาการแปลงนี้
+	Resource unavailable	ทรัพยากรไม่พร้อมใช้งาน
+	Invalid optional data	ข้อมูลเสริมไม่ถูกต้อง
+	Retention limit	ขีดจำกัดการเก็บรักษา
+	Precision conversion	การแปลงความแม่นยำ
+	Unknown reason	เหตุผลที่ไม่ทราบ
+	Native layer {id} (removed; historical reference)	เลเยอร์ภายใน {id} (ถูกลบ; การอ้างอิงในอดีต)
+	Native layer: {name}	เลเยอร์ภายใน: {name}
+	Alpha Percentile	เปอร์เซ็นไทล์อัลฟา
+	Alpha Weighted	ถ่วงน้ำหนักด้วยอัลฟา
+	Color Percentile	เปอร์เซ็นไทล์สี
+	Connectivity	การเชื่อมต่อของพิกเซล
+	Disc	บริเวณข้างเคียงรูปวงกลม
+	Each	แต่ละรายการ
+	Value	ค่า

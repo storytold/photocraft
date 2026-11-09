@@ -4573,3 +4573,35 @@ navigator	Zoom	תקריב
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	הגדרות פיתוח RAW נשמרו ב־{file}
+
+# Native XCF import report
+	Import Conversion Report	דוח המרה בייבוא
+	Import-time outcomes. Editing uses native PhotoCraft rules.	תוצאות בזמן הייבוא. העריכה משתמשת בכללים המובנים של PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	נשמר דוח בפורמט חדש יותר. לא ניתן להציג את פרטיו.
+	No conversion report was recorded.	לא נרשם דוח המרה.
+	No entries on this page.	אין רשומות בדף זה.
+	Layer mask	מסכת שכבה
+	Source item	פריט מקור
+	{first}–{last} of {total}	{first}–{last} מתוך {total}
+	Native equivalent	מקבילה מובנית
+	Native approximation	קירוב מובנה
+	Retained, not applied	נשמר, לא הוחל
+	Nonessential data skipped	דולגו נתונים לא חיוניים
+	Unknown outcome	תוצאה לא ידועה
+	Native rules	כללים מובנים
+	Native capability limit	מגבלת יכולת מובנית
+	Conversion not implemented	ההמרה לא מומשה
+	Resource unavailable	המשאב אינו זמין
+	Invalid optional data	נתונים אופציונליים לא תקינים
+	Retention limit	מגבלת שימור
+	Precision conversion	המרת דיוק
+	Unknown reason	סיבה לא ידועה
+	Native layer {id} (removed; historical reference)	שכבה מובנית {id} (הוסרה; הפניה היסטורית)
+	Native layer: {name}	שכבה מובנית: {name}
+	Alpha Percentile	אחוזון אלפא
+	Alpha Weighted	משוקלל לפי אלפא
+	Color Percentile	אחוזון צבע
+	Connectivity	קישוריות
+	Disc	סביבה מעגלית
+	Each	כל אחד
+	Value	ערך

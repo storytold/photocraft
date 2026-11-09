@@ -4573,3 +4573,35 @@ navigator	Zoom	زوم
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW ڈیولپمنٹ کی ترتیبات {file} میں محفوظ ہو گئیں
+
+# Native XCF import report
+	Import Conversion Report	درآمدی تبدیلی کی رپورٹ
+	Import-time outcomes. Editing uses native PhotoCraft rules.	درآمد کے وقت کے نتائج۔ ترمیم میں PhotoCraft کے داخلی قواعد استعمال ہوتے ہیں۔
+	A newer report format is retained. Its details cannot be displayed.	رپورٹ کا ایک نیا فارمیٹ محفوظ ہے۔ اس کی تفصیلات نہیں دکھائی جا سکتیں۔
+	No conversion report was recorded.	تبدیلی کی کوئی رپورٹ درج نہیں ہوئی۔
+	No entries on this page.	اس صفحے پر کوئی اندراج نہیں ہے۔
+	Layer mask	تہہ کا ماسک
+	Source item	ماخذ کا جزو
+	{first}–{last} of {total}	کل {total} میں سے {first}–{last}
+	Native equivalent	داخلی مساوی متبادل
+	Native approximation	داخلی تخمینہ
+	Retained, not applied	محفوظ، لاگو نہیں کیا گیا
+	Nonessential data skipped	غیر ضروری ڈیٹا چھوڑ دیا گیا
+	Unknown outcome	نامعلوم نتیجہ
+	Native rules	داخلی قواعد
+	Native capability limit	داخلی صلاحیت کی حد
+	Conversion not implemented	تبدیلی نافذ نہیں کی گئی
+	Resource unavailable	وسیلہ دستیاب نہیں
+	Invalid optional data	غلط اختیاری ڈیٹا
+	Retention limit	محفوظ رکھنے کی حد
+	Precision conversion	درستی کی تبدیلی
+	Unknown reason	نامعلوم وجہ
+	Native layer {id} (removed; historical reference)	داخلی تہہ {id} (ہٹا دی گئی؛ تاریخی حوالہ)
+	Native layer: {name}	داخلی تہہ: {name}
+	Alpha Percentile	الفا پرسنٹائل
+	Alpha Weighted	الفا سے وزن شدہ
+	Color Percentile	رنگ کا پرسنٹائل
+	Connectivity	اتصال
+	Disc	دائرہ نما پڑوس
+	Each	ہر ایک
+	Value	قدر
