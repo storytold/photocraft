@@ -29,6 +29,14 @@ fn block_unknown_ids(list: &mut [Action]) {
     }
 }
 
+// A Droplet with explicit steps does not use a named action. A set requires a name.
+fn numeric_droplet(command: &str, params: &Value) -> bool {
+    command == "file.automate.createDroplet"
+        && params.get("steps").is_none()
+        && params.get("set").is_none_or(Value::is_null)
+        && params.get("action").is_some_and(Value::is_number)
+}
+
 pub(super) fn pin_disk_targets(s: &mut Session, disk: &mut [Action], warnings: &mut Vec<String>) {
     if s.actions.list.is_empty() || disk.is_empty() {
         return;
@@ -46,6 +54,7 @@ pub(super) fn pin_disk_targets(s: &mut Session, disk: &mut [Action], warnings: &
             let resolved = match command {
                 "actions.play" => resolve_play_target(memory, params, command),
                 "file.automate.batch" => crate::file_cmds::batch_action(memory, params),
+                _ if numeric_droplet(command, params) => resolve_play_target(memory, params, command),
                 _ => return,
             };
             if resolved.is_err() {
@@ -95,6 +104,10 @@ pub(super) fn pin_disk_targets(s: &mut Session, disk: &mut [Action], warnings: &
                         params[field] = original.map_or(Value::Null, |row| pin_target(disk, row, warnings));
                     }
                 }
+            }
+            _ if params.get("actionId").is_none() && numeric_droplet(command, params) => {
+                let original = resolve_play_target(disk, params, command);
+                params["actionId"] = original.map_or(Value::Null, |row| pin_target(disk, row, warnings));
             }
             _ => {}
         });

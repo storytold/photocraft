@@ -164,6 +164,7 @@ pub(crate) fn cancel_batch_dialog(app: &mut PhotocraftApp, dialog: u64) {
 
 pub(crate) fn batch_dialog_params(app: &mut PhotocraftApp, dialog: u64, choice: Option<&Value>, params: &mut Value) -> Result<(), String> {
     let targets = app.ui.actions.batch_dialog_targets.remove(&dialog);
+    let params = params.as_object_mut().ok_or("Batch parameters must be an object")?;
     if params.get("actionId").is_some() {
         return Ok(());
     }
@@ -184,13 +185,19 @@ pub(crate) fn batch_dialog_params(app: &mut PhotocraftApp, dialog: u64, choice: 
     if first == Some(row) {
         return Ok(());
     }
-    if let Some(id) = actions_cmds::PlaybackTarget::from(&target.action).id {
-        params["actionId"] = json!(id);
-    } else if app.session.actions.recording.is_some() {
-        return Err("recording this Batch selection requires a stable action ID".into());
+    let id = match actions_cmds::PlaybackTarget::from(&target.action).id {
+        None if app.session.actions.recording.is_some() => {
+            let id = actions_cmds::prepare_action_id(list, row).map_err(|error| error.to_string())?;
+            actions_cmds::commit_action_id(&mut app.session, row, id.clone()).map_err(|error| error.to_string())?;
+            Some(id)
+        }
+        id => id,
+    };
+    if let Some(id) = id {
+        params.insert("actionId".into(), json!(id));
     } else {
-        params["action"] = json!(row);
-        params.as_object_mut().expect("dialog params are an object").remove("set");
+        params.insert("action".into(), json!(row));
+        params.remove("set");
     }
     Ok(())
 }
@@ -635,7 +642,7 @@ fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &
 /// back, with that named call journaled, only when the whole call ends. `inner` are the called
 /// actions a resumed playback replays first, outermost first, each `(action, from)`: the first is
 /// the one this action's step before `from` called ([`resume`]).
-fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>, inner: &[(usize, usize)]) -> Result<Value, String> {
+fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<SuspendedRecording>, inner: &[(usize, usize)]) -> Result<Value, String> {
     let (row, mut action, from) = match actions_cmds::playback_plan_at(&app.session, params) {
         Ok(plan) => plan,
         Err(e) => {
@@ -644,20 +651,30 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
             return Err(e.to_string());
         }
     };
-    let recording = match actions_cmds::begin_playback_at(&mut app.session, row, &mut action) {
-        Ok(r) => r,
+    let recording = (|| -> photocraft_engine::Result<Option<String>> {
+        // An action or one of its callers can pause at a dialog while the library changes.
+        let owner_id = if let Some((_, index)) = app.session.actions.recording {
+            let id = actions_cmds::prepare_action_id(&app.session.actions.list, index)?;
+            actions_cmds::commit_action_id(&mut app.session, index, id.clone())?;
+            if index == row {
+                action.action_id = Some(id.clone());
+            }
+            Some(id)
+        } else {
+            None
+        };
+        let recording = actions_cmds::begin_playback_at(&mut app.session, row, &mut action)?;
+        Ok(recording.and(owner_id))
+    })();
+    let owner_id = match recording {
+        Ok(id) => id,
         Err(e) => {
             actions_cmds::finish_pending_history(&mut app.session);
             restore_recording(app, suspended.as_ref());
             return Err(e.to_string());
         }
     };
-    let owner = recording
-        .map(|(_, idx)| {
-            let into = app.session.actions.list.get(idx).map(|a| a.name.clone());
-            json!({"index": idx, "into": into, "target": actions_cmds::recorded_target(&app.session, &action, from)})
-        })
-        .or(suspended);
+    let owner = owner_id.map(|action_id| SuspendedRecording { action_id, target: actions_cmds::recorded_target(&app.session, &action, from) }).or(suspended);
     let mut ran = 0u64;
     let interactive = playback::is_interactive(app);
     let (mut failed, mut paused, mut stopped) = (None, None, None);
@@ -1294,23 +1311,21 @@ pub fn stop_message_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<St
 /// The key a paused playback leaves in its dialog's fields: the token of its [`PausedPlayback`].
 pub const RESUME: &str = "__resumeAction";
 
+/// The exact recording owner and Play call held by a suspended playback.
+#[derive(Clone, Debug)]
+struct SuspendedRecording {
+    action_id: String,
+    target: Value,
+}
+
 /// Resume the recording a paused call suspended and journal that call, once.
-fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
+fn restore_recording(app: &mut PhotocraftApp, owner: Option<&SuspendedRecording>) {
     let Some(owner) = owner else { return };
-    let (Some(idx), Some(into), Some(params)) =
-        (owner.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()), owner.get("into").and_then(Value::as_str), owner.get("target"))
-    else {
-        return;
-    };
-    // `suspended_guard` refuses what would move the recorded action, but another command may
-    // still replace the list: the call goes to the action of that name, never to whatever now
-    // sits at the old index, and is dropped if that action is gone.
-    let list = &app.session.actions.list;
-    let target = if list.get(idx).is_some_and(|a| a.name == into) { Some(idx) } else { list.iter().position(|a| a.name == into) };
-    if let Some(idx) = target
+    let key = actions_cmds::occurrence_key(&owner.action_id);
+    if let Some(idx) = actions_cmds::shortcut_row(&app.session.actions.list, &key)
         && app.session.actions.recording.is_none()
     {
-        actions_cmds::restore_recording(&mut app.session, idx, params.clone());
+        actions_cmds::restore_recording(&mut app.session, idx, owner.target.clone());
     }
 }
 
@@ -1390,12 +1405,12 @@ pub(crate) struct PausedPlayback {
     action: String,
     from: usize,
     gate: Option<Gate>,
-    /// The recording the paused call suspended: `{index, into, action, from}` (`into` is the
-    /// name of the action being recorded). A step dialog only closes through
+    /// The recording occurrence and Play call held while the step dialog is open.
+    /// A step dialog only closes through
     /// `dialogs::confirm` (OK, `↩`, automation) or `dialogs::cancel` (Cancel, Esc, the close
     /// box, automation), which end the call through `resume`, `abandoned` or `stopped`, so the
     /// recording comes back exactly once.
-    record: Option<Value>,
+    record: Option<SuspendedRecording>,
     history: Option<actions_cmds::ActionHistoryContinuation>,
     /// The actions still to play after this one, as they were when Play started a whole set.
     /// The whole action also guards against edits while the dialog is open.

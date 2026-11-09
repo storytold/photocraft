@@ -156,6 +156,7 @@ pub(super) fn clear(s: &mut Session, p: &Value) -> Result<Value> {
         || !s.actions.sets.is_empty()
         || !s.actions.set_rows.is_empty()
         || prefs.shortcuts.keys().chain(prefs.alternate_shortcuts.keys()).any(|id| is_action_key(id))
+        || (s.preset_store.is_none() && !s.actions.replaced_before_attachment)
     {
         publish_library(s, Vec::new(), Vec::new(), Vec::new(), Some(Shortcuts::new()), "Undo Clear All Actions", "actions.clearAll")?;
     }

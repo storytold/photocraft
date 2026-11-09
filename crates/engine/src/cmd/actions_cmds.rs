@@ -102,7 +102,7 @@ impl Action {
     }
 }
 
-/// Active playback identity. Registered legacy rows are scoped to their current library.
+/// Active playback identity. Registered rows are scoped to their current library.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackTarget {
     pub name: String,
@@ -124,7 +124,8 @@ impl PlaybackTarget {
     fn matches(&self, s: &Session, row: usize, action: &Action) -> bool {
         match (self.id.as_deref(), action.action_id.as_deref().filter(|id| identity::valid_action_id(id))) {
             (None, None) => self.position.map_or_else(|| self.name == action.name, |position| position == (s.actions.playback_namespace, row)),
-            (left, right) => left == right,
+            (Some(left), Some(right)) => left == right && self.position.is_none_or(|(namespace, _)| namespace == s.actions.playback_namespace),
+            _ => false,
         }
     }
 }

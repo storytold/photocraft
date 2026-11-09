@@ -362,6 +362,29 @@ fn pre_attachment_clear_remains_authoritative_after_an_ordinary_edit() {
 }
 
 #[test]
+fn empty_pre_attachment_clear_replaces_the_saved_library() {
+    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+
+    for undo in [false, true] {
+        let store = MemBackend::default();
+        store.write(ACTIONS_FILE, br#"{"version":1,"actions":[{"name":"Disk"}]}"#).unwrap();
+        let mut s = Session::new();
+        assert_eq!(s.execute("actions.clearAll", json!({"confirm":true})).unwrap()["cleared"], 0);
+        let revision = s.actions.rev;
+        assert_eq!(s.execute("actions.clearAll", json!({"confirm":true})).unwrap()["cleared"], 0);
+        assert_eq!(s.actions.rev, revision, "a second empty clear must keep the first undo");
+        if undo {
+            s.execute("actions.undoLibrary", json!({})).unwrap();
+        }
+        assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+        assert_eq!(s.actions.list.first().map(|action| action.name.as_str()), undo.then_some("Disk"));
+        let mut reopened = Session::new();
+        assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
+        assert_eq!(reopened.actions.list, s.actions.list);
+    }
+}
+
+#[test]
 fn attachment_does_not_fill_an_unresolved_early_numeric_call() {
     use crate::actions_cmds::resolve_play_target;
     use crate::preset_store::{ACTIONS_FILE, PresetBackend};
@@ -390,6 +413,89 @@ fn attachment_does_not_fill_an_unresolved_early_numeric_call() {
         assert_eq!(resolve_play_target(library, &calls[2].1, "actions.play").unwrap(), 0);
         assert_eq!(resolve_play_target(library, &calls[3].1, "actions.play").unwrap(), 2);
     }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn attachment_keeps_named_numeric_droplet_targets_in_their_source_library() {
+    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing.pcdroplet");
+    let disk_droplet = temp.path().join("disk.pcdroplet");
+    let disk_steps = vec![("file.new".to_string(), json!({"width":7,"height":8}))];
+    let disk = json!({
+        "version":1, "actions":[
+            Action::new("Disk", disk_steps.clone()),
+            Action::new("Disk caller", vec![("file.automate.createDroplet".into(), json!({"action":0,"path":disk_droplet,"shim":false}))]),
+        ],
+    });
+    let store = MemBackend::default();
+    store.write(ACTIONS_FILE, disk.to_string().as_bytes()).unwrap();
+    let mut s = Session::new();
+    s.actions.list.push(Action::new("Early", vec![("file.automate.createDroplet".into(), json!({"action":1,"path":missing,"shim":false}))]));
+    assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+    let mut reopened = Session::new();
+    assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
+    for session in [&mut s, &mut reopened] {
+        assert_eq!(session.actions.list[1].name, "Disk");
+        let unresolved = session.actions.list[0].steps[0].1.clone();
+        assert!(session.execute("file.automate.createDroplet", unresolved).is_err());
+        assert!(!missing.exists());
+        let valid = session.actions.list[2].steps[0].1.clone();
+        session.execute("file.automate.createDroplet", valid).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&disk_droplet).unwrap()).unwrap();
+        assert_eq!(saved["action"]["steps"], json!(disk_steps));
+    }
+}
+
+#[test]
+fn whole_replace_preserves_explicit_atn_play_and_conditional_set_scopes() {
+    use crate::actions_cmds::{conditional_branch, resolve_play_target};
+    use photocraft_psd::atn::{AtnEvent, AtnItem};
+    use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, Value as D};
+
+    let name_ref =
+        |class, name| ReferenceItem::Name { class: Class { name: UnicodeString::default(), class_id: Id::new(class) }, name: UnicodeString::new_nul(name) };
+    let target = |set| D::Reference(vec![name_ref("Actn", "Target"), name_ref("ASet", set)]);
+    let play = |set| AtnItem { event: AtnEvent::Code(*b"Ply "), descriptor: Some(Descriptor::default().with("null", target(set))), ..Default::default() };
+    let conditional = AtnItem {
+        event: AtnEvent::name("conditional"),
+        descriptor: Some(
+            Descriptor::default()
+                .with("null", D::Enumerated { type_id: Id::new("Cndt"), value: Id::new("Lyrs") })
+                .with("then", target("Wanted"))
+                .with("else", target("Missing")),
+        ),
+        ..Default::default()
+    };
+    let caller = write(&AtnFile {
+        name: UnicodeString::new_nul("Caller set"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("Caller"), items: vec![play("Wanted"), play("Missing"), conditional], ..Default::default() }],
+        ..Default::default()
+    })
+    .unwrap();
+    let ordinary = crate::atn_cmds::import(&caller).unwrap();
+    assert!(ordinary.actions[0].steps[0].1.get("set").is_none());
+    assert!(ordinary.actions[0].steps[2].1.get("thenSet").is_none());
+
+    let mut archive = set("Decoy", Some(("Target", 0)));
+    archive.extend_from_slice(&set("Wanted", Some(("Target", 0)))[4..]);
+    archive.extend_from_slice(&caller[4..]);
+    let mut s = Session::new();
+    s.execute("actions.replace", json!({"confirm":true,"data":photocraft_paint::tile::b64_encode(&archive)})).unwrap();
+    let list = &s.actions.list;
+    let steps = &list[2].steps;
+    assert_eq!(steps[0].1["set"], "Wanted");
+    assert_eq!(resolve_play_target(list, &steps[0].1, "actions.play").unwrap(), 1);
+    assert_eq!(steps[1].1["set"], "Missing");
+    assert!(resolve_play_target(list, &steps[1].1, "actions.play").is_err());
+    assert_eq!(steps[2].1["thenSet"], "Wanted");
+    let then = conditional_branch(&steps[2].1, "then").unwrap().unwrap();
+    assert_eq!(resolve_play_target(list, &then, "actions.conditional").unwrap(), 1);
+    assert_eq!(steps[2].1["elseSet"], "Missing");
+    let otherwise = conditional_branch(&steps[2].1, "else").unwrap().unwrap();
+    assert!(resolve_play_target(list, &otherwise, "actions.conditional").is_err());
 }
 
 #[test]

@@ -2474,6 +2474,35 @@ fn a_suspended_call_is_recorded_into_its_action_after_the_list_changes() {
 }
 
 #[test]
+fn a_script_deleted_recording_owner_does_not_resume_into_its_namesake() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 300, "height": 100})).unwrap();
+    app.run("type.create", json!({"x": 10, "y": 50, "text": "Teh brwon"})).unwrap();
+    let mut spelling =
+        Action::new("Spell", vec![("edit.checkSpelling".into(), json!({"allLayers": false})), ("layer.renameLayer".into(), json!({"name": "Tail"}))]);
+    spelling.dialogs.insert(0);
+    let namesake = Action::new("Owner", vec![]);
+    app.session.actions.list = vec![spelling, Action::new("Owner", vec![]), namesake.clone()];
+    app.run("actions.record", json!({"action": 1})).unwrap();
+    let paused = play(&mut app, &json!({"action": "Spell"})).unwrap();
+    assert_eq!(paused["paused"]["dialog"], crate::type_panels_ui::SPELLING);
+    assert!(app.session.actions.recording.is_none());
+    assert!(crate::menus::modal_allows(&app, "file.scripts.browse"));
+
+    let deleted = app.run("file.scripts.browse", json!({"steps": [["actions.delete", {"action": 1}]]})).unwrap();
+    assert_eq!(deleted["ok"], true, "{deleted}");
+    assert_eq!(app.session.actions.list[1], namesake);
+    let journal = app.session.journal.len();
+    crate::type_panels_ui::close_spelling(&mut app);
+
+    assert!(app.session.actions.recording.is_none(), "the remaining namesake does not own this recording");
+    assert_eq!(app.session.actions.list[1], namesake);
+    assert!(app.session.journal[journal..].iter().all(|(id, _)| id != "actions.play"));
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "Tail");
+}
+
+#[test]
 fn escape_on_a_step_dialog_ends_the_recorded_call_once() {
     let app = recording_with_dialog_child();
     let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);

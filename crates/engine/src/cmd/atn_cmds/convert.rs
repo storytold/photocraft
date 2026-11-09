@@ -1,7 +1,7 @@
-use super::descriptors::{desc, get_obj, jstr};
+use super::descriptors::{desc, get_obj, get_ref, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
-use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
+use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, ReferenceItem, UnicodeString, Value, atn, json};
 
 // ------------------------------------------------------------------ import
 
@@ -64,7 +64,24 @@ pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
 }
 
-fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) -> Action {
+/// Whole-library replacement resolves these explicit scopes against the archive.
+fn retain_action_scopes(d: &Descriptor, id: &str, params: &mut Value) {
+    let fields: &[(&str, &str)] = match id {
+        "actions.play" => &[("null", "set")],
+        "actions.conditional" => &[("then", "thenSet"), ("else", "elseSet")],
+        _ => return,
+    };
+    for (reference, scope) in fields {
+        if let Some([ReferenceItem::Name { class: action, .. }, ReferenceItem::Name { class: set, name }, ..]) = get_ref(d, reference)
+            && action.class_id.is("Actn")
+            && set.class_id.is("ASet")
+        {
+            params[*scope] = json!(clip_name(&name.to_string_lossy()));
+        }
+    }
+}
+
+fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>, replacing: bool) -> Action {
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
@@ -90,6 +107,9 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
             }
         };
         for mut s in new_steps {
+            if replacing && let Some(descriptor) = &item.descriptor {
+                retain_action_scopes(descriptor, &s.0, &mut s.1);
+            }
             normalise(&mut s.1);
             let idx = action.steps.len();
             action.steps.push(s);
@@ -155,7 +175,7 @@ fn convert_set(file: &AtnFile, mut unsupported_rows: Option<&mut Vec<usize>>) ->
     let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { clip_name(&set) };
     let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), encoding: file.encoding.clone(), ..Default::default() };
     for (row, a) in file.actions.iter().enumerate() {
-        let action = convert_action(file, a, &set, &mut out.unsupported);
+        let action = convert_action(file, a, &set, &mut out.unsupported, unsupported_rows.is_some());
         if let Some(owners) = unsupported_rows.as_deref_mut() {
             owners.resize(out.unsupported.len(), row);
         }

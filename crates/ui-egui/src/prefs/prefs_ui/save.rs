@@ -70,11 +70,9 @@ pub(super) fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
             return Some(due - now);
         }
     }
-    let (ours, deferred) = persistable_preferences(app);
-    // A change that was undone (or set a value to what it already was) leaves nothing to write.
-    let written = if app.prefs_rt.saved_value.as_ref() == Some(&ours) { Ok(()) } else { write_prefs(app, &ours) };
-    match written {
-        Ok(()) => {
+    let ours = app.session.prefs_value();
+    match save_prepared_preferences(app, ours, true) {
+        Ok((ours, deferred)) => {
             if !deferred {
                 app.prefs_rt.saved_rev = rev;
             }
@@ -113,16 +111,16 @@ pub(super) fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
 
 /// Hold only Action shortcut changes while the library's separate browser transaction is
 /// pending. Keep saving other preferences against the same three-way merge base.
-fn persistable_preferences(app: &PhotocraftApp) -> (Value, bool) {
-    let mut ours = app.session.prefs_value();
-    if !app.services.actions_write_pending.as_ref().is_some_and(|pending| pending()) {
-        return (ours, false);
-    }
+fn persistable_preferences(app: &PhotocraftApp, mut ours: Value) -> Result<(Value, bool), String> {
+    let pending = app.services.actions_write_pending.as_ref().is_some_and(|pending| pending());
     let base = app.prefs_rt.saved_value.as_ref();
     let mut deferred = false;
     for section in ["shortcuts", "alternateShortcuts"] {
+        let bindings = ours.get_mut(section).and_then(Value::as_object_mut).ok_or_else(|| format!("serialized preferences {section} must be an object"))?;
+        if !pending {
+            continue;
+        }
         let saved = base.and_then(|value| value.get(section)).and_then(Value::as_object);
-        let bindings = ours[section].as_object_mut().expect("serialized shortcut map");
         let is_action = |key: &str| photocraft_engine::actions_cmds::is_action_key(key);
         bindings.retain(|key, _| {
             let keep = !is_action(key) || saved.is_some_and(|map| map.contains_key(key));
@@ -136,7 +134,16 @@ fn persistable_preferences(app: &PhotocraftApp) -> (Value, bool) {
             }
         }
     }
-    (ours, deferred)
+    Ok((ours, deferred))
+}
+
+fn save_prepared_preferences(app: &mut PhotocraftApp, ours: Value, skip_unchanged: bool) -> Result<(Value, bool), String> {
+    let (ours, deferred) = persistable_preferences(app, ours)?;
+    // A change that was undone (or set a value to what it already was) leaves nothing to write.
+    if !skip_unchanged || app.prefs_rt.saved_value.as_ref() != Some(&ours) {
+        write_prefs(app, &ours)?;
+    }
+    Ok((ours, deferred))
 }
 
 /// Write `ours` over the stored preferences, keeping what another instance (a second browser
@@ -213,8 +220,8 @@ pub(super) fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
 /// need the result immediately. The pending revision stays unsaved when the write fails.
 pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
     let rev = app.session.prefs.rev();
-    let (ours, deferred) = persistable_preferences(app);
-    write_prefs(app, &ours)?;
+    let ours = app.session.prefs_value();
+    let (ours, deferred) = save_prepared_preferences(app, ours, false)?;
     if !deferred {
         app.prefs_rt.saved_rev = rev;
     }
@@ -377,5 +384,27 @@ fn history_log(app: &mut PhotocraftApp) {
     }
     if !text.is_empty() {
         let _ = append(&hl.file_path, &text);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn malformed_shortcut_maps_are_not_written() {
+        let services = crate::Services {
+            save_prefs: Some(Box::new(|_| panic!("malformed preferences reached storage"))),
+            actions_write_pending: Some(Box::new(|| true)),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        for skip_unchanged in [true, false] {
+            for malformed in [json!({"shortcuts": []}), json!({"shortcuts": {}, "alternateShortcuts": null})] {
+                let error = save_prepared_preferences(&mut app, malformed, skip_unchanged).unwrap_err();
+                assert!(error.starts_with("serialized preferences "), "{error}");
+            }
+        }
     }
 }

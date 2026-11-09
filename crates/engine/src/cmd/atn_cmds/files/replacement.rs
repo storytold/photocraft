@@ -87,10 +87,11 @@ impl Replacement {
                     };
                     if let Some(renamed) = renamed {
                         params[*field] = json!(renamed);
-                    } else if generated.get(name).is_some_and(|set| !named_automation || scope.is_none_or(|requested| requested.as_str() == Some(set.as_str())))
+                    } else if (!named_automation && scope.is_some())
+                        || generated.get(name).is_some_and(|set| !named_automation || scope.is_none_or(|requested| requested.as_str() == Some(set.as_str())))
                     {
-                        // The original target was missing. A generated caption must not turn
-                        // it into a working call. Keep the displayed name and block fallback.
+                        // An unresolved scoped call or generated caption must not fall back
+                        // to another action. Keep the displayed name and block playback.
                         let identity = if *field == "action" { "actionId" } else { branch_id_field(field) };
                         if params.get(identity).is_none() {
                             params[identity] = Value::Null;

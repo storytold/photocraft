@@ -594,6 +594,40 @@ fn batch_legacy_rows_in_embedded_libraries_do_not_alias_the_caller() {
     assert_eq!(s.actions.list[0].steps, [("file.automate.batch".to_string(), params)]);
 }
 
+#[test]
+fn batch_stable_ids_are_scoped_to_the_embedded_library() {
+    use crate::actions_cmds::Action;
+
+    let dir = tmp("batch-stable-occurrence");
+    let input = png(&dir, "red.png", 8, 8, "#ff0000");
+    let id = "112233445566778899aabbccddeeff00";
+    let mut leaf = Action::new("Leaf", vec![("layer.new.layer".into(), json!({"name":"embedded leaf"}))]);
+    leaf.action_id = Some(id.into());
+    for source in ["open", "folder"] {
+        let mut s = Session::new();
+        if source == "open" {
+            s.execute("file.openAs", json!({"path":input})).unwrap();
+        }
+        let mut caller = Action::new("Caller", vec![("actions.play".into(), json!({"actionId":id}))]);
+        caller.action_id = Some(id.into());
+        s.actions.list.push(caller);
+        let mut params = json!({
+            "source":source, "input":[input], "output":join(&dir, source),
+            "format":"png", "actionId":id, "calledActions":[leaf],
+        });
+        let result = s.execute("file.automate.batch", params.clone()).unwrap();
+        assert_eq!(result["errors"], json!([]), "{result}");
+        assert_eq!(s.actions.playback_namespace, 0);
+        assert!(s.actions.playback_stack.is_empty());
+        if source == "open" {
+            assert!(doc(&s).layers.iter().any(|layer| layer.name == "embedded leaf"));
+            params.as_object_mut().unwrap().remove("calledActions");
+            let recursive = s.execute("file.automate.batch", params).unwrap();
+            assert!(recursive["errors"][0]["error"].as_str().unwrap().contains("recursive action"), "{recursive}");
+        }
+    }
+}
+
 /// Named live-document playback must normalize recorded targets and percentage coordinates,
 /// just as ordinary action playback does, before authorization sees execution params.
 #[test]
