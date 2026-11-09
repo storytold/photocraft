@@ -27,7 +27,7 @@ fn color_value(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
 }
 
 pub(super) fn new_channel(s: &mut Session, p: &Value) -> Result<Value> {
-    let fill = p.get("fill").and_then(Value::as_str).unwrap_or("black").to_string();
+    let fill = p.get("fill").and_then(Value::as_str);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let indicates = indicates_param(p.get("indicates"));
     let color = color_value("channel.new", p, "color")?;
@@ -35,9 +35,17 @@ pub(super) fn new_channel(s: &mut Session, p: &Value) -> Result<Value> {
     let i = s.edit("New Channel", |doc, _| {
         let area = doc.bounds();
         let fmt = channel_format(doc);
-        let surface = match fill.as_str() {
-            "white" => plane_surface(&vec![1.0; area.width() as usize * area.height() as usize], area, fmt),
-            "selection" => plane_surface(&sel::mask_from_surface(doc.selection.as_ref(), area), area, fmt),
+        let surface = match fill {
+            Some("white") => plane_surface(&vec![1.0; area.width() as usize * area.height() as usize], area, fmt),
+            Some("selection") => plane_surface(&sel::mask_from_surface(doc.selection.as_ref(), area), area, fmt),
+            Some("black") => Surface::new(fmt),
+            None => {
+                if indicates == Some(ColorIndicates::SelectedAreas) {
+                    plane_surface(&vec![1.0; area.width() as usize * area.height() as usize], area, fmt)
+                } else {
+                    Surface::new(fmt)
+                }
+            }
             _ => Surface::new(fmt),
         };
         let mut ch = AlphaChannel::new(name.clone().unwrap_or_else(|| next_alpha_name(doc, "Alpha")), surface);
