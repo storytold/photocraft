@@ -86,7 +86,7 @@ fn modelled_filters_round_trip() {
         sf(
             "filter.distort.wave",
             json!({"type": "square", "generators": 3, "wavelengthMin": 20, "wavelengthMax": 90, "amplitudeMin": 4, "amplitudeMax": 30,
-                   "undefinedAreas": "repeat", "seed": 4_000_000_000u32}),
+                   "scaleHorizontal": 60, "scaleVertical": 15, "undefinedAreas": "repeat", "seed": 4_000_000_000u32}),
         ),
         sf("filter.distort.zigZag", json!({"amount": 30, "ridges": 7, "style": "aroundCenter"})),
         sf("image.adjustments.invert", json!({})),
@@ -992,26 +992,17 @@ fn photoshop_distort_filters_read_and_write_like_photoshop() {
         };
         assert_eq!((&ours.class_id, &ours.items), (&ps.class_id, &ps.items), "{command}: same keys, values and order");
     }
-    // A scaled wave can't be modelled, so it stays Photoshop's, unchanged.
+    // Photoshop's Wave has 332 generators (the renderer draws 64 at most), so it stays
+    // Photoshop's, unchanged.
     let wave = Descriptor::from_bytes(&from_hex(PHOTOSHOP_WAVE).unwrap()).unwrap();
     let item = photoshop_fltr_item(wave);
-    let f = filter_from_item(&item);
-    assert_eq!(f.command, UNSUPPORTED_FILTER);
-    assert_eq!(item_for_filter(&f).unwrap().get("Fltr"), item.get("Fltr"));
-    // Unscaled, but with 332 generators (the renderer draws 64 at most), it stays Photoshop's too.
-    let mut unscaled = match item.get("Fltr") {
-        Some(Value::Descriptor(d)) => d.clone(),
-        other => panic!("wave: no Fltr ({other:?})"),
-    };
-    set(&mut unscaled, "SclV", Value::Integer(100));
-    let item = photoshop_fltr_item(unscaled);
     let f = filter_from_item(&item);
     assert_eq!(f.command, UNSUPPORTED_FILTER);
     assert_eq!(item_for_filter(&f).unwrap().get("Fltr"), item.get("Fltr"));
 
     // An extra or repeated setting PhotoCraft doesn't model keeps the filter Photoshop's, unchanged.
     let mut fltrs: Vec<Descriptor> = PHOTOSHOP_FLTR.iter().map(|(_, _, hex)| Descriptor::from_bytes(&from_hex(hex).unwrap()).unwrap()).collect();
-    let mut wave = unscaled_wave();
+    let mut wave = Descriptor::from_bytes(&from_hex(PHOTOSHOP_WAVE).unwrap()).unwrap();
     set(&mut wave, "NmbG", Value::Integer(5));
     assert_eq!(filter_from_item(&photoshop_fltr_item(wave.clone())).command, "filter.distort.wave", "the plain wave maps");
     fltrs.push(wave);
@@ -1028,21 +1019,15 @@ fn photoshop_distort_filters_read_and_write_like_photoshop() {
     }
 }
 
-/// Photoshop's Wave ([`PHOTOSHOP_WAVE`]) at 100% scale both ways.
-fn unscaled_wave() -> Descriptor {
-    let mut wave = Descriptor::from_bytes(&from_hex(PHOTOSHOP_WAVE).unwrap()).unwrap();
-    set(&mut wave, "SclV", Value::Integer(100));
-    wave
-}
-
-/// An unscaled Wave opens as PhotoCraft's Wave (Triangle, the other settings as stored) up to
-/// the generators the renderer models; one more and it stays Photoshop's, unchanged.
+/// Photoshop's Wave ([`PHOTOSHOP_WAVE`]: 100 % horizontal, 28 % vertical scale) opens as
+/// PhotoCraft's Wave (Triangle, the other settings and both scales as stored) up to the
+/// generators the renderer models, and saves back byte for byte; one more and it stays
+/// Photoshop's, unchanged.
 #[test]
 fn wave_maps_up_to_the_generators_the_renderer_models() {
     let max = i32::try_from(photocraft_algo::MAX_WAVE_GENERATORS).unwrap();
     assert_eq!(max, 64);
     let mut wave = Descriptor::from_bytes(&from_hex(PHOTOSHOP_WAVE).unwrap()).unwrap();
-    set(&mut wave, "SclV", Value::Integer(100));
     for (generators, mapped) in [(1, true), (max, true), (max + 1, false), (999, false), (0, false), (-1, false)] {
         set(&mut wave, "NmbG", Value::Integer(generators));
         let item = photoshop_fltr_item(wave.clone());
@@ -1053,7 +1038,7 @@ fn wave_maps_up_to_the_generators_the_renderer_models() {
                 (
                     "filter.distort.wave",
                     &json!({"type": "triangle", "generators": generators, "wavelengthMin": 213, "wavelengthMax": 214, "amplitudeMin": 240,
-                            "amplitudeMax": 241, "undefinedAreas": "wrap", "seed": 1270346})
+                            "amplitudeMax": 241, "scaleHorizontal": 100, "scaleVertical": 28, "undefinedAreas": "wrap", "seed": 1270346})
                 ),
                 "{generators} generators"
             );
@@ -1083,6 +1068,40 @@ fn wave_export_writes_only_the_generators_the_renderer_draws() {
             other => panic!("wave: no Fltr ({other:?})"),
         };
         assert_eq!(int(&fltr, "NmbG"), Some(written), "{stored} generators");
+    }
+}
+
+/// Wave's Scale Horiz. and Vert. save as Photoshop's `SclH` / `SclV` longs: whole percentages
+/// (rounded, as the other Wave settings), clamped to the dialog's 1–100 % as the renderer clamps
+/// them, and 100 % when a record has none or holds no number.
+#[test]
+fn wave_export_writes_the_scales_the_renderer_draws() {
+    for (params, written) in [
+        (json!({}), (100, 100)),
+        (json!({"scaleHorizontal": 35, "scaleVertical": 1}), (35, 1)),
+        (json!({"scaleHorizontal": 49.6, "scaleVertical": 0}), (50, 1)),
+        (json!({"scaleHorizontal": 250, "scaleVertical": "x"}), (100, 100)),
+    ] {
+        let fltr = match item_for_filter(&sf("filter.distort.wave", params.clone())).unwrap().get("Fltr") {
+            Some(Value::Descriptor(d)) => d.clone(),
+            other => panic!("wave: no Fltr ({other:?})"),
+        };
+        assert_eq!((int(&fltr, "SclH"), int(&fltr, "SclV")), (Some(written.0), Some(written.1)), "{params}");
+    }
+}
+
+/// A Wave scale outside the dialog's 1–100 % would render clamped, so the filter stays
+/// Photoshop's and is written back unchanged.
+#[test]
+fn wave_scales_outside_the_dialog_range_stay_photoshops() {
+    for (key, scale) in [("SclH", 0), ("SclV", 101), ("SclH", -5), ("SclV", i32::MAX)] {
+        let mut wave = Descriptor::from_bytes(&from_hex(PHOTOSHOP_WAVE).unwrap()).unwrap();
+        set(&mut wave, "NmbG", Value::Integer(5));
+        set(&mut wave, key, Value::Integer(scale));
+        let item = photoshop_fltr_item(wave);
+        let f = filter_from_item(&item);
+        assert_eq!(f.command, UNSUPPORTED_FILTER, "{key} {scale}");
+        assert_eq!(item_for_filter(&f).unwrap().get("Fltr"), item.get("Fltr"), "{key} {scale}");
     }
 }
 

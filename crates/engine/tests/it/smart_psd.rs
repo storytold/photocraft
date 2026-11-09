@@ -842,3 +842,41 @@ fn hue_saturation_smart_filter_survives_psd_and_re_renders() {
         }
     }
 }
+
+/// A Wave smart filter keeps Photoshop's Scale Horiz. and Vert. through a PSD save and open, and
+/// re-renders from its source with them: the same pixels as before, not those of a full wave.
+#[test]
+fn scaled_wave_smart_filter_survives_psd_and_re_renders() {
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let wave = json!({"generators": 3, "amplitudeMin": 3, "amplitudeMax": 6, "seed": 11});
+        s.execute("filter.distort.wave", wave.clone()).unwrap();
+        let full = smart(&s.active().unwrap().doc).1.cache.unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        let mut params = wave.clone();
+        params["scaleHorizontal"] = json!(40);
+        params["scaleVertical"] = json!(15);
+        s.execute("filter.distort.wave", params).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let scaled = smart(&doc).1.cache.unwrap();
+        let rows = |c: &photocraft_raster::Surface| c.read_region(Rect::new(0, 0, W, H));
+        assert_ne!(rows(&scaled), rows(&full), "depth {depth}: the scales change the render");
+
+        let out = photocraft_io::export(&doc, "psd", &Default::default()).unwrap();
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        keep(&format!("wave-scaled-{depth}.psd"), &out.bytes);
+        let back = photocraft_io::import("wave.psd", &out.bytes).unwrap().document;
+        let (bid, after) = smart(&back);
+        let f = &after.smart_filters[0];
+        assert_eq!(f.command, "filter.distort.wave", "depth {depth}: {}", f.params);
+        assert_eq!((&f.params["scaleHorizontal"], &f.params["scaleVertical"]), (&json!(40), &json!(15)), "depth {depth}");
+        let mut l = back.layer(photocraft_doc::LayerId(bid)).unwrap().clone();
+        assert!(refresh_layer(&back, &mut l).unwrap());
+        let LayerContent::Smart(sm) = &l.content else { panic!("smart") };
+        let cache = sm.cache.as_ref().unwrap();
+        let tolerance = 1.0 / 255.0 + 1e-6;
+        let worst = rows(cache).iter().zip(rows(&scaled)).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(worst <= tolerance, "depth {depth}: re-render differs by {worst}");
+    }
+}
