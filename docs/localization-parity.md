@@ -75,7 +75,7 @@ Complete menu keys, regional locale matching and English fallback are covered by
 Native-speaker review remains pending; validation results and limits are recorded in the
 [language notes](localization-az.md). Readiness estimates and G13 remain unchanged.
 
-Marathi `mr` (Devanagari, 4,850 rows, added 2026-11-08) covers every measured key (2,460 / 2,460) and the
+Marathi `mr` (Devanagari, 4,849 rows, added 2026-11-08) covers every measured key (2,462 / 2,462) and the
 dynamic-label key union of the Georgian, Urdu and Tamil catalogs. It uses one/other plurals (one is n = 1).
 UI font: the Devanagari fallback in `crates/text/src/scripts.rs` (Noto Sans Devanagari and the system Devanagari faces); on the web the first served font for `Deva`. It was machine-translated with Claude for @tronicum against one
 term glossary and has not had a native-speaker review yet.
@@ -104,7 +104,7 @@ engine localization or native review is complete.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-08 | minor | Marathi (`mr`) UI catalog: 4,850 rows, every measured key (2,460); one/other plurals; machine-translated, native review pending |
+| 2026-11-08 | minor | Marathi (`mr`) UI catalog: 4,849 rows, every measured key (2,462); one/other plurals; machine-translated, native review pending |
 | 2026-11-06 | minor | Azerbaijani/Turkish UI search, dropdown prefixes and access keys use locale-aware I casing; 4,606 Azerbaijani entries and current menu coverage; native review requested and pending |
 | 2026-11-05 | minor | Preserved Bosnian while merging current main; 29 registered languages, 17 outside the table; Azerbaijani has 4,606 entries, including 29 current OpenType menu keys and checks for all eight command-ID overrides; native review pending |
 | 2026-11-01 | minor | Azerbaijani UI catalog, 4,566 entries; regional tags and one/other plurals; PR narrowed to Azerbaijani, 28 registered languages and 16 outside the table; native review pending; validation limits in the language notes; readiness estimates unchanged |

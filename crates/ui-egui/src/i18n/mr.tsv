@@ -198,7 +198,6 @@
 	Plug-ins…	प्लग-इन…
 	Type…	मजकूर…
 	Enhanced Controls…	प्रगत नियंत्रणे…
-	Camera Raw…	Camera Raw…
 	Raw Defaults…	Raw डीफॉल्ट…
 	Integrations…	एकत्रीकरणे…
 	AI Integrations…	AI एकत्रीकरणे…
@@ -509,7 +508,6 @@
 	Last Filter	शेवटचा फिल्टर
 	Filter Gallery…	फिल्टर गॅलरी…
 	Adaptive Wide Angle…	ॲडॅप्टिव्ह वाइड अँगल…
-	Camera Raw Filter…	Camera Raw फिल्टर…
 	Liquify…	लिक्विफाय…
 	Vanishing Point…	व्हॅनिशिंग पॉइंट…
 	Blur	ब्लर
@@ -859,7 +857,6 @@
 	Brush Reconstruct Options	ब्रश पुनर्रचना पर्याय
 	Brush Tool Options	ब्रश साधन पर्याय
 	Cache Level:	कॅशे स्तर:
-	Camera Raw isn't open	Camera Raw उघडलेले नाही
 	Cancel	रद्द करा
 	Cancel (Esc)	रद्द करा (Esc)
 	Cancel any current edits (Esc)	सध्याची सर्व संपादने रद्द करा (Esc)
@@ -1810,7 +1807,6 @@
 	Brush preview color	ब्रश पूर्वावलोकन रंग
 	Cache levels	कॅशे पातळ्या
 	Cache tile size	कॅशे टाइल आकार
-	Camera Raw Defaults	Camera Raw डीफॉल्ट
 	Canvas border	कॅनव्हास किनार
 	Show canvas dots	कॅनव्हास बिंदू दाखवा
 	Canvas color	कॅनव्हास रंग
@@ -1890,7 +1886,6 @@
 	Never	कधीही नाही
 	Normal tip	सामान्य टोक
 	Open as smart object	स्मार्ट ऑब्जेक्ट म्हणून उघडा
-	Open in camera raw	Camera Raw मध्ये उघडा
 	Open documents as tabs	दस्तऐवज टॅब म्हणून उघडा
 	Overscroll	ओव्हरस्क्रोल
 	Performance	कार्यक्षमता
@@ -2274,8 +2269,6 @@
 	Roman Hanging Punctuation	रोमन हँगिंग विरामचिन्हे
 	Avoid Widows/Orphans	विडो/ऑर्फन टाळा
 	Compose	रचना
-	Adobe Single-line Composer	Adobe एक-ओळ कंपोझर
-	Adobe Every-line Composer	Adobe प्रत्येक-ओळ कंपोझर
 	Justification	समरेखन
 	Word Spacing	शब्दांमधील अंतर
 	Letter Spacing	अक्षरांमधील अंतर
@@ -2528,7 +2521,6 @@
 	Intersect with	याच्याशी छेदन करा
 	Capture Comp	कॉम्प कॅप्चर करा
 	No Layer Comps	लेयर कॉम्प नाहीत
-	Adobe PDF Presets…	Adobe PDF प्रीसेट…
 	3D…	3D…
 	Technology Previews…	तंत्रज्ञान पूर्वावलोकने…
 	Background from Layer	लेयरमधून पार्श्वभूमी
@@ -2616,8 +2608,6 @@
 	Tone Histogram	टोन हिस्टोग्राम
 	Show Selected Region	निवडलेला प्रदेश दाखवा
 cameraRaw	Light	प्रकाश
-	Camera Raw Filter ({layer})	Camera Raw फिल्टर ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	उजळ भाग
 cameraRaw	Darks	गडद भाग
 cameraRaw	Blacks	काळे
@@ -3580,8 +3570,6 @@ layerLabel	No Color	रंग नाही
 	Border	किनार
 	Box Blur	बॉक्स ब्लर
 	Calculations	गणना
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw फिल्टर
 	Channel1	चॅनेल 1
 	Channel2	चॅनेल 2
 	Channel3	चॅनेल 3
@@ -4054,7 +4042,6 @@ shape	Appearance	स्वरूप
 	Add Mask to Selection	मास्क निवडीमध्ये जोडा
 	Add Open Files	उघड्या फाइल्स जोडा
 	Add to Dictionary	शब्दकोशात जोडा
-	All shortcuts reset to Photoshop defaults.	सर्व शॉर्टकट Photoshop डीफॉल्टवर रीसेट केले.
 	Allow Continue	पुढे सुरू ठेवण्यास अनुमती द्या
 	Attempt to Automatically Align Source Images	स्रोत प्रतिमा आपोआप संरेखित करण्याचा प्रयत्न करा
 	Auto Add/Delete	स्वयं जोडा/हटवा
@@ -4073,7 +4060,6 @@ shape	Appearance	स्वरूप
 	Color Indicates:	रंग दर्शवतो:
 	Copy Texture to Other Tools	टेक्सचर इतर साधनांवर कॉपी करा
 	Create Smart Object after Loading Layers	लेयर लोड केल्यानंतर स्मार्ट ऑब्जेक्ट तयार करा
-	Default Photoshop Size	डीफॉल्ट Photoshop आकार
 	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	क्रॉप बॉक्स ओढा · हलवण्यासाठी आत ओढा · कडा आकार बदलतात ({ratio} गुणोत्तर, {centre} केंद्र) · रेखाटताना Space हलवते · {commit} लागू करते · Esc रद्द करते
 	Drag to pan · Scroll to zoom · Double-click to fit	पॅन करण्यासाठी ओढा · झूम करण्यासाठी स्क्रोल करा · बसवण्यासाठी डबल-क्लिक करा
 	Drag: draw freehand · Release on the start point: close	ओढा: मुक्तहस्ते रेखाटा · सुरुवातीच्या बिंदूवर सोडा: बंद करा
@@ -4092,8 +4078,6 @@ shape	Appearance	स्वरूप
 	Load Actions…	क्रिया लोड करा…
 	Load Settings…	सेटिंग्ज लोड करा…
 	Load settings from a Camera Raw .xmp file	Camera Raw .xmp फाइलमधून सेटिंग्ज लोड करा
-	Loaded Camera Raw settings from {file}	{file} मधून Camera Raw सेटिंग्ज लोड केल्या
-	Loaded Camera Raw settings from {file} ({n} not supported)	{file} मधून Camera Raw सेटिंग्ज लोड केल्या ({n} समर्थित नाहीत)
 	Mask Channel	मास्क चॅनेल
 	Message:	संदेश:
 	No Spelling Suggestions	स्पेलिंग सूचना नाहीत
@@ -4544,9 +4528,6 @@ layerLabel	Magenta	मॅजेंटा
 @plural	{n} document|{n} documents	{n} दस्तऐवज|{n} दस्तऐवज
 @plural	{n} pixel|{n} pixels	{n} पिक्सेल|{n} पिक्सेल
 cameraRaw	Before (Y)	आधी (Y)
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Camera Raw फिल्टर ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw उघडलेले नाही
 cameraRaw	Cancel	रद्द करा
 cameraRaw	Cancelled opening {name}	{name} उघडणे रद्द केले
 cameraRaw	Cancelled {label}	{label} रद्द केले
@@ -4558,7 +4539,6 @@ cameraRaw	Highlight Clipping Warning (O)	हायलाइट क्लिप�
 cameraRaw	Highlight Priority	हायलाइट प्राधान्य
 cameraRaw	Load Settings…	सेटिंग्ज लोड करा…
 cameraRaw	Load settings from a Camera Raw .xmp file	Camera Raw .xmp फाइलमधून सेटिंग्ज लोड करा
-cameraRaw	Loaded Camera Raw settings from {file}	{file} मधून Camera Raw सेटिंग्ज लोड केल्या
 cameraRaw	Noise Reduction	नॉइज कमी करणे
 cameraRaw	OK	ठीक आहे
 cameraRaw	Open	उघडा
@@ -4821,7 +4801,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Sample: foreground color	नमुना: अग्रभूमी रंग
 	Save canceled	जतन रद्द केले
 	Save the settings to each raw's sidecar without opening it	प्रत्येक raw फाइल न उघडता तिच्या साइडकारमध्ये सेटिंग्ज जतन करा
-	Saved Camera Raw settings to {file}	Camera Raw सेटिंग्ज {file} मध्ये जतन केल्या
 	Select an action first.	प्रथम एक क्रिया निवडा.
 	Select an action step first.	प्रथम एक क्रिया पायरी निवडा.
 	Selected Slices	निवडलेले स्लाइस
@@ -4873,3 +4852,24 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Set the brush angle	ब्रशचा कोन सेट करा
 	The preference could not be saved: {error}	प्राधान्य जतन करता आले नाही: {error}
 	Top align text	मजकूर वर संरेखित करा
+# RAW Develop (renamed from Camera Raw), notes, toolbar side, layer thumbnail menu
+	RAW Develop	RAW डेव्हलप
+	RAW Develop Filter	RAW डेव्हलप फिल्टर
+	RAW Develop Filter…	RAW डेव्हलप फिल्टर…
+	RAW Defaults	RAW डीफॉल्ट
+	RAW Defaults…	RAW डीफॉल्ट…
+	RAW Develop ({name})	RAW डेव्हलप ({name})
+cameraRaw	RAW Develop ({name})	RAW डेव्हलप ({name})
+	RAW Develop Filter ({layer})	RAW डेव्हलप फिल्टर ({layer})
+cameraRaw	RAW Develop Filter ({layer})	RAW डेव्हलप फिल्टर ({layer})
+	RAW Develop isn't open	RAW डेव्हलप उघडलेले नाही
+cameraRaw	RAW Develop isn't open	RAW डेव्हलप उघडलेले नाही
+	Loaded RAW Develop settings from {file}	{file} मधून RAW डेव्हलप सेटिंग्ज लोड केल्या
+cameraRaw	Loaded RAW Develop settings from {file}	{file} मधून RAW डेव्हलप सेटिंग्ज लोड केल्या
+	Loaded RAW Develop settings from {file} ({n} not supported)	{file} मधून RAW डेव्हलप सेटिंग्ज लोड केल्या ({n} समर्थित नाहीत)
+	Saved RAW Develop settings to {file}	RAW डेव्हलप सेटिंग्ज {file} मध्ये जतन केल्या
+	Are you sure you want to delete all notes?	तुम्हाला नक्की सर्व टिपा हटवायच्या आहेत का?
+	Move Toolbar to the Left	टूलबार डावीकडे हलवा
+	Move Toolbar to the Right	टूलबार उजवीकडे हलवा
+	Select Pixels	पिक्सेल निवडा
+	The document changed. Please choose Clear All again.	दस्तऐवज बदलला आहे. कृपया पुन्हा "सर्व साफ करा" निवडा.
