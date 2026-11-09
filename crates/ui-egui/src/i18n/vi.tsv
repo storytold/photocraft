@@ -62,7 +62,7 @@
 
 # Mixer Brush (required for every registered non-English language)
 
-# Camera Raw labels (required for every registered non-English language)
+# RAW Develop labels (required for every registered non-English language)
 
 # Phase 4.1 — Preferences dialog
 
@@ -75,13 +75,13 @@
 
 # Phase 4.5 — Preset Manager + Export/Import Presets
 
-# Phase 4.6 — Camera Raw chrome + Light/Color basics (tone, WB, presence)
+# Phase 4.6 — RAW Develop chrome + Light/Color basics (tone, WB, presence)
 
-# Phase 4.7 — Camera Raw Curve + Color Mixer
+# Phase 4.7 — RAW Develop Curve + Color Mixer
 
-# Phase 4.8 — Camera Raw Color Grading + Detail
+# Phase 4.8 — RAW Develop Color Grading + Detail
 
-# Phase 4.10 — Camera Raw Effects (Texture/Clarity/Dehaze + Vignetting + Grain)
+# Phase 4.10 — RAW Develop Effects (Texture/Clarity/Dehaze + Vignetting + Grain)
 
 # Phase 4.13 — New Document + Home + Image Size
 
@@ -289,7 +289,7 @@
 	Puppet Warp	Biến dạng con rối
 	Purge	Dọn
 	Quick Export as PNG	Xuất nhanh dạng PNG
-	Raw Defaults…	Mặc định Camera Raw…
+	Raw Defaults…	Mặc định RAW…
 	Redo	Làm lại
 	Remove Warp Split	Gỡ tách biến dạng
 	Render Video…	Xuất video…
@@ -630,7 +630,7 @@
 	Blur Gallery	Thư viện làm mờ
 	Blur More	Làm mờ thêm
 	Box Blur…	Làm mờ hộp…
-	Camera Raw Filter…	Bộ lọc Camera Raw…
+	RAW Develop Filter…	Bộ lọc Xử lý RAW…
 	Clouds	Mây
 	Color Halftone…	Bán tông màu…
 	Convert for Smart Filters	Chuyển cho bộ lọc thông minh
@@ -1449,13 +1449,13 @@
 	Load Settings…	Tải cài đặt…
 	Save these settings as a Camera Raw .xmp file	Lưu các cài đặt này thành tệp .xmp Camera Raw
 	Load settings from a Camera Raw .xmp file	Tải cài đặt từ tệp .xmp Camera Raw
-	Loaded Camera Raw settings from {file}	Đã tải cài đặt Camera Raw từ {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Đã tải cài đặt Camera Raw từ {file} ({n} không được hỗ trợ)
+	Loaded RAW Develop settings from {file}	Đã tải cài đặt Xử lý RAW từ {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Đã tải cài đặt Xử lý RAW từ {file} ({n} không được hỗ trợ)
 	Blacks	Điểm đen
 	Blending	Pha trộn
 	Blue	Xanh dương
-	Camera Raw Filter ({layer})	Bộ lọc Camera Raw ({layer})
-	Camera Raw isn't open	Camera Raw chưa mở
+	RAW Develop Filter ({layer})	Bộ lọc Xử lý RAW ({layer})
+	RAW Develop isn't open	Xử lý RAW chưa mở
 	Cancel	Hủy
 	Clarity	Độ rõ
 	Color	Màu
@@ -1551,7 +1551,7 @@ cameraRaw	Shadows	Vùng tối
 	Both	Cả hai
 	Brush picker	Bộ chọn cọ
 	Cache tile size	Kích thước ô đệm
-	Camera Raw Defaults	Mặc định Camera Raw
+	RAW Defaults	Mặc định RAW
 	Canvas border	Viền canvas
 	Canvas color	Màu canvas
 	Canvas custom color	Màu canvas tùy chỉnh
@@ -1747,7 +1747,6 @@ cameraRaw	Shadows	Vùng tối
 	Default restored.	Đã khôi phục mặc định.
 	Delete Shortcut	Xóa phím tắt
 	Reset All to Defaults	Đặt lại tất cả về mặc định
-	All shortcuts reset to Photoshop defaults.	Tất cả phím tắt đã được đặt lại về mặc định Photoshop.
 	Show All Menu Items	Hiện tất cả mục menu
 	Restore Defaults	Khôi phục mặc định
 	Visible	Hiện
@@ -1809,7 +1808,7 @@ cameraRaw	Shadows	Vùng tối
 	Export Presets	Xuất thiết lập sẵn
 	Import Presets	Nhập thiết lập sẵn
 	Fit in View	Vừa khung nhìn
-	Camera Raw	Camera Raw
+	RAW Develop	Xử lý RAW
 cameraRaw	Color	Màu
 cameraRaw	Effects	Hiệu ứng
 cameraRaw	Whites	Điểm trắng
@@ -1872,7 +1871,6 @@ cameraRaw	Size	Kích thước
 	White	Trắng
 	Transparent	Trong suốt
 	Portrait	Dọc
-	Default Photoshop Size	Kích thước Photoshop mặc định
 document	Orientation	Hướng trang
 	Image Size	Kích thước ảnh
 	Image Size:	Kích thước ảnh:
@@ -2094,7 +2092,7 @@ layers	Fill:	Độ tô:
 	Scope	Phạm vi
 	Selected	Đã chọn
 	Open	Mở
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop ({name})	Xử lý RAW ({name})
 	Developing {name}	Đang xử lý {name}
 	101 by 101 Average	Trung bình 101 × 101
 	11 by 11 Average	Trung bình 11 × 11
@@ -2637,7 +2635,7 @@ shape	Appearance	Diện mạo
 	Delete and Fill Selection	Xoá và tô vùng chọn
 	Transform Again on a Copy	Biến đổi lại trên một bản sao
 	General…	Chung…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Mặc định RAW…
 	Integrations…	Tích hợp…
 	Stamp Visible	Đóng dấu lớp hiện thấy
 	Select Layer Above	Chọn lớp phía trên
@@ -2811,7 +2809,6 @@ shape	Appearance	Diện mạo
 	Missing glyph protection	Bảo vệ khi thiếu glyph
 	Modern	Hiện đại
 	Open as smart object	Mở dưới dạng đối tượng thông minh
-	Open in camera raw	Mở trong camera raw
 	Open documents as tabs	Mở tài liệu dưới dạng thẻ
 	Print resolution	Độ phân giải in
 	Pro light	Pro sáng
@@ -3043,7 +3040,7 @@ cameraData	Lens	Ống kính
 	Burn	Làm tối
 	Calculations	Tính toán
 	Camera Calibration	Hiệu chuẩn máy ảnh
-	Camera Raw Filter	Bộ lọc Camera Raw
+	RAW Develop Filter	Bộ lọc Xử lý RAW
 	Candle Light	Ánh nến
 	Canvas Size	Kích thước vùng vẽ
 	Caption	Chú thích
@@ -4123,7 +4120,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Hiện ranh giới lớp khi di chuột
 	Expand layer group on click	Mở rộng nhóm lớp khi nhấp
 	Show hover bounds from Layers	Hiện ranh giới khi di chuột từ bảng Lớp
-	Saved Camera Raw settings to {file}	Đã lưu cài đặt Camera Raw vào {file}
+	Saved RAW Develop settings to {file}	Đã lưu cài đặt Xử lý RAW vào {file}
 	Save the settings to each raw's sidecar without opening it	Lưu thiết lập vào tệp sidecar của từng ảnh raw mà không mở
 	No settings saved: these raws can't keep a sidecar here	Không lưu được gì: các ảnh raw này không thể có tệp sidecar ở đây
 	Some settings could not be saved; the raws stay open	Không thể lưu một số cài đặt; các ảnh raw vẫn mở
@@ -4135,3 +4132,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Tự động đổi kích thước vùng vẽ
 	Keep Relative Position During Layer Reordering	Giữ vị trí tương đối khi sắp xếp lại lớp
 	Shrinkwrap Canvas on Save	Thu nhỏ vùng vẽ theo nội dung khi lưu
+	Move Toolbar to the Right	Di chuyển thanh công cụ sang phải
+	Move Toolbar to the Left	Di chuyển thanh công cụ sang trái
