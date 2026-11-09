@@ -4,7 +4,7 @@
 //! Colours are compared in the surface's own colour channels (RGB, CMYK, Gray, Lab… at any depth),
 //! so nothing is converted through RGB; only alpha changes.
 
-use photocraft_color::SampleType;
+use photocraft_color::{SampleType, read_sample, write_sample};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba};
 use serde::{Deserialize, Serialize};
@@ -24,10 +24,10 @@ pub struct BgEraseSettings {
     /// 0..1: how far from the sampled colour a colour is still partly erased. The distance is the
     /// largest increase plus the largest decrease over the colour channels (`dist`); an exact
     /// match is erased fully, then less the further a colour is, and colours at or beyond the
-    /// Tolerance are kept (`graded_weight`). Protect Foreground Color still compares the
-    /// foreground by the largest per-channel difference (`max_channel_dist`).
+    /// Tolerance are kept (`graded_weight`).
     pub tolerance: f32,
-    /// Keep pixels that match the foreground colour.
+    /// Keep the foreground colour: the erase narrows to the colours between the sampled colour and
+    /// the foreground colour (see [`protected_tolerance`]).
     pub protect_foreground: bool,
     /// Straight RGBA foreground colour (for Protect Foreground Color).
     pub foreground: [f32; 4],
@@ -60,10 +60,25 @@ fn dist(a: &[f32], b: &[f32]) -> f32 {
     up + down
 }
 
-/// The largest per-channel difference of `a` from `b`: the distance Protect Foreground Color keeps
-/// using (#11901 measured only the sample match; #11903 keeps today's measure for the foreground).
-fn max_channel_dist(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+/// The Tolerance Protect Foreground Color leaves (#11903): it narrows to `limit`, the distance from
+/// the sampled colour to the foreground colour, so the sampled colour itself is still erased, the
+/// erase fades out towards the foreground, and colours at least as far from the sample as the
+/// foreground (the foreground itself included) are kept. `None` when the foreground is the sampled
+/// colour: nothing is erased.
+fn protected_tolerance(tol: f32, limit: f32) -> Option<f32> {
+    if limit.is_nan() || limit <= 0.0 {
+        return None;
+    }
+    Some(tol.min(limit))
+}
+
+/// `v` as the document stores it: rounded to the 8- or 16-bit levels, unchanged in 32-bit float.
+/// The sampled colour is read from stored pixels, so the foreground is compared at the same
+/// precision; otherwise a foreground between two levels misses its own stored colour (#11903).
+fn at_sample_precision(sample: SampleType, v: f32) -> f32 {
+    let mut bytes = [0u8; 4];
+    write_sample(&mut bytes, sample, 0, v);
+    read_sample(&bytes, sample, 0)
 }
 
 /// The match weight of one dab for a colour `d` away from the sampled colour (#11901): an exact
@@ -108,13 +123,10 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
     let tol = if bs.tolerance.is_finite() { bs.tolerance.clamp(0.0, 1.0) } else { 0.0 };
     let native = |c: [f32; 4]| -> Vec<f32> { from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec() };
     let swatch = native(bs.background);
-    let fg = native(bs.foreground);
+    let fg: Vec<f32> = native(bs.foreground).into_iter().map(|v| at_sample_precision(fmt.sample, v)).collect();
     let (sampling, limits, protect_foreground) = (bs.sampling, bs.limits, bs.protect_foreground);
     let float = fmt.sample == SampleType::F32;
     let mut once: Option<Option<Vec<f32>>> = None;
-    // Find Edges grades soft edges like Contiguous does instead of cutting them hard (#11904):
-    // the reference application keeps at least as much of a blurred transition with it.
-    let match_w = move |d: f32| -> f32 { graded_weight(d, tol) };
     let pre = pre.clone();
     // The pixels before the stroke under the working copy, read once per working area. Sampling
     // and matching read these, so a dab landing on pixels earlier dabs already erased still
@@ -145,6 +157,18 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
             Sampling::BackgroundSwatch => Some(swatch.clone()),
         };
         let Some(sampled) = sampled else { return };
+        // Protect Foreground Color narrows the Tolerance to the foreground colour (#11903), by the
+        // same distance as the sample match: the reference application measures a foreground that
+        // is off in two channels that way too.
+        let tol = if protect_foreground {
+            let Some(t) = protected_tolerance(tol, dist(&sampled, &fg)) else { return };
+            t
+        } else {
+            tol
+        };
+        // Find Edges grades soft edges like Contiguous does instead of cutting them hard (#11904):
+        // the reference application keeps at least as much of a blurred transition with it.
+        let match_w = |d: f32| -> f32 { graded_weight(d, tol) };
         let (w, h) = (r.width() as usize, r.height() as usize);
         // Which pixels the contiguous fill may pass, from the pre-stroke colours as before: it
         // passes through pixels this stroke already erased.
@@ -153,7 +177,6 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
         // partly is matched by its current, decontaminated colour, which is pushed away from the
         // sampled colour, so later dabs erase it again only while it is still within the Tolerance.
         let mut weight = vec![0.0f32; w * h];
-        let protected = |c: &[f32]| protect_foreground && max_channel_dist(c, &fg) <= tol;
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
                 if fp.at(x, y) <= 0.0 {
@@ -164,11 +187,9 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
                     continue;
                 }
                 let i = (y - r.y0) as usize * w + (x - r.x0) as usize;
-                if !protected(&o[..nc]) {
-                    reach[i] = match_w(dist(&o[..nc], &sampled));
-                }
+                reach[i] = match_w(dist(&o[..nc], &sampled));
                 let c = work.px(x, y);
-                if c[a] > 0.0 && !protected(&c[..nc]) {
+                if c[a] > 0.0 {
                     weight[i] = match_w(dist(&c[..nc], &sampled));
                 }
             }
@@ -248,6 +269,10 @@ fn keep_connected(weight: &mut [f32], w: usize, h: usize, sx: usize, sy: usize) 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bg_erase_protect_foreground_tests.rs"]
+mod protect_foreground_tests;
 
 #[cfg(test)]
 #[path = "bg_erase_graded_alpha_tests.rs"]

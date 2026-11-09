@@ -13,8 +13,8 @@ fn hindi_has_the_reveal_and_camera_raw_rows() {
     let hi = lang("hi");
     assert_eq!(tr(hi, "Reveal in Explorer"), "Explorer में दिखाएँ");
     assert_eq!(tr(hi, "Reveal in Finder"), "Finder में दिखाएँ");
-    assert_eq!(tr(hi, "Camera Raw…"), "Camera Raw…");
-    assert!(has(hi, "Camera Raw…"), "Camera Raw… is a catalog row, not a fallback");
+    assert_eq!(tr(hi, "RAW Defaults…"), "RAW डिफ़ॉल्ट…");
+    assert!(has(hi, "RAW Defaults…"), "RAW Defaults… is a catalog row, not a fallback");
 }
 
 #[test]
@@ -507,6 +507,19 @@ fn bundled_catalogs_are_consistent() {
             if id != "language.name" && !(crate::menus::is_live(id) || crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id)) {
                 println!("{code}: @id row for a command PhotoCraft doesn't have: {id:?}");
             }
+        }
+    }
+}
+
+#[test]
+fn raw_develop_labels_are_translated_in_every_shipped_catalog() {
+    if !needs_catalogs() {
+        return;
+    }
+    for language in LANGUAGES.iter().skip(1) {
+        let l = lang(language.code);
+        for source in ["RAW Develop", "RAW Develop Filter", "RAW Develop Filter…", "RAW Defaults", "RAW Defaults…"] {
+            assert!(has(l, source) && !tr(l, source).is_empty(), "{}: {source}", language.code);
         }
     }
 }
