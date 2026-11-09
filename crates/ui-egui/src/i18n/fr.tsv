@@ -4651,3 +4651,5 @@ shape	Appearance	Apparence
 	Auto-size Canvas	Redimensionner le canevas automatiquement
 	Keep Relative Position During Layer Reordering	Conserver la position relative lors de la réorganisation des calques
 	Shrinkwrap Canvas on Save	Réduire le canevas au contenu à l'enregistrement
+	Move Toolbar to the Right	Déplacer la barre d'outils à droite
+	Move Toolbar to the Left	Déplacer la barre d'outils à gauche

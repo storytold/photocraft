@@ -4631,6 +4631,8 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Add Pixels to Selection	Pikselləri seçimə əlavə edin
 	Subtract Pixels from Selection	Pikselləri seçimdən çıxın
 	Intersect Pixels with Selection	Pikselləri seçimlə kəsişdirin
+	Move Toolbar to the Right	Alət panelini sağa köçür
+	Move Toolbar to the Left	Alət panelini sola köçür
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW emalı ayarları {file} faylında saxlanıldı

@@ -4829,6 +4829,8 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	Auto-size Canvas	Endre lerretstørrelse automatisk
 	Keep Relative Position During Layer Reordering	Behold relativ posisjon ved omordning av lag
 	Shrinkwrap Canvas on Save	Krymp lerretet til innholdet ved lagring
+	Move Toolbar to the Right	Flytt verktøylinjen til høyre
+	Move Toolbar to the Left	Flytt verktøylinjen til venstre
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW-fremkallingsinnstillinger lagret i {file}
