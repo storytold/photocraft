@@ -7,6 +7,10 @@
 //! part of the serialisable UI state so the control channel can read and drive it). The Color
 //! Sampler points themselves live in the engine (`DocState.color_samplers`) so every front end
 //! shares them; this module only maps pointer input and draws the numbered markers.
+//!
+//! The Ruler options bar's Straighten Layer button is on when the engine's check says so, and a
+//! hidden target layer answers its click with the reference's alert rather than the status line
+//! (#12033).
 
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, RichText, Stroke, pos2, vec2};
 use photocraft_doc::{Document, Ruler};
@@ -15,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::Tool;
+use crate::state::{DialogKind, Tool};
 use crate::theme::Tokens;
 
 /// What a pointer drag is doing (not serialised).
@@ -68,7 +72,7 @@ impl Default for AnalysisUi {
             log_selected: Vec::new(),
             note_selected: None,
             note_author: String::new(),
-            note_color: [1.0, 1.0, 0.51],
+            note_color: photocraft_engine::notes_cmds::DEFAULT_NOTE_COLOR,
             use_measurement_scale: false,
             dialog: None,
             drag: None,
@@ -219,15 +223,24 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
-/// Shift constrains to 45° steps around `from`.
+/// Shift constrains to 45° steps around `from`, as the reference does (#11985): on a diagonal step
+/// both legs take the smaller of |dx| and |dy| (signs kept), on a 0° or 90° step the dominant
+/// component stays and the other becomes 0, so the ruler never gets longer than the pointer's legs.
 fn constrain(from: [f64; 2], to: [f64; 2], shift: bool) -> [f64; 2] {
     if !shift {
         return to;
     }
     let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-    let a = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
-    let l = dx.hypot(dy);
-    [from[0] + l * a.cos(), from[1] + l * a.sin()]
+    let step = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() as i64;
+    let (cx, cy) = match step.rem_euclid(4) {
+        0 => (dx, 0.0),
+        2 => (0.0, dy),
+        _ => {
+            let leg = dx.abs().min(dy.abs());
+            (leg.copysign(dx), leg.copysign(dy))
+        }
+    };
+    [from[0] + cx, from[1] + cy]
 }
 
 fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
@@ -315,7 +328,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
                 Some((g, i)) => app.ui.analysis.drag = Some(Drag::Count(g, i, [x, y])),
                 None if !mods.alt => {
-                    let _ = app.run("count.add", json!({"x": x, "y": y}));
+                    // A marker that stays invisible looks like the click did nothing, so adding one
+                    // brings View > Show > Count back. It is view state, not a history step.
+                    let added = app.run("count.add", json!({"x": x, "y": y})).is_ok();
+                    app.ui.view.show.count |= added;
                 }
                 None => {}
             }
@@ -547,8 +563,26 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut app.ui.analysis.use_measurement_scale, tl!("Use Measurement Scale"));
             let has = doc.measurement.ruler.is_some();
-            if ui.add_enabled_ui(has, |ui| crate::widgets::secondary_button(ui, tl!("Straighten Layer"), 0.0)).inner.clicked() {
-                let _ = app.run("image.analysis.straightenLayer", json!({}));
+            // The engine decides this button's state, so it goes grey for exactly the targets
+            // Straighten Layer is off for: the Background, several selected layers, a group and a
+            // layer locked in place (#12033).
+            let straighten = app.session.is_enabled("image.analysis.straightenLayer");
+            if ui.add_enabled_ui(straighten, |ui| crate::widgets::secondary_button(ui, tl!("Straighten Layer"), 0.0)).inner.clicked() {
+                let hidden = photocraft_engine::analysis_cmds::STRAIGHTEN_HIDDEN_ERROR;
+                if let Err(why) = app.run("image.analysis.straightenLayer", json!({})) {
+                    // A hidden target layer keeps the button on and answers the click with the
+                    // reference's alert (its message and an OK button), changing nothing (#12033).
+                    if why == hidden {
+                        app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(hidden)}).as_object().cloned().unwrap_or_default());
+                    }
+                    // Every other refusal goes to the status line, as the eraser tools do. What the
+                    // command itself answered is reported there by `PhotocraftApp::run`, but a
+                    // refusal raised before it runs - the automation gate a control or MCP-driven
+                    // click passes - returns early, and a click that says nothing reads as a dead
+                    // button (#12148).
+                    app.ui.status = why;
+                    app.ui.status_error = true;
+                }
             }
             if ui.add_enabled_ui(has, |ui| crate::widgets::secondary_button(ui, tl!("Clear"), 0.0)).inner.clicked() {
                 let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
@@ -1125,3 +1159,7 @@ pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 #[cfg(test)]
 #[path = "note_delete_key_tests.rs"]
 mod note_delete_key_tests;
+
+#[cfg(test)]
+#[path = "analysis_ruler_shift_tests.rs"]
+mod analysis_ruler_shift_tests;

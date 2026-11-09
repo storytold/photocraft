@@ -230,11 +230,11 @@ fn background_eraser_fails_gracefully() {
     ] {
         assert!(s.execute("paint.backgroundEraser", p.clone()).is_err(), "{p}");
     }
-    // A normal layer with locked transparency is refused.
+    // A layer with locked pixels is refused.
     s.execute("layer.new.layer", json!({})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
     s.edit("lock", |doc, _| {
-        doc.layer_mut(id).unwrap().locks.transparency = true;
+        doc.layer_mut(id).unwrap().locks.pixels = true;
         Ok(())
     })
     .unwrap();
@@ -319,7 +319,7 @@ fn live_background_eraser_matches_the_commit() {
 fn live_background_eraser_refuses_what_the_command_refuses() {
     let mut s = session("rgb", 8);
     s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("layer.setProps", json!({"locks": {"transparency": true}})).unwrap();
+    s.execute("layer.setProps", json!({"locks": {"pixels": true}})).unwrap();
     let p = json!({"points": [[20, 20]]});
     assert!(live_background_eraser(&s, &p).is_err());
     assert!(s.execute("paint.backgroundEraser", p).is_err());
