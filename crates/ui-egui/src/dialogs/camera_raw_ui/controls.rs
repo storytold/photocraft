@@ -305,9 +305,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         // does, so the zoom tool must not claim it.
         // Guides follow the geometry the preview shows (none with Geometry hidden or Before shown).
         let drawing = super::masks_panel::captures_pointer(ctx, &d.effective_params(), d.show_before);
-        // The White Balance tool and the Color Sampler are one at a time, as in Camera Raw.
+        // The White Balance tool, the Color Sampler and the mask / guide tools are one at a time,
+        // as in Camera Raw: a pointer gesture reaches only one of them.
         let wb_tool = d.panels.wb_tool && !drawing;
-        if wb_tool {
+        if wb_tool || drawing {
             scope.sampler_tool = false;
         }
         let mut sampling = scope.sampler_tool || drawing || wb_tool;
@@ -340,7 +341,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // Edits start only on the After image: Split's Before half covers the left of it.
             super::masks_panel::preview(&mut preview, d, r, &response, panning, compare.after_area(view, after_view));
             if wb_tool && !panning {
-                super::wb_picker::preview(&preview, d, r, &response);
+                super::wb_picker::preview(&preview, d, r, r.intersect(after_area(compare, view, after_view)), &response);
             }
             if let Some(before) = d.before_tex.as_ref() {
                 paint_before(ui, &t, before, compare, view, after_view, r);
@@ -407,8 +408,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             super::masks_panel::store(ctx, s);
         }
         super::masks_panel::strip_button(&mut strip_ui);
-        // Picking the Color Sampler (its button or S) turns the White Balance tool off; the
-        // other way round happens above, when the White Balance tool is on.
+        // Picking the Color Sampler (its button or S) turns the White Balance tool and the mask
+        // or guide tool off; the other way round happens above, when one of those is on.
         let sampler_was = scope.sampler_tool;
         strip_ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             crate::camera_raw_preview_ui::tools(ui, navigation, &mut scope.sampler_tool);
@@ -439,7 +440,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         crate::camera_raw_scope_ui::floating(ctx, d, scope, right);
         crate::camera_raw_scope_ui::shortcuts(ctx, scope);
         if scope.sampler_tool && !sampler_was {
-            d.panels.wb_tool = false;
+            sampler_picked(ctx, d);
         }
         d.dirty |= dirty;
         if d.dirty {
@@ -553,6 +554,23 @@ fn paint_before(ui: &egui::Ui, t: &Tokens, before: &egui::TextureHandle, compare
         let at = align.anchor_size(pos2(x, view.top() + 8.0), label.size());
         ui.painter().rect_filled(at.expand2(vec2(6.0, 3.0)), t.radius_sm, Color32::from_black_alpha(150));
         ui.painter().galley(at.min, label, t.text);
+    }
+}
+
+/// Where the After image shows: Split covers the left half of `view` with Before, side by side
+/// puts After in `after_view`.
+fn after_area(compare: super::panels::Compare, view: ERect, after_view: ERect) -> ERect {
+    if compare == super::panels::Compare::Split { ERect::from_min_max(pos2(view.center().x, view.top()), view.max) } else { after_view }
+}
+
+/// The Color Sampler was just picked: the White Balance tool and the mask or guide tool step
+/// aside, so a gesture on the preview reaches only the sampler.
+fn sampler_picked(ctx: &egui::Context, d: &mut CameraRawDialog) {
+    d.panels.wb_tool = false;
+    let mut s = super::masks_panel::load(ctx);
+    if s.tool != super::masks_panel::DrawTool::None {
+        s.tool = super::masks_panel::DrawTool::None;
+        super::masks_panel::store(ctx, s);
     }
 }
 

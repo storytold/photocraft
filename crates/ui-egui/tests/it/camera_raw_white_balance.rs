@@ -116,3 +116,43 @@ fn the_color_sampler_replaces_the_white_balance_tool() {
     assert_eq!(inspect(&h)["panels"]["whiteBalanceTool"], false);
     assert!(h.state().ui.camera_raw_scope.sampler_tool, "the sampler stayed on");
 }
+
+fn preview_rect(h: &Harness<'_, PhotocraftApp>) -> egui::Rect {
+    let r = inspect(h)["previewRect"].clone();
+    let at = |i: usize| r[i].as_f64().unwrap_or(f64::NAN) as f32;
+    egui::Rect::from_min_max(pos2(at(0), at(1)), pos2(at(2), at(3)))
+}
+
+/// In Split view the left half shows Before: a White Balance click there changes nothing; the
+/// After half still takes it.
+#[test]
+fn split_view_takes_white_balance_clicks_on_the_after_half_only() {
+    let mut h = warm();
+    let ctx = h.ctx.clone();
+    menu(h.state_mut(), &ctx, json!({"ui":{"whiteBalanceTool":true,"compare":"split"}})).unwrap();
+    h.run_steps(3);
+    let r = preview_rect(&h);
+    click(&mut h, r.lerp_inside(vec2(0.2, 0.5)));
+    assert_eq!(wb(&h), (0.0, 0.0), "a click on Before sets nothing");
+    click(&mut h, r.lerp_inside(vec2(0.8, 0.5)));
+    assert!(wb(&h).0 < 0.0, "a click on After cools the warm image: {:?}", wb(&h));
+}
+
+/// Picking the Color Sampler turns a mask brush off: its clicks place samplers and paint nothing.
+#[test]
+fn the_color_sampler_takes_the_preview_from_a_mask_brush() {
+    let mut h = warm();
+    let ctx = h.ctx.clone();
+    menu(h.state_mut(), &ctx, json!({"ui":{"set":{"masks":[{"name":"Mask 1","components":[]}]},"masks":{"open":true,"selected":0,"tool":"brush"}}})).unwrap();
+    h.run_steps(3);
+    h.event(Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().ui.camera_raw_scope.sampler_tool, "the sampler is on");
+    let at = preview_rect(&h).center();
+    click(&mut h, at);
+    let after = menu(h.state_mut(), &ctx, json!({"ui":{}})).unwrap();
+    assert_eq!(after["masking"]["tool"], "none", "the brush is off");
+    let dabs = inspect(&h)["params"]["masks"][0]["components"].as_array().map_or(0, |c| c.iter().map(|c| c["dabs"].as_array().map_or(0, Vec::len)).sum());
+    assert_eq!(dabs, 0, "the sampler click painted nothing");
+    assert_eq!(inspect(&h)["samplerReadouts"].as_array().map(Vec::len), Some(1), "one sampler placed");
+}

@@ -60,12 +60,31 @@ pub(crate) fn curves(temperature: f32, tint: f32) -> Option<Balance> {
 /// corrections.
 pub(crate) fn pixel(mut q: [f32; 4], b: &Balance, enc: Encoding) -> [f32; 4] {
     for (rows, fix) in &b.0 {
-        let input = [q[0], q[1], q[2]];
-        let base: [f32; 3] = std::array::from_fn(|c| enc.encode(curve(&rows[c], enc.decode(q[c]))));
-        let out = fix.as_ref().map_or(base, |f| f.apply(input, base, enc));
+        let out = stage([q[0], q[1], q[2]], rows, fix.as_ref(), enc);
         q[..3].copy_from_slice(&out);
     }
     q
+}
+
+/// One slider (Temperature or Tint) on a straight colour: its curves, then its correction.
+fn stage(input: [f32; 3], rows: &[[f32; STEPS]; 3], fix: Option<&Correction>, enc: Encoding) -> [f32; 3] {
+    let base: [f32; 3] = std::array::from_fn(|c| enc.encode(curve(&rows[c], enc.decode(input[c]))));
+    fix.map_or(base, |f| f.apply(input, base, enc))
+}
+
+/// [`pixel`] stage by stage, `None` when Temperature or Tint pushes a channel that was below white
+/// up to the clip: a near-white sample that clipping turns grey is not neutralised, and choosing
+/// that setting would tint the rest of the image.
+fn unclipped(mut q: [f32; 4], b: &Balance, enc: Encoding) -> Option<[f32; 4]> {
+    const WHITE: f32 = 0.999;
+    for (rows, fix) in &b.0 {
+        let o = stage([q[0], q[1], q[2]], rows, fix.as_ref(), enc);
+        if (0..3).any(|c| o[c] >= WHITE && q[c] < WHITE) {
+            return None;
+        }
+        q[..3].copy_from_slice(&o);
+    }
+    Some(q)
 }
 
 /// Applies Temperature and Tint to straight RGBA pixels (`width` per row).
@@ -102,7 +121,10 @@ pub fn white_balance_from_sample(rgb: [f32; 3], encoding_gamma: f32) -> Option<(
     }
     let q = [rgb[0], rgb[1], rgb[2], 1.0];
     let score = |t: f32, n: f32| -> Option<f32> {
-        let o = curves(t, n).map_or(q, |b| pixel(q, &b, enc));
+        let o = match curves(t, n) {
+            Some(b) => unclipped(q, &b, enc)?,
+            None => q,
+        };
         cast([o[0], o[1], o[2]], enc)
     };
     // The neutral setting is the one to beat: a candidate must read strictly greyer.
@@ -309,6 +331,19 @@ mod tests {
         assert!(white_balance_from_sample([0.6, 0.5, 0.4], 1.8).is_some());
         // A neutral highlight just under clipping: nothing reads greyer than leaving it alone.
         assert_eq!(white_balance_from_sample([0.998; 3], 0.0), Some((0.0, 0.0)));
+    }
+
+    #[test]
+    fn the_eyedropper_does_not_neutralise_by_clipping() {
+        // A warm near-white: Temperature and Tint −100 clip it to white, which reads as no cast
+        // but tints everything else. Only settings that leave it below white count.
+        for rgb in [[0.99, 0.98, 0.95], [0.97, 0.99, 0.96]] {
+            let (t, n) = white_balance_from_sample(rgb, 0.0).expect("a colour");
+            let q = [rgb[0], rgb[1], rgb[2], 1.0];
+            let o = curves(t, n).map_or(q, |b| pixel(q, &b, Encoding::of(0.0)));
+            assert!(o[..3].iter().all(|v| *v < 0.999), "{rgb:?} → ({t}, {n}) clips: {o:?}");
+            assert!(t.abs() < 100.0 && n.abs() < 100.0, "{rgb:?} → ({t}, {n})");
+        }
     }
 
     #[test]

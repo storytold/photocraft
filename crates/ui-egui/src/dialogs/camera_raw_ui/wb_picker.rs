@@ -3,7 +3,7 @@
 //! Raw (the proxy), at the source point the shown pixel came from when Geometry moves it, averaged
 //! over a 3 × 3 block as Camera Raw's tool reads a small area.
 
-use photocraft_algo::camera_raw::{geometry, white_balance_from_sample};
+use photocraft_algo::camera_raw::{CameraRaw, geometry, white_balance_from_sample};
 use photocraft_algo::transform::Homography;
 
 use super::{CameraRawDialog, ERect, Pos2};
@@ -15,16 +15,37 @@ pub(super) fn source_point(d: &CameraRawDialog, u: [f32; 2]) -> Option<[f32; 2]>
     if d.show_before || p.geometry_neutral() {
         return Some(u);
     }
-    let (w, h) = (d.pw.max(1) as f64, d.ph.max(1) as f64);
-    let m = geometry::homography(&d.proxy, d.pw.max(1), d.ph.max(1), &p);
+    unwarp(&d.proxy, d.pw, d.ph, d.canvas_frame, &p, u)
+}
+
+/// `u` (0 … 1 across the `pw` × `ph` proxy) through the inverse of `p`'s Geometry, as the preview
+/// applies it: when the layer reaches past the canvas, only the canvas's part `frame` (proxy
+/// pixels `[x0, y0, x1, y1]`) is warped, about its own centre, and the rest stays where it is.
+/// `None` when the shown point has no source (uncovered by the warp, or the warp folds).
+fn unwarp(px: &[[f32; 4]], pw: usize, ph: usize, frame: Option<[usize; 4]>, p: &CameraRaw, u: [f32; 2]) -> Option<[f32; 2]> {
+    let (pw, ph) = (pw.max(1), ph.max(1));
+    let [x0, y0, x1, y1] = frame.filter(|[x0, y0, x1, y1]| x0 < x1 && y0 < y1 && *x1 <= pw && *y1 <= ph).unwrap_or([0, 0, pw, ph]);
+    let (fw, fh) = (x1 - x0, y1 - y0);
+    // The shown point in proxy pixels; past the canvas the layer is not warped.
+    let (px_x, px_y) = (f64::from(u[0]) * pw as f64, f64::from(u[1]) * ph as f64);
+    if px_x < x0 as f64 || px_x > x1 as f64 || px_y < y0 as f64 || px_y > y1 as f64 {
+        return Some(u);
+    }
+    let sub: Vec<[f32; 4]> =
+        if (fw, fh) == (pw, ph) { Vec::new() } else { (y0..y1).flat_map(|y| px.get(y * pw + x0..y * pw + x1).unwrap_or(&[]).iter().copied()).collect() };
+    let m = geometry::homography(if sub.is_empty() { px } else { &sub }, fw, fh, p);
     let inv = Homography(m).inverse()?.0;
-    let (x, y) = (f64::from(u[0]) * w - w / 2.0, f64::from(u[1]) * h - h / 2.0);
+    let (w, h) = (fw as f64, fh as f64);
+    let (x, y) = (px_x - x0 as f64 - w / 2.0, px_y - y0 as f64 - h / 2.0);
     let z = inv[6] * x + inv[7] * y + inv[8];
     if !z.is_finite() || z.abs() < 1e-12 {
         return None;
     }
-    let (sx, sy) = ((inv[0] * x + inv[1] * y + inv[2]) / z, (inv[3] * x + inv[4] * y + inv[5]) / z);
-    let out = [((sx + w / 2.0) / w) as f32, ((sy + h / 2.0) / h) as f32];
+    let (sx, sy) = ((inv[0] * x + inv[1] * y + inv[2]) / z + w / 2.0, (inv[3] * x + inv[4] * y + inv[5]) / z + h / 2.0);
+    if !(sx.is_finite() && sy.is_finite() && (0.0..=w).contains(&sx) && (0.0..=h).contains(&sy)) {
+        return None;
+    }
+    let out = [((sx + x0 as f64) / pw as f64) as f32, ((sy + y0 as f64) / ph as f64) as f32];
     out.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)).then_some(out)
 }
 
@@ -60,15 +81,16 @@ pub(super) fn balance_at(d: &CameraRawDialog, u: [f32; 2]) -> Option<(f32, f32)>
     white_balance_from_sample(rgb, d.params.encoding_gamma)
 }
 
-/// The tool on the preview: a crosshair over the image `r`; a click sets the balance (one
-/// undo step, like a slider drag).
-pub(super) fn preview(ui: &egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &egui::Response) {
-    let over = response.hover_pos().filter(|p| r.contains(*p));
+/// The tool on the preview: a crosshair over `active`, the part of the image `r` that shows the
+/// After image (all of it, except under Split's Before half); a click there sets the balance
+/// (one undo step, like a slider drag).
+pub(super) fn preview(ui: &egui::Ui, d: &mut CameraRawDialog, r: ERect, active: ERect, response: &egui::Response) {
+    let over = response.hover_pos().filter(|p| active.contains(*p));
     if over.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     if response.clicked()
-        && let Some(p) = response.interact_pointer_pos().filter(|p| r.contains(*p))
+        && let Some(p) = response.interact_pointer_pos().filter(|p| active.contains(*p))
     {
         let u = unit(r, p);
         if let Some((temperature, tint)) = balance_at(d, u)
@@ -86,7 +108,23 @@ fn unit(r: ERect, p: Pos2) -> [f32; 2] {
 
 #[cfg(test)]
 mod tests {
-    use super::sample;
+    use super::{CameraRaw, sample, unwarp};
+
+    #[test]
+    fn geometry_turns_the_canvas_about_its_own_centre() {
+        // A 40 × 20 proxy whose canvas is its left half: Rotate turns that half about (10, 10).
+        let px = vec![[0.5, 0.5, 0.5, 1.0]; 40 * 20];
+        let p = CameraRaw { perspective_rotate: 8.0, ..CameraRaw::default() };
+        let frame = Some([0, 0, 20, 20]);
+        let centre = unwarp(&px, 40, 20, frame, &p, [0.25, 0.5]).expect("inside");
+        assert!((centre[0] - 0.25).abs() < 1e-4 && (centre[1] - 0.5).abs() < 1e-4, "the canvas centre stays: {centre:?}");
+        assert_eq!(unwarp(&px, 40, 20, frame, &p, [0.8, 0.3]), Some([0.8, 0.3]), "past the canvas nothing moves");
+        // Without a frame the whole proxy turns about (20, 10), so its centre stays instead.
+        let whole = unwarp(&px, 40, 20, None, &p, [0.5, 0.5]).expect("inside");
+        assert!((whole[0] - 0.5).abs() < 1e-4 && (whole[1] - 0.5).abs() < 1e-4, "{whole:?}");
+        let off = unwarp(&px, 40, 20, None, &p, [0.25, 0.5]).expect("inside");
+        assert!((off[1] - 0.5).abs() > 1e-3, "off the turning centre a point moves: {off:?}");
+    }
 
     #[test]
     fn samples_average_the_block_and_stay_in_bounds() {
