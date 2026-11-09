@@ -220,7 +220,18 @@ fn new_document_preview(
                 ((f64::from(canvas.y1) - f64::from(bounds.y0)) * scale).ceil() as i32,
             );
             let fallback = photocraft_vector::CompiledShape::with_frames(&proxy, photocraft_vector::DEFAULT_TOLERANCE, output, frame).render_rgba(output);
-            let bytes: Vec<u8> = fallback.iter().flat_map(|p| p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+            let bytes: Vec<u8> = fallback
+                .iter()
+                .flat_map(|p| {
+                    let mut rgba = p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                    // A 1px document stroke can be below half an alpha byte in this
+                    // coarse proxy. Keep positive coverage until native pixels replace it.
+                    if p[3] > 0.0 && rgba[3] == 0 {
+                        rgba[3] = 1;
+                    }
+                    rgba
+                })
+                .collect();
             work.set_fallback(egui::ColorImage::from_rgba_unmultiplied(size, &bytes));
         }
         let image = work.image();

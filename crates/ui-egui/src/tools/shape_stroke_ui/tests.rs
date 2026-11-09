@@ -1056,3 +1056,32 @@ fn pixel_align_round2_changing_preview_has_complete_fill() {
         output.textures_delta.clear();
     }
 }
+
+/// The coarse proxy of a changing 300k outline has less than half an alpha byte
+/// of coverage. Unvisited edges must survive the uploaded texture, not just f32 rasterization.
+#[test]
+fn pixel_align_fallback_preserves_thin_strokes_in_uploaded_texture() {
+    let ctx = egui::Context::default();
+    for width in [300_000.0, 299_999.0] {
+        let shape = photocraft_doc::ShapeLayer {
+            path: photocraft_vector::shapes::rect(0.0, 0.0, width, 4096.0),
+            stroke: Some(photocraft_doc::ShapeStroke { width: 1.0, ..Default::default() }),
+            use_aligned_rendering: true,
+            ..Default::default()
+        };
+        let mut texture = None;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.ctx().layer_painter(egui::LayerId::background());
+            let canvas = photocraft_geom::Rect::new(0, 0, 300_000, 4096);
+            let cache = new_document_preview(&painter, &shape, canvas, canvas, egui::TextureOptions::LINEAR).unwrap();
+            assert!(cache.reduction.is_some(), "fixture must leave native tiles unvisited");
+            texture = Some(cache.texture.clone());
+        });
+        let delta = output.textures_delta.set.get(&texture.as_ref().unwrap().id()).unwrap();
+        let egui::ImageData::Color(image) = &delta[0].image;
+        let row = image.size[1] / 2;
+        assert!(image.pixels[row * image.size[0] + image.size[0] - 1].a() > 0, "unvisited right edge, width={width}");
+        assert_eq!(image.pixels[row * image.size[0] + image.size[0] / 2].a(), 0, "transparent interior must remain transparent");
+        output.textures_delta.clear();
+    }
+}

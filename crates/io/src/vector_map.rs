@@ -866,4 +866,35 @@ mod align_edges_tests {
             assert_eq!(raw[0].1, data, "unchanged true values stay byte-identical");
         }
     }
+    /// Layer-wide snapping no longer needs the old canvas quantum to sharpen a rectangle.
+    #[test]
+    fn pixel_alignment_narrowed_psd_canvas_keeps_crisp_edges_after_recolor() {
+        let shape = ShapeLayer {
+            path: photocraft_vector::shapes::rect(10.0, 10.0, 60.0, 60.0),
+            use_aligned_rendering: true,
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            ..Default::default()
+        };
+        let mut raw = Vec::new();
+        shape_blocks(&shape, &mut raw, 300_000, 300_000, 72.0);
+        let mut imported = ShapeLayer::default();
+        shape_from_blocks(&mut imported, &|key| raw.iter().find(|(k, _)| k == key).map(|(_, bytes)| bytes.clone()), 300_000, 300_000, 72.0);
+        assert_ne!(imported.path, shape.path, "fixture must exercise PSD path quantization");
+        shape_blocks(&imported, &mut raw, 1000, 1000, 72.0);
+        let mut reopened = ShapeLayer::default();
+        shape_from_blocks(&mut reopened, &|key| raw.iter().find(|(k, _)| k == key).map(|(_, bytes)| bytes.clone()), 1000, 1000, 72.0);
+        assert_eq!(reopened.psd_coordinate_frame, Some([1000, 1000]));
+        assert!(reopened.use_aligned_rendering);
+        reopened.stroke.as_mut().unwrap().paint = Fill::Solid(photocraft_doc::Color::rgb(0.4, 0.2, 0.7));
+        let path = reopened.path.clone();
+        let rect = photocraft_geom::Rect::new(0, 0, 80, 80);
+        let pixels = photocraft_vector::CompiledShape::new(&reopened, photocraft_vector::DEFAULT_TOLERANCE, rect).render_rgba(rect);
+        for y in 0..80 {
+            for x in 0..80 {
+                let edge = (10..70).contains(&x) && (y == 10 || y == 69) || (10..70).contains(&y) && (x == 10 || x == 69);
+                assert_eq!(pixels[y * 80 + x][3], f32::from(edge), "({x},{y})");
+            }
+        }
+        assert_eq!(reopened.path, path);
+    }
 }
