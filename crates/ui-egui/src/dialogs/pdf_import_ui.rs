@@ -577,13 +577,17 @@ fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImpor
             // What the choice keeps, so it can be picked without trying each one (#11414).
             let crop = CropTo::from_id(s(f, "crop", "boundingBox")).unwrap_or_default();
             ui.horizontal(|ui| {
-                ui.add_space(label_w);
+                // Allocated like `field`'s label, so the spacing after it lines the hint up with the dropdown.
+                ui.allocate_exact_size(vec2(label_w, 0.0), Sense::hover());
                 ui.add(egui::Label::new(egui::RichText::new(tl!(crop.description())).size(11.0).color(t.text_dim)).wrap());
             });
             let mut aa = flag(f, "antiAlias", true);
-            if widgets::checkbox(ui, &mut aa, tl!("Anti-aliased")).changed() {
-                f.insert("antiAlias".into(), json!(aa));
-            }
+            ui.horizontal(|ui| {
+                ui.allocate_exact_size(vec2(label_w, 0.0), Sense::hover());
+                if widgets::checkbox(ui, &mut aa, tl!("Anti-aliased")).changed() {
+                    f.insert("antiAlias".into(), json!(aa));
+                }
+            });
         });
         ui.add_space(6.0);
         let (w, h) = pixel_size(st, f).unwrap_or((0, 0));

@@ -527,6 +527,33 @@ fn crop_to_says_what_the_chosen_box_keeps() {
     assert_eq!(hints.len(), CropTo::ALL.len(), "every choice has its own hint");
 }
 
+/// The Crop To hint and the Anti-aliased box start where the dropdown above them starts, in the
+/// column of the fields, not at the labels' edge.
+#[test]
+fn crop_to_hint_and_anti_aliased_line_up_with_the_dropdown() {
+    let mut app = app();
+    app.open_bytes("multi.pdf", &three_pages()).expect("open");
+    let mut h = dialog_harness(app);
+    h.run_steps(4);
+    let hint = h.query_by_label(CropTo::BoundingBox.description()).expect("the hint").rect();
+    let combo = h
+        .query_all_by_role(egui::accesskit::Role::ComboBox)
+        .map(|n| n.rect())
+        .filter(|r| r.bottom() <= hint.top() + 0.5)
+        .max_by(|a, b| a.bottom().total_cmp(&b.bottom()))
+        .expect("the Crop To dropdown above the hint");
+    assert!((hint.left() - combo.left()).abs() < 0.5, "hint at x {} but the dropdown at x {}", hint.left(), combo.left());
+    let aa = h
+        .query_all_by_role(egui::accesskit::Role::CheckBox)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Anti-aliased"))
+        .expect("the Anti-aliased box")
+        .rect();
+    // The named node is the box's label; the 14 px box and 6 px of spacing come before it
+    // (`widgets::checkbox`).
+    let aa_box = aa.left() - 20.0;
+    assert!((aa_box - combo.left()).abs() < 0.5, "Anti-aliased box at x {aa_box} but the dropdown at x {}", combo.left());
+}
+
 /// The password is masked as it is typed: the field never shows (or tells assistive technology)
 /// the characters.
 #[test]
