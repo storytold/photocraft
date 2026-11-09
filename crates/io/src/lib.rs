@@ -1079,7 +1079,9 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
 /// flag alongside the ordinary best-effort import result.
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
     // Verified XCF content wins over misleading suffixes before ordinary format routing.
-    if xcf::is_xcf(bytes) { return xcf::import_with_sample_order(name, bytes, opts.historical_xcf_sample_order, ctl); }
+    if xcf::is_xcf(bytes) {
+        return xcf::import_with_sample_order(name, bytes, opts.historical_xcf_sample_order, ctl);
+    }
     if let Some(inflated) = xcf::transport::decode(name, bytes, ctl)? {
         return xcf::import_with_sample_order(name, &inflated, opts.historical_xcf_sample_order, ctl);
     }
