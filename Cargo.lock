@@ -5628,10 +5628,12 @@ version = "0.20.1"
 dependencies = [
  "blake3",
  "craft-docpath",
+ "craft-jpeg",
  "craft-pdf",
  "crc32fast",
  "flate2",
  "imagesize",
+ "jpeg-encoder",
  "kurbo 0.13.1",
  "lopdf",
  "miniz_oxide 0.9.1",

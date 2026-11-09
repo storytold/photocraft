@@ -77,3 +77,7 @@ proptest = { workspace = true }
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
 zune-core = { workspace = true }
 tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
+# Baseline JPEGs with chosen sampling factors and restart intervals for the streamed JPEG tests.
+jpeg-encoder = "0.6"
+# The whole-file decode the streamed JPEG import is compared with, sample for sample.
+craft-jpeg.workspace = true

@@ -145,6 +145,8 @@ fn import_flat_impl_with_options(
     // A PNG whose rows come in final order is decoded straight into the tiles.
     let streamed = match stream_min {
         Some(min) if format == Some(Format::Png) => import_png_streamed(name, bytes, opts, ctl, min)?,
+        // A baseline JPEG is decoded straight into the tiles too, a few lines of MCUs at a time.
+        Some(min) if format == Some(Format::Jpeg) => import_jpeg_streamed(name, bytes, opts, ctl, min)?,
         _ => None,
     };
     let (mut r, img) = match streamed {
@@ -975,36 +977,59 @@ fn import_png_streamed(name: &str, bytes: &[u8], opts: &crate::ImportOptions, ct
     import_png_streamed_with(name, bytes, opts, ctl, min_bytes, crate::memory::available)
 }
 
-/// A PNG's rows becoming the tiles of its layer as they are decoded: the surface, and what turns a
-/// decoded row into its pixels. Shared by [`import_png_streamed`] (all at once) and the stepped
-/// import ([`crate::PngImport`], a bounded piece at a time), which give the same document.
-pub(crate) struct PngStream {
+/// Decoded rows becoming the tiles of their layer as they are decoded: the surface, and what turns
+/// a decoded row into its pixels. A PNG's (in [`import_png_streamed`], all at once, and in the
+/// stepped import, [`crate::PngImport`], a bounded piece at a time, which give the same document)
+/// and a baseline JPEG's ([`import_jpeg_streamed`]).
+pub(crate) struct RowStream {
     surface: Surface,
-    header: codecs::PngHeader,
+    header: Shape,
     convert: RowConverter,
 }
 
-impl PngStream {
+/// A decoded image's size, layout and sample type, as [`RowStream`] receives its rows.
+#[derive(Clone, Copy)]
+struct Shape {
+    width: u32,
+    height: u32,
+    layout: ChannelLayout,
+    sample: CSample,
+}
+
+impl From<&codecs::PngHeader> for Shape {
+    fn from(h: &codecs::PngHeader) -> Self {
+        Shape { width: h.width, height: h.height, layout: h.layout, sample: h.sample }
+    }
+}
+
+impl RowStream {
     /// Sets up the surface for rows of `header`, after checking the layer's tiles and a group of
     /// rows as decoded and as converted against `available` (the memory the machine can still use,
     /// when known): Linux overcommits, so the tiles would be allocated even when they can't be
     /// backed, and writing them would have the process killed.
     pub(crate) fn new(header: &codecs::PngHeader, available: Option<u64>) -> Result<Self, IoError> {
+        // One group of rows as decoded and as converted into the tiles.
         let (_, target_layout, _, csample) = flat_target(header.layout, header.sample);
-        // The layer's tiles, plus one group of rows as decoded and as converted into them.
         let bpp = surface_format(target_layout, csample).bytes_per_pixel() as u64;
         let src_px = (header.layout.channels() * header.sample.bytes()) as u64;
         let group = u64::from(header.width).saturating_mul(u64::from(header.height.min(TILE_SIZE as u32)));
-        let needed = tile_bytes(header.width, header.height, bpp).saturating_add(group.saturating_mul(src_px)).saturating_add(group.saturating_mul(bpp));
+        Self::with_working(header.into(), group.saturating_mul(src_px).saturating_add(group.saturating_mul(bpp)), available)
+    }
+
+    /// [`RowStream::new`] for a decoder that holds `working` bytes beside the tiles while it decodes.
+    fn with_working(header: Shape, working: u64, available: Option<u64>) -> Result<Self, IoError> {
+        let (_, target_layout, _, csample) = flat_target(header.layout, header.sample);
+        let bpp = surface_format(target_layout, csample).bytes_per_pixel() as u64;
+        let needed = tile_bytes(header.width, header.height, bpp).saturating_add(working);
         crate::memory::check_fits(header.width, header.height, needed, available)?;
         Ok(Self {
             surface: Surface::new(surface_format(target_layout, csample)),
-            header: *header,
+            header,
             convert: RowConverter::new((header.layout, header.sample), (target_layout, csample)),
         })
     }
 
-    /// [`PngStream::new`] for a stepped import, which streams every PNG whose rows come in order
+    /// [`RowStream::new`] for a stepped import, which streams every PNG whose rows come in order
     /// and not only the big ones: a layer under [`STREAM_MIN_BYTES`] of tiles is not checked
     /// against free memory, as the whole-image path leaves it unchecked ([`check_layer_fits`]).
     pub(crate) fn for_steps(header: &codecs::PngHeader) -> Result<Self, IoError> {
@@ -1059,7 +1084,7 @@ impl PngStream {
         !self.scans() || self.surface.prune_batch(cursor, PRUNE_BATCH)
     }
 
-    /// A cursor for [`PngStream::prune_step`].
+    /// A cursor for [`RowStream::prune_step`].
     pub(crate) fn prune_cursor(&self) -> photocraft_raster::PruneCursor {
         self.surface.prune_cursor()
     }
@@ -1068,11 +1093,23 @@ impl PngStream {
     /// count of images the file holds when the decoder read only the first (an animated PNG's
     /// frames), so Save doesn't write one image over all of them (#5733).
     pub(crate) fn into_document(self, name: &str, extras: codecs::PngExtras) -> Result<ImportResult, IoError> {
+        self.into_document_with(name, extras.icc, &extras.meta, &extras.warnings)
+    }
+
+    /// [`RowStream::into_document`] with the profile, metadata and warnings given apart.
+    fn into_document_with(
+        self,
+        name: &str,
+        icc: Option<Vec<u8>>,
+        meta: &codecs::Metadata,
+        warnings: &[codecs::DecodeWarning],
+    ) -> Result<ImportResult, IoError> {
         let Self { surface, header, .. } = self;
         let (mode, _, depth, _) = flat_target(header.layout, header.sample);
-        let warnings = extras.warnings.iter().map(ToString::to_string).collect();
-        let mut r = flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)?;
-        r.document.file_encoding.source_images = source_images(&extras.warnings);
+        let images = source_images(warnings);
+        let warnings = warnings.iter().map(ToString::to_string).collect();
+        let mut r = flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, icc, meta, warnings, None)?;
+        r.document.file_encoding.source_images = images;
         Ok(r)
     }
 }
@@ -1089,7 +1126,7 @@ fn import_png_streamed_with(
 ) -> Result<Option<ImportResult>, IoError> {
     // Rows are worked off 0.02..0.55 so a fallback to the whole-image path, which reports 0.6
     // after its decode, never takes progress backwards.
-    let state = std::cell::RefCell::new(None::<PngStream>);
+    let state = std::cell::RefCell::new(None::<RowStream>);
     let mut available = Some(available);
     let busy = || IoError::Unsupported("the PNG reader re-entered itself".into());
     let mut begin = |header: &codecs::PngHeader| -> Result<bool, IoError> {
@@ -1102,7 +1139,7 @@ fn import_png_streamed_with(
         }
         // A cancelled import is reported as such, not as the memory it would have needed.
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        *state.try_borrow_mut().map_err(|_| busy())? = Some(PngStream::new(header, available.take().and_then(|f| f()))?);
+        *state.try_borrow_mut().map_err(|_| busy())? = Some(RowStream::new(header, available.take().and_then(|f| f()))?);
         ctl.progress(0.02);
         Ok(true)
     };
@@ -1133,6 +1170,54 @@ fn import_png_streamed_with(
     ctl.progress(0.95);
     stream.prune();
     stream.into_document(name, extras).map(Some)
+}
+
+/// A baseline JPEG opened straight into the tiles of its layer, a group of rows at a time (see
+/// [`codecs::JpegBands`]), so the whole decoded image never exists next to them. `None` when the
+/// whole-image path is for it: under `min_bytes` decoded, a file `JpegBands` doesn't take
+/// (progressive, arithmetic-coded or 12-bit, components in several scans, an EXIF orientation that
+/// turns it), or the web build. The byte budget is [`decode_limits`]', applied to the image as the
+/// whole-image decode applies it, and the sides are the format's own (65,535 px) on 64-bit
+/// targets; the tiles and the decoder's buffers are checked against free memory first.
+fn import_jpeg_streamed(name: &str, bytes: &[u8], opts: &crate::ImportOptions, ctl: &Interrupt, min_bytes: u64) -> Result<Option<ImportResult>, IoError> {
+    import_jpeg_streamed_with(name, bytes, opts, ctl, min_bytes, crate::memory::available)
+}
+
+/// [`import_jpeg_streamed`], with the memory the machine can still use given.
+fn import_jpeg_streamed_with(
+    name: &str,
+    bytes: &[u8],
+    opts: &crate::ImportOptions,
+    ctl: &Interrupt,
+    min_bytes: u64,
+    available: impl FnOnce() -> Option<u64>,
+) -> Result<Option<ImportResult>, IoError> {
+    if cfg!(target_arch = "wasm32") {
+        return Ok(None);
+    }
+    let Some(info) = codecs::jpeg_info(bytes) else { return Ok(None) };
+    let decoded = u64::from(info.width).saturating_mul(u64::from(info.height)).saturating_mul(info.layout.channels() as u64);
+    if decoded < min_bytes {
+        return Ok(None);
+    }
+    let mut limits = decode_limits(opts);
+    if cfg!(target_pointer_width = "64") {
+        limits = codecs::Limits { max_width: JPEG_MAX_SIDE, max_height: JPEG_MAX_SIDE, max_pixels: u64::from(JPEG_MAX_SIDE).pow(2), ..limits };
+    }
+    let Some(mut bands) = codecs::JpegBands::open(bytes, &limits)? else { return Ok(None) };
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let (w, h) = bands.dimensions();
+    let shape = Shape { width: w, height: h, layout: bands.layout(), sample: CSample::U8 };
+    let mut stream = RowStream::with_working(shape, bands.working_bytes(), available())?;
+    ctl.progress(0.02);
+    bands.decode(|y0, group: &Image| -> Result<(), IoError> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        stream.write_rows(y0, group.data(), ctl)?;
+        ctl.progress(0.02 + 0.93 * (y0 + group.height()) as f32 / h.max(1) as f32);
+        Ok(())
+    })?;
+    let codecs::JpegBands { icc, meta, warnings, .. } = bands;
+    stream.into_document_with(name, icc, &meta, &warnings).map(Some)
 }
 
 /// The pixels of a decoded image as a surface of the target layout and sample type, converted
@@ -2764,11 +2849,11 @@ mod streamed_png_tests {
     #[test]
     fn a_stream_for_steps_keeps_the_memory_errors() {
         let big = codecs::PngHeader { width: 20_000, height: 20_000, layout: ChannelLayout::Rgba, sample: CSample::U8 };
-        let e = PngStream::new(&big, Some(1 << 20)).err().expect("refused");
+        let e = RowStream::new(&big, Some(1 << 20)).err().expect("refused");
         assert!(matches!(&e, IoError::Unsupported(m) if m.contains("not enough memory to open this 20000 × 20000 px image")), "{e}");
         let small = codecs::PngHeader { width: 64, height: 64, layout: ChannelLayout::Rgba, sample: CSample::U8 };
-        assert!(PngStream::for_steps(&small).is_ok(), "a small layer is not checked");
-        assert!(PngStream::new(&small, Some(1 << 20)).is_err(), "though the check itself would refuse it");
+        assert!(RowStream::for_steps(&small).is_ok(), "a small layer is not checked");
+        assert!(RowStream::new(&small, Some(1 << 20)).is_err(), "though the check itself would refuse it");
     }
 
     #[test]
@@ -3129,6 +3214,9 @@ mod fused_tile_tests {
 
 #[cfg(test)]
 mod png_stream_tests;
+
+#[cfg(test)]
+mod jpeg_stream_tests;
 
 #[cfg(test)]
 mod bilevel_tiff_tests {

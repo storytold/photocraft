@@ -13,18 +13,18 @@ use photocraft_codecs::{self as codecs, DecodeOptions, Format, Limits, OrientSte
 use photocraft_geom::TILE_SIZE;
 use photocraft_raster::{Interrupt, PruneCursor};
 
-use crate::flat::{FlatBuilder, PngStream, apply_flat_format};
+use crate::flat::{FlatBuilder, RowStream, apply_flat_format};
 use crate::{ImportResult, IoError, Route};
 
 /// The rows of a file being streamed into the tiles of its layer.
 struct Streaming {
     rows: PngDecodeRows<SharedBytes>,
-    stream: PngStream,
+    stream: RowStream,
 }
 
 /// A streamed layer being scanned for tiles that hold only the default pixel.
 struct Pruning {
-    stream: PngStream,
+    stream: RowStream,
     cursor: PruneCursor,
     extras: PngExtras,
 }
@@ -60,7 +60,7 @@ impl PngImport {
         }
         let rows = PngDecodeRows::new_streaming(SharedBytes(Arc::clone(bytes)), &Limits::default())?;
         let stage = if rows.streamable() {
-            let stream = PngStream::for_steps(&rows.header())?;
+            let stream = RowStream::for_steps(&rows.header())?;
             Stage::Stream(Box::new(Streaming { rows, stream }))
         } else {
             Stage::Rows(Box::new(Self::buffered(rows)?))
