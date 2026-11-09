@@ -837,8 +837,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             opt(ui, tl!("Exposure:"));
             crate::widgets::value_field(ui, &mut o.exposure, 1.0..=100.0, "%", 58.0).on_hover_text(tl!("Set exposure for stroke"));
-            crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"))
-                .on_hover_text(tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"));
+            let protect_tip = tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue");
+            let protect = crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones")).on_hover_ui(|ui| {
+                // Keep the long tooltip inside narrow viewports at high UI scales.
+                let room = (ui.ctx().content_rect().width() - egui::Frame::popup(ui.style()).total_margin().sum().x).max(1.0);
+                ui.set_max_width(ui.spacing().tooltip_width.min(room));
+                ui.label(protect_tip);
+            });
+            protect.ctx.accesskit_node_builder(protect.id, |node| node.set_description(protect_tip));
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));
@@ -1018,3 +1024,7 @@ mod color_replacement_tolerance_field_tests;
 #[cfg(test)]
 #[path = "../cam_options_bar_tests.rs"]
 mod cam_options_bar_tests;
+
+#[cfg(test)]
+#[path = "../burn_bar_tooltips_tests.rs"]
+mod burn_bar_tooltips_tests;
