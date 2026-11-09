@@ -391,6 +391,41 @@ fn alt_at_the_press_reverses_erase_to_history_for_one_eraser_stroke() {
     }
 }
 
+/// A ⇧-click Erase to History line isn't smoothed (#11887) and keeps the Eraser's brush from the
+/// press: the commit sends `smoothing: 0` beside the `brush` param, as its live preview does, so
+/// the release takes the pixels the preview drew.
+#[test]
+fn a_shift_click_erase_to_history_line_commits_its_live_pixels_unsmoothed() {
+    for mode in ["brush", "pencil", "block"] {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+        app.run("history.setSource", json!({"state": 1})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 9, "hardness": 1.0, "smoothing": {"amount": 0.6, "catchUpOnEnd": false}}})).unwrap();
+        app.ui.tool_options.eraser_mode = mode.into();
+        app.ui.tool_options.erase_to_history = true;
+        drag(&mut app, &[(20.0, 20.0), (40.0, 30.0)], Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 60.0, pressure: 1.0 }, Modifiers::SHIFT);
+        assert!(app.live_stroke.is_some(), "{mode}: a live line");
+        app.retouch_from_live = false;
+        tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 60.0 }, Modifiers::SHIFT);
+        let (id, p) = last(&app);
+        assert_eq!((id.as_str(), &p["eraseToHistory"]), ("paint.historyBrush", &json!(true)), "{mode}: {id} {p}");
+        let ends: Vec<[f64; 2]> = p["points"].as_array().unwrap().iter().map(|q| [q[0].as_f64().unwrap(), q[1].as_f64().unwrap()]).collect();
+        // The Pencil tip's line runs between the clicked pixels' centres.
+        let c = if mode == "pencil" { 0.5 } else { 0.0 };
+        assert_eq!(ends, vec![[40.0 + c, 30.0 + c], [100.0 + c, 60.0 + c]], "{mode}");
+        assert_eq!(p["smoothing"], json!(0.0), "{mode}: {p}");
+        assert!(p["brush"].is_object(), "{mode}: the brush from the press: {p}");
+        assert!(app.retouch_from_live, "{mode}: the release took the live pixels instead of rendering the line again");
+        // The line reaches the click: the source is painted back at its far end.
+        assert!(rgba(&app, 99, 60)[3] > 0.99, "{mode}");
+        assert_eq!(app.session.tools.brush.smoothing.amount, 0.6, "{mode}: the Eraser keeps its Smoothing");
+    }
+}
+
 /// A tool key pressed mid-stroke changes neither the stroke's options nor its tip.
 #[test]
 fn a_tool_key_during_an_erase_to_history_stroke_keeps_the_stroke_as_it_began() {
