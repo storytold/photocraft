@@ -14,6 +14,8 @@ use photocraft_ui_egui::theme::ThemeKind;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
 use wasm_bindgen::JsCast as _;
 
+use crate::preset_bridge::SaveWarning;
+
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 type PlaceInbox = photocraft_ui_egui::PlaceInbox;
 
@@ -499,11 +501,11 @@ impl eframe::App for WebShell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        // Only while a preset change is unsaved. Storage the browser denies from the start (a
+        // Only while a change is unsaved. Storage the browser denies from the start (a
         // sandboxed iframe, blocked site data) loses nothing until the first change, and that
         // change brings the banner with the reason.
         if self.presets.unsaved()
-            && let Some(error) = self.presets.error()
+            && let Some(warning) = self.presets.error()
         {
             egui::Panel::top("browser_preset_storage").show(ui, |ui| {
                 let tokens = photocraft_ui_egui::theme::Tokens::for_kind(self.app.ui.theme);
@@ -513,13 +515,23 @@ impl eframe::App for WebShell {
                         self.presets.retry();
                         ui.ctx().request_repaint();
                     }
-                    ui.colored_label(tokens.warning, i18n::fmt(i18n::t("Brush preset changes are not saved: {error}"), &[("error", &error)]));
+                    match &warning {
+                        SaveWarning::Actions(error) => {
+                            ui.colored_label(tokens.warning, i18n::t("Actions"));
+                            ui.colored_label(tokens.warning, error.as_str());
+                        }
+                        SaveWarning::Presets(error) => {
+                            ui.colored_label(tokens.warning, i18n::fmt(i18n::t("Brush preset changes are not saved: {error}"), &[("error", error)]));
+                        }
+                    }
                 });
-                ui.label(if self.database.is_some() {
-                    i18n::t("Keep this tab open to retain your brushes.")
-                } else {
-                    i18n::t("Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.")
-                });
+                if matches!(warning, SaveWarning::Presets(_)) {
+                    ui.label(if self.database.is_some() {
+                        i18n::t("Keep this tab open to retain your brushes.")
+                    } else {
+                        i18n::t("Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.")
+                    });
+                }
             });
         }
         self.app.ui_frame(ui, frame);

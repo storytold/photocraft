@@ -95,6 +95,11 @@ impl From<String> for WriteError {
     }
 }
 
+pub enum SaveWarning {
+    Actions(String),
+    Presets(String),
+}
+
 /// Three sampled images per preset (tip, dual tip, texture), plus group/index/action/pattern records.
 pub const MAX_RECORDS: usize = MAX_GROUPS + MAX_PRESETS_PER_GROUP * 3 + 3;
 
@@ -271,16 +276,16 @@ impl Bridge {
         }
     }
 
-    pub fn error(&self) -> Option<String> {
+    pub fn error(&self) -> Option<SaveWarning> {
         let s = self.state();
         s.rejected
-            .values()
+            .iter()
             .next()
-            .cloned()
-            .or_else(|| s.error.clone())
-            .or_else(|| s.action_error.as_ref().map(|e| e.message().to_owned()))
-            .or_else(|| s.action_quarantine.clone())
-            .or_else(|| s.actions_unsynced.then(|| "Browser Actions definitions could not be staged".into()))
+            .map(|(name, error)| if name == ACTIONS_FILE { SaveWarning::Actions(error.clone()) } else { SaveWarning::Presets(error.clone()) })
+            .or_else(|| s.error.clone().map(SaveWarning::Presets))
+            .or_else(|| s.action_error.as_ref().map(|e| SaveWarning::Actions(e.message().to_owned())))
+            .or_else(|| s.action_quarantine.clone().map(SaveWarning::Actions))
+            .or_else(|| s.actions_unsynced.then(|| SaveWarning::Actions("Browser Actions definitions could not be staged".into())))
     }
 
     pub fn unsaved(&self) -> bool {
@@ -457,6 +462,7 @@ mod tests {
     #[test]
     fn stale_or_uncertain_actions_do_not_block_ordinary_presets() {
         for error in [WriteError::Stale("stale".into()), WriteError::Uncertain("unknown commit".into())] {
+            let reason = error.message().to_owned();
             let bridge = Bridge::default();
             bridge.load_action_keys(5, ActionKeys::default());
             bridge.write(ACTIONS_FILE, b"local actions").unwrap();
@@ -476,6 +482,7 @@ mod tests {
             bridge.finish(batch, Ok(()));
             assert!(bridge.unsaved(), "the Action intent is still pending");
             assert!(bridge.begin().is_none(), "retry must wait for a fresh Action generation");
+            assert!(matches!(bridge.error(), Some(SaveWarning::Actions(message)) if message == reason));
         }
     }
 
@@ -554,7 +561,7 @@ mod tests {
         b.write("index.json", b"new").unwrap();
         b.finish(batch, Err(WriteError::Aborted("QuotaExceededError".into())));
         assert!(b.unsaved());
-        assert!(b.error().unwrap().contains("QuotaExceeded"));
+        assert!(matches!(b.error(), Some(SaveWarning::Presets(message)) if message == "QuotaExceededError"));
         assert!(b.begin().is_none());
         b.retry();
         let batch = b.begin().unwrap();
@@ -663,7 +670,7 @@ mod tests {
         import(&mut s);
         assert!(s.tools.presets.iter().any(|p| p.name == "Browser seam brush"));
         assert!(b.unsaved());
-        assert!(b.error().unwrap().contains("SecurityError"));
+        assert!(matches!(b.error(), Some(SaveWarning::Presets(message)) if message == "SecurityError"));
         assert!(b.begin().is_none());
     }
     #[test]
