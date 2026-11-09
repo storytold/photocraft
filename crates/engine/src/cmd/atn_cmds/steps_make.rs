@@ -549,6 +549,10 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
     if get_ref(d, "null").and_then(ref_class).as_deref() == Some("Path") {
         return super::steps_type_path::from(d);
     }
+    // Layer › New › Artboard and Artboard from Layers (#10723).
+    if get_ref(d, "null").and_then(ref_class).as_deref() == Some("artboardSection") {
+        return super::steps_artboard_section::from(d);
+    }
     if let Some(mapped) = super::steps_layer_style::create_from_descriptor(d) {
         return mapped;
     }
@@ -716,6 +720,9 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     }
     if id == super::steps_type_path::COMMAND {
         return super::steps_type_path::to(p);
+    }
+    if matches!(id, super::steps_artboard_section::NEW | super::steps_artboard_section::FROM_LAYERS) {
+        return super::steps_artboard_section::to(id, p);
     }
     if id == super::steps_layer_style::CREATE {
         return super::steps_layer_style::style_to(id, p);
