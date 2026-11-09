@@ -190,7 +190,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
 | (string ID only) | autoCutout | Select Subject | `select.subject` |
 | `SlcC` | selectiveColor | Selective Color | `image.adjustments.selectiveColor` |
-| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions` |
+| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions`, `image.analysis.setMeasurementScale` (Set Measurement Scale › Custom) |
 | (string ID only) | adaptCorrect | Shadows/Highlights | `image.adjustments.shadowsHighlights` |
 | `Shrp` | sharpen | Sharpen | `filter.sharpen.sharpen` |
 | `ShrE` | sharpenEdges | Sharpen Edges | `filter.sharpen.sharpenEdges` |
@@ -314,6 +314,18 @@ inherited group state, and remains unavailable for Indexed Color documents.
 The separate `CropPhotos0001` helper remains a complete kept Photoshop step.
 Playback stops at that enabled helper before subsequent duplicate/crop steps can
 run. This covers the parent event, not complete recordings with generated helpers.
+
+Set Measurement Scale › Custom is a Set of the target document's `measurementScale`
+property. `T   ` holds `pixelLength` (a long above 0), `logicalLength` (a double
+above 0) and `logicalUnits` (text that isn't blank), and the step plays as
+`image.analysis.setMeasurementScale` with preset `custom`. A loaded step saves back
+its recorded descriptor while it still sets the same scale. A step recorded in
+PhotoCraft writes `T   ` with class `measurementScale`, since the recordings don't
+pin that class down. Another target, another value type, a missing or extra key, or
+a value the native command refuses stays a kept step. A native step that reads the
+scale, resets it to the default, leaves a value to the current scale or has a
+fractional pixel length refuses export. Place Scale Marker (a script step) stays a
+kept step.
 
 ### Perspective Warp recordings
 
