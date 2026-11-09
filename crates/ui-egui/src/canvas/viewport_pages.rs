@@ -602,6 +602,12 @@ fn render(
     Ok(texture_buffer(display, &buf).into_owned())
 }
 
+/// Multi-page PDF workspaces avoid whole-document recomposition even if GPU memory could fit.
+/// This only changes the display path: exports remain full resolution.
+pub(crate) fn prefer_streaming_large_pdf_pages(size: [u32; 2], artboards: usize) -> bool {
+    artboards >= 4 && u64::from(size[0]) * u64::from(size[1]) >= 16_000_000
+}
+
 /// Draw document `idx` from viewport pages when its texture set doesn't fit the GPU canvas
 /// budget: true when the view should paint [`stream_key`] with the GPU canvas.
 pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf: &ViewXform, zoom: f32) -> bool {
@@ -620,7 +626,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf:
     let size = [size.width, size.height];
     let (doc, raw_key) = display_doc(app, idx);
     // A size-changing preview draws as main does; a document that fits keeps its texture set.
-    if [doc.size.width, doc.size.height] != size || gpu.fits_canvas(&doc) {
+    if [doc.size.width, doc.size.height] != size || (gpu.fits_canvas(&doc) && !prefer_streaming_large_pdf_pages(size, doc.artboards().len())) {
         if let Some(s) = app.streams.remove(&id) {
             drop(s);
             gpu.retain_pages(stream_key(id.0), &[]);
@@ -726,6 +732,13 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nine_page_pdf_uses_viewport_streaming_without_changing_small_documents() {
+        assert!(prefer_streaming_large_pdf_pages([12000, 10000], 9));
+        assert!(!prefer_streaming_large_pdf_pages([12000, 10000], 1));
+        assert!(!prefer_streaming_large_pdf_pages([1000, 1200], 9));
+    }
 
     const SIZE: [u32; 2] = [20_000, 12_000];
 
