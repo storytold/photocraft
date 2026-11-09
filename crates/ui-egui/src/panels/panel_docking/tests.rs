@@ -1880,17 +1880,15 @@ fn release_only_position_updates_model_and_actual_geometry_on_that_frame() {
     }
 }
 
-/// `dockWidth` stores the requested model width even when a narrow window draws the dock
-/// narrower: in one frame the model keeps 520, the drawn dock column fits in 364 points and the
-/// canvas keeps its 200, and a wider window draws the stored width again.
-#[test]
-fn a_narrow_window_draws_a_stored_dock_width_narrower_without_losing_it() {
+/// A dock-edge harness `width` points wide with the Pro single-column toolbox on the right, the
+/// rail and a stored 520-point dock column, after the frames that draw it.
+fn narrow_dock_harness(width: f32) -> Harness<'static, PhotocraftApp> {
     let mut app = app_with_columns(&[400.0], false);
     app.ui.panels.rail = true;
     app.ui.panels.toolbar_double = false;
     app.ui.panels.toolbar_side = crate::state::ToolbarSide::Right;
     let mut ready = false;
-    let mut h = Harness::builder().with_size(vec2(640.0, 600.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(width, 600.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         move |ui, app: &mut PhotocraftApp| {
             if !ready {
                 PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
@@ -1910,33 +1908,88 @@ fn a_narrow_window_draws_a_stored_dock_width_narrower_without_losing_it() {
     let ctx = h.ctx.clone();
     assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":520.0}))["ok"], true);
     h.run_steps(2);
-    let canvas = h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("narrow-canvas-rect")).expect("the canvas rect"));
+    h
+}
+
+/// The canvas rectangle [`narrow_dock_harness`] drew on its last frame.
+fn narrow_canvas(h: &Harness<'static, PhotocraftApp>) -> egui::Rect {
+    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("narrow-canvas-rect")).expect("the canvas rect"))
+}
+
+/// The panel a dock column's control acts on; `None` for floating-window and split controls.
+fn dock_hit_panel(hit: &craft_ui::docking::Hit<String>) -> Option<&String> {
+    use craft_ui::docking::{Divider, Hit};
+    match hit {
+        Hit::Tab(p)
+        | Hit::DragBar(p)
+        | Hit::Border(p)
+        | Hit::Overflow(p)
+        | Hit::ColumnBar(p)
+        | Hit::Collapse(p)
+        | Hit::StackToggle(p)
+        | Hit::Icon(p)
+        | Hit::IconGrip(p) => Some(p),
+        Hit::Divider(Divider::Column(p) | Divider::Group(p) | Divider::Stack(p)) => Some(p),
+        _ => None,
+    }
+}
+
+/// Asserts that every control of the end dock's panels keeps its clipped `interact_rect`, what is
+/// drawn and clickable, inside `dock`, and returns how many have a full `rect` past it.
+fn dock_controls_clipped(h: &Harness<'static, PhotocraftApp>, dock: egui::Rect) -> usize {
+    use craft_ui::docking::DockArea;
+    let panels: Vec<&String> = end_columns(h.state()).iter().flat_map(|c| c.groups.iter().flat_map(|g| g.panels.iter())).collect();
+    let area = area_id();
+    let hits = DockArea::<String>::hit_rects(&h.ctx, area);
+    let (mut drawn, mut clipped) = (0, 0);
+    for (hit, rect) in hits.iter().filter(|(hit, _)| dock_hit_panel(hit).is_some_and(|p| panels.contains(&p))) {
+        let Some(response) = h.ctx.read_response(DockArea::<String>::hit_id(area, hit)) else {
+            assert!(!rect.intersect(dock).is_positive(), "{hit:?} at {rect:?} has no response");
+            continue;
+        };
+        let shown = response.interact_rect;
+        assert!(!shown.is_positive() || dock.expand(0.5).contains_rect(shown), "{hit:?}: interactive {shown:?} (full {rect:?}) outside {dock:?}");
+        drawn += usize::from(shown.is_positive());
+        clipped += usize::from(!dock.expand(2.0).contains_rect(*rect));
+    }
+    assert!(drawn > 0, "the dock drew controls: {hits:?}");
+    clipped
+}
+
+/// `dockWidth` stores the requested model width even when a narrow window draws the dock
+/// narrower: in one frame the model keeps 520, the drawn dock column fits in 364 points and the
+/// canvas keeps its 200, and a wider window draws the stored width again.
+#[test]
+fn a_narrow_window_draws_a_stored_dock_width_narrower_without_losing_it() {
+    let mut h = narrow_dock_harness(640.0);
+    let canvas = narrow_canvas(&h);
     let dock = allocated_dock(&h);
     let model = dock_width(h.state());
     assert!((model - 520.0).abs() < 0.5, "the model keeps the request, got {model}");
     assert!(dock.width() - 36.0 <= 364.5, "the drawn dock column fits beside the toolbox and canvas, got {dock:?}");
     assert!(canvas.width() >= 199.5, "the canvas keeps its 200-point minimum, got {canvas:?} beside {dock:?}");
     assert!(!canvas.intersect(dock).is_positive(), "the dock never overlaps the canvas: {canvas:?}, {dock:?}");
-    // `hit_rects` reports each control's full widget rect (`Response::rect`), not its clipped
-    // `interact_rect`, so a squeezed column may report chrome past the panel edge; what is drawn
-    // is that rect inside the panel's clip. No visible part may reach the toolbox, which sits
-    // between the canvas and the dock, or the canvas.
-    let toolbox = egui::Rect::from_x_y_ranges(canvas.right()..=dock.left(), dock.y_range());
-    let hits = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id());
-    assert!(hits.iter().any(|(_, rect)| rect.intersect(dock).is_positive()), "the dock drew visible controls: {hits:?}");
-    for (hit, rect) in &hits {
-        let visible = rect.intersect(dock);
-        if !visible.is_positive() {
-            continue;
-        }
-        assert!(dock.contains_rect(visible), "{hit:?}: {visible:?} outside {dock:?}");
-        assert!(!visible.intersect(canvas).is_positive(), "{hit:?}: {visible:?} reaches the canvas {canvas:?}");
-        assert!(!visible.intersect(toolbox).is_positive(), "{hit:?}: {visible:?} reaches the toolbox {toolbox:?}");
-    }
+    // The fitted column lays its chrome out inside the dock, so here nothing needs the clip.
+    dock_controls_clipped(&h, dock);
     h.set_size(vec2(1280.0, 600.0));
     h.run_steps(3);
     assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "growing the window keeps the stored width");
     assert!((allocated_dock(&h).width() - 520.0 - 36.0).abs() < 1.0, "a wide window draws the stored width again, got {:?}", allocated_dock(&h));
+}
+
+/// With no room left for the dock column, its controls' full rects run past the panel edge and
+/// the panel clip keeps what is drawn and clickable inside the dock.
+#[test]
+fn a_squeezed_dock_column_clips_its_controls_at_the_panel_edge() {
+    // The toolbox, the Pro rail (36 points) and the canvas minimum fill the window, which leaves
+    // the dock column only its one-point floor.
+    let h = narrow_dock_harness(crate::panels::toolbar::toolbar_width(true, false) + 36.0 + CANVAS_MIN_WIDTH);
+    let canvas = narrow_canvas(&h);
+    let dock = allocated_dock(&h);
+    assert!(!canvas.intersect(dock).is_positive(), "the dock never overlaps the canvas: {canvas:?}, {dock:?}");
+    // Asserts that some control's full rect overflows the dock while every clipped one stays inside.
+    let clipped = dock_controls_clipped(&h, dock);
+    assert!(clipped > 0, "a squeezed column has chrome wider than the dock that the clip cuts off, in {dock:?}");
 }
 
 /// A queued external width cancels a held or just-released dock-edge drag and is drawn at its
