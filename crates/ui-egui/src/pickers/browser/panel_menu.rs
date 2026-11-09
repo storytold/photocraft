@@ -1,9 +1,9 @@
 //! Asset-browser contributions to the shared docking panel menu.
 
-use crate::PhotocraftApp;
 use crate::pickers::browser::asset_browser::BrowserAction;
 use crate::pickers::browser::context_menu::SelectionMenuModel;
 use crate::pickers::state::PresetUi;
+use crate::PhotocraftApp;
 
 fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut PresetUi, panel: &str) {
     let Some((asset, prefix, new_params)) = (match panel {
@@ -35,14 +35,6 @@ fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut 
     }
     ui.separator();
 
-    let selected_names = menu.export_items.clone();
-    let show_leading_export = selection_summary.contains_selected_card && (selection_summary.selected_cards.len() > 1 || selection_summary.contains_group);
-    if panel == "gradients" && show_leading_export {
-        if crate::menu_keys::menu_item_button(ui, "Export Selected Gradients…", !selected_names.is_empty()).clicked() {
-            crate::pickers::adapters::gradients::export_selected_gradients_dialog(app, &selected_names);
-            ui.close();
-        }
-    }
     if crate::menu_keys::menu_item_button(ui, &menu.rename_label, menu.rename_action.is_some()).clicked() {
         if let Some(action) = menu.rename_action.clone() {
             match action {
@@ -106,13 +98,13 @@ pub(crate) fn shared_picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, pan
 #[cfg(test)]
 mod tests {
     use super::{browser_actions_menu, shared_picker_menu};
-    use crate::PhotocraftApp;
     use crate::pickers::browser::asset_browser::{GroupView, ItemView};
     use crate::pickers::state::PresetUi;
+    use crate::PhotocraftApp;
     use egui::vec2;
     use egui_kittest::{
-        Harness,
         kittest::{NodeT, Queryable},
+        Harness,
     };
 
     #[test]
@@ -318,8 +310,8 @@ mod tests {
         harness.get_by_label("Panel menu").click();
         harness.run_steps(2);
         assert!(
-            harness.get_by_label("Export Selected Gradients…").rect().top() < harness.get_by_label("Rename Gradients…").rect().top(),
-            "multi-card export precedes plural rename/delete actions"
+            harness.get_by_label("Export Selected Gradients…").rect().top() > harness.get_by_label("Delete Gradients…").rect().top(),
+            "export stays in the trailing domain-action section after selection actions"
         );
         harness.get_by_label("Rename Gradients…").click();
         harness.run_steps(2);

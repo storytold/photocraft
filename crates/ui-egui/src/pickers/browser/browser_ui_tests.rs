@@ -281,7 +281,7 @@ fn mixed_card_and_group_shift_selection_keeps_group_in_rename_and_delete_actions
     let summary = harness.state().0.browser_selection_snapshot[PANEL].clone();
     let menu = SelectionMenuModel::new("Gradient", &summary);
 
-    assert_eq!(menu.rename_label, "Rename Gradients and Groups…");
+    assert_eq!(menu.rename_label, "Rename Gradients…");
     assert!(
         matches!(&menu.rename_action, Some(BrowserAction::BeginRenameSelection { targets }) if targets == &[
             crate::pickers::browser::selection::SelectionTarget::Item { group: "A".into(), path: Vec::new(), key: "gradient-a".into() },
@@ -290,7 +290,7 @@ fn mixed_card_and_group_shift_selection_keeps_group_in_rename_and_delete_actions
         ]),
         "rename request should preserve every explicitly selected target and rename cards before their group; resolved selection={summary:?}"
     );
-    assert_eq!(menu.delete_label, "Delete Gradients and Groups…");
+    assert_eq!(menu.delete_label, "Delete Gradients…");
     assert!(matches!(menu.delete_actions.as_slice(), [
         BrowserAction::DeleteItem { group: item_group, key, .. },
         BrowserAction::DeleteGroup(group),

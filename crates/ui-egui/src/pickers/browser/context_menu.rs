@@ -51,28 +51,24 @@ impl SelectionMenuModel {
     pub(crate) fn new(asset: &str, selection: &crate::pickers::state::BrowserSelectionSnapshot) -> Self {
         let rename_count = selection.targets.len();
         let delete_actions = crate::pickers::browser::selection_operations::delete_selection(selection);
-        let delete_count = delete_actions.len();
         let has_headers = selection.targets.iter().any(|target| {
             matches!(target, crate::pickers::browser::selection::SelectionTarget::Group(_) | crate::pickers::browser::selection::SelectionTarget::Folder { .. })
         });
         let has_cards = selection.targets.iter().any(|target| matches!(target, crate::pickers::browser::selection::SelectionTarget::Item { .. }));
+        // Mixed selections intentionally use the asset plural, matching multiple-card wording.
+        // Classify the user's selection rather than reduced delete actions: a selected group can
+        // subsume selected descendants in the actual deletion operation.
         let mixed_selection = has_headers && has_cards;
-        let delete_has_headers = delete_actions.iter().any(|action| matches!(action, BrowserAction::DeleteGroup(_) | BrowserAction::DeleteNestedGroup { .. }));
-        let delete_has_cards = delete_actions.iter().any(|action| matches!(action, BrowserAction::DeleteItem { .. }));
-        let mixed_delete = delete_has_headers && delete_has_cards;
-        let rename_label = if mixed_selection {
-            format!("Rename {asset}s and Groups…")
-        } else if has_headers {
-            format!("Rename Group{}…", if rename_count == 1 { "" } else { "s" })
+        let plural = rename_count != 1;
+        let rename_label = if mixed_selection || !has_headers {
+            format!("Rename {asset}{}…", if plural { "s" } else { "" })
         } else {
-            format!("Rename {asset}{}…", if rename_count == 1 { "" } else { "s" })
+            format!("Rename Group{}…", if plural { "s" } else { "" })
         };
-        let delete_label = if mixed_delete {
-            format!("Delete {asset}s and Groups…")
-        } else if delete_has_headers {
-            format!("Delete Group{}…", if delete_count == 1 { "" } else { "s" })
+        let delete_label = if mixed_selection || !has_headers {
+            format!("Delete {asset}{}…", if plural { "s" } else { "" })
         } else {
-            format!("Delete {asset}{}…", if delete_count == 1 { "" } else { "s" })
+            format!("Delete Group{}…", if plural { "s" } else { "" })
         };
         let rename_action = crate::pickers::browser::selection_operations::rename_selection(selection);
         let export_items = crate::pickers::browser::selection_operations::export_selection(selection);
@@ -111,6 +107,35 @@ pub(crate) fn picker_context_menu(
     selection: &crate::pickers::state::BrowserSelectionSnapshot,
     events: &mut Vec<BrowserAction>,
 ) {
+    let Some(asset) = picker_context_menu_actions(ui, panel, selection, events) else {
+        return;
+    };
+    ui.separator();
+    picker_creation_actions_menu(ui, asset, events);
+    let move_targets = selection.selected_items.clone();
+    if !move_targets.is_empty() {
+        ui.separator();
+        ui.menu_button(tl!("Move to"), |ui| {
+            for destination in groups.iter().map(|group| &group.name) {
+                if move_targets.iter().all(|(source, _)| source == destination) {
+                    continue;
+                }
+                if ui.button(destination).clicked() {
+                    events.extend(move_item_actions(&move_targets, destination));
+                    ui.close();
+                }
+            }
+        });
+    }
+}
+
+/// Render the leading action block shared by item, group and empty-space context menus.
+fn picker_context_menu_actions(
+    ui: &mut egui::Ui,
+    panel: &str,
+    selection: &crate::pickers::state::BrowserSelectionSnapshot,
+    events: &mut Vec<BrowserAction>,
+) -> Option<&'static str> {
     let Some((asset, plural, supports_append, supports_import, supports_export)) = (match panel {
         "gradients" => Some((tl!("Gradient"), tl!("Gradients"), true, true, true)),
         "patterns" => Some((tl!("Pattern"), tl!("Patterns"), false, true, true)),
@@ -121,7 +146,7 @@ pub(crate) fn picker_context_menu(
         "cloneSource" => Some((tl!("Clone Source"), tl!("Clone Sources"), false, false, false)),
         _ => None,
     }) else {
-        return;
+        return None;
     };
     let menu = SelectionMenuModel::new(asset, selection);
     if crate::menu_keys::menu_item_button(ui, &format!("Append Default {plural}…"), supports_append).clicked() {
@@ -137,7 +162,11 @@ pub(crate) fn picker_context_menu(
         ui.close();
     }
     selection_actions_menu(ui, asset, selection, events);
-    ui.separator();
+    Some(asset)
+}
+
+/// Keep preset creation together after the selection-dependent actions on every context surface.
+fn picker_creation_actions_menu(ui: &mut egui::Ui, asset: &str, events: &mut Vec<BrowserAction>) {
     if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Preset…"), true).clicked() {
         events.push(BrowserAction::New);
         ui.close();
@@ -145,21 +174,6 @@ pub(crate) fn picker_context_menu(
     if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Group…"), true).clicked() {
         events.push(BrowserAction::NewGroup);
         ui.close();
-    }
-    let move_targets = selection.selected_items.clone();
-    if !move_targets.is_empty() {
-        ui.separator();
-        ui.menu_button(tl!("Move to"), |ui| {
-            for destination in groups.iter().map(|group| &group.name) {
-                if move_targets.iter().all(|(source, _)| source == destination) {
-                    continue;
-                }
-                if ui.button(destination).clicked() {
-                    events.extend(move_item_actions(&move_targets, destination));
-                    ui.close();
-                }
-            }
-        });
     }
 }
 
@@ -266,22 +280,11 @@ pub(crate) fn begin_item_rename(state: &mut PresetUi, panel: &str, targets: &[(S
 
 /// Standard item-menu policy shared by preset panels and specialised adapters.
 pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
-    let ItemContextMenuArgs { panel, group_names, .. } = args;
+    let ItemContextMenuArgs { panel, .. } = args;
     let selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
-    selection_actions_menu(ui, card_type_name(panel), &selection, events);
-    let move_targets = selection.selected_items;
-    if !move_targets.is_empty() {
-        ui.menu_button(tl!("Move to"), |ui| {
-            for destination in group_names {
-                if move_targets.iter().all(|(source, _)| source == destination) {
-                    continue;
-                }
-                if ui.button(destination).clicked() {
-                    events.extend(move_item_actions(&move_targets, destination));
-                    ui.close();
-                }
-            }
-        });
+    if let Some(asset) = picker_context_menu_actions(ui, panel, &selection, events) {
+        ui.separator();
+        picker_creation_actions_menu(ui, asset, events);
     }
 }
 
@@ -289,20 +292,9 @@ pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi
 pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
     let selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
     let _ = group;
-    selection_actions_menu(ui, card_type_name(panel), &selection, events);
-}
-
-fn card_type_name(panel: &str) -> &'static str {
-    match panel {
-        "gradients" => tl!("Gradient"),
-        "patterns" => tl!("Pattern"),
-        "swatches" => tl!("Swatch"),
-        "styles" => tl!("Style"),
-        "shapes" => tl!("Shape"),
-        "toolPresets" => tl!("Tool Preset"),
-        "cloneSource" => tl!("Clone Source"),
-        "brushes" => tl!("Brush"),
-        _ => tl!("Preset"),
+    if let Some(asset) = picker_context_menu_actions(ui, panel, &selection, events) {
+        ui.separator();
+        picker_creation_actions_menu(ui, asset, events);
     }
 }
 
@@ -316,10 +308,105 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use egui::vec2;
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{kittest::Queryable, Harness};
 
     use super::picker_context_menu;
     use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemView};
+
+    fn assert_standard_context_menu_template(harness: &Harness<'_>) {
+        let labels = [
+            "Append Default Gradients…",
+            "Import Gradients…",
+            "Export Selected Gradients…",
+            "Rename Gradients…",
+            "Delete Gradients…",
+            "New Gradient Preset…",
+            "New Gradient Group…",
+        ];
+        let mut previous_bottom = None;
+        for label in labels {
+            let rect = harness.get_by_label(label).rect();
+            if let Some(bottom) = previous_bottom {
+                assert!(rect.top() >= bottom, "{label} must follow the previous context-menu entry");
+            }
+            previous_bottom = Some(rect.bottom());
+        }
+        let row_gap = harness.get_by_label("Import Gradients…").rect().top() - harness.get_by_label("Append Default Gradients…").rect().bottom();
+        let section_gap = harness.get_by_label("New Gradient Preset…").rect().top() - harness.get_by_label("Delete Gradients…").rect().bottom();
+        assert!(section_gap > row_gap, "creation actions must follow a separator");
+        assert!(harness.query_by_label("Move to").is_none(), "card and group menus do not include the empty-space Move to action");
+    }
+
+    #[test]
+    fn selection_menu_labels_follow_selected_target_composition() {
+        use super::SelectionMenuModel;
+        use crate::pickers::browser::selection::SelectionTarget as Target;
+        use crate::pickers::state::BrowserSelectionSnapshot;
+
+        let item = |key: &str| Target::Item { group: "Basics".into(), path: Vec::new(), key: key.into() };
+        let group = |name: &str| Target::Group(name.into());
+        let cases = [
+            (vec![item("one")], "Rename Gradient\u{2026}", "Delete Gradient\u{2026}"),
+            (vec![item("one"), item("two")], "Rename Gradients\u{2026}", "Delete Gradients\u{2026}"),
+            (vec![group("Basics")], "Rename Group\u{2026}", "Delete Group\u{2026}"),
+            (vec![group("Basics"), group("Grays")], "Rename Groups\u{2026}", "Delete Groups\u{2026}"),
+            (vec![item("one"), group("Grays")], "Rename Gradients\u{2026}", "Delete Gradients\u{2026}"),
+        ];
+
+        for (targets, rename, delete) in cases {
+            let selection = BrowserSelectionSnapshot { targets, ..Default::default() };
+            let menu = SelectionMenuModel::new("Gradient", &selection);
+            assert_eq!(menu.rename_label, rename);
+            assert_eq!(menu.delete_label, delete);
+        }
+    }
+
+    #[test]
+    fn standard_item_context_menu_renders_the_complete_context_template() {
+        use super::standard_item_context_menu;
+        use crate::pickers::browser::asset_browser::ItemContextMenuArgs;
+        use crate::pickers::state::PresetUi;
+
+        let item = ItemView { key: "one".into(), name: "One".into(), group_path: Vec::new() };
+        let group = GroupView { name: "Basics".into(), root_only: false, items: vec![item.clone()] };
+        let group_names = vec!["Basics".into(), "Grays".into()];
+        let selected_items = vec![("Basics".into(), item.clone())];
+        let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
+            ui.menu_button("Picker", |ui| {
+                standard_item_context_menu(
+                    ui,
+                    &mut PresetUi::default(),
+                    ItemContextMenuArgs { panel: "gradients", item: &item, group: &group, group_names: &group_names, selected_items: &selected_items },
+                    &mut Vec::new(),
+                );
+            });
+        });
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Picker").click();
+        harness.run_steps(2);
+
+        assert_standard_context_menu_template(&harness);
+    }
+
+    #[test]
+    fn standard_group_context_menu_renders_the_complete_context_template() {
+        use super::standard_group_context_menu;
+        use crate::pickers::state::PresetUi;
+
+        let group = GroupView { name: "Basics".into(), root_only: false, items: Vec::new() };
+        let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
+            ui.menu_button("Picker", |ui| {
+                standard_group_context_menu(ui, &mut PresetUi::default(), "gradients", &group, &mut Vec::new());
+            });
+        });
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Picker").click();
+        harness.run_steps(2);
+
+        assert_standard_context_menu_template(&harness);
+    }
 
     #[test]
     fn gradient_context_menu_orders_all_actions_and_dispatches_import() {
@@ -427,7 +514,7 @@ mod tests {
         harness.run_steps(2);
         assert!(harness.query_by_label("Rename Groups…").is_some());
         assert!(harness.query_by_label("Delete Groups…").is_some());
-        assert!(harness.query_by_label("Rename Gradients…").is_none());
+        assert!(harness.query_by_label("Rename Groups…").is_none());
     }
 
     #[test]
@@ -480,16 +567,16 @@ mod tests {
         harness.get_by_label("Picker").click();
         harness.run_steps(2);
 
-        assert!(harness.query_by_label("Rename Gradients and Groups…").is_some());
-        assert!(harness.query_by_label("Delete Gradients and Groups…").is_some());
-        assert!(harness.query_by_label("Rename Gradients…").is_none());
+        assert!(harness.query_by_label("Rename Gradients…").is_some());
+        assert!(harness.query_by_label("Delete Gradients…").is_some());
+        assert!(harness.query_by_label("Rename Groups…").is_none());
     }
 
     #[test]
     fn mixed_gradient_selection_deletes_selected_group_and_uncovered_card() {
         use std::collections::{BTreeMap, BTreeSet};
 
-        use super::{BrowserDeleteContext, selected_delete_actions};
+        use super::{selected_delete_actions, BrowserDeleteContext};
         use crate::pickers::browser::identity::PickerNodeIdentity;
         use crate::pickers::browser::path_identity_model::{HierarchyNode, PickerBrowserHierarchy, PickerId};
 
