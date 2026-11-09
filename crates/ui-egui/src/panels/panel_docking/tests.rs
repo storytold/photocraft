@@ -1728,15 +1728,20 @@ fn constrained_width_does_not_panic_while_resizing() {
     h.event(Event::PointerMoved(start + vec2(-30.0, 0.0)));
     h.run_steps(1);
     assert!(crate::panels::dock_edge_drag_active(&h.ctx), "the drag is held in the wide window");
+    let stored: Vec<f32> = end_columns(h.state()).iter().map(|column| column.width).collect();
     h.set_size(vec2(300.0, 600.0));
     h.event(Event::PointerMoved(pos2(200.0, 300.0)));
     h.run_steps(3);
     assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "shrinking the window below the column minima cancels the held drag");
     let drawn = crate::panels::dock_panel_width(&h.ctx);
     assert!(drawn <= 80.0, "the dock stays within the shrunk window mid-drag, got {drawn}");
+    let widths: Vec<f32> = end_columns(h.state()).iter().map(|column| column.width).collect();
+    assert_eq!(widths, stored, "the cancel keeps the stored column widths");
     h.event(Event::PointerButton { pos: pos2(200.0, 300.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert!(crate::panels::dock_panel_width(&h.ctx) <= 80.0, "the release after the cancel keeps the dock in the window");
+    let widths: Vec<f32> = end_columns(h.state()).iter().map(|column| column.width).collect();
+    assert_eq!(widths, stored, "the release after the cancel keeps the stored column widths");
 
     let mut h = dock_edge_harness(two_columns(), vec2(300.0, 600.0));
     let drawn = crate::panels::dock_panel_width(&h.ctx);
@@ -2292,9 +2297,11 @@ fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspa
         apply_pending_dock_width(h.state_mut(), &ctx);
         assert_eq!(h.state().ui.docking, Some(invalid));
         assert_eq!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())), Some(requested));
-        assert!(
-            h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(),
-            "neither queued request nor native state is consumed before recovery"
+        // The rectangle `remember_native_width_for_request_test` saved, in both cases.
+        assert_eq!(
+            h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).map(|state| state.outer_rect),
+            Some(egui::Rect::from_min_size(pos2(900.0, 0.0), vec2(380.0, 700.0))),
+            "changed={changed}: neither queued request nor native state is consumed or changed before recovery"
         );
         h.run_steps(1);
         assert!(
