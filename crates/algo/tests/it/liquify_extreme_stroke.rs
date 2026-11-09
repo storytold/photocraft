@@ -35,3 +35,26 @@ fn a_brush_with_an_absurd_size_or_position_replays_without_overflow() {
         }
     }
 }
+
+/// Review on #11013: a dab whose centre and size are both huge gives infinity over infinity for its
+/// distance; it must not write NaN displacements.
+#[test]
+fn a_huge_far_off_dab_leaves_the_field_finite() {
+    let bounds = Rect::new(0, 0, 64, 64);
+    for tool in BRUSH_TOOLS {
+        let f = LiquifyField::from_strokes(bounds, 8.0, &[stroke(tool, 4e200, vec![vec![1e200, 10.0]])]);
+        assert!(f.max_displacement().is_finite(), "{tool:?}");
+        assert!(f.sample(10.0, 10.0).iter().all(|v| v.is_finite()), "{tool:?}");
+    }
+}
+
+/// Review on #11013: a Freeze dab centred far to the left with a radius reaching the image changes
+/// nodes inside it, so the area it reports must not be empty.
+#[test]
+fn a_far_off_dab_that_reaches_the_image_reports_what_it_changed() {
+    let mut f = LiquifyField::new(Rect::new(0, 0, 64, 64), 8.0);
+    let changed = f.stroke_begin(&stroke(LiquifyTool::Freeze, 1.2e10, vec![]), [-3e9, 10.0, 1.0]);
+    if f.freeze_at(10.0, 10.0) > 0.0 {
+        assert!(!changed.is_empty(), "the freeze changed nodes but reported {changed:?}");
+    }
+}

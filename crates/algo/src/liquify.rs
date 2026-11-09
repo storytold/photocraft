@@ -680,7 +680,9 @@ impl LiquifyField {
                 let p = self.node_pos(i, j);
                 let (dx, dy) = (p[0] - c[0], p[1] - c[1]);
                 let t2 = (dx * dx + dy * dy) / (r * r);
-                if t2 >= 1.0 {
+                // NaN is skipped too: it is what a far-off centre with a huge radius gives
+                // (infinity over infinity): a NaN weight would spread NaN displacements.
+                if t2.is_nan() || t2 >= 1.0 {
                     continue;
                 }
                 let fall = falloff(t2, density);
@@ -749,14 +751,10 @@ impl LiquifyField {
             self.d[idx] = d;
             self.freeze[idx] = f;
         }
-        let pad = (r.ceil() as i32).saturating_add(2);
-        Rect::new(
-            (c[0].floor() as i32).saturating_sub(pad),
-            (c[1].floor() as i32).saturating_sub(pad),
-            (c[0].ceil() as i32).saturating_add(pad),
-            (c[1].ceil() as i32).saturating_add(pad),
-        )
-        .intersect(&self.bounds)
+        // Each edge is worked out in f64 and only then converted (saturating), so a far-off centre
+        // with a huge radius still covers the nodes it changed.
+        let pad = r.ceil() + 2.0;
+        Rect::new((c[0].floor() - pad) as i32, (c[1].floor() - pad) as i32, (c[0].ceil() + pad) as i32, (c[1].ceil() + pad) as i32).intersect(&self.bounds)
     }
 
     /// Replays strokes on a fresh field.
