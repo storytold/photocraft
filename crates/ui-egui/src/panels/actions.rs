@@ -487,12 +487,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         }
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
-        if action.dialogs.contains(&i)
-            && interactive
-            && (crate::filter_dialog::has_dialog(id)
-                || crate::adjust_dialog::has_dialog(id)
-                || (id == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app)))
-        {
+        if action.dialogs.contains(&i) && interactive && step_has_dialog(app, id) {
             paused = Some(pause_recorded_step(app, &action, i, id, p));
             break;
         }
@@ -1319,6 +1314,28 @@ pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, fields: &serde_json::Map<
     let result = app.run(command, params);
     app.session.authorize = saved;
     result
+}
+
+/// Confirm a dedicated dialog (Color Range, Fill) that runs its own command: through the paused
+/// action's gate and history, then the action goes on after it. A failure ends the paused action.
+/// With no pause behind the dialog this is just the command.
+pub(crate) fn run_dialog_command(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>, command: &str, params: Value) -> Result<Value, String> {
+    match run_step_dialog(app, fields, command, params) {
+        Ok(value) => resume(app, fields).map(|()| value),
+        Err(error) => {
+            abandoned(app, fields);
+            Err(error)
+        }
+    }
+}
+
+/// Whether the dialog toggle of a recorded step shows a dialog of its own during playback.
+fn step_has_dialog(app: &PhotocraftApp, id: &str) -> bool {
+    crate::filter_dialog::has_dialog(id)
+        || crate::adjust_dialog::has_dialog(id)
+        || id == crate::color_range_ui::COMMAND
+        || id == crate::fill_ui::COMMAND
+        || (id == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app))
 }
 
 /// Bind the dialog's own edit to its suspended action before it runs or starts a worker.

@@ -2945,3 +2945,123 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     assert_eq!(names, ["A", "B"]);
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
 }
+
+/// A 16×16 document whose left half is red and right half blue, nothing selected.
+fn two_tone_app() -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 16})).unwrap();
+    app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+    app.run("select.rect", json!({"x": 8, "y": 0, "width": 8, "height": 16})).unwrap();
+    app.run("edit.fill", json!({"contents": "color", "color": "#0000ff"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app
+}
+
+/// The red channel of the first layer (the one filled), whatever layer a later step made active.
+fn red_at(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
+    let st = app.session.active().unwrap();
+    let walk = st.doc.walk();
+    walk.first().unwrap().2.surface().unwrap().pixel(x, y)[0]
+}
+
+fn has_selection(app: &PhotocraftApp) -> bool {
+    app.session.active().unwrap().doc.selection.is_some()
+}
+
+fn named_layers(app: &PhotocraftApp, name: &str) -> usize {
+    layer_names(app).iter().filter(|n| *n == name).count()
+}
+
+const RANGE_STEP: &str = "select.colorRange";
+const FILL_STEP: &str = "edit.fill";
+
+fn recorded_range() -> Value {
+    json!({"select": "sampledColors", "fuzziness": 25.0, "points": [[2.0, 8.0]], "invert": false})
+}
+
+fn recorded_fill() -> Value {
+    json!({"contents": "color", "color": "#000000", "mode": "normal", "opacity": 50.0, "preserveTransparency": false})
+}
+
+#[test]
+fn color_range_step_with_dialog_toggle_opens_its_dialog() {
+    let mut app = two_tone_app();
+    let mut a = Action::new("Range", vec![(RANGE_STEP.into(), recorded_range()), ("layer.new.layer".into(), json!({"name": "after"}))]);
+    a.dialogs.insert(0);
+    app.session.actions.list.push(a);
+    let v = play(&mut app, &json!({"action": "Range"})).unwrap();
+    assert_eq!(v["paused"]["step"], 0, "{v}");
+    let id = v["paused"]["dialog"].as_u64().unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(crate::color_range_ui::owns(fields), "the Color Range dialog opened");
+    assert_eq!(fields["fuzziness"], 25.0, "the dialog shows the recorded values");
+    assert_eq!(fields["points"], json!([[2.0, 8.0]]));
+    assert!(!has_selection(&app), "nothing selected while the dialog is open");
+    assert_eq!(named_layers(&app, "after"), 0);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(has_selection(&app), "OK selected the range");
+    assert_eq!(named_layers(&app, "after"), 1, "the step after the dialog ran once");
+    assert!(app.paused_playbacks.paused.is_empty());
+    assert!(app.ui.status.starts_with("Played"), "{}", app.ui.status);
+}
+
+#[test]
+fn fill_step_with_dialog_toggle_opens_its_dialog() {
+    let mut app = two_tone_app();
+    let mut a = Action::new("Fill", vec![(FILL_STEP.into(), recorded_fill()), ("layer.new.layer".into(), json!({"name": "after"}))]);
+    a.dialogs.insert(0);
+    app.session.actions.list.push(a);
+    // What one fill with these values does, on an identical document.
+    let mut reference = two_tone_app();
+    reference.run(FILL_STEP, recorded_fill()).unwrap();
+    let once = red_at(&reference, 2, 2);
+    let before = red_at(&app, 2, 2);
+    assert!((once - before).abs() > 0.05, "the reference fill changes the pixel");
+
+    let v = play(&mut app, &json!({"action": "Fill"})).unwrap();
+    assert_eq!(v["paused"]["step"], 0, "{v}");
+    let id = v["paused"]["dialog"].as_u64().unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(crate::fill_ui::owns(fields), "the Fill dialog opened");
+    assert_eq!(fields["opacity"], 50.0, "the dialog shows the recorded values");
+    assert_eq!(fields["color"], "#000000");
+    assert_eq!(red_at(&app, 2, 2), before, "pixels unchanged while the dialog is open");
+    assert_eq!(named_layers(&app, "after"), 0);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!((red_at(&app, 2, 2) - once).abs() < 1e-4, "the fill was applied exactly once");
+    assert_eq!(named_layers(&app, "after"), 1, "the step after the dialog ran once");
+    assert!(app.paused_playbacks.paused.is_empty());
+}
+
+#[test]
+fn color_range_then_fill_both_toggled_in_one_action() {
+    let mut app = two_tone_app();
+    let mut a = Action::new(
+        "Both",
+        vec![(RANGE_STEP.into(), recorded_range()), (FILL_STEP.into(), recorded_fill()), ("layer.new.layer".into(), json!({"name": "after"}))],
+    );
+    a.dialogs.extend([0, 1]);
+    app.session.actions.list.push(a);
+    let mut reference = two_tone_app();
+    reference.run(RANGE_STEP, recorded_range()).unwrap();
+    reference.run(FILL_STEP, recorded_fill()).unwrap();
+    let (inside, outside) = (red_at(&reference, 2, 8), red_at(&reference, 12, 8));
+
+    let v = play(&mut app, &json!({"action": "Both"})).unwrap();
+    let first = v["paused"]["dialog"].as_u64().unwrap();
+    assert!(crate::color_range_ui::owns(&app.ui.dialog_mut(first).unwrap().fields));
+    crate::dialogs::confirm(&mut app, first).unwrap();
+    // The first OK opens the Fill dialog; the later steps wait for its OK.
+    assert!(has_selection(&app));
+    assert_eq!(app.ui.dialogs.len(), 1, "only the Fill dialog is open");
+    let second = app.ui.dialogs[0].id;
+    assert!(crate::fill_ui::owns(&app.ui.dialog_mut(second).unwrap().fields));
+    assert_eq!(named_layers(&app, "after"), 0);
+    crate::dialogs::confirm(&mut app, second).unwrap();
+    assert!(app.ui.dialogs.is_empty());
+    assert_eq!(named_layers(&app, "after"), 1);
+    assert!((red_at(&app, 2, 8) - inside).abs() < 1e-4, "inside the range: filled once");
+    assert!((red_at(&app, 12, 8) - outside).abs() < 1e-4, "outside the range: untouched");
+    assert!(app.paused_playbacks.paused.is_empty());
+}

@@ -130,7 +130,7 @@ pub fn params(f: &Map<String, Value>) -> Value {
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let remembered: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
     app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
-    app.run(COMMAND, params(f))
+    crate::actions::run_dialog_command(app, f, COMMAND, params(f))
 }
 
 fn label(ui: &mut egui::Ui, text: &str) {

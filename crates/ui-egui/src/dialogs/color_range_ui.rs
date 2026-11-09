@@ -161,7 +161,7 @@ pub fn params(f: &Map<String, Value>) -> Value {
 /// OK: run the command on the document (one history step).
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     app.color_range = None;
-    app.run(COMMAND, params(f))
+    crate::actions::run_dialog_command(app, f, COMMAND, params(f))
 }
 
 /// Cached preview: the document proxy (per revision) and the textures drawn from it.

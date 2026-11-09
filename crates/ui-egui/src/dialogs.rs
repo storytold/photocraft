@@ -1231,6 +1231,9 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
     if command == crate::color_range_ui::COMMAND {
         return crate::color_range_ui::open(app);
     }
+    if command == crate::fill_ui::COMMAND {
+        return crate::fill_ui::open(app);
+    }
     if let Some(id) = crate::adjust_dialog::open(app, command) {
         return id;
     }
