@@ -82,6 +82,23 @@ fn the_brush_keeps_its_own_pressure_flags() {
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
     assert!(h.state().session.tools.brush.pressure_opacity, "the Pencil's flag came back");
+
+    // The mirror: the Brush on, the Pencil off, so a reset to one value cannot pass.
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(4);
+    h.state_mut().session.tools.brush.pressure_opacity = true;
+    h.run_steps(2);
+    h.state_mut().ui.tool = Tool::Pencil;
+    h.run_steps(4);
+    h.get_by_label("Always use pressure for opacity").click();
+    h.run_steps(2);
+    assert!(!h.state().session.tools.brush.pressure_opacity, "the Pencil is off");
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(4);
+    assert!(h.state().session.tools.brush.pressure_opacity, "the Brush stayed on");
+    h.state_mut().ui.tool = Tool::Pencil;
+    h.run_steps(4);
+    assert!(!h.state().session.tools.brush.pressure_opacity, "the Pencil stayed off");
 }
 
 #[test]
