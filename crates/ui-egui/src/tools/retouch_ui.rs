@@ -832,8 +832,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Range:"));
             let opts = [("shadows".to_string(), tl!("Shadows")), ("midtones".to_string(), tl!("Midtones")), ("highlights".to_string(), tl!("Highlights"))];
             crate::widgets::dropdown(ui, "tone-range", tl!("Range"), &mut o.tone_range, &opts, 100.0);
-            pct(ui, tl!("Exposure:"), &mut o.exposure);
-            crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"));
+            if let Some(range) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("tone-range"))) {
+                range.on_hover_text(tl!("Painting Mode"));
+            }
+            opt(ui, tl!("Exposure:"));
+            crate::widgets::value_field(ui, &mut o.exposure, 1.0..=100.0, "%", 58.0).on_hover_text(tl!("Set exposure for stroke"));
+            crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"))
+                .on_hover_text(tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"));
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));
