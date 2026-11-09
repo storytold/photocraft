@@ -409,8 +409,8 @@
 	Layer Content Options…	Rétegtartalom beállításai…
 	Layer from Background…	Réteg a háttérből…
 	Layer Style	Rétegstílus
-	Layer via Copy	Réteg másolással
-	Layer via Cut	Réteg kivágással
+	Layer Via Copy	Réteg másolással
+	Layer Via Cut	Réteg kivágással
 	Layer…	Réteg…
 	Left Edges	Bal szélek
 	Link Layer Mask	Rétegmaszk összekapcsolása
@@ -4426,8 +4426,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Szürkeárnyalatos sáv
 	Current Colors	Aktuális színek
 	Make Ramp Web Safe	Sáv korlátozása webes színekre
+	Scroll All Windows	Összes ablak görgetése
 	The path was kept as the Work Path	Az útvonal munkaútvonalként megmaradt
 	The path was discarded	Az útvonal el lett vetve
+# Art History Brush (#213).
 	Art History Brush Tool	Művészi előzményecset eszköz
 	Tight Short	Szoros, rövid
 	Tight Medium	Szoros, közepes

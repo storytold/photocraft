@@ -141,6 +141,10 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
         }
         Tool::Lasso | Tool::Patch | Tool::ContentAwareMove => {
             let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();
+            // A Content-Aware Move drag with nothing to select only says so (#12192).
+            if d.tool == Tool::ContentAwareMove && crate::retouch_ui::content_aware_move_no_pixels(app, &pts) {
+                return;
+            }
             if pts.len() >= 3 {
                 let mode = selection_mode(app, d.modifiers);
                 let o = &app.ui.tool_options;

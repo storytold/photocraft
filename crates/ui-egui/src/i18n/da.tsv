@@ -185,8 +185,8 @@
 	Trap…	Trap…
 
 # Layer
-	Layer via Copy	Lag via kopiering
-	Layer via Cut	Lag via udklipning
+	Layer Via Copy	Lag via kopiering
+	Layer Via Cut	Lag via udklipning
 	Duplicate Layer…	Duplikér lag…
 	Duplicate…	Duplikér…
 	Delete	Slet
@@ -4705,6 +4705,7 @@ shape	Appearance	Udseende
 	Grayscale Ramp	Gråtonerampe
 	Current Colors	Aktuelle farver
 	Make Ramp Web Safe	Gør rampe websikker
+	Scroll All Windows	Rul alle vinduer
 # Art History Brush (#213).
 	Art History Brush Tool	Kunstnerisk historikpenselværktøj
 	Tight Short	Stram kort

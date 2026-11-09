@@ -185,8 +185,8 @@
 	Trap…	Overlapping…
 
 # Layer
-	Layer via Copy	Lag via kopiering
-	Layer via Cut	Lag via utklipp
+	Layer Via Copy	Lag via kopiering
+	Layer Via Cut	Lag via utklipp
 	Duplicate Layer…	Dupliser lag…
 	Duplicate…	Dupliser…
 	Delete	Slett
@@ -4705,6 +4705,7 @@ shape	Appearance	Utseende
 	Grayscale Ramp	Gråtonerampe
 	Current Colors	Gjeldende farger
 	Make Ramp Web Safe	Gjør rampen webtrygg
+	Scroll All Windows	Rull alle vinduer
 # Art History Brush (#213).
 	Art History Brush Tool	Kunsthistorikkpensel
 	Tight Short	Stram kort

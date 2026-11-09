@@ -423,8 +423,8 @@
 	Artboard…	画板…
 	Artboard from Group…	从组创建画板…
 	Artboard from Layers…	从图层创建画板…
-	Layer via Copy	通过复制创建图层
-	Layer via Cut	通过剪切创建图层
+	Layer Via Copy	通过复制创建图层
+	Layer Via Cut	通过剪切创建图层
 	Layer From Background…	从背景创建图层…
 	Layer from Background…	从背景创建图层…
 	Background From Layer	从图层创建背景
@@ -3184,8 +3184,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Exported {path}	已导出 {path}
 	Exported {n} files	已导出 {n} 个文件
 	Driver: {driver}	驱动程序：{driver}
+	Scroll All Windows	滚动所有窗口
 	The path was kept as the Work Path	路径已保留为工作路径
 	The path was discarded	路径已丢弃
+# Art History Brush (#213).
 	Art History Brush	艺术历史画笔
 	Art History Brush Tool	艺术历史画笔工具
 	Tight Short	紧密短
