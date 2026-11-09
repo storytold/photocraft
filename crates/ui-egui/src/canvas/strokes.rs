@@ -599,9 +599,9 @@ pub(super) fn pointer_moves(events: &[egui::Event], button: egui::PointerButton,
 /// Modifiers attached to the pointer event itself. Some input sources provide these without a
 /// separate `ModifiersChanged` event, so use them for click gestures before falling back to the
 /// frame-wide modifier state.
-pub(super) fn pointer_button_modifiers(events: &[egui::Event], button: egui::PointerButton) -> Option<egui::Modifiers> {
+pub(super) fn pointer_button_modifiers(events: &[egui::Event], button: egui::PointerButton, pressed: bool) -> Option<egui::Modifiers> {
     events.iter().rev().find_map(|e| match e {
-        egui::Event::PointerButton { button: b, modifiers, .. } if *b == button => Some(*modifiers),
+        egui::Event::PointerButton { button: b, pressed: down, modifiers, .. } if *b == button && *down == pressed => Some(*modifiers),
         _ => None,
     })
 }
@@ -611,13 +611,23 @@ pub(super) fn press_alt_id(idx: usize) -> egui::Id {
     egui::Id::unique(("tool-pointer-press-alt", idx))
 }
 
-/// The Alt on the primary press of this frame inside `rect`, if there is one (the first press
-/// wins, as for `tool_press`).
-pub(super) fn press_alt_in(events: &[egui::Event], rect: egui::Rect) -> Option<bool> {
-    events.iter().find_map(|e| match e {
-        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers } if rect.contains(*pos) => Some(modifiers.alt),
-        _ => None,
-    })
+type PressAlt = Option<(Tool, bool)>;
+
+/// The last released press belongs to the click egui reports; retain a later press for the next frame.
+pub(super) fn press_alt_events(events: &[egui::Event], rect: egui::Rect, tool: Tool, mut held: PressAlt) -> (PressAlt, PressAlt) {
+    let mut released = None;
+    for event in events {
+        match event {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers } => {
+                held = rect.contains(*pos).then_some((tool, modifiers.alt));
+            }
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => {
+                released = held.take();
+            }
+            _ => {}
+        }
+    }
+    (released, held)
 }
 
 /// The Alt stored at the press, for the click's tool only: a press that started under one tool (the

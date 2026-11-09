@@ -20,11 +20,11 @@
 
 use egui::{Context, Event, Key, Modifiers, RawInput};
 
-/// Which Alt key an event names: 0 for the left one, 1 for the right one (AltGr).
+/// AltGr on Windows and Linux types characters, so only macOS folds right Alt.
 fn alt_slot(key: Key) -> Option<usize> {
     match key {
         Key::AltLeft => Some(0),
-        Key::AltRight => Some(1),
+        Key::AltRight if cfg!(target_os = "macos") => Some(1),
         _ => None,
     }
 }
@@ -41,7 +41,7 @@ pub(crate) struct AltKeys {
 impl AltKeys {
     /// The state at the end of the previous frame: egui's held keys and modifiers.
     pub(crate) fn of(ctx: &Context) -> Self {
-        ctx.input(|i| Self { held: [i.key_down(Key::AltLeft), i.key_down(Key::AltRight)], modifiers: i.modifiers })
+        ctx.input(|i| Self { held: [i.key_down(Key::AltLeft), cfg!(target_os = "macos") && i.key_down(Key::AltRight)], modifiers: i.modifiers })
     }
 
     /// Is an Alt key down?
@@ -143,6 +143,13 @@ mod tests {
             .collect()
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn altgr_does_not_add_alt_to_a_letter_in_the_same_frame() {
+        let events = fold(AltKeys::default(), vec![alt_key(Key::AltRight, true, Modifiers::NONE), alt_key(Key::E, true, Modifiers::NONE)]);
+        assert_eq!(alts(&events), [false, false]);
+    }
+
     #[test]
     fn a_click_after_the_alt_press_in_the_same_frame_carries_alt() {
         let events = fold(AltKeys::default(), vec![alt_key(Key::AltLeft, true, Modifiers::NONE), click(true, Modifiers::NONE), click(false, Modifiers::NONE)]);
@@ -174,9 +181,9 @@ mod tests {
         let events = fold(
             AltKeys::default(),
             vec![
-                alt_key(Key::AltRight, true, Modifiers::NONE),
+                alt_key(Key::AltLeft, true, Modifiers::NONE),
                 click(true, Modifiers::NONE),
-                alt_key(Key::AltRight, false, Modifiers::NONE),
+                alt_key(Key::AltLeft, false, Modifiers::NONE),
                 click(false, Modifiers::NONE),
             ],
         );

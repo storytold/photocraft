@@ -280,6 +280,34 @@ fn underlined_text_marks_the_mnemonic_once_and_keeps_the_prefix() {
     out.textures_delta.clear();
 }
 
+/// Access keys preserve visible spelling and underline only the locale-correct I pair.
+#[test]
+fn azerbaijani_and_turkish_mnemonics_keep_the_two_i_pairs_distinct() {
+    for code in ["az", "tr"] {
+        let lang = crate::i18n::Lang::from_code(code).unwrap();
+        crate::i18n::with_language(lang, || {
+            assert_eq!(crate::menu_keys::assign(&["ix", "ı"], &[Some('I'), Some('I')]), [Some('X'), Some('I')]);
+            assert_eq!(crate::menu_keys::localized(&["i".into()], &["Image"], &[Some('I')]), (vec!["i(I)".into()], vec![Some('I')]));
+            let ctx = egui::Context::default();
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                for text in [crate::menu_keys::mnemonic_text(ui, "", "İıi", Some('I'), None), crate::menu_keys::menu_row_text(ui, false, "İıi", Some('I'))]
+                {
+                    let egui::WidgetText::LayoutJob(job) = text else { panic!("an access key makes a layout job") };
+                    assert!(job.text.ends_with("İıi"), "visible text is retained verbatim");
+                    let underlined: Vec<&str> = job
+                        .sections
+                        .iter()
+                        .filter(|s| s.format.underline != egui::Stroke::NONE)
+                        .map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0])
+                        .collect();
+                    assert_eq!(underlined, ["ı"]);
+                }
+            });
+            out.textures_delta.clear();
+        });
+    }
+}
+
 /// The whole app: with the bar focused a letter opens a menu instead of picking a tool, and the
 /// arrows don't nudge the layer.
 #[test]
@@ -612,4 +640,34 @@ fn help_letters_stay_typing_while_a_zoom_is_typed() {
     let c = rows.iter().find(|r| r.enabled && r.mnemonic.is_some()).and_then(|r| r.mnemonic).expect("a Help row with a mnemonic");
     letter(&mut h, c);
     assert!(is_open(&h.ctx), "{c} ran no row: Help stays open");
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn altgr_e_types_euro_without_opening_edit() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        |ui, state: &mut (PhotocraftApp, String)| {
+            crate::menus::menu_bar(&mut state.0, ui);
+            let label = ui.label("Text");
+            ui.text_edit_singleline(&mut state.1).labelled_by(label.id).request_focus();
+        },
+        (app(), String::new()),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    let key = |key, pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.input_mut().events.push(key(egui::Key::AltRight, true));
+    let ctx = h.ctx.clone();
+    let mut raw = h.input_mut().clone();
+    eframe::App::raw_input_hook(&mut h.state_mut().0, &ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.input_mut().events.extend([key(egui::Key::E, true), egui::Event::Text("€".into())]);
+    let ctx = h.ctx.clone();
+    let mut raw = h.input_mut().clone();
+    eframe::App::raw_input_hook(&mut h.state_mut().0, &ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    assert_eq!(h.state().1, "€");
+    assert!(!is_open(&h.ctx), "AltGr+E must not open Edit");
 }

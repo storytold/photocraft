@@ -492,3 +492,18 @@ fn a_plain_click_after_an_alt_click_paints() {
     assert!(h.state().session.active().unwrap().revision > rev, "a click without Alt paints");
     assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "and samples nothing");
 }
+
+/// A release and the next press in one frame must retain the next press's Alt until its release.
+#[test]
+fn alt_press_after_a_release_in_the_same_frame_sets_clone_source() {
+    let mut h = harness(two_colours());
+    h.state_mut().ui.tool = Tool::CloneStamp;
+    h.state_mut().ui.tool_options.clone_sample = "all".into();
+    let p = screen(&h, 150.0, 50.0);
+    frame(&mut h, vec![egui::Event::PointerMoved(p)], false);
+    frame(&mut h, vec![pointer(p, true, Modifiers::ALT)], false);
+    frame(&mut h, vec![pointer(p, false, Modifiers::ALT), pointer(p, true, Modifiers::ALT)], false);
+    h.state_mut().session.presets.clone.active_mut().source = None;
+    frame(&mut h, vec![pointer(p, false, Modifiers::NONE)], false);
+    assert!(h.state().session.presets.clone.active().source.is_some(), "the second Alt press sets the source");
+}
