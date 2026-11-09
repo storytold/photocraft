@@ -68,6 +68,16 @@ fn history_brush_params_with(app: &PhotocraftApp, erase_to_history: bool) -> Val
         "hardness": brush.hardness * 100.0,
         "spacing": brush.spacing * 100.0,
     });
+    // The whole brush too (tip shape, sampled tip, dynamics, smoothing), so the commit and any
+    // replay paint with the brush the stroke was pressed with. Stored tips go as references
+    // (`remembered_settings`, as each tool's remembered brush); only with a sampled tip or pattern
+    // too big for that, not yet in the preset store, does the brush go in full. `square` is
+    // written out even when off.
+    let mut whole = photocraft_engine::brush_cmds::remembered_settings(brush).or_else(|| serde_json::to_value(brush).ok()).unwrap_or(Value::Null);
+    if let Some(o) = whole.as_object_mut() {
+        o.insert("square".into(), json!(brush.square));
+        p["brush"] = whole;
+    }
     if app.ui.tool == Tool::Eraser && erase_to_history {
         p["eraseToHistory"] = json!(true);
         // The Eraser's Pencil and Block tips (as `strokes::stroke_params`).

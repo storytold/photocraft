@@ -445,3 +445,73 @@ fn a_tool_key_during_a_history_brush_stroke_keeps_the_brush_it_began_with() {
     assert_eq!(p["spacing"].as_f64().map(f64::round), Some(30.0), "{p}");
     assert_eq!(p.get("eraseToHistory"), None, "{p}");
 }
+
+/// The layer after a History Brush (`mode` "") or Erase to History (`mode` "brush", "pencil",
+/// "block") stroke whose tool brush is given `pressed`; with `switched`, the Brush tool is picked
+/// halfway and its saved brush given `switched`, as a tool key does mid-stroke (the drag goes on).
+fn history_stroke_pixels(mode: &str, pressed: &serde_json::Value, switched: Option<&serde_json::Value>) -> Vec<f32> {
+    let mut app = app();
+    app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+    app.run("history.setSource", json!({"state": 1})).unwrap();
+    let tool = if mode.is_empty() { Tool::HistoryBrush } else { Tool::Eraser };
+    if tool == Tool::Eraser {
+        // A layer made since the source state: Erase to History paints that state's one layer.
+        app.run("layer.new.layer", json!({})).unwrap();
+    } else {
+        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400, "erase": true})).unwrap();
+    }
+    assert!(layer(&app).surface().unwrap().rgba(60, 40)[3] < 0.01, "{mode}: nothing there to start with");
+    app.ui.tool = tool;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush": {"size": 15, "hardness": 1.0, "spacing": 0.1, "smoothing": {"amount": 0.0}}})).unwrap();
+    app.run("tools.setBrush", json!({ "brush": pressed })).unwrap();
+    if tool == Tool::Eraser {
+        app.ui.tool_options.eraser_mode = mode.into();
+        app.ui.tool_options.erase_to_history = true;
+    }
+    let pts = [(30.0, 40.0), (45.0, 44.0), (60.0, 37.0), (75.0, 43.0), (90.0, 40.0)];
+    tool_event(&mut app, ToolEvent::Down { x: pts[0].0, y: pts[0].1, pressure: 1.0 }, Modifiers::NONE);
+    for (i, &(x, y)) in pts.iter().enumerate().skip(1) {
+        if i == 3
+            && let Some(sw) = switched
+        {
+            // What pressing a tool's letter does (`shortcuts`): the drag is not cancelled.
+            app.ui.tool = Tool::Brush;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+            app.run("tools.setBrush", json!({ "brush": sw })).unwrap();
+        }
+        tool_event(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, Modifiers::NONE);
+    }
+    tool_event(&mut app, ToolEvent::Up { x: pts[4].0, y: pts[4].1 }, Modifiers::NONE);
+    let (id, p) = last(&app);
+    assert_eq!(id, "paint.historyBrush", "{mode}: {p}");
+    let st = app.session.active().unwrap();
+    layer(&app).surface().unwrap().read_region(st.doc.bounds())
+}
+
+/// A tool key pressed mid-stroke leaves a History Brush or Erase to History stroke exactly as the
+/// same stroke without it, with the brush it was pressed with: tip shape, sampled tip, dynamics
+/// and smoothing, not only size, hardness and spacing (FredApps' review of #10692).
+#[test]
+fn a_tool_key_mid_stroke_paints_what_the_stroke_paints_without_it() {
+    let round = json!({"tip": "round", "roundness": 1.0, "angle": 0.0});
+    let cross = json!({"sampled": {"width": 3, "height": 3, "data": [0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0]}});
+    let cases = [
+        ("an elliptical tip, then a round one", json!({"roundness": 0.2, "angle": 30.0}), round.clone()),
+        ("a round tip, then a sampled one", round.clone(), json!({"tip": cross})),
+        ("a sampled tip, then a round one", json!({"tip": cross}), round.clone()),
+        ("no dynamics, then size jitter", round.clone(), json!({"shapeDynamics": {"enabled": true, "size": {"jitter": 1.0}}})),
+        ("no smoothing, then 90 %", round.clone(), json!({"smoothing": {"enabled": true, "amount": 0.9}})),
+    ];
+    for mode in ["", "brush", "pencil", "block"] {
+        for (what, pressed, switched) in &cases {
+            let plain = history_stroke_pixels(mode, pressed, None);
+            assert!(history_stroke_pixels(mode, pressed, Some(switched)) == plain, "{mode} {what}: the switch changed the stroke");
+            // The switched-to brush paints differently, so the comparison means something; Block
+            // mode keeps only the brush's smoothing.
+            if mode != "block" || what.contains("smoothing") {
+                assert!(history_stroke_pixels(mode, switched, None) != plain, "{mode} {what}: both brushes paint alike");
+            }
+        }
+    }
+}

@@ -824,6 +824,62 @@ fn erase_to_history_refuses_a_new_layer_from_a_state_holding_two_layers() {
     assert_eq!(rgba(&s, 20, 10), picture);
 }
 
+/// A red stroke (state 1), then a green one over it, and a History Brush stroke from state 1
+/// across them, with `session_brush` set as the session brush and `param`, if any, as the
+/// stroke's own `"brush"`.
+fn history_stroke_with(session_brush: Value, param: Option<Value>) -> Session {
+    let mut s = session(40, 20, 8, "rgb");
+    s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 14, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 14, "hardness": 1.0, "color": "#00ff00"})).unwrap();
+    s.execute("tools.setBrush", json!({ "brush": session_brush })).unwrap();
+    // A zigzag: smoothing changes a bent path, not a straight one.
+    let mut p = json!({"points": [[6, 6], [12, 14], [18, 6], [24, 14], [30, 6], [34, 12]], "size": 8, "hardness": 100, "spacing": 10, "state": 1});
+    if let Some(b) = param {
+        p["brush"] = b;
+    }
+    s.execute("paint.historyBrush", p).unwrap();
+    s
+}
+
+/// A History Brush stroke with a `"brush"` param paints with that brush whatever the session brush
+/// is by then, so the stroke replays (the commit's fallback, a recorded action) with the brush it
+/// was pressed with, its tip shape, sampled tip, dynamics and smoothing included (FredApps' review
+/// of #10692).
+#[test]
+fn history_brush_paints_with_its_brush_param_not_the_session_brush() {
+    let round = json!({"roundness": 1.0, "angle": 0.0});
+    let tip = json!({"sampled": {"width": 3, "height": 3, "data": [0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0]}});
+    for pressed in [
+        json!({"roundness": 0.2, "angle": 30.0}),
+        json!({"tip": tip}),
+        json!({"shapeDynamics": {"enabled": true, "size": {"jitter": 1.0}}}),
+        json!({"smoothing": {"enabled": true, "amount": 0.9}}),
+    ] {
+        // Painted with `pressed` as the session brush, and with it as the param over a round one.
+        let as_session = layer_pixels(&history_stroke_with(pressed.clone(), None));
+        let as_param = layer_pixels(&history_stroke_with(round.clone(), Some(pressed.clone())));
+        assert!(as_param == as_session, "{pressed}: the param's brush, not the session's");
+        // The two brushes paint differently, so the comparison means something.
+        assert!(layer_pixels(&history_stroke_with(round.clone(), None)) != as_session, "{pressed}: no different from round");
+    }
+    // A partial `"brush"` merges onto the session brush, as `paint.stroke`'s does.
+    let partial = layer_pixels(&history_stroke_with(json!({"angle": 30.0}), Some(json!({"roundness": 0.2}))));
+    assert!(partial == layer_pixels(&history_stroke_with(json!({"roundness": 0.2, "angle": 30.0}), None)));
+}
+
+/// A malformed `"brush"` is refused before anything is painted.
+#[test]
+fn history_brush_refuses_a_bad_brush_param() {
+    for bad in [json!({"size": "big"}), json!({"tip": {"sampled": {"width": 0}}}), json!({"size": 1e9}), json!({"roundness": [1, 2]})] {
+        let mut s = session(40, 20, 8, "rgb");
+        s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 14, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+        let before = layer_pixels(&s);
+        let r = s.execute("paint.historyBrush", json!({"points": [[8, 10], [32, 10]], "state": 0, "brush": bad}));
+        assert!(r.is_err(), "{bad}: {r:?}");
+        assert!(layer_pixels(&s) == before, "{bad}: nothing painted");
+    }
+}
+
 #[test]
 fn history_brush_errors_when_layer_is_new() {
     let mut s = session(20, 20, 8, "rgb");

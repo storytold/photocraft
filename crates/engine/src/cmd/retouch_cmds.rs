@@ -164,7 +164,18 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
         return Err(bad(cmd, "`points` is empty"));
     }
     crate::brush_cmds::check_coords(&pts, cmd)?;
-    let mut brush = stroke_brush(&s.tools.brush, p);
+    // A History Brush stroke carries the brush it was pressed with (`"brush"`, deep-merged onto the
+    // session brush as `paint.stroke`'s is): a tool key mid-stroke changes the session brush, and
+    // the commit, its fallback and a replayed action must all paint what the press began.
+    let base = match p.get("brush").filter(|v| v.is_object()) {
+        Some(patch) if cmd == "paint.historyBrush" => {
+            let mut b = crate::brush_cmds::merge_brush(&s.tools.brush, patch, cmd)?;
+            s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
+            b
+        }
+        _ => s.tools.brush.clone(),
+    };
+    let mut brush = stroke_brush(&base, p);
     // The Eraser's Erase to History in Pencil or Block mode paints back through that hard tip.
     if flag(p, "eraseToHistory", false) && (flag(p, "pencil", false) || flag(p, "block", false)) {
         brush = crate::brush_cmds::pencil_shape(brush, p)?;
@@ -378,7 +389,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error),"eraseToHistory":bool=false (a layer missing from a source state that holds a single layer paints that layer's own pixels, or a shape's solid colour, else white, past its path, as the Eraser's Erase to History does, instead of an error),"pencil":bool=false and "block":bool=false with "zoom" (with eraseToHistory: the hard aliased tip or the square, as paint.pencil's)"#
+                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error),"eraseToHistory":bool=false (a layer missing from a source state that holds a single layer paints that layer's own pixels, or a shape's solid colour, else white, past its path, as the Eraser's Erase to History does, instead of an error),"pencil":bool=false and "block":bool=false with "zoom" (with eraseToHistory: the hard aliased tip or the square, as paint.pencil's),"brush":{…}? (BrushSettings fields, deep-merged onto the session brush as paint.stroke's: the brush the stroke was pressed with, so a tool picked mid-stroke changes nothing)"#
             ),
             enabled: has_pixel_layer,
             run: history_brush,
