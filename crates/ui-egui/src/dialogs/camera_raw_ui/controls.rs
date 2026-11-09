@@ -341,7 +341,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // Edits start only on the After image: Split's Before half covers the left of it.
             super::masks_panel::preview(&mut preview, d, r, &response, panning, compare.after_area(view, after_view));
             if wb_tool && !panning {
-                super::wb_picker::preview(&preview, d, r, r.intersect(after_area(compare, view, after_view)), &response);
+                super::wb_picker::preview(&preview, d, r, r.intersect(compare.after_area(view, after_view)), &response);
             }
             if let Some(before) = d.before_tex.as_ref() {
                 paint_before(ui, &t, before, compare, view, after_view, r);
@@ -555,12 +555,6 @@ fn paint_before(ui: &egui::Ui, t: &Tokens, before: &egui::TextureHandle, compare
         ui.painter().rect_filled(at.expand2(vec2(6.0, 3.0)), t.radius_sm, Color32::from_black_alpha(150));
         ui.painter().galley(at.min, label, t.text);
     }
-}
-
-/// Where the After image shows: Split covers the left half of `view` with Before, side by side
-/// puts After in `after_view`.
-fn after_area(compare: super::panels::Compare, view: ERect, after_view: ERect) -> ERect {
-    if compare == super::panels::Compare::Split { ERect::from_min_max(pos2(view.center().x, view.top()), view.max) } else { after_view }
 }
 
 /// The Color Sampler was just picked: the White Balance tool and the mask or guide tool step
