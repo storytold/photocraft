@@ -138,7 +138,7 @@ fn perf_output_includes_slow_frames() {
     assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"], json!([]));
     app.slow_frames.set_threshold_ms(0.0);
     app.run("file.new", json!({"width": 64, "height": 32})).unwrap();
-    app.finish_frame(1.0);
+    app.finish_frame(&ctx, 1.0);
     let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
     let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
     assert_eq!(last["command"], "file.new", "{last}");
@@ -156,7 +156,7 @@ fn perf_output_includes_slow_frames() {
     let played = app.run("actions.play", json!({"action": "Zoom"})).unwrap();
     assert_eq!(played["ran"], 2, "{played}");
     let outer_ms = app.perf.command_ms;
-    app.finish_frame(1.0);
+    app.finish_frame(&ctx, 1.0);
     let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
     let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
     assert_eq!(last["command"], "actions.play", "{last}");
@@ -1116,7 +1116,7 @@ fn ui_set_opens_the_brush_preset_picker_and_sets_its_cards() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();
     let list = &app.ui.brush_picker_list;
-    assert!(list.show_name && list.show_stroke && list.show_tip, "every card part is on by default");
+    assert!(list.show_name && list.show_stroke && !list.show_tip, "the cards show the name and the stroke by default");
     let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerStroke": false}));
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]));
@@ -1160,11 +1160,11 @@ fn ui_inspect_tracks_brush_picker_open_and_closed() {
     assert!(open["result"]["brushPicker"]["pos"].is_array(), "{open}");
     assert_eq!(open["result"]["brushPicker"]["list"]["showName"], true);
     assert_eq!(open["result"]["brushPicker"]["list"]["showStroke"], true);
-    assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], true);
+    assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], false);
 
-    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": false}))["ok"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": true}))["ok"], true);
     let changed = call(&mut app, &ctx, "ui.inspect", json!({}));
-    assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], false);
+    assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], true);
 
     assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
     let closed_again = call(&mut app, &ctx, "ui.inspect", json!({}));

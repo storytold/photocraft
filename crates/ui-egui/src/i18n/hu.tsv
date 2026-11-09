@@ -4536,3 +4536,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Vászonméret automatikus módosítása
 	Keep Relative Position During Layer Reordering	Relatív pozíció megtartása a rétegek átrendezésekor
 	Shrinkwrap Canvas on Save	Vászon összehúzása a tartalomra mentéskor
+	Move Toolbar to the Right	Eszköztár áthelyezése jobbra
+	Move Toolbar to the Left	Eszköztár áthelyezése balra
