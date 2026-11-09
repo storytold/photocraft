@@ -102,6 +102,28 @@ fn a_layer_decoded_in_bands_is_not_charged_for_whole_layer_buffers() {
 }
 
 #[test]
+fn a_zip_mask_pays_for_its_whole_plane() {
+    let mask = |compression| {
+        let mut file = testgen::small(Version::Psd, compression);
+        let photocraft_psd::layer::MaskData::Mask(mask) = &mut file.layers_mut()[0].mask else { panic!("fixture needs a parsed mask") };
+        mask.rect = Rect::from_xywh(0, 0, 4000, 4000);
+        for channel in &mut file.layers_mut()[0].channels {
+            channel.compression = Some(compression);
+        }
+        super::estimate(&file).unwrap().workspace_bytes
+    };
+    assert_eq!(mask(Compression::Zip), mask(Compression::Rle) + 4000 * 4000);
+}
+
+#[test]
+fn zip_channels_left_in_the_source_pay_for_their_encoded_bytes() {
+    let bytes = testgen::small(Version::Psd, Compression::Zip).to_bytes().unwrap();
+    let in_memory = PsdFile::from_bytes(&bytes).unwrap();
+    let from_source = PsdFile::from_source(photocraft_psd::Source::new(bytes)).unwrap();
+    assert!(super::estimate(&from_source).unwrap().workspace_bytes > super::estimate(&in_memory).unwrap().workspace_bytes);
+}
+
+#[test]
 fn merged_bitmap_and_multichannel_expansion_are_budgeted() {
     for (mode, depth) in [(ColorMode::Bitmap, 1), (ColorMode::Multichannel, 8), (ColorMode::Rgb, 32)] {
         let mut file = testgen::merged_only(Version::Psb, mode, depth, Compression::Zip, 2, 2);

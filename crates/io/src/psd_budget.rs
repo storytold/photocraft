@@ -127,10 +127,14 @@ fn mul(a: u64, b: u64) -> Result<u64, IoError> {
     a.checked_mul(b).ok_or_else(overflow)
 }
 
-/// Whether decoding `channel` inflates its whole plane first: a ZIP stream can't be entered part
-/// way, while Raw and RLE channels are read a band of rows at a time.
-fn holds_whole_plane(channel: Option<&ChannelData>) -> bool {
-    matches!(channel.and_then(|c| c.compression), Some(Compression::Zip | Compression::ZipPrediction))
+/// Bytes decoding `channel` holds beyond a band: a ZIP stream can't be entered part way, so it is
+/// inflated whole, with its encoded bytes read in first when they are still in the source. Raw and
+/// RLE channels are read a band of rows at a time.
+fn whole_plane_bytes(channel: Option<&ChannelData>, plane: u64) -> u64 {
+    match channel {
+        Some(c) if matches!(c.compression, Some(Compression::Zip | Compression::ZipPrediction)) => plane.saturating_add(c.stored.as_ref().map_or(0, |s| s.len)),
+        _ => 0,
+    }
 }
 
 impl ImportBudget {
@@ -196,8 +200,10 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
                 let band = mul(mul(w as u64, band_rows)?, mul(cc + 1, sample * 3 + 4)?)?;
                 // The ZIP channels' planes are inflated side by side and live until the layer ends.
                 let plane = mul(pixels, sample)?;
-                let zipped = (0..cc as i16).chain([CHANNEL_TRANSPARENCY]).filter(|&id| holds_whole_plane(rec.channel(id))).count() as u64;
-                let workspace = band.checked_add(mul(plane, zipped)?).and_then(|b| b.checked_add(inflate_scratch(plane, cc + 1).ok()?)).ok_or_else(overflow)?;
+                let scratch = inflate_scratch(plane, cc + 1)?;
+                let workspace = (0..cc as i16).chain([CHANNEL_TRANSPARENCY]).try_fold(band.checked_add(scratch).ok_or_else(overflow)?, |sum, id| {
+                    sum.checked_add(whole_plane_bytes(rec.channel(id), plane)).ok_or_else(overflow)
+                })?;
                 // RLE row indexes live beside decoded planes.
                 budget.scratch(workspace.checked_add(mul(hh as u64 + 1, (cc + 1) * 8)?).ok_or_else(overflow)?);
             }
@@ -212,8 +218,8 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
                     let pixels = mul(w as u64, hh as u64)?;
                     let band = mul(mul(w as u64, (hh as u64).min(TILE_SIZE as u64))?, sample * 3 + 4)?;
                     let plane = mul(pixels, sample)?;
-                    let whole = if holds_whole_plane(rec.channel(id)) { plane } else { 0 };
-                    budget.scratch(band.checked_add(whole).and_then(|b| b.checked_add(inflate_scratch(plane, 1).ok()?)).ok_or_else(overflow)?);
+                    let scratch = inflate_scratch(plane, 1)?;
+                    budget.scratch(band.checked_add(whole_plane_bytes(rec.channel(id), plane)).and_then(|b| b.checked_add(scratch)).ok_or_else(overflow)?);
                 }
             }
         }
