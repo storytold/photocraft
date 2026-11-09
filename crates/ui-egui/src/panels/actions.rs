@@ -254,7 +254,7 @@ fn called(app: &mut PhotocraftApp, caller: &str, i: usize, id: &str, value: &Val
 }
 
 /// A recorded Quick Export or Save for Web step runs the engine command directly, not its UI
-/// wrapper, so the metadata a JPEG couldn't hold is reported here, as the wrappers do (#11332).
+/// wrapper, so the metadata a JPEG couldn't hold is reported here, as the wrappers do (#11330).
 fn export_step_warnings(app: &mut PhotocraftApp, id: &str, value: &Value) {
     if !matches!(id, "file.export.quickExport" | "file.export.saveForWebLegacy") {
         return;

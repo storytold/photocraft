@@ -2946,7 +2946,7 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
 }
 
-/// #11332: a recorded Quick Export or Save for Web step runs the engine command, not the UI
+/// #11330: a recorded Quick Export or Save for Web step runs the engine command, not the UI
 /// wrapper, so playback itself reports the XMP a JPEG couldn't hold.
 #[test]
 fn playback_reports_the_xmp_a_recorded_export_left_out() {

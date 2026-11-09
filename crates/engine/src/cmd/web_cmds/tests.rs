@@ -1385,7 +1385,7 @@ fn web_xmp_that_does_not_fit_is_trimmed_or_left_out_and_reported() {
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
-/// #11332: the XMP warning is for a JPEG that was encoded. Only no-image slices chosen: nothing
+/// #11330: the XMP warning is for a JPEG that was encoded. Only no-image slices chosen: nothing
 /// is written, so nothing is said; and a later slice failing after one was written still tells
 /// what the written one lacks.
 #[test]

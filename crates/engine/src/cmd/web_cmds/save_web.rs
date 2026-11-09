@@ -318,7 +318,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // empty cell, so the exported ones keep their place in the table.
     let mut texted = std::collections::HashSet::new();
     let mut html_path = None;
-    // Anything that fails after a file is on disk says which metadata that file lacks (#11332).
+    // Anything that fails after a file is on disk says which metadata that file lacks (#11330).
     let mut run = || -> Result<()> {
         for r in &all {
             let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
