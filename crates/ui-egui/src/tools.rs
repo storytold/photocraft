@@ -2,8 +2,10 @@ pub(super) mod align_bar;
 pub mod analysis_ui;
 pub mod anchor_tools;
 pub mod artboard_tool;
+pub mod bg_eraser_popup;
 pub(crate) mod brush_cursor;
 pub mod brush_picker;
+pub mod brush_refusal;
 pub mod brush_resize;
 pub(super) mod cam_transform;
 pub mod cas_transform;
@@ -56,5 +58,7 @@ pub mod vector_ui;
 pub mod warp_preview;
 pub mod zoom_tool;
 
+#[cfg(test)]
+mod count_show_extras_tests;
 #[cfg(test)]
 mod crop_options_labels_tests;

@@ -112,10 +112,11 @@ pub(super) fn eyedropper_ring(app: &mut PhotocraftApp, painter: &egui::Painter, 
 const RING_GREY: Color32 = Color32::from_gray(127);
 
 /// Tools on which holding ⌥ (Alt) switches to the Eyedropper: a click or drag sets the
-/// foreground colour, as with the Eyedropper itself (#417, the Background Eraser #11906).
+/// foreground colour, as with the Eyedropper itself (#417, the Background Eraser #11906, the Color
+/// Replacement tool #11914).
 pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     // Control+Alt is the brush-resize drag (`brush_resize`), not sampling.
-    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::BackgroundEraser)
+    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::BackgroundEraser | Tool::ColorReplacement)
 }
 
 /// Preferences › Cursors › Other Cursors asks for the precise crosshair, or Caps Lock swaps the
@@ -147,6 +148,20 @@ pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon 
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
     crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
+    egui::CursorIcon::None
+}
+
+/// The filter dialogs' preview locator: a small square centred on `p`, the point a click centres
+/// the dialog's preview window on (#9648), white between dark edges so it reads on any image.
+/// Draws it at `p` and returns the OS cursor to set (hidden).
+pub(crate) fn preview_locator_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    const SIDE: f32 = 9.0;
+    let rect = Rect::from_center_size(p, vec2(SIDE, SIDE));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-preview-locator")));
+    let dark = Stroke::new(1.0, Color32::from_black_alpha(200));
+    painter.rect_stroke(rect.expand(1.0), 0.0, dark, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect.shrink(1.0), 0.0, dark, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
     egui::CursorIcon::None
 }
 
@@ -289,6 +304,10 @@ pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
 #[cfg(test)]
 #[path = "../eyedropper_mask_sample_tests.rs"]
 mod eyedropper_mask_sample_tests;
+
+#[cfg(test)]
+#[path = "../color_replacement_alt_click_tests.rs"]
+mod color_replacement_alt_click_tests;
 
 #[cfg(test)]
 #[path = "../background_eraser_alt_click_tests.rs"]
