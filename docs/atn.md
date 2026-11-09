@@ -239,6 +239,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | textSaveDefaultTypeStyles | Save Default Type Styles | `type.saveDefaultTypeStyles` |
 | (string ID only) | recordMeasurements | Record Measurements | `image.analysis.recordMeasurements` |
 | (string ID only) | CropPhotosAuto0001 | Crop and Straighten Photos | `file.automate.cropAndStraightenPhotos` |
+| (string ID only) | 3caa3434-cb67-11d1-bc43-0060b0a13dc4 | Fit Image (script event; pixel box sides) | `file.automate.fitImage` |
 | (string ID only) | placedLayerExportContents | Export Contents | `layer.smartObjects.exportContents` |
 | (string ID only) | placedLayerConvertToLinked | Convert to Linked | `layer.smartObjects.convertToLinked` |
 | (string ID only) | placedLayerRelinkToFile | Relink to File | `layer.smartObjects.relinkToFile` |
@@ -314,6 +315,18 @@ inherited group state, and remains unavailable for Indexed Color documents.
 The separate `CropPhotos0001` helper remains a complete kept Photoshop step.
 Playback stops at that enabled helper before subsequent duplicate/crop steps can
 run. This covers the parent event, not complete recordings with generated helpers.
+
+Fit Image is the script event `3caa3434-cb67-11d1-bc43-0060b0a13dc4` that follows
+the Image Size step it runs, which stays a step of its own. `Wdth` and
+`Hght` (pixel unit floats above 0) and `limit` (Don't Enlarge) play as
+`file.automate.fitImage`, which leaves a document that already fits unchanged.
+`Msge` is the script's own text, not a setting: a loaded step saves back with its
+recorded descriptor (message, class, key order), and once its settings change it
+saves them with the recorded message. A step recorded in PhotoCraft saves an empty
+`Msge` and class `null`. Another unit, a side of 0, a missing or extra key stays a
+kept step. A native step with a missing or 0 side (the document's own size) or a
+resampling method other than the default refuses export, because the event has no
+key for it.
 
 ### Perspective Warp recordings
 
