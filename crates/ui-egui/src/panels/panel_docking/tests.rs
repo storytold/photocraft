@@ -1917,6 +1917,22 @@ fn a_narrow_window_draws_a_stored_dock_width_narrower_without_losing_it() {
     assert!(dock.width() - 36.0 <= 364.5, "the drawn dock column fits beside the toolbox and canvas, got {dock:?}");
     assert!(canvas.width() >= 199.5, "the canvas keeps its 200-point minimum, got {canvas:?} beside {dock:?}");
     assert!(!canvas.intersect(dock).is_positive(), "the dock never overlaps the canvas: {canvas:?}, {dock:?}");
+    // `hit_rects` reports each control's full widget rect (`Response::rect`), not its clipped
+    // `interact_rect`, so a squeezed column may report chrome past the panel edge; what is drawn
+    // is that rect inside the panel's clip. No visible part may reach the toolbox, which sits
+    // between the canvas and the dock, or the canvas.
+    let toolbox = egui::Rect::from_x_y_ranges(canvas.right()..=dock.left(), dock.y_range());
+    let hits = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id());
+    assert!(hits.iter().any(|(_, rect)| rect.intersect(dock).is_positive()), "the dock drew visible controls: {hits:?}");
+    for (hit, rect) in &hits {
+        let visible = rect.intersect(dock);
+        if !visible.is_positive() {
+            continue;
+        }
+        assert!(dock.contains_rect(visible), "{hit:?}: {visible:?} outside {dock:?}");
+        assert!(!visible.intersect(canvas).is_positive(), "{hit:?}: {visible:?} reaches the canvas {canvas:?}");
+        assert!(!visible.intersect(toolbox).is_positive(), "{hit:?}: {visible:?} reaches the toolbox {toolbox:?}");
+    }
     h.set_size(vec2(1280.0, 600.0));
     h.run_steps(3);
     assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "growing the window keeps the stored width");

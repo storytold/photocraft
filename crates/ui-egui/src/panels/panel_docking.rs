@@ -154,6 +154,10 @@ fn display_width(column: &Column<String>) -> f32 {
 /// The canvas panel's least width in points, for the docking layout and the dock-edge layout.
 pub(crate) const CANVAS_MIN_WIDTH: f32 = 200.0;
 
+/// The narrowest column, in points, that still draws a panel's body; a narrower one shows only
+/// its chrome. Deliberately independent of [`CANVAS_MIN_WIDTH`], although both are 200.
+const PANEL_BODY_MIN_WIDTH: f32 = 200.0;
+
 /// The least displayed width of a column: the app's 220-point panel minimum, unless the column is
 /// iconic (its icons fit in the narrow width) or has no panels.
 const MIN_COLUMN_WIDTH: f32 = 220.0;
@@ -1578,7 +1582,7 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         }
         // A window too small for the dock squeezes its column below the panels' minimum width,
         // which their layouts do not take.
-        if !self.collapsed.contains(id) && ui.available_width() >= 200.0 {
+        if !self.collapsed.contains(id) && ui.available_width() >= PANEL_BODY_MIN_WIDTH {
             let pro = crate::theme::Tokens::get(ui.ctx()).pro;
             ui.spacing_mut().item_spacing.y = if pro { 0.0 } else { 6.0 };
             egui::Frame::NONE.inner_margin(crate::widgets::body_margin(pro)).show(ui, |ui| body(self.app, ui, id));
