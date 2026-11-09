@@ -4,6 +4,17 @@ use crate::state::ToolbarSide;
 
 // ----------------------------------------------------------------------------- toolbar
 
+/// The toolbar's single-column width and its second column's button width, in points.
+pub(crate) fn toolbar_columns(pro: bool) -> (f32, f32) {
+    if pro { (40.0, 30.0) } else { (50.0, 36.0) }
+}
+
+/// The toolbar panel's width in points: one column, or two when the header chevron asks for them.
+pub(crate) fn toolbar_width(pro: bool, double: bool) -> f32 {
+    let (w1, bx) = toolbar_columns(pro);
+    if double { w1 + bx + 2.0 } else { w1 }
+}
+
 /// Tool groups separated by hairlines, Photoshop order.
 /// Photoshop toolbar: divider-separated sections of slots; each slot is a flyout group whose button
 /// shows the group's last-used tool.
@@ -151,13 +162,16 @@ fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::R
     }
 }
 
+/// The tool palette panel, on the side `panels.toolbar_side` resolves to, with its width
+/// toggle and Move Toolbar header buttons.
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
+    let (_, bx) = toolbar_columns(t.pro);
+    let m = if t.pro { 5i8 } else { 7i8 };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
     // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
     let double = app.ui.panels.toolbar_double;
-    let w = if double { w1 + bx + 2.0 } else { w1 };
+    let w = toolbar_width(t.pro, double);
     let side = app.ui.panels.toolbar_side.resolve();
     let panel = if side == ToolbarSide::Right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") };
     panel.resizable(false).exact_size(w).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(ui, |ui| {

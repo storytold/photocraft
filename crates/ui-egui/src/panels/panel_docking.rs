@@ -151,10 +151,15 @@ fn display_width(column: &Column<String>) -> f32 {
     if column.iconic { column.iconic_width.unwrap_or(ICONIC_WIDTH).clamp(ICONIC_WIDTH, ICONIC_MAX_WIDTH) } else { column.width }
 }
 
+/// The canvas panel's least width in points, for the docking layout and the dock-edge layout.
+pub(crate) const CANVAS_MIN_WIDTH: f32 = 200.0;
+
 /// The least displayed width of a column: the app's 220-point panel minimum, unless the column is
 /// iconic (its icons fit in the narrow width) or has no panels.
 const MIN_COLUMN_WIDTH: f32 = 220.0;
 
+/// The least displayed width of `column`: [`ICONIC_WIDTH`] when iconic, one point when it
+/// holds no panels, else [`MIN_COLUMN_WIDTH`].
 fn column_minimum(column: &Column<String>) -> f32 {
     if column.iconic {
         ICONIC_WIDTH
@@ -165,6 +170,7 @@ fn column_minimum(column: &Column<String>) -> f32 {
     }
 }
 
+/// The sum of the columns' displayed-width minimums.
 fn columns_minimum(columns: &[Column<String>]) -> f32 {
     columns.iter().map(column_minimum).sum()
 }
@@ -175,6 +181,7 @@ fn column_maximum(column: &Column<String>) -> f32 {
     if column.iconic { ICONIC_MAX_WIDTH } else { f32::INFINITY }
 }
 
+/// The sum of the columns' displayed-width maximums; infinite while any column is expanded.
 fn columns_maximum(columns: &[Column<String>]) -> f32 {
     columns.iter().map(column_maximum).sum()
 }
@@ -686,26 +693,11 @@ fn app_owned(app: &mut PhotocraftApp, command: DockCommand<String>) -> Result<Va
     crate::workspace_ui::menu(app, id, &params).unwrap_or_else(|| Err(format!("`{id}` is not available")))
 }
 
-thread_local! {
-    /// `show_dock` draws the dock without a canvas, so the toolbox can sit between them.
-    static DOCK_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 /// Draw only the dock column, for the right-hand toolbox layout: the canvas is drawn separately
 /// to the toolbox's left.
 pub(crate) fn show_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    #[cfg(test)]
-    ui.ctx().data_mut(|data| {
-        let id = egui::Id::unique("photo-dock-show-calls");
-        data.insert_temp(id, data.get_temp::<u32>(id).unwrap_or(0) + 1);
-    });
-    let previous = DOCK_ONLY.with(|flag| {
-        let previous = flag.get();
-        flag.set(true);
-        previous
-    });
-    let _guard = DockOnlyGuard(previous);
-    show(app, ui);
+    record::show_dock_call(ui.ctx());
+    show_layout(app, ui, true);
 }
 
 /// How many times `show_dock` ran in this context (tests: the empty-dock path must still
@@ -713,16 +705,6 @@ pub(crate) fn show_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 pub(crate) fn show_dock_calls(ctx: &egui::Context) -> u32 {
     ctx.data(|data| data.get_temp::<u32>(egui::Id::unique("photo-dock-show-calls")).unwrap_or(0))
-}
-
-/// Restores the previous dock-only flag when [`show_dock`] returns or unwinds.
-struct DockOnlyGuard(bool);
-
-impl Drop for DockOnlyGuard {
-    /// Restores the flag value `show_dock` found before it set it.
-    fn drop(&mut self) {
-        DOCK_ONLY.with(|flag| flag.set(self.0));
-    }
 }
 
 /// The dock column of a canvas-plus-dock layout, with the canvas removed.
@@ -784,6 +766,12 @@ pub(crate) fn apply_pending_dock_width(app: &mut PhotocraftApp, ctx: &egui::Cont
 /// Draw the layout, the canvas included, in the space `ui` has left: the customized workspace,
 /// else the native dock's arrangement.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    show_layout(app, ui, false);
+}
+
+/// Draw the workspace layout; `dock_only` drops the canvas so [`show_dock`] draws only the dock
+/// column and the toolbox can sit between them.
+fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
     let area = area_id();
     let changed_workspace = ui.ctx().data_mut(|data| {
         let previous = data.get_temp::<u64>(area.with("generation"));
@@ -805,7 +793,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Some(workspace) => workspace.layout.clone(),
         None => legacy(app),
     };
-    let layout = if DOCK_ONLY.with(|flag| flag.get()) { without_canvas(layout) } else { layout };
+    let layout = if dock_only { without_canvas(layout) } else { layout };
     let collapsed = collapsed_members(app, &layout);
     let layout = presented(layout, &collapsed);
     let fillers = fillers(&layout);
@@ -842,8 +830,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let strip = style.tab_height;
     let card: std::collections::HashSet<String> =
         layout.floating.iter().filter(|window| window.id == PROPERTIES_WINDOW).flat_map(|window| window.panels().cloned()).collect();
-    #[cfg(test)]
-    ui.ctx().data_mut(|data| data.insert_temp(bodies_id(), Vec::<(String, egui::Rect)>::new()));
+    record::clear_bodies(ui.ctx());
     // The panel windows' passes, inside this call, note their keyboard focus again.
     keyboard_focus(ui.ctx()).lock().unwrap_or_else(|e| e.into_inner()).clear();
     let mut output = dock.show_customized(
@@ -854,7 +841,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         permissions,
         |id| {
             if id == CANVAS {
-                craft_ui::docking::PanelLimits { min: egui::vec2(200.0, 120.0), ..Default::default() }
+                craft_ui::docking::PanelLimits { min: egui::vec2(CANVAS_MIN_WIDTH, 120.0), ..Default::default() }
             } else if collapsed.contains(id) {
                 craft_ui::docking::PanelLimits { min: egui::vec2(220.0, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
             } else {
@@ -1161,6 +1148,55 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
     } else if let Some(label) = group.tabs(pro).get(selected) {
         let _ = app.run("window.panel.activate", json!({"panel":label}));
     }
+}
+
+/// What the drawing code notes for the tests to read back; every write is a no-op outside tests.
+pub(crate) mod record {
+    #[cfg(test)]
+    use super::bodies_id;
+
+    /// Counts a [`super::show_dock`] call, for `show_dock_calls`.
+    #[cfg(test)]
+    pub(crate) fn show_dock_call(ctx: &egui::Context) {
+        ctx.data_mut(|data| {
+            let id = egui::Id::unique("photo-dock-show-calls");
+            data.insert_temp(id, data.get_temp::<u32>(id).unwrap_or(0) + 1);
+        });
+    }
+
+    /// Starts this pass's list of drawn panel bodies, for `last_bodies`.
+    #[cfg(test)]
+    pub(crate) fn clear_bodies(ctx: &egui::Context) {
+        ctx.data_mut(|data| data.insert_temp(bodies_id(), Vec::<(String, egui::Rect)>::new()));
+    }
+
+    /// Notes the body of panel `id`, for `last_bodies`.
+    #[cfg(test)]
+    pub(crate) fn body(ctx: &egui::Context, id: &str, rect: egui::Rect) {
+        ctx.data_mut(|data| data.get_temp_mut_or_default::<Vec<(String, egui::Rect)>>(bodies_id()).push((id.to_owned(), rect)));
+    }
+
+    /// Notes the dock-edge layout's allocated dock rectangle, for `dock_panel_rect`.
+    #[cfg(test)]
+    pub(crate) fn dock_panel_rect(ctx: &egui::Context, rect: egui::Rect) {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique("photo-dock-panel-rect"), rect));
+    }
+
+    /// Outside tests nothing is noted.
+    #[cfg(not(test))]
+    pub(crate) fn show_dock_call(_: &egui::Context) {}
+
+    /// Outside tests nothing is noted.
+    #[cfg(not(test))]
+    pub(crate) fn clear_bodies(_: &egui::Context) {}
+
+    /// Outside tests nothing is noted.
+    #[cfg(not(test))]
+    pub(crate) fn body(_: &egui::Context, _: &str, _: egui::Rect) {}
+
+    /// Outside tests nothing is noted.
+    #[cfg(not(test))]
+    pub(crate) fn dock_panel_rect(_: &egui::Context, _: egui::Rect) {}
 }
 
 /// Where tests find panels and docking controls as drawn last frame.
@@ -1528,9 +1564,10 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
 }
 
 impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
+    /// Draws panel `id`'s body in `ui`: the canvas, or an expanded panel's contents when the
+    /// column leaves it at least 200 points.
     fn body(&mut self, ui: &mut egui::Ui, id: &String) {
-        #[cfg(test)]
-        ui.ctx().data_mut(|data| data.get_temp_mut_or_default::<Vec<(String, egui::Rect)>>(bodies_id()).push((id.clone(), ui.max_rect())));
+        record::body(ui.ctx(), id, ui.max_rect());
         if id == CANVAS {
             crate::panels::canvas_panel(self.app, ui);
             return;

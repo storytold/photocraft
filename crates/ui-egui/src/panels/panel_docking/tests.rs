@@ -1003,49 +1003,50 @@ fn the_end_dock_is_only_the_horizontal_split_s_second_child() {
     assert!((actual - 320.0).abs() < 0.5, "the end dock takes the requested width, got {actual}");
 }
 
-/// The dock-only guard restores the flag on drop and during unwinding, so a later standard layout
-/// never loses its canvas.
+/// The dock-only mode is an argument of one call, so a dock-only frame never leaves a later
+/// standard layout without its canvas.
 #[test]
-fn dock_only_guard_restores_the_previous_flag_on_drop_and_unwind() {
-    DOCK_ONLY.with(|flag| flag.set(false));
-    {
-        let previous = DOCK_ONLY.with(|flag| {
-            let previous = flag.get();
-            flag.set(true);
-            previous
-        });
-        let guard = DockOnlyGuard(previous);
-        assert!(DOCK_ONLY.with(|flag| flag.get()), "show_dock's flag is set while it draws");
-        drop(guard);
+fn dock_only_frames_never_leak_into_the_standard_layout() {
+    let mut ready = false;
+    let dock_only = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mode = dock_only.clone();
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+                return;
+            }
+            if mode.get() { show_dock(app, ui) } else { show(app, ui) }
+        },
+        app(),
+    );
+    let canvas_drawn = |h: &Harness<'static, PhotocraftApp>| last_bodies(&h.ctx).iter().any(|(id, _)| id == CANVAS);
+    h.run_steps(2);
+    for _ in 0..3 {
+        dock_only.set(true);
+        h.step();
+        assert!(!canvas_drawn(&h), "show_dock draws no canvas");
+        dock_only.set(false);
+        h.step();
+        assert!(canvas_drawn(&h), "the standard layout after a dock-only frame keeps its canvas");
     }
-    assert!(!DOCK_ONLY.with(|flag| flag.get()), "dropping the guard restores the flag");
+}
 
-    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let previous = DOCK_ONLY.with(|flag| {
-            let previous = flag.get();
-            flag.set(true);
-            previous
-        });
-        let _guard = DockOnlyGuard(previous);
-        panic!("simulated panel panic");
-    }));
-    assert!(unwound.is_err());
-    assert!(!DOCK_ONLY.with(|flag| flag.get()), "unwinding must restore the flag");
-
-    // A nested guard that finds the flag set restores true, rather than clearing it.
-    DOCK_ONLY.with(|flag| flag.set(true));
-    {
-        let previous = DOCK_ONLY.with(|flag| {
-            let previous = flag.get();
-            flag.set(true);
-            previous
-        });
-        let guard = DockOnlyGuard(previous);
-        assert!(DOCK_ONLY.with(|flag| flag.get()));
-        drop(guard);
+/// `ui.set` still refuses an unknown toolbar side, though saved panels read one as `Start`.
+#[test]
+fn ui_set_refuses_an_unknown_toolbar_side() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    for bad in [json!("diagonal"), json!(5), json!(null)] {
+        let reply = control_set(&mut app, &ctx, json!({"panels": {"toolbar_side": bad, "layers": false}}));
+        assert_ne!(reply["ok"], true, "{bad}: {reply}");
+        assert_eq!(app.ui.panels.toolbar_side, crate::state::ToolbarSide::Start);
+        assert!(app.ui.panels.layers, "{bad}: a refused request changes nothing");
     }
-    assert!(DOCK_ONLY.with(|flag| flag.get()), "an inner guard must not clear a flag found set");
-    DOCK_ONLY.with(|flag| flag.set(false));
+    let reply = control_set(&mut app, &ctx, json!({"panels": {"toolbar_side": "right"}}));
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(app.ui.panels.toolbar_side, crate::state::ToolbarSide::Right);
 }
 
 /// The toolbar lands on the requested physical side in every interface theme.
@@ -1132,6 +1133,7 @@ fn dock_panel_harness(app: PhotocraftApp, size: egui::Vec2, theme: crate::theme:
     harness
 }
 
+/// [`dock_panel_harness`] in the Pro Medium theme.
 fn dock_edge_harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
     dock_panel_harness(app, size, crate::theme::ThemeKind::ProMedium)
 }
@@ -1359,8 +1361,7 @@ fn a_narrow_window_keeps_the_canvas_minimum() {
     app.ui.panels.rail = true;
     let h = dock_panel_harness(app, vec2(700.0, 600.0), crate::theme::ThemeKind::ProMedium);
     let panel = crate::panels::dock_panel_width(&h.ctx);
-    let (w1, bx) = if h.state().ui.theme.is_pro() { (40.0, 30.0) } else { (50.0, 36.0) };
-    let toolbar = if h.state().ui.panels.toolbar_double { w1 + bx + 2.0 } else { w1 };
+    let toolbar = crate::panels::toolbar::toolbar_width(h.state().ui.theme.is_pro(), h.state().ui.panels.toolbar_double);
     let canvas = 700.0 - panel - toolbar;
     assert!(canvas >= 199.0, "the canvas keeps its 200-point minimum, got {canvas} (dock {panel}, toolbar {toolbar})");
 }
@@ -1537,6 +1538,16 @@ fn iconic_widths_follow_the_renderer_clamp() {
     let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
     columns[0].iconic_width = Some(10.0);
     assert!((dock_width(&app) - 36.0).abs() < 0.5, "a stored 10 displays at least 36, got {}", dock_width(&app));
+    let root = app.ui.docking.as_mut().unwrap().layout.root.as_mut().unwrap();
+    let dock = match root {
+        Node::Split { second, .. } => second.as_mut(),
+        _ => root,
+    };
+    let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+    columns[0].iconic_width = None;
+    assert!((dock_width(&app) - ICONIC_WIDTH).abs() < 0.5, "no saved width displays craft-ui's default 36, got {}", dock_width(&app));
+    let style = craft_ui::docking::DockStyle::default();
+    assert_eq!((style.iconic_width, style.iconic_max_width), (ICONIC_WIDTH, ICONIC_MAX_WIDTH), "the renderer's defaults");
 }
 /// Closing every panel leaves the dock with nothing in it, which the dock-edge layout uses to
 /// take no width for the column.
@@ -1688,14 +1699,18 @@ fn constrained_width_does_not_panic_while_resizing() {
     assert!(crate::panels::dock_panel_width(&h.ctx) <= 80.0, "the panel stays within the narrow window after release");
 }
 
+/// The rendered dock-edge resize handle's interaction rectangle.
 fn outer_handle(h: &Harness<'static, PhotocraftApp>) -> egui::Rect {
     h.ctx.read_response(egui::Id::unique("dock-edge-handle")).expect("the rendered resize handle").rect
 }
 
+/// The rectangle the dock-edge panel actually allocated on the last frame.
 fn allocated_dock(h: &Harness<'static, PhotocraftApp>) -> egui::Rect {
     h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("photo-dock-panel-rect")).expect("the allocated dock rectangle"))
 }
 
+/// Presses on the dock-edge handle, asserts the drag started that frame and returns the press
+/// position.
 fn begin_outer_resize(h: &mut Harness<'static, PhotocraftApp>) -> Pos2 {
     let start = outer_handle(h).center();
     h.event(Event::PointerMoved(start));
@@ -1706,12 +1721,16 @@ fn begin_outer_resize(h: &mut Harness<'static, PhotocraftApp>) -> Pos2 {
     start
 }
 
+/// Releases the pointer at `pos` with no preceding move, so the release alone carries the final
+/// position.
 fn release_outer_resize(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
     // No preceding PointerMoved: the release event alone supplies the final position.
     h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
+/// An app whose saved workspace has one end-dock column per width, each holding one panel; iconic
+/// columns get distinct expanded widths so tests can check they are preserved.
 fn app_with_columns(widths: &[f32], iconic: bool) -> PhotocraftApp {
     assert!(widths.len() <= PANELS.len());
     let columns = widths
@@ -1735,11 +1754,13 @@ fn app_with_columns(widths: &[f32], iconic: bool) -> PhotocraftApp {
     app
 }
 
+/// The end dock's columns in the customized workspace.
 fn end_columns(app: &PhotocraftApp) -> &[Column<String>] {
     let Some(Node::Dock { columns, .. }) = lay(app).root.as_ref().and_then(end_dock_node) else { panic!("the end dock is missing") };
     columns
 }
 
+/// A request equal to the current total still lifts an undersized column to its minimum.
 #[test]
 fn same_total_requests_normalize_each_populated_column() {
     let mut app = app_with_columns(&[290.0, 180.0], false);
@@ -1748,6 +1769,7 @@ fn same_total_requests_normalize_each_populated_column() {
     assert!(end_columns(&app).iter().all(|column| column.width >= MIN_COLUMN_WIDTH));
 }
 
+/// Redistribution reaches an attainable total even when more than eight columns saturate in turn.
 #[test]
 fn redistribution_converges_with_more_than_eight_saturating_columns() {
     let mut app = app_with_columns(&[221.0, 800221.0, 889109.75, 900220.75, 901807.9, 902072.25, 902124.94, 902137.9, 902141.9, 902242.4], false);
@@ -1756,6 +1778,8 @@ fn redistribution_converges_with_more_than_eight_saturating_columns() {
     assert!(end_columns(&app).iter().all(|column| column.width >= MIN_COLUMN_WIDTH));
 }
 
+/// Width an iconic column cannot take past its cap goes to the expanded column, whether the cap
+/// was already reached or is reached by this request.
 #[test]
 fn mixed_iconic_caps_redistribute_both_existing_and_new_saturation() {
     for iconic_width in [100.0, ICONIC_MAX_WIDTH] {
@@ -1770,6 +1794,7 @@ fn mixed_iconic_caps_redistribute_both_existing_and_new_saturation() {
     }
 }
 
+/// An all-iconic dock stops at the summed iconic minimum and cap, and keeps every expanded width.
 #[test]
 fn all_iconic_totals_stop_at_both_bounds_without_losing_expanded_widths() {
     let mut app = app_with_columns(&[100.0, 200.0], true);
@@ -1783,6 +1808,8 @@ fn all_iconic_totals_stop_at_both_bounds_without_losing_expanded_widths() {
     }
 }
 
+/// The end-dock setter reports a same-width legacy request as a no-op and rejects invalid,
+/// locked and empty cases without changing the workspace.
 #[test]
 fn end_dock_setter_reports_legacy_noop_and_rejects_without_mutation() {
     let mut app = app();
@@ -1805,6 +1832,8 @@ fn end_dock_setter_reports_legacy_noop_and_rejects_without_mutation() {
     assert_eq!(empty.ui.docking, before);
 }
 
+/// Idle frames draw the stored 220-point width; a gesture, even without motion, applies the
+/// 250-point resize minimum.
 #[test]
 fn an_idle_expanded_dock_uses_its_stored_width_not_the_gesture_minimum() {
     let mut h = dock_edge_harness(app_with_columns(&[220.0], false), vec2(1280.0, 800.0));
@@ -1820,6 +1849,8 @@ fn an_idle_expanded_dock_uses_its_stored_width_not_the_gesture_minimum() {
     assert_eq!(dock_width(h.state()), 250.0, "idle keeps the normalized gesture result");
 }
 
+/// A release with no preceding move updates the model and the allocated panel on that frame,
+/// counting the rail once, in both directions, both rail widths and with the rail hidden.
 #[test]
 fn release_only_position_updates_model_and_actual_geometry_on_that_frame() {
     for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
@@ -1849,6 +1880,51 @@ fn release_only_position_updates_model_and_actual_geometry_on_that_frame() {
     }
 }
 
+/// `dockWidth` stores the requested model width even when a narrow window draws the dock
+/// narrower: in one frame the model keeps 520, the drawn dock column fits in 364 points and the
+/// canvas keeps its 200, and a wider window draws the stored width again.
+#[test]
+fn a_narrow_window_draws_a_stored_dock_width_narrower_without_losing_it() {
+    let mut app = app_with_columns(&[400.0], false);
+    app.ui.panels.rail = true;
+    app.ui.panels.toolbar_double = false;
+    app.ui.panels.toolbar_side = crate::state::ToolbarSide::Right;
+    let mut ready = false;
+    let mut h = Harness::builder().with_size(vec2(640.0, 600.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+                return;
+            }
+            crate::panels::dock_panel(app, ui);
+            crate::panels::toolbar(app, ui);
+            egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("narrow-canvas-rect"), ui.max_rect()));
+            });
+        },
+        app,
+    );
+    h.run_steps(4);
+    assert_eq!(crate::panels::toolbar::toolbar_width(h.state().ui.theme.is_pro(), false), 40.0, "the Pro single-column toolbox");
+    let ctx = h.ctx.clone();
+    assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":520.0}))["ok"], true);
+    h.run_steps(2);
+    let canvas = h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("narrow-canvas-rect")).expect("the canvas rect"));
+    let dock = allocated_dock(&h);
+    let model = dock_width(h.state());
+    assert!((model - 520.0).abs() < 0.5, "the model keeps the request, got {model}");
+    assert!(dock.width() - 36.0 <= 364.5, "the drawn dock column fits beside the toolbox and canvas, got {dock:?}");
+    assert!(canvas.width() >= 199.5, "the canvas keeps its 200-point minimum, got {canvas:?} beside {dock:?}");
+    assert!(!canvas.intersect(dock).is_positive(), "the dock never overlaps the canvas: {canvas:?}, {dock:?}");
+    h.set_size(vec2(1280.0, 600.0));
+    h.run_steps(3);
+    assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "growing the window keeps the stored width");
+    assert!((allocated_dock(&h).width() - 520.0 - 36.0).abs() < 1.0, "a wide window draws the stored width again, got {:?}", allocated_dock(&h));
+}
+
+/// A queued external width cancels a held or just-released dock-edge drag and is drawn at its
+/// actual width on the first frame that processes it.
 #[test]
 fn external_width_requests_supersede_held_and_release_first_gestures() {
     for release_first in [false, true] {
@@ -1882,6 +1958,8 @@ fn external_width_requests_supersede_held_and_release_first_gestures() {
     }
 }
 
+/// Narrowing the window below the iconic minimum cancels an active resize without committing the
+/// stale pointer width, held or release-first, and widening restores the expanded width.
 #[test]
 fn active_iconic_resize_is_cancelled_when_the_window_narrows() {
     for release_first in [false, true] {
@@ -1912,6 +1990,7 @@ fn active_iconic_resize_is_cancelled_when_the_window_narrows() {
     }
 }
 
+/// Several iconic columns disable resizing when the window cannot fit their combined minimum.
 #[test]
 fn multiple_iconic_columns_disable_resizing_below_their_combined_minimum() {
     let mut h = dock_edge_harness(app_with_columns(&[100.0, 100.0], true), vec2(342.0, 600.0));
@@ -1931,6 +2010,9 @@ fn multiple_iconic_columns_disable_resizing_below_their_combined_minimum() {
     assert_eq!(dock_width(h.state()), original, "widening retains the pre-constraint iconic widths");
 }
 
+/// With the dock, toolbar and canvas composed in a narrow window, the canvas keeps its minimum
+/// width and the model keeps its column minimums, in both directions and themes, with and without
+/// the rail.
 #[test]
 fn constrained_composed_layout_reserves_the_canvas_with_or_without_a_rail() {
     for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
@@ -1978,6 +2060,8 @@ fn constrained_composed_layout_reserves_the_canvas_with_or_without_a_rail() {
     }
 }
 
+/// A queued width is drawn on its first frame while native migration still waits for the
+/// canvas; the native state is consumed once.
 #[test]
 fn queued_external_width_precedes_but_does_not_eagerly_consume_native_migration() {
     let mut app = app();
@@ -2001,6 +2085,8 @@ fn queued_external_width_precedes_but_does_not_eagerly_consume_native_migration(
     assert!((dock_width(h.state()) - 520.0).abs() < 0.5);
 }
 
+/// Stores a native dock `PanelState` `width` points wide, as earlier versions saved it, and
+/// returns its key.
 fn remember_native_width_for_request_test(ctx: &egui::Context, width: f32) -> egui::Id {
     let key = crate::panels::panel_state_id(ctx, "dock");
     let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(pos2(900.0, 0.0), vec2(width, 700.0)) };
@@ -2008,6 +2094,8 @@ fn remember_native_width_for_request_test(ctx: &egui::Context, width: f32) -> eg
     key
 }
 
+/// With the canvas already laid out, an explicit same-width request retires native migration
+/// without customizing the legacy workspace, in both layouts and with the workspace locked.
 #[test]
 fn explicit_legacy_noop_width_supersedes_native_migration_with_ready_canvas() {
     for compact in [false, true] {
@@ -2033,6 +2121,8 @@ fn explicit_legacy_noop_width_supersedes_native_migration_with_ready_canvas() {
     }
 }
 
+/// An explicit same-width request made before the canvas is ready still prevents a later
+/// migration from applying the saved native width.
 #[test]
 fn explicit_legacy_noop_width_supersedes_native_migration_after_canvas_becomes_ready() {
     for locked in [false, true] {
@@ -2059,6 +2149,8 @@ fn explicit_legacy_noop_width_supersedes_native_migration_after_canvas_becomes_r
     }
 }
 
+/// An invalid workspace defers both the queued request and the native state until recovery,
+/// after which the explicit request wins.
 #[test]
 fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspace_recovery() {
     let mut h = dock_edge_harness(app(), vec2(1280.0, 800.0));
@@ -2083,6 +2175,7 @@ fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspa
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
 }
 
+/// A consumed request retires the native state even when it is clamped or the dock is empty.
 #[test]
 fn explicit_width_requests_retire_native_state_even_when_clamped_or_empty() {
     for empty in [false, true] {
@@ -2105,6 +2198,8 @@ fn explicit_width_requests_retire_native_state_even_when_clamped_or_empty() {
     }
 }
 
+/// Without an accepted request, native migration still waits for the canvas and then applies
+/// the saved width once.
 #[test]
 fn native_migration_still_waits_and_runs_without_an_accepted_explicit_request() {
     for rejected in [false, true] {

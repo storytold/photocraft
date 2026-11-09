@@ -29,10 +29,19 @@ pub use transform::{
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToolbarSide {
+    /// The leading edge of the interface direction: left in LTR, right in RTL.
     #[default]
     Start,
+    /// The window's left edge in every direction.
     Left,
+    /// The window's right edge in every direction.
     Right,
+}
+
+/// Reads a [`ToolbarSide`], falling back to the default for any value it does not name.
+fn toolbar_side_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ToolbarSide, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 impl ToolbarSide {
@@ -76,8 +85,9 @@ pub struct Panels {
     /// The toolbar's header chevron: two columns even when one fits (#1197).
     #[serde(default)]
     pub toolbar_double: bool,
-    /// Physical side of the tool palette. `Start` mirrors with the reading direction.
-    #[serde(default)]
+    /// Physical side of the tool palette. `Start` mirrors with the reading direction. An unknown
+    /// or malformed value reads as `Start`, so it never discards the other panel flags.
+    #[serde(default, deserialize_with = "toolbar_side_or_default")]
     pub toolbar_side: ToolbarSide,
     /// The right-hand panel dock. ⇧Tab hides and shows it, as in Photoshop (#1313).
     #[serde(default = "yes")]
@@ -760,8 +770,8 @@ impl UiState {
 mod tests {
     use super::*;
 
-    #[test]
     /// `toolbar_side` defaults to `Start`, serializes as a string and reads old prefs without it.
+    #[test]
     fn toolbar_side_defaults_to_start_and_round_trips() {
         assert_eq!(ToolbarSide::default(), ToolbarSide::Start);
         assert_eq!(Panels::default().toolbar_side, ToolbarSide::Start);
@@ -780,6 +790,24 @@ mod tests {
 
         assert_eq!(ToolbarSide::Left.other(), ToolbarSide::Right);
         assert_eq!(ToolbarSide::Right.other(), ToolbarSide::Left);
+    }
+
+    /// An unknown or malformed `toolbar_side` reads as `Start` and keeps every other panel flag.
+    #[test]
+    fn unknown_toolbar_side_falls_back_without_dropping_panels() {
+        let saved = Panels { layers: false, toolbar_double: true, toolbar_side: ToolbarSide::Left, ..Default::default() };
+        for bad in
+            [serde_json::json!("diagonal"), serde_json::json!(5), serde_json::json!(null), serde_json::json!("RIGHT"), serde_json::json!({"side": "left"})]
+        {
+            let mut value = serde_json::to_value(&saved).unwrap();
+            value["toolbar_side"] = bad.clone();
+            let read = serde_json::from_value::<Panels>(value).unwrap_or_else(|e| panic!("{bad} must not fail the panels: {e}"));
+            assert_eq!(read, Panels { toolbar_side: ToolbarSide::Start, ..saved.clone() }, "{bad}");
+        }
+        for side in [ToolbarSide::Start, ToolbarSide::Left, ToolbarSide::Right] {
+            let panels = Panels { toolbar_side: side, ..saved.clone() };
+            assert_eq!(serde_json::from_value::<Panels>(serde_json::to_value(&panels).unwrap()).unwrap(), panels);
+        }
     }
 
     #[test]

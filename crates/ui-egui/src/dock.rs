@@ -433,10 +433,12 @@ fn panels_moving(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     crate::panels::dock_edge_drag_active(ctx) || ctx.input(|i| i.pointer.any_down()) || native_moved(app, ctx)
 }
 
+/// Whether a toolbar-side save is waiting for the dock geometry to settle.
 fn panels_pending(ctx: &egui::Context) -> bool {
     ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("dock-persist-panels-pending")).unwrap_or(false))
 }
 
+/// Marks or clears the deferred toolbar-side save that [`persist_pending`] retries.
 fn set_panels_pending(ctx: &egui::Context, pending: bool) {
     let id = egui::Id::unique("dock-persist-panels-pending");
     ctx.data_mut(|data| {
