@@ -1227,3 +1227,18 @@ fn dds_writes_the_alpha_channel_as_the_texture_alpha() {
     let img = photocraft_codecs::decode(&r.bytes).expect("decode dds");
     assert!(!img.layout().has_alpha() || img.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255));
 }
+
+/// Opt-in, release: `cargo test --release -p photocraft-io --test it -- flat::opens_a_jpeg_over_a_gigapixel
+/// --ignored --nocapture`. A 33,000 × 33,000 px grey baseline JPEG (1.09 GP) opens: past the
+/// default 2^30 px it failed with "1089000000 pixels exceed max 1073741824". No JPEG past that
+/// cap fits an ordinary test run; [`photocraft_io`]'s `jpeg_limits_tests` cover the admission.
+#[test]
+#[ignore = "needs about 5 GB of RAM; run in release"]
+fn opens_a_jpeg_over_a_gigapixel() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType as S};
+    let (w, h) = (33_000u32, 33_000u32);
+    let px: Vec<u8> = (0..h).flat_map(|y| (0..w).map(move |x| ((x / 512 + y / 512) % 2 * 120 + 60) as u8)).collect();
+    let bytes = photocraft_codecs::encode(&Image::from_raw(w, h, ChannelLayout::Gray, S::U8, px).unwrap(), Format::Jpeg, &EncodeOptions::default()).unwrap();
+    let r = photocraft_io::import("big.jpg", &bytes).unwrap();
+    assert_eq!((r.document.size.width, r.document.size.height), (w, h));
+}
