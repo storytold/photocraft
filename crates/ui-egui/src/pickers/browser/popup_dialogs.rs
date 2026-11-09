@@ -179,12 +179,15 @@ fn show_group_name_editor(ctx: &egui::Context, request_id: egui::Id, title: &str
             });
             ui.add_space(12.0);
             ui.vertical(|ui| {
-                if ui.add_sized(egui::vec2(button_width, 24.0), egui::Button::new(tl!("OK"))).clicked() {
+                let ok = ui.add_sized(egui::vec2(button_width, 24.0), egui::Button::new(tl!("OK")));
+                if ok.clicked() {
                     *decision = Some(true);
                 }
-                if ui.add_sized(egui::vec2(button_width, 24.0), egui::Button::new(tl!("Cancel"))).clicked() {
+                let cancel = ui.add_sized(egui::vec2(button_width, 24.0), egui::Button::new(tl!("Cancel")));
+                if cancel.clicked() {
                     *decision = Some(false);
                 }
+                apply_dialog_keyboard(ctx, decision, &ok, &cancel);
             });
         });
     });
@@ -202,10 +205,10 @@ fn show_card_name_editor(
     decision: &mut Option<bool>,
 ) {
     let name_id = request_id.with("name");
-    show_popup_dialog(ctx, request_id.with("modal"), title, egui::vec2(420.0, 76.0), |ui| {
+    show_popup_dialog(ctx, request_id.with("modal"), title, egui::vec2(420.0, 88.0), |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
-            let preview_size = egui::vec2(88.0, 64.0);
+            let preview_size = egui::vec2(88.0, 88.0);
             let (preview_rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
             if let Some((group_index, item_index)) = groups.iter().enumerate().find_map(|(group_index, view)| {
                 (view.name == group)
@@ -220,10 +223,10 @@ fn show_card_name_editor(
                 paint_item(ui, preview_rect, group_index, item_index, ItemPaintState::Item { selected: false });
             }
             let middle_width = 220.0;
-            ui.allocate_ui_with_layout(egui::vec2(middle_width, ui.available_height()), egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.add_space((ui.available_height() - 42.0).max(0.0) * 0.5);
-                ui.label("Name");
-                let output = egui::TextEdit::singleline(name).desired_width(middle_width).cursor_at_end(true).show(ui);
+            ui.allocate_ui_with_layout(egui::vec2(middle_width, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label("Name:");
+                let input_width = (ui.available_width() - 6.0).max(40.0);
+                let output = egui::TextEdit::singleline(name).desired_width(input_width).cursor_at_end(true).show(ui);
                 if !ctx.data(|data| data.get_temp::<bool>(name_id.with("focused")).unwrap_or(false)) {
                     output.response.request_focus();
                     let mut state = output.state;
@@ -235,12 +238,15 @@ fn show_card_name_editor(
                 }
             });
             ui.vertical(|ui| {
-                if ui.add_sized(egui::vec2(72.0, 24.0), egui::Button::new(tl!("OK"))).clicked() {
+                let ok = ui.add_sized(egui::vec2(72.0, 24.0), egui::Button::new(tl!("OK")));
+                if ok.clicked() {
                     *decision = Some(true);
                 }
-                if ui.add_sized(egui::vec2(72.0, 24.0), egui::Button::new(tl!("Cancel"))).clicked() {
+                let cancel = ui.add_sized(egui::vec2(72.0, 24.0), egui::Button::new(tl!("Cancel")));
+                if cancel.clicked() {
                     *decision = Some(false);
                 }
+                apply_dialog_keyboard(ctx, decision, &ok, &cancel);
             });
         });
     });
@@ -306,6 +312,17 @@ fn advance_group_rename(ctx: &egui::Context, request_id: egui::Id, name_id: egui
             data.remove::<bool>(request_id);
         }
     });
+}
+
+/// Enter confirms the active picker dialog unless a dialog button owns keyboard focus; in that
+/// case egui's focused button handles Enter itself. Escape always aborts the dialog.
+fn apply_dialog_keyboard(ctx: &egui::Context, decision: &mut Option<bool>, confirm: &egui::Response, cancel: &egui::Response) {
+    let (enter, escape) = ctx.input(|input| (input.key_pressed(egui::Key::Enter), input.key_pressed(egui::Key::Escape)));
+    if escape {
+        *decision = Some(false);
+    } else if enter && !confirm.has_focus() && !cancel.has_focus() {
+        *decision = Some(true);
+    }
 }
 
 fn next_group_name(groups: &[GroupView]) -> String {
@@ -418,12 +435,15 @@ fn show_confirmation_dialog(ctx: &egui::Context, id: egui::Id, title: &str, mess
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
                 ui.add_space((ui.available_width() - 162.0) * 0.5);
-                if ui.add_sized(egui::vec2(75.0, 20.0), egui::Button::new(ok_label)).clicked() {
+                let ok = ui.add_sized(egui::vec2(75.0, 20.0), egui::Button::new(ok_label));
+                if ok.clicked() {
                     decision = Some(true);
                 }
-                if ui.add_sized(egui::vec2(75.0, 20.0), egui::Button::new(cancel_label)).clicked() {
+                let cancel = ui.add_sized(egui::vec2(75.0, 20.0), egui::Button::new(cancel_label));
+                if cancel.clicked() {
                     decision = Some(false);
                 }
+                apply_dialog_keyboard(ctx, &mut decision, &ok, &cancel);
             });
         });
     });

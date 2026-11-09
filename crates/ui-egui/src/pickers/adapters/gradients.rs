@@ -280,7 +280,7 @@ pub(crate) fn new_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::
                 state.set_hierarchy_order("gradients", "", root);
             }
             state.item_renaming =
-                Some(ItemRenameState { panel: "gradients".into(), group: destination_group, group_path: Vec::new(), key: name.clone(), text: name });
+                Some(ItemRenameState { panel: "gradients".into(), group: destination_group, group_path: Vec::new(), key: name.clone(), text: name, focused: false });
         }
     }
 }
@@ -295,16 +295,15 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &cra
         crate::preset_files_ui::import_gradients_dialog(app);
         ui.close();
     }
+    let selection_actions = ui.ctx().data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-selection-actions", "gradients"))).unwrap_or_default());
+    let delete_actions = ui.ctx().data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-delete-selection", "gradients"))).unwrap_or_default());
     let selection = state.browser_selection_summary.get("gradients").cloned().unwrap_or_default();
-    let selected_names = selected_gradient_names(&selection);
+    let menu = crate::pickers::browser::context_menu::SelectionMenuModel::new("gradients", "Gradient", &selection_actions, &delete_actions, &selection, false);
+    let selected_names = menu.export_items;
     if crate::menu_keys::menu_item_button(ui, tl!("Export Selected Gradients…"), !selected_names.is_empty()).clicked() {
         export_selected_gradients_dialog(app, &selected_names);
         ui.close();
     }
-}
-
-fn selected_gradient_names(selection: &crate::pickers::state::BrowserSelectionSummary) -> Vec<String> {
-    selection.cards.iter().map(|(_, key)| key.clone()).collect()
 }
 
 #[cfg(test)]
@@ -313,7 +312,7 @@ mod tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
-    use super::{ROOT_ITEMS_GROUP, gradients_panel, selected_gradient_names};
+    use super::{ROOT_ITEMS_GROUP, gradients_panel};
     use crate::PhotocraftApp;
     use crate::pickers::browser::asset_browser::last_group_headers;
     use crate::pickers::state::HierarchyOrderEntry;
@@ -325,8 +324,10 @@ mod tests {
             contains_group: true,
             cards: vec![("Basics".into(), "Blue 01".into()), ("Blues".into(), "Blue 02".into())],
             groups: vec!["Basics".into()],
+            ..Default::default()
         };
-        assert_eq!(selected_gradient_names(&selection), ["Blue 01", "Blue 02"]);
+        let menu = crate::pickers::browser::context_menu::SelectionMenuModel::new("gradients", "Gradient", &[], &[], &selection, false);
+        assert_eq!(menu.export_items, ["Blue 01", "Blue 02"]);
     }
 
     #[test]

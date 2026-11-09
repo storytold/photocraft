@@ -718,6 +718,7 @@ pub(crate) fn picker_browser(
     paint_brush_hierarchy_drag_label(ui, PANEL, egui::Id::new(("brush-drag-label", PANEL)));
 
     let browser_actions = crate::pickers::browser::popup_dialogs::confirm_deletions(ui, PANEL, &groups, browser_actions);
+    apply_inline_rename_actions(preset_ui, PANEL, &browser_actions);
     let mut actions = browser_actions_to_actions(presets, browser_actions);
     actions.extend(hierarchy_actions);
     actions
@@ -736,7 +737,11 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
             BrowserAction::RenameItem { group: _, group_path, key, text } => {
                 occurrence_name(presets, &key).map(|name| Action::Rename(Renaming { group: false, name, folder: group_path, text }))
             }
-            BrowserAction::BeginRenameItems(_) | BrowserAction::BeginRenameGroup(_) | BrowserAction::BeginRenameGroups(_) => None,
+            BrowserAction::BeginRenameItems(_)
+            | BrowserAction::BeginInlineRenameItem(_, _)
+            | BrowserAction::CancelInlineRenameItem
+            | BrowserAction::BeginRenameGroup(_)
+            | BrowserAction::BeginRenameGroups(_) => None,
             BrowserAction::DeleteItem { group: _, group_path: _, key } => preset_by_identity(presets, &key).map(|preset| Action::DeleteOccurrence {
                 name: preset.name.clone(),
                 group: preset.group.clone(),
@@ -1464,9 +1469,25 @@ pub fn preset_list(
     };
     sync_browser_state_to_brush_state(st, preset_ui, presets, PANEL);
     paint_brush_hierarchy_drag_label(ui, PANEL, egui::Id::new(("brush-drag-label", layout.id)));
+    apply_inline_rename_actions(preset_ui, PANEL, &browser_actions);
     let mut actions = browser_actions_to_actions(presets, browser_actions);
     actions.extend(hierarchy_actions);
     actions
+}
+
+fn apply_inline_rename_actions(state: &mut PresetUi, panel: &str, actions: &[BrowserAction]) {
+    for action in actions {
+        match action {
+            BrowserAction::BeginInlineRenameItem(group, item) => {
+                begin_item_rename(state, panel, &[(group.clone(), item.clone())]);
+            }
+            BrowserAction::CancelInlineRenameItem => {
+                state.item_renaming = None;
+                state.item_rename_queue.clear();
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Bridge the Brushes panel's persisted public state to the shared transient browser state. The

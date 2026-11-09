@@ -42,7 +42,8 @@ impl PickerDisplayMode {
 
     pub(crate) fn list_width(self) -> Option<f32> {
         match self {
-            Self::TextOnly | Self::SmallList => Some(198.0),
+            Self::SmallList => Some(198.0),
+            Self::TextOnly => Some(180.0),
             Self::LargeList => Some(247.0),
             _ => None,
         }
@@ -67,14 +68,19 @@ pub(crate) struct ItemRenameState {
     pub(crate) group_path: Vec<String>,
     pub(crate) key: String,
     pub(crate) text: String,
+    pub(crate) focused: bool,
 }
 
 /// Asset-neutral facts about the current multi-selection, derived by the shared browser.
 /// Adapters and menu consumers use this instead of interpreting picker node identities.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BrowserSelectionSummary {
+    /// At least one card itself (rather than only its containing group) is selected.
+    pub(crate) contains_selected_card: bool,
     pub(crate) contains_card: bool,
     pub(crate) contains_group: bool,
+    /// Cards explicitly selected by the user, excluding cards covered only by a selected group.
+    pub(crate) selected_cards: Vec<(String, String)>,
     /// Explicitly selected cards plus cards covered by selected groups, in browser order.
     pub(crate) cards: Vec<(String, String)>,
     pub(crate) groups: Vec<String>,
@@ -1034,7 +1040,7 @@ mod tests {
         assert_eq!(Mode::LargeList.item_height(), 34.0);
         assert_eq!(Mode::SmallList.list_width(), Some(198.0));
         assert_eq!(Mode::LargeList.list_width(), Some(247.0));
-        assert_eq!(Mode::TextOnly.list_width(), Some(198.0));
+        assert_eq!(Mode::TextOnly.list_width(), Some(180.0));
     }
 
     #[test]

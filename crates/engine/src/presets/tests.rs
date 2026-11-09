@@ -340,6 +340,28 @@ fn gradient_new_rename_move_delete_groups() {
 }
 
 #[test]
+fn appending_default_gradients_deduplicates_group_and_preset_names() {
+    let mut s = Session::new();
+    let original_names: Vec<String> = s.presets.gradients.iter().flat_map(|g| g.items.iter().map(|p| p.name.clone())).collect();
+
+    s.execute("gradient.presets.reset", json!({"append": true})).unwrap();
+    let first_append = s.execute("gradient.presets.list", json!({})).unwrap();
+    let groups = first_append["groups"].as_array().unwrap();
+    assert!(groups.iter().any(|g| g["name"] == "Basics 1"));
+    let names: Vec<&str> = groups.iter().flat_map(|g| g["presets"].as_array().unwrap()).map(|p| p["name"].as_str().unwrap()).collect();
+    assert!(original_names.iter().all(|name| names.contains(&name.as_str())));
+    assert!(names.contains(&"Black, White_1"));
+
+    s.execute("gradient.presets.reset", json!({"append": true})).unwrap();
+    let second_append = s.execute("gradient.presets.list", json!({})).unwrap();
+    let names: Vec<&str> = second_append["groups"].as_array().unwrap().iter()
+        .flat_map(|g| g["presets"].as_array().unwrap())
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"Black, White_2"));
+}
+
+#[test]
 fn gradient_rename_group_refuses_a_name_another_group_has() {
     let mut s = Session::new();
     s.execute("gradient.presets.edit", json!({"action": "newGroup", "name": "Pastels"})).unwrap();

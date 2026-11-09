@@ -247,13 +247,19 @@ pub(crate) fn item_row_edge_targets(area: Rect, item_rect: Rect, last: bool) -> 
 /// Register a draggable group source without installing any legacy target/release consumer.
 /// Register a canonical hierarchy node as a draggable header using its exact typed identity.
 pub(crate) fn asset_browser_header_drag_source_with_id(response: &egui::Response, scope: &str, node_id: PickerId, label: &str, selection: &[PickerId]) {
-    response.dnd_set_drag_payload(AssetDrag::CanonicalGroup { scope: scope.to_owned(), node_id, label: label.to_owned(), selection: selection.to_vec() });
+    // Secondary clicks participate in selection and context menus, never in drag-and-drop.
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        response.dnd_set_drag_payload(AssetDrag::CanonicalGroup { scope: scope.to_owned(), node_id, label: label.to_owned(), selection: selection.to_vec() });
+    }
 }
 
 /// Register a card source with its exact canonical identity (keys may repeat across groups).
 pub(crate) fn asset_browser_item_drag_source_with_id(response: &egui::Response, scope: &str, key: &str, node_id: PickerId, selection: &[PickerId]) {
-    let selection = selection.to_vec();
-    response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: Some(node_id), selection });
+    // Secondary clicks participate in selection and context menus, never in drag-and-drop.
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        let selection = selection.to_vec();
+        response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: Some(node_id), selection });
+    }
 }
 
 /// Take the browser's one-shot release payload after a canonical hit has won arbitration.
@@ -268,8 +274,100 @@ pub(crate) fn asset_browser_take_release(ctx: &egui::Context) -> Option<AssetDra
 /// Common click/double-click semantics for asset rows and cards.
 pub(crate) fn asset_browser_item_gesture(response: &egui::Response, selection: bool, activation: bool) -> (bool, bool) {
     let activated = activation && response.double_clicked();
-    let selected = selection && !activated && response.clicked();
+    let selected = selection && !activated && asset_browser_selection_gesture(response);
     (selected, activated)
+}
+
+pub(super) fn asset_browser_selection_clicked(response: &egui::Response) -> bool {
+    response.clicked_by(egui::PointerButton::Primary) || response.clicked_by(egui::PointerButton::Secondary)
+}
+
+#[derive(Clone, Copy, Default)]
+struct SecondaryPressSelection {
+    started_at: f64,
+    origin: Pos2,
+    selected: bool,
+}
+
+const SECONDARY_LONG_PRESS_SECONDS: f64 = 0.45;
+const SECONDARY_LONG_PRESS_MAX_MOVEMENT: f32 = 6.0;
+
+/// Secondary clicks select on release; holding the button selects once after a short long-press.
+/// Movement cancels the pending gesture, and a long-press is not applied again on release.
+pub(super) fn asset_browser_selection_gesture(response: &egui::Response) -> bool {
+    if response.clicked_by(egui::PointerButton::Primary) {
+        return true;
+    }
+    let state_id = response.id.with("browser-secondary-long-press-selection");
+    let (time, pressed, down, released, press_origin, pointer_pos) = response.ctx.input(|input| {
+        (
+            input.time,
+            input.pointer.button_pressed(egui::PointerButton::Secondary),
+            input.pointer.button_down(egui::PointerButton::Secondary),
+            input.pointer.button_released(egui::PointerButton::Secondary),
+            input.pointer.press_origin(),
+            input.pointer.hover_pos(),
+        )
+    });
+
+    if pressed && response.hovered()
+        && let Some(origin) = press_origin.filter(|origin| response.rect.contains(*origin))
+    {
+        response.ctx.data_mut(|data| data.insert_temp(state_id, SecondaryPressSelection { started_at: time, origin, selected: false }));
+    }
+
+    if let Some(mut state) = response.ctx.data(|data| data.get_temp::<SecondaryPressSelection>(state_id)) {
+        if down {
+            let stayed_in_place = response.hovered()
+                && pointer_pos.is_some_and(|pointer| pointer.distance(state.origin) <= SECONDARY_LONG_PRESS_MAX_MOVEMENT);
+            if !stayed_in_place {
+                response.ctx.data_mut(|data| data.remove_temp::<SecondaryPressSelection>(state_id));
+                return false;
+            }
+            if !state.selected && time - state.started_at >= SECONDARY_LONG_PRESS_SECONDS {
+                state.selected = true;
+                response.ctx.data_mut(|data| data.insert_temp(state_id, state));
+                return true;
+            }
+            if !state.selected {
+                response.ctx.request_repaint_after(std::time::Duration::from_secs_f64((SECONDARY_LONG_PRESS_SECONDS - (time - state.started_at)).max(0.001)));
+            }
+            return false;
+        }
+        if released {
+            response.ctx.data_mut(|data| data.remove_temp::<SecondaryPressSelection>(state_id));
+            return response.clicked_by(egui::PointerButton::Secondary) && !state.selected;
+        }
+        response.ctx.data_mut(|data| data.remove_temp::<SecondaryPressSelection>(state_id));
+    }
+    response.clicked_by(egui::PointerButton::Secondary)
+}
+
+/// Apply the same modifier-aware selection policy to every selectable browser node, regardless
+/// of which pointer button initiated the click.
+pub(super) fn apply_browser_node_selection(
+    ui: &egui::Ui,
+    clicked: bool,
+    secondary: bool,
+    panel: &str,
+    id: &PickerId,
+    visible_selection_order: &[PickerId],
+    sink: &mut BrowserSink<'_>,
+) {
+    if !clicked {
+        return;
+    }
+    let modifiers = ui.input(|input| input.modifiers);
+    // A plain right-click on an already-selected node opens its context menu without
+    // collapsing the multi-selection. Ctrl/Shift retain their normal selection semantics.
+    if secondary && !modifiers.ctrl && !modifiers.shift && sink.is_node_selected(panel, id) {
+        return;
+    }
+    if modifiers.shift {
+        sink.select_range(panel, visible_selection_order, id);
+    } else {
+        sink.select_node(panel, id.clone(), modifiers.ctrl);
+    }
 }
 
 /// Apply shared click/double-click selection semantics and emit the corresponding browser action.
@@ -279,6 +377,7 @@ pub(super) fn apply_browser_item_gesture(
     ctx: &BrowserCtx<'_>,
     sink: &mut BrowserSink<'_>,
     visible_selection_order: &[PickerId],
+    inline_rename: bool,
 ) -> egui::Response {
     let group = painted.item.group;
     let item = painted.item.item;
@@ -287,16 +386,17 @@ pub(super) fn apply_browser_item_gesture(
     let hover = if item.group_path.is_empty() { item.name.clone() } else { format!("{} / {}", item.group_path.join(" / "), item.name) };
     let response = response.on_hover_text(hover);
     let (selected, activated) = asset_browser_item_gesture(&response, capabilities.selection, capabilities.activation);
-    if selected && let Some(id) = painted.node_id.as_ref() {
-        let modifiers = ui.input(|input| input.modifiers);
-        if modifiers.shift {
-            sink.select_range(panel, visible_selection_order, id);
-        } else {
-            sink.select_node(panel, id.clone(), modifiers.ctrl);
-        }
+    if let Some(id) = painted.node_id.as_ref() {
+        let secondary = response.clicked_by(egui::PointerButton::Secondary)
+            || ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary));
+        apply_browser_node_selection(ui, selected, secondary, panel, id, visible_selection_order, sink);
     }
     if activated {
-        sink.emit(BrowserAction::ActivateItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
+        if inline_rename {
+            sink.emit(BrowserAction::BeginInlineRenameItem(group.name.clone(), item.clone()));
+        } else {
+            sink.emit(BrowserAction::BeginRenameItems(vec![(group.name.clone(), item.clone())]));
+        }
     } else if selected {
         sink.emit(BrowserAction::SelectItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
     }

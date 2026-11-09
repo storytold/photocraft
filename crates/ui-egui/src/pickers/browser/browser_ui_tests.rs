@@ -187,6 +187,142 @@ fn wrapped_list_uses_fixed_width_column_major_flow_and_shift_selection_order() {
 }
 
 #[test]
+fn secondary_click_uses_the_same_modifier_selection_and_empty_clear_rules() {
+    let groups = vec![group("A", vec![item("a1", "Card 1", &[]), item("a2", "Card 2", &[]), item("a3", "Card 3", &[])])];
+    let mut harness = harness_with_state(groups, vec2(520.0, 520.0), PresetUi::default());
+    let secondary_click = |harness: &mut Harness<'static, UiTestState>, point: Pos2, modifiers: Modifiers| {
+        harness.hover_at(point);
+        harness.event(Event::ModifiersChanged(modifiers));
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Secondary, pressed: true, modifiers });
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Secondary, pressed: false, modifiers });
+        harness.run_steps(2);
+        harness.event(Event::ModifiersChanged(Modifiers::NONE));
+        harness.run_steps(1);
+    };
+
+    let first = harness.get_by_label("Card 1").rect().center();
+    let second = harness.get_by_label("Card 2").rect().center();
+    let third = harness.get_by_label("Card 3").rect().center();
+    secondary_click(&mut harness, second, Modifiers::NONE);
+    secondary_click(&mut harness, third, Modifiers::CTRL);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 2, "Ctrl+right-click adds to selection");
+
+    secondary_click(&mut harness, first, Modifiers::SHIFT);
+    let selected = &harness.state().0.browser_selection[PANEL];
+    assert!(selected.contains(&PickerId::item("A", "a1")));
+    assert!(selected.contains(&PickerId::item("A", "a2")));
+    assert!(!selected.contains(&PickerId::item("A", "a3")));
+
+    let browser = super::last_browser_rect(&harness.ctx, PANEL).expect("browser viewport is recorded");
+    secondary_click(&mut harness, pos2(browser.right() - 8.0, browser.bottom() - 8.0), Modifiers::NONE);
+    assert!(harness.state().0.browser_selection.get(PANEL).is_none_or(|selection| selection.is_empty()), "right-clicking empty browser space clears selection");
+}
+
+#[test]
+fn secondary_click_on_selected_item_preserves_multi_selection_for_context_menu() {
+    let groups = vec![group("A", vec![item("a1", "Card 1", &[]), item("a2", "Card 2", &[]), item("a3", "Card 3", &[])])];
+    let mut harness = harness_with_state(groups, vec2(520.0, 520.0), PresetUi::default());
+    let click = |harness: &mut Harness<'static, UiTestState>, point: Pos2, button: PointerButton, modifiers: Modifiers| {
+        harness.hover_at(point);
+        harness.event(Event::ModifiersChanged(modifiers));
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button, pressed: true, modifiers });
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button, pressed: false, modifiers });
+        harness.run_steps(2);
+    };
+    let first = harness.get_by_label("Card 1").rect().center();
+    let second = harness.get_by_label("Card 2").rect().center();
+
+    click(&mut harness, first, PointerButton::Primary, Modifiers::NONE);
+    click(&mut harness, second, PointerButton::Primary, Modifiers::CTRL);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 2);
+
+    click(&mut harness, first, PointerButton::Secondary, Modifiers::NONE);
+    let selected = &harness.state().0.browser_selection[PANEL];
+    assert_eq!(selected.len(), 2, "plain right-click on a selected item must preserve the multi-selection");
+    assert!(selected.contains(&PickerId::item("A", "a1")));
+    assert!(selected.contains(&PickerId::item("A", "a2")));
+}
+
+#[test]
+fn secondary_long_press_selects_once_without_selecting_on_mouse_down() {
+    let groups = vec![group("A", vec![item("a1", "Card 1", &[]), item("a2", "Card 2", &[]), item("a3", "Card 3", &[])])];
+    let mut harness = harness_with_state(groups, vec2(520.0, 520.0), PresetUi::default());
+    let first = harness.get_by_label("Card 1").rect().center();
+    let second = harness.get_by_label("Card 2").rect().center();
+    let third = harness.get_by_label("Card 3").rect().center();
+
+    let primary_click = |harness: &mut Harness<'static, UiTestState>, point: Pos2| {
+        harness.hover_at(point);
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        harness.run_steps(2);
+    };
+    primary_click(&mut harness, second);
+
+    harness.hover_at(third);
+    harness.event(Event::ModifiersChanged(Modifiers::CTRL));
+    harness.run_steps(1);
+    harness.event(Event::PointerButton { pos: third, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::CTRL });
+    harness.run_steps(1);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 1, "Ctrl+right-press must not select on mouse-down");
+    // The harness advances 250 ms per frame, so two frames cross the 450 ms long-press threshold.
+    harness.run_steps(2);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 2, "Ctrl+right long-press selects after the hold threshold");
+    harness.event(Event::PointerButton { pos: third, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::CTRL });
+    harness.run_steps(2);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 2, "release must not toggle the long-pressed item a second time");
+
+    harness.hover_at(first);
+    harness.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    harness.run_steps(1);
+    harness.event(Event::PointerButton { pos: first, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::SHIFT });
+    harness.run_steps(1);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 2, "Shift+right-press must not select on mouse-down");
+    harness.run_steps(2);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 3, "Shift+right long-press selects the range after the hold threshold");
+    harness.event(Event::PointerButton { pos: first, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::SHIFT });
+    harness.run_steps(2);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 3, "release must not reapply the long-pressed range");
+}
+
+#[test]
+fn secondary_drag_cancels_long_press_without_starting_a_drag_or_changing_cursor() {
+    let groups = vec![group("A", vec![item("a1", "Card 1", &[]), item("a2", "Card 2", &[]), item("a3", "Card 3", &[])])];
+    let mut harness = harness_with_state(groups, vec2(520.0, 520.0), PresetUi::default());
+    let selected = harness.get_by_label("Card 1").rect().center();
+    let source = harness.get_by_label("Card 3").rect().center();
+
+    harness.hover_at(selected);
+    harness.run_steps(1);
+    harness.event(Event::PointerButton { pos: selected, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    harness.run_steps(1);
+    harness.event(Event::PointerButton { pos: selected, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    harness.run_steps(2);
+
+    harness.hover_at(source);
+    harness.run_steps(1);
+    harness.event(Event::PointerButton { pos: source, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    harness.run_steps(1);
+    let moved = source + vec2(18.0, 0.0);
+    harness.event(Event::PointerMoved(moved));
+    harness.run_steps(2);
+
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 1, "moving while right-held cancels the pending selection");
+    assert!(egui::DragAndDrop::payload::<AssetDrag>(&harness.ctx).is_none(), "right-button movement must never start an asset drag");
+    assert_eq!(harness.output().platform_output.cursor_icon, egui::CursorIcon::Default, "right-button movement must not request a move or grabbing cursor");
+
+    harness.event(Event::PointerButton { pos: moved, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    harness.run_steps(1);
+    assert_eq!(harness.state().0.browser_selection[PANEL].len(), 1, "releasing a cancelled right-drag must not select the source");
+}
+
+#[test]
 fn large_wrapped_list_uses_245px_content_width_plus_its_two_pixel_border() {
     use crate::pickers::state::PickerDisplayMode as Mode;
 
@@ -233,7 +369,7 @@ fn unwrapped_list_modes_use_full_width_and_keep_one_item_per_row() {
 }
 
 #[test]
-fn text_only_is_a_list_mode_but_keeps_full_width_rows() {
+fn text_only_wraps_at_180px_by_default_and_can_be_unwrapped() {
     use crate::pickers::state::PickerDisplayMode as Mode;
 
     let groups = vec![group("A", vec![item("a1", "Text card 1", &[]), item("a2", "Text card 2", &[])])];
@@ -244,10 +380,48 @@ fn text_only_is_a_list_mode_but_keeps_full_width_rows() {
 
     let first = harness.query_all_by_label("Text card 1").map(|node| node.rect()).max_by(|a, b| a.width().total_cmp(&b.width())).unwrap();
     let second = harness.query_all_by_label("Text card 2").map(|node| node.rect()).max_by(|a, b| a.width().total_cmp(&b.width())).unwrap();
-    assert!(first.width() > 400.0, "Text Only must remain full-width despite a stored Wrap List preference: {first:?}");
+    assert_eq!(first.width(), 180.0, "Text Only wrapped rows use the dedicated 180px width: {first:?}");
+    assert_eq!(first.left(), second.left());
+    assert_eq!(first.top(), second.top(), "wrapped Text Only items share a row when there is room");
+    assert!(harness.state().0.wrap_list_enabled(PANEL), "Text Only participates in the shared list-mode preference");
+
+    let mut unwrapped_state = PresetUi::default();
+    unwrapped_state.display_modes.insert(PANEL.to_owned(), Mode::TextOnly);
+    unwrapped_state.wrap_list.insert(PANEL.to_owned(), false);
+    let unwrapped = harness_with_state(vec![group("A", vec![item("a1", "Text card 1", &[]), item("a2", "Text card 2", &[])])], vec2(520.0, 520.0), unwrapped_state);
+    let first = unwrapped.query_all_by_label("Text card 1").map(|node| node.rect()).max_by(|a, b| a.width().total_cmp(&b.width())).unwrap();
+    let second = unwrapped.query_all_by_label("Text card 2").map(|node| node.rect()).max_by(|a, b| a.width().total_cmp(&b.width())).unwrap();
+    assert!(first.width() > 400.0, "unwrapped Text Only rows span the available width: {first:?}");
     assert_eq!(first.left(), second.left());
     assert!(second.top() > first.top());
-    assert!(harness.state().0.wrap_list_enabled(PANEL), "Text Only participates in the shared list-mode preference");
+}
+
+#[test]
+fn inline_rename_editor_replaces_the_label_in_all_list_modes() {
+    use crate::pickers::state::{ItemRenameState, PickerDisplayMode as Mode};
+
+    let groups = vec![group("A", vec![item("a1", "Original label", &[])])];
+    for mode in [Mode::TextOnly, Mode::SmallList, Mode::LargeList] {
+        let mut state = PresetUi::default();
+        state.display_modes.insert(PANEL.to_owned(), mode);
+        state.item_renaming = Some(ItemRenameState {
+            panel: PANEL.to_owned(),
+            group: "A".to_owned(),
+            group_path: Vec::new(),
+            key: "a1".to_owned(),
+            text: "Editing label".to_owned(),
+            focused: false,
+        });
+        let harness = harness_with_state(groups.clone(), vec2(520.0, 520.0), state);
+        assert!(
+            harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Editing label")),
+            "{mode:?} should paint the inline text editor's current value"
+        );
+        assert!(
+            !harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Original label")),
+            "{mode:?} should replace the old label while editing"
+        );
+    }
 }
 
 #[test]
@@ -2994,8 +3168,8 @@ mod moved_unit_tests {
             assert_eq!(wrapped.x, 198.0);
             assert_eq!((wrapped_cols, wrapped_rows), (4, 2));
             let (wrapped_text_only, text_cols, text_rows) = list_layout_geometry(900.0, 0.0, 20.0, true, PickerDisplayMode::TextOnly.list_width(), 7);
-            assert_eq!(wrapped_text_only.x, 198.0, "Text Only shares Small Thumbnail's wrap width");
-            assert_eq!((text_cols, text_rows), (4, 2));
+            assert_eq!(wrapped_text_only.x, 180.0, "Text Only has its own 180px wrap width");
+            assert_eq!((text_cols, text_rows), (5, 2));
             let (wrapped_large, wrapped_large_cols, wrapped_large_rows) = list_layout_geometry(1000.0, 0.0, 34.0, true, Some(247.0), 7);
             assert_eq!(wrapped_large.x, 247.0);
             assert_eq!((wrapped_large_cols, wrapped_large_rows), (4, 2));

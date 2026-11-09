@@ -30,14 +30,20 @@ pub(crate) enum FooterAction {
 }
 
 fn delete_action(st: &PresetUi, panel: &str) -> Option<FooterAction> {
-    if st.browser_selection.get(panel).is_some_and(|selection| !selection.is_empty()) {
-        Some(FooterAction::DeleteSelection)
-    } else {
-        let key = st.selected.get(panel)?.clone();
-        let group = st.selected_group.get(panel)?.clone();
-        let group_path = st.selected_group_path.get(panel)?.clone();
-        Some(FooterAction::DeleteItem { group, group_path, key })
+    if panel == "gradients" {
+        return st
+            .browser_selection
+            .get(panel)
+            .filter(|selection| !selection.is_empty())
+            .map(|_| FooterAction::DeleteSelection);
     }
+    if let Some(selection) = st.browser_selection.get(panel) {
+        return (!selection.is_empty()).then_some(FooterAction::DeleteSelection);
+    }
+    let key = st.selected.get(panel)?.clone();
+    let group = st.selected_group.get(panel)?.clone();
+    let group_path = st.selected_group_path.get(panel)?.clone();
+    Some(FooterAction::DeleteItem { group, group_path, key })
 }
 
 /// Draw the standard footer controls and return requested actions without dispatching them.
@@ -55,9 +61,13 @@ pub(crate) fn draw(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str, footer: Fo
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if footer.delete && crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked() {
-                if let Some(action) = delete_action(st, panel) {
-                    actions.push(action);
+            if footer.delete {
+                let delete = delete_action(st, panel);
+                let response = ui.add_enabled_ui(delete.is_some(), |ui| crate::icons::button(ui, "trash", 24.0, false, tl!("Delete"))).inner;
+                if response.clicked() {
+                    if let Some(action) = delete {
+                        actions.push(action);
+                    }
                 }
             }
             if footer.new_item && crate::icons::button(ui, "plus", 24.0, false, footer.new_tip).clicked() {
@@ -97,5 +107,22 @@ mod tests {
             Some(FooterAction::DeleteItem { group, group_path, key })
                 if group == "A" && group_path == ["Folder"] && key == "active"
         ));
+    }
+
+    #[test]
+    fn footer_delete_is_disabled_after_the_browser_selection_is_cleared() {
+        let mut state = PresetUi::default();
+        state.set_selected_item("gradients", "A", &[], "active");
+        state.browser_selection.insert("gradients".into(), Default::default());
+
+        assert_eq!(delete_action(&state, "gradients"), None);
+    }
+
+    #[test]
+    fn gradient_footer_delete_requires_a_browser_selection_even_if_an_active_preset_exists() {
+        let mut state = PresetUi::default();
+        state.set_selected_item("gradients", "A", &[], "active");
+
+        assert_eq!(delete_action(&state, "gradients"), None);
     }
 }

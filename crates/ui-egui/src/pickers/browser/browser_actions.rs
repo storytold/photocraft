@@ -84,6 +84,25 @@ pub(crate) fn generic_with_state(
             begin_item_rename(state, panel, targets);
             true
         }
+        BrowserAction::BeginInlineRenameItem(group, item) => {
+            state.renaming = None;
+            state.group_rename_queue.clear();
+            state.item_rename_queue.clear();
+            state.item_renaming = Some(crate::pickers::state::ItemRenameState {
+                panel: panel.to_owned(),
+                group: group.clone(),
+                group_path: item.group_path.clone(),
+                key: item.key.clone(),
+                text: item.name.clone(),
+                focused: false,
+            });
+            true
+        }
+        BrowserAction::CancelInlineRenameItem => {
+            state.item_renaming = None;
+            state.item_rename_queue.clear();
+            true
+        }
         BrowserAction::BeginRenameGroup(group) => {
             state.item_renaming = None;
             state.item_rename_queue.clear();

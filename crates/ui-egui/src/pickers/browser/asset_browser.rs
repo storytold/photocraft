@@ -9,6 +9,7 @@ use egui::{Align2, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
 use crate::pickers::browser::browser_interaction::{
     AssetDrag, BrowserDeleteContext, BrowserDragGhostSource, GroupDragGhost, ItemDragGhost, NestedGroupDragGhost, apply_browser_item_gesture,
+    apply_browser_node_selection, asset_browser_selection_clicked, asset_browser_selection_gesture,
     asset_browser_header_drag_source_with_id, browser_drag_ghost_rect, draw_context_menu_target, item_row_edge_targets, replace_selected_delete_actions,
 };
 pub(crate) use crate::pickers::browser::browser_interaction::{
@@ -144,6 +145,10 @@ pub(crate) enum BrowserAction {
     },
     /// Open the shared card-rename dialog for the supplied item occurrences.
     BeginRenameItems(Vec<(String, ItemView)>),
+    /// Begin editing one card's label directly in a list row.
+    BeginInlineRenameItem(String, ItemView),
+    /// Cancel the currently active inline card rename.
+    CancelInlineRenameItem,
     /// Open the shared group-rename dialog for a top-level group.
     BeginRenameGroup(String),
     /// Open the shared group-rename dialog for multiple top-level groups, one after another.
@@ -216,7 +221,7 @@ impl<'a> BrowserSink<'a> {
         Self { state, actions, pending_group_toggles: Vec::new() }
     }
 
-    fn is_node_selected(&self, panel: &str, id: &PickerId) -> bool {
+    pub(super) fn is_node_selected(&self, panel: &str, id: &PickerId) -> bool {
         self.state.browser_node_selected(panel, id)
     }
 
@@ -542,7 +547,7 @@ pub(crate) struct BrowserCapabilities {
     pub(crate) group_drag: bool,
     /// Whether clicking an item emits a selection event.
     pub(crate) selection: bool,
-    /// Whether activating an item (for example, double-clicking) emits an activation event.
+    /// Whether double-clicking an item opens its rename dialog.
     pub(crate) activation: bool,
 }
 
@@ -707,6 +712,7 @@ fn draw_nested_folder_row(
     ui: &mut egui::Ui,
     row: NestedFolderRow<'_, '_>,
     ctx: &BrowserCtx<'_>,
+    groups: &[GroupView],
     hierarchy: &BrowserHierarchyView<'_>,
     sink: &mut BrowserSink<'_>,
     drag: &mut BrowserDragState,
@@ -732,17 +738,14 @@ fn draw_nested_folder_row(
             count: group.count,
         });
     }
-    if response.clicked() && !disclosure.clicked() {
-        let modifiers = ui.input(|input| input.modifiers);
-        if capabilities.selection {
-            if modifiers.shift {
-                sink.select_range(panel, hierarchy.visible_selection_order, &node_id);
-            } else {
-                sink.select_node(panel, node_id.clone(), modifiers.ctrl);
-            }
-        }
+    if capabilities.selection {
+        let disclosure_clicked = asset_browser_selection_clicked(&disclosure);
+        let selected = asset_browser_selection_gesture(&response) && !disclosure_clicked;
+        let secondary = response.clicked_by(egui::PointerButton::Secondary)
+            || ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary));
+        apply_browser_node_selection(ui, selected, secondary, panel, &node_id, hierarchy.visible_selection_order, sink);
     }
-    if disclosure.clicked() {
+    if asset_browser_selection_clicked(&disclosure) {
         sink.queue_group_toggle(format!(
             "{panel}/{}/{}",
             escape_hierarchy_key_part(&root_group.name),
@@ -761,6 +764,9 @@ fn draw_nested_folder_row(
     if let Some(menu) = ctx.context_menus.nested_group {
         let delete_context = BrowserDeleteContext { hierarchy: hierarchy.hierarchy, identities: hierarchy.hierarchy_identities };
         draw_context_menu_target(ui, response.clone(), ctx.context_menus.compact, |ui| {
+            if response.secondary_clicked() {
+                refresh_browser_selection_summary(ui.ctx(), sink.state, panel, groups, hierarchy.hierarchy_identities);
+            }
             sink.with_context_menu(|state, events| {
                 let start = events.len();
                 menu(ui, state, panel, root_group, &group.path, events);
@@ -857,7 +863,9 @@ fn paint_browser_item(
     display_mode: crate::pickers::state::PickerDisplayMode,
     painters: &mut Painters<'_, '_>,
     tokens: &Tokens,
-) {
+    inline_rename: &mut Option<crate::pickers::state::ItemRenameState>,
+    panel: &str,
+) -> Option<BrowserAction> {
     let response = &painted.response;
     let rect = painted.rect;
     let name = &painted.item.item.name;
@@ -872,21 +880,59 @@ fn paint_browser_item(
             let label_rect = Rect::from_min_max(pos2(rect.left() + 8.0, rect.top()), rect.right_bottom());
             let mut label_ui = ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
             label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
+            if let Some(rename) = inline_rename.as_mut().filter(|rename| {
+                rename.panel == panel
+                    && rename.group == painted.item.group.name
+                    && rename.group_path == painted.item.item.group_path
+                    && rename.key == painted.item.item.key
+            }) {
+                return paint_inline_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
+            }
             crate::widgets::elided_label(&mut label_ui, name, label_rect.width());
         } else if painters.has_list_item() {
             asset_browser_item_info(response, name, selected);
             painters.list_item(ui, rect, group_index, item_index, selected);
-            if !selected && response.hovered() {
+            let label_rect = Rect::from_min_max(pos2(rect.right() - 132.0, rect.top() + 1.0), pos2(rect.right() - 3.0, rect.bottom() - 1.0));
+            let mut inline_action = None;
+            let editing = if let Some(rename) = inline_rename.as_mut().filter(|rename| {
+                rename.panel == panel
+                    && rename.group == painted.item.group.name
+                    && rename.group_path == painted.item.item.group_path
+                    && rename.key == painted.item.item.key
+            }) {
+                ui.painter().rect_filled(label_rect, 0.0, if selected { tokens.accent_soft } else { tokens.card });
+                let mut label_ui = ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
+                inline_action = paint_inline_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
+                true
+            } else {
+                false
+            };
+            if !editing && !selected && response.hovered() {
                 ui.painter().rect_filled(rect, 2.0, tokens.hover.gamma_multiply(0.5));
             }
             ui.painter().rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, tokens.card_border), egui::StrokeKind::Inside);
+            if editing {
+                return inline_action;
+            }
         } else {
             asset_browser_list_row(ui, response, rect, name, selected);
+            ui.painter().rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, tokens.card_border), egui::StrokeKind::Inside);
             let thumb_size = (cell_height - 2.0).max(0.0);
             let thumb_rect = Rect::from_min_size(rect.min + vec2(1.0, 1.0), vec2(thumb_size, thumb_size));
             painters.item(ui, thumb_rect, group_index, item_index, ItemPaintState::Item { selected });
-            ui.painter().text(pos2(thumb_rect.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, name, FontId::proportional(11.5), tokens.text);
-            ui.painter().rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, tokens.card_border), egui::StrokeKind::Inside);
+            let label_rect = Rect::from_min_max(pos2(thumb_rect.right() + 8.0, rect.top()), rect.right_bottom());
+            let mut label_ui = ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
+            if let Some(rename) = inline_rename.as_mut().filter(|rename| {
+                rename.panel == panel
+                    && rename.group == painted.item.group.name
+                    && rename.group_path == painted.item.item.group_path
+                    && rename.key == painted.item.item.key
+            }) {
+                return paint_inline_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
+            }
+            label_ui.painter().text(pos2(label_rect.left(), rect.center().y), Align2::LEFT_CENTER, name, FontId::proportional(11.5), tokens.text);
         }
     } else {
         asset_browser_item_info(response, name, selected);
@@ -900,6 +946,42 @@ fn paint_browser_item(
             egui::StrokeKind::Inside,
         );
     }
+    None
+}
+
+fn paint_inline_item_name(
+    ui: &mut egui::Ui,
+    rename: &mut crate::pickers::state::ItemRenameState,
+    panel: &str,
+    group: &str,
+    item: &ItemView,
+) -> Option<BrowserAction> {
+    let edit_id = ui.make_persistent_id(("browser-inline-item-rename", panel, group, &item.group_path, &item.key));
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut rename.text)
+            .id(edit_id)
+            .desired_width(ui.available_width())
+            .margin(egui::vec2(4.0, 2.0))
+            .cursor_at_end(true),
+    );
+    if !rename.focused {
+        response.request_focus();
+        rename.focused = true;
+    }
+    let escape = response.ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    let enter = response.ctx.input(|input| input.key_pressed(egui::Key::Enter));
+    if escape {
+        return Some(BrowserAction::CancelInlineRenameItem);
+    }
+    if (enter || response.lost_focus()) && !rename.text.trim().is_empty() {
+        return Some(BrowserAction::RenameItem {
+            group: rename.group.clone(),
+            group_path: rename.group_path.clone(),
+            key: rename.key.clone(),
+            text: rename.text.trim().to_owned(),
+        });
+    }
+    None
 }
 
 /// Prepare the hit target and selection state for one item; painting follows in the segment loop.
@@ -915,18 +997,89 @@ fn prepare_browser_item_cell<'a>(
     let ItemRef { group_index: item_group_index, item_index, group: item_group, item } = item_ref;
     let rect = grid.cell_rect(run_index);
     let response = ui.interact(rect, ui.id().with((ctx.panel, item_group_index, item_index)), Sense::click_and_drag());
-    let cursor = if response.is_pointer_button_down_on() {
-        Some(egui::CursorIcon::Grabbing)
+    let browser_drag_active = response.dragged_by(egui::PointerButton::Primary) || egui::DragAndDrop::payload::<AssetDrag>(ui.ctx()).is_some();
+    let response = if browser_drag_active {
+        // On Windows winit maps Grabbing and Move to the same four-arrow cursor. Use the
+        // existing platform-aware hand cursor so a drag remains visibly distinct there too.
+        let cursor = crate::tool_cursor::hand(ui.ctx(), true);
+        ui.ctx().set_cursor_icon(cursor);
+        response
     } else if ctx.panel == "gradients" {
-        Some(egui::CursorIcon::PointingHand)
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
-        None
+        response
     };
-    let response = if let Some(cursor) = cursor { response.on_hover_cursor(cursor) } else { response };
     let node_id = item_node_for_identity(&item_group.name, &item.group_path, &item.key, &projection.hierarchy_identities);
     let item_depth = depth + item.group_path.len() + usize::from(!root_level);
     let selected = node_id.as_ref().is_some_and(|id| sink.is_node_selected(ctx.panel, id));
     PaintedCell { item: item_ref, rect, response, node_id, depth: item_depth, selected }
+}
+
+/// Rebuild the menu-facing selection summary after a pointer gesture changes browser selection.
+/// The projection's render-time selection snapshot is intentionally not mutated by click handling.
+fn refresh_browser_selection_summary(
+    ctx: &egui::Context,
+    state: &mut PresetUi,
+    panel: &str,
+    groups: &[GroupView],
+    hierarchy_identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+) {
+    let selection = state.browser_selection.get(panel);
+    let selected_group_names: BTreeSet<String> = selection
+        .into_iter()
+        .flat_map(|selection| hierarchy_identities.iter())
+        .filter_map(|(id, identity)| match identity {
+            PickerNodeIdentity::Group(group) if selection.is_some_and(|selection| selection.contains(id)) => Some(group.clone()),
+            _ => None,
+        })
+        .collect();
+    let selected_item_keys: BTreeSet<(String, String, Vec<String>)> = groups
+        .iter()
+        .flat_map(|group| {
+            group.items.iter().filter_map(|item| {
+                item_node_for_identity(&group.name, &item.group_path, &item.key, hierarchy_identities)
+                    .filter(|id| selection.is_some_and(|selection| selection.contains(id)))
+                    .map(|_| (group.name.clone(), item.key.clone(), item.group_path.clone()))
+            })
+        })
+        .collect();
+    let selected_cards: Vec<(String, String)> = groups
+        .iter()
+        .flat_map(|group| {
+            group.items.iter().filter_map(|item| {
+                selected_item_keys.contains(&(group.name.clone(), item.key.clone(), item.group_path.clone())).then(|| (group.name.clone(), item.key.clone()))
+            })
+        })
+        .collect();
+    let cards: Vec<(String, String)> = groups
+        .iter()
+        .flat_map(|group| {
+            group.items.iter().filter_map(|item| {
+                (selected_group_names.contains(&group.name)
+                    || selected_item_keys.contains(&(group.name.clone(), item.key.clone(), item.group_path.clone())))
+                    .then(|| (group.name.clone(), item.key.clone()))
+            })
+        })
+        .collect();
+    state.browser_selection_summary.insert(
+        panel.to_owned(),
+        crate::pickers::state::BrowserSelectionSummary {
+            contains_selected_card: !selected_cards.is_empty(),
+            contains_card: !cards.is_empty(),
+            contains_group: !selected_group_names.is_empty(),
+            selected_cards,
+            cards,
+            groups: selected_group_names.into_iter().collect(),
+        },
+    );
+    if let Some(is_group) = state
+        .browser_selection_anchor
+        .get(panel)
+        .and_then(|anchor| hierarchy_identities.get(anchor))
+        .map(|identity| matches!(identity, PickerNodeIdentity::Group(_) | PickerNodeIdentity::Folder { .. }))
+    {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(("preset-browser-last-selection-is-group", panel)), is_group));
+    }
 }
 
 fn load_picker_id_registry(ui: &egui::Ui, panel: &str) -> (egui::Id, PickerIdRegistry) {
@@ -980,7 +1133,7 @@ pub(crate) fn browser_with_root_sequence(
         Painters { group: adapter.paint_group.as_deref_mut(), item: &mut *adapter.paint_item, list_item: adapter.paint_list_item.as_deref_mut() };
     let display_mode = st.display_mode(panel);
     let list = display_mode.uses_list_layout();
-    let wrap_list = st.wrap_list_enabled(panel) && display_mode != crate::pickers::state::PickerDisplayMode::TextOnly;
+    let wrap_list = st.wrap_list_enabled(panel);
     // Renaming is handled by the shared popup dialogs; the browser owns the full allocated area.
     let scroll_height = allocated_height;
     let mut drag_state = BrowserDragState::default();
@@ -1004,6 +1157,16 @@ pub(crate) fn browser_with_root_sequence(
         .iter()
         .map(|(group, item)| (group.clone(), item.key.clone(), item.group_path.clone()))
         .collect();
+    let selected_cards: Vec<(String, String)> = groups
+        .iter()
+        .flat_map(|group| {
+            group.items.iter().filter_map(|item| {
+                selected_item_keys
+                    .contains(&(group.name.clone(), item.key.clone(), item.group_path.clone()))
+                    .then(|| (group.name.clone(), item.key.clone()))
+            })
+        })
+        .collect();
     let cards: Vec<(String, String)> = groups
         .iter()
         .flat_map(|group| {
@@ -1018,8 +1181,10 @@ pub(crate) fn browser_with_root_sequence(
     st.browser_selection_summary.insert(
         panel.to_owned(),
         crate::pickers::state::BrowserSelectionSummary {
+            contains_selected_card: !selected_cards.is_empty(),
             contains_card,
             contains_group,
+            selected_cards,
             cards,
             groups: selected_group_names.into_iter().collect(),
         },
@@ -1037,7 +1202,6 @@ pub(crate) fn browser_with_root_sequence(
     // Drag previews are collected while rows are laid out, then painted from the parent UI.
     // A child created inside ScrollArea inherits its painter's viewport clip, which cannot be
     // expanded to show the preview elsewhere in the picker window.
-    let empty_area_clicked = std::cell::Cell::new(false);
     let scroll = egui::ScrollArea::vertical()
         .id_salt(("preset-scroll", panel))
         .max_height(scroll_height)
@@ -1047,30 +1211,42 @@ pub(crate) fn browser_with_root_sequence(
             let browser_bounds = ui.clip_rect();
             // Register the viewport as a background click target before its rows/cards. Later
             // child widgets take precedence, so only genuinely empty browser space clears the
-            // multi-selection. The viewport excludes the shell-owned header and footer.
+            // multi-selection. The viewport excludes the shell-owned header and footer. Context
+            // menus belong to cards and groups: right-clicking either selects it before opening
+            // its menu. The Gradients browser has no blank-space context menu target; other
+            // adapters retain their existing picker-level menu.
             let empty_area = ui.interact(browser_bounds, ui.id().with(("browser-empty-area", panel)), Sense::click());
-            draw_context_menu_target(ui, empty_area.clone(), compact_context_menus, |ui| {
-                sink.with_context_menu(|state, events| {
-                    let selection_actions = ui
-                        .ctx()
-                        .data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-selection-actions", panel))).unwrap_or_default());
-                    let delete_actions = ui
-                        .ctx()
-                        .data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-delete-selection", panel))).unwrap_or_default());
-                    let selection = state.browser_selection_summary.get(panel).cloned().unwrap_or_default();
-                    crate::pickers::browser::context_menu::picker_context_menu(
-                        ui,
-                        panel,
-                        groups,
-                        &selection_actions,
-                        &delete_actions,
-                        &selection,
-                        events,
-                    );
-                    let _ = state;
+            let empty_area_was_clicked = asset_browser_selection_clicked(&empty_area);
+            if empty_area_was_clicked {
+                sink.state.clear_browser_selection(panel);
+                sink.state.browser_selection_summary.remove(panel);
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new(("preset-browser-selection-actions", panel)), Vec::<BrowserAction>::new());
+                    data.insert_temp(egui::Id::new(("preset-browser-delete-selection", panel)), Vec::<BrowserAction>::new());
                 });
-            });
-            empty_area_clicked.set(empty_area.clicked());
+            }
+            if panel != "gradients" {
+                draw_context_menu_target(ui, empty_area.clone(), compact_context_menus, |ui| {
+                    sink.with_context_menu(|state, events| {
+                        let selection_actions = ui
+                            .ctx()
+                            .data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-selection-actions", panel))).unwrap_or_default());
+                        let delete_actions = ui
+                            .ctx()
+                            .data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-delete-selection", panel))).unwrap_or_default());
+                        let selection = state.browser_selection_summary.get(panel).cloned().unwrap_or_default();
+                        crate::pickers::browser::context_menu::picker_context_menu(
+                            ui,
+                            panel,
+                            groups,
+                            &selection_actions,
+                            &delete_actions,
+                            &selection,
+                            events,
+                        );
+                    });
+                });
+            }
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             // Keep drag targets reachable when a preset or hierarchy node is dragged beyond the
             // current viewport. This behavior belongs to the shared scrollable browser, not to a
@@ -1118,8 +1294,11 @@ pub(crate) fn browser_with_root_sequence(
                         pos2((header_hit_rect.left() + 18.0).min(header_hit_rect.right()), header_hit_rect.bottom()),
                     );
                     let disclosure = ui.interact(disclosure_rect, response.id.with("disclosure"), Sense::click());
-                    if capabilities.group_drag && response.is_pointer_button_down_on() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let browser_drag_active = response.dragged_by(egui::PointerButton::Primary)
+                        || egui::DragAndDrop::payload::<AssetDrag>(ui.ctx()).is_some();
+                    if browser_drag_active {
+                        let cursor = crate::tool_cursor::hand(ui.ctx(), true);
+                        ui.ctx().set_cursor_icon(cursor);
                     } else if capabilities.group_drag && response.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
@@ -1130,17 +1309,22 @@ pub(crate) fn browser_with_root_sequence(
                         let selection = selected_drag_nodes(sink.state, panel, &projection.visible_selection_order, &group_id, &projection.hierarchy);
                         asset_browser_header_drag_source_with_id(&response, panel, group_id.clone(), &g.name, &selection);
                     }
-                    if response.clicked() && !disclosure.clicked() {
-                        let modifiers = ui.input(|input| input.modifiers);
-                        if capabilities.selection {
-                            if modifiers.shift {
-                                sink.select_range(panel, &projection.visible_selection_order, &group_id);
-                            } else {
-                                sink.select_node(panel, group_id.clone(), modifiers.ctrl);
-                            }
-                        }
+                    if capabilities.selection {
+                        let disclosure_clicked = asset_browser_selection_clicked(&disclosure);
+                        let selected = asset_browser_selection_gesture(&response) && !disclosure_clicked;
+                        let secondary = response.clicked_by(egui::PointerButton::Secondary)
+                            || ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary));
+                        apply_browser_node_selection(
+                            ui,
+                            selected,
+                            secondary,
+                            panel,
+                            &group_id,
+                            &projection.visible_selection_order,
+                            &mut sink,
+                        );
                     }
-                    if disclosure.clicked() {
+                    if asset_browser_selection_clicked(&disclosure) {
                         let key = format!("{panel}/{}", escape_hierarchy_key_part(&g.name));
                         sink.toggle_group(key);
                     }
@@ -1150,6 +1334,9 @@ pub(crate) fn browser_with_root_sequence(
                     if let Some(menu) = context_menus.group {
                         let delete_context = BrowserDeleteContext { hierarchy: &projection.hierarchy, identities: &projection.hierarchy_identities };
                         draw_context_menu_target(ui, response.clone(), context_menus.compact, |ui| {
+                            if response.secondary_clicked() {
+                                refresh_browser_selection_summary(ui.ctx(), sink.state, panel, groups, &projection.hierarchy_identities);
+                            }
                             sink.with_context_menu(|state, events| {
                                 let start = events.len();
                                 menu(ui, state, panel, g, events);
@@ -1163,7 +1350,11 @@ pub(crate) fn browser_with_root_sequence(
                     {
                         drag_state.ghosts.groups.push(GroupDragGhost { rect: ghost_rect, group_index: gi, open, depth });
                     }
-                    if capabilities.group_drag && capabilities.selection && response.drag_stopped() && !sink.is_node_selected(panel, &group_id) {
+                    if capabilities.group_drag
+                        && capabilities.selection
+                        && response.drag_stopped_by(egui::PointerButton::Primary)
+                        && !sink.is_node_selected(panel, &group_id)
+                    {
                         sink.select_node(panel, group_id, false);
                     }
                     drag_state.headers.push((gi, inset_row_rect(header_rect, depth), g.name.clone()));
@@ -1211,6 +1402,7 @@ pub(crate) fn browser_with_root_sequence(
                                     parent_depth: depth,
                                 },
                                 &browser_ctx,
+                                groups,
                                 &hierarchy_view,
                                 &mut sink,
                                 &mut drag_state,
@@ -1247,7 +1439,22 @@ pub(crate) fn browser_with_root_sequence(
                                     &projection,
                                     sink,
                                 );
-                                paint_browser_item(ui, &painted, grid.list, display_mode, &mut painters, browser_ctx.tokens);
+                                let inline_action = paint_browser_item(
+                                    ui,
+                                    &painted,
+                                    grid.list,
+                                    display_mode,
+                                    &mut painters,
+                                    browser_ctx.tokens,
+                                    &mut sink.state.item_renaming,
+                                    panel,
+                                );
+                                if let Some(action) = inline_action {
+                                    sink.state.item_renaming = None;
+                                    if !matches!(action, BrowserAction::CancelInlineRenameItem) {
+                                        sink.emit(action);
+                                    }
+                                }
                                 register_browser_item_drop_targets(
                                     ItemDropRegistrationGeometry { painted: &painted },
                                     &browser_ctx,
@@ -1264,10 +1471,7 @@ pub(crate) fn browser_with_root_sequence(
                                     };
                                     register_card(&drag_state, node_id, painted.rect, painted.depth, grid.list, row_end);
                                 }
-                                let resp = apply_browser_item_gesture(ui, &painted, &browser_ctx, sink, &projection.visible_selection_order);
-                                if capabilities.item_drag && resp.dragged() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                }
+                                let resp = apply_browser_item_gesture(ui, &painted, &browser_ctx, sink, &projection.visible_selection_order, grid.list);
                                 if capabilities.item_drag
                                     && let Some(ghost_rect) = browser_drag_ghost_rect(
                                         ui,
@@ -1287,7 +1491,7 @@ pub(crate) fn browser_with_root_sequence(
                                     });
                                 }
                                 if capabilities.item_drag
-                                    && resp.drag_stopped()
+                                    && resp.drag_stopped_by(egui::PointerButton::Primary)
                                     && let Some(pp) = ui.ctx().pointer_interact_pos()
                                     && canvas_drop_target(pp, painted.rect, canvas, browser_bounds)
                                 {
@@ -1295,19 +1499,32 @@ pub(crate) fn browser_with_root_sequence(
                                 }
                                 if capabilities.item_drag
                                     && capabilities.selection
-                                    && resp.drag_stopped()
+                                    && resp.drag_stopped_by(egui::PointerButton::Primary)
                                     && let Some(id) = painted.node_id.as_ref()
                                     && !sink.is_node_selected(panel, id)
                                 {
                                     sink.select_node(panel, id.clone(), false);
                                 }
                                 if let Some(menu) = context_menus.item {
+                                    if resp.secondary_clicked() {
+                                        refresh_browser_selection_summary(ui.ctx(), sink.state, panel, groups, &projection.hierarchy_identities);
+                                    }
+                                    let selected_items: Vec<(String, ItemView)> = groups
+                                        .iter()
+                                        .flat_map(|group| {
+                                            group.items.iter().filter_map(|item| {
+                                                item_node_for_identity(&group.name, &item.group_path, &item.key, &projection.hierarchy_identities)
+                                                    .filter(|id| sink.state.browser_node_selected(panel, id))
+                                                    .map(|_| (group.name.clone(), item.clone()))
+                                            })
+                                        })
+                                        .collect();
                                     let args = ItemContextMenuArgs {
                                         panel,
                                         item: it,
                                         group: painted.item.group,
                                         group_names: &projection.group_names,
-                                        selected_items: &projection.selected_items,
+                                        selected_items: &selected_items,
                                     };
                                     let delete_context =
                                         BrowserDeleteContext { hierarchy: &projection.hierarchy, identities: &projection.hierarchy_identities };
@@ -1382,13 +1599,15 @@ pub(crate) fn browser_with_root_sequence(
     ui.ctx().data_mut(|data| {
         data.insert_temp(egui::Id::new(("preset-browser-selection-actions", panel)), selection_actions);
     });
-    let last_selected_kind = st
-        .browser_selection_anchor
-        .get(panel)
-        .and_then(|anchor| projection.hierarchy_identities.get(anchor))
-        .map(|identity| matches!(identity, PickerNodeIdentity::Group(_) | PickerNodeIdentity::Folder { .. }));
-    if let Some(is_group) = last_selected_kind {
-        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new(("preset-browser-last-selection-is-group", panel)), is_group));
+    if panel != "gradients" {
+        let last_selected_kind = st
+            .browser_selection_anchor
+            .get(panel)
+            .and_then(|anchor| projection.hierarchy_identities.get(anchor))
+            .map(|identity| matches!(identity, PickerNodeIdentity::Group(_) | PickerNodeIdentity::Folder { .. }));
+        if let Some(is_group) = last_selected_kind {
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new(("preset-browser-last-selection-is-group", panel)), is_group));
+        }
     }
     let selected_delete_actions = st
         .browser_selection
@@ -1403,10 +1622,6 @@ pub(crate) fn browser_with_root_sequence(
     ui.ctx().data_mut(|data| {
         data.insert_temp(egui::Id::new(("preset-browser-delete-selection", panel)), selected_delete_actions);
     });
-    if empty_area_clicked.get() {
-        st.browser_selection.entry(panel.to_owned()).or_default().clear();
-        st.browser_selection_anchor.remove(panel);
-    }
     painters.paint_drag_ghosts(ui, panel, groups, app_window_clip, std::mem::take(&mut drag_state.ghosts), browser_ctx.tokens);
     let browser_view_clip =
         Rect::from_min_max(pos2(browser_parent_clip.left(), browser_parent_clip.top()), pos2(browser_parent_clip.right(), scroll.inner_rect.bottom()))

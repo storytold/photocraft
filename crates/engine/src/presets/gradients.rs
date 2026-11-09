@@ -641,7 +641,13 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
         for g in &mut b {
             g.name = unique_group(&s.presets.gradients, &g.name);
         }
-        s.presets.gradients.extend(b);
+        // Appending defaults follows the same library-wide name policy as importing a GRD
+        // or creating/renaming a preset: existing cards keep their names, while collisions
+        // in the appended defaults receive the next available suffix.
+        let mut merged = s.presets.gradients.clone();
+        merged.extend(b);
+        make_gradient_names_unique(&mut merged);
+        s.presets.gradients = merged;
     } else {
         s.presets.gradients = b;
     }
