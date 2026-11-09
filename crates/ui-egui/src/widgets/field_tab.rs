@@ -41,7 +41,10 @@ pub fn take_step(ctx: &Context) -> i32 {
     if let Some(id) = pending {
         ctx.memory_mut(|m| m.request_focus(id));
     }
-    ctx.data_mut(|d| d.insert_temp(reached_id(), pending));
+    // Tagged with this pass: `take_step` is skipped while a popup is open, and a marker left
+    // over from an earlier pass would make a later click into the field select all its text.
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(reached_id(), pending.map(|id| (id, pass))));
     let step = ctx.input_mut(|i| {
         if i.consume_key(Modifiers::SHIFT, Key::Tab) {
             -1
@@ -61,7 +64,7 @@ pub fn take_step(ctx: &Context) -> i32 {
 /// True in the frame a field gets the focus [`take_step`] handed it (Tab, ⇧Tab or [`focus`]),
 /// whatever the mouse is doing meanwhile.
 pub fn reached(ctx: &Context, id: Id) -> bool {
-    ctx.data(|d| d.get_temp::<Option<Id>>(reached_id())).flatten() == Some(id)
+    ctx.data(|d| d.get_temp::<Option<(Id, u64)>>(reached_id())).flatten() == Some((id, ctx.cumulative_pass_nr()))
 }
 
 /// Start collecting the fields of a dialog body.
@@ -225,6 +228,27 @@ mod tests {
         h.run_steps(3);
         let d = &h.state().session.active().expect("a new document").doc;
         assert_eq!((d.name.as_str(), d.size.width, d.size.height), ("Flyer", 512, 310));
+    }
+
+    /// The field a Tab reached is "reached" only in the pass that handed it focus: while a popup
+    /// is open `take_step` is skipped, and a later click into the field must place the caret.
+    #[test]
+    fn reached_lasts_only_the_pass_that_applied_the_focus() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("field");
+        let mut seen = Vec::new();
+        for apply in [true, false, false] {
+            ctx.run_ui(Default::default(), |ui| {
+                if apply {
+                    super::focus(ui.ctx(), id);
+                    super::take_step(ui.ctx());
+                }
+                seen.push(super::reached(ui.ctx(), id));
+            })
+            .textures_delta
+            .clear();
+        }
+        assert_eq!(seen, [true, false, false]);
     }
 
     /// Tab is the dialog's: the modal underneath never sees it, and a dialog with no fields swallows it.

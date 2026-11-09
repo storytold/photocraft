@@ -504,3 +504,25 @@ fn tab_selects_the_field_while_a_mouse_button_is_held() {
     h.run_steps(2);
     assert_eq!(h.state().ui.dialogs.first().unwrap().fields["gutter"], "5");
 }
+
+/// Percent is of each selected artboard, not of the document: 50% of a 140 x 40 board is a
+/// 70 px column, centred in it; the field reopens still in percent.
+#[test]
+fn percent_is_of_the_selected_artboard_and_stays_percent() {
+    let mut app = app();
+    app.run("layer.new.artboard", json!({"rect": [200, 100, 140, 40]})).unwrap();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("target".into(), json!("selectedArtboards"));
+    f.insert("columns".into(), json!(1));
+    f.insert("width".into(), json!("50 %"));
+    f.insert("centerColumns".into(), json!(true));
+    f.insert("clearExisting".into(), json!(true));
+    f.insert("__rowsEnabled".into(), json!(false));
+    f.insert("__marginEnabled".into(), json!(false));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let g = &app.session.active().unwrap().doc.guides;
+    assert!(g.vertical.contains(&235.0) && g.vertical.contains(&305.0), "{:?}", g.vertical);
+    let reopened = open(&mut app);
+    assert_eq!(app.ui.dialog_mut(reopened).unwrap().fields["width"], "50 %");
+}

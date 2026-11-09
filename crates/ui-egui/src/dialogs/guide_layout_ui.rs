@@ -98,6 +98,19 @@ fn parse_length_str(text: &str, app: &PhotocraftApp, along_x: bool) -> Option<f6
     }
 }
 
+/// The percent a field's text gives ("10%", or a bare number while the rulers are in percent).
+/// Percent stays percent all the way to the engine, which takes it of each target, so a selected
+/// artboard smaller than the document gets its own share, not the document's.
+fn percent_of(text: &str, ruler: Unit) -> Option<f64> {
+    match Unit::parse_length(text) {
+        Some((n, Some(Unit::Percent))) => Some(n),
+        Some((n, None)) if ruler == Unit::Percent => Some(n),
+        Some(_) => None,
+        None if ruler == Unit::Percent => widgets::parse_num(text),
+        None => None,
+    }
+}
+
 fn format_stored_length(app: &PhotocraftApp, val: &Value, along_x: bool, optional: bool) -> Value {
     match val {
         Value::Number(n) => {
@@ -108,6 +121,8 @@ fn format_stored_length(app: &PhotocraftApp, val: &Value, along_x: bool, optiona
             let t = s.trim();
             if t.is_empty() {
                 if optional { Value::Null } else { json!(in_ruler_unit(app, 0.0, along_x)) }
+            } else if let Some(pct) = percent_of(t, ruler_unit(app)) {
+                if optional && pct <= 0.0 { Value::Null } else { json!(with_unit(&photocraft_engine::prefs::fmt_decimals(pct, FIELD_DECIMALS), Unit::Percent)) }
             } else if let Some(px) = parse_length_str(t, app, along_x) {
                 if optional && px <= 0.0 { Value::Null } else { json!(in_ruler_unit(app, px, along_x)) }
             } else {
@@ -221,6 +236,8 @@ fn parse_length_value(val: Option<&Value>, app: Option<&PhotocraftApp>, along_x:
             let t = s.trim();
             if t.is_empty() {
                 if optional { Value::Null } else { json!(0.0) }
+            } else if let Some(pct) = percent_of(t, app.map_or(Unit::Pixels, ruler_unit)) {
+                if optional && pct <= 0.0 { Value::Null } else { json!(format!("{pct}%")) }
             } else {
                 let (dpi, extent, ppi, ruler) = match app {
                     Some(app) => {
@@ -337,7 +354,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let hex = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
     let params = params_with(Some(app), f);
     // Lengths are remembered as the pixels they applied, so a bare "5" typed in px still means
-    // 5 px after the ruler unit changes; reopening shows them in the new unit.
+    // 5 px after the ruler unit changes; reopening shows them in the new unit. Percent stays
+    // percent, of whatever the next target is.
     let mut remembered = f.clone();
     for (key, along_x, optional) in [("width", true, true), ("height", false, true), ("gutter", true, false), ("rowGutter", false, false)] {
         if let Some(v) = f.get(key) {
