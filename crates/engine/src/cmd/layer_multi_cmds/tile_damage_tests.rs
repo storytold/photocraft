@@ -173,23 +173,71 @@ fn tile_damage_grows_by_the_layer_effect_margin() {
     assert!(unchanged_outside(&before, &after, d));
 }
 
+/// The default drop shadow, `distance` px away and `size` px soft.
+fn drop_shadow(distance: f32, size: f32) -> photocraft_doc::Effect {
+    match photocraft_doc::Effect::default_drop_shadow() {
+        photocraft_doc::Effect::DropShadow(sh) => photocraft_doc::Effect::DropShadow(photocraft_doc::Shadow { distance, size, ..sh }),
+        e => e,
+    }
+}
+
+/// A styled layer inside a styled group: the group's shadow is cast by the child's shadow too, so
+/// a dab's change reaches as far as both shadows together, not just the farther one.
 #[test]
 fn a_dab_inside_a_group_with_a_drop_shadow_damages_the_shadow() {
     let mut s = session(1024, 768);
-    let child = layer_with(&mut s, &[(Rect::new(600, 400, 700, 500), [1.0, 0.0, 0.0, 1.0])]);
+    let child = layer_with(&mut s, &[(Rect::new(200, 400, 300, 500), [1.0, 0.0, 0.0, 1.0])]);
     s.execute("layer.select", json!({"layer": child.0})).unwrap();
     let g = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
     s.edit("fx", |doc, _| {
-        doc.layer_mut(g).unwrap().effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        for id in [child, g] {
+            doc.layer_mut(id).unwrap().effects.items.push(drop_shadow(40.0, 2.0));
+        }
         Ok(())
     })
     .unwrap();
-    assert!(photocraft_compose::effects::margin(doc(&s).layer(g).unwrap()) > 0);
-    let dab = Rect::new(640, 440, 660, 460);
-    let (before, after) = paint(&mut s, child, dab, [0.0, 0.0, 1.0, 1.0]);
+    assert!(photocraft_compose::effects::margin(doc(&s).layer(g).unwrap()) > 40);
+    // A brush dab (a hinted edit) in empty space left of a tile's right edge. Each shadow falls
+    // about 20 px right and 35 px down, so the group's shadow of the child's shadow lands about
+    // 40 px right and 70 px down, in the next tile and past either shadow's reach alone.
+    s.execute("layer.select", json!({"layer": child.0})).unwrap();
+    let before = doc(&s);
+    s.execute("paint.stroke", json!({"points": [[TILE_SIZE - 30, 300]], "size": 10, "hardness": 1.0, "color": "#0000ff", "layer": child.0})).unwrap();
+    assert_eq!(s.damage_misses, 0);
     let d = damage(&s).expect("a bounded dab");
-    assert!(d.contains_rect(&dab), "{d:?}");
-    assert!(unchanged_outside(&before, &after, d), "the group's shadow changed outside {d:?}");
+    assert!(d.x0 < TILE_SIZE && d.x1 > TILE_SIZE, "{d:?}");
+    assert!(unchanged_outside(&before, &doc(&s), d), "the group's shadow changed outside {d:?}");
+}
+
+/// A layer the compositor doesn't draw adds nothing to a dab elsewhere: neither a hidden layer's
+/// effects nor those of layers inside a hidden group grow the hint.
+#[test]
+fn a_brush_hint_ignores_the_effects_of_hidden_layers() {
+    let mut s = session(1024, 768);
+    let plain = full_layer(&mut s);
+    let hidden = layer_with(&mut s, &[(Rect::new(800, 600, 900, 700), [1.0, 0.0, 0.0, 1.0])]);
+    let child = layer_with(&mut s, &[(Rect::new(50, 600, 150, 700), [0.0, 1.0, 0.0, 1.0])]);
+    s.execute("layer.select", json!({"layer": child.0})).unwrap();
+    let g = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("fx", |doc, _| {
+        for id in [hidden, child] {
+            let l = doc.layer_mut(id).unwrap();
+            l.effects.items.push(drop_shadow(40.0, 40.0));
+        }
+        doc.layer_mut(hidden).unwrap().visible = false;
+        doc.layer_mut(g).unwrap().visible = false;
+        Ok(())
+    })
+    .unwrap();
+    assert!(photocraft_compose::effects::margin(doc(&s).layer(hidden).unwrap()) > 40);
+    // A dab in the middle of a tile, far from every tile edge.
+    s.execute("layer.select", json!({"layer": plain.0})).unwrap();
+    let before = doc(&s);
+    s.execute("paint.stroke", json!({"points": [[384, 384]], "size": 10, "hardness": 1.0, "color": "#0000ff", "layer": plain.0})).unwrap();
+    assert_eq!(s.damage_misses, 0);
+    let d = damage(&s).expect("a bounded dab");
+    assert!(d.contains(384, 384) && d.width() <= 20 && d.height() <= 20, "grown by a hidden layer: {d:?}");
+    assert!(unchanged_outside(&before, &doc(&s), d));
 }
 
 #[test]
@@ -209,6 +257,12 @@ fn painting_a_clip_base_under_a_styled_clipped_layer_is_covered() {
     assert!(unchanged_outside(&before, &after, d), "the clipped layer changed outside {d:?}");
     let (before, after) = paint(&mut s, base, Rect::new(640, 440, 660, 460), [0.0, 0.0, 0.0, 0.0]);
     let d = damage(&s).expect("a bounded base edit");
+    assert!(unchanged_outside(&before, &after, d), "the clipped layer changed outside {d:?}");
+    // At a tile's edge too: the clipped layer's shadow is built from its own shape, and the base
+    // only masks it pixel by pixel, so a base edit changes nothing past its own tiles.
+    let (before, after) = paint(&mut s, base, Rect::new(3 * TILE_SIZE - 6, 440, 3 * TILE_SIZE, 460), [0.0, 0.0, 0.0, 0.0]);
+    let d = damage(&s).expect("a bounded base edit");
+    assert!(d.x1 <= 3 * TILE_SIZE, "{d:?}");
     assert!(unchanged_outside(&before, &after, d), "the clipped layer changed outside {d:?}");
 }
 
@@ -267,6 +321,41 @@ fn a_hint_that_misses_a_changed_tile_is_counted() {
     s.hint_damage(Rect::new(600, 400, 620, 420));
     assert_eq!(s.damage_misses, 1);
     assert_eq!(damage(&s), Some(Rect::new(600, 400, 620, 420)));
+}
+
+/// A brush hint is the bare dab; on a feathered mask the dab changes a soft ring around it, and
+/// the hint must not cut that off.
+#[test]
+fn a_brush_hint_on_a_feathered_mask_keeps_the_ring() {
+    let mut s = session(1024, 768);
+    let id = full_layer(&mut s);
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(id).unwrap().mask = Some(photocraft_doc::LayerMask { feather: 10.0, ..photocraft_doc::LayerMask::reveal_all() });
+        Ok(())
+    })
+    .unwrap();
+    let before = doc(&s);
+    s.execute("paint.stroke", json!({"points": [[500, 400]], "size": 10, "hardness": 1.0, "color": "#000000", "target": "mask", "layer": id.0})).unwrap();
+    assert_eq!(s.damage_misses, 0);
+    let d = damage(&s).expect("a bounded dab");
+    assert!(unchanged_outside(&before, &doc(&s), d), "the feathered mask changed outside {d:?}");
+}
+
+/// The same for a layer's effects: the dab's drop shadow lands outside the dab.
+#[test]
+fn a_brush_hint_on_a_layer_with_a_drop_shadow_keeps_the_shadow() {
+    let mut s = session(1024, 768);
+    let id = layer_with(&mut s, &[(Rect::new(600, 400, 700, 500), [1.0, 0.0, 0.0, 1.0])]);
+    s.edit("fx", |doc, _| {
+        doc.layer_mut(id).unwrap().effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        Ok(())
+    })
+    .unwrap();
+    let before = doc(&s);
+    s.execute("paint.stroke", json!({"points": [[300, 300]], "size": 10, "hardness": 1.0, "color": "#0000ff", "layer": id.0})).unwrap();
+    assert_eq!(s.damage_misses, 0);
+    let d = damage(&s).expect("a bounded dab");
+    assert!(unchanged_outside(&before, &doc(&s), d), "the shadow changed outside {d:?}");
 }
 
 #[test]
