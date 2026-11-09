@@ -278,7 +278,7 @@ pub(crate) fn capture_pen_owner(app: &PhotocraftApp) -> Option<PenOwner> {
         && (pen::pen_path_op(&options).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.resumes.as_ref().is_some_and(|r| r.layer.is_some())))
         && let Some(LayerContent::Shape(shape)) = st.active_layer.and_then(|id| st.doc.layer(id)).map(|layer| &layer.content)
     {
-        options.pixel_align_stroke = shape.pixel_align_stroke;
+        options.use_aligned_rendering = shape.use_aligned_rendering;
     }
     Some(PenOwner {
         document: st.doc.id,

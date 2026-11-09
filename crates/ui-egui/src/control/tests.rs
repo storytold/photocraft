@@ -2421,3 +2421,14 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     shift_right(&mut app, &ctx, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
 }
+
+#[test]
+fn ui_set_align_edges_uses_scripted_tool_option_name() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": true}))["ok"], true);
+    assert!(app.ui.tool_options.use_aligned_rendering);
+    assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"]["useAlignedRendering"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": "true"}))["ok"], false);
+    assert!(app.ui.tool_options.use_aligned_rendering);
+}

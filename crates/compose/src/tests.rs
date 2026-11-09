@@ -1421,7 +1421,7 @@ fn pixel_align_live_line_with_effect_keeps_fill_and_outline_registered() {
             let expected = flatten(&doc);
             assert!(expected.get(35, 19)[3] > 0.0, "fixture must paint the upper half of the live bar");
             let LayerContent::Shape(shape) = &mut doc.layers[0].content else { panic!("shape") };
-            shape.pixel_align_stroke = true;
+            shape.use_aligned_rendering = true;
             assert_eq!(shape.path, path);
             assert!(shape.cache.is_none());
             let actual = flatten(&doc);
@@ -4703,7 +4703,7 @@ fn pixel_align_psd_effect_layer_roi_matches_document_frame() {
         path: photocraft_vector::shapes::rect(quantize(10.0), quantize(10.0), quantize(70.0) - quantize(10.0), quantize(70.0) - quantize(10.0)),
         fill: Some(Fill::Solid(Color::WHITE)),
         stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
-        pixel_align_stroke: true,
+        use_aligned_rendering: true,
         psd_raw: Some(std::sync::Arc::new(Vec::new())),
         psd_coordinate_frame: Some([1000, 1000]),
         ..Default::default()
@@ -4730,7 +4730,7 @@ fn pixel_align_round2_effect_identity_tracks_alignment_provenance() {
     };
     let original = key(&layer);
     let LayerContent::Shape(sh) = &mut layer.content else { panic!() };
-    sh.pixel_align_stroke = true;
+    sh.use_aligned_rendering = true;
     let aligned = key(&layer);
     assert_ne!(original, aligned);
     let LayerContent::Shape(sh) = &mut layer.content else { panic!() };

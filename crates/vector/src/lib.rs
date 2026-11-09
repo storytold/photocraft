@@ -72,9 +72,35 @@ fn fill_rasterizer_with(path: &Path, tol: f64, ctl: &Interrupt) -> Option<Raster
 
 /// Compiles the stroke outline of `path` (all subpaths, one non-zero component).
 pub fn stroke_rasterizer(path: &Path, style: &StrokeStyle, tol: f64) -> Rasterizer {
+    stroke_rasterizer_with_alignment(path, style, tol, false)
+}
+
+/// Align actual straight outline edges, including widths other than one pixel.
+/// Curved source paths keep their original outline antialiasing.
+fn stroke_rasterizer_with_alignment(path: &Path, style: &StrokeStyle, tol: f64, aligned: bool) -> Rasterizer {
     // Stroke outlines tolerate a coarser flattening than fills (the offset hides chord error).
     let lines = flatten_path(path, (tol * 4.0).min(style.width.max(0.01) * 0.1).max(1e-3));
-    let polys = stroke_polygons(&lines, style, tol);
+    let mut polys = stroke_polygons(&lines, style, tol);
+    if aligned
+        && style.width != 1.0
+        && path.subpaths.iter().all(|subpath| subpath.knots.iter().all(|knot| knot.anchor == knot.in_ctrl && knot.anchor == knot.out_ctrl))
+    {
+        for polygon in &mut polys {
+            let original = polygon.clone();
+            for index in 0..original.len() {
+                let next = (index + 1) % original.len();
+                let (a, b) = (original[index], original[next]);
+                if a.0 == b.0 {
+                    polygon[index].0 = a.0.round();
+                    polygon[next].0 = b.0.round();
+                }
+                if a.1 == b.1 {
+                    polygon[index].1 = a.1.round();
+                    polygon[next].1 = b.1.round();
+                }
+            }
+        }
+    }
     let mut r = Rasterizer::new(false);
     r.add_component(&polys, PathOp::Combine, FillRule::NonZero);
     r
@@ -604,6 +630,8 @@ impl CompiledShape {
     /// out in `gradient_frame`: measuring a shape beyond the canvas it is drawn in.
     pub fn with_frames(shape: &ShapeLayer, tol: f64, coverage: Rect, gradient_frame: Rect) -> Self {
         let pb = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let aligned_shape = pixel_align::aligned_edge_path(shape).map(|path| ShapeLayer { path, live: None, ..shape.clone() });
+        let shape = aligned_shape.as_ref().unwrap_or(shape);
         let g = gradient_frame;
         let cb = (f64::from(g.x0), f64::from(g.y0), f64::from(g.x1), f64::from(g.y1));
         let area = fill_rasterizer(&shape.path, tol);
@@ -644,7 +672,7 @@ impl CompiledShape {
                 let mask = shapes::rect(x0.round(), y0.round(), x1.round() - x0.round(), y1.round() - y0.round());
                 align = Some((fill_rasterizer(&mask, tol), true, 2.0));
             }
-            let r = stroke_rasterizer(&shape.path, &st, tol);
+            let r = stroke_rasterizer_with_alignment(&shape.path, &st, tol, shape.use_aligned_rendering);
             if !pixel_dash_caps.is_empty() {
                 // A tiny positive translation resolves only otherwise indistinguishable cap
                 // ties. Reuse the compiled outline so dash lengths, phase and budgets agree.

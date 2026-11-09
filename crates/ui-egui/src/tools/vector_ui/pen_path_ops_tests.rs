@@ -28,10 +28,10 @@ fn pixel_align_make_shape_forwards_preference_and_keeps_geometry() {
             let mut app = app();
             app.ui.tool_options.vector_mode = "path".into();
             app.ui.tool_options.stroke_width = 1.0;
-            app.ui.tool_options.pixel_align_stroke = enabled;
+            app.ui.tool_options.use_aligned_rendering = enabled;
             let expected = if source == "draft" {
                 draw(&mut app, &[(20.0, 20.0), (80.0, 20.0), (80.0, 80.0)]);
-                app.ui.tool_options.pixel_align_stroke = !enabled;
+                app.ui.tool_options.use_aligned_rendering = !enabled;
                 None
             } else {
                 square(&mut app, 20.0, 20.0, 60.0);
@@ -46,7 +46,7 @@ fn pixel_align_make_shape_forwards_preference_and_keeps_geometry() {
             let history = app.session.active().unwrap().history.past_len();
             super::make_shape(&mut app).unwrap();
             let info = app.run("shape.info", json!({})).unwrap();
-            assert_eq!(info["pixelAlignStroke"], enabled, "source={source}");
+            assert_eq!(info["useAlignedRendering"], enabled, "source={source}");
             let path = shape_path(&app).1;
             if let Some(expected) = expected {
                 assert_eq!(path, expected);
@@ -59,12 +59,12 @@ fn pixel_align_make_shape_forwards_preference_and_keeps_geometry() {
             let st = app.session.active().unwrap();
             assert_eq!(st.history.past_len(), history + 1);
             assert_eq!(st.doc.paths, before.paths);
-            assert_eq!(app.ui.tool_options.pixel_align_stroke, if source == "draft" { !enabled } else { enabled });
+            assert_eq!(app.ui.tool_options.use_aligned_rendering, if source == "draft" { !enabled } else { enabled });
             app.run("edit.undo", json!({})).unwrap();
             assert_eq!(app.session.active().unwrap().doc.work_path, before.work_path);
             assert_eq!(app.session.active().unwrap().doc.layers.len(), before.layers.len());
             app.run("edit.redo", json!({})).unwrap();
-            assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
+            assert_eq!(app.run("shape.info", json!({})).unwrap()["useAlignedRendering"], enabled);
             assert_eq!(shape_path(&app).1, *paths.last().unwrap());
         }
         assert_eq!(paths[0], paths[1], "alignment must not change stored {source} geometry");
@@ -80,7 +80,7 @@ fn pixel_align_pen_append_and_resume_apply_the_captured_setting() {
             let before = app
                 .run(
                     "shape.create",
-                    json!({"kind":"path", "pixelAlignStroke": !enabled,
+                    json!({"kind":"path", "useAlignedRendering": !enabled,
                     "fill":null,"stroke":{"width":1},"path":{"subpaths":[{"closed":false,"knots":[
                         {"anchor":[20,20]},{"anchor":[80,20]}
                     ]}]}}),
@@ -88,29 +88,29 @@ fn pixel_align_pen_append_and_resume_apply_the_captured_setting() {
                 .unwrap();
             app.ui.tool_options.vector_mode = "shape".into();
             app.ui.tool_options.pen_path_op = if resume { "newLayer" } else { "combine" }.into();
-            app.ui.tool_options.pixel_align_stroke = enabled;
+            app.ui.tool_options.use_aligned_rendering = enabled;
             if resume {
                 draw(&mut app, &[(80.0, 20.0), (80.0, 80.0)]);
                 assert!(app.ui.pen.as_ref().unwrap().resumes.is_some());
                 // An explicit draft edit overrides the inherited layer value.
-                app.ui.pen.as_mut().unwrap().owner.as_mut().unwrap().options.pixel_align_stroke = enabled;
+                app.ui.pen.as_mut().unwrap().owner.as_mut().unwrap().options.use_aligned_rendering = enabled;
                 assert!(super::pen_commit(&mut app, false));
             } else {
                 draw(&mut app, &[(110.0, 110.0), (140.0, 110.0), (140.0, 140.0), (110.0, 140.0)]);
                 // Model the pending checkbox edit before closing the captured draft.
-                app.ui.pen.as_mut().unwrap().owner.as_mut().unwrap().options.pixel_align_stroke = enabled;
+                app.ui.pen.as_mut().unwrap().owner.as_mut().unwrap().options.use_aligned_rendering = enabled;
                 pen_down(&mut app, 110.5, 110.5, false);
                 pen_up(&mut app);
             }
             let after = app.run("shape.info", json!({})).unwrap();
             assert_eq!(after["layer"], before["layer"]);
-            assert_eq!(after["pixelAlignStroke"], enabled, "resume={resume}");
+            assert_eq!(after["useAlignedRendering"], enabled, "resume={resume}");
             app.session.undo();
             let undone = app.run("shape.info", json!({})).unwrap();
-            assert_eq!(undone["pixelAlignStroke"], !enabled);
+            assert_eq!(undone["useAlignedRendering"], !enabled);
             assert_eq!(undone["path"], before["path"]);
             app.session.redo();
-            assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
+            assert_eq!(app.run("shape.info", json!({})).unwrap()["useAlignedRendering"], enabled);
         }
     }
 }
@@ -123,7 +123,7 @@ fn pixel_align_resumed_pen_inherits_layer_before_any_checkbox_edit() {
         let before = app
             .run(
                 "shape.create",
-                json!({"kind":"path", "pixelAlignStroke":enabled,
+                json!({"kind":"path", "useAlignedRendering":enabled,
                 "fill":null,"stroke":{"width":1},"path":{"subpaths":[{"closed":false,"knots":[
                     {"anchor":[20,20]},{"anchor":[80,20]}
                 ]}]}}),
@@ -131,16 +131,16 @@ fn pixel_align_resumed_pen_inherits_layer_before_any_checkbox_edit() {
             .unwrap();
         app.ui.tool_options.vector_mode = "shape".into();
         app.ui.tool_options.pen_path_op = "newLayer".into();
-        app.ui.tool_options.pixel_align_stroke = !enabled;
+        app.ui.tool_options.use_aligned_rendering = !enabled;
         draw(&mut app, &[(80.0, 20.0), (80.0, 80.0)]);
-        assert_eq!(app.ui.pen.as_ref().unwrap().owner.as_ref().unwrap().options.pixel_align_stroke, enabled);
+        assert_eq!(app.ui.pen.as_ref().unwrap().owner.as_ref().unwrap().options.use_aligned_rendering, enabled);
         assert!(super::pen_commit(&mut app, false));
-        assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
-        assert_eq!(app.ui.tool_options.pixel_align_stroke, !enabled);
+        assert_eq!(app.run("shape.info", json!({})).unwrap()["useAlignedRendering"], enabled);
+        assert_eq!(app.ui.tool_options.use_aligned_rendering, !enabled);
         app.session.undo();
         assert_eq!(app.run("shape.info", json!({})).unwrap()["path"], before["path"]);
         app.session.redo();
-        assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
+        assert_eq!(app.run("shape.info", json!({})).unwrap()["useAlignedRendering"], enabled);
     }
 }
 
@@ -150,10 +150,10 @@ fn pixel_align_pen_checkbox_controls_the_target_and_pending_draft() {
     for tool in [Tool::Pen, Tool::CurvaturePen, Tool::FreeformPen] {
         let mut app = app();
         app.ui.tool = tool;
-        app.run("shape.create", json!({"kind":"rect","rect":[20,20,60,60],"pixelAlignStroke":false})).unwrap();
+        app.run("shape.create", json!({"kind":"rect","rect":[20,20,60,60],"useAlignedRendering":false})).unwrap();
         app.ui.tool_options.vector_mode = "shape".into();
         app.ui.tool_options.pen_path_op = "combine".into();
-        app.ui.tool_options.pixel_align_stroke = true;
+        app.ui.tool_options.use_aligned_rendering = true;
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
             move |ui, app: &mut PhotocraftApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -164,22 +164,22 @@ fn pixel_align_pen_checkbox_controls_the_target_and_pending_draft() {
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(4);
-        assert_eq!(h.get_by_label("Pixel Align Stroke").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
-        assert!(h.state().ui.tool_options.pixel_align_stroke, "viewing a combine target must preserve the New Layer default");
-        h.get_by_label("Pixel Align Stroke").click();
+        assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+        assert!(h.state().ui.tool_options.use_aligned_rendering, "viewing a combine target must preserve the New Layer default");
+        h.get_by_label("Align Edges").click();
         h.run_steps(3);
-        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["pixelAlignStroke"], true);
+        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["useAlignedRendering"], true);
         h.state_mut().session.undo();
         h.run_steps(3);
-        assert_eq!(h.get_by_label("Pixel Align Stroke").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+        assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
         draw(h.state_mut(), &[(110.0, 110.0), (150.0, 110.0)]);
         h.run_steps(3);
-        h.get_by_label("Pixel Align Stroke").click();
+        h.get_by_label("Align Edges").click();
         h.run_steps(3);
         assert!(super::pen_commit(h.state_mut(), false), "checkbox must not invalidate the draft");
-        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["pixelAlignStroke"], true);
+        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["useAlignedRendering"], true);
         h.state_mut().session.undo();
-        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["pixelAlignStroke"], false);
+        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["useAlignedRendering"], false);
     }
 }
 
@@ -705,12 +705,12 @@ fn make_shape_on_a_resumed_shape_layer_draft_keeps_its_other_subpaths() {
 #[test]
 fn pixel_align_rejected_pen_edit_preserves_new_layer_preference() {
     let mut app = app();
-    app.run("shape.create", json!({"rect":[20,20,60,60],"pixelAlignStroke":false})).unwrap();
+    app.run("shape.create", json!({"rect":[20,20,60,60],"useAlignedRendering":false})).unwrap();
     let id = app.session.active().unwrap().active_layer.unwrap();
     std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(id).unwrap().locks.all = true;
     app.ui.tool_options.vector_mode = "shape".into();
     app.ui.tool_options.pen_path_op = "combine".into();
-    app.ui.tool_options.pixel_align_stroke = true;
+    app.ui.tool_options.use_aligned_rendering = true;
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -721,9 +721,9 @@ fn pixel_align_rejected_pen_edit_preserves_new_layer_preference() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
     h.run_steps(4);
-    h.get_by_label("Pixel Align Stroke").click();
+    h.get_by_label("Align Edges").click();
     h.run_steps(3);
     assert!(h.state().ui.status_error);
-    assert!(h.state().ui.tool_options.pixel_align_stroke);
-    assert_eq!(h.get_by_label("Pixel Align Stroke").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    assert!(h.state().ui.tool_options.use_aligned_rendering);
+    assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
 }

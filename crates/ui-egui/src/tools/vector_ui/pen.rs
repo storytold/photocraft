@@ -412,7 +412,10 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
         r
     } else if let (Some(op), Some(layer), "shape") = (op, into_shape, app.ui.tool_options.vector_mode.as_str()) {
         // The selected shape layer keeps its fill and stroke; the new component cuts, intersects…
-        app.run("shape.create", json!({"kind": "path", "path": path, "addTo": layer, "op": op, "pixelAlignStroke": app.ui.tool_options.pixel_align_stroke}))
+        app.run(
+            "shape.create",
+            json!({"kind": "path", "path": path, "addTo": layer, "op": op, "useAlignedRendering": app.ui.tool_options.use_aligned_rendering}),
+        )
     } else if app.ui.tool_options.vector_mode == "shape" {
         let fill = if closed { fill_param(app) } else { Value::Null };
         let stroke = if closed {
@@ -423,7 +426,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
             stroke["color"] = json!(app.session.tools.foreground);
             stroke
         };
-        let pixel_align_stroke = app.ui.tool_options.pixel_align_stroke;
+        let use_aligned_rendering = app.ui.tool_options.use_aligned_rendering;
         app.run(
             "shape.create",
             json!({
@@ -431,7 +434,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
                 "path": path,
                 "fill": fill,
                 "stroke": stroke,
-                "pixelAlignStroke": pixel_align_stroke
+                "useAlignedRendering": use_aligned_rendering
             }),
         )
     } else if let Some((name, p)) =
@@ -645,7 +648,7 @@ fn commit_resumed_on_layer(app: &mut PhotocraftApp, pen: &PenPath, path: &Value,
     };
     let mut params = json!({"layer": id, "path": p});
     if app.ui.tool_options.vector_mode == "shape" {
-        params["pixelAlignStroke"] = json!(app.ui.tool_options.pixel_align_stroke);
+        params["useAlignedRendering"] = json!(app.ui.tool_options.use_aligned_rendering);
     }
     if closed && sh.fill.is_none() && sh.path.subpaths.iter().all(|s| !s.closed) {
         params["fill"] = fill_param(app);
@@ -923,7 +926,7 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
     let params = |app: &mut PhotocraftApp| {
         let (path, consume) = draft_shape_path(app, pen).ok_or_else(|| tl!("No document").to_string())?;
         let params = json!({"path": path, "consumeWorkPath": consume, "fill": fill_param(app), "stroke": stroke_param(app),
-            "pixelAlignStroke": app.ui.tool_options.pixel_align_stroke});
+            "useAlignedRendering": app.ui.tool_options.use_aligned_rendering});
         Ok::<_, String>((params, consume))
     };
     let made = match &owner {

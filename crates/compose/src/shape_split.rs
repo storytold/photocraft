@@ -60,7 +60,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     depth.hash(&mut h);
     format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(&mut h);
     (sh.density.to_bits(), sh.feather.to_bits()).hash(&mut h);
-    sh.pixel_align_stroke.hash(&mut h);
+    sh.use_aligned_rendering.hash(&mut h);
     sh.psd_raw.is_some().hash(&mut h);
     sh.psd_coordinate_frame.hash(&mut h);
     if let Some(c) = &sh.cache {
@@ -83,7 +83,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     // Removing the outline must not newly qualify a live Line/ArrowLine fill for
     // a half-pixel shift: interior effects and clipped layers need the original placement.
     let align_fill = photocraft_vector::pixel_aligned_line_fill_path(sh).is_some();
-    let fill_only = ShapeLayer { stroke: None, cache: None, pixel_align_stroke: align_fill, ..sh.clone() };
+    let fill_only = ShapeLayer { stroke: None, cache: None, use_aligned_rendering: align_fill, ..sh.clone() };
     let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
     let mut parts = (photocraft_vector::render_shape(&fill_only, fmt, canvas), photocraft_vector::render_shape(&stroke_only, fmt, canvas));
     if let Some(cache) = &sh.cache {
@@ -248,12 +248,12 @@ mod tests {
                 live: Some(live),
                 fill: Some(Fill::Solid(Color::BLACK)),
                 stroke: Some(ShapeStroke { width: 2.0, paint: Fill::Solid(if transparent { Color::TRANSPARENT } else { Color::BLACK }), ..Default::default() }),
-                pixel_align_stroke: true,
+                use_aligned_rendering: true,
                 ..Default::default()
             };
             let path = sh.path.clone();
             let (fill, _) = split(&sh, canvas, SampleType::U8).unwrap();
-            let expected = ShapeLayer { stroke: None, pixel_align_stroke: transparent, ..sh.clone() };
+            let expected = ShapeLayer { stroke: None, use_aligned_rendering: transparent, ..sh.clone() };
             let expected = photocraft_vector::render_shape(&expected, PixelFormat::RGBA8, canvas);
             for y in 0..100 {
                 for x in 0..100 {
@@ -276,7 +276,7 @@ mod tests {
             ..ShapeLayer::default()
         };
         for aligned in [false, true, false] {
-            sh.pixel_align_stroke = aligned;
+            sh.use_aligned_rendering = aligned;
             let (_, stroke) = split(&sh, canvas, SampleType::U8).expect("stroked shape");
             let alpha = |y| photocraft_raster::to_rgba(&stroke.format(), &stroke.pixel(31, y))[3];
             if aligned {
@@ -289,18 +289,20 @@ mod tests {
         }
     }
 
-    /// A retained PSD marker changes near-integer eligibility and must distinguish cache entries.
+    /// Fractional edges align independently of PSD provenance and cached prior toggles.
     #[test]
     fn split_cache_distinguishes_psd_quantization_allowance() {
         let canvas = Rect::new(0, 0, 64, 64);
         let mut sh = ShapeLayer {
             path: Path::new(vec![Subpath::polyline(&[(13.0, 27.0000005), (53.0, 27.0000005)])]),
-            pixel_align_stroke: true,
+            use_aligned_rendering: true,
             stroke: Some(ShapeStroke { width: 1.0, ..ShapeStroke::default() }),
+            psd_raw: Some(std::sync::Arc::new(Vec::new())),
             ..ShapeLayer::default()
         };
         for imported in [false, true, false] {
             sh.psd_coordinate_frame = imported.then_some([64, 64]);
+            sh.use_aligned_rendering = imported;
             let (_, stroke) = split(&sh, canvas, SampleType::U8).expect("stroked shape");
             let alpha = photocraft_raster::to_rgba(&stroke.format(), &stroke.pixel(31, 26))[3];
             if imported {

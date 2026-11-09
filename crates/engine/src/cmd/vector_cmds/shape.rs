@@ -44,7 +44,7 @@ pub(super) fn copy_shape_fill(s: &mut Session, _p: &Value) -> Result<Value> {
 pub(super) fn copy_shape_stroke(s: &mut Session, _p: &Value) -> Result<Value> {
     let shape = active_shape(s).map_err(EngineError::Other)?;
     let stroke = shape.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
-    s.path_stroke_clipboard = Some((stroke, shape.pixel_align_stroke));
+    s.path_stroke_clipboard = Some((stroke, shape.use_aligned_rendering));
     Ok(Value::Null)
 }
 
@@ -59,11 +59,11 @@ pub(super) fn paste_shape_fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn paste_shape_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    let (stroke, pixel_align_stroke) = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
+    let (stroke, use_aligned_rendering) = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
     let id = layer_id(s, p)?;
     with_shape(s, id, "Paste Complete Stroke", |shape, _| {
         shape.stroke = Some(stroke);
-        shape.pixel_align_stroke = pixel_align_stroke;
+        shape.use_aligned_rendering = use_aligned_rendering;
         Ok(())
     })?;
     shape_info(s, id)
@@ -393,7 +393,7 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
         "path": path_json(&sh.path),
         "fill": sh.fill.as_ref().map(fill_json),
         "stroke": sh.stroke.as_ref().map(stroke_json),
-        "pixelAlignStroke": sh.pixel_align_stroke,
+        "useAlignedRendering": sh.use_aligned_rendering,
         "live": sh.live.as_ref().map(live_json),
         "kind": sh.live.as_ref().map_or("path", live_kind),
         "bounds": bounds,
@@ -453,18 +453,18 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
-    let pixel_align_stroke = match p.get("pixelAlignStroke") {
+    let use_aligned_rendering = match p.get("useAlignedRendering") {
         None => None,
         Some(Value::Bool(enabled)) => Some(*enabled),
-        Some(_) => return Err(bad(CMD, "`pixelAlignStroke` must be a boolean")),
+        Some(_) => return Err(bad(CMD, "`useAlignedRendering` must be a boolean")),
     };
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
         with_shape(s, id, "Add Shape", |sh, _| {
-            if let Some(enabled) = pixel_align_stroke {
-                sh.pixel_align_stroke = enabled;
+            if let Some(enabled) = use_aligned_rendering {
+                sh.use_aligned_rendering = enabled;
             }
             for mut sp in path.subpaths {
                 sp.op = op;
@@ -479,7 +479,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         return shape_info(s, id);
     }
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let mut sh = ShapeLayer { path, fill, stroke, live, pixel_align_stroke: pixel_align_stroke.unwrap_or(false), ..Default::default() };
+    let mut sh = ShapeLayer { path, fill, stroke, live, use_aligned_rendering: use_aligned_rendering.unwrap_or(false), ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
@@ -513,10 +513,10 @@ fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, O
 /// that would duplicate the selected shape or vector mask.
 pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.toShape";
-    let pixel_align_stroke = match p.get("pixelAlignStroke") {
+    let use_aligned_rendering = match p.get("useAlignedRendering") {
         None => false,
         Some(Value::Bool(enabled)) => *enabled,
-        Some(_) => return Err(bad(CMD, "`pixelAlignStroke` must be a boolean")),
+        Some(_) => return Err(bad(CMD, "`useAlignedRendering` must be a boolean")),
     };
     let name = match p.get("name") {
         None | Some(Value::Null) => None,
@@ -547,16 +547,8 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.clone()),
         Some(_) => return Err(bad(CMD, "`layerName` must be a name that isn't empty")),
     };
-    let psd_coordinate_frame = if name == Some("layer") && p.get("path").is_none_or(Value::is_null) {
-        let st = s.active().ok_or(EngineError::NoDocument)?;
-        st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|layer| match &layer.content {
-            LayerContent::Shape(source) => source.psd_coordinate_frame.or_else(|| source.psd_raw.as_ref().map(|_| [st.doc.size.width, st.doc.size.height])),
-            _ => None,
-        })
-    } else {
-        None
-    };
-    let mut sh = ShapeLayer { path, fill, stroke, pixel_align_stroke, psd_coordinate_frame, ..Default::default() };
+    let psd_coordinate_frame = if p.get("path").is_none_or(Value::is_null) { converted_path_frame(s, name, &path) } else { None };
+    let mut sh = ShapeLayer { path, fill, stroke, use_aligned_rendering, psd_coordinate_frame, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));
@@ -570,6 +562,30 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     shape_info(s, id)
 }
 
+/// Reuse a source grid only when retained PSD bytes still describe the copied path.
+fn converted_path_frame(s: &Session, name: Option<&str>, path: &Path) -> Option<[u32; 2]> {
+    let st = s.active()?;
+    let [w, h] = [st.doc.size.width, st.doc.size.height];
+    if name == Some("layer") {
+        let layer = st.doc.layer(st.active_layer?)?;
+        if let LayerContent::Shape(source) = &layer.content {
+            return source.psd_coordinate_frame.or_else(|| source.psd_raw.as_ref().map(|_| [w, h]));
+        }
+        return layer
+            .psd_blocks
+            .iter()
+            .filter(|(key, _)| key == b"vsms" || key == b"vmsk")
+            .any(|(_, data)| photocraft_io::vector_map::vector_mask_from_block(data, w, h).is_some_and(|mask| mask.path == *path))
+            .then_some([w, h]);
+    }
+    if super::is_work(name) {
+        return None;
+    }
+    let saved = st.doc.paths.iter().find(|p| Some(p.name.as_str()) == name)?;
+    let raw = saved.psd_raw.as_ref()?;
+    (photocraft_io::vector_map::path_from_resource(raw, w, h).as_ref() == Some(path)).then_some([w, h])
+}
+
 pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.edit";
     let id = layer_id(s, p)?;
@@ -578,10 +594,11 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     with_shape(s, id, "Edit Shape", |sh, layer| {
         if let Some(v) = p.get("path") {
-            sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
+            let path = parse_path(v).map_err(|e| bad(CMD, e))?;
+            sh.psd_coordinate_frame = (path == sh.path).then_some(sh.psd_coordinate_frame).flatten();
+            sh.path = path;
             sh.live = None;
             sh.psd_raw = None;
-            sh.psd_coordinate_frame = None;
         }
         let geom_keys = [
             "kind",
@@ -640,8 +657,8 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = p.get("stroke") {
             sh.stroke = parse_stroke(v, sh.stroke.clone(), fgc).map_err(|e| bad(CMD, e))?;
         }
-        if let Some(value) = p.get("pixelAlignStroke") {
-            sh.pixel_align_stroke = value.as_bool().ok_or_else(|| bad(CMD, "`pixelAlignStroke` must be a boolean"))?;
+        if let Some(value) = p.get("useAlignedRendering") {
+            sh.use_aligned_rendering = value.as_bool().ok_or_else(|| bad(CMD, "`useAlignedRendering` must be a boolean"))?;
         }
         if let Some(n) = name {
             layer.name = n;

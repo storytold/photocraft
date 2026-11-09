@@ -170,33 +170,27 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
 /// Edit the target layer before drawing, or the captured setting during an owned draft.
 /// Deferring an in-flight edit to its commit keeps that draft's source revision valid.
 fn pen_pixel_align_option(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let draft = app
-        .ui
-        .pen
-        .as_ref()
-        .and_then(|pen| pen.owner.as_ref())
-        .filter(|owner| owner.valid(app) && owner.options.vector_mode == "shape")
-        .map(|owner| owner.options.pixel_align_stroke);
+    let draft = app.ui.pen.as_ref().and_then(|pen| pen.owner.as_ref()).filter(|owner| owner.valid(app)).map(|owner| owner.options.use_aligned_rendering);
     let target = if app.ui.pen.is_none() && super::pen::pen_path_op(&app.ui.tool_options).is_some() { selected_shape(&app.session) } else { None };
     let layer_value = app
         .session
         .active()
         .and_then(|st| target.and_then(|id| st.doc.layer(id)))
-        .and_then(|layer| if let LayerContent::Shape(shape) = &layer.content { Some(shape.pixel_align_stroke) } else { None });
-    let mut enabled = draft.or(layer_value).unwrap_or(app.ui.tool_options.pixel_align_stroke);
-    let previous = app.ui.tool_options.pixel_align_stroke;
-    if !crate::widgets::checkbox(ui, &mut enabled, tl!("Pixel Align Stroke")).changed() {
+        .and_then(|layer| if let LayerContent::Shape(shape) = &layer.content { Some(shape.use_aligned_rendering) } else { None });
+    let mut enabled = draft.or(layer_value).unwrap_or(app.ui.tool_options.use_aligned_rendering);
+    let previous = app.ui.tool_options.use_aligned_rendering;
+    if !crate::widgets::checkbox(ui, &mut enabled, tl!("Align Edges")).changed() {
         return;
     }
-    app.ui.tool_options.pixel_align_stroke = enabled;
+    app.ui.tool_options.use_aligned_rendering = enabled;
     if draft.is_some() {
         if let Some(owner) = app.ui.pen.as_mut().and_then(|pen| pen.owner.as_mut()) {
-            owner.options.pixel_align_stroke = enabled;
+            owner.options.use_aligned_rendering = enabled;
         }
     } else if let Some(layer) = target
-        && let Err(error) = app.run("shape.edit", json!({"layer":layer.0,"pixelAlignStroke":enabled}))
+        && let Err(error) = app.run("shape.edit", json!({"layer":layer.0,"useAlignedRendering":enabled}))
     {
-        app.ui.tool_options.pixel_align_stroke = previous;
+        app.ui.tool_options.use_aligned_rendering = previous;
         app.ui.status = error;
         app.ui.status_error = true;
     }
@@ -266,6 +260,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     };
     let t = Tokens::get(ui.ctx());
     let mut edit: Option<Value> = None;
+    let mut pixel_align_edit = None;
     // A swatch picked in a Fill/Stroke popover joins the Recently Used Colors once the edit took it.
     let mut recent: Option<[f32; 3]> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
@@ -320,14 +315,15 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 edit = Some(json!({"stroke": {"width": w}, "coalesce": coalesce("stroke-w")}));
             }
         });
-        let mut pixel_align_stroke = sh.pixel_align_stroke;
-        if crate::widgets::checkbox(ui, &mut pixel_align_stroke, tl!("Pixel Align Stroke")).changed() {
+        let mut use_aligned_rendering = sh.use_aligned_rendering;
+        if crate::widgets::checkbox(ui, &mut use_aligned_rendering, tl!("Align Edges")).changed() {
             // Losing width-field focus can commit an expression in this same click.
             let edit = edit.get_or_insert_with(|| json!({}));
-            edit["pixelAlignStroke"] = json!(pixel_align_stroke);
+            edit["useAlignedRendering"] = json!(use_aligned_rendering);
             edit["coalesce"] = json!(coalesce("pixel-align-stroke"));
         }
 
+        pixel_align_edit = edit.as_ref().and_then(|patch| patch.get("useAlignedRendering")).cloned();
         let style = sh.stroke.as_ref().map(crate::shape_stroke_ui::StrokeOptions::from).unwrap_or_default();
         let stroke_enabled = sh.stroke.as_ref().is_some_and(|stroke| stroke.width > 0.0);
         if let Some(change) = crate::shape_stroke_ui::button(
@@ -358,7 +354,6 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         }
     }
     // Geometry fields may commit on the same click as the alignment checkbox.
-    let pixel_align_edit = edit.as_ref().and_then(|patch| patch.get("pixelAlignStroke")).cloned();
     if let Some(live) = &sh.live
         && crate::props_layout::section(ui, "liveShape", tl!("Shape"))
     {
@@ -490,7 +485,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     }
     if let Some(mut p) = edit {
         if let Some(value) = pixel_align_edit {
-            p["pixelAlignStroke"] = value;
+            p["useAlignedRendering"] = value;
         }
         p["layer"] = json!(id.0);
 

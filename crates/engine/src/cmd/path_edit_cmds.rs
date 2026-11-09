@@ -80,7 +80,7 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
         Some(id) => with_shape(s, id, label, |sh, _| {
             let previous = sh.path.clone();
             f(&mut sh.path).map_err(|e| bad(cmd, e))?;
-            if sh.path != previous {
+            if !preserves_psd_grid(&previous, &sh.path) {
                 sh.psd_coordinate_frame = None;
             }
             sh.live = None;
@@ -94,6 +94,17 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
         })?,
     };
     Ok(json!({ "name": name, "path": path }))
+}
+
+/// Only a verified whole-path integer translation retains the source quantization grid.
+fn preserves_psd_grid(before: &Path, after: &Path) -> bool {
+    if before == after {
+        return true;
+    }
+    let first = |path: &Path| path.subpaths.first().and_then(|s| s.knots.first()).map(|k| k.anchor);
+    let (Some(a), Some(b)) = (first(before), first(after)) else { return false };
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    dx.is_finite() && dy.is_finite() && dx == dx.round() && dy == dy.round() && before.transform(&photocraft_geom::Affine::translate(dx, dy)) == *after
 }
 
 fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {

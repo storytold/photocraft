@@ -149,7 +149,7 @@ pub(super) fn fill_param(app: &PhotocraftApp) -> Value {
 pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Value, String> {
     geometry["fill"] = fill_param(app);
     geometry["stroke"] = stroke_param(app);
-    geometry["pixelAlignStroke"] = json!(app.ui.tool_options.pixel_align_stroke);
+    geometry["useAlignedRendering"] = json!(app.ui.tool_options.use_aligned_rendering);
     app.run("shape.create", geometry)
 }
 
@@ -233,7 +233,7 @@ pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], en
         path,
         fill: (paint && o.shape_fill).then(|| tool_paint(app, false)),
         stroke: (paint && o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
-        pixel_align_stroke: o.pixel_align_stroke,
+        use_aligned_rendering: o.use_aligned_rendering,
         live,
         ..Default::default()
     })
@@ -261,7 +261,7 @@ pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
     let transform = Affine { m: [x.x as f64, x.y as f64, y.x as f64, y.y as f64, origin.x as f64, origin.y as f64] };
     // This lightweight screen overlay retains the existing display-colour behaviour; document
     // rendering still goes through its format/profile path when the shape is committed.
-    if shape.pixel_align_stroke {
+    if shape.use_aligned_rendering {
         let canvas = app.session.active().map_or(photocraft_geom::Rect::EMPTY, |st| st.doc.bounds());
         crate::shape_stroke_ui::paint_document_shape_preview(painter, &shape, &transform, canvas);
     } else {

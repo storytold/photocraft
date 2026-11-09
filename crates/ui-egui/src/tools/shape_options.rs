@@ -21,7 +21,7 @@ struct SelectedShape {
     fill: Option<photocraft_doc::Fill>,
     stroke: Option<photocraft_doc::ShapeStroke>,
     live: Option<photocraft_doc::LiveShape>,
-    pixel_align_stroke: bool,
+    use_aligned_rendering: bool,
 }
 
 fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape> {
@@ -34,7 +34,7 @@ fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape>
             fill: sh.fill.clone(),
             stroke: sh.stroke.clone(),
             live: sh.live.clone(),
-            pixel_align_stroke: sh.pixel_align_stroke,
+            use_aligned_rendering: sh.use_aligned_rendering,
         }),
         _ => None,
     }
@@ -109,8 +109,8 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             o.stroke_width = enabled_stroke_width(o.stroke_width);
         }
     }
-    let previous_alignment_preference = o.pixel_align_stroke;
-    let alignment_edit = pixel_align_option(ui, &mut o.pixel_align_stroke, target.as_ref().map(|s| s.pixel_align_stroke), paint);
+    let previous_alignment_preference = o.use_aligned_rendering;
+    let alignment_edit = pixel_align_option(ui, &mut o.use_aligned_rendering, target.as_ref().map(|s| s.use_aligned_rendering), paint);
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
@@ -195,7 +195,8 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     if let (Some(mut p), Some(s)) = (edit, &target) {
         p["layer"] = json!(s.layer.0);
         if let Err(e) = app.run("shape.edit", p) {
-            app.ui.tool_options.pixel_align_stroke = alignment_edit.as_ref().map_or(app.ui.tool_options.pixel_align_stroke, |_| previous_alignment_preference);
+            app.ui.tool_options.use_aligned_rendering =
+                alignment_edit.as_ref().map_or(app.ui.tool_options.use_aligned_rendering, |_| previous_alignment_preference);
             app.ui.status = e;
             app.ui.status_error = true;
             recent = None;
@@ -215,7 +216,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
 /// Append the checkbox change without replacing another control's pending edit or coalesce key.
 fn merge_pixel_alignment_edit(mut edit: Option<Value>, alignment: Option<Value>) -> Option<Value> {
     if let Some(alignment) = alignment {
-        edit.get_or_insert_with(|| json!({}))["pixelAlignStroke"] = alignment["pixelAlignStroke"].clone();
+        edit.get_or_insert_with(|| json!({}))["useAlignedRendering"] = alignment["useAlignedRendering"].clone();
     }
     edit
 }
@@ -226,11 +227,11 @@ fn pixel_align_option(ui: &mut egui::Ui, preference: &mut bool, selected: Option
     }
     crate::widgets::vline(ui, 22.0);
     let mut pixel_align = selected.unwrap_or(*preference);
-    if !crate::widgets::checkbox(ui, &mut pixel_align, tl!("Pixel Align Stroke")).changed() {
+    if !crate::widgets::checkbox(ui, &mut pixel_align, tl!("Align Edges")).changed() {
         return None;
     }
     *preference = pixel_align;
-    Some(json!({"pixelAlignStroke": pixel_align}))
+    Some(json!({"useAlignedRendering": pixel_align}))
 }
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.

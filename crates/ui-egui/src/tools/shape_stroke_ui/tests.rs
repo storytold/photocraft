@@ -8,7 +8,7 @@ fn pixel_align_preview_pads_fill_texture_before_fractional_projection() {
         let shape = photocraft_doc::ShapeLayer {
             path: photocraft_vector::shapes::rect(20.0, 20.0, side, 30.0),
             fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
-            pixel_align_stroke: true,
+            use_aligned_rendering: true,
             ..Default::default()
         };
         let ctx = egui::Context::default();
@@ -63,7 +63,7 @@ fn pixel_align_floating_preview_survives_root_cleanup_and_completes() {
     let shape = photocraft_doc::ShapeLayer {
         path: photocraft_vector::shapes::rect(0.0, 0.0, 2050.0, 2050.0),
         fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
-        pixel_align_stroke: true,
+        use_aligned_rendering: true,
         ..Default::default()
     };
     let id = document_preview_id(egui::ViewportId::from_hash_of("floating-preview"), egui::LayerId::background());
@@ -114,7 +114,7 @@ fn pixel_align_preview_preserves_canvas_gradient_frame() {
         path: photocraft_vector::shapes::rect(20.0, 20.0, 140.0, 80.0),
         fill: Some(gradient.clone()),
         stroke: Some(ShapeStroke { width: 1.0, paint: gradient, ..Default::default() }),
-        pixel_align_stroke: true,
+        use_aligned_rendering: true,
         ..Default::default()
     };
     let ctx = egui::Context::default();
@@ -163,7 +163,7 @@ fn pixel_align_oversized_preview_preserves_document_coverage() {
                     dash_offset: -0.5,
                     ..Default::default()
                 }),
-                pixel_align_stroke: true,
+                use_aligned_rendering: true,
                 ..Default::default()
             };
             let ctx = egui::Context::default();
@@ -219,7 +219,7 @@ fn pixel_align_preview_texture_matches_document_coverage_before_zoom() {
                                 dash_offset: 0.5,
                                 ..Default::default()
                             }),
-                            pixel_align_stroke: true,
+                            use_aligned_rendering: true,
                             ..Default::default()
                         };
                         let ctx = egui::Context::default();
@@ -279,7 +279,7 @@ fn pixel_align_document_preview_rejects_oversized_raster_allocations() {
     let shape = photocraft_doc::ShapeLayer {
         path: photocraft_vector::shapes::rect(0.0, 0.0, 100_000.0, 100_000.0),
         fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
-        pixel_align_stroke: true,
+        use_aligned_rendering: true,
         ..Default::default()
     };
     let visible = photocraft_geom::Rect::new(0, 0, 100_000, 100_000);
@@ -300,7 +300,7 @@ fn pixel_align_large_preview_completes_in_bounded_passes() {
     let shape = photocraft_doc::ShapeLayer {
         path: photocraft_vector::shapes::rect(0.0, 0.0, 2050.0, 2050.0),
         fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
-        pixel_align_stroke: true,
+        use_aligned_rendering: true,
         ..Default::default()
     };
     let compiled = photocraft_vector::CompiledShape::new(&shape, photocraft_vector::DEFAULT_TOLERANCE, bounds);
@@ -997,7 +997,7 @@ fn pixel_align_preview_views_progress_independently_and_release_hidden_view() {
     let shape = photocraft_doc::ShapeLayer {
         path: photocraft_vector::shapes::rect(0.0, 0.0, 2050.0, 2050.0),
         fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
-        pixel_align_stroke: true,
+        use_aligned_rendering: true,
         ..Default::default()
     };
     let layers = [egui::LayerId::background(), egui::LayerId::new(egui::Order::Middle, egui::Id::unique("focused-view"))];
@@ -1034,7 +1034,7 @@ fn pixel_align_round2_changing_preview_has_complete_fill() {
     let mut shape = photocraft_doc::ShapeLayer {
         path: photocraft_vector::shapes::rect(0.0, 0.0, 2050.0, 2050.0),
         fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
-        pixel_align_stroke: true,
+        use_aligned_rendering: true,
         ..Default::default()
     };
     for x in [0.0, 1.0, 2.0] {

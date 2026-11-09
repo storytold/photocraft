@@ -1093,7 +1093,7 @@ fn arrow_document_is_backward_compatible() {
 }
 /// Native files keep enabled alignment; missing or disabled fields preserve legacy rendering.
 #[test]
-fn pixel_align_stroke_roundtrips_and_defaults_for_legacy_files() {
+fn use_aligned_rendering_roundtrips_and_defaults_for_legacy_files() {
     use photocraft_doc::{ShapeLayer, ShapeStroke};
     use photocraft_format::manifest::ContentM;
 
@@ -1104,7 +1104,7 @@ fn pixel_align_stroke_roundtrips_and_defaults_for_legacy_files() {
         LayerContent::Shape(ShapeLayer {
             path: photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(10.0, 10.0), (70.0, 10.0), (70.0, 70.0), (10.0, 70.0)])]),
             stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
-            pixel_align_stroke: true,
+            use_aligned_rendering: true,
             psd_coordinate_frame: Some([1000, 2000]),
             ..Default::default()
         }),
@@ -1119,23 +1119,23 @@ fn pixel_align_stroke_roundtrips_and_defaults_for_legacy_files() {
     let layer = manifest.document.layers.iter().find(|l| l.name == "Pixel aligned rectangle").unwrap();
 
     let stored = serde_json::to_value(&layer.content).unwrap();
-    assert_eq!(stored["pixel_align_stroke"], true);
+    assert_eq!(stored["use_aligned_rendering"], true);
 
     // A legacy manifest without the new property defaults to false.
     let mut legacy = stored.clone();
-    legacy.as_object_mut().unwrap().remove("pixel_align_stroke");
+    legacy.as_object_mut().unwrap().remove("use_aligned_rendering");
 
     let old_content: ContentM = serde_json::from_value(legacy).unwrap();
-    assert!(matches!(old_content, ContentM::Shape { pixel_align_stroke: false, .. }));
+    assert!(matches!(old_content, ContentM::Shape { use_aligned_rendering: false, .. }));
 
     // Disabled alignment must not add a new field to legacy-style manifests.
     let mut disabled = layer.content.clone();
-    if let ContentM::Shape { pixel_align_stroke, .. } = &mut disabled {
-        *pixel_align_stroke = false;
+    if let ContentM::Shape { use_aligned_rendering, .. } = &mut disabled {
+        *use_aligned_rendering = false;
     }
 
     let disabled_json = serde_json::to_value(disabled).unwrap();
-    assert!(disabled_json.get("pixel_align_stroke").is_none());
+    assert!(disabled_json.get("use_aligned_rendering").is_none());
 }
 
 #[test]
@@ -1143,7 +1143,11 @@ fn pixel_align_round2_legacy_psd_provenance_is_migrated() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let layer = Layer::new(
         "legacy PSD",
-        LayerContent::Shape(photocraft_doc::ShapeLayer { pixel_align_stroke: true, psd_raw: Some(std::sync::Arc::new(vec![1, 2, 3])), ..Default::default() }),
+        LayerContent::Shape(photocraft_doc::ShapeLayer {
+            use_aligned_rendering: false,
+            psd_raw: Some(std::sync::Arc::new(vec![1, 2, 3])),
+            ..Default::default()
+        }),
     );
     let id = layer.id;
     doc.layers.push(layer);

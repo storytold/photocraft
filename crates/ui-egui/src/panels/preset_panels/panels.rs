@@ -300,7 +300,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     );
     app.ui.presets_ui = st;
     let fill = shape_fill(app);
-    let pixel_align_stroke = app.ui.tool_options.pixel_align_stroke;
+    let use_aligned_rendering = app.ui.tool_options.use_aligned_rendering;
     for e in events {
         match &e {
             Ev::Select(k) => {
@@ -311,11 +311,11 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             Ev::Activate(k) => {
                 app.ui.presets_ui.custom_shape = k.clone();
-                run(app, "shape.presets.place", json!({"preset": k, "fill": fill, "pixelAlignStroke": pixel_align_stroke}));
+                run(app, "shape.presets.place", json!({"preset": k, "fill": fill, "useAlignedRendering": use_aligned_rendering}));
             }
             Ev::Drop(k, pos) => {
                 app.ui.presets_ui.custom_shape = k.clone();
-                let mut p = json!({"preset": k, "fill": fill, "pixelAlignStroke": pixel_align_stroke});
+                let mut p = json!({"preset": k, "fill": fill, "useAlignedRendering": use_aligned_rendering});
                 if let (Some(c), Some(d)) = (crate::canvas::doc_point_at(app, *pos), app.session.active()) {
                     let side = (d.doc.size.width.min(d.doc.size.height) as f64 * 0.3).max(8.0);
                     p["rect"] = json!([c[0] - side / 2.0, c[1] - side / 2.0, side, side]);
@@ -393,11 +393,11 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// Custom Shape tool drag: places the selected shape in the dragged rect (⇧ keeps proportions).
 pub fn finish_custom_shape(app: &mut PhotocraftApp, rect: [f64; 4], keep: bool, fill: Value, stroke: Value) {
     let name = app.ui.presets_ui.shape().to_string();
-    let pixel_align_stroke = app.ui.tool_options.pixel_align_stroke;
+    let use_aligned_rendering = app.ui.tool_options.use_aligned_rendering;
     let r = run(
         app,
         "shape.presets.place",
-        json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke, "pixelAlignStroke": pixel_align_stroke}),
+        json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke, "useAlignedRendering": use_aligned_rendering}),
     );
     if r.is_none() && !photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == name)) {
         let template = "No custom shape \"{name}\": pick one in the options bar or Window › Shapes";

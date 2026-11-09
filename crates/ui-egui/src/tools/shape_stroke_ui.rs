@@ -207,7 +207,7 @@ fn new_document_preview(
             proxy.path =
                 proxy.path.transform(&photocraft_geom::Affine { m: [scale, 0.0, 0.0, scale, -f64::from(bounds.x0) * scale, -f64::from(bounds.y0) * scale] });
             proxy.live = None;
-            proxy.pixel_align_stroke = false;
+            proxy.use_aligned_rendering = false;
             proxy.feather *= scale as f32;
             if let Some(stroke) = &mut proxy.stroke {
                 stroke.width *= scale as f32;

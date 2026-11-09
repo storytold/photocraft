@@ -244,7 +244,7 @@ pub struct Session {
     pub style_clipboard: Option<CopiedStyle>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
-    /// Complete stroke and the source layer's Pixel Align Stroke setting.
+    /// Complete stroke and the source layer's Align Edges setting.
     pub path_stroke_clipboard: Option<(photocraft_doc::ShapeStroke, bool)>,
     /// Colour management: proofing state, monitor profile, display transforms.
     pub color: color_cmds::ColorState,
