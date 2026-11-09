@@ -502,8 +502,9 @@ fn tools_sharing_a_changed_key_cycle_with_shift() {
         tap(&mut app, &ctx, Key::B, Modifiers::SHIFT);
         seen.push(app.ui.tool);
     }
-    assert!(seen.contains(&Tool::Move), "Shift+B reaches the Move Tool: {seen:?}");
-    assert!(seen.contains(&Tool::Brush) && seen.contains(&Tool::Pencil), "and still the Brush group: {seen:?}");
+    // From outside the group Shift+B starts at its first tool in toolbar order, then steps through
+    // the whole group in that order and wraps round.
+    assert_eq!(seen, [Tool::Move, Tool::Brush, Tool::Pencil, Tool::ColorReplacement, Tool::MixerBrush, Tool::Move]);
 
     // Two tools moved onto one new key share it too. (⇧F6 is Feather, so the plain key cycles here.)
     app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "F6", "tools.select.hand": "F6"}, "allowUnknown": true})).unwrap();
@@ -518,6 +519,65 @@ fn tools_sharing_a_changed_key_cycle_with_shift() {
     // A key with modifiers still selects its one tool.
     app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Ctrl+Alt+F6"}, "allowUnknown": true})).unwrap();
     tap(&mut app, &ctx, Key::F6, crate::shortcuts::parse("Ctrl+Alt+F6").unwrap().modifiers);
+    assert_eq!(app.ui.tool, Tool::Hand);
+}
+
+/// One frame of presses and releases through the shell's shortcut handling, in this order.
+fn presses(app: &mut PhotocraftApp, ctx: &egui::Context, keys: &[(Key, Modifiers)]) {
+    let events = keys
+        .iter()
+        .flat_map(|&(key, modifiers)| {
+            [
+                Event::ModifiersChanged(modifiers),
+                Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+                Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+            ]
+        })
+        .collect();
+    ctx.begin_pass(egui::RawInput { events, ..Default::default() });
+    crate::shortcuts::handle(app, ctx);
+    ctx.end_pass().textures_delta.clear();
+}
+
+/// A tool key arriving in the same frame as a command shortcut still picks its tool, as it did
+/// when an assigned tool key was a command too: ⌘D deselects and F6 selects the Hand Tool. A
+/// shortcut that opens a dialog keeps the later press from the tools.
+#[test]
+fn a_tool_key_in_a_shortcuts_frame_still_picks_its_tool() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "F6"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Brush;
+    presses(&mut app, &ctx, &[(Key::D, Modifiers::COMMAND), (Key::F6, Modifiers::NONE)]);
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "⌘D deselected: {}", app.ui.status);
+    assert_eq!(app.ui.tool, Tool::Hand);
+    // The default letters too: ⌘D then V.
+    app.run("select.all", json!({})).unwrap();
+    presses(&mut app, &ctx, &[(Key::D, Modifiers::COMMAND), (Key::V, Modifiers::NONE)]);
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+    assert_eq!(app.ui.tool, Tool::Move);
+
+    // ⌥⌘I opens Image Size: F6 after it is the dialog's, not the Hand Tool's.
+    presses(&mut app, &ctx, &[(Key::I, Modifiers::COMMAND | Modifiers::ALT), (Key::F6, Modifiers::NONE)]);
+    assert!(!app.ui.dialogs.is_empty(), "Image Size opened: {}", app.ui.status);
+    assert_eq!(app.ui.tool, Tool::Move);
+}
+
+/// A tool given Delete takes Backspace too, as a command given Delete does (`key_matches`).
+#[test]
+fn a_tool_given_delete_takes_backspace_too() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Delete"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Brush;
+    tap(&mut app, &ctx, Key::Backspace, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Hand, "{}", app.ui.status);
+    app.ui.tool = Tool::Brush;
+    tap(&mut app, &ctx, Key::Delete, Modifiers::NONE);
     assert_eq!(app.ui.tool, Tool::Hand);
 }
 

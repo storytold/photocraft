@@ -210,7 +210,7 @@ impl Focus {
 
 /// What decides which keys [`crate::shortcuts::handle`] gives the shortcuts: an open menu, a
 /// dialog, the unsaved-changes prompt, a warp or the Filter Gallery, inline type.
-fn key_owner(app: &PhotocraftApp, ctx: &egui::Context) -> (bool, usize, bool, bool, bool, bool, bool) {
+pub(crate) fn key_owner(app: &PhotocraftApp, ctx: &egui::Context) -> (bool, usize, bool, bool, bool, bool, bool) {
     let distort = app.distort.active() || app.distort.gallery.is_some();
     (
         crate::menu_nav::is_open(ctx),
