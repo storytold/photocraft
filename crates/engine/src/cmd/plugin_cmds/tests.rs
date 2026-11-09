@@ -486,9 +486,9 @@ fn skin_smooth_checks_icc_before_editing_at_every_depth() {
 }
 
 /// A +1-stop, tone-only run has an independent RGB oracle: double the input, then clamp.
-/// Keep the fractional selection and its processing bounds; check the fully selected band.
+/// Keep the selection bounds; check unselected, 40%-selected and fully selected pixels.
 #[test]
-fn skin_smooth_full_selection_matches_independent_exposure_oracle_at_every_depth() {
+fn skin_smooth_selection_matches_independent_exposure_oracle_at_every_depth() {
     registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
     for depth in [8, 16, 32] {
         let mut s = doc(depth);
@@ -511,12 +511,16 @@ fn skin_smooth_full_selection_matches_independent_exposure_oracle_at_every_depth
         let mut largest_change = 0.0_f32;
         for (i, (original, filtered)) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0.iter()).enumerate() {
             let (x, y) = (i % 40, i / 40);
-            if (4..30).contains(&x) && (9..20).contains(&y) {
-                assert_eq!(filtered[3], original[3]);
+            assert_eq!(filtered[3], original[3]);
+            // Unselected pixels and hidden RGB on fully transparent pixels stay exact.
+            if !(4..30).contains(&x) || !(4..20).contains(&y) || original[3] == 0.0 {
+                assert_eq!(original, filtered, "{depth}: unselected or transparent pixel {x},{y}");
+            } else {
+                let coverage = if y < 9 { 0.4 } else { 1.0 };
                 for channel in 0..3 {
-                    // The plug-in preserves hidden RGB on fully transparent pixels.
-                    let expected = if original[3] == 0.0 { original[channel] } else { (original[channel] * 2.0).min(1.0) };
-                    assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: full-strength RGB at {x},{y}, channel {channel}");
+                    let exposed = (original[channel] * 2.0).min(1.0);
+                    let expected = original[channel] * (1.0 - coverage) + exposed * coverage;
+                    assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: coverage {coverage} at {x},{y}, channel {channel}");
                     largest_change = largest_change.max((expected - original[channel]).abs());
                 }
             }
