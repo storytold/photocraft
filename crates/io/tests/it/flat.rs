@@ -1228,7 +1228,8 @@ fn dds_writes_the_alpha_channel_as_the_texture_alpha() {
     assert!(!img.layout().has_alpha() || img.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255));
 }
 
-/// Opt-in, release: `cargo test --release -p photocraft-io --test it -- flat::opens_a_jpeg_over_a_gigapixel
+/// Opt-in, release, on Linux (elsewhere free memory isn't known and the default cap stays):
+/// `cargo test --release -p photocraft-io --test it -- flat::opens_a_jpeg_over_a_gigapixel
 /// --ignored --nocapture`. A 33,000 × 33,000 px grey baseline JPEG (1.09 GP) opens: past the
 /// default 2^30 px it failed with "1089000000 pixels exceed max 1073741824". No JPEG past that
 /// cap fits an ordinary test run; [`photocraft_io`]'s `jpeg_limits_tests` cover the admission.

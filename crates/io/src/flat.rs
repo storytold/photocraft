@@ -71,7 +71,8 @@ const JPEG_MAX_SIDE: u32 = 65_535;
 ///
 /// Sizes the default limits open, the files the whole-coefficient decoder takes (whose working
 /// set is several times the image: [`codecs::JpegInfo::whole_coefficients`]) and 32-bit targets
-/// keep the default limits.
+/// keep the default limits, and so does every file where free memory isn't known: the decoder
+/// allocates its output infallibly, so a decode the machine can't hold would end the process.
 fn jpeg_limits(bytes: &[u8], opts: &crate::ImportOptions, available: Option<u64>) -> Result<codecs::Limits, IoError> {
     let limits = decode_limits(opts);
     let Some(info) = codecs::jpeg_info(bytes) else { return Ok(limits) };
@@ -79,9 +80,14 @@ fn jpeg_limits(bytes: &[u8], opts: &crate::ImportOptions, available: Option<u64>
     if info.whole_coefficients || !cfg!(target_pointer_width = "64") || !needs_memory_check(w, h, info.layout, CSample::U8) {
         return Ok(limits);
     }
+    let Some(available) = available else { return Ok(limits) };
     // Linux overcommits: a decode the machine can't hold is allocated, and writing it has the
-    // process killed. The decoded image and the document built from it are checked first.
-    crate::memory::check_fits(w, h, flattened_import_bytes(w, h, info.layout, CSample::U8, 0, 0), available)?;
+    // process killed. Checked first: the decoded image and the document built from it, or the
+    // decoded image and the coefficients a progressive decode holds beside it, whichever is more.
+    let decoded = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.layout.channels() as u64);
+    let decoding = decoded.saturating_add(info.progressive_coefficients);
+    let needed = flattened_import_bytes(w, h, info.layout, CSample::U8, 0, 0).max(decoding);
+    crate::memory::check_fits(w, h, needed, Some(available))?;
     Ok(codecs::Limits { max_width: JPEG_MAX_SIDE, max_height: JPEG_MAX_SIDE, max_pixels: u64::from(JPEG_MAX_SIDE).pow(2), ..limits })
 }
 
@@ -3261,7 +3267,29 @@ mod jpeg_limits_tests {
         assert!(decode_limits(&opts).check(48_000, 34_200, ChannelLayout::Rgb, CSample::U8).is_err(), "the default cap");
         assert_eq!(limits.max_alloc, decode_limits(&opts).max_alloc, "the byte budget");
         assert!(limits.check(65_536, 1, ChannelLayout::Gray, CSample::U8).is_err(), "past a JPEG's own side");
-        assert_eq!(jpeg_limits(&big, &opts, None).unwrap(), limits, "unknown free memory is not a refusal");
+        assert_eq!(jpeg_limits(&big, &opts, None).unwrap(), decode_limits(&opts), "unknown free memory keeps the default cap");
+    }
+
+    /// A progressive frame is admitted against its decode's peak: the decoded image and every
+    /// coefficient, which for a 4:4:4 frame is more than the image and its document.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_progressive_jpeg_is_admitted_against_its_coefficients() {
+        let opts = crate::ImportOptions::default();
+        let (w, h) = (48_000u32, 34_200u32);
+        let document = flattened_import_bytes(w, h, ChannelLayout::Rgb, CSample::U8, 0, 0);
+        // 3 bytes of image and 3 × 2 bytes of coefficients per pixel, the MCUs filling 48,000 × 34,200.
+        let decoding = u64::from(w * h) * 3 + 6_000 * 4_275 * 3 * 128;
+        assert!(decoding > document);
+        let progressive = jpeg_header(0xC2, 8, 48_000, 34_200, 3);
+        let baseline = jpeg_header(0xC0, 8, 48_000, 34_200, 3);
+        // Room for the document but not for the coefficients: the baseline frame opens, the
+        // progressive one is refused.
+        let room = Some(document + crate::memory::RESERVE);
+        assert!(jpeg_limits(&baseline, &opts, room).is_ok());
+        let e = jpeg_limits(&progressive, &opts, room).unwrap_err().to_string();
+        assert!(e.contains("not enough memory"), "{e}");
+        assert!(jpeg_limits(&progressive, &opts, Some(decoding + crate::memory::RESERVE)).is_ok());
     }
 
     /// Sizes the default limits open are not checked, and a file for the whole-coefficient
