@@ -673,7 +673,7 @@ fn native_filters_inner(
                 continue;
             }
             Operation::Average => {
-                processed = match photocraft_algo::average::apply_with(&processed, extent, bounds, None, ctl) {
+                processed = match photocraft_algo::average::apply_preserving_alpha_with(&processed, extent, bounds, None, ctl) {
                     Ok(surface) => surface,
                     Err(photocraft_algo::average::Error::Cancelled) => return Err(IoError::Cancelled),
                     Err(error) => return Ok(Err(error.to_string().into())),
@@ -3118,9 +3118,9 @@ mod tests {
         assert!(operation("filter.pixelate.mosaic", &serde_json::json!({"cellSize":201})).is_err());
     }
 
-    /// Use an independent native weighted-average result to verify owner-domain analysis and single component envelope application.
+    /// Use an independent straight-color mean to verify owner-domain analysis, preserved alpha and one component envelope.
     #[test]
-    fn coverage_average_uses_native_weighted_mean_and_component_envelope() {
+    fn coverage_average_preserves_native_alpha_and_applies_component_envelope_once() {
         let bounds = Rect::new(-2, 3, 1, 4);
         for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
             for alpha in [false, true] {
@@ -3131,26 +3131,17 @@ mod tests {
                 filter.opacity = 0.5;
                 let mut budget = super::super::MAX_PIXEL_BYTES;
                 let result = native_filters(&source, bounds, &[filter], &mut budget, &Interrupt::NONE).expect("coverage").expect("native Average");
-                // The ordinary native alpha-weighted mean ignores the transparent
-                // white pixel: (0*1 + .5*.5)/(1+.5), mean alpha=(1+.5+0)/3.
-                // Read quantized source first, independently sum that native data.
+                // Photoshop Average includes hidden colors and keeps each original alpha.
+                // Sum quantized stored data independently of the native filter implementation.
                 let pixels = source.read_region(bounds);
-                let mut weighted = 0.0f64;
-                let mut weight = 0.0f64;
-                let mut alpha_sum = 0.0f64;
-                for p in pixels.chunks_exact(fmt.channels()) {
-                    let rgba = photocraft_raster::to_rgba(&fmt, p);
-                    weighted += f64::from(rgba[0]) * f64::from(rgba[3]);
-                    weight += f64::from(rgba[3]);
-                    alpha_sum += f64::from(rgba[3]);
-                }
-                let mean = (weighted / weight) as f32;
-                let mean_alpha = (alpha_sum / 3.0) as f32;
+                let sum: f64 = pixels.chunks_exact(fmt.channels()).map(|p| f64::from(photocraft_raster::to_rgba(&fmt, p)[0])).sum();
+                let mean = (sum / 3.0) as f32;
                 let mut averaged = Surface::new(fmt);
                 let mut raw = Vec::new();
-                for _ in 0..3 {
+                for source_pixel in pixels.chunks_exact(fmt.channels()) {
+                    let alpha = photocraft_raster::to_rgba(&fmt, source_pixel)[3];
                     let mut pixel = vec![0.; fmt.channels()];
-                    photocraft_raster::from_rgba_into(&fmt, [mean, mean, mean, mean_alpha], &mut pixel);
+                    photocraft_raster::from_rgba_into(&fmt, [mean, mean, mean, alpha], &mut pixel);
                     raw.extend(pixel);
                 }
                 averaged.write_region(bounds, &raw);
