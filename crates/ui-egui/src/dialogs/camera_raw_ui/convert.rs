@@ -107,6 +107,10 @@ impl From<photocraft_raster::Surface> for Source {
     }
 }
 
+/// A raw proxy's straight RGBA pixels, and whether Temperature / Tint were applied at the raw
+/// stage ([`photocraft_io::raw::RawPixels::white_balance`]).
+pub(super) type RawProxy = (Vec<[f32; 4]>, bool);
+
 /// The preview proxy developed from a raw's binned sensor data with the settings the document
 /// was developed with, as straight RGBA: the same pixels [`box_proxy`] reads from the document,
 /// up to the binning. `Ok(None)` when its size is not `pw`×`ph` (a canvas changed since); `Err`
@@ -116,7 +120,7 @@ pub(super) fn raw_proxy(
     tuning: &photocraft_io::raw::RawTuning,
     pw: usize,
     ph: usize,
-) -> Result<Option<(Vec<[f32; 4]>, bool)>, String> {
+) -> Result<Option<RawProxy>, String> {
     let dev = raw.source.develop_proxy(tuning).map_err(|e| format!("Camera Raw preview develop failed: {e}"))?;
     Ok(((dev.width, dev.height) == (pw, ph)).then(|| (raw.document_pixels(&dev.rgb), dev.white_balance)))
 }
