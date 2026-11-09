@@ -1,9 +1,9 @@
 use super::shortcuts::normalize_shortcut;
 use super::{
     AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, DarkTheme, ExportLocation, ExportMetadata, FontPreview,
-    GenerativeBackend, GpuBackend, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PointSize,
-    PressureCurve, QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TextEngine, Theme, TypeUnit,
-    UiFontSize, UiScale, Unit, Value,
+    GenerativeBackend, GpuBackend, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor,
+    PlaybackPerformance, PointSize, PressureCurve, QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint,
+    TabletInput, TextEngine, Theme, TypeUnit, UiFontSize, UiScale, Unit, Value,
 };
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -21,10 +21,10 @@ pub const SECTIONS: [(&str, &str); 18] = [
     ("transparencyAndGamut", "Transparency & Gamut"),
     ("unitsAndRulers", "Units & Rulers"),
     ("guidesGridAndSlices", "Guides, Grid & Slices"),
-    ("plugIns", "Plug-ins"),
+    ("plugIns", "Plugins"),
     ("type", "Type"),
     ("enhancedControls", "Enhanced Controls"),
-    ("rawDefaults", "Camera Raw Defaults"),
+    ("rawDefaults", "RAW Defaults"),
     ("integrations", "Integrations"),
 ];
 
@@ -89,6 +89,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "cursors.other" => OtherCursor::NAMES,
         "integrations.generativeFillBackend" => GenerativeBackend::NAMES,
         "tools.rightClickWithPaintingTools" => RightClickPaint::NAMES,
+        "tools.tabletInput" => TabletInput::NAMES,
         "transparencyAndGamut.gridSize" => CheckerSize::NAMES,
         "transparencyAndGamut.gridColors" => CheckerColors::NAMES,
         "unitsAndRulers.rulers" | "guidesGridAndSlices.gridUnit" => Unit::NAMES,
@@ -104,6 +105,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "performance.gpuBackend" => GpuBackend::NAMES,
         "performance.linuxDisplayServer" => LinuxDisplayServer::NAMES,
         "performance.renderingMode" => RenderingMode::NAMES,
+        "actions.performance" => PlaybackPerformance::NAMES,
         _ => return None,
     })
 }
@@ -112,6 +114,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
 pub fn range(path: &str) -> Option<(f64, f64)> {
     Some(match path {
         "fileHandling.autosaveMinutes" => (1.0, 240.0),
+        "actions.pauseSeconds" => (1.0, 60.0),
         "fileHandling.recentFileCount" => (0.0, 100.0),
         "tools.nudgeBundlePauseMs" => (100.0, 10_000.0),
         "fileHandling.rasterizeSvgGroupsDeeperThan" => (0.0, photocraft_doc::MAX_GROUP_DEPTH as f64),
