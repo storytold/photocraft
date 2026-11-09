@@ -233,6 +233,51 @@ fn grid_steps(side: f32) -> usize {
     ((side / 48.0).round() as usize).clamp(2, 12)
 }
 
+/// The shield over the image outside a pending quad (#11972): grey 89 at 18 % opacity, which shows
+/// red 255, 0, 0 as 225, 16, 16, as measured in the reference application.
+pub(crate) const SHIELD: Color32 = Color32::from_rgba_premultiplied(16, 16, 16, 46);
+
+/// The canvas `canvas` (a convex polygon, document px) minus the convex quad `q`, as up to four
+/// disjoint convex pieces: each is what is left of the canvas outside one quad edge and inside the
+/// edges before it. Empty for a degenerate quad.
+pub(crate) fn shield_pieces(canvas: [[f64; 2]; 4], q: [[f64; 2]; 4]) -> Vec<Vec<[f64; 2]>> {
+    let area: f64 = (0..4).map(|i| q[i][0] * q[(i + 1) % 4][1] - q[(i + 1) % 4][0] * q[i][1]).sum();
+    if !area.is_finite() || area.abs() < 1e-9 {
+        return Vec::new();
+    }
+    let side = area.signum();
+    let mut rest = canvas.to_vec();
+    let mut out = Vec::new();
+    for i in 0..4 {
+        let (a, b) = (q[i], q[(i + 1) % 4]);
+        let outside = clip_half_plane(&rest, a, b, -side);
+        if outside.len() >= 3 {
+            out.push(outside);
+        }
+        rest = clip_half_plane(&rest, a, b, side);
+    }
+    out
+}
+
+/// One Sutherland–Hodgman step: the part of the convex polygon `poly` on the `side` (the sign of
+/// the cross product) of the line from `a` to `b`.
+fn clip_half_plane(poly: &[[f64; 2]], a: [f64; 2], b: [f64; 2], side: f64) -> Vec<[f64; 2]> {
+    let d = |p: [f64; 2]| side * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]));
+    let mut out = Vec::with_capacity(poly.len() + 1);
+    for (i, &p) in poly.iter().enumerate() {
+        let n = poly[(i + 1) % poly.len()];
+        let (dp, dn) = (d(p), d(n));
+        if dp >= 0.0 {
+            out.push(p);
+        }
+        if (dp >= 0.0) != (dn >= 0.0) && (dp - dn).abs() > f64::EPSILON {
+            let t = dp / (dp - dn);
+            out.push([p[0] + (n[0] - p[0]) * t, p[1] + (n[1] - p[1]) * t]);
+        }
+    }
+    out
+}
+
 /// The quad, its perspective grid and corner handles; corners clicked so far; the box being drawn.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     if app.ui.tool != Tool::PerspectiveCrop {
@@ -250,6 +295,13 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if let Some(q) = quad.filter(|q| q.iter().flatten().all(|v| v.is_finite())) {
         let ok = convex_quad(&q);
         let color = if ok { accent } else { Color32::from_rgb(0xe5, 0x3e, 0x3e) };
+        // The image outside the quad is dimmed (#11972), following the quad while it is dragged.
+        if ok && let Some(size) = app.session.active().map(|d| d.doc.size) {
+            let (w, h) = (f64::from(size.width), f64::from(size.height));
+            for piece in shield_pieces([[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]], q) {
+                painter.add(egui::Shape::convex_polygon(piece.iter().map(|c| scr(*c)).collect(), SHIELD, Stroke::NONE));
+            }
+        }
         let pts: Vec<Pos2> = q.iter().map(|c| scr(*c)).collect();
         if ok
             && app.ui.tool_options.perspective_crop_grid
@@ -323,6 +375,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 #[path = "perspective_crop_bar_buttons_tests.rs"]
 mod perspective_crop_bar_buttons_tests;
+
+#[cfg(test)]
+#[path = "perspective_crop_shield_tests.rs"]
+mod perspective_crop_shield_tests;
 
 #[cfg(test)]
 mod tests {
