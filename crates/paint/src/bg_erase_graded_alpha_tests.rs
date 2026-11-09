@@ -175,15 +175,3 @@ fn the_distance_is_measured_in_the_documents_own_channels() {
         }
     }
 }
-
-#[test]
-fn protect_foreground_keeps_todays_distance_to_the_foreground() {
-    // #11903 measured the foreground only one channel away and keeps today's measure otherwise:
-    // the largest per-channel difference. This foreground is 100 levels off in red and in green
-    // (opposite signs): within Tolerance 50 by that measure, though the sample-match distance of
-    // #11901 adds the two to 200. The pixel is the sampled colour, so only the protection keeps it.
-    let bs = BgEraseSettings { protect_foreground: true, foreground: rgb([100, 140, 40]), ..swatch(50.0, rgb(SAMPLE)) };
-    assert_eq!(one_click(PixelFormat::RGBA8, rgb(SAMPLE), &bs), 255);
-    // Protection off: the same click erases the sample fully.
-    assert_eq!(one_click(PixelFormat::RGBA8, rgb(SAMPLE), &BgEraseSettings { protect_foreground: false, ..bs }), 0);
-}

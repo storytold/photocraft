@@ -110,6 +110,7 @@ pub use cmd::history_select_cmds;
 pub use cmd::history_source_cmds;
 pub use cmd::image_cmds;
 pub use cmd::layer_copy_cmds;
+pub use cmd::layer_css_cmds;
 pub use cmd::layer_label_cmds;
 pub use cmd::layer_list_cmds;
 pub use cmd::layer_mask_props_cmds;
@@ -357,4 +358,6 @@ mod tests;
 #[cfg(test)]
 mod fx_mode_tests;
 
+#[cfg(test)]
+mod brush_clear_background_tests;
 pub mod command_hints;
