@@ -379,11 +379,16 @@ pub fn composite_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
     if !transparent_outside(layer) {
         return None;
     }
+    let m = if effects::has_effects(layer) { effects::margin(layer) } else { 0 };
     let own = match &layer.content {
-        LayerContent::Group(g) if g.artboard.is_none() => {
-            let mut acc = frame_stroke_bounds(layer, canvas);
+        // A shapeless group's effects cover the whole layer: `layer_bounds` gives the canvas.
+        LayerContent::Group(g) if g.artboard.is_none() && !advanced::shapeless(layer) => {
+            // Children up to its effects' reach off the canvas still cast them onto it (group
+            // effects are built past the canvas).
+            let near = canvas.inflate(m);
+            let mut acc = frame_stroke_bounds(layer, near);
             for c in g.children.iter().filter(|c| c.visible) {
-                let b = composite_bounds(c, canvas)?;
+                let b = composite_bounds(c, near)?;
                 if !b.is_empty() {
                     acc = if acc.is_empty() { b } else { acc.union(&b) };
                 }
@@ -396,7 +401,6 @@ pub fn composite_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
     if own.is_empty() {
         return Some(Rect::EMPTY);
     }
-    let m = if effects::has_effects(layer) { effects::margin(layer) } else { 0 };
     Some(own.inflate(m).intersect(&canvas))
 }
 
@@ -559,6 +563,12 @@ fn beneath(layers: &[Layer], k: usize, ancestors: &Ancestors, canvas: Rect) -> O
         if group.clipped {
             return None;
         }
+        // An artboard's background lies beneath its layers.
+        if let LayerContent::Group(gr) = &group.content
+            && let Some(ab) = gr.artboard.as_ref().filter(|ab| ab.background.rgba().is_some())
+        {
+            acc = join(acc, ab.rect.intersect(&canvas));
+        }
         acc = join(acc, beneath(outer, g, rest, canvas)?);
     }
     Some(acc)
@@ -589,11 +599,17 @@ pub fn siblings_of(doc: &Document, id: photocraft_doc::LayerId) -> Option<Placem
     Some((layers, k, path))
 }
 
-/// [`change_bounds_in`] of layer `id` where it sits in `doc`, or `None` for anywhere (or no such
-/// layer). An in-place bound: never translate it (see [`change_bounds_in`]).
+/// [`change_bounds_in`] of layer `id` where it sits in `doc`, grown by the reach of the effects
+/// of the groups around it (a parent's drop shadow), or `None` for anywhere (or no such layer).
+/// An in-place bound: never translate it (see [`change_bounds_in`]).
 pub fn layer_change_bounds(doc: &Document, id: photocraft_doc::LayerId) -> Option<Rect> {
     let (layers, k, ancestors) = siblings_of(doc, id)?;
-    change_bounds_in(layers, k, &ancestors, doc.depth, doc.bounds())
+    let reach = ancestors.iter().filter_map(|(ls, g)| ls.get(*g)).filter(|l| effects::has_effects(l)).fold(0i32, |r, l| r.saturating_add(effects::margin(l)));
+    // Bounded within that reach of the canvas, not on it: a layer just off the canvas still
+    // moves a parent's shadow onto it (group effects are built past the canvas).
+    let canvas = doc.bounds();
+    let r = change_bounds_in(layers, k, &ancestors, doc.depth, canvas.inflate(reach))?;
+    Some(if r.is_empty() { r } else { r.inflate(reach).intersect(&canvas) })
 }
 
 /// Whether the layer's content is transparent outside its bounds (every surface it draws from

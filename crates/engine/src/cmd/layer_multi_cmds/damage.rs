@@ -544,6 +544,20 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
             }
             match (x.children(), y.children()) {
                 (Some(xc), Some(yc)) => {
+                    // A change inside that moves the group's frame (a layer added, removed or
+                    // hidden at its edge) lays effects spanning that frame out again over the
+                    // whole group, beyond the change (#4053).
+                    let spans = photocraft_compose::effects::spans_frame;
+                    if (spans(x) || spans(y)) && photocraft_compose::effects_frame(x, a.bounds()) != photocraft_compose::effects_frame(y, b.bounds()) {
+                        let (Some(bx), Some(by)) = (
+                            photocraft_compose::change_bounds_in(xs, xk, px, depth, near(a.bounds())),
+                            photocraft_compose::change_bounds_in(ys, yk, py, depth, near(b.bounds())),
+                        ) else {
+                            return false;
+                        };
+                        add(out, grow(bx, a.bounds()));
+                        add(out, grow(by, b.bounds()));
+                    }
                     let reach = |l: &Layer| if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
                     let inner = Around {
                         reach: around.reach.saturating_add(reach(x).max(reach(y))),

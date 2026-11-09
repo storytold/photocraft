@@ -1527,6 +1527,33 @@ fn a_property_change_inside_a_shadowed_group_damages_the_shadow() {
     bounded_visible_step(&mut s, "layer.setProps", json!({"layer": a.0, "opacity": 0.3}));
 }
 
+/// #9329: hiding or deleting a layer at the edge of a group with a Gradient Overlay shrinks the
+/// group's frame, which lays the gradient out again over the rest of the group (#4053).
+#[test]
+fn hiding_or_deleting_a_layer_in_a_group_with_a_gradient_overlay_damages_the_group() {
+    use photocraft_doc::{Effect, FxCommon, Gradient};
+    let mut s = session(8);
+    let a = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
+    let b = rect_layer(&mut s, Rect::new(60, 40, 80, 60));
+    select_all(&mut s, &[a, b]);
+    let g = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("fx", |doc, _| {
+        doc.layer_mut(g).unwrap().effects.items.push(Effect::GradientOverlay {
+            common: FxCommon::new(photocraft_doc::BlendMode::Normal, 1.0),
+            gradient: Gradient::default(),
+            dither: false,
+            interpolation: None,
+        });
+        Ok(())
+    })
+    .unwrap();
+    let r = bounded_visible_step(&mut s, "layer.setProps", json!({"layer": b.0, "visible": false}));
+    assert!(r.contains_rect(&Rect::new(10, 10, 30, 30)), "{r:?}");
+    s.undo();
+    let r = bounded_visible_step(&mut s, "layer.delete", json!({"layer": b.0}));
+    assert!(r.contains_rect(&Rect::new(10, 10, 30, 30)), "{r:?}");
+}
+
 /// #9329: clipping a layer to the one beneath damages it and the layers clipped to it
 /// (they change base), on undo and redo too.
 #[test]

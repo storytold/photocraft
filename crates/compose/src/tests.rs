@@ -1029,6 +1029,78 @@ fn an_adjustment_in_an_isolated_group_stops_at_the_group() {
     assert!(unchanged_outside(&d, &h, q));
 }
 
+/// #9329: inside a pass-through artboard an adjustment also reaches the artboard's background,
+/// which lies beneath its layers.
+#[test]
+fn an_adjustment_in_a_pass_through_artboard_reaches_its_background() {
+    let canvas = Rect::new(0, 0, 40, 30);
+    let board = Rect::new(4, 3, 24, 20);
+    let mut d = Document::new("t", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
+    let mut ab = Layer::group("board", vec![Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert))]);
+    let LayerContent::Group(g) = &mut ab.content else { panic!("group") };
+    g.artboard = Some(photocraft_doc::Artboard::new(board));
+    d.layers.push(ab);
+    let LayerContent::Group(gc) = &d.layers[0].content else { panic!("group") };
+    let b = change_bounds_in(&gc.children, 0, &[(&d.layers, 0)], SampleType::U8, canvas);
+    assert_eq!(b, Some(board));
+    let h = hidden_at(&d, 0, Some(0));
+    assert_ne!(render(&d, canvas), render(&h, canvas));
+    assert!(unchanged_outside(&d, &h, board));
+}
+
+/// A layer just off the left edge of a 40 × 30 canvas, in a group whose drop shadow reaches
+/// onto it.
+fn shadowed_group_off_the_canvas() -> Layer {
+    let mut g = Layer::group("g", vec![solid_layer("off", Rect::new(-6, 8, -1, 16), [0.2, 0.4, 0.6, 1.0])]);
+    g.effects.items.push(Effect::default_drop_shadow());
+    g
+}
+
+/// #9329: an adjustment above a group whose pixels lie just off the canvas reaches the group's
+/// drop shadow on the canvas.
+#[test]
+fn an_adjustment_over_a_shadowed_group_off_the_canvas_reaches_the_shadow() {
+    let canvas = Rect::new(0, 0, 40, 30);
+    let mut d = Document::new("t", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
+    d.layers.push(shadowed_group_off_the_canvas());
+    d.layers.push(Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert)));
+    let b = change_bounds_in(&d.layers, 1, &[], SampleType::U8, canvas).expect("bounded");
+    let h = hidden_at(&d, 1, None);
+    assert_ne!(render(&d, canvas), render(&h, canvas), "the shadow reaches the canvas");
+    assert!(unchanged_outside(&d, &h, b), "{b:?}");
+}
+
+/// #9329: a layer just off the canvas in a group with a drop shadow changes the shadow on the
+/// canvas: [`layer_change_bounds`] grows by the reach of the groups around it.
+#[test]
+fn a_layer_off_the_canvas_in_a_shadowed_group_bounds_the_shadow() {
+    let canvas = Rect::new(0, 0, 40, 30);
+    let mut d = Document::new("t", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
+    d.layers.push(shadowed_group_off_the_canvas());
+    let id = d.layers[0].children().unwrap()[0].id;
+    let b = layer_change_bounds(&d, id).expect("bounded");
+    let h = hidden_at(&d, 0, Some(0));
+    assert_ne!(render(&d, canvas), render(&h, canvas), "the shadow reaches the canvas");
+    assert!(unchanged_outside(&d, &h, b), "{b:?}");
+}
+
+/// #9329: a group with Transparency Shapes Layer off takes the whole layer as its effects'
+/// shape, so it draws over the whole canvas, also while it holds an adjustment.
+#[test]
+fn a_shapeless_group_holding_an_adjustment_reaches_the_canvas() {
+    let canvas = Rect::new(0, 0, 40, 30);
+    let q = Rect::new(20, 12, 30, 25);
+    let mut d = Document::new("t", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
+    let mut g = Layer::group("g", vec![solid_layer("q", q, [0.2, 0.4, 0.6, 1.0]), Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert))]);
+    g.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), color: Color::BLACK });
+    g.advanced.transparency_shapes = false;
+    d.layers.push(g);
+    let h = hidden_at(&d, 0, None);
+    assert!(!unchanged_outside(&d, &h, q.inflate(effects::margin(&d.layers[0]))), "the overlay draws past its layers");
+    assert_eq!(composite_bounds(&d.layers[0], canvas), Some(canvas));
+    assert_eq!(change_bounds_in(&d.layers, 0, &[], SampleType::U8, canvas), Some(canvas));
+}
+
 #[test]
 fn threshold_posterize_levels_curves() {
     let mut buf = Buffer::filled(Rect::new(0, 0, 1, 1), [0.3, 0.3, 0.3, 1.0]);
