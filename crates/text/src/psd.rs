@@ -292,3 +292,60 @@ mod nonfinite_tests {
         assert!(out.contains("/FontSize 12.0"), "{out}");
     }
 }
+
+#[cfg(test)]
+mod paragraph_run_tests {
+    use super::*;
+
+    fn layer(text: &str, shape: TextShape) -> TextLayer {
+        TextLayer {
+            text: text.into(),
+            runs: vec![TextRun { len: text.len(), style: CharStyle { size_pt: 12.0, ..Default::default() } }],
+            paragraphs: vec![ParagraphRun { len: text.len(), style: ParagraphStyle { align: TextAlign::Center, ..Default::default() } }],
+            shape,
+            ..Default::default()
+        }
+    }
+
+    fn paragraph_runs(layer: &TextLayer) -> (Vec<i64>, Vec<E>) {
+        let e = build_engine_data(layer, None, 72.0);
+        let lens = e.path(&["EngineDict", "ParagraphRun", "RunLengthArray"]).and_then(E::as_array).unwrap().iter().map(|n| n.as_i64().unwrap()).collect();
+        let sheets = e.path(&["EngineDict", "ParagraphRun", "RunArray"]).and_then(E::as_array).unwrap().to_vec();
+        (lens, sheets)
+    }
+
+    /// #12420: a run spanning several paragraphs is written as one paragraph run per paragraph,
+    /// as Photoshop writes it, or Photoshop joins the lines when the text is edited.
+    #[test]
+    fn multi_paragraph_text_writes_one_paragraph_run_per_paragraph() {
+        let boxed = TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 100.0 };
+        for text in ["Line one\nLine two\nLine three", "Line one\rLine two\rLine three"] {
+            for shape in [TextShape::Point, boxed.clone()] {
+                let l = layer(text, shape);
+                let (lens, sheets) = paragraph_runs(&l);
+                assert_eq!(lens, [9, 9, 11]);
+                assert_eq!(sheets.len(), 3);
+                assert!(sheets.iter().all(|s| s.get("ParagraphSheet").is_some() && *s == sheets[0]), "{sheets:?}");
+                // Read back: same text, every paragraph keeps its style.
+                let back = text_layer_from_tysh(&build_tysh(&l, 72.0, None), 72.0).unwrap();
+                assert_eq!(back.text.replace('\r', "\n"), text.replace('\r', "\n"));
+                assert_eq!(back.paragraphs.len(), 3);
+                assert!(back.paragraphs.iter().all(|p| p.style.align == TextAlign::Center));
+            }
+        }
+    }
+
+    #[test]
+    fn single_paragraph_text_writes_one_paragraph_run() {
+        let (lens, sheets) = paragraph_runs(&layer("Line one", TextShape::Point));
+        assert_eq!(lens, [9]);
+        assert_eq!(sheets.len(), 1);
+    }
+
+    #[test]
+    fn trailing_break_writes_a_final_empty_paragraph_run() {
+        let (lens, sheets) = paragraph_runs(&layer("Line one\n", TextShape::Point));
+        assert_eq!(lens, [9, 1]);
+        assert_eq!(sheets.len(), 2);
+    }
+}

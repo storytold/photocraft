@@ -939,17 +939,29 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
     let mut plens = Vec::new();
     let mut at = 0usize;
     for (i, p) in paras.iter().enumerate() {
-        let piece = &text[at..at + p.len];
-        at += p.len;
-        let mut n = utf16_len(piece);
-        if i + 1 == paras.len() {
-            n += 1;
-        }
-        pruns.push(E::Dict(vec![(
+        // The last run also covers the terminal `\r`.
+        let end = if i + 1 == paras.len() { ed_text.len() } else { at.saturating_add(p.len) };
+        let piece = ed_text.get(at..end).unwrap_or("");
+        let starts_paragraph = at == 0 || ed_text.get(..at).is_some_and(|s| s.ends_with('\r'));
+        at = end;
+        let sheet = E::Dict(vec![(
             "ParagraphSheet".into(),
             E::Dict(vec![("DefaultStyleSheet".into(), E::Int(0)), ("Properties".into(), paragraph_properties(&p.style, k))]),
-        )]));
-        plens.push(E::Int(n));
+        )]);
+        // One run per paragraph, as Photoshop writes them: a run spanning several paragraphs
+        // makes Photoshop join their lines when the text is edited (#12420).
+        let mut lens: Vec<i64> = piece.split_inclusive('\r').map(utf16_len).collect();
+        // A run that starts inside a paragraph keeps that paragraph's tail with its next one.
+        if !starts_paragraph && lens.len() > 1 {
+            let tail = lens.remove(0);
+            if let Some(first) = lens.first_mut() {
+                *first += tail;
+            }
+        }
+        for n in lens {
+            pruns.push(sheet.clone());
+            plens.push(E::Int(n));
+        }
     }
 
     let Some(dict) = e.get_mut("EngineDict") else {
