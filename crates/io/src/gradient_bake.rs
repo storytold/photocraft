@@ -195,10 +195,11 @@ const OPACITY_RESPONSE: f32 = 0.65;
 
 /// Dense linear opacity stops reproducing Photoshop's interpolation of a gradient's transparency
 /// (Smoothness, opacity midpoints and the method, see [`OPACITY_RESPONSE`]). Returns the input
-/// unchanged when it already interpolates linearly. Smooth keeps Classic's opacity curve: it was
-/// not measured (the Photoshop build it was fitted on has no Smooth method).
+/// unchanged when it already interpolates linearly. Smooth follows [`bake_smooth_opacity`].
 pub fn bake_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, f32)> {
-    let method = if method == Method::Smooth { Method::Classic } else { method };
+    if method == Method::Smooth {
+        return bake_smooth_opacity(stops, midpoints);
+    }
     let plain_mids = midpoints.iter().all(|m| (m - 0.5).abs() < 1e-3);
     let smoothness = if smoothness.is_finite() { smoothness.clamp(0.0, 1.0) } else { 0.0 };
     if stops.len() < 2 || (smoothness <= 0.0 && method == Method::Classic && plain_mids) {
@@ -230,6 +231,43 @@ pub fn bake_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32], smoothness: f32, 
             let t = k as f32 / N as f32;
             // Smoothness and midpoints shape the curve as for Classic colours, in the method's space.
             (t, out(eval(&pts, midpoints, smoothness, t, Method::Classic)[0]))
+        })
+        .collect();
+    baked.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
+    baked
+}
+
+/// Gamma of Smooth's opacity response: the opacity of a fully transparent gradient ramp is the
+/// Oklab lightness curve's linear value `y` raised to `1 / 2.2`. Photoshop 27.11, "Foreground to
+/// Transparent" dragged over 600 px: alpha 255 / 179 / 100 / 35 / 0 at 50 / 250 / 400 / 550 / 750
+/// (#12010). The same ramp as an sRGB grey (`y` encoded with the sRGB curve) gives 30 at the dark
+/// end, 5 levels off, where the 2.2 power gives 35.
+const SMOOTH_OPACITY_GAMMA: f32 = 2.2;
+
+/// Smooth's transparency ramp: each opacity stop is a grey whose Oklab lightness is
+/// `(opacity^2.2)^(1/3)`, which the colours' measured Smooth easing ([`SMOOTH_EASE`]) crosses
+/// segment by segment, and the linear value `y = L^3` comes out as opacity `y^(1/2.2)`. Smoothness
+/// doesn't change Smooth; opacity midpoints still move each segment's centre. Constant opacity
+/// comes back unchanged.
+fn bake_smooth_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32]) -> Vec<(f32, f32)> {
+    if stops.len() < 2 || stops.windows(2).all(|w| w[0].1 == w[1].1) {
+        return stops;
+    }
+    let mut s = stops;
+    s.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let pts: Vec<(f32, [f32; 3])> = s
+        .iter()
+        .map(|(t, o)| {
+            let o = if o.is_finite() { o.clamp(0.0, 1.0) } else { 1.0 };
+            (*t, [o.powf(SMOOTH_OPACITY_GAMMA).cbrt(); 3])
+        })
+        .collect();
+    const N: usize = 96;
+    let mut baked: Vec<(f32, f32)> = (0..=N)
+        .map(|k| {
+            let t = k as f32 / N as f32;
+            let l = eval(&pts, midpoints, 0.0, t, Method::Smooth)[0];
+            (t, if l.is_finite() { l.clamp(0.0, 1.0).powi(3).powf(1.0 / SMOOTH_OPACITY_GAMMA) } else { 1.0 })
         })
         .collect();
     baked.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
@@ -280,10 +318,11 @@ mod tests {
     }
 
     #[test]
-    fn plain_classic_and_smooth_opacity_stay_as_stored() {
+    fn plain_classic_and_constant_smooth_opacity_stay_as_stored() {
         let stops = vec![(1.0, 0.0), (0.0, 1.0)];
         assert_eq!(bake_opacity(stops.clone(), &[0.5], 0.0, Method::Classic), stops);
-        assert_eq!(bake_opacity(stops.clone(), &[0.5], 0.0, Method::Smooth), stops);
+        let flat = vec![(0.0, 0.4), (1.0, 0.4)];
+        assert_eq!(bake_opacity(flat.clone(), &[0.5], 0.0, Method::Smooth), flat);
         assert_eq!(bake_opacity(vec![(0.5, 0.3)], &[], 1.0, Method::Linear), vec![(0.5, 0.3)]);
     }
 

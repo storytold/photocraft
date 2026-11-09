@@ -144,15 +144,48 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
     // where straight stops give 0.0625.
     let stops = match p.get("method").and_then(Value::as_str).and_then(photocraft_io::GradientMethod::from_name) {
         Some(m) if stops.len() >= 2 => {
-            let colors = stops.iter().map(|(t, c)| (*t, photocraft_color::Color::rgba(c[0], c[1], c[2], c[3]))).collect();
-            let mids = vec![0.5; stops.len() - 1];
-            photocraft_io::bake_gradient(colors, &mids, (f(p, "smoothness", 100.0) / 100.0).clamp(0.0, 1.0), m)
-                .into_iter()
-                .map(|(t, c)| {
-                    let rgb = c.to_rgb();
-                    (t, [rgb[0], rgb[1], rgb[2], c.alpha])
-                })
-                .collect()
+            let smoothness = (f(p, "smoothness", 100.0) / 100.0).clamp(0.0, 1.0);
+            // With transparency, the colour and opacity stops are baked apart: the colours by the
+            // method, the opacity by the method's own transparency curve (#12010). Merged stops
+            // would ease each of their sub-segments again and take the nearest stop's alpha.
+            let split = match gradients::tool_fill_stops(s, p)? {
+                Some((cs, os)) => Some((cs, os)),
+                None => {
+                    // The legacy `colors` list, evenly spaced.
+                    let os = gradients::transparency_param(p, "paint.gradient")?.unwrap_or_default();
+                    let colors: Vec<[f32; 4]> =
+                        p.get("colors").and_then(Value::as_array).map(|a| a.iter().map(|v| color(Some(v), fg)).collect()).unwrap_or_default();
+                    let n = colors.len();
+                    let cs = colors
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| (if n > 1 { i as f32 / (n - 1) as f32 } else { 0.0 }, photocraft_color::Color::rgb(c[0], c[1], c[2])))
+                        .collect();
+                    Some((cs, os))
+                }
+            };
+            match split {
+                Some((cs, os)) if os.iter().any(|o| (o.1 - 1.0).abs() > 1e-6) && cs.len() >= 2 => {
+                    let mids = vec![0.5; cs.len() - 1];
+                    let colours: Vec<(f32, [f32; 4])> = photocraft_io::bake_gradient(cs, &mids, smoothness, m)
+                        .into_iter()
+                        .map(|(t, c)| (t, [c.to_rgb()[0], c.to_rgb()[1], c.to_rgb()[2], 1.0]))
+                        .collect();
+                    let omids = vec![0.5; os.len().saturating_sub(1)];
+                    gradients::apply_opacity(colours, &photocraft_io::bake_gradient_opacity(os, &omids, smoothness, m))
+                }
+                _ => {
+                    let colors = stops.iter().map(|(t, c)| (*t, photocraft_color::Color::rgba(c[0], c[1], c[2], c[3]))).collect();
+                    let mids = vec![0.5; stops.len() - 1];
+                    photocraft_io::bake_gradient(colors, &mids, smoothness, m)
+                        .into_iter()
+                        .map(|(t, c)| {
+                            let rgb = c.to_rgb();
+                            (t, [rgb[0], rgb[1], rgb[2], c.alpha])
+                        })
+                        .collect()
+                }
+            }
         }
         _ => stops,
     };
