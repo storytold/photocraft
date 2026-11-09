@@ -116,3 +116,31 @@ fn a_pointer_past_the_anchor_flips_the_box() {
     assert!(s.quad[2][0] < s.quad[0][0] || s.quad[2][1] < s.quad[0][1] || s.quad[1][0] < s.quad[0][0], "{:?}", s.quad);
     assert!(side(s.quad[0], [100.0, 100.0]) < 1e-6);
 }
+
+/// The box after a Distort step: not a rectangle, so the physical diagonal and the unit-square
+/// diagonal differ (#11096).
+fn distorted() -> TransformSession {
+    let mut s = session(0.0);
+    s.quad = [[250.0, 250.0], [950.0, 250.0], [872.0, 710.0], [250.0, 650.0]];
+    s.pivot = [580.0, 465.0];
+    s
+}
+
+#[test]
+fn a_distorted_box_follows_the_on_screen_diagonal() {
+    // Reference rows: pointer offset from the dragged corner, then the new TR, BR and BL.
+    let rows: [([f64; 2], [[f64; 2]; 3]); 4] = [
+        ([-100.0, 0.0], [[869.18, 250.0], [807.36, 662.19], [250.0, 613.35]]),
+        ([0.0, -60.0], [[913.88, 250.0], [843.32, 688.79], [250.0, 633.86]]),
+        ([-100.0, -60.0], [[833.98, 250.0], [778.67, 640.98], [250.0, 596.77]]),
+        ([100.0, 0.0], [[1032.95, 250.0], [936.64, 757.81], [250.0, 685.67]]),
+    ];
+    for (d, want) in rows {
+        let mut s = distorted();
+        drag(&mut s, 2, 0.0, d, egui::Modifiers::NONE);
+        assert!(side(s.quad[0], [250.0, 250.0]) < 1e-6, "the anchor stays put");
+        for (i, w) in [(1, want[0]), (2, want[1]), (3, want[2])] {
+            assert!(side(s.quad[i], w) <= 0.5, "drag {d:?}: corner {i} is {:?}, want {w:?}", s.quad[i]);
+        }
+    }
+}
