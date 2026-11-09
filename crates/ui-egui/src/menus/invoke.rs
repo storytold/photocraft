@@ -56,11 +56,31 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     Ok(r)
 }
 
+/// Layer › New › Convert to Frame without params: asks for the frame's name and size first.
+fn frame_convert_dialog(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
+    let st = app.session.active().ok_or("no document")?;
+    let layer = st.active_layer.and_then(|id| st.doc.layer(id)).ok_or("select a shape or type layer")?;
+    let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, layer);
+    let mut fixed = serde_json::Map::new();
+    fixed.insert("layer".into(), json!(layer.id.0));
+    let dialog = crate::filter_dialog::open_with_spec(app, id, tl!("New Frame"), r#"{"name":text,"width":1..300000=100,"height":1..300000=100}"#, fixed);
+    if let Some(d) = app.ui.dialog_mut(dialog) {
+        d.fields.insert("__preview".into(), json!(false));
+        d.fields.insert("name".into(), json!("Frame"));
+        d.fields.insert("width".into(), json!(b.width().max(1)));
+        d.fields.insert("height".into(), json!(b.height().max(1)));
+    }
+    Ok(json!({"dialog":dialog}))
+}
+
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if let Some(tool) = crate::tool_shortcuts::tool(id) {
         crate::tool_memory::select(app, tool);
         return Some(Ok(json!({"tool": tool})));
+    }
+    if id == "layer.frame.convert" && params.as_object().is_none_or(|o| o.is_empty()) {
+        return Some(frame_convert_dialog(app, id));
     }
     if id == "help.checkForUpdates" {
         return Some(crate::updates_ui::check(app, ctx, params.clone()));
@@ -395,18 +415,34 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"dialog": crate::new_group_ui::open(app, id)}))
         }
         // Channels › Channel Options… without params: the dialog on the targeted alpha/spot
-        // channel, Layer Mask Display Options on a targeted layer mask, or Quick Mask Options while
-        // in Quick Mask (with params: the engine directly).
+        // channel (also in Quick Mask mode, where its row is the selected one), Quick Mask Options
+        // in Quick Mask otherwise, or Layer Mask Display Options on a targeted layer mask (with
+        // params: the engine directly).
         crate::channel_options_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
             let mask = app.layer_mask_targeted();
             let st = app.session.active().ok_or("no document is open")?;
             let channel = match st.channel_view.target {
-                _ if st.doc.quick_mask.is_some() => json!("quickMask"),
                 photocraft_engine::channel_cmds::ChannelTarget::Alpha(i) => json!(i),
+                _ if st.doc.quick_mask.is_some() => json!("quickMask"),
                 _ if mask => json!("mask"),
                 _ => return Err("target an alpha or spot channel, or a layer mask, first".into()),
             };
             let dialog = crate::channel_options_ui::open(app, &channel).ok_or("no such channel")?;
+            Ok(json!({"dialog": dialog}))
+        }
+        // Channels › New Channel… without params: its dialog (with params: the engine). The
+        // panel's New button makes one at once, as Photoshop's does.
+        crate::channel_options_ui::NEW_CHANNEL if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let dialog = crate::channel_options_ui::open_new_channel(app).ok_or("no document is open")?;
+            Ok(json!({"dialog": dialog}))
+        }
+        // Channels › Merge Channels… without params: its dialog, which picks the mode and the
+        // documents (with params: the engine).
+        crate::dialogs::merge_channels_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
+            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+                return Err(why);
+            }
+            let dialog = crate::dialogs::merge_channels_ui::open(app).ok_or("no document is open")?;
             Ok(json!({"dialog": dialog}))
         }
         // Channels › New Spot Channel… without params: its dialog (with params: the engine).
@@ -590,6 +626,10 @@ fn type_command_target(app: &PhotocraftApp) -> Option<Value> {
 fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     match id {
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => Some(app.run(id, params.clone())),
+        "view.editSelectedGuides" => Some(crate::new_guide_ui::open_edit(app).map(|_| Value::Null)),
+        "view.clearSelectedGuides" => {
+            Some(crate::guide_select::delete_selected(app).and_then(|done| if done { Ok(Value::Null) } else { Err("No guide is selected".to_string()) }))
+        }
         "view.rulers" | "view.show.grid" | "view.show.guides" | "view.snap" | "view.lockGuides" => {
             let extras = &mut app.ui.extras;
             let slot = match id {
@@ -707,7 +747,9 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
             let count = app.session.documents().len();
             let active = app.session.active_index().ok_or("no document open")?;
             let next = if id == "window.nextDocument" { (active + 1) % count } else { (active + count - 1) % count };
-            app.session.set_active(next);
+            if next != active {
+                app.run("document.activate", json!({"document": next}))?;
+            }
             app.jobs.focus = None;
             Ok(json!({"document": next}))
         })()),

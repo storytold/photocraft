@@ -703,6 +703,29 @@ pub fn last_error() -> Option<String> {
     M.config().last_error.clone()
 }
 
+/// Uncompressed tile bytes the scratch disk can still take before it reaches its size limit
+/// ([`set_size_cap`]) or the volume's free-space reserve, so an import can admit tile pixels
+/// beyond physical RAM. `None` while spilling is off or paused, and when neither the free space
+/// nor a size limit is known (nothing to promise). Tiles are written compressed; this counts
+/// them uncompressed, less 1/64 for the allocator's block rounding, so it never over-promises.
+pub fn scratch_capacity() -> Option<u64> {
+    if !enabled() || paused() {
+        return None;
+    }
+    let (dir, used, cap) = {
+        let c = M.config();
+        (c.dir.clone()?, c.file.as_ref().map_or(0, |f| f.used()), c.size_cap)
+    };
+    let room = free_space(&dir).map(|(available, total)| available.saturating_sub(RESERVE_MIN.max(total / 20)));
+    let room = match (room, cap) {
+        (Some(room), Some(cap)) => room.min(cap.saturating_sub(used)),
+        (Some(room), None) => room,
+        (None, Some(cap)) => cap.saturating_sub(used),
+        (None, None) => return None,
+    };
+    Some(room - room / 64)
+}
+
 /// Whether spilling is on (tiles beyond the budget go to disk).
 pub fn enabled() -> bool {
     M.budget.load(Ordering::Relaxed) > 0
