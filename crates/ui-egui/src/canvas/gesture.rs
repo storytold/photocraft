@@ -119,7 +119,7 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
             };
             let mode = selection_mode(app, d.modifiers);
             let (aa, feather) = (app.ui.tool_options.anti_alias, app.ui.tool_options.feather);
-            let _ = app.run("select.rect", json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "ellipse": d.tool == Tool::EllipseMarquee, "antiAlias": aa, "feather": feather}));
+            let _ = app.run("select.rect", json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "ellipse": d.tool == Tool::EllipseMarquee, "clipToCanvas": app.ui.tool_options.marquee_style != "fixedSize", "antiAlias": aa, "feather": feather}));
         }
         // A click (or the end of a drag) selects the line under the pointer, never deselects.
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => {
