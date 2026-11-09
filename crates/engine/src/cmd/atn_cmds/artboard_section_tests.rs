@@ -102,6 +102,8 @@ fn recorded_steps_load_and_save_back_unchanged() {
             NEW,
             json!({"rect": [0, 0, 100, 80], "name": ""}),
         ),
+        // Edges in the 32-bit range, a width past it.
+        (new_board("Span", [0.0, -2e9, 10.0, 2e9]), NEW, json!({"rect": [-2_000_000_000_i64, 0, 4_000_000_000_i64, 10], "name": "Span"})),
         (from_layers("Cards"), FROM_LAYERS, json!({"name": "Cards"})),
         (no_ids, FROM_LAYERS, json!({"name": "Cards"})),
     ];
@@ -180,6 +182,7 @@ fn native_steps_save_the_measured_keys() {
         (FROM_LAYERS, json!({"name": "Cards"}), no_ids(from_layers("Cards"))),
         (FROM_LAYERS, json!({"name": "", "width": 0, "height": 0, "background": "white"}), unnamed_from.clone()),
         (FROM_LAYERS, json!({}), unnamed_from),
+        (NEW, json!({"rect": [-2_000_000_000_i64, 0, 4_000_000_000_i64, 10], "name": "Span"}), no_ids(new_board("Span", [0.0, -2e9, 10.0, 2e9]))),
     ];
     for (id, p, d) in cases {
         assert_eq!(exported(id, &p).as_ref(), Some(&d), "{id} {p}");
@@ -206,6 +209,8 @@ fn settings_the_event_cannot_hold_are_refused() {
         (NEW, json!({"rect": [10, 20, 0, 50]})),
         (NEW, json!({"rect": [10, 20, 100, -50]})),
         (NEW, json!({"rect": [2_147_483_600, 0, 100, 50]})),
+        (NEW, json!({"rect": [-2_147_483_649_i64, 0, 100, 50]})),
+        (NEW, json!({"rect": [0, 0, 4_294_967_296_i64, 50]})),
         (NEW, json!({"rect": [10, 20, 100, 50], "x": 5})),
         (NEW, json!({"rect": [10, 20, 100, 50], "preset": "iPhone 14"})),
         (NEW, json!({"rect": [10, 20, 100, 50], "background": "black"})),
@@ -279,4 +284,20 @@ fn changed_or_damaged_steps_save_their_settings() {
     assert_eq!(exported(FROM_LAYERS, &cards), Some(unnamed));
     board[SOURCE] = json!("not base64!");
     assert_eq!(exported(NEW, &board), Some(small));
+}
+
+/// A recording too large to keep whole stays a kept step, and a stored recording past that size
+/// is never decoded on save: the step's settings are written instead.
+#[test]
+fn oversized_recordings_are_not_kept_or_parsed() {
+    let long = "N".repeat(40_000);
+    let huge = new_board(&long, [20.0, 10.0, 70.0, 110.0]);
+    let (mut s, r) = load(vec![make_item(huge.clone())]);
+    assert_eq!(r["unsupported"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(saved(&mut s)[0].descriptor.as_ref().map(Descriptor::to_bytes), Some(huge.to_bytes()));
+    // The same recording stored by hand: it matches the settings, but it is past the bound.
+    let p = json!({"rect": [10, 20, 100, 50], "name": long, SOURCE: photocraft_paint::tile::b64_encode(&huge.to_bytes())});
+    let mut canonical = huge;
+    canonical.items.retain(|(k, _)| !k.is("layerSectionStart") && !k.is("layerSectionEnd"));
+    assert_eq!(exported(NEW, &p), Some(canonical));
 }

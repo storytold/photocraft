@@ -20,6 +20,9 @@ pub(super) const FROM_LAYERS: &str = "layer.new.artboardFromLayers";
 /// The recorded descriptor, kept when it differs from the one [`to`] would write (session ids,
 /// key order, classes), so a load and save keeps the step unchanged.
 const SOURCE: &str = "_atnArtboardSectionDescriptor";
+/// The most bytes a recorded descriptor may take to be kept in [`SOURCE`]: far above any measured
+/// step (a few keys and a name), so a stored value is never parsed at any size on save.
+const MAX_SOURCE_BYTES: usize = 64 * 1024;
 /// The rectangle's edges in the order the step records them, with the `[x, y, w, h]` slot each
 /// one comes from.
 const EDGES: [&str; 4] = ["Top ", "Left", "Btom", "Rght"];
@@ -121,6 +124,11 @@ fn canonical(settings: &Settings) -> Descriptor {
 /// Map the measured forms; any other stays a complete kept step.
 pub(super) fn from(d: &Descriptor) -> Mapped {
     let Some(settings) = recorded(d) else { return Mapped::Unsupported { harmless: false } };
+    let bytes = d.to_bytes();
+    // A step too large to keep whole stays a kept step rather than lose its bytes on save.
+    if bytes.len() > MAX_SOURCE_BYTES {
+        return Mapped::Unsupported { harmless: false };
+    }
     let (id, mut p) = match settings.section {
         Section::Board(r) => (NEW, json!({"rect": r})),
         Section::FromLayers => (FROM_LAYERS, json!({})),
@@ -129,7 +137,7 @@ pub(super) fn from(d: &Descriptor) -> Mapped {
         p["name"] = name.as_str().into();
     }
     if *d != canonical(&settings) {
-        p[SOURCE] = photocraft_paint::tile::b64_encode(&d.to_bytes()).into();
+        p[SOURCE] = photocraft_paint::tile::b64_encode(&bytes).into();
     }
     step(id, p)
 }
@@ -139,16 +147,17 @@ fn unset_or(p: &Value, key: &str, default: &Value) -> bool {
     p.get(key).is_none_or(|v| v.is_null() || v == default)
 }
 
-/// A whole number of pixels in the 32-bit range.
+/// A whole number of pixels, small enough that a position plus a size can't overflow.
 fn whole(v: &Value) -> Option<i64> {
-    let v = v.as_f64().filter(|v| v.is_finite() && v.fract() == 0.0)?;
-    (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&v).then_some(v as i64)
+    let v = v.as_f64().filter(|v| v.is_finite() && v.fract() == 0.0 && v.abs() <= f64::from(u32::MAX))?;
+    Some(v as i64)
 }
 
 /// The board a native New Artboard step makes, when the step says where: `rect`, or all of `x`,
 /// `y`, `width` and `height`, in whole pixels, of positive size and with every edge in the
-/// 32-bit range. Without a position the board lands beside the last one at playback, which the
-/// event's fixed rectangle can't say.
+/// 32-bit range, as the command and [`rect`] take it (so the size itself may pass `i32::MAX`).
+/// Without a position the board lands beside the last one at playback, which the event's fixed
+/// rectangle can't say.
 fn native_rect(p: &Value) -> Option<[i64; 4]> {
     let v: [i64; 4] = match p.get("rect") {
         Some(Value::Array(a)) if ["x", "y", "width", "height"].iter().all(|k| p.get(*k).is_none_or(Value::is_null)) => {
@@ -158,7 +167,7 @@ fn native_rect(p: &Value) -> Option<[i64; 4]> {
         _ => return None,
     };
     let [x, y, w, h] = v;
-    let fits = |a: i64, len: i64| len > 0 && a + len <= i64::from(i32::MAX);
+    let fits = |a: i64, len: i64| len > 0 && i32::try_from(a).is_ok() && i32::try_from(a + len).is_ok();
     (fits(x, w) && fits(y, h)).then_some(v)
 }
 
@@ -200,8 +209,11 @@ fn native(id: &str, p: &Value) -> Option<Settings> {
 /// canonical form of the step's settings.
 pub(super) fn to(id: &str, p: &Value) -> Option<Descriptor> {
     let settings = native(id, p)?;
+    // Only a value no larger than a kept recording is decoded and parsed at all.
     let source = jstr(p, SOURCE)
+        .filter(|text| text.len() <= MAX_SOURCE_BYTES.div_ceil(3) * 4)
         .and_then(photocraft_paint::tile::b64_decode)
+        .filter(|bytes| bytes.len() <= MAX_SOURCE_BYTES)
         .and_then(|bytes| Descriptor::from_bytes(&bytes).ok())
         .filter(|d| recorded(d).is_some_and(|r| r.section == settings.section && r.name.as_deref().unwrap_or("") == settings.name.as_deref().unwrap_or("")));
     Some(source.unwrap_or_else(|| canonical(&settings)))
