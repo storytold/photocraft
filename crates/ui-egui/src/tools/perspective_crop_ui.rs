@@ -8,8 +8,8 @@
 //!   wound like its box, which can't be committed;
 //! - ↵ (or ✓) commits: `image.perspectiveCrop` maps the quad onto an upright rectangle, the whole
 //!   document in one undo step. Its size comes from the options bar's W x H (and the resolution),
-//!   which are the Crop tool's fields (`crop_size`), or with them empty from the quad's mean side
-//!   lengths. Esc (or ⊘) cancels.
+//!   which are the Crop tool's fields (`crop_size`), or with them empty from the rectangle the
+//!   quad shows in perspective. Esc (or ⊘) cancels.
 //!
 //! A pending quad belongs to the document it was drawn on, like the Crop tool's frame.
 
@@ -568,7 +568,7 @@ mod tests {
         commit(&mut app);
         assert!(app.ui.perspective_crop.is_none());
         let size = app.session.active().unwrap().doc.size;
-        assert_eq!((size.width, size.height), (110, 86), "the quad's mean side lengths");
+        assert_eq!((size.width, size.height), (120, 92), "the quad's longest edges: no camera at the centre can see this rectangle");
 
         assert_eq!(ordered([[10.0, 90.0], [100.0, 5.0], [0.0, 0.0], [90.0, 100.0]]), [[0.0, 0.0], [100.0, 5.0], [90.0, 100.0], [10.0, 90.0]]);
     }
