@@ -32,10 +32,19 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rw = if rail_shown { rail_w } else { 0.0 };
     let content = ui.available_rect_before_wrap();
     let range = crate::panels::dock_width_range(content.width());
-    let (min_dock, max_dock) = (*range.start(), *range.end());
+    // The dock must leave the toolbox and the canvas's 200-point minimum room: the standard
+    // layout enforces the canvas minimum inside craft-ui, the fixed-size dock-edge panel does not.
+    let toolbar_w = {
+        let (w1, bx) = if t.pro { (40.0, 30.0) } else { (50.0, 36.0) };
+        if app.ui.panels.toolbar_double { w1 + bx + 2.0 } else { w1 }
+    };
+    const MIN_CANVAS_WIDTH: f32 = 200.0;
+    let max_dock = (*range.end()).min((content.width() - toolbar_w - MIN_CANVAS_WIDTH - rw).max(1.0));
+    let min_dock = (*range.start()).min(max_dock);
     let locked = app.session.prefs().workspace_locked;
     let modal = crate::panel_docking::modal_open(app, ui.ctx());
-    let empty = crate::panel_docking::dock_is_empty(app);
+    let metrics = crate::panel_docking::dock_metrics(app);
+    let empty = metrics.empty;
     if empty {
         // Nothing to resize or draw in the dock column, but Studio draws its floating Properties
         // group from the docking pass: keep that pass, on the full remaining area, with no column.
@@ -53,27 +62,24 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         // The dock became empty: a drag start from before this transition can never finish.
         crate::panels::clear_dock_edge_drag(ui.ctx());
-        crate::panel_docking::show_dock(app, ui);
+        // A child that does not consume the parent's layout space: the docking pass still draws
+        // floating windows, but the toolbox and canvas keep their room.
+        let mut dock_ui = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()));
+        crate::panel_docking::show_dock(app, &mut dock_ui);
         crate::dock::persist(app, ui.ctx());
         crate::color_panel_ui::persist(app);
         return;
     }
     // An iconic-only dock keeps its narrow displayed width instead of being raised to the expanded
     // minimum; other docks keep the usual minimum and maximum.
-    let iconic = crate::panel_docking::dock_iconic_only(app);
+    let iconic = metrics.iconic_only;
     let min_visible = if iconic { 1.0 } else { min_dock };
-    // An empty dock takes no width: the standard layout gives it 0 rather than a blank column.
-    let mut stored = if empty {
-        0.0
-    } else {
-        let width = crate::panel_docking::dock_width(app);
-        if iconic { width.clamp(1.0, max_dock) } else { width.clamp(min_dock, max_dock) }
-    };
+    let mut stored = if iconic { metrics.width.clamp(1.0, max_dock) } else { metrics.width.clamp(min_dock, max_dock) };
     let drag_id = egui::Id::unique("dock-edge-drag");
     // Resizing is unavailable while locked, modal, or when the parent UI is disabled (screen
     // picking disables it). A disabled handle never receives drag_stopped, so drop any stored
     // start here; otherwise it blocks persistence and can apply to a later pointer.
-    let resizable = !empty && !locked && !modal && ui.is_enabled();
+    let resizable = !locked && !modal && ui.is_enabled();
     let mut drag = if resizable {
         ui.ctx().data(|d| d.get_temp::<(f32, f32)>(drag_id))
     } else {
@@ -95,9 +101,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         drag = None;
         ui.ctx().data_mut(|d| d.remove::<(f32, f32)>(drag_id));
     }
-    let panel_w = if empty {
-        rw
-    } else if let Some((start_x, start_w)) = drag {
+    let panel_w = if let Some((start_x, start_w)) = drag {
         let pointer = ui.ctx().input(|i| i.pointer.latest_pos()).map_or(start_x, |pos| pos.x);
         let dx = if crate::direction::is_rtl() { pointer - start_x } else { start_x - pointer };
         (start_w + dx).clamp(min_visible + rw, max_dock + rw)
@@ -138,14 +142,13 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // The docking pass also renders floating windows (Studio floats Properties over the
             // canvas), so it runs even when the dock column itself is empty.
             crate::panel_docking::show_dock(app, &mut dock_ui);
-            if !empty {
-                // Block the docking layout's column-edge handle at the dock's content edge. It is
-                // registered before the resize handle so the handle wins where they overlap when
-                // the rail is hidden and both edges coincide.
-                let dock_edge = if crate::direction::is_rtl() { dock_rect.right() } else { dock_rect.left() };
-                let cover = egui::Rect::from_min_max(egui::pos2(dock_edge - 2.0, dock_rect.top()), egui::pos2(dock_edge + 2.0, dock_rect.bottom()));
-                let _ = ui.interact(cover, egui::Id::unique("dock-content-edge"), egui::Sense::click_and_drag());
-            }
+            // Block the docking layout's column-edge handle at the dock's content edge. It is
+            // registered before the resize handle so the handle wins where they overlap when the
+            // rail is hidden and both edges coincide; one point either side keeps tab strips and
+            // scrollbars clear.
+            let dock_edge = if crate::direction::is_rtl() { dock_rect.right() } else { dock_rect.left() };
+            let cover = egui::Rect::from_min_max(egui::pos2(dock_edge - 1.0, dock_rect.top()), egui::pos2(dock_edge + 1.0, dock_rect.bottom()));
+            let _ = ui.interact(cover, egui::Id::unique("dock-content-edge"), egui::Sense::click_and_drag());
             // The panel's inner edge (between the toolbox and the rail) is the resize handle.
             let panel_rect = ui.max_rect();
             let panel_edge = if crate::direction::is_rtl() { panel_rect.right() } else { panel_rect.left() };
@@ -166,7 +169,9 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let color = if active { t.accent } else { t.separator };
             ui.ctx().layer_painter(line).vline(panel_edge, panel_rect.y_range(), Stroke::new(1.0, color));
             if response.drag_started() {
-                let start_x = response.interact_pointer_pos().map_or(panel_edge, |pos| pos.x);
+                // The press origin, not the threshold-crossing frame: the dock then tracks the
+                // pointer exactly from where the user pressed.
+                let start_x = ui.ctx().input(|i| i.pointer.press_origin()).map_or(panel_edge, |pos| pos.x);
                 ui.ctx().data_mut(|d| d.insert_temp(drag_id, (start_x, panel_w)));
             }
             if response.dragged() {

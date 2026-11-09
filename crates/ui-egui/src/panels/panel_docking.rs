@@ -91,7 +91,8 @@ fn default_width(pro: bool) -> f32 {
 }
 
 /// The end dock of `layout`: follow only the second child of horizontal splits, as craft-ui
-/// keeps a side's dock at its window edge. `None` when the layout has no end dock.
+/// keeps a side's dock at its window edge; this app builds that dock as `Side::End`. `None` when
+/// the layout has no end dock.
 fn end_dock_node(node: &Node<String>) -> Option<&Node<String>> {
     match node {
         Node::Dock { .. } => Some(node),
@@ -100,33 +101,57 @@ fn end_dock_node(node: &Node<String>) -> Option<&Node<String>> {
     }
 }
 
-/// True when the end dock holds no panels at all (every panel is closed): the dock column should
-/// then take no width, as the standard layout's empty dock does.
-pub(crate) fn dock_is_empty(app: &PhotocraftApp) -> bool {
+/// The end dock's layout facts, computed from one layout snapshot per frame.
+pub(crate) struct DockMetrics {
+    pub(crate) empty: bool,
+    pub(crate) iconic_only: bool,
+    pub(crate) width: f32,
+}
+
+/// The end dock's displayed width, whether it has no panels, and whether every column is iconic.
+/// A layout built from the native dock is materialized once here rather than in each helper.
+pub(crate) fn dock_metrics(app: &PhotocraftApp) -> DockMetrics {
     let layout = match &app.ui.docking {
         Some(workspace) => workspace.layout.clone(),
         None => legacy(app),
     };
     match layout.root.as_ref().and_then(end_dock_node) {
-        Some(Node::Dock { columns, .. }) => columns.iter().all(|column| column.groups.iter().all(|group| group.panels.is_empty())),
-        // No end dock at the edge: there is no dock column to show, which is empty for our purpose.
-        _ => true,
+        Some(Node::Dock { columns, .. }) if !columns.is_empty() => DockMetrics {
+            empty: columns.iter().all(|column| column.groups.iter().all(|group| group.panels.is_empty())),
+            iconic_only: columns.iter().all(|column| column.iconic),
+            width: columns.iter().map(display_width).sum(),
+        },
+        _ => DockMetrics { empty: true, iconic_only: false, width: default_width(app.ui.theme.is_pro()) },
     }
 }
 
-/// The end dock's stored width (all its columns), or the native default when the layout is
-/// built from the native dock.
+/// The end dock's displayed width (tests).
+#[cfg(test)]
 pub(crate) fn dock_width(app: &PhotocraftApp) -> f32 {
-    let width = app.ui.docking.as_ref().and_then(|workspace| match workspace.layout.root.as_ref().and_then(end_dock_node) {
-        Some(Node::Dock { columns, .. }) if !columns.is_empty() => Some(columns.iter().map(display_width).sum::<f32>()),
-        _ => None,
-    });
-    width.unwrap_or_else(|| default_width(app.ui.theme.is_pro()))
+    dock_metrics(app).width
+}
+
+/// True when the end dock holds no panels at all (tests).
+#[cfg(test)]
+pub(crate) fn dock_is_empty(app: &PhotocraftApp) -> bool {
+    dock_metrics(app).empty
 }
 
 /// A column's width as craft-ui displays it: `iconic_width` while collapsed to icons.
 fn display_width(column: &Column<String>) -> f32 {
     if column.iconic { column.iconic_width.unwrap_or(column.width) } else { column.width }
+}
+
+/// The least displayed width of a column: the app's 220-point panel minimum, unless the column is
+/// iconic (its icons fit in the narrow width) or has no panels.
+const MIN_COLUMN_WIDTH: f32 = 220.0;
+
+fn column_minimum(column: &Column<String>) -> f32 {
+    if column.iconic || column.groups.iter().all(|group| group.panels.is_empty()) { 1.0 } else { MIN_COLUMN_WIDTH }
+}
+
+fn columns_minimum(columns: &[Column<String>]) -> f32 {
+    columns.iter().map(column_minimum).sum()
 }
 
 /// Sets a column's displayed width. An iconic column keeps its expanded width for when the user
@@ -140,44 +165,30 @@ fn set_display_width(column: &mut Column<String>, width: f32) {
     }
 }
 
-/// True when every end-dock column is collapsed to icons: such a dock takes its iconic width even
-/// below the expanded minimum.
-pub(crate) fn dock_iconic_only(app: &PhotocraftApp) -> bool {
-    let layout = match &app.ui.docking {
-        Some(workspace) => workspace.layout.clone(),
-        None => legacy(app),
-    };
-    match layout.root.as_ref().and_then(end_dock_node) {
-        Some(Node::Dock { columns, .. }) => !columns.is_empty() && columns.iter().all(|column| column.iconic),
-        _ => false,
-    }
-}
-
-/// Scales every column so their displayed widths add up to `total`, each at least one point.
-/// Returns the resulting displayed total (rounding can differ by a point per column).
+/// Scales every column so their displayed widths add up to `total`, respecting the per-column
+/// panel minimum. Returns the resulting displayed total (rounding can differ by a point).
 fn scale_columns(columns: &mut [Column<String>], total: f32) -> f32 {
     if columns.is_empty() {
         return 0.0;
     }
     let current: f32 = columns.iter().map(display_width).sum();
-    let target = total.max(columns.len() as f32).max(1.0);
+    let minimum: f32 = columns_minimum(columns);
+    let target = total.max(minimum).max(1.0);
     if current > 0.0 && (current - target).abs() < 0.5 {
         return current;
     }
-    if current <= 0.0 {
-        let even = target / columns.len() as f32;
-        for column in columns.iter_mut() {
-            set_display_width(column, even);
-        }
-    } else {
-        let scale = target / current;
-        for column in columns.iter_mut() {
-            set_display_width(column, display_width(column) * scale);
-        }
+    // Every column keeps its minimum; the rest of the target is shared in proportion to each
+    // column's width above its minimum, so the total lands on the request.
+    let extra = (target - minimum).max(0.0);
+    let flexible: f32 = columns.iter().map(|column| (display_width(column) - column_minimum(column)).max(0.0)).sum();
+    let count = columns.len() as f32;
+    for column in columns.iter_mut() {
+        let base = column_minimum(column);
+        let width = if flexible > 0.0 { base + extra * (display_width(column) - base).max(0.0) / flexible } else { base + extra / count };
+        set_display_width(column, width);
     }
     columns.iter().map(display_width).sum()
 }
-
 /// The end dock's columns, following the same horizontal second-child path as [`end_dock_node`].
 fn dock_columns_mut(node: &mut Node<String>) -> Option<&mut Vec<Column<String>>> {
     match node {
@@ -936,7 +947,7 @@ pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
     // A request for the width the dock already has must stay a no-op: committing the legacy
     // layout here would turn a later `ui.set {dockTabs}` into a customized-workspace update.
     let current: f32 = columns.iter().map(display_width).sum();
-    if (current - width).abs() < 0.5 {
+    if current >= columns_minimum(columns) && (current - width).abs() < 0.5 {
         return;
     }
     let actual = scale_columns(columns, width);

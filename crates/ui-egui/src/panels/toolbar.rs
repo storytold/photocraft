@@ -161,8 +161,9 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let side = app.ui.panels.toolbar_side.resolve();
     let panel = if side == ToolbarSide::Right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") };
     panel.resizable(false).exact_size(w).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(ui, |ui| {
-        // Toolbar width is a user preference, not a Pro-only feature.
-        // Keep the same hit target in every theme (including RTL layouts).
+        // Toolbar width is a user preference, not a Pro-only feature. The two header buttons share
+        // the narrow toolbar column (14-point targets in every theme, including RTL layouts), so
+        // their tooltips carry the full names.
         ui.allocate_ui_with_layout(vec2(bx, 14.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             let (cr, resp) = ui.allocate_exact_size(vec2(bx.min(14.0), 14.0), Sense::click());

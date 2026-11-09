@@ -1270,9 +1270,9 @@ fn ui_set_dock_width_scales_every_column() {
         }
     };
     let before = total(&app);
-    set_dock_width(&mut app, 420.0);
+    set_dock_width(&mut app, 520.0);
     let after = total(&app);
-    assert!((after - 420.0).abs() < 1.0, "the whole dock should be 420 points, got {after} (was {before})");
+    assert!((after - 520.0).abs() < 1.0, "the whole dock should be 520 points, got {after} (was {before})");
     let widths: Vec<f32> = {
         let root = app.ui.docking.as_ref().unwrap().layout.root.as_ref().unwrap();
         let dock = match root {
@@ -1287,11 +1287,11 @@ fn ui_set_dock_width_scales_every_column() {
     assert_eq!(widths.len(), 2, "both columns are kept");
     assert!(widths.iter().all(|width| *width > 0.0), "every column keeps a positive width: {widths:?}");
 
-    // A target smaller than the other column's expanded width must scale every column, not starve
-    // the first one while leaving the second untouched.
+    // A target below the sum of the columns' 220-point panel minima must stop at that minimum,
+    // not starve a column while leaving the other untouched.
     set_dock_width(&mut app, 250.0);
     let after = total(&app);
-    assert!((after - 250.0).abs() < 1.0, "the whole dock should be 250 points, got {after}");
+    assert!((after - 440.0).abs() < 1.0, "two columns keep the 440-point minimum, got {after}");
     let widths: Vec<f32> = {
         let root = app.ui.docking.as_ref().unwrap().layout.root.as_ref().unwrap();
         let dock = match root {
@@ -1303,8 +1303,8 @@ fn ui_set_dock_width_scales_every_column() {
             _ => Vec::new(),
         }
     };
-    assert!(widths.iter().all(|width| *width < 250.0), "every column is scaled below the total: {widths:?}");
-    assert!(widths[1] < 180.0, "the second column must scale too: {widths:?}");
+    assert!(widths.iter().all(|width| *width >= 219.5), "every column keeps the panel minimum: {widths:?}");
+    assert!(widths.iter().all(|width| *width < 221.0), "the minimum is shared between the columns: {widths:?}");
 }
 
 /// `ui.set {dockWidth}` travels through the queued request and the rendered dock pass, scaling a
@@ -1326,7 +1326,7 @@ fn ui_set_dock_width_queues_and_scales_every_column_when_drawn() {
     }
     app.ui.docking = Some(Workspace::new(layout));
     let mut h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::ProMedium);
-    crate::panels::request_dock_width(&h.ctx, 420.0);
+    crate::panels::request_dock_width(&h.ctx, 520.0);
     h.run_steps(2);
     let root = h.state().ui.docking.as_ref().expect("a workspace").layout.root.as_ref().expect("root");
     let dock = match root {
@@ -1338,7 +1338,69 @@ fn ui_set_dock_width_queues_and_scales_every_column_when_drawn() {
     assert_eq!(widths.len(), 2, "both columns are kept");
     assert!(widths.iter().all(|width| *width > 0.0), "every column keeps a positive width: {widths:?}");
     let total: f32 = widths.iter().sum();
-    assert!((total - 420.0).abs() < 1.0, "the queued request sets the whole dock to 420 points, got {total} from {widths:?}");
+    assert!((total - 520.0).abs() < 1.0, "the queued request sets the whole dock to 520 points, got {total} from {widths:?}");
+}
+
+/// A narrow window must still give the canvas its 200-point minimum; the dock shrinks instead.
+#[test]
+fn a_narrow_window_keeps_the_canvas_minimum() {
+    let mut app = app();
+    let mut layout = legacy(&app);
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns[0].width = 520.0;
+    }
+    app.ui.docking = Some(Workspace::new(layout));
+    app.ui.panels.rail = true;
+    let h = dock_panel_harness(app, vec2(700.0, 600.0), crate::theme::ThemeKind::ProMedium);
+    let panel = crate::panels::dock_panel_width(&h.ctx);
+    let (w1, bx) = if h.state().ui.theme.is_pro() { (40.0, 30.0) } else { (50.0, 36.0) };
+    let toolbar = if h.state().ui.panels.toolbar_double { w1 + bx + 2.0 } else { w1 };
+    let canvas = 700.0 - panel - toolbar;
+    assert!(canvas >= 199.0, "the canvas keeps its 200-point minimum, got {canvas} (dock {panel}, toolbar {toolbar})");
+}
+
+/// The empty dock still renders its docking pass but must not consume the parent layout, so the
+/// toolbar and canvas keep their space.
+#[test]
+fn an_empty_dock_keeps_the_parent_layout_for_toolbar_and_canvas() {
+    let mut app = app();
+    let layout = Layout {
+        root: Some(Node::Split {
+            axis: SplitAxis::Horizontal,
+            size: SplitSize::FixedSecond(0.0),
+            first: Box::new(Node::Tabs { panels: vec![CANVAS.to_owned()], active: 0 }),
+            second: Box::new(Node::Dock { side: Side::End, columns: Vec::new() }),
+        }),
+        floating: Vec::new(),
+    };
+    app.ui.docking = Some(Workspace::new(layout));
+    app.ui.panels.rail = false;
+    let mut ready = false;
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+                return;
+            }
+            crate::panels::dock_panel(app, ui);
+            let remaining = ui.available_width();
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("empty-dock-remaining"), remaining));
+            crate::panels::toolbar(app, ui);
+            egui::CentralPanel::default().show(ui, |_| {});
+        },
+        app,
+    );
+    h.run_steps(4);
+    let remaining = h.ctx.data(|data| data.get_temp::<f32>(egui::Id::unique("empty-dock-remaining")).unwrap_or(0.0));
+    assert!(remaining > 1200.0, "the empty dock must not consume the parent layout, left {remaining}");
+    assert!(h.get_by_label("Toolbar").rect().is_positive(), "the toolbar still draws");
 }
 
 /// An empty dock must still run the docking pass, because Studio draws its floating Properties
