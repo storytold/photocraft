@@ -32,7 +32,6 @@ pub mod text_field_menu;
 pub mod tone;
 mod units;
 
-pub(crate) use buttons::checkbox_with_accessibility_id;
 pub use buttons::{
     ButtonRole, DialogButton, button_height, button_width, check_box, check_box_fill, checkbox, compact_button, dialog_buttons, primary_button,
     secondary_button, toggle,

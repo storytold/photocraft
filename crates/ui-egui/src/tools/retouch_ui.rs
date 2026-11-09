@@ -740,6 +740,35 @@ fn content_aware_move_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Draw Protect Tones with the shared checkbox's appearance and mouse behavior.
+/// Keep the label response here so its accessibility description needs no shared-widget API change.
+fn protect_tones_checkbox(ui: &mut egui::Ui, on: &mut bool) -> (egui::Response, egui::Id) {
+    let label = tl!("Protect Tones");
+    let t = Tokens::get(ui.ctx());
+    let (mut resp, label_resp) = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::CLICK);
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            let l = ui
+                .add(egui::Label::new(egui::RichText::new(label).color(t.text_dim)).selectable(false).sense(egui::Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            // Pressing the label presses the box (#4476).
+            let pressed = resp.is_pointer_button_down_on() || l.is_pointer_button_down_on();
+            crate::widgets::check_box(ui.painter(), rect, *on, resp.hovered() || l.hovered(), pressed, &t);
+            (resp.union(l.clone()), l)
+        })
+        .inner;
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    // The label is the single named, focusable checkbox; the box is a mouse target.
+    // Override Label's metadata instead of creating a second node with the same name.
+    label_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label));
+    (resp, label_resp.id)
+}
+
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
@@ -860,7 +889,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             let exposure = crate::widgets::value_field(ui, &mut o.exposure, 1.0..=100.0, "%", 58.0);
             let exposure_id = exposure.id;
             tooltip(exposure, tl!("Set exposure for stroke"), exposure_id);
-            let (protect, protect_id) = crate::widgets::checkbox_with_accessibility_id(ui, &mut o.protect_tones, tl!("Protect Tones"));
+            let (protect, protect_id) = protect_tones_checkbox(ui, &mut o.protect_tones);
             tooltip(protect, tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"), protect_id);
         }
         Tool::Sponge => {

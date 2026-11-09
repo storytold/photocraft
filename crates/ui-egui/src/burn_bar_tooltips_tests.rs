@@ -16,6 +16,7 @@ const CONTROLS: [(Role, &str, &str); 3] = [
     (Role::CheckBox, "Protect Tones", "Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"),
 ];
 
+/// Build a settled options-bar fixture with the requested tool, locale, viewport and scale.
 fn bar(tool: Tool, lang: Lang, width: f32, scale: f32, narrow: bool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
@@ -37,10 +38,12 @@ fn bar(tool: Tool, lang: Lang, width: f32, scale: f32, narrow: bool) -> Harness<
     h
 }
 
+/// Find the named control by its accessibility role without matching tooltip labels.
 fn control<'a>(h: &'a Harness<'static, PhotocraftApp>, role: Role, label: &str) -> egui_kittest::Node<'a> {
     h.query_all_by_role(role).find(|n| n.accesskit_node().label().as_deref() == Some(label)).unwrap_or_else(|| panic!("missing {role:?} {label:?}"))
 }
 
+/// Resolve the localized control name, using the numeric node for the existing RTL caption layout.
 fn control_name(h: &Harness<'static, PhotocraftApp>, lang: Lang, role: Role, label: &str) -> String {
     // The existing scrub-caption link only names fields laid out left to right.
     if role == Role::SpinButton && lang.dir() == crate::i18n::Dir::Rtl {
@@ -50,6 +53,7 @@ fn control_name(h: &Harness<'static, PhotocraftApp>, lang: Lang, role: Role, lab
     }
 }
 
+/// Scroll a control into view, wait for its hover delay and assert the visible tooltip text.
 fn hover(h: &mut Harness<'static, PhotocraftApp>, role: Role, label: &str, tip: &str) {
     control(h, role, label).scroll_to_me();
     h.run_steps(4);
@@ -60,6 +64,7 @@ fn hover(h: &mut Harness<'static, PhotocraftApp>, role: Role, label: &str, tip: 
     assert!(h.query_all_by_role(Role::Label).any(|n| n.accesskit_node().value().as_deref() == Some(tip)), "hovering {role:?} {label:?} must display {tip:?}");
 }
 
+/// Check tooltip text, dismissal and unchanged option values and keyboard focus for both tools.
 #[test]
 fn both_tools_show_exact_tooltips_on_the_controls_and_hide_them_on_leave() {
     for tool in [Tool::Burn, Tool::Dodge] {
@@ -79,6 +84,7 @@ fn both_tools_show_exact_tooltips_on_the_controls_and_hide_them_on_leave() {
     }
 }
 
+/// Exercise translated and English-fallback tooltips in Latin, Japanese and RTL locales.
 #[test]
 fn hover_uses_the_active_catalog_or_english_fallback() {
     for code in ["en", "de", "fr", "ja", "ar"] {
@@ -93,6 +99,7 @@ fn hover_uses_the_active_catalog_or_english_fallback() {
     }
 }
 
+/// Verify that hovering preserves Exposure editing, Range navigation and Protect Tones toggling without history edits.
 #[test]
 fn hovering_does_not_block_exposure_editing_range_selection_or_protect_tones() {
     for tool in [Tool::Burn, Tool::Dodge] {
@@ -142,6 +149,7 @@ fn hovering_does_not_block_exposure_editing_range_selection_or_protect_tones() {
     }
 }
 
+/// Switch to adjacent tools and verify tooltip dismissal and independent Strength and Exposure values.
 #[test]
 fn tool_switching_clears_the_old_tooltip_and_leaves_other_percentage_fields_unchanged() {
     for tool in [Tool::Blur, Tool::Sharpen, Tool::Smudge] {
@@ -203,6 +211,7 @@ fn render_tooltips_for_visual_inspection() {
     }
 }
 
+/// Require descriptions on the named controls and reject anonymous duplicates while preserving checkbox keyboard focus.
 #[test]
 fn tooltip_descriptions_do_not_create_anonymous_accessibility_nodes() {
     for tool in [Tool::Burn, Tool::Dodge] {
@@ -230,6 +239,7 @@ fn tooltip_descriptions_do_not_create_anonymous_accessibility_nodes() {
     }
 }
 
+/// Check that English and German tooltip text fits the narrow 3x viewport at every interface font size.
 #[test]
 fn tooltip_text_fits_with_every_ui_font_size_in_a_narrow_scaled_bar() {
     use photocraft_engine::prefs::UiFontSize;
@@ -249,6 +259,7 @@ fn tooltip_text_fits_with_every_ui_font_size_in_a_narrow_scaled_bar() {
     }
 }
 
+/// Hover and click both the checkbox box and its label to verify their shared tooltip and toggle behavior.
 #[test]
 fn both_checkbox_mouse_targets_show_the_tooltip_and_toggle() {
     for tool in [Tool::Burn, Tool::Dodge] {
@@ -269,6 +280,7 @@ fn both_checkbox_mouse_targets_show_the_tooltip_and_toggle() {
     }
 }
 
+/// Cover Exposure bounds, invalid text and Enter/Tab commits while another control is hovered.
 #[test]
 fn exposure_keeps_its_bounds_and_text_entry_after_hover() {
     for tool in [Tool::Burn, Tool::Dodge] {
@@ -292,6 +304,7 @@ fn exposure_keeps_its_bounds_and_text_entry_after_hover() {
     }
 }
 
+/// Exercise tooltip visibility and control interaction in a narrow bar at every supported display scale.
 #[test]
 fn tooltips_remain_reachable_in_narrow_bars_at_supported_scales() {
     for scale in [0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
