@@ -4244,6 +4244,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Automatycznie zmieniaj rozmiar płótna
 	Keep Relative Position During Layer Reordering	Zachowaj położenie względne przy zmianie kolejności warstw
 	Shrinkwrap Canvas on Save	Przytnij płótno do zawartości przy zapisie
+	Move Toolbar to the Right	Przenieś pasek narzędzi w prawo
+	Move Toolbar to the Left	Przenieś pasek narzędzi w lewo
 
 # JPEG Options: the size the file will have (#7843)
 	Estimated file size	Szacowany rozmiar pliku

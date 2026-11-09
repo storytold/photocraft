@@ -4132,6 +4132,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Tự động đổi kích thước vùng vẽ
 	Keep Relative Position During Layer Reordering	Giữ vị trí tương đối khi sắp xếp lại lớp
 	Shrinkwrap Canvas on Save	Thu nhỏ vùng vẽ theo nội dung khi lưu
+	Move Toolbar to the Right	Di chuyển thanh công cụ sang phải
+	Move Toolbar to the Left	Di chuyển thanh công cụ sang trái
 
 # JPEG Options: the size the file will have (#7843)
 	Estimated file size	Kích thước tệp ước tính

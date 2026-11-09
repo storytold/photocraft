@@ -4202,6 +4202,8 @@ shape	Appearance	화면 모양
 	Auto-size Canvas	캔버스 크기 자동 조정
 	Keep Relative Position During Layer Reordering	레이어 순서 변경 시 상대 위치 유지
 	Shrinkwrap Canvas on Save	저장 시 캔버스를 내용에 맞게 축소
+	Move Toolbar to the Right	도구 모음을 오른쪽으로 이동
+	Move Toolbar to the Left	도구 모음을 왼쪽으로 이동
 
 # JPEG Options: the size the file will have (#7843)
 	Estimated file size	예상 파일 크기
