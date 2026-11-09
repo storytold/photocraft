@@ -62,43 +62,50 @@ fn the_pro_toggles_edit_the_pencils_own_flags_and_brush_get_sees_them() {
 #[test]
 fn the_brush_keeps_its_own_pressure_flags() {
     let mut h = bar(ThemeKind::ProMedium);
-    // Give the Brush its own brush first, so the Pencil's later toggle cannot be "inherited" on
+    let flags = |h: &Harness<'static, PhotocraftApp>| (h.state().session.tools.brush.pressure_opacity, h.state().session.tools.brush.pressure_size);
+    let toggle = |h: &mut Harness<'static, PhotocraftApp>, label: &str| {
+        h.get_by_label(label).click();
+        h.run_steps(2);
+    };
+
+    // Give the Brush its own brush first, so the Pencil's later toggles cannot be "inherited" on
     // the first switch and hide a leak.
     h.state_mut().ui.tool = Tool::Brush;
     h.run_steps(4);
     h.state_mut().session.tools.brush.pressure_opacity = false;
+    h.state_mut().session.tools.brush.pressure_size = false;
     h.run_steps(2);
 
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
-    h.get_by_label("Always use pressure for opacity").click();
-    h.run_steps(2);
-    assert!(h.state().session.tools.brush.pressure_opacity, "the Pencil's flag is on");
+    toggle(&mut h, "Always use pressure for opacity");
+    toggle(&mut h, "Always use pressure for size");
+    assert_eq!(flags(&h), (true, true), "the Pencil's flags are on");
 
     h.state_mut().ui.tool = Tool::Brush;
     h.run_steps(4);
-    assert!(!h.state().session.tools.brush.pressure_opacity, "the Pencil's toggle did not change the Brush");
-
+    assert_eq!(flags(&h), (false, false), "the Pencil's toggles did not change the Brush");
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
-    assert!(h.state().session.tools.brush.pressure_opacity, "the Pencil's flag came back");
+    assert_eq!(flags(&h), (true, true), "the Pencil's flags came back");
 
     // The mirror: the Brush on, the Pencil off, so a reset to one value cannot pass.
     h.state_mut().ui.tool = Tool::Brush;
     h.run_steps(4);
     h.state_mut().session.tools.brush.pressure_opacity = true;
+    h.state_mut().session.tools.brush.pressure_size = true;
     h.run_steps(2);
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
-    h.get_by_label("Always use pressure for opacity").click();
-    h.run_steps(2);
-    assert!(!h.state().session.tools.brush.pressure_opacity, "the Pencil is off");
+    toggle(&mut h, "Always use pressure for opacity");
+    toggle(&mut h, "Always use pressure for size");
+    assert_eq!(flags(&h), (false, false), "the Pencil is off");
     h.state_mut().ui.tool = Tool::Brush;
     h.run_steps(4);
-    assert!(h.state().session.tools.brush.pressure_opacity, "the Brush stayed on");
+    assert_eq!(flags(&h), (true, true), "the Brush stayed on");
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
-    assert!(!h.state().session.tools.brush.pressure_opacity, "the Pencil stayed off");
+    assert_eq!(flags(&h), (false, false), "the Pencil stayed off");
 }
 
 #[test]
