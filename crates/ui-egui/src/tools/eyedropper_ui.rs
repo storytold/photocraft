@@ -50,7 +50,7 @@ pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(
         egui::RichText::new(crate::i18n::fmt(
-            tl!("Click to sample the foreground colour  ·  {key}-click for background"),
+            tl!("Click to sample the foreground color  ·  {key}-click for background"),
             &[("key", &crate::shortcuts::pretty("Alt"))],
         ))
         .color(t.text_faint),
@@ -92,6 +92,32 @@ mod tests {
     fn click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
         tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
         tool_event(app, ToolEvent::Up { x, y }, mods);
+    }
+
+    #[test]
+    fn mask_sampling_sets_gray_swatches_without_changing_pixel_sampling() {
+        for depth in [8, 16, 32] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 20, "height": 20, "depth": depth, "background": "transparent"})).unwrap();
+            app.session
+                .edit("red", |doc, _| {
+                    let surface = doc.layers[0].surface_mut().unwrap();
+                    surface.fill_rect(photocraft_geom::Rect::new(0, 0, 20, 20), &photocraft_raster::from_rgba(&surface.format(), [1.0, 0.0, 0.0, 1.0]));
+                    doc.layers[0].mask = Some(photocraft_doc::LayerMask::reveal_all());
+                    Ok(())
+                })
+                .unwrap();
+            app.ui.tool = Tool::Eyedropper;
+            app.ui.mask_target = true;
+            click(&mut app, 5.0, 5.0, egui::Modifiers::NONE);
+            let gray = photocraft_color::convert::rgb_to_gray([1.0, 0.0, 0.0]);
+            assert_eq!(fg(&app), [gray, gray, gray, 1.0], "depth {depth}");
+            click(&mut app, 5.0, 5.0, egui::Modifiers::ALT);
+            assert_eq!(app.session.tools.background, [gray, gray, gray, 1.0]);
+            app.ui.mask_target = false;
+            click(&mut app, 5.0, 5.0, egui::Modifiers::NONE);
+            assert_eq!(fg(&app), [1.0, 0.0, 0.0, 1.0]);
+        }
     }
 
     #[test]

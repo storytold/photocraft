@@ -1327,6 +1327,7 @@ fn warp_with(
                 outp[o + a] = al as f32;
             }
         }
+        photocraft_raster::scratch::give(px);
         Ok(any.then_some((*t, outp)))
     };
     // Each tile is written as soon as it is warped, so only the tiles in flight hold their `f32`

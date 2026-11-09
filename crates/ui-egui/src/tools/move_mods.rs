@@ -1,12 +1,14 @@
 //! Move-tool modifier keys, as in Photoshop (#90):
 //!
-//! - ⇧ while dragging locks the move to the dominant axis (horizontal or vertical). The axis is
-//!   re-evaluated as the drag goes on, so moving far enough the other way switches it; a small
-//!   hysteresis keeps it from flickering near the diagonal. Free Transform uses the same rule with
-//!   eight directions ([`constrain`]).
+//! - ⇧ while dragging locks the move to the nearest of the eight directions (the axes and the 45°
+//!   diagonals), as the reference application does when a layer is dragged (#11382): +100,+30
+//!   moves +100,0 and +80,+80 moves +80,+80. The direction is re-evaluated as the drag goes on,
+//!   so moving far enough another way switches it; a small hysteresis keeps it from flickering
+//!   near the switch-over angle. Free Transform uses the same rule ([`constrain`]).
 //! - ⌥ held when the drag starts duplicates the selected layer(s) (groups included) once the
 //!   pointer actually moves, and the drag then moves the copies. Duplicate and move land as one
-//!   history step ("Duplicate + Move"). ⇧⌥ combines both.
+//!   history step ("Move", as in Photoshop; an ⌥-arrow nudge keeps "Duplicate + Move"). ⇧⌥
+//!   combines both.
 //! - Arrow keys nudge the selected layers 1 px (⇧: 10 px); ⌥ duplicates first. While Free
 //!   Transform is active they nudge the box instead. A run of nudges is one History state
 //!   (`nudge_bundle`, #2259).
@@ -23,8 +25,10 @@ use crate::PhotocraftApp;
 use crate::canvas::ToolEvent;
 use crate::state::Tool;
 
-/// Directions ⇧ locks a Move-tool drag to: horizontal and vertical (Photoshop's Move tool).
-pub const MOVE_DIRECTIONS: u32 = 4;
+/// Directions ⇧ locks a Move-tool drag of a layer to: the axes and the 45° diagonals. The
+/// reference application moves +80,+80 for a ⇧-drag of +80,+80, so an axis-only lock (four
+/// directions) does not match it (#11382).
+pub const MOVE_DIRECTIONS: u32 = 8;
 /// Directions ⇧ locks a Free Transform body drag, or a Move-tool drag of selected pixels, to: the
 /// axes and the 45° diagonals.
 pub const TRANSFORM_DIRECTIONS: u32 = 8;
@@ -34,7 +38,7 @@ const HYSTERESIS_DEG: f64 = 8.0;
 /// ⌥-drag duplicates only once the pointer has moved this far (screen points), so an ⌥-click
 /// without a drag doesn't make a copy (Photoshop).
 const DUPLICATE_THRESHOLD: f64 = 2.0;
-/// History label of an ⌥-drag / ⌥-nudge.
+/// History label of an ⌥-nudge. An ⌥-drag of a layer is a plain "Move", as in Photoshop (#11383).
 pub const DUPLICATE_MOVE_LABEL: &str = "Duplicate + Move";
 
 /// Locks the drag offset `d` to the nearest of `n` evenly spaced directions (0° = right). `prev`
@@ -84,13 +88,20 @@ fn moving(app: &PhotocraftApp) -> bool {
     app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move)
 }
 
+/// The pointer reflects the pending copy, then the latched duplication for the whole drag.
+pub fn copying(app: &PhotocraftApp, alt: bool) -> bool {
+    if moving(app) && app.move_mods.start.is_some() { app.move_mods.alt || app.move_mods.dup_from.is_some() } else { alt }
+}
+
 /// Duplicates the selected layers (the copies become the selection), remembering the history
 /// length before so [`fold_history`] can merge the copy and the move into one step.
 fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     let before = past_len(app)?;
     // In place: the copy follows the pointer from the original, artboards too (#1531).
     match app.run("layer.duplicate", json!({"inPlace": true})) {
-        Ok(_) => Some(before),
+        // The state just before the copy's: in non-linear history the copy's step also moved
+        // the later states in front of it (`History::record`), and those must stay.
+        Ok(_) => Some(past_len(app).and_then(|n| n.checked_sub(1)).unwrap_or(before).max(before)),
         Err(e) => {
             app.ui.status = e;
             None
@@ -98,8 +109,8 @@ fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     }
 }
 
-/// Merges every history step after `from` into one "Duplicate + Move" step.
-fn fold_history(app: &mut PhotocraftApp, from: usize) {
+/// Merges every history step after `from` into one step called `label`.
+fn fold_history(app: &mut PhotocraftApp, from: usize, label: &str) {
     let Some(st) = app.session.active_mut() else { return };
     while st.history.past_len() > from + 1 {
         if !st.history.purge_last() {
@@ -107,7 +118,7 @@ fn fold_history(app: &mut PhotocraftApp, from: usize) {
         }
     }
     if st.history.past_len() == from + 1 {
-        st.history.set_current_label(DUPLICATE_MOVE_LABEL);
+        st.history.set_current_label(label);
     }
 }
 
@@ -178,7 +189,7 @@ pub(crate) fn duplicated(app: &PhotocraftApp) -> bool {
 pub fn finish(app: &mut PhotocraftApp) {
     let st = std::mem::take(&mut app.move_mods);
     if let Some(from) = st.dup_from {
-        fold_history(app, from);
+        fold_history(app, from, tl!("Move"));
     }
 }
 
@@ -186,15 +197,37 @@ pub fn finish(app: &mut PhotocraftApp) {
 /// ⌥-drag's copy is taken back.
 pub fn abandon(app: &mut PhotocraftApp) {
     if std::mem::take(&mut app.move_mods).dup_from.is_some() {
-        app.session.undo();
+        // Exactly, also in non-linear history (where an undo would land on a later state).
+        app.session.rollback();
     }
 }
 
-/// Arrow keys with the Move tool (or while Free Transform is active): nudge 1 px, ⇧ 10 px;
+/// The document pixels one plain arrow press moves layers by with the Move tool: one screen
+/// pixel, as in Photoshop (#9511). Zoomed out that is several document pixels (2 at 50 %, 4 at
+/// 25 %; 1 at 66.7 %: whole pixels only), zoomed in still one. No cap: the zoom bottoms out
+/// with the document's shorter side 2 px on screen (`zoom_levels::min`), so a step is at most
+/// half that side. ⇧'s 10 px don't scale. Free Transform keeps 1 px.
+fn screen_pixel_step(app: &PhotocraftApp) -> f64 {
+    let zoom = f64::from(app.current_zoom());
+    if app.ui.transform.is_some() || !zoom.is_finite() || zoom <= 0.0 {
+        return 1.0;
+    }
+    // A ladder rung is a hair off in f32 (0.1 % is 1 / 999.99995): snap a reciprocal within f32
+    // precision of a whole number to it, and floor any other zoom (0.3333334 is 2, not 3).
+    let (r, whole) = (1.0 / zoom, (1.0 / zoom).round());
+    let steps = if (r - whole).abs() <= r * f64::from(f32::EPSILON) { whole } else { r.floor() };
+    steps.max(1.0)
+}
+
+/// Arrow keys with the Move tool (or while Free Transform is active): nudge one screen pixel
+/// (1 px at 100 %, [`screen_pixel_step`]), ⇧ 10 px;
 /// ⌥ duplicates the layers first. ⌘-arrows (Ctrl off the Mac) do the same from most other tools,
 /// where ⌘ is the temporary Move tool (`hold_keys::cmd_nudges`, #2474). Returns true when a key
 /// was used.
 pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    if app.ui.text_edit.is_some() {
+        return false;
+    }
     use egui::{Key, Modifiers};
     let cmd = ctx.input(|i| i.modifiers.command) && crate::hold_keys::cmd_nudges(app);
     if app.ui.tool != Tool::Move && app.ui.transform.is_none() && !cmd {
@@ -207,7 +240,7 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         // Most specific first: `consume_key` ignores extra ⇧ / ⌥ (`matches_logically`).
         for mods in [Modifiers::SHIFT | Modifiers::ALT, Modifiers::SHIFT, Modifiers::ALT, Modifiers::NONE] {
             if ctx.input_mut(|i| i.consume_key(base | mods, key)) {
-                let k = if mods.shift { 10.0 } else { 1.0 };
+                let k = if mods.shift { 10.0 } else { screen_pixel_step(app) };
                 app.nudge_bundle.now = ctx.input(|i| i.time);
                 nudge(app, ux * k, uy * k, mods.alt);
                 return true;
@@ -258,6 +291,7 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
         return;
     }
     let from = if duplicate_first { duplicate(app) } else { None };
+    let revision = app.session.active().map(|st| st.revision);
     let moved = if duplicate_first {
         // A copy is a state of its own, folded with its move below.
         app.nudge_bundle.reset();
@@ -265,11 +299,20 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
     } else {
         crate::nudge_bundle::run(app, "layers", "layer.translate", json!({"dx": dx, "dy": dy}))
     };
-    if let Err(e) = moved {
-        app.ui.status = e;
+    match moved {
+        // The reference names an arrow-key move "Nudge"; a bundled run is one step with that name.
+        // Only a move that changed the document: a zero offset records nothing, and the state
+        // on top is then another edit's.
+        Ok(_) if from.is_none() => {
+            if let Some(st) = app.session.active_mut().filter(|st| Some(st.revision) != revision) {
+                st.history.set_current_label(tl!("Nudge"));
+            }
+        }
+        Ok(_) => {}
+        Err(e) => app.ui.status = e,
     }
     if let Some(from) = from {
-        fold_history(app, from);
+        fold_history(app, from, DUPLICATE_MOVE_LABEL);
     }
 }
 

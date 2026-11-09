@@ -1,5 +1,6 @@
+use super::begin::moves_kind;
 use super::pointer::{Gesture, Hit, carry_pivot};
-use super::*;
+use super::{Homography, LayerContent, PhotocraftApp, TransformMode, TransformSession};
 
 /// The same effective modifiers drive the geometry and decide whether Ctrl is a distortion
 /// gesture rather than the ordinary snap override. Keep type and Content-Aware Scale refusals.
@@ -21,14 +22,40 @@ pub(crate) fn corner_distorts(app: &PhotocraftApp, index: usize, mods: egui::Mod
     mods.command && !(mods.alt && mods.shift)
 }
 
+/// The pointer a handle shows for a drag that distorts or skews the box rather than scaling or
+/// rotating it (#5405).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HandleIndicator {
+    Distort,
+    Skew,
+}
+
+/// What dragging handle `h` with `mods` does, worked out by the same rules as the drag itself
+/// ([`drag_mods`], [`mode_mods`], [`apply_mode_drag`]): ⌘ on a corner distorts (⌘⌥⇧ adds
+/// perspective) and on an edge skews, Distort mode distorts from every handle, Perspective mode
+/// distorts from the corners and skews from the edges, Skew mode skews from the edges. Rotate
+/// mode turns the box whatever the keys, a Skew-mode corner slides along an edge, editable type
+/// refuses Distort and Content-Aware Scale only scales: `None`.
+pub(super) fn handle_indicator(app: &PhotocraftApp, t: &TransformSession, h: Hit, mods: egui::Modifiers) -> Option<HandleIndicator> {
+    if t.warp.is_some() || t.content_aware.is_some() || !mode_allows(t.mode, h) {
+        return None;
+    }
+    let (mode, mods) = drag_mods(app, t, h, mods);
+    match (mode, h) {
+        (TransformMode::Rotate, _) | (TransformMode::Skew, Hit::Corner(_)) => None,
+        (TransformMode::Distort, Hit::Edge(_)) => Some(HandleIndicator::Distort),
+        (TransformMode::Skew | TransformMode::Perspective, Hit::Edge(_)) => Some(HandleIndicator::Skew),
+        (_, Hit::Corner(_)) if mode_mods(mode, h, mods).command => Some(HandleIndicator::Distort),
+        (_, Hit::Edge(_)) if mods.command => Some(HandleIndicator::Skew),
+        _ => None,
+    }
+}
+
 /// Editable type can be scaled, rotated and skewed but not distorted (#2630): the rule that greys
 /// Distort and Perspective in `enable_rules::disabled`, for the box's own layer. A box on a path,
 /// on the selection outline or on a lone mask or channel moves no type.
 fn distort_refused(app: &PhotocraftApp, t: &TransformSession) -> bool {
-    t.path.is_none()
-        && !t.selection
-        && t.target.is_none()
-        && app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
+    t.path.is_none() && !t.selection && t.target.is_none() && moves_kind(app, t, |c| matches!(c, LayerContent::Text(_)))
 }
 
 /// Where Distort and Perspective are refused ([`distort_refused`]), ⌘-drag and ⌘⌥⇧-drag of a
@@ -130,23 +157,45 @@ pub(crate) fn apply_mode_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2],
             g.hit = Hit::Outside;
             apply_drag(s, g, p, mods);
         }
+        // Distort (#10085): a side handle moves its edge freely, both of its corners by the drag
+        // and the opposite edge staying put, up to where the box would fold over, as a corner
+        // does (#1323). Like a Distort corner, it takes no ⇧ or ⌥ constraint.
+        (TransformMode::Distort, Hit::Edge(i)) if i < 4 => {
+            let (d, q0) = ([p[0] - g.start[0], p[1] - g.start[1]], g.quad0);
+            let mut q = q0;
+            for k in [i, (i + 1) % 4] {
+                if let (Some(dst), Some(src)) = (q.get_mut(k), q0.get(k)) {
+                    *dst = [src[0] + d[0], src[1] + d[1]];
+                }
+            }
+            s.quad = keep_convex(q0, q);
+            s.pivot = carry_pivot(q0, s.quad, g.pivot0);
+        }
         // Skew: an edge slides only along itself (⌘⇧ in Free Transform).
         (TransformMode::Skew, Hit::Edge(_)) => {
             mods.command = true;
             mods.shift = true;
             apply_drag(s, g, p, mods);
         }
+        // Perspective's side handles, as in Photoshop: the edge slides along itself, stopping
+        // before the box folds over (#1323). That happens once the opposite edge isn't parallel,
+        // as after a corner drag on the other axis.
+        (TransformMode::Perspective, Hit::Edge(_)) => {
+            mods.command = true;
+            mods.shift = true;
+            apply_drag(s, g, p, mods);
+            s.quad = keep_convex(g.quad0, s.quad);
+            s.pivot = carry_pivot(g.quad0, s.quad, g.pivot0);
+        }
         _ => apply_drag(s, g, p, mode_mods(mode, g.hit, mods)),
     }
 }
 
-/// What a drag can do in each Edit › Transform mode: in Distort only the corners (and moving the
-/// box from inside); in Skew everything but rotating from outside the box (#3437). A click
-/// outside still commits.
+/// What a drag can do in each Edit › Transform mode: in Distort and Skew everything but rotating
+/// from outside the box (#3437, #10085). A click outside still commits.
 pub(super) fn mode_allows(mode: TransformMode, h: Hit) -> bool {
     match mode {
-        TransformMode::Distort => !matches!(h, Hit::Outside | Hit::Edge(_)),
-        TransformMode::Skew => h != Hit::Outside,
+        TransformMode::Distort | TransformMode::Skew => h != Hit::Outside,
         _ => true,
     }
 }
@@ -206,10 +255,10 @@ pub(crate) fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods
             let a1 = (p[1] - g.pivot0[1]).atan2(p[0] - g.pivot0[0]);
             let mut da = a1 - a0;
             if mods.shift {
-                // Snap the resulting angle to 15° steps.
-                let base = (g.quad0[1][1] - g.quad0[0][1]).atan2(g.quad0[1][0] - g.quad0[0][0]);
+                // Snap the turn made by this drag to 15° steps; the angle the box started at is
+                // kept (#11099).
                 let step = 15f64.to_radians();
-                da = ((base + da) / step).round() * step - base;
+                da = (da / step).round() * step;
             }
             let (sn, cs) = da.sin_cos();
             let c = g.pivot0;

@@ -20,7 +20,9 @@
 pub mod area;
 pub mod cjk;
 pub mod craft_fonts;
+mod embolden;
 pub mod engine_data;
+pub mod font_class;
 pub mod fonts;
 pub mod glyphs;
 pub mod layout;
@@ -39,6 +41,7 @@ use photocraft_color::PixelFormat;
 use photocraft_doc::TextLayer;
 
 pub use craft_fonts::{CRAFT_FONTS, CraftFont};
+pub use font_class::{FamilyTraits, FontClass, FontFormat};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};
 pub use layout::{
     ClusterInfo, LineInfo, PlacedGlyph, TextLayout, byte_index, char_index, hit_char, line_edge, line_index, line_step, text_point_inside, word_boundary,
@@ -138,6 +141,22 @@ impl TextEngine {
         let (_, r) = self.render(layer, dpi, format);
         layer.cache = Some(r.surface);
         r.rect
+    }
+
+    /// Registers font bytes (for example a font embedded in an imported PDF) for later layout.
+    /// Returns the family names the font provides, best first.
+    pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
+        self.fonts.register_font_data(bytes)
+    }
+
+    /// [`Self::register_font_data`] under `family`, which cannot shadow an installed family.
+    pub fn register_font_data_as(&mut self, bytes: Vec<u8>, family: &str) -> Vec<String> {
+        self.fonts.register_font_data_as(bytes, family)
+    }
+
+    /// Whether `family` is available to this engine.
+    pub fn has_family(&mut self, family: &str) -> bool {
+        self.fonts.has_family(family)
     }
 }
 

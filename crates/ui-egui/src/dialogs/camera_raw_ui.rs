@@ -19,6 +19,7 @@ use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
 use photocraft_algo::histogram::RgbHistogram;
 
 use crate::camera_raw_scope_ui::{MAX_SAMPLERS, ToneZone};
+
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
@@ -29,6 +30,7 @@ use crate::widgets;
 
 mod controls;
 mod convert;
+mod filmstrip;
 mod menu;
 mod open;
 mod proxy;
@@ -37,6 +39,7 @@ mod sidecar;
 pub use controls::show;
 #[cfg(test)]
 use convert::open_pixels;
+pub use filmstrip::HeldRaw;
 pub use menu::menu;
 #[cfg(test)]
 use open::{Coverage, commit_open_raw, document_index, finish_redevelop, open_raw, replace_raw_document};
