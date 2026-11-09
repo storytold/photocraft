@@ -39,6 +39,7 @@ pub mod pixel_grid;
 pub mod quick_pick;
 pub mod rotate_view;
 pub mod rulers;
+pub mod scroll_all_windows;
 pub mod scrollbars;
 pub mod select_mask_view;
 mod selection;
@@ -63,12 +64,12 @@ pub mod zoom_window_fit;
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
-use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
+use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
 use display::{checker, hdr_preview, sync_display_lut};
-pub use drag::{Drag, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
+pub use drag::{Drag, DragDocument, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
 pub(crate) use drag::{angle_readout, doc_box_corners, draw_readout, draw_value_readout};
 #[cfg(test)]
 pub(crate) use drag::{marquee_drag_ants, marquee_preview_px};
@@ -79,7 +80,7 @@ pub(crate) use filter_preview::{ensure_filter_preview, filter_channel_preview, f
 #[cfg(test)]
 pub(crate) use gesture::constrained_polygon_point;
 pub use gesture::{commit_crop, commit_polygon, polygon_cancel_stale, polygon_replaces_selection, polygon_retract};
-pub(crate) use gesture::{finish_gesture, selection_mode};
+pub(crate) use gesture::{finish_gesture, polygon_close_reach, selection_mode};
 pub(crate) use navigator::NavigatorCache;
 #[cfg(test)]
 use navigator::navigator_waits_for_drag;
@@ -248,8 +249,20 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
         Some(None) => (None, 1),
         Some(Some((proxy, k))) => (proxy.selection.as_ref(), (*k).max(1)),
     };
+    // ⌥'s "is anything selected" (`tool_feedback::document_selection_mode`) reads the active
+    // document's selection bounds every frame: cache them here even while the ants are hidden
+    // (Selection Edges off, a lasso replacing them), or each frame would scan the selection.
+    if app.session.active_index() == Some(input.idx)
+        && let Some(sel) = input.doc.selection.as_ref()
+    {
+        app.cached_bounds(u64::MAX - input.doc.id.0, sel);
+    }
     // Selection outline: true boundary, animated marching ants (cached per revision).
-    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app)) {
+    // A Patch lasso drag replaces the active document's selection, not a floating piece or Select
+    // and Mask's refined preview; other documents keep their ants.
+    let patch_replaces =
+        || refined.is_none() && floated.is_none() && app.session.active_index() == Some(input.idx) && crate::retouch_ui::patch_replaces_selection(app);
+    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app) && !patch_replaces()) {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
@@ -682,6 +695,8 @@ struct DialogCanvasInput<'a> {
     temporary: Option<crate::hold_keys::Temporary>,
     free_hover: bool,
     img_rect: Rect,
+    idx: usize,
+    aspect: f32,
 }
 
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
@@ -705,9 +720,26 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         input.primary && app.ui.dialogs.last().is_some_and(|d| crate::select_mask_view::owns(&d.fields) && crate::select_mask_view::brush_on(&d.fields));
     // Field Blur's pins are placed and dragged on the image (`blur_pins`).
     let pinning = input.primary && app.ui.dialogs.last().is_some_and(|d| crate::blur_pins::owns(&d.fields));
+    // A filter dialog with a preview window (Smart Sharpen, Unsharp Mask, Reduce Noise…): the image
+    // is its locator, and a click centres the window there (#9648), whatever the tool. Only the
+    // press counts: as in the reference application, dragging on afterwards leaves the window be.
+    let locating = input.primary && crate::filter_preview_ui::locator(app).is_some();
     // Layer Style on a Drop or Inner Shadow page: a drag on the image moves the shadow (#5701).
     let shadow_drag =
         !picking && app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::LayerStyle && crate::layer_style::drags_shadow(&d.fields));
+    // Layer Style on a Gradient Overlay page: a drag on the image moves the gradient (#10763), as
+    // long as the dialog's layer is there to move it on.
+    let gradient_drag = !picking
+        && app.ui.dialogs.last().is_some_and(|d| {
+            d.kind == crate::state::DialogKind::LayerStyle
+                && crate::layer_style::drags_gradient(&d.fields)
+                && crate::layer_style::gradient_layer_bounds(&app.session, &d.fields).is_some()
+        });
+    // Off that page (another one chosen under a held press, say) the stored drag is over: the
+    // page chosen again starts from the offset shown.
+    if !gradient_drag && let Some(d) = app.ui.dialogs.last_mut().filter(|d| d.kind == crate::state::DialogKind::LayerStyle) {
+        crate::layer_style::end_gradient_drag(&mut d.fields);
+    }
     // ⌘/Ctrl-click with Curves open: a point at the pixel's tone (#7325), whatever the tool. The
     // press's own modifiers decide, and only the press adds: a drag would add one per frame.
     let curve_point_press = (input.primary && !input.middle && crate::adjust_dialog::curves_on_top(app))
@@ -722,7 +754,15 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         .flatten()
         .map(|m| crate::workspace_ui::sticky_mods(app, m))
         .filter(|m| m.command);
-    let dialog_hand = app.ui.tool == Tool::Hand && !picking && !range_picking && !refine_brushing && !pinning && !shadow_drag && curve_point_press.is_none();
+    let dialog_hand = app.ui.tool == Tool::Hand
+        && !picking
+        && !range_picking
+        && !refine_brushing
+        && !pinning
+        && !locating
+        && !shadow_drag
+        && !gradient_drag
+        && curve_point_press.is_none();
     // ⌘Space / ⌥Space zoom under the dialog as they do without one, before Space pans (#6460).
     // With the Hand tool, ⌘ alone is Zoom In (#6434); under Curves that press is the dialog's
     // point (#7325), not a zoom.
@@ -745,8 +785,14 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         }
     } else if let Some(d) = crate::dialogs::pan_delta(input.ctx, input.rect, dialog_hand) {
         let d = input.xf.unmap_vec(d) / (input.view.zoom / input.ppp);
+        let before = input.view.center;
         input.view.center[0] -= d.x;
         input.view.center[1] -= d.y;
+        // Hand › Scroll All Windows, or Shift held: the other shown views follow, as on the free canvas.
+        let scroll_all = crate::scroll_all_windows::active(app, crate::workspace_ui::sticky_mods(app, input.ctx.input(|i| i.modifiers)).shift);
+        let source = crate::scroll_all_windows::source(app, input.idx);
+        let geometry = crate::scroll_all_windows::ClampGeometry { size: input.rect.size(), ppp: input.ppp, aspect: input.aspect };
+        crate::scroll_all_windows::follow_step(app, scroll_all, source, before, input.view, geometry);
         input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, true));
     } else if input.free_hover && (input.space_pan || dialog_hand) {
         input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, false));
@@ -757,6 +803,17 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             let total = input.xf.unmap_vec(p - origin) / (input.view.zoom / input.ppp);
             if let Some(d) = app.ui.dialogs.last_mut() {
                 crate::layer_style::drag_shadow(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)]);
+            }
+        }
+    } else if gradient_drag && !input.middle && crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {
+        input.ctx.set_cursor_icon(egui::CursorIcon::Move);
+        if let Some(p) = crate::dialogs::free_press(input.ctx, input.rect) {
+            let (start, origin) = input.ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin().unwrap_or(p)));
+            let total = input.xf.unmap_vec(p - origin) / (input.view.zoom / input.ppp);
+            // The gradient's offset is a fraction of the layer's bounds, as the renderer paints it.
+            let bounds = app.ui.dialogs.last().and_then(|d| crate::layer_style::gradient_layer_bounds(&app.session, &d.fields));
+            if let (Some(bounds), Some(d)) = (bounds, app.ui.dialogs.last_mut()) {
+                crate::layer_style::drag_gradient(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)], bounds);
             }
         }
     } else if picking && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect) {
@@ -770,7 +827,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             if curves_picking {
                 crate::adjust_dialog::sample_at(app, d[0], d[1]);
             } else if replace_picking {
-                crate::filter_dialog::color_eyedropper_sample(app, d[0], d[1]);
+                crate::filter_dialog::color_eyedropper_sample(app, d[0], d[1], input.ctx.input(|i| i.modifiers));
             } else {
                 crate::color_picker_ui::sample_at(app, d[0], d[1]);
             }
@@ -781,6 +838,15 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     {
         let press = crate::dialogs::free_press(input.ctx, input.rect);
         crate::blur_pins::canvas(app, input.ctx, input.xf, p, press);
+    } else if locating
+        && !input.middle
+        && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect)
+    {
+        input.ctx.set_cursor_icon(preview_locator_cursor(input.ctx, p));
+        if let Some(q) = crate::dialogs::free_press(input.ctx, input.rect).filter(|_| input.ctx.input(|i| i.pointer.primary_pressed())) {
+            let d = input.xf.to_doc(q);
+            crate::filter_preview_ui::center_at(app, d[0], d[1]);
+        }
     } else if refine_brushing
         && !input.middle
         && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect)
@@ -1636,6 +1702,15 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         {
             crate::tool_cursor::close_path(painter, p)
         }
+        // Over an endpoint of an open path, the continue-path pointer (#9356).
+        Tool::Pen
+            if {
+                let [x, y] = xf.to_doc(p);
+                crate::vector_ui::continues_path_at(app, tool, x, y)
+            } =>
+        {
+            crate::tool_cursor::continue_path(painter, p)
+        }
         // The pen tools: their own icon with its nib on the point, or the crosshair for
         // precise Other Cursors (#4639).
         Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
@@ -1945,9 +2020,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         None => paint_dots(ui, rect, app.session.prefs().interface.show_canvas_dots),
     }
     let border = app.session.prefs().interface.canvas_border;
-    // Default-mode Crop changes its camera during input. Defer its image until the new camera
-    // is known; other tools keep their existing paint order and texture/outline snapshots.
+    // Default-mode Crop changes its camera during input. Live painting must also process the
+    // current pointer samples before preparing the image, or every dab appears a frame late.
+    // Under a dialog the image keeps its place below the dialog's own overlays (Refine Edge).
     let crop_camera = primary && crate::crop_mode::moves_image(app);
+    let paint_after_input = crop_camera || (primary && app.ui.dialogs.is_empty() && strokes_live(app.ui.tool));
     let paint_input = CanvasPaintInput {
         ctx: &ctx,
         rect,
@@ -1965,7 +2042,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         target_xf,
         pixel_grid,
     };
-    let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
+    let painted = if paint_after_input { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
     let img_rect = xf.doc_rect(doc.bounds());
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
@@ -1986,7 +2063,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     app.stylus.update_for_frame(ui.ctx().cumulative_frame_nr(), &ui.input(|i| i.events.clone()));
     crate::stylus::Stylus::sync_eraser_tool(app);
     // A Magnetic Lasso border left behind by a tool or document switch is dropped.
-    crate::magnetic_lasso_ui::frame(app);
+    crate::magnetic_lasso_ui::frame(app, ui.input(|i| i.pointer.primary_down()), primary);
     // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
     crate::layer_picker::prune(app);
     // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
@@ -2049,6 +2126,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 temporary,
                 free_hover,
                 img_rect,
+                idx,
+                aspect,
             },
         );
     }
@@ -2081,8 +2160,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
     let flick_id = egui::Id::unique(("pc-flick-pan", idx, primary, ctx.viewport_id()));
     let flick_on = app.session.prefs().tools.enable_flick_panning;
+    // Hand › Scroll All Windows, or Shift held (on the keyboard or in Window › Modifier Keys): the
+    // other shown views follow this one.
+    let scroll_all = hand_pan && crate::scroll_all_windows::active(app, crate::workspace_ui::sticky_mods(app, ctx.input(|i| i.modifiers)).shift);
+    let scroll_source = crate::scroll_all_windows::source(app, idx);
+    // A glide keeps the drag's choice after Space, Shift or the button is let go.
+    let glide_scroll_all = crate::scroll_all_windows::glide_choice(&ctx, flick_id.with("scroll-all"), hand_drag && !stroke_dismissal, scroll_all);
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_drag && !stroke_dismissal, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
+        let before = view.center;
         if d.is_finite() {
             view.zoom_animating = false;
             view.zoom_anchor = None;
@@ -2093,13 +2179,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view_with_aspect(&mut view, rect.size(), ppp, aspect) {
             ctx.data_mut(|m| m.get_temp_mut_or_default::<crate::flick_pan::Flick>(flick_id).stop());
         }
+        let geometry = crate::scroll_all_windows::ClampGeometry { size: rect.size(), ppp, aspect };
+        crate::scroll_all_windows::follow_step(app, glide_scroll_all, scroll_source, before, &view, geometry);
     }
     // A scroll or zoom while the right button is held moves the image under its press: no click.
     crate::paint_mouse::track_right_press_view(&response, &view, flip);
     if hand_drag && !stroke_dismissal {
         let d = xf.unmap_vec(response.drag_delta()) / (view.zoom / ppp);
+        let before = view.center;
         view.center[0] -= d.x;
         view.center[1] -= d.y;
+        let geometry = crate::scroll_all_windows::ClampGeometry { size: rect.size(), ppp, aspect };
+        crate::scroll_all_windows::follow_step(app, scroll_all, scroll_source, before, &view, geometry);
         // The tool cursors below are skipped while panning: the fist is set here (#2196).
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
     } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
@@ -2133,12 +2224,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ctx.request_repaint();
         }
     }
-    let xf = if crop_camera {
+    let xf = if paint_after_input {
+        // This frame's navigation input (wheel pan, pinch zoom) shows in this frame too.
+        if view.zoom != render_zoom {
+            display_view.zoom = view.zoom;
+        }
         if view.center != target_xf.center {
             display_view.center = view.center;
         }
         display_view.rotation = view.rotation;
-        ViewXform { center: display_view.center, rotation: display_view.rotation, ..xf }.pixel_aligned_for(app, ppp)
+        ViewXform { zoom: display_view.zoom / ppp, center: display_view.center, rotation: display_view.rotation, ..xf }.pixel_aligned_for(app, ppp)
     } else {
         xf
     };
@@ -2235,6 +2330,9 @@ mod layer_edges_tests;
 
 #[cfg(test)]
 mod guide_ants_tests;
+
+#[cfg(test)]
+mod live_frame_tests;
 
 #[cfg(test)]
 mod rotation_preview_isolation_tests {
