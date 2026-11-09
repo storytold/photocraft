@@ -7,11 +7,36 @@ use serde_json::json;
 
 const WASM: &[u8] = include_bytes!("../../../plugins/tests/fixtures/skin-smooth.wasm");
 
+/// Every attempted band is recorded, so one GPU success cannot hide later WASM fallback.
+struct CountedBackend {
+    backend: Arc<Backend>,
+    bands: Mutex<Vec<bool>>,
+}
+
+impl Accelerator for CountedBackend {
+    fn algorithm(&self) -> &str {
+        self.backend.algorithm()
+    }
+    fn filter(&self, band: Band<'_>, ctl: &Interrupt<'_>) -> Result<bool> {
+        let result = self.backend.filter(band, ctl);
+        self.bands.lock().unwrap().push(matches!(result, Ok(true)));
+        result
+    }
+}
+
+impl CountedBackend {
+    fn assert_all_bands_used_gpu(&self) {
+        let bands = self.bands.lock().unwrap();
+        assert!(!bands.is_empty() && bands.iter().all(|executed| *executed), "GPU execution per band: {bands:?}");
+    }
+}
+
 /// Compares sample unions, exclusions and tolerance extremes against WASM at every depth, requiring actual GPU execution.
 #[test]
 fn sampled_colour_ranges_match_gpu_and_wasm_including_subtract_only() {
     let _gpu_lock = photocraft_testkit::gpu_lock();
     let backend = backend();
+    let counted = Arc::new(CountedBackend { backend: backend.clone(), bands: Mutex::new(Vec::new()) });
     let plugin = Plugin::load(WASM, Limits::default()).unwrap();
     let rect = Rect::new(0, 0, 48, 32);
     for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -33,12 +58,12 @@ fn sampled_colour_ranges_match_gpu_and_wasm_including_subtract_only() {
             for tolerance in [0, 55, 100] {
                 let params = json!({"positiveColors":positive,"negativeColors":negative,"tolerance":tolerance,"brightness":35,"warmth":12});
                 let expected = plugin.apply(&source, rect, None, &params).unwrap();
-                backend.reported.store(false, Ordering::Relaxed);
+                counted.bands.lock().unwrap().clear();
                 let result = {
-                    let _scope = acceleration::scope(Some(backend.clone()));
+                    let _scope = acceleration::scope(Some(counted.clone()));
                     plugin.apply(&source, rect, None, &params).unwrap()
                 };
-                assert!(backend.reported.load(Ordering::Relaxed), "each parity case must execute on GPU");
+                counted.assert_all_bands_used_gpu();
                 let max = expected.read_region(rect).iter().zip(result.read_region(rect)).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
                 let epsilon = match sample {
                     SampleType::U8 => 1.0 / 255.0 + 3e-6,
@@ -70,6 +95,7 @@ fn backend() -> Arc<Backend> {
 fn gpu_bands_match_wasm_for_depths_offsets_seams_selection_and_alpha() {
     let _gpu_lock = photocraft_testkit::gpu_lock();
     let backend = backend();
+    let counted = Arc::new(CountedBackend { backend: backend.clone(), bands: Mutex::new(Vec::new()) });
     let plugin = Plugin::load(WASM, Limits::default()).unwrap();
     let params = json!({"fine":100,"medium":100,"large":100,"detail":0,"skinOnly":false,"warmth":8,"brightness":15,"redness":20});
     for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -91,12 +117,12 @@ fn gpu_bands_match_wasm_for_depths_offsets_seams_selection_and_alpha() {
             mask.fill_rect(Rect::new(37, 43, 989, 251), &[0.4]);
             let selection = selected.then_some(&mask);
             let expected = plugin.apply(&input, canvas, selection, &params).unwrap();
-            backend.reported.store(false, Ordering::Relaxed);
+            counted.bands.lock().unwrap().clear();
             let result = {
-                let _scope = acceleration::scope(Some(backend.clone()));
+                let _scope = acceleration::scope(Some(counted.clone()));
                 plugin.apply(&input, canvas, selection, &params).unwrap()
             };
-            assert!(backend.reported.load(Ordering::Relaxed), "each band case must execute on GPU");
+            counted.assert_all_bands_used_gpu();
             let (a, b) = (expected.read_region(rect), result.read_region(rect));
             let tolerance = match sample {
                 SampleType::U8 => 1. / 255. + 2e-6,
@@ -301,6 +327,7 @@ fn skin_smooth_gpu_benchmark() {
 fn built_in_presets_override_sliders_on_gpu_and_wasm() {
     let _gpu_lock = photocraft_testkit::gpu_lock();
     let backend = backend();
+    let counted = Arc::new(CountedBackend { backend: backend.clone(), bands: Mutex::new(Vec::new()) });
     let plugin = Plugin::load(WASM, Limits::default()).unwrap();
     let rect = Rect::new(0, 0, 48, 32);
     let mut source = Surface::new(PixelFormat { sample: SampleType::F32, ..PixelFormat::RGBA8 });
@@ -322,10 +349,12 @@ fn built_in_presets_override_sliders_on_gpu_and_wasm() {
             json!({"preset":preset,"fine":0,"medium":0,"large":0,"detail":0,"brightness":-100,"warmth":-100,"redness":100,"tolerance":0,"skinOnly":false});
         let wasm = plugin.apply(&source, rect, None, &params).unwrap().read_region(rect);
         assert_eq!(wasm, expected, "WASM preset {preset}");
+        counted.bands.lock().unwrap().clear();
         let gpu = {
-            let _scope = acceleration::scope(Some(backend.clone()));
+            let _scope = acceleration::scope(Some(counted.clone()));
             plugin.apply(&source, rect, None, &params).unwrap().read_region(rect)
         };
+        counted.assert_all_bands_used_gpu();
         for (i, (&actual, &expected)) in gpu.iter().zip(&expected).enumerate() {
             if i % 4 == 3 {
                 assert_eq!(actual.to_bits(), expected.to_bits(), "alpha for {preset}");
@@ -334,7 +363,6 @@ fn built_in_presets_override_sliders_on_gpu_and_wasm() {
             }
         }
     }
-    assert!(backend.reported.load(Ordering::Relaxed));
     assert!(!backend.failed.load(Ordering::Relaxed));
 }
 

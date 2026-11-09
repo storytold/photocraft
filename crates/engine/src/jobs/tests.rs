@@ -1670,7 +1670,7 @@ fn cooperative_steps_install_the_registered_session_accelerator() {
     }
     struct Work(Option<std::sync::Arc<dyn Accelerator>>);
     impl StepWork<()> for Work {
-        fn step(&mut self, _: &JobCtx, _: std::time::Instant) -> Result<Option<()>> {
+        fn step(&mut self, _: &JobCtx, _: web_time::Instant) -> Result<Option<()>> {
             let current = acceleration::current();
             assert_eq!(current.is_some(), self.0.is_some());
             if let (Some(current), Some(expected)) = (current, &self.0) {
@@ -1691,7 +1691,7 @@ fn cooperative_steps_install_the_registered_session_accelerator() {
         s.plugin_accelerator = None; // Registration captures the choice; a later preference cannot change it.
         let mut job = s.jobs.pending.take().unwrap();
         for _ in 0..2 {
-            job.stepper.as_mut().unwrap()(&job.ctx, std::time::Instant::now()).unwrap();
+            job.stepper.as_mut().unwrap()(&job.ctx, web_time::Instant::now()).unwrap();
         }
         assert!(std::sync::Arc::ptr_eq(&acceleration::current().unwrap(), &ambient));
     }

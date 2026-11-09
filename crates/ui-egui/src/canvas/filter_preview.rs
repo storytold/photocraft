@@ -68,6 +68,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     // Only the preview copy gets this region. OK still dispatches the dialog's full parameters.
     if cmd == photocraft_engine::plugin_cmds::RUN
         && !multiple_views
+        // Cooperative/web sessions reuse a fixed proxy, so panning never runs a plug-in.
+        // Native sessions can refresh a clipped region.
+        && !cfg!(target_arch = "wasm32")
+        && !app.session.cooperative_jobs()
         && !app.ui.view.pattern_preview
         && let Some(visible) = ctx.data(|data| data.get_temp::<photocraft_geom::Rect>(egui::Id::unique(("plugin-preview-region", st.doc.id))))
         && let Some(p) = params.as_object_mut()
@@ -80,7 +84,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         let previous = app
             .filter_preview
             .as_ref()
-            .filter(|p| p.key.doc == st.doc.id && p.key.k == k)
+            .filter(|p| p.result.is_some() && p.key.doc == st.doc.id && p.key.k == k)
             .and_then(|p| p.key.params.get("__previewRegion"))
             .and_then(|v| serde_json::from_value::<[i32; 4]>(v.clone()).ok())
             .map(|[x0, y0, x1, y1]| photocraft_geom::Rect::new(x0, y0, x1, y1))

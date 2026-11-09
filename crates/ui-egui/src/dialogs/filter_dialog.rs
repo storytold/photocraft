@@ -1424,6 +1424,26 @@ pub(crate) fn preview_document_for_target(
         s.select_layer(id).ok()?;
     }
     s.active_mut()?.channel_view.target = target;
+    if command == photocraft_engine::plugin_cmds::RUN
+        && target == photocraft_engine::channel_cmds::ChannelTarget::Composite
+        && let Some(rect) = p.get("__previewRegion")
+    {
+        let [x0, y0, x1, y1]: [i32; 4] = serde_json::from_value(rect.clone()).ok()?;
+        if let Some((layer, surface)) = photocraft_engine::plugin_cmds::preview_smart_region(
+            &s,
+            &p,
+            photocraft_geom::Rect::new(x0, y0, x1, y1),
+            cancel.unwrap_or(&photocraft_engine::jobs::JobCtx::new()),
+        )
+        .ok()?
+        {
+            let mut result = (*s.active()?.doc).clone();
+            let photocraft_doc::LayerContent::Smart(sm) = &mut result.layer_mut(layer)?.content else { return None };
+            sm.cache = Some(surface);
+            result.selection = selection;
+            return Some(result);
+        }
+    }
     s.execute(command, p).ok()?;
     let mut result = crate::proxy::proxy_document(&s.active()?.doc, reduce_k);
     if command == photocraft_engine::plugin_cmds::RUN && params.get("__previewRegion").is_some() {

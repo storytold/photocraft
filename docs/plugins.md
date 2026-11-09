@@ -33,8 +33,9 @@ filters PhotoCraft does not implement.
 In this Smooth fork, native `plugin.run` uses background jobs with progress and cancellation
 (`Session::start`, or control requests with `wait: false`). Cancellation reaches WASM between fuel
 slices and discards partial output. The dialog keeps Enter for field edits; click OK to apply.
-On-canvas plug-in previews compute only the visible region and its overlap; final runs still use
-the complete selection. Smart-filter stack previews retain their existing full-stack path.
+Native on-canvas plug-in previews compute the visible region and its overlap on a background worker.
+Web/cooperative sessions reuse a full proxy while panning, without rerunning the plug-in.
+Final runs use the complete selection. Smart-filter stack previews retain their existing full-stack path.
 
 Named presets use `plugin.preset.list {id}`, `plugin.preset.save {id,name,params}`,
 `plugin.preset.load {id,name}` and `plugin.preset.remove {id,name}`. They are saved under

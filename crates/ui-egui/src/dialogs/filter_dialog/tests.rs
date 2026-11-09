@@ -1958,6 +1958,7 @@ fn review_smart_plugin_region_keeps_existing_mask_and_other_pixels() {
         let photocraft_doc::LayerContent::Smart(original_sm) = &proxy.layer(layer).unwrap().content else { panic!("smart") };
         let original = photocraft_engine::smart_cmds::render(&proxy, original_sm).unwrap().unwrap();
         let photocraft_doc::LayerContent::Smart(local_sm) = &local.layer(layer).unwrap().content else { panic!("smart") };
+        assert_eq!(local_sm.smart_filters.len(), original_sm.smart_filters.len(), "preview rendering returns pixels, never a new filter record");
         let (before_mask, after_mask) = (original_sm.filter_mask.as_ref().unwrap(), local_sm.filter_mask.as_ref().unwrap());
         assert_eq!((before_mask.density, before_mask.feather), (after_mask.density, after_mask.feather));
         assert_eq!(before_mask.surface.read_region(proxy.bounds()), after_mask.surface.read_region(proxy.bounds()));

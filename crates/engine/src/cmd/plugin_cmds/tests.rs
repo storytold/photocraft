@@ -527,9 +527,8 @@ fn untagged_skin_smooth_matches_the_same_pixels_tagged_with_the_host_default() {
 
 #[test]
 fn smart_plugin_progress_keeps_the_stacks_progress_interval() {
-    let plugin = photocraft_plugins::Plugin::load(INVERT, Default::default()).unwrap();
-    let id = plugin.id().to_string();
-    registry::install(plugin);
+    let id = "test.cmds.stack-progress";
+    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
     let canvas = photocraft_geom::Rect::new(0, 0, 32, 24);
     let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
     surface.fill_rect(canvas, &[0.2, 0.4, 0.6, 1.0]);
@@ -540,4 +539,23 @@ fn smart_plugin_progress_keeps_the_stacks_progress_interval() {
     assert_eq!(ctx.fraction(), 0.25, "a plugin cannot complete the rest of the stack");
     ctx.cancel();
     assert!(matches!(crate::filters::apply_filter_to_surface_in(RUN, &json!({"id":id}), &surface, canvas, None, canvas, &ctx), Err(EngineError::Cancelled)));
+}
+
+#[test]
+fn preview_regions_cannot_restrict_committed_smart_filters() {
+    let id = "test.cmds.committed-preview";
+    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":32,"height":24,"background":"#204060"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(RUN, json!({"id":id,"__previewRegion":[8,8,16,16]})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(layer).unwrap().content else { panic!("smart object") };
+    assert!(sm.smart_filters.last().unwrap().params.get("__previewRegion").is_none());
+    assert_eq!(sm.cache.as_ref().unwrap().pixel(0, 0), sm.cache.as_ref().unwrap().pixel(12, 12));
+    let mut doc = (**doc).clone();
+    crate::smart_cmds::refresh(&mut doc, layer).unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(layer).unwrap().content else { panic!("smart object") };
+    assert_eq!(sm.cache.as_ref().unwrap().pixel(0, 0), sm.cache.as_ref().unwrap().pixel(12, 12));
 }

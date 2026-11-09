@@ -181,16 +181,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 }
                 LayerContent::Smart(_) => {
-                    let mut sf = SmartFilter {
+                    let sf = SmartFilter {
                         command: RUN.into(),
                         params: json!({"id": id, "params": resolved}),
                         blend: photocraft_color::BlendMode::Normal,
                         opacity: 1.0,
                         visible: true,
                     };
-                    if let Some(region) = p.get("__previewRegion") {
-                        sf.params["__previewRegion"] = region.clone();
-                    }
                     crate::smart_cmds::add_smart_filter_in(doc, layer, sf, selection.as_ref(), ctx)
                 }
                 other => {
@@ -200,6 +197,43 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         },
         move |()| result,
     )
+}
+
+/// Render a region on a disposable smart-object copy. Only pixels leave this function;
+/// the transient region and new filter never become part of a committed filter stack.
+pub fn preview_smart_region(
+    session: &Session,
+    params: &Value,
+    region: photocraft_geom::Rect,
+    ctx: &crate::jobs::JobCtx,
+) -> Result<Option<(photocraft_doc::LayerId, Surface)>> {
+    ctx.check()?;
+    let layer = crate::commands::layer_param(session, params)?;
+    let mut doc = (*session.active().ok_or(EngineError::NoDocument)?.doc).clone();
+    if !matches!(doc.layer(layer).map(|l| &l.content), Some(LayerContent::Smart(_))) {
+        return Ok(None);
+    }
+    if crate::channel_cmds::channel_surface_for_filter(&mut doc, Some(layer), params)?.is_some() {
+        return Ok(None);
+    }
+    let _acceleration = photocraft_plugins::acceleration::scope(session.effective_plugin_accelerator());
+    let _authorization = crate::jobs::render_authorization_scope(session.authorize);
+    check_color(&doc, params)?;
+    crate::commands::check_pixels_unlocked(&doc, layer)?;
+    let plugin = plugin_by_id(RUN, params)?;
+    let resolved = plugin.manifest().resolve_params(&plugin_params(params)).map_err(|e| bad(RUN, e.to_string()))?;
+    let selection = doc.selection.clone();
+    let sf = SmartFilter {
+        command: RUN.into(),
+        params: json!({"id":plugin.id(), "params":resolved, "__previewRegion":[region.x0,region.y0,region.x1,region.y1]}),
+        blend: photocraft_color::BlendMode::Normal,
+        opacity: 1.0,
+        visible: true,
+    };
+    crate::smart_cmds::add_smart_filter_in(&mut doc, layer, sf, selection.as_ref(), ctx)?;
+    let Some(LayerContent::Smart(sm)) = doc.layer(layer).map(|l| &l.content) else { return Err(EngineError::NoLayer(layer)) };
+    let surface = sm.cache.clone().ok_or_else(|| EngineError::Other("smart object has no pixels".into()))?;
+    Ok(Some((layer, surface)))
 }
 
 /// Smart-filter re-render of a recorded `plugin.run` (see `filters::apply_filter_to_surface`).
