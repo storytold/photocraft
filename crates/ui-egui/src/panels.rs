@@ -88,6 +88,8 @@ pub(crate) use info::{SamplerReadouts, sampler_readouts};
 use layer_drag::{background_drop_refused, layer_drop_payload};
 pub(crate) use layer_drag::{dropped_on, layer_drag_edge_scroll};
 #[cfg(test)]
+pub(crate) use layer_row::adjustment_icon;
+#[cfg(test)]
 pub(crate) use layer_row::thumb_load_badge;
 #[cfg(test)]
 use layer_row::{layer_thumb_fit, paint_clipping_indicator};
@@ -105,6 +107,8 @@ pub use options_bar::options_bar;
 use options_bar::options_bar_height;
 pub(crate) use options_bar::{FIXED_SIZE_MAX_PX, opt_label};
 pub use panel_state::{migrate_panel_state, panel_state_id, remember_panel_state};
+#[cfg(test)]
+pub(crate) use properties::adjustment_kind_icon;
 pub use properties::properties_window;
 pub(crate) use properties::selection_mode_buttons;
 #[cfg(test)]

@@ -224,34 +224,58 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The glyph of an adjustment kind's button: the one its layer's thumbnail shows (#9038,
+/// `layer_row::adjustment_icon`; a test keeps the two in step).
+pub(crate) fn adjustment_kind_icon(kind: &str) -> &'static str {
+    match kind {
+        "brightnessContrast" => "brightness-contrast",
+        "levels" => "levels",
+        "curves" => "curves",
+        "exposure" => "exposure",
+        "vibrance" => "vibrance",
+        "hueSaturation" => "hue-saturation",
+        "colorBalance" => "scale",
+        "blackWhite" => "black-white",
+        "photoFilter" => "photo-filter",
+        "channelMixer" => "channel-mixer",
+        "colorLookup" => "color-lookup",
+        "invert" => "invert",
+        "posterize" => "posterize",
+        "threshold" => "threshold",
+        "gradientMap" => "gradient-map",
+        "selectiveColor" => "selective-color",
+        _ => "adjustment-layer",
+    }
+}
+
 /// Photoshop's Adjustments panel: a grid of one-click adjustment layers.
 pub(super) fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Add an adjustment")).color(t.text_dim));
     ui.add_space(4.0);
-    let items: [(&str, &str, &str); 16] = [
-        ("brightnessContrast", "sun", tl!("Brightness/Contrast")),
-        ("levels", "gauge", tl!("Levels")),
-        ("curves", "pen-tool", tl!("Curves")),
-        ("exposure", "scan", tl!("Exposure")),
-        ("vibrance", "sparkles", tl!("Vibrance")),
-        ("hueSaturation", "droplet", tl!("Hue/Saturation")),
-        ("colorBalance", "blend", tl!("Color Balance")),
-        ("blackWhite", "contrast", tl!("Black & White")),
-        ("photoFilter", "circle-dot", tl!("Photo Filter")),
-        ("channelMixer", "sliders-horizontal", tl!("Channel Mixer")),
-        ("invert", "squares-subtract", tl!("Invert")),
-        ("posterize", "layers", tl!("Posterize")),
-        ("threshold", "square", tl!("Threshold")),
-        ("gradientMap", "palette", tl!("Gradient Map")),
-        ("selectiveColor", "swatch-book", tl!("Selective Color")),
-        ("colorLookup", "grid-3x3", tl!("Color Lookup")),
+    let items: [(&str, &str); 16] = [
+        ("brightnessContrast", tl!("Brightness/Contrast")),
+        ("levels", tl!("Levels")),
+        ("curves", tl!("Curves")),
+        ("exposure", tl!("Exposure")),
+        ("vibrance", tl!("Vibrance")),
+        ("hueSaturation", tl!("Hue/Saturation")),
+        ("colorBalance", tl!("Color Balance")),
+        ("blackWhite", tl!("Black & White")),
+        ("photoFilter", tl!("Photo Filter")),
+        ("channelMixer", tl!("Channel Mixer")),
+        ("invert", tl!("Invert")),
+        ("posterize", tl!("Posterize")),
+        ("threshold", tl!("Threshold")),
+        ("gradientMap", tl!("Gradient Map")),
+        ("selectiveColor", tl!("Selective Color")),
+        ("colorLookup", tl!("Color Lookup")),
     ];
     let mut run = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-        for (kind, icon, tip) in items {
-            if icons::button(ui, icon, 30.0, false, tip).clicked() {
+        for (kind, tip) in items {
+            if icons::button(ui, adjustment_kind_icon(kind), 30.0, false, tip).clicked() {
                 run = Some(format!("layer.newAdjustmentLayer.{kind}"));
             }
         }
