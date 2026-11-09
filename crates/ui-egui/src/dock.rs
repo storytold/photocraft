@@ -510,10 +510,15 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
         Some(_) => v.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),
         None => Vec::new(),
     };
-    if let Some(mut p) = v.get("panels").and_then(|p| serde_json::from_value::<Panels>(p.clone()).ok()) {
+    if let Some(saved) = v.get("panels")
+        && let Ok(mut p) = serde_json::from_value::<Panels>(saved.clone())
+    {
         // The embedding host owns these flags, including for layouts that serialize them.
         p.menu_bar = app.ui.panels.menu_bar;
         p.rail = app.ui.panels.rail;
+        // A layout saved before the toolbar could move (or with an unreadable side) keeps the
+        // current side; a valid saved side still belongs to the workspace.
+        p.toolbar_side = saved.get("toolbar_side").and_then(|side| serde_json::from_value(side.clone()).ok()).unwrap_or(app.ui.panels.toolbar_side);
         app.ui.panels = p;
     }
     if let Some(t) = v.get("dockTabs").and_then(|t| serde_json::from_value(t.clone()).ok()) {

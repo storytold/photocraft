@@ -839,6 +839,26 @@ fn an_unreadable_docking_layout_is_dropped_and_the_rest_applies() {
     assert!(app.ui.timeline.open, "the rest of the layout still applies");
 }
 
+/// `toolbar_side` belongs to the workspace when the layout saved one; a layout saved before the
+/// toolbar could move, or with an unreadable side, keeps the current side instead of `Start`.
+#[test]
+fn applying_a_workspace_keeps_the_toolbar_side_unless_it_saved_one() {
+    use crate::state::ToolbarSide;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let saved = snapshot(&app);
+    for (side, expected) in [(None, ToolbarSide::Right), (Some(json!("sideways")), ToolbarSide::Right), (Some(json!("left")), ToolbarSide::Left)] {
+        app.ui.panels.toolbar_side = ToolbarSide::Right;
+        let mut saved = saved.clone();
+        let panels = saved["panels"].as_object_mut().unwrap();
+        match &side {
+            Some(side) => panels.insert("toolbar_side".into(), side.clone()),
+            None => panels.remove("toolbar_side"),
+        };
+        apply(&mut app, &saved);
+        assert_eq!(app.ui.panels.toolbar_side, expected, "{side:?}");
+    }
+}
+
 /// Layers panel options live in the preferences on their own (like Photoshop's Panel Options),
 /// so a workspace layout neither saves nor restores them.
 #[test]
