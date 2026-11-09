@@ -9,6 +9,9 @@ mod tool;
 mod tool_options;
 mod transform;
 
+#[cfg(test)]
+mod type_default_size_tests;
+
 pub use color_panel::{ColorPanelMode, ColorPanelState, ColorRamp, DockTabs};
 pub use panel_state::{
     CameraRawPreviewState, CameraRawScopeState, CurvesEditorState, LayerThumbnailContents, LayerThumbnailSize, LayersPanelDialog, LayersPanelOptions,
@@ -227,8 +230,11 @@ pub struct DocWindow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
-    /// The last tool used in each shortcut group (the tools sharing a key, [`Tool::key`]), at most
-    /// one per group: the group's key brings it back, as in Photoshop (#2608).
+    /// The tools used so far, most recent first and each one once. The first tool of a shortcut
+    /// group (the tools sharing a key, [`Tool::key`]) is the one its key brings back, and the first
+    /// tool of a toolbar slot is the one the slot shows, as in Photoshop (#2608, #3569). One list
+    /// answers both because they don't line up: the Marquee slot holds tools with and without a
+    /// key, the Hand slot two keys. Kept between launches in `Preferences::group_tools`.
     #[serde(default)]
     pub group_tools: Vec<Tool>,
     /// A tool letter still held (spring-loaded tool, #2672): the tool to give back on release.
@@ -675,16 +681,16 @@ impl Default for UiState {
 }
 
 impl UiState {
-    /// Records the current tool as the last one used in its shortcut group.
-    pub fn remember_group_tool(&mut self) {
-        let tool = self.tool;
-        if !self.group_tools.contains(&tool) {
-            self.group_tools.retain(|t| t.key() != tool.key());
-            self.group_tools.push(tool);
+    /// Records `tool` as the last one used in its shortcut group and toolbar slot.
+    pub fn remember_group_tool(&mut self, tool: Tool) {
+        if self.group_tools.first() != Some(&tool) {
+            self.group_tools.retain(|t| *t != tool);
+            self.group_tools.insert(0, tool);
         }
     }
 
     /// The last tool used in the shortcut group of `key`, if any.
+    #[cfg(test)]
     pub fn group_tool(&self, key: char) -> Option<Tool> {
         self.group_tools.iter().copied().find(|t| t.key() == key)
     }
@@ -763,7 +769,7 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 68);
+        assert_eq!(Tool::ALL.len(), 69);
     }
 
     fn vector_tool_names_parse() {

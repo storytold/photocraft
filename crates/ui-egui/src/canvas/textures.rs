@@ -339,6 +339,13 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
     if seen.1 == now.1 ^ display_key && seen.0 + 1 == now.0 {
         return last_damage;
     }
+    // Opening, canceling or committing a Free Transform box: the moving layer and the layers
+    // drawn over the box, not the whole document (a gigapixel canvas took over a second).
+    if let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::transform_tool::damage(app, st.doc.id, (seen.0, seen.1 ^ display_key), now, last_damage)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
     if seen.0 == now.0
         && let Some(st) = app.session.documents().get(idx)
         && let Some(r) = crate::type_transform::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
@@ -637,7 +644,7 @@ fn budget_allowance(app: &PhotocraftApp) -> (u64, u64) {
 
 /// The document pixels a view shows, with a margin for filtering. Uses all four canvas corners
 /// so a rotated camera still covers the visible tiles.
-pub(super) fn visible_doc_rect(xf: &ViewXform) -> DRect {
+pub(crate) fn visible_doc_rect(xf: &ViewXform) -> DRect {
     let r = xf.rect;
     let docs = [xf.to_doc(r.min), xf.to_doc(pos2(r.max.x, r.min.y)), xf.to_doc(r.max), xf.to_doc(pos2(r.min.x, r.max.y))];
     let mut x0 = docs[0][0];
