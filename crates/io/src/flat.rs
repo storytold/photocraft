@@ -3266,8 +3266,21 @@ mod jpeg_limits_tests {
         assert!(limits.check(48_000, 34_200, ChannelLayout::Rgb, CSample::U8).is_ok());
         assert!(decode_limits(&opts).check(48_000, 34_200, ChannelLayout::Rgb, CSample::U8).is_err(), "the default cap");
         assert_eq!(limits.max_alloc, decode_limits(&opts).max_alloc, "the byte budget");
+        assert!(limits.check(65_535, 1, ChannelLayout::Gray, CSample::U8).is_ok(), "a JPEG's own side");
         assert!(limits.check(65_536, 1, ChannelLayout::Gray, CSample::U8).is_err(), "past a JPEG's own side");
         assert_eq!(jpeg_limits(&big, &opts, None).unwrap(), decode_limits(&opts), "unknown free memory keeps the default cap");
+        // Admitted with exactly what it needs free, refused a byte short: the RGBA layer's 256 px
+        // tiles, the decoded RGB image, the 16 bands of 32 MiB it converts through, and the
+        // 512 MiB reserve.
+        let need = 48_128 * 34_304 * 4 + 48_000 * 34_200 * 3 + 16 * (32 << 20) + (512 << 20);
+        assert!(jpeg_limits(&big, &opts, Some(need)).is_ok());
+        assert!(jpeg_limits(&big, &opts, Some(need - 1)).is_err());
+        // One row past 2^30 px is checked.
+        assert!(jpeg_limits(&jpeg_header(0xC0, 8, 32_768, 32_769, 1), &opts, Some(0)).is_err());
+        // The largest frame: 65,535² gray fits the byte budget; RGB doesn't, and stays refused.
+        let max = jpeg_limits(&jpeg_header(0xC0, 8, 65_535, 65_535, 1), &opts, Some(u64::MAX)).unwrap();
+        assert!(max.check(65_535, 65_535, ChannelLayout::Gray, CSample::U8).is_ok());
+        assert!(max.check(65_535, 65_535, ChannelLayout::Rgb, CSample::U8).is_err(), "the byte budget");
     }
 
     /// A progressive frame is admitted against its decode's peak: the decoded image and every
@@ -3285,20 +3298,28 @@ mod jpeg_limits_tests {
         let baseline = jpeg_header(0xC0, 8, 48_000, 34_200, 3);
         // Room for the document but not for the coefficients: the baseline frame opens, the
         // progressive one is refused.
-        let room = Some(document + crate::memory::RESERVE);
-        assert!(jpeg_limits(&baseline, &opts, room).is_ok());
-        let e = jpeg_limits(&progressive, &opts, room).unwrap_err().to_string();
+        let room = document + crate::memory::RESERVE;
+        assert!(jpeg_limits(&baseline, &opts, Some(room)).is_ok());
+        assert!(jpeg_limits(&baseline, &opts, Some(room - 1)).is_err());
+        let e = jpeg_limits(&progressive, &opts, Some(room)).unwrap_err().to_string();
         assert!(e.contains("not enough memory"), "{e}");
         assert!(jpeg_limits(&progressive, &opts, Some(decoding + crate::memory::RESERVE)).is_ok());
+        assert!(jpeg_limits(&progressive, &opts, Some(decoding + crate::memory::RESERVE - 1)).is_err());
     }
 
-    /// Sizes the default limits open are not checked, and a file for the whole-coefficient
-    /// decoder (a 12-bit frame here) keeps the default cap however large it is.
+    /// Sizes the default limits open (up to exactly 2^30 px) are not checked, and a file for the
+    /// whole-coefficient decoder (12-bit, arithmetic-coded or lossless) keeps the default cap
+    /// however large it is, as does a frame whose components aren't a layout `decode` returns.
     #[test]
     fn other_jpegs_keep_the_default_limits_unchecked() {
         let opts = crate::ImportOptions::default();
-        assert_eq!(jpeg_limits(&jpeg_header(0xC0, 8, 4000, 3000, 3), &opts, Some(0)).unwrap(), decode_limits(&opts));
-        assert_eq!(jpeg_limits(&jpeg_header(0xC1, 12, 48_000, 34_200, 3), &opts, Some(0)).unwrap(), decode_limits(&opts));
-        assert_eq!(jpeg_limits(b"not a jpeg", &opts, Some(0)).unwrap(), decode_limits(&opts));
+        let default = |b: &[u8]| jpeg_limits(b, &opts, Some(0)).unwrap() == decode_limits(&opts);
+        assert!(default(&jpeg_header(0xC0, 8, 4000, 3000, 3)));
+        assert!(default(&jpeg_header(0xC0, 8, 32_768, 32_768, 3)), "exactly 2^30 px");
+        for (marker, precision) in [(0xC1, 12), (0xC9, 8), (0xC3, 8)] {
+            assert!(default(&jpeg_header(marker, precision, 48_000, 34_200, 3)), "{marker:#x}");
+        }
+        assert!(default(&jpeg_header(0xC0, 8, 48_000, 34_200, 2)), "two components");
+        assert!(default(b"not a jpeg"));
     }
 }
