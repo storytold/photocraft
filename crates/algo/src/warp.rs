@@ -233,7 +233,15 @@ pub fn cell_order(pos: &[[f64; 2]], rest: &[[f64; 2]], row: usize) -> Vec<usize>
             cells.push((turned, moved(a) + moved(a + 1) + moved(a + row) + moved(a + row + 1), a));
         }
     }
-    cells.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)));
+    let by = |x: &(bool, f64, usize), y: &(bool, f64, usize)| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1));
+    // A stable sort either way, so equal cells keep row order.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        cells.par_sort_by(by);
+    }
+    #[cfg(target_arch = "wasm32")]
+    cells.sort_by(by);
     cells.into_iter().map(|(_, _, a)| a).collect()
 }
 
@@ -260,26 +268,39 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
         }
     }
     let w1 = nx + 1;
-    let order: Vec<usize> = match fold {
-        Fold::Stack(rest) => {
-            let pos: Vec<[f64; 2]> = verts.iter().map(|(d, _)| *d).collect();
-            let at_rest: Vec<[f64; 2]> = verts
-                .iter()
-                .map(|(_, s)| {
-                    let r = rest(s[0], s[1]);
-                    [r.0, r.1]
-                })
-                .collect();
-            cell_order(&pos, &at_rest, w1)
-        }
-        Fold::Rows => (0..ny).flat_map(|j| (0..nx).map(move |i| j * w1 + i)).collect(),
-    };
+    // Drawn in row order; for a fold, a tile where two parts of the picture meet is drawn again in
+    // [`cell_order`], each cell's two triangles ranked together.
     let mut tris = Vec::with_capacity(nx * ny * 2);
-    for a in order {
-        tris.push([a, a + 1, a + w1 + 1]);
-        tris.push([a, a + w1 + 1, a + w1]);
+    for j in 0..ny {
+        for i in 0..nx {
+            let a = j * w1 + i;
+            tris.push([a, a + 1, a + w1 + 1]);
+            tris.push([a, a + w1 + 1, a + w1]);
+        }
     }
-    triangles(src, src_rect, &verts, &tris, interp, ctl, Draw { folds: matches!(fold, Fold::Stack(_)), ..Draw::default() })
+    let rank = || -> Vec<u32> {
+        let Fold::Stack(rest) = fold else { return Vec::new() };
+        let pos: Vec<[f64; 2]> = verts.iter().map(|(d, _)| *d).collect();
+        let at_rest: Vec<[f64; 2]> = verts
+            .iter()
+            .map(|(_, s)| {
+                let r = rest(s[0], s[1]);
+                [r.0, r.1]
+            })
+            .collect();
+        let mut rank = vec![0u32; tris.len()];
+        for (r, a) in cell_order(&pos, &at_rest, w1).into_iter().enumerate() {
+            let c = (a / w1) * nx + a % w1;
+            for (t, k) in [(2 * c, 2 * r), (2 * c + 1, 2 * r + 1)] {
+                if let Some(slot) = rank.get_mut(t) {
+                    *slot = u32::try_from(k).unwrap_or(u32::MAX);
+                }
+            }
+        }
+        rank
+    };
+    let stack: Option<&(dyn Fn() -> Vec<u32> + Sync)> = matches!(fold, Fold::Stack(_)).then_some(&rank);
+    triangles(src, src_rect, &verts, &tris, interp, ctl, Draw { stack, ..Draw::default() })
 }
 
 /// How far (destination px) a cell's straight edges and middle may stray from the warped surface
@@ -338,8 +359,9 @@ const START_CELLS: usize = 4;
 
 /// A cell of the source rectangle in normalised coordinates: `[u0, u1, v0, v1]`.
 type Cell = [f64; 4];
-/// Mesh vertices as `(destination, source)` and triangles of vertex indices.
-type TriMesh = (Vec<([f64; 2], [f64; 2])>, Vec<[usize; 3]>);
+/// Mesh vertices as `(destination, source)`, triangles of vertex indices, and each triangle's rank
+/// where a fold stacks them.
+type TriMesh = (Vec<([f64; 2], [f64; 2])>, Vec<[usize; 3]>, Vec<u32>);
 
 /// Warps `src` through a smart object's warp, `f`, as the reference application draws one: the
 /// surface is cut into cells, each drawn as two flat triangles (split along the diagonal from the
@@ -375,17 +397,18 @@ pub fn warp_patches_surface(
     // `warp_tess`).
     let one_patch = cuts_u.iter().chain(cuts_v).all(|&c| c <= 1e-9 || c >= 1.0 - 1e-9);
     let envelope = (facets == Facets::Envelope || one_patch).then(|| crate::warp_tess::envelope_mesh(&at, facets != Facets::Envelope)).flatten();
-    let (verts, tris) = match envelope {
+    let (verts, tris, rank) = match envelope {
         Some(m) => {
             let verts: Vec<([f64; 2], [f64; 2])> = m.uv.iter().zip(&m.pos).map(|(p, &d)| (d, [x0 + sw * p[0], y0 + sh * p[1]])).collect();
-            let tris = ordered_triangles(&verts, &m.pos, &m.quads, &fold);
-            (verts, tris)
+            let (tris, rank) = ordered_triangles(&verts, &m.pos, &m.quads, &fold);
+            (verts, tris, rank)
         }
         None => {
             let leaves = tessellate(&at, cuts_u, cuts_v, sw, sh, facets);
             cell_triangles(&at, &leaves, [x0, y0, sw, sh], &fold)
         }
     };
+    let rank_of_tris = move || rank.clone();
     // The reference application draws a warp's border half a pixel out (see `Draw::fringe`).
     triangles(
         src,
@@ -394,7 +417,7 @@ pub fn warp_patches_surface(
         &tris,
         Interp::Bilinear,
         &Interrupt::NONE,
-        Draw { single: sampling == Sampling::Single, fringe: true, folds: matches!(fold, Fold::Stack(_)) },
+        Draw { single: sampling == Sampling::Single, fringe: true, stack: matches!(fold, Fold::Stack(_)).then_some(&rank_of_tris) },
     )
 }
 
@@ -515,14 +538,15 @@ fn cell_triangles(at: &dyn Fn(f64, f64) -> [f64; 2], leaves: &[Cell], rect: [f64
     }
     let [x0, y0, sw, sh] = rect;
     let verts: Vec<([f64; 2], [f64; 2])> = uv.iter().zip(&pos).map(|(p, &d)| (d, [x0 + sw * p[0], y0 + sh * p[1]])).collect();
-    let tris = ordered_triangles(&verts, &pos, &corners, fold);
-    (verts, tris)
+    let (tris, rank) = ordered_triangles(&verts, &pos, &corners, fold);
+    (verts, tris, rank)
 }
 
 /// The triangles of the quads `corners` (`[top-left, top-right, bottom-left, bottom-right]` vertex
-/// indices), two each split from the top-left corner, in drawing order: row order, or for
-/// [`Fold::Stack`] a cell turned over on top, else the cell moved furthest (as [`cell_order`]).
-fn ordered_triangles(verts: &[([f64; 2], [f64; 2])], pos: &[[f64; 2]], corners: &[[usize; 4]], fold: &Fold) -> Vec<[usize; 3]> {
+/// indices), two each split from the top-left corner, in the quads' order, and each one's rank in
+/// a fold's order: for [`Fold::Stack`] a cell turned over on top, else the cell moved furthest (as
+/// [`cell_order`]); the quads' order otherwise.
+fn ordered_triangles(verts: &[([f64; 2], [f64; 2])], pos: &[[f64; 2]], corners: &[[usize; 4]], fold: &Fold) -> RankedMesh {
     let mut order: Vec<usize> = (0..corners.len()).collect();
     if let Fold::Stack(rest) = fold {
         // As [`cell_order`]: a cell turned over on top, else the cell moved furthest.
@@ -542,8 +566,21 @@ fn ordered_triangles(verts: &[([f64; 2], [f64; 2])], pos: &[[f64; 2]], corners: 
             .collect();
         order.sort_by(|&a, &b| key[a].0.cmp(&key[b].0).then(key[a].1.total_cmp(&key[b].1)));
     }
-    order.iter().filter_map(|&k| corners.get(k)).flat_map(|&[c00, c10, c01, c11]| [[c00, c10, c11], [c00, c11, c01]]).collect()
+    // The triangles in the quads' own order, each ranked where its quad comes in `order`.
+    let tris = corners.iter().flat_map(|&[c00, c10, c01, c11]| [[c00, c10, c11], [c00, c11, c01]]).collect();
+    let mut rank = vec![0u32; corners.len() * 2];
+    for (r, &k) in order.iter().enumerate() {
+        for (t, v) in [(2 * k, 2 * r), (2 * k + 1, 2 * r + 1)] {
+            if let Some(slot) = rank.get_mut(t) {
+                *slot = u32::try_from(v).unwrap_or(u32::MAX);
+            }
+        }
+    }
+    (tris, rank)
 }
+
+/// Triangles in drawing order without a fold, and each one's rank where a fold stacks them.
+type RankedMesh = (Vec<[usize; 3]>, Vec<u32>);
 
 /// The patch borders of `warp` inside `src_rect`, normalised to it (`(u cuts, v cuts)`), for
 /// [`warp_patches_surface`]: a preset is one patch; a custom or cylinder mesh has its own.
@@ -748,9 +785,37 @@ fn cap_alpha(px: &mut [f64], cap: Option<f64>) {
     }
 }
 
-/// How [`triangles`] draws a smart object's warp.
-#[derive(Clone, Copy, Debug, Default)]
-struct Draw {
+/// Puts a pixel's previous top layer `top` (source position, triangle) on the end of its list of
+/// fold layers in `under` (linked from `head`, see [`Draw::stack`]), first taking out any layer the
+/// new top is part of (`same`).
+fn stack_layer(under: &mut Vec<([f64; 2], u32, u32)>, head: &mut u32, top: ([f64; 2], u32), same: &dyn Fn([f64; 2]) -> bool) {
+    let Ok(node) = u32::try_from(under.len()) else { return };
+    let (mut at, mut last) = (*head, u32::MAX);
+    *head = u32::MAX;
+    while let Some(&(p, _, next)) = under.get(at as usize) {
+        if same(p) {
+            if let Some(e) = under.get_mut(at as usize) {
+                e.0 = [f64::NAN; 2];
+            }
+        } else {
+            match under.get_mut(last as usize) {
+                Some(prev) => prev.2 = at,
+                None => *head = at,
+            }
+            last = at;
+        }
+        at = next;
+    }
+    under.push((top.0, top.1, u32::MAX));
+    match under.get_mut(last as usize) {
+        Some(prev) => prev.2 = node,
+        None => *head = node,
+    }
+}
+
+/// How [`triangles`] draws a warp.
+#[derive(Clone, Copy, Default)]
+struct Draw<'a> {
     /// One sample per pixel (from a mip level where the warp squeezes rows), not a footprint.
     single: bool,
     /// Pixels just outside an edge of the mesh that lies on the source's border are drawn too, from
@@ -758,9 +823,132 @@ struct Draw {
     /// centre `d` px out (and the source's transparent surround lowers it further): the outline
     /// the reference application's warp renders show.
     fringe: bool,
-    /// Where triangles drawn later cover a pixel already covered from another part of the source
-    /// (a fold of the picture), composite them over it instead of replacing it.
-    folds: bool,
+    /// The picture can fold over itself: each triangle's rank in the order a fold stacks them
+    /// (asked once, when a tile first needs it). A tile is drawn in the triangles' own order;
+    /// where two parts of the source meet at a pixel (a fold), the tile is drawn again in rank
+    /// order, and triangles drawn later composite over what they cover instead of replacing it.
+    /// Without a fold the order makes no difference, so a warp that doesn't fold costs no more
+    /// than one that can't.
+    stack: Option<&'a (dyn Fn() -> Vec<u32> + Sync)>,
+}
+
+/// Source points a destination tile samples, grouped into connected regions of the source, so
+/// each region is read as a window of its own: a fold joins distant parts of the source in one
+/// tile, and one window over both read everything between them (a corner dragged over the
+/// middle of a 24 MP layer read seven times its pixels). Points are joined through the cells of a
+/// coarse grid over their bounding box that their footprints touch.
+struct Regions {
+    /// The grid's origin, cell size, columns and rows.
+    origin: [f64; 2],
+    cell: f64,
+    cols: usize,
+    rows: usize,
+    /// Each cell's region (`u32::MAX`: none). Empty for a single region, which every point is in.
+    of_cell: Vec<u32>,
+    /// Each region's source rectangle (the points' footprints, a 3 px border, inside `src_rect`).
+    rects: Vec<Rect>,
+}
+
+/// Visits points for [`Regions::new`]: each with the half extent of its footprint along x and y.
+type VisitPoints<'a> = &'a dyn Fn(&mut dyn FnMut([f64; 2], [f64; 2]));
+
+/// Most cells per axis of a [`Regions`] grid.
+const REGION_GRID: f64 = 256.0;
+/// Smallest [`Regions`] cell (source px).
+const REGION_CELL: f64 = 32.0;
+/// A [`Regions`] bounding box this small (source px) stays one region.
+const SINGLE_REGION_PIXELS: f64 = 1024.0 * 1024.0;
+
+impl Regions {
+    /// `points` visits each point with the half extent of its footprint along x and y (it is
+    /// called again only when the points form more than one region).
+    fn new(points: VisitPoints, src_rect: Rect) -> Regions {
+        let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+        let mut count = 0usize;
+        points(&mut |q, e| {
+            b = [b[0].min(q[0] - e[0]), b[1].min(q[1] - e[1]), b[2].max(q[0] + e[0]), b[3].max(q[1] + e[1])];
+            count += 1;
+        });
+        let empty = Regions { origin: [0.0; 2], cell: 1.0, cols: 0, rows: 0, of_cell: Vec::new(), rects: Vec::new() };
+        if !(b[0] <= b[2] && b.iter().all(|v| v.is_finite())) {
+            return empty;
+        }
+        let rect =
+            |r: [f64; 4]| Rect::new(r[0].floor() as i32 - 3, r[1].floor() as i32 - 3, r[2].ceil() as i32 + 3, r[3].ceil() as i32 + 3).intersect(&src_rect);
+        // Most tiles sample one stretch of the source: no more than a few times the source
+        // pixels there are points (the footprints' own spread), or a small window, is one region.
+        let area = (b[2] - b[0] + 7.0) * (b[3] - b[1] + 7.0);
+        if area <= SINGLE_REGION_PIXELS.max(4.0 * count as f64) {
+            return Regions { rects: vec![rect(b)], ..empty };
+        }
+        let cell = ((b[2] - b[0]).max(b[3] - b[1]) / REGION_GRID).max(REGION_CELL);
+        let (cols, rows) = (((b[2] - b[0]) / cell).floor() as usize + 1, ((b[3] - b[1]) / cell).floor() as usize + 1);
+        let to = |v: f64, o: f64, n: usize| (((v - o) / cell).floor().max(0.0) as usize).min(n - 1);
+        // Cells a footprint touches, marked (0) then labelled by region.
+        let mut of_cell = vec![u32::MAX; cols * rows];
+        points(&mut |q, e| {
+            for y in to(q[1] - e[1], b[1], rows)..=to(q[1] + e[1], b[1], rows) {
+                for x in to(q[0] - e[0], b[0], cols)..=to(q[0] + e[0], b[0], cols) {
+                    if let Some(c) = of_cell.get_mut(y * cols + x) {
+                        *c = 0;
+                    }
+                }
+            }
+        });
+        let mut regions = 0u32;
+        let mut stack = Vec::new();
+        for start in 0..of_cell.len() {
+            if of_cell.get(start) != Some(&0) {
+                continue;
+            }
+            regions += 1;
+            stack.push(start);
+            while let Some(c) = stack.pop() {
+                if of_cell.get(c) != Some(&0) {
+                    continue;
+                }
+                of_cell[c] = regions;
+                let (x, y) = ((c % cols) as i64, (c / cols) as i64);
+                for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx >= 0 && ny >= 0 && (nx as usize) < cols && (ny as usize) < rows {
+                        stack.push(ny as usize * cols + nx as usize);
+                    }
+                }
+            }
+        }
+        // Labels 1.. become indices 0..; each region's rectangle covers its points' footprints.
+        for c in of_cell.iter_mut().filter(|c| **c != u32::MAX) {
+            *c -= 1;
+        }
+        let mut boxes = vec![[f64::MAX, f64::MAX, f64::MIN, f64::MIN]; regions as usize];
+        let mut out = Regions { origin: [b[0], b[1]], cell, cols, rows, of_cell, rects: Vec::new() };
+        points(&mut |q, e| {
+            if let Some(r) = out.of(q).and_then(|r| boxes.get_mut(r)) {
+                *r = [r[0].min(q[0] - e[0]), r[1].min(q[1] - e[1]), r[2].max(q[0] + e[0]), r[3].max(q[1] + e[1])];
+            }
+        });
+        out.rects = boxes.into_iter().map(rect).collect();
+        out
+    }
+
+    /// The region of a point given to [`Regions::new`].
+    fn of(&self, q: [f64; 2]) -> Option<usize> {
+        if self.of_cell.is_empty() {
+            return (!self.rects.is_empty()).then_some(0);
+        }
+        if !(q[0].is_finite() && q[1].is_finite()) {
+            return None;
+        }
+        let x = (((q[0] - self.origin[0]) / self.cell).floor().max(0.0) as usize).min(self.cols - 1);
+        let y = (((q[1] - self.origin[1]) / self.cell).floor().max(0.0) as usize).min(self.rows - 1);
+        self.of_cell.get(y * self.cols + x).filter(|&&r| r != u32::MAX).map(|&r| r as usize)
+    }
+
+    /// Source pixels all the regions' rectangles hold.
+    fn area(&self) -> u64 {
+        self.rects.iter().map(|r| r.size().area()).sum()
+    }
 }
 
 /// A premultiplied window of the source that a destination tile samples.
@@ -773,7 +961,9 @@ struct Win {
 }
 
 fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt, draw: Draw) -> Surface {
-    let (single, folds) = (draw.single, draw.folds);
+    let (single, folds) = (draw.single, draw.stack.is_some());
+    let ranks = std::sync::OnceLock::new();
+    let rank_of = |t: u32| draw.stack.map(|f| ranks.get_or_init(f)).and_then(|r| r.get(t as usize)).copied().unwrap_or(u32::MAX);
     let mut fmt = src.format();
     let converted;
     let src = if fmt.alpha {
@@ -807,7 +997,8 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
     }
     // Triangles: (vertex indices), binned per destination tile.
     let tiles: Vec<Rect> = dst.tiles().map(|tc| tc.rect().intersect(&dst)).filter(|r| !r.is_empty()).collect();
-    let mut bins: Vec<Vec<[usize; 3]>> = vec![Vec::new(); tiles.len()];
+    // Triangles by index into `tris`, in its order.
+    let mut bins: Vec<Vec<u32>> = vec![Vec::new(); tiles.len()];
     let ts = photocraft_geom::TILE_SIZE;
     // Bin origin on the tile grid (the first tile is clipped to `dst`, so its x0/y0 may not be).
     let tx0 = tiles.iter().map(|t| t.x0).min().unwrap_or(0).div_euclid(ts) * ts;
@@ -818,7 +1009,8 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
     for (k, t) in tiles.iter().enumerate() {
         lookup[grid_of(t)] = k;
     }
-    for &tri in tris {
+    for (index, &tri) in tris.iter().enumerate() {
+        let Ok(index) = u32::try_from(index) else { break };
         let ps = tri.map(|v| verts[v].0);
         // A fringe reaches past the triangle, into a neighbouring tile.
         let grow = if draw.fringe { 1.0 } else { 0.0 };
@@ -834,7 +1026,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 if let Some(&k) = lookup.get(g)
                     && k != usize::MAX
                 {
-                    bins[k].push(tri);
+                    bins[k].push(index);
                 }
             }
         }
@@ -844,14 +1036,14 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
     // Tiles finished so far, for progress reported per tile (from any worker thread).
     let finished = std::sync::atomic::AtomicUsize::new(0);
     let total = tiles.len().max(1);
-    let work = |(t, tris): (&Rect, &Vec<[usize; 3]>)| -> Option<(TileCoord, Arc<Tile>)> {
+    let work = |(t, bin): (&Rect, &Vec<u32>)| -> Option<(TileCoord, Arc<Tile>)> {
         if ctl.cancelled() {
             return None;
         }
         let k = finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         // The last few percent are putting the tiles in place.
         ctl.progress(0.98 * k as f32 / total as f32);
-        if tris.is_empty() {
+        if bin.is_empty() {
             return None;
         }
         let w = t.width() as usize;
@@ -869,120 +1061,121 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         // from. Per triangle: its source step per destination pixel along x and y (`[dx_u, dx_v,
         // dy_u, dy_v]`, the inverse map's Jacobian, constant over a triangle; zero when
         // point-sampled) and the subsamples along each.
+        // The tile's triangles, first in `tris`' order, then, if a fold shows here, by rank.
+        let mut order: Vec<[usize; 3]> = bin.iter().filter_map(|&k| tris.get(k as usize).copied()).collect();
+        let mut stacked = false;
         let mut uv = vec![[f64::NAN; 2]; w * h];
         let mut owner = vec![0u32; w * h];
-        // The layers of a fold under a pixel's top one, bottom first: (source position, triangle),
-        // in `under`, at the index `under_at` holds for the pixel (`u32::MAX`: none).
-        let mut under: Vec<Vec<([f64; 2], u32)>> = Vec::new();
-        let mut under_at: Vec<u32> = if folds { vec![u32::MAX; w * h] } else { Vec::new() };
-        let mut jac: Vec<([f64; 4], usize, usize)> = Vec::with_capacity(tris.len());
+        // The layers of a fold under a pixel's top one, bottom first, as a list linked through
+        // `under` (source position, triangle, next node or `u32::MAX`) from the node `under_at`
+        // holds for the pixel (`u32::MAX`: none): one arena for the tile rather than a list per
+        // folded pixel. A layer taken out again keeps its node, its position NaN.
+        let mut under: Vec<([f64; 2], u32, u32)> = Vec::new();
+        let mut under_at: Vec<u32> = Vec::new();
+        let mut jac: Vec<([f64; 4], usize, usize)> = Vec::with_capacity(order.len());
         // A single-sample warp's mip level per triangle (see `mip_level`).
-        let mut lev: Vec<u32> = Vec::with_capacity(tris.len());
-        for (k, tri) in tris.iter().enumerate() {
-            let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
-            let det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
-            if det.abs() < 1e-12 {
-                jac.push(([0.0; 4], 1, 1));
-                lev.push(0);
-                continue;
-            }
-            let (d1, d2) = ([s1[0] - s0[0], s1[1] - s0[1]], [s2[0] - s0[0], s2[1] - s0[1]]);
-            let (l1x, l1y, l2x, l2y) = ((p2[1] - p0[1]) / det, (p0[0] - p2[0]) / det, (p0[1] - p1[1]) / det, (p1[0] - p0[0]) / det);
-            // Capped, so a sliver triangle can't ask for an unbounded footprint.
-            let cap = |j: [f64; 2]| {
-                let l = j[0].hypot(j[1]);
-                if l > MAX_SS { [j[0] * MAX_SS / l, j[1] * MAX_SS / l] } else { j }
-            };
-            let raw_jx = [l1x * d1[0] + l2x * d2[0], l1x * d1[1] + l2x * d2[1]];
-            lev.push(if single && interp == Interp::Bilinear { mip_level(raw_jx) } else { 0 });
-            let jx = cap(raw_jx);
-            let jy = cap([l1y * d1[0] + l2y * d2[0], l1y * d1[1] + l2y * d2[1]]);
-            let (nx, ny) = (count(jx), count(jy));
-            jac.push(if nx * ny == 1 { ([0.0; 4], 1, 1) } else { ([jx[0], jx[1], jy[0], jy[1]], nx, ny) });
-            let bx0 = (p0[0].min(p1[0]).min(p2[0]) - 0.5).floor().max(f64::from(t.x0)) as i32;
-            let by0 = (p0[1].min(p1[1]).min(p2[1]) - 0.5).floor().max(f64::from(t.y0)) as i32;
-            let bx1 = (p0[0].max(p1[0]).max(p2[0]) + 0.5).ceil().min(f64::from(t.x1)) as i32;
-            let by1 = (p0[1].max(p1[1]).max(p2[1]) + 0.5).ceil().min(f64::from(t.y1)) as i32;
-            let eps = -1e-9;
-            for y in by0..by1 {
-                let py = f64::from(y) + 0.5;
-                for x in bx0..bx1 {
-                    let px = f64::from(x) + 0.5;
-                    let l1 = ((px - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (py - p0[1])) / det;
-                    let l2 = ((p1[0] - p0[0]) * (py - p0[1]) - (px - p0[0]) * (p1[1] - p0[1])) / det;
-                    let l0 = 1.0 - l1 - l2;
-                    if l0 < eps || l1 < eps || l2 < eps {
-                        continue;
-                    }
-                    let o = (y - t.y0) as usize * w + (x - t.x0) as usize;
-                    let q = [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]];
-                    // Another part of the source: a fold. Triangles of one layer meeting at a pixel
-                    // (on their shared edge) interpolate the same source point, to float noise,
-                    // and replace each other; one drawn again after another layer comes back on
-                    // top of it, as painting would put it. Layers of a tight fold can be well under
-                    // a source pixel apart and still be layers.
-                    let near = |a: [f64; 2]| (a[0] - q[0]).hypot(a[1] - q[1]) <= SAME_LAYER;
-                    if folds && !uv[o][0].is_nan() && !near(uv[o]) {
-                        let i = match under_at.get(o) {
-                            Some(&i) if i != u32::MAX => i as usize,
-                            _ => {
-                                under.push(Vec::new());
-                                if let Some(slot) = under_at.get_mut(o) {
-                                    *slot = (under.len() - 1) as u32;
-                                }
-                                under.len() - 1
-                            }
-                        };
-                        if let Some(layers) = under.get_mut(i) {
-                            layers.retain(|(p, _)| !near(*p));
-                            layers.push((uv[o], owner[o]));
+        let mut lev: Vec<u32> = Vec::with_capacity(order.len());
+        'pass: loop {
+            for (k, tri) in order.iter().enumerate() {
+                let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
+                let det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
+                if det.abs() < 1e-12 {
+                    jac.push(([0.0; 4], 1, 1));
+                    lev.push(0);
+                    continue;
+                }
+                let (d1, d2) = ([s1[0] - s0[0], s1[1] - s0[1]], [s2[0] - s0[0], s2[1] - s0[1]]);
+                let (l1x, l1y, l2x, l2y) = ((p2[1] - p0[1]) / det, (p0[0] - p2[0]) / det, (p0[1] - p1[1]) / det, (p1[0] - p0[0]) / det);
+                // Capped, so a sliver triangle can't ask for an unbounded footprint.
+                let cap = |j: [f64; 2]| {
+                    let l = j[0].hypot(j[1]);
+                    if l > MAX_SS { [j[0] * MAX_SS / l, j[1] * MAX_SS / l] } else { j }
+                };
+                let raw_jx = [l1x * d1[0] + l2x * d2[0], l1x * d1[1] + l2x * d2[1]];
+                lev.push(if single && interp == Interp::Bilinear { mip_level(raw_jx) } else { 0 });
+                let jx = cap(raw_jx);
+                let jy = cap([l1y * d1[0] + l2y * d2[0], l1y * d1[1] + l2y * d2[1]]);
+                let (nx, ny) = (count(jx), count(jy));
+                jac.push(if nx * ny == 1 { ([0.0; 4], 1, 1) } else { ([jx[0], jx[1], jy[0], jy[1]], nx, ny) });
+                let bx0 = (p0[0].min(p1[0]).min(p2[0]) - 0.5).floor().max(f64::from(t.x0)) as i32;
+                let by0 = (p0[1].min(p1[1]).min(p2[1]) - 0.5).floor().max(f64::from(t.y0)) as i32;
+                let bx1 = (p0[0].max(p1[0]).max(p2[0]) + 0.5).ceil().min(f64::from(t.x1)) as i32;
+                let by1 = (p0[1].max(p1[1]).max(p2[1]) + 0.5).ceil().min(f64::from(t.y1)) as i32;
+                let eps = -1e-9;
+                for y in by0..by1 {
+                    let py = f64::from(y) + 0.5;
+                    for x in bx0..bx1 {
+                        let px = f64::from(x) + 0.5;
+                        let l1 = ((px - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (py - p0[1])) / det;
+                        let l2 = ((p1[0] - p0[0]) * (py - p0[1]) - (px - p0[0]) * (p1[1] - p0[1])) / det;
+                        let l0 = 1.0 - l1 - l2;
+                        if l0 < eps || l1 < eps || l2 < eps {
+                            continue;
                         }
+                        let o = (y - t.y0) as usize * w + (x - t.x0) as usize;
+                        let q = [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]];
+                        // Another part of the source: a fold. Triangles of one layer meeting at a pixel
+                        // (on their shared edge) interpolate the same source point, to float noise,
+                        // and replace each other; one drawn again after another layer comes back on
+                        // top of it, as painting would put it. Layers of a tight fold can be well under
+                        // a source pixel apart and still be layers.
+                        let near = |a: [f64; 2]| (a[0] - q[0]).hypot(a[1] - q[1]) <= SAME_LAYER;
+                        if folds && !stacked && !uv[o][0].is_nan() && !near(uv[o]) {
+                            // A fold shows in this tile: draw it again in the fold's order.
+                            let mut ranked: Vec<(u32, [usize; 3])> = bin.iter().filter_map(|&k| tris.get(k as usize).map(|&t| (rank_of(k), t))).collect();
+                            ranked.sort_by_key(|e| e.0);
+                            order = ranked.into_iter().map(|e| e.1).collect();
+                            stacked = true;
+                            uv.fill([f64::NAN; 2]);
+                            under_at = vec![u32::MAX; w * h];
+                            jac.clear();
+                            lev.clear();
+                            continue 'pass;
+                        }
+                        if stacked
+                            && !uv[o][0].is_nan()
+                            && !near(uv[o])
+                            && let Some(head) = under_at.get_mut(o)
+                        {
+                            // This layer replaces a layer of itself already in the list; the old top goes on
+                            // the end.
+                            stack_layer(&mut under, head, (uv[o], owner[o]), &near);
+                        }
+                        uv[o] = q;
+                        owner[o] = k as u32;
                     }
-                    uv[o] = q;
-                    owner[o] = k as u32;
                 }
             }
+            break;
         }
         // The fringe (see `Draw::fringe`): per uncovered pixel, its distance to the nearest border
         // edge and that triangle's source position carried out to it.
-        let cover = if draw.fringe { fringe(tris, verts, src_rect, t, w, &mut uv, &mut owner) } else { Vec::new() };
-        // Source footprint of the covered pixels, including the spread of their subsamples (a mip
-        // level's taps reach up to 1.5 texels of 2^level pixels from the sample), and the finest
-        // level it needs: the top layer's and, apart, that of the fold layers under it, which can
-        // be far away in the source (a fold joins distant parts), so one window over both could be
-        // huge. Mip levels are built from the window, so it starts on the source's level grid: its
-        // blocks are the whole pyramid's (only the source's own far edge leaves part blocks).
-        let footprint = |qs: &mut dyn Iterator<Item = ([f64; 2], u32)>| -> (Rect, u32) {
-            let (mut fx0, mut fy0, mut fx1, mut fy1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-            let mut top_level = 0u32;
-            for (q, k) in qs {
-                let j = jac[k as usize].0;
-                let l = lev.get(k as usize).copied().unwrap_or(0);
-                top_level = top_level.max(l);
-                let m = if l > 0 { 1.5 * f64::from(1u32 << l) } else { 0.0 };
-                let (ex, ey) = (0.5 * (j[0].abs() + j[2].abs()) + m, 0.5 * (j[1].abs() + j[3].abs()) + m);
-                fx0 = fx0.min(q[0] - ex);
-                fy0 = fy0.min(q[1] - ey);
-                fx1 = fx1.max(q[0] + ex);
-                fy1 = fy1.max(q[1] + ey);
+        let cover = if draw.fringe { fringe(&order, verts, src_rect, t, w, &mut uv, &mut owner) } else { Vec::new() };
+        // Where the covered pixels sample the source, with the spread of their subsamples (a mip
+        // level's taps reach up to 1.5 texels of 2^level pixels from the sample), in regions read
+        // apart ([`Regions`]): the top layer's and, apart, those of the fold layers under it. A
+        // layer's windows start on the source's grid for its finest level, since mip levels are
+        // built from the window: its blocks are the whole pyramid's (only the source's own far
+        // edge leaves part blocks).
+        let spread = |(q, k): ([f64; 2], u32)| {
+            let j = jac[k as usize].0;
+            let l = lev.get(k as usize).copied().unwrap_or(0);
+            let m = if l > 0 { 1.5 * f64::from(1u32 << l) } else { 0.0 };
+            (q, [0.5 * (j[0].abs() + j[2].abs()) + m, 0.5 * (j[1].abs() + j[3].abs()) + m])
+        };
+        let snapped = |foot: Rect, level: u32| -> Rect {
+            if level == 0 || foot.is_empty() {
+                return foot;
             }
-            if fx0 > fx1 {
-                return (Rect::EMPTY, 0);
-            }
-            let foot = Rect::new(fx0.floor() as i32 - 3, fy0.floor() as i32 - 3, fx1.ceil() as i32 + 3, fy1.ceil() as i32 + 3).intersect(&src_rect);
-            if top_level == 0 || foot.is_empty() {
-                return (foot, top_level);
-            }
-            let b = 1i32 << top_level;
+            let b = 1i32 << level;
             let snap = |v: i32, o: i32| o + (v - o).div_euclid(b) * b;
-            let foot = Rect::new(
+            Rect::new(
                 snap(foot.x0, src_rect.x0),
                 snap(foot.y0, src_rect.y0),
                 snap(foot.x1 - 1, src_rect.x0).saturating_add(b),
                 snap(foot.y1 - 1, src_rect.y0).saturating_add(b),
             )
-            .intersect(&src_rect);
-            (foot, top_level)
+            .intersect(&src_rect)
         };
         // An 8-bit source's levels are 8-bit too; deeper ones keep their precision (unmeasured).
         let steps = (fmt.sample == photocraft_color::SampleType::U8).then_some(255.0);
@@ -1006,24 +1199,55 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             Some(Win { px, foot, fw, mips })
         };
         // A top layer over an empty part of the source has no window: it is transparent there,
-        // and the fold layers under it still show. One too large to read leaves the tile empty,
-        // as without folds: what is under it can't show through where it may be opaque.
-        let top_foot = footprint(&mut uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(q, &k)| (*q, k)));
-        if top_foot.0.size().area() > MAX_FOOTPRINT_PIXELS {
+        // and the fold layers under it still show. Too much to read leaves the tile empty, as
+        // without folds: what is under it can't show through where it may be opaque.
+        let top_level = uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(_, &k)| lev.get(k as usize).copied().unwrap_or(0)).max().unwrap_or(0);
+        let mut top_regions = Regions::new(
+            &|f| {
+                for (q, &k) in uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()) {
+                    let (q, e) = spread((*q, k));
+                    f(q, e);
+                }
+            },
+            src_rect,
+        );
+        for r in &mut top_regions.rects {
+            *r = snapped(*r, top_level);
+        }
+        if top_regions.area() > MAX_FOOTPRINT_PIXELS {
             return None;
         }
-        let top = window(top_foot);
-        // Fold layers whose source can't be read in a window of their own, within the one cap
-        // for both, are left out (the top one stays).
-        let below_foot = footprint(&mut under.iter().flatten().copied());
-        let room = MAX_FOOTPRINT_PIXELS.saturating_sub(top.as_ref().map_or(0, |w| w.foot.size().area()));
-        let below = (!under.is_empty() && below_foot.0.size().area() <= room).then(|| window(below_foot)).flatten();
-        if below.is_none() {
+        let top: Vec<Option<Win>> = top_regions.rects.iter().map(|&r| window((r, top_level))).collect();
+        // Fold layers whose source can't be read in windows of their own, within the one cap for
+        // both, are left out (the top one stays).
+        let below_level = under.iter().filter(|e| !e.0[0].is_nan()).map(|e| lev.get(e.1 as usize).copied().unwrap_or(0)).max().unwrap_or(0);
+        let mut below_regions = Regions::new(
+            &|f| {
+                for &(q, k, _) in under.iter().filter(|e| !e.0[0].is_nan()) {
+                    let (q, e) = spread((q, k));
+                    f(q, e);
+                }
+            },
+            src_rect,
+        );
+        for r in &mut below_regions.rects {
+            *r = snapped(*r, below_level);
+        }
+        let room = MAX_FOOTPRINT_PIXELS.saturating_sub(top_regions.area());
+        let below: Vec<Option<Win>> = if !under.is_empty() && below_regions.area() <= room {
+            below_regions.rects.iter().map(|&r| window((r, below_level))).collect()
+        } else {
+            Vec::new()
+        };
+        if below.iter().all(Option::is_none) {
             under.clear();
         }
-        if top.is_none() && below.is_none() {
+        if top.iter().all(Option::is_none) && under.is_empty() {
             return None;
         }
+        // The window a point of the top layer, or of a fold layer under it, samples.
+        let top_win = |q: [f64; 2]| top_regions.of(q).and_then(|r| top.get(r)).and_then(Option::as_ref);
+        let below_win = |q: [f64; 2]| below_regions.of(q).and_then(|r| below.get(r)).and_then(Option::as_ref);
         let at = |win: &Win, x: i32, y: i32, c: usize| -> f64 {
             let foot = win.foot;
             if x < foot.x0 || y < foot.y0 || x >= foot.x1 || y >= foot.y1 {
@@ -1169,27 +1393,30 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             if q[0].is_nan() {
                 continue;
             }
-            match top.as_ref() {
+            match top_win(*q) {
                 Some(tw) => sample(tw, *q, k, &mut acc, &mut one),
                 None => acc[..n].fill(0.0),
             }
             // A fold: its layers under this one, bottom first, composite under the top (unless
             // the top covers them).
-            let layers = under_at.get(o).filter(|&&i| i != u32::MAX).and_then(|&i| under.get(i as usize));
-            if let (Some(bw), Some(layers)) = (below.as_ref(), layers)
-                && acc[a] < 1.0
-            {
-                let mut below = [0.0f64; 8];
-                for e in layers {
-                    sample(bw, e.0, e.1, &mut layer, &mut one);
+            let first = under_at.get(o).copied().unwrap_or(u32::MAX);
+            if first != u32::MAX && !under.is_empty() && acc[a] < 1.0 {
+                let mut under_top = [0.0f64; 8];
+                let mut at = first;
+                while let Some(&(q, k, next)) = under.get(at as usize) {
+                    at = next;
+                    match below_win(q) {
+                        Some(bw) => sample(bw, q, k, &mut layer, &mut one),
+                        None => layer[..n].fill(0.0),
+                    }
                     let keep = 1.0 - layer[a].clamp(0.0, 1.0);
                     for c in 0..n {
-                        below[c] = layer[c] + below[c] * keep;
+                        under_top[c] = layer[c] + under_top[c] * keep;
                     }
                 }
                 let keep = 1.0 - acc[a].clamp(0.0, 1.0);
                 for c in 0..n {
-                    acc[c] += below[c] * keep;
+                    acc[c] += under_top[c] * keep;
                 }
             }
             // A fringe pixel's alpha is capped by its distance out.
@@ -1747,6 +1974,51 @@ mod tests {
         // The edge pixel reads transparency past the contents, as the reference does.
         let edge = scaled_strip(0.5)[256];
         assert!((edge - 121.67).abs() < 1.0, "{edge}");
+    }
+
+    /// A warp that doesn't fold is drawn in row order whether or not folds stack: the result is
+    /// the same to the bit, and only a tile where the picture overlaps itself is drawn again.
+    #[test]
+    fn a_warp_without_a_fold_is_the_same_either_way() {
+        let (w, h) = (300, 200);
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        let px: Vec<f32> = (0..w * h).flat_map(|i| [(i % 7) as f32 / 6.0, (i % 11) as f32 / 10.0, 0.5, 1.0]).collect();
+        let r = Rect::new(0, 0, w, h);
+        src.write_region(r, &px);
+        let bulge = |x: f64, y: f64| {
+            let (u, v) = (x / 300.0 - 0.5, y / 200.0 - 0.5);
+            let k = 1.0 - 0.6 * (u * u + v * v);
+            (300.0 * (0.5 + u * k) + 10.0, 200.0 * (0.5 + v * k) + 10.0)
+        };
+        let rows = warp_mesh_surface_with(&src, r, &bulge, Fold::Rows, Interp::Bicubic, &Interrupt::NONE).unwrap();
+        let stacked = warp_mesh_surface_with(&src, r, &bulge, Fold::IN_PLACE, Interp::Bicubic, &Interrupt::NONE).unwrap();
+        let b = rows.content_bounds();
+        assert_eq!(b, stacked.content_bounds());
+        assert!(rows.read_region(b) == stacked.read_region(b), "the same pixels");
+    }
+
+    /// Points in two parts of the source far apart are two regions, each read on its own; points
+    /// close together are one, and a point not given has none.
+    #[test]
+    fn regions_split_distant_parts_of_the_source() {
+        let src = Rect::new(0, 0, 6000, 4000);
+        let pts: Vec<([f64; 2], [f64; 2])> =
+            (0..64).flat_map(|i| [([100.0 + f64::from(i), 100.0], [0.5, 0.5]), ([5000.0 + f64::from(i), 3500.0], [0.5, 0.5])]).collect();
+        let r = Regions::new(&|f| pts.iter().for_each(|&(q, e)| f(q, e)), src);
+        assert_eq!(r.rects.len(), 2, "{:?}", r.rects);
+        assert!(r.area() < 20_000, "small windows: {:?}", r.rects);
+        assert_ne!(r.of([100.0, 100.0]), r.of([5000.0, 3500.0]));
+        assert_eq!(r.of([120.0, 100.0]), r.of([100.0, 100.0]));
+        assert_eq!(r.of([3000.0, 2000.0]), None, "nothing samples between them");
+        // A compact patch stays one region; nothing at all is none.
+        let near: Vec<([f64; 2], [f64; 2])> = (0..400).map(|i| ([f64::from(i % 20), f64::from(i / 20)], [0.5, 0.5])).collect();
+        let one = Regions::new(&|f| near.iter().for_each(|&(q, e)| f(q, e)), src);
+        assert_eq!(one.rects.len(), 1);
+        assert_eq!(one.of([5.0, 5.0]), Some(0));
+        let none = Regions::new(&|_| {}, src);
+        assert!(none.rects.is_empty() && none.of([0.0, 0.0]).is_none());
+        let bad = Regions::new(&|f| f([f64::NAN, 1.0], [0.5, 0.5]), src);
+        assert!(bad.rects.is_empty());
     }
 
     #[test]
