@@ -77,6 +77,41 @@ fn longest_edges([tl, tr, br, bl]: [[f64; 2]; 4]) -> (f64, f64) {
     (len(tl, tr).max(len(bl, br)), len(tl, bl).max(len(tr, br)))
 }
 
+/// One pixel on one corner used to take this quad across the parallel-sides limit, and the output
+/// from 602 x 400 to 719 x 289. Both sides of that limit now keep the edges.
+#[test]
+fn a_pixel_of_click_error_cannot_swing_the_proportions() {
+    for x in [697.0, 698.0] {
+        let q = [[100.0, 50.0], [700.0, 50.0], [x, 384.0], [100.0, 450.0]];
+        assert_eq!(quad_free_size(&q, CENTER), longest_edges(q), "bottom right at x = {x}");
+    }
+}
+
+/// A 600 x 400 rectangle turned by `yaw` and `pitch` degrees, as a camera of focal length `focal`
+/// centred on the image sees it.
+fn photographed(focal: f64, yaw: f64, pitch: f64) -> [[f64; 2]; 4] {
+    let ((sy, cy), (sp, cp)) = (yaw.to_radians().sin_cos(), pitch.to_radians().sin_cos());
+    [[-300.0, -200.0], [300.0, -200.0], [300.0, 200.0], [-300.0, 200.0]].map(|[x, y]: [f64; 2]| {
+        let (px, py, pz) = (cy * x, sy * sp * x + cp * y, -sy * cp * x + sp * y);
+        let k = focal / (pz + focal * 1.2);
+        [CENTER[0] + px * k, CENTER[1] + py * k]
+    })
+}
+
+/// Where the sides converge enough to measure, a known rectangle's proportions come back exactly;
+/// where they barely converge, the longest edges are used instead.
+#[test]
+fn a_photographed_rectangle_keeps_its_proportions() {
+    for focal in [600.0, 1000.0, 1600.0] {
+        for (yaw, pitch) in [(20.0, 15.0), (30.0, 10.0), (-25.0, 20.0), (15.0, -30.0), (3.0, 2.0)] {
+            let (w, h) = quad_free_size(&photographed(focal, yaw, pitch), CENTER);
+            assert!((w / h - 1.5).abs() < 1e-3, "focal {focal}, {yaw} / {pitch} degrees: {w} x {h}");
+        }
+        let barely = photographed(focal, 1.0, 1.0);
+        assert_eq!(quad_free_size(&barely, CENTER), longest_edges(barely), "focal {focal}");
+    }
+}
+
 /// Parallelograms, trapezoids, wild perspective and huge coordinates give a finite, positive size
 /// no more than four times the quad's longest edges.
 #[test]
