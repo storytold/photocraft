@@ -1607,19 +1607,16 @@ fn dock_panel_draws_the_actual_minimum_during_and_after_a_drag() {
     app.ui.docking = Some(Workspace::new(layout));
     let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
     let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
-    let edge = 1280.0 - (dock_width(h.state()) + rail);
-    h.event(Event::PointerMoved(pos2(edge, 400.0)));
-    h.run_steps(1);
-    h.event(Event::PointerButton { pos: pos2(edge, 400.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    h.event(Event::PointerMoved(pos2(edge + 240.0, 400.0)));
+    let start = begin_outer_resize(&mut h);
+    let edge = start.x;
+    h.event(Event::PointerMoved(pos2(edge + 240.0, start.y)));
     h.run_steps(2);
     let during = dock_width(h.state());
     let drawn = crate::panels::dock_panel_width(&h.ctx);
     assert!((during - 440.0).abs() < 1.0, "the model stops at the 440-point minimum, got {during}");
     assert!((drawn - (during + rail)).abs() < 2.0, "the panel follows the stored width, got {drawn} for {during}+{rail}");
-    h.event(Event::PointerButton { pos: pos2(edge + 240.0, 400.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(3);
+    h.event(Event::PointerButton { pos: pos2(edge + 240.0, start.y), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
     let after = dock_width(h.state());
     assert!((after - during).abs() < 1.0, "the release keeps the model width, got {after} then {during}");
     let drawn = crate::panels::dock_panel_width(&h.ctx);
@@ -1629,37 +1626,32 @@ fn dock_panel_draws_the_actual_minimum_during_and_after_a_drag() {
 /// A workspace replacement during a drag invalidates the stored gesture before it can write.
 #[test]
 fn replacing_the_workspace_cancels_the_dock_drag() {
-    let mut app = app();
-    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
-    let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
-    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
-    let edge = 1280.0 - (dock_width(h.state()) + rail);
-    h.event(Event::PointerMoved(pos2(edge, 400.0)));
-    h.run_steps(1);
-    h.event(Event::PointerButton { pos: pos2(edge, 400.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    h.event(Event::PointerMoved(pos2(edge + 120.0, 400.0)));
-    h.run_steps(2);
-    assert!(crate::panels::dock_edge_drag_active(&h.ctx), "the drag started");
-
-    let mut replacement = legacy(h.state());
-    {
-        let root = replacement.root.as_mut().expect("root");
-        let dock = match root {
-            Node::Split { second, .. } => second.as_mut(),
-            _ => root,
-        };
-        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
-        columns[0].width = 520.0;
+    for release_first in [false, true] {
+        let mut app = app();
+        app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
+        let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
+        let start = begin_outer_resize(&mut h);
+        h.event(Event::PointerMoved(start + vec2(20.0, 0.0)));
+        h.run_steps(1);
+        let mut replacement = legacy(h.state());
+        dock_columns_mut(replacement.root.as_mut().expect("root")).expect("end dock")[0].width = 520.0;
+        let generation = h.state().ui.docking_generation;
+        crate::dock::apply(h.state_mut(), &json!({"docking": Workspace::new(replacement)}));
+        assert_eq!(h.state().ui.docking_generation, generation.wrapping_add(1));
+        assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "the installed baseline is known before any frame");
+        if release_first {
+            release_outer_resize(&mut h, start + vec2(100.0, 0.0));
+        } else {
+            h.run_steps(1);
+        }
+        assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "the first frame clears the stale gesture");
+        assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "the first frame must not overwrite the replacement");
+        if !release_first {
+            release_outer_resize(&mut h, start + vec2(100.0, 0.0));
+        }
+        h.run_steps(2);
+        assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "release and idle retain the installed width");
     }
-    h.state_mut().ui.docking = Some(Workspace::new(replacement));
-    h.state_mut().ui.docking_generation += 1;
-    h.run_steps(2);
-    assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "the old workspace drag is cleared");
-    let target = dock_width(h.state());
-    h.event(Event::PointerButton { pos: pos2(edge + 120.0, 400.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(3);
-    assert!((dock_width(h.state()) - target).abs() < 1.0, "the release does not overwrite the new workspace: got {} from {target}", dock_width(h.state()));
 }
 
 /// A window too narrow for the column minima does not panic while resizing and keeps the panel
@@ -1683,13 +1675,328 @@ fn constrained_width_does_not_panic_while_resizing() {
     let mut h = dock_edge_harness(app, vec2(300.0, 600.0));
     let drawn = crate::panels::dock_panel_width(&h.ctx);
     assert!(drawn <= 80.0, "the dock stays within the narrow window, got {drawn}");
-    let edge = 300.0 - drawn;
-    h.event(Event::PointerMoved(pos2(edge, 300.0)));
-    h.event(Event::PointerButton { pos: pos2(edge, 300.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    let start = outer_handle(&h).center();
+    let edge = start.x;
+    h.event(Event::PointerMoved(start));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(1);
     h.event(Event::PointerMoved(pos2(edge + 40.0, 300.0)));
     h.run_steps(2);
     h.event(Event::PointerButton { pos: pos2(edge + 40.0, 300.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
     assert!(crate::panels::dock_panel_width(&h.ctx) <= 80.0, "the panel stays within the narrow window after release");
+}
+
+fn outer_handle(h: &Harness<'static, PhotocraftApp>) -> egui::Rect {
+    h.ctx.read_response(egui::Id::unique("dock-edge-handle")).expect("the rendered resize handle").rect
+}
+
+fn allocated_dock(h: &Harness<'static, PhotocraftApp>) -> egui::Rect {
+    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("photo-dock-panel-rect")).expect("the allocated dock rectangle"))
+}
+
+fn begin_outer_resize(h: &mut Harness<'static, PhotocraftApp>) -> Pos2 {
+    let start = outer_handle(h).center();
+    h.event(Event::PointerMoved(start));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(crate::panels::dock_edge_drag_active(&h.ctx), "Sense::drag starts on the press frame");
+    start
+}
+
+fn release_outer_resize(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+    // No preceding PointerMoved: the release event alone supplies the final position.
+    h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+}
+
+fn app_with_columns(widths: &[f32], iconic: bool) -> PhotocraftApp {
+    assert!(widths.len() <= PANELS.len());
+    let columns = widths
+        .iter()
+        .zip(PANELS.iter())
+        .enumerate()
+        .map(|(index, (width, (id, _, _)))| {
+            let mut column = Column::new(vec![craft_ui::docking::Group::new(vec![(*id).to_owned()], 0)], *width);
+            if iconic {
+                column.iconic = true;
+                column.iconic_width = Some(*width);
+                column.width = 290.0 + index as f32;
+            }
+            column
+        })
+        .collect();
+    let root = with_canvas(Node::Dock { side: Side::End, columns }, widths.iter().sum::<f32>().min(520.0));
+    let mut app = app();
+    app.ui.docking = Some(Workspace::new(Layout { root: Some(root), floating: Vec::new() }));
+    assert!(valid_workspace(app.ui.docking.as_ref().unwrap()), "fixtures must be accepted saved workspaces");
+    app
+}
+
+fn end_columns(app: &PhotocraftApp) -> &[Column<String>] {
+    let Some(Node::Dock { columns, .. }) = lay(app).root.as_ref().and_then(end_dock_node) else { panic!("the end dock is missing") };
+    columns
+}
+
+#[test]
+fn same_total_requests_normalize_each_populated_column() {
+    let mut app = app_with_columns(&[290.0, 180.0], false);
+    set_dock_width(&mut app, 470.0);
+    assert!((dock_width(&app) - 470.0).abs() < 0.5);
+    assert!(end_columns(&app).iter().all(|column| column.width >= MIN_COLUMN_WIDTH));
+}
+
+#[test]
+fn redistribution_converges_with_more_than_eight_saturating_columns() {
+    let mut app = app_with_columns(&[221.0, 800221.0, 889109.75, 900220.75, 901807.9, 902072.25, 902124.94, 902137.9, 902141.9, 902242.4], false);
+    set_dock_width(&mut app, 2300.5);
+    assert!((dock_width(&app) - 2300.5).abs() < 0.5, "attainable target, got {}", dock_width(&app));
+    assert!(end_columns(&app).iter().all(|column| column.width >= MIN_COLUMN_WIDTH));
+}
+
+#[test]
+fn mixed_iconic_caps_redistribute_both_existing_and_new_saturation() {
+    for iconic_width in [100.0, ICONIC_MAX_WIDTH] {
+        let mut app = app_with_columns(&[290.0, 220.0], false);
+        let first = &mut dock_columns_mut(app.ui.docking.as_mut().unwrap().layout.root.as_mut().unwrap()).unwrap()[0];
+        first.iconic = true;
+        first.iconic_width = Some(iconic_width);
+        assert!((set_end_dock_total(&mut app, 800.0).unwrap() - 800.0).abs() < 0.5);
+        assert_eq!(end_columns(&app)[0].iconic_width, Some(ICONIC_MAX_WIDTH));
+        assert_eq!(end_columns(&app)[0].width, 290.0, "iconic resizing preserves expanded width");
+        assert!((end_columns(&app)[1].width - 560.0).abs() < 0.5);
+    }
+}
+
+#[test]
+fn all_iconic_totals_stop_at_both_bounds_without_losing_expanded_widths() {
+    let mut app = app_with_columns(&[100.0, 200.0], true);
+    let expanded: Vec<_> = end_columns(&app).iter().map(|column| column.width).collect();
+    for (requested, expected) in [(1000.0, 480.0), (1.0, 72.0), (300.0, 300.0)] {
+        assert!((set_end_dock_total(&mut app, requested).unwrap() - expected).abs() < 0.5);
+        for (column, expanded) in end_columns(&app).iter().zip(&expanded) {
+            assert!((ICONIC_WIDTH..=ICONIC_MAX_WIDTH).contains(&display_width(column)));
+            assert_eq!(column.width, *expanded);
+        }
+    }
+}
+
+#[test]
+fn end_dock_setter_reports_legacy_noop_and_rejects_without_mutation() {
+    let mut app = app();
+    let current = dock_width(&app);
+    assert_eq!(set_end_dock_total(&mut app, current), Some(current));
+    assert!(app.ui.docking.is_none(), "same-width legacy requests must not customize");
+    for rejected in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(set_end_dock_total(&mut app, rejected), None);
+        assert!(app.ui.docking.is_none());
+    }
+    app.session.prefs.edit(|prefs| prefs.workspace_locked = true);
+    assert_eq!(set_end_dock_total(&mut app, current + 100.0), None);
+    assert!(app.ui.docking.is_none());
+    app.session.prefs.edit(|prefs| prefs.workspace_locked = false);
+    assert_eq!(set_end_dock_total(&mut app, 400.0), Some(400.0));
+    assert!((dock_width(&app) - 400.0).abs() < 0.5);
+    let mut empty = app_with_columns(&[], false);
+    let before = empty.ui.docking.clone();
+    assert_eq!(set_end_dock_total(&mut empty, 400.0), None);
+    assert_eq!(empty.ui.docking, before);
+}
+
+#[test]
+fn an_idle_expanded_dock_uses_its_stored_width_not_the_gesture_minimum() {
+    let mut h = dock_edge_harness(app_with_columns(&[220.0], false), vec2(1280.0, 800.0));
+    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
+    assert!((allocated_dock(&h).width() - 220.0 - rail).abs() < 1.0);
+    assert_eq!(dock_width(h.state()), 220.0);
+    let start = begin_outer_resize(&mut h);
+    assert_eq!(dock_width(h.state()), 220.0, "the press records the existing idle width");
+    release_outer_resize(&mut h, start);
+    assert_eq!(dock_width(h.state()), 250.0, "even an unmoved gesture applies the resize minimum");
+    assert!((allocated_dock(&h).width() - 250.0 - rail).abs() < 1.0);
+    h.run_steps(2);
+    assert_eq!(dock_width(h.state()), 250.0, "idle keeps the normalized gesture result");
+}
+
+#[test]
+fn release_only_position_updates_model_and_actual_geometry_on_that_frame() {
+    for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+        let _direction = crate::direction::direction_scope(dir);
+        for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Classic] {
+            for rail in [false, true] {
+                let mut app = app_with_columns(&[400.0], false);
+                app.ui.panels.rail = rail;
+                app.ui.theme = theme;
+                let rw = if rail { if theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
+                let mut h = dock_panel_harness(app, vec2(1280.0, 800.0), theme);
+                let start = begin_outer_resize(&mut h);
+                let sign = if crate::direction::is_rtl() { 1.0 } else { -1.0 };
+                h.event(Event::PointerMoved(start + vec2(sign * 30.0, 0.0)));
+                h.run_steps(1);
+                assert!((dock_width(h.state()) - 430.0).abs() < 0.5);
+                assert!((allocated_dock(&h).width() - 430.0 - rw).abs() < 1.0);
+                release_outer_resize(&mut h, start + vec2(sign * 80.0, 0.0));
+                assert!(!crate::panels::dock_edge_drag_active(&h.ctx));
+                assert!((dock_width(h.state()) - 480.0).abs() < 0.5, "the release-only position is applied immediately");
+                let released = allocated_dock(&h);
+                assert!((released.width() - 480.0 - rw).abs() < 1.0, "the rail is counted once");
+                h.run_steps(2);
+                assert!((allocated_dock(&h).width() - released.width()).abs() < 0.5, "idle does not jump");
+            }
+        }
+    }
+}
+
+#[test]
+fn external_width_requests_supersede_held_and_release_first_gestures() {
+    for release_first in [false, true] {
+        let mut h = dock_edge_harness(app_with_columns(&[400.0], false), vec2(1280.0, 800.0));
+        let start = begin_outer_resize(&mut h);
+        h.event(Event::PointerMoved(start + vec2(30.0, 0.0)));
+        h.run_steps(1);
+        let ctx = h.ctx.clone();
+        assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":520.0}))["ok"], true);
+        assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "the external request invalidates the gesture before another frame");
+        if release_first {
+            release_outer_resize(&mut h, start + vec2(100.0, 0.0));
+        } else {
+            h.run_steps(1);
+        }
+        assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "the request is installed on its first frame");
+        let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
+        assert!(
+            (allocated_dock(&h).width() - 520.0 - rail).abs() < 1.0,
+            "release_first={release_first}: the FIRST processing frame allocates the requested model width plus one rail, got {:?}",
+            allocated_dock(&h),
+        );
+        if !release_first {
+            h.event(Event::PointerMoved(start + vec2(100.0, 0.0)));
+            h.run_steps(1);
+            assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "later held movement cannot restore the old width");
+            release_outer_resize(&mut h, start + vec2(140.0, 0.0));
+        }
+        h.run_steps(2);
+        assert!((dock_width(h.state()) - 520.0).abs() < 0.5);
+    }
+}
+
+#[test]
+fn active_iconic_resize_is_cancelled_when_the_window_narrows() {
+    for release_first in [false, true] {
+        let mut h = dock_edge_harness(app_with_columns(&[100.0], true), vec2(1280.0, 800.0));
+        let start = begin_outer_resize(&mut h);
+        h.event(Event::PointerMoved(start - vec2(40.0, 0.0)));
+        h.run_steps(1);
+        let before = dock_width(h.state());
+        let expanded = end_columns(h.state())[0].width;
+        assert!((before - 140.0).abs() < 0.5);
+        h.set_size(vec2(300.0, 600.0));
+        if release_first {
+            release_outer_resize(&mut h, start + vec2(100.0, 0.0));
+        } else {
+            h.event(Event::PointerMoved(start + vec2(100.0, 0.0)));
+            h.run_steps(1);
+        }
+        assert!(!crate::panels::dock_edge_drag_active(&h.ctx));
+        assert_eq!(dock_width(h.state()), before, "narrowing cannot commit the stale pointer width");
+        assert!(allocated_dock(&h).width() <= 44.5, "the allocated panel remains bounded");
+        if !release_first {
+            release_outer_resize(&mut h, start + vec2(140.0, 0.0));
+        }
+        h.set_size(vec2(1280.0, 800.0));
+        h.run_steps(2);
+        assert_eq!(dock_width(h.state()), before);
+        assert_eq!(end_columns(h.state())[0].width, expanded);
+    }
+}
+
+#[test]
+fn multiple_iconic_columns_disable_resizing_below_their_combined_minimum() {
+    let mut h = dock_edge_harness(app_with_columns(&[100.0, 100.0], true), vec2(342.0, 600.0));
+    let original = dock_width(h.state());
+    let start = outer_handle(&h).center();
+    h.event(Event::PointerMoved(start));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "50 available points cannot fit two 36-point columns");
+    h.event(Event::PointerMoved(start + vec2(100.0, 0.0)));
+    h.run_steps(1);
+    release_outer_resize(&mut h, start + vec2(120.0, 0.0));
+    assert_eq!(dock_width(h.state()), original);
+    h.set_size(vec2(1280.0, 800.0));
+    h.run_steps(2);
+    assert_eq!(dock_width(h.state()), original, "widening retains the pre-constraint iconic widths");
+}
+
+#[test]
+fn constrained_composed_layout_reserves_the_canvas_with_or_without_a_rail() {
+    for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+        let _direction = crate::direction::direction_scope(dir);
+        for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Classic] {
+            for rail in [false, true] {
+                let mut app = app_with_columns(&[290.0, 220.0], false);
+                app.ui.panels.rail = rail;
+                app.ui.theme = theme;
+                app.ui.panels.toolbar_side = if crate::direction::is_rtl() { crate::state::ToolbarSide::Left } else { crate::state::ToolbarSide::Right };
+                let mut ready = false;
+                let mut h = Harness::builder().with_size(vec2(400.0, 600.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+                    move |ui, app: &mut PhotocraftApp| {
+                        if !ready {
+                            PhotocraftApp::setup_context(ui.ctx(), theme);
+                            ready = true;
+                            return;
+                        }
+                        crate::panels::dock_panel(app, ui);
+                        crate::panels::toolbar(app, ui);
+                        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("constrained-canvas-rect"), ui.max_rect()));
+                        });
+                    },
+                    app,
+                );
+                h.run_steps(4);
+                let assert_geometry = |h: &Harness<'static, PhotocraftApp>| {
+                    let canvas = h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("constrained-canvas-rect")).unwrap());
+                    assert!(canvas.width() >= 199.5, "rail={rail}, dir={dir:?}: canvas {canvas:?}, dock {:?}", allocated_dock(h));
+                    assert!((dock_width(h.state()) - 510.0).abs() < 0.5, "the constrained display does not corrupt model minima");
+                    assert!(allocated_dock(h).width() <= 144.5, "actual allocation, not requested width");
+                };
+                assert_geometry(&h);
+                let start = outer_handle(&h).center();
+                h.event(Event::PointerMoved(start));
+                h.run_steps(1);
+                h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                h.run_steps(1);
+                assert!(!crate::panels::dock_edge_drag_active(&h.ctx));
+                release_outer_resize(&mut h, start + vec2(60.0, 0.0));
+                assert_geometry(&h);
+            }
+        }
+    }
+}
+
+#[test]
+fn queued_external_width_precedes_but_does_not_eagerly_consume_native_migration() {
+    let mut app = app();
+    app.last_canvas_rect = egui::Rect::NOTHING;
+    let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
+    assert!(!h.state().last_canvas_rect.is_positive(), "the dock-only harness has not laid out a canvas");
+    assert!(h.state().ui.docking.is_none());
+    let key = crate::panels::panel_state_id(&h.ctx, "dock");
+    let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(900.0, 0.0), vec2(380.0, 700.0)) };
+    h.ctx.data_mut(|data| data.insert_persisted(key, state));
+    h.run_steps(1);
+    assert!(h.state().ui.docking.is_none(), "native migration still waits for canvas readiness");
+    assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some());
+    crate::panels::request_dock_width(&h.ctx, 520.0);
+    h.run_steps(1);
+    assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "the explicit request takes precedence over the old native width");
+    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
+    assert!((allocated_dock(&h).width() - 520.0 - rail).abs() < 1.0, "first-frame allocation uses that same width");
+    assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "the migrated state is consumed once");
+    h.run_steps(2);
+    assert!((dock_width(h.state()) - 520.0).abs() < 0.5);
 }

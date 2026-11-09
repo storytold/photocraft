@@ -206,7 +206,8 @@ fn scale_columns(columns: &mut [Column<String>], total: f32) -> f32 {
     let maximum = columns_maximum(columns);
     let target = total.clamp(minimum, maximum.max(minimum)).max(1.0);
     let mut sum: f32 = columns.iter().map(display_width).sum();
-    for _ in 0..8 {
+    // Every unfinished pass freezes at least one column; allow a final convergence pass.
+    for _ in 0..=columns.len() {
         let diff = target - sum;
         if diff.abs() < 0.5 {
             break;
@@ -759,6 +760,21 @@ fn canvas_alone_layout(layout: &Layout<String>) -> bool {
     }
 }
 
+/// Apply an external width request before the dock-edge panel measures its allocation.
+/// Standard rendering consumes the same queue. Native PanelState migration stays in `show`,
+/// after this request and its existing canvas-readiness guard.
+pub(crate) fn apply_pending_dock_width(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let id = crate::panels::dock_width_id();
+    let Some(width) = ctx.data(|data| data.get_temp::<f32>(id)) else { return };
+    // Let `show` restore an invalid workspace before consuming its queued request, as before.
+    if app.ui.docking.as_ref().is_some_and(|workspace| !valid_workspace(workspace)) {
+        return;
+    }
+    ctx.data_mut(|data| data.remove::<f32>(id));
+    let range = crate::panels::dock_width_range(ctx.content_rect().width());
+    set_dock_width(app, width.clamp(*range.start(), *range.end()));
+}
+
 /// Draw the layout, the canvas included, in the space `ui` has left: the customized workspace,
 /// else the native dock's arrangement.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -777,10 +793,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let message = "Invalid panel layout; restored the default dock";
         app.ui.status = tl!(message).into();
     }
-    if let Some(width) = ui.ctx().data_mut(|data| data.remove_temp::<f32>(crate::panels::dock_width_id())) {
-        let range = crate::panels::dock_width_range(ui.ctx().content_rect().width());
-        set_dock_width(app, width.clamp(*range.start(), *range.end()));
-    }
+    apply_pending_dock_width(app, ui.ctx());
     native_dock_width(app, ui.ctx());
     let layout = match &app.ui.docking {
         Some(workspace) => workspace.layout.clone(),
@@ -984,7 +997,8 @@ fn pin_group_heights(ctx: &egui::Context, layout: &Layout<String>, actions: &mut
     actions.splice(0..0, pins);
 }
 
-/// `ui.set {dockWidth}`: the width of the end dock, keeping its other columns' widths.
+/// `ui.set {dockWidth}`: the whole end dock width, distributing changes across its columns
+/// within their individual minimums and iconic caps.
 /// An empty end dock has no column to store the width in; the request is a no-op until the
 /// dock gets a column.
 pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
@@ -1000,7 +1014,8 @@ pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
     // A request for the width the dock already has must stay a no-op: committing the legacy
     // layout here would turn a later `ui.set {dockTabs}` into a customized-workspace update.
     let current: f32 = columns.iter().map(display_width).sum();
-    if current >= columns_minimum(columns) && (current - width).abs() < 0.5 {
+    let compliant = columns.iter().all(|column| (column_minimum(column)..=column_maximum(column)).contains(&display_width(column)));
+    if compliant && (current - width).abs() < 0.5 {
         return;
     }
     let actual = scale_columns(columns, width);
@@ -1016,15 +1031,21 @@ pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
     commit(app, workspace, returns);
 }
 
-/// Set the end dock's total width in place, keeping its columns' proportions and the horizontal
-/// split that holds the dock at its edge in step. Creates the custom workspace from the legacy
-/// dock the first time. Returns the resulting displayed width, or `None` when there is no end dock.
+/// Set the end dock's total width in place, distributing changes within each column's bounds and
+/// keeping its horizontal split in step. Creates the custom workspace from the legacy
+/// dock the first time a change is needed. Returns the resulting displayed width, including a
+/// legacy no-op, or `None` for rejected input, a locked workspace, or no end-dock column.
 pub(crate) fn set_end_dock_total(app: &mut PhotocraftApp, total: f32) -> Option<f32> {
     if !total.is_finite() || total <= 0.0 || app.session.prefs().workspace_locked {
         return None;
     }
     if app.ui.docking.is_none() {
         set_dock_width(app, total);
+        if app.ui.docking.is_none() {
+            // A compliant same-width legacy request must not customize the workspace.
+            let metrics = dock_metrics(app);
+            return (!metrics.empty).then_some(metrics.width);
+        }
     }
     let workspace = app.ui.docking.as_mut()?;
     let root = workspace.layout.root.as_mut()?;

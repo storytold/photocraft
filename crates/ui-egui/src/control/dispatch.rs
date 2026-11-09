@@ -729,7 +729,7 @@ impl PanelSet {
         if let Some(v) = self.color_panel.take() {
             app.ui.color_panel = v;
         }
-        // Right dock width in points (clamped to the dock's 250..=520 range), applied next frame.
+        // End dock width in points, clamped to its window-dependent range and applied next frame.
         if let Some(w) = self.dock_width {
             crate::panels::request_dock_width(ctx, w as f32);
         }

@@ -43,6 +43,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let min_dock = (*range.start()).min(max_dock);
     let locked = app.session.prefs().workspace_locked;
     let modal = crate::panel_docking::modal_open(app, ui.ctx());
+    crate::panel_docking::apply_pending_dock_width(app, ui.ctx());
     let metrics = crate::panel_docking::dock_metrics(app);
     let empty = metrics.empty;
     if empty {
@@ -70,7 +71,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     }
     let iconic = metrics.iconic_only;
-    let natural_min = if iconic { crate::panel_docking::ICONIC_WIDTH } else { metrics.minimum.max(min_dock) };
+    let natural_min = if iconic { metrics.minimum } else { metrics.minimum.max(min_dock) };
     let max_dock = max_dock.min(if metrics.maximum.is_finite() { metrics.maximum.max(natural_min) } else { max_dock });
     let feasible = natural_min <= max_dock + 0.5;
     let min_visible = natural_min.min(max_dock);
@@ -98,6 +99,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let lower = (min_visible + rw).min(max_dock + rw);
     let upper = max_dock + rw;
+    // A gesture applies its minimum even without motion; idle may retain a narrower saved width.
     let pointer_width = |start_x: f32, start_w: f32| {
         let pointer = ui.ctx().input(|i| i.pointer.latest_pos()).map_or(start_x, |pos| pos.x);
         let dx = if crate::direction::is_rtl() { pointer - start_x } else { start_x - pointer };
@@ -114,7 +116,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         drag = None;
         ui.ctx().data_mut(|d| d.remove::<(f32, f32, u64)>(drag_id));
     }
-    let mut panel_w = if let Some((start_x, start_w)) = drag { pointer_width(start_x, start_w) } else { (stored + rw).clamp(lower, upper) };
+    let mut panel_w = if let Some((start_x, start_w)) = drag { pointer_width(start_x, start_w) } else { stored + rw };
     if drag.is_some() && resizable {
         let requested = (panel_w - rw).clamp(min_visible, max_dock);
         if let Some(actual) = crate::panel_docking::set_end_dock_total(app, requested) {
@@ -123,78 +125,76 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             panel_w = (actual + rw).clamp(lower, upper);
         }
     }
-    #[cfg(test)]
-    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("photo-dock-panel-width"), panel_w));
-    if drag.is_some() && resizable {
-        crate::panel_docking::set_end_dock_total(app, (panel_w - rw).clamp(min_visible, max_dock));
-    }
-    crate::direction::end_panel("dock-column").resizable(false).show_separator_line(false).exact_size(panel_w).frame(egui::Frame::NONE.fill(t.card)).show(
-        ui,
-        |ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            let height = ui.available_height();
-            let mut dock_rect = ui.max_rect();
-            if rail_shown {
-                // The rail sits between the dock (at the window edge) and the toolbox, with the
-                // chrome fill and inset the standalone rail panel gives it.
-                let rail_rect = if crate::direction::is_rtl() {
-                    egui::Rect::from_min_size(egui::pos2(dock_rect.right() - rw, dock_rect.top()), egui::vec2(rw, height))
-                } else {
-                    egui::Rect::from_min_size(dock_rect.min, egui::vec2(rw, height))
-                };
-                ui.painter().rect_filled(rail_rect, 0.0, t.chrome);
-                ui.allocate_rect(rail_rect, egui::Sense::hover());
-                let inner = rail_rect.shrink2(egui::vec2(4.0, 8.0));
-                let mut rail_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner));
-                rail_body(app, &mut rail_ui, &t);
-                if crate::direction::is_rtl() {
-                    dock_rect.max.x = rail_rect.left();
-                } else {
-                    dock_rect.min.x = rail_rect.right();
+    let _panel =
+        crate::direction::end_panel("dock-column").resizable(false).show_separator_line(false).exact_size(panel_w).frame(egui::Frame::NONE.fill(t.card)).show(
+            ui,
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let height = ui.available_height();
+                let mut dock_rect = ui.max_rect();
+                if rail_shown {
+                    // The rail sits between the dock (at the window edge) and the toolbox, with the
+                    // chrome fill and inset the standalone rail panel gives it.
+                    let rail_rect = if crate::direction::is_rtl() {
+                        egui::Rect::from_min_size(egui::pos2(dock_rect.right() - rw, dock_rect.top()), egui::vec2(rw, height))
+                    } else {
+                        egui::Rect::from_min_size(dock_rect.min, egui::vec2(rw, height))
+                    };
+                    ui.painter().rect_filled(rail_rect, 0.0, t.chrome);
+                    ui.allocate_rect(rail_rect, egui::Sense::hover());
+                    let inner = rail_rect.shrink2(egui::vec2(4.0, 8.0));
+                    let mut rail_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner));
+                    rail_body(app, &mut rail_ui, &t);
+                    if crate::direction::is_rtl() {
+                        dock_rect.max.x = rail_rect.left();
+                    } else {
+                        dock_rect.min.x = rail_rect.right();
+                    }
                 }
-            }
-            let mut dock_ui = ui.new_child(egui::UiBuilder::new().max_rect(dock_rect));
-            // The docking pass also renders floating windows (Studio floats Properties over the
-            // canvas), so it runs even when the dock column itself is empty.
-            crate::panel_docking::show_dock(app, &mut dock_ui);
-            // Block the docking layout's column-edge handle at the dock's content edge. It is
-            // registered before the resize handle so the handle wins where they overlap when the
-            // rail is hidden and both edges coincide; one point either side keeps tab strips and
-            // scrollbars clear.
-            let dock_edge = if crate::direction::is_rtl() { dock_rect.right() } else { dock_rect.left() };
-            let cover = egui::Rect::from_min_max(egui::pos2(dock_edge - 1.0, dock_rect.top()), egui::pos2(dock_edge + 1.0, dock_rect.bottom()));
-            let _ = ui.interact(cover, egui::Id::unique("dock-content-edge"), egui::Sense::click_and_drag());
-            // The panel's inner edge (between the toolbox and the rail) is the resize handle.
-            let panel_rect = ui.max_rect();
-            let panel_edge = if crate::direction::is_rtl() { panel_rect.right() } else { panel_rect.left() };
-            let handle = egui::Rect::from_min_max(egui::pos2(panel_edge - 4.0, panel_rect.top()), egui::pos2(panel_edge + 4.0, panel_rect.bottom()));
-            // A locked workspace, an empty dock (nothing to resize), a modal dialog or a disabled
-            // UI leaves the handle inert.
-            let sense = if resizable { egui::Sense::drag() } else { egui::Sense::hover() };
-            let response = ui.interact(handle, egui::Id::unique("dock-edge-handle"), sense);
-            // The bar is always visible, on the foreground layer so no panel, rail or dock
-            // content can hide it; it brightens under the pointer.
-            let active = resizable && (response.hovered() || response.dragged());
-            if active {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            }
-            let line = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dock-edge-line"));
-            // The theme's separator colour at rest, the accent while the edge is hovered or
-            // dragged: a dark divider that lights up, not a permanently lit bar.
-            let color = if active { t.accent } else { t.separator };
-            ui.ctx().layer_painter(line).vline(panel_edge, panel_rect.y_range(), Stroke::new(1.0, color));
-            if response.drag_started() {
-                let start_x = response.interact_pointer_pos().map_or(panel_edge, |pos| pos.x);
-                ui.ctx().data_mut(|d| d.insert_temp(drag_id, (start_x, panel_w, generation)));
-            }
-            if response.dragged() {
-                ui.ctx().request_repaint();
-            }
-            if response.drag_stopped() {
-                ui.ctx().data_mut(|d| d.remove::<(f32, f32, u64)>(drag_id));
-            }
-        },
-    );
+                let mut dock_ui = ui.new_child(egui::UiBuilder::new().max_rect(dock_rect));
+                // The docking pass also renders floating windows (Studio floats Properties over the
+                // canvas), so it runs even when the dock column itself is empty.
+                crate::panel_docking::show_dock(app, &mut dock_ui);
+                // Block the docking layout's column-edge handle at the dock's content edge. It is
+                // registered before the resize handle so the handle wins where they overlap when the
+                // rail is hidden and both edges coincide; one point either side keeps tab strips and
+                // scrollbars clear.
+                let dock_edge = if crate::direction::is_rtl() { dock_rect.right() } else { dock_rect.left() };
+                let cover = egui::Rect::from_min_max(egui::pos2(dock_edge - 1.0, dock_rect.top()), egui::pos2(dock_edge + 1.0, dock_rect.bottom()));
+                let _ = ui.interact(cover, egui::Id::unique("dock-content-edge"), egui::Sense::click_and_drag());
+                // The panel's inner edge (between the toolbox and the rail) is the resize handle.
+                let panel_rect = ui.max_rect();
+                let panel_edge = if crate::direction::is_rtl() { panel_rect.right() } else { panel_rect.left() };
+                let handle = egui::Rect::from_min_max(egui::pos2(panel_edge - 4.0, panel_rect.top()), egui::pos2(panel_edge + 4.0, panel_rect.bottom()));
+                // A locked workspace, an empty dock (nothing to resize), a modal dialog or a disabled
+                // UI leaves the handle inert.
+                let sense = if resizable { egui::Sense::drag() } else { egui::Sense::hover() };
+                let response = ui.interact(handle, egui::Id::unique("dock-edge-handle"), sense);
+                // The bar is always visible, on the foreground layer so no panel, rail or dock
+                // content can hide it; it brightens under the pointer.
+                let active = resizable && (response.hovered() || response.dragged());
+                if active {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+                let line = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dock-edge-line"));
+                // The theme's separator colour at rest, the accent while the edge is hovered or
+                // dragged: a dark divider that lights up, not a permanently lit bar.
+                let color = if active { t.accent } else { t.separator };
+                ui.ctx().layer_painter(line).vline(panel_edge, panel_rect.y_range(), Stroke::new(1.0, color));
+                if response.drag_started() {
+                    let start_x = response.interact_pointer_pos().map_or(panel_edge, |pos| pos.x);
+                    ui.ctx().data_mut(|d| d.insert_temp(drag_id, (start_x, panel_w, generation)));
+                }
+                if response.dragged() {
+                    ui.ctx().request_repaint();
+                }
+                if response.drag_stopped() {
+                    ui.ctx().data_mut(|d| d.remove::<(f32, f32, u64)>(drag_id));
+                }
+            },
+        );
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("photo-dock-panel-rect"), _panel.response.rect));
     crate::dock::persist(app, ui.ctx());
     crate::color_panel_ui::persist(app);
 }
@@ -214,7 +214,13 @@ pub(crate) fn clear_dock_edge_drag(ctx: &egui::Context) {
 /// narrow width and return the rest to the canvas).
 #[cfg(test)]
 pub(crate) fn dock_panel_width(ctx: &egui::Context) -> f32 {
-    ctx.data(|data| data.get_temp::<f32>(egui::Id::unique("photo-dock-panel-width")).unwrap_or(0.0))
+    dock_panel_rect(ctx).width()
+}
+
+/// The actual allocated dock panel rectangle, not its requested pre-render width (tests).
+#[cfg(test)]
+pub(crate) fn dock_panel_rect(ctx: &egui::Context) -> egui::Rect {
+    ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("photo-dock-panel-rect")).unwrap_or(egui::Rect::NOTHING))
 }
 
 /// The docking layout's protected canvas panel: the document area, with the icon rail on its end
@@ -289,8 +295,10 @@ pub(crate) fn dock_width_id() -> egui::Id {
     egui::Id::unique("dock-width-request")
 }
 
-/// Set the right dock's width on the next frame (`ui.set {dockWidth}`); clamped to its range.
+/// Set the end dock's width on the next frame (`ui.set {dockWidth}`); clamped to its
+/// window-dependent range. An external request supersedes an in-progress outer resize.
 pub fn request_dock_width(ctx: &egui::Context, w: f32) {
+    clear_dock_edge_drag(ctx);
     let range = dock_width_range(ctx.content_rect().width());
     let w = if w.is_finite() { w.clamp(*range.start(), *range.end()) } else { *range.start() };
     ctx.data_mut(|d| d.insert_temp(dock_width_id(), w));
