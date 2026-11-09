@@ -263,8 +263,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn,
-    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable,
+    RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -791,6 +791,10 @@ mod brush_options_tooltips_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
+mod cam_no_pixels_alert_tests;
+#[cfg(test)]
+mod eyedropper_context_menu_tests;
+#[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod shape_bounds_box_tests;
@@ -1032,7 +1036,13 @@ mod pen_path_ownership_tests;
 #[cfg(test)]
 mod artboard_options_bar_tests;
 #[cfg(test)]
+mod background_eraser_bar_angle_tests;
+#[cfg(test)]
 mod brush_opacity_minimum_tests;
+
+#[cfg(test)]
+mod pencil_shift_digit_opacity_tests;
+
 #[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]

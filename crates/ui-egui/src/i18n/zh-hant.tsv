@@ -34,7 +34,7 @@
 
 # Gradient Editor window, opened from the options bar's gradient swatch.
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 
 
@@ -333,7 +333,7 @@
 	Plugins…	增效模組…
 	Type…	文字…
 	Enhanced Controls…	增強控制項…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	RAW 預設值…
 	Raw Defaults…	Raw 預設值…
 	Integrations…	整合…
 	AI Integrations…	AI 整合…
@@ -668,7 +668,7 @@
 	Last Filter	上次濾鏡
 	Filter Gallery…	濾鏡收藏館…
 	Adaptive Wide Angle…	最適化廣角…
-	Camera Raw Filter…	Camera Raw 濾鏡…
+	RAW Develop Filter…	RAW 顯影 濾鏡…
 	Liquify…	液化…
 	Vanishing Point…	消失點…
 	Blur	模糊
@@ -1024,8 +1024,8 @@
 	Load Settings…	載入設定…
 	Save these settings as a Camera Raw .xmp file	將這些設定儲存為 Camera Raw .xmp 檔案
 	Load settings from a Camera Raw .xmp file	從 Camera Raw .xmp 檔案載入設定
-	Loaded Camera Raw settings from {file}	已從 {file} 載入 Camera Raw 設定
-	Loaded Camera Raw settings from {file} ({n} not supported)	已從 {file} 載入 Camera Raw 設定（{n} 項不支援）
+	Loaded RAW Develop settings from {file}	已從 {file} 載入 RAW 顯影 設定
+	Loaded RAW Develop settings from {file} ({n} not supported)	已從 {file} 載入 RAW 顯影 設定（{n} 項不支援）
 	Begin recording	開始記錄
 	Bend:	彎曲：
 	Bicubic	雙三次
@@ -1053,7 +1053,7 @@
 	Brush Reconstruct Options	筆刷重建選項
 	Brush Tool Options	筆刷工具選項
 	Cache Level:	快取層級：
-	Camera Raw isn't open	Camera Raw 未開啟
+	RAW Develop isn't open	RAW 顯影 未開啟
 	Cancel	取消
 	Cancel (Esc)	取消 (Esc)
 	Manage submitted jobs in the system print queue	在系統列印佇列中管理已提交的工作
@@ -2035,7 +2035,7 @@
 	Brush preview color	筆刷預視顏色
 	Cache levels	快取層級
 	Cache tile size	快取拼貼大小
-	Camera Raw Defaults	Camera Raw 預設值
+	RAW Defaults	RAW 預設值
 	Canvas border	畫布邊框
 	Show canvas dots	顯示畫布圓點
 	Clip thumbnails to layer bounds	將縮圖裁切至圖層邊界
@@ -2122,7 +2122,6 @@
 	Never	永不
 	Normal tip	一般筆尖
 	Open as smart object	以智慧型物件開啟
-	Open in camera raw	在 Camera Raw 中開啟
 	Open documents as tabs	以索引標籤開啟文件
 	Overscroll	超出捲動
 	Performance	效能
@@ -2401,8 +2400,8 @@
 	Tone Histogram	色調直方圖
 	Show Selected Region	顯示選取區域
 cameraRaw	Light	光線
-	Camera Raw Filter ({layer})	Camera Raw 濾鏡（{layer}）
-	Camera Raw ({name})	Camera Raw（{name}）
+	RAW Develop Filter ({layer})	RAW 顯影 濾鏡（{layer}）
+	RAW Develop ({name})	RAW 顯影（{name}）
 cameraRaw	Lights	亮調
 cameraRaw	Darks	暗調
 cameraRaw	Blacks	黑色色階
@@ -3267,7 +3266,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	滑過時顯示圖層邊界
 	Expand layer group on click	按一下時展開圖層群組
 	Show hover bounds from Layers	顯示來自圖層面板的滑過邊界
-	Saved Camera Raw settings to {file}	已將 Camera Raw 設定儲存到 {file}
+	Saved RAW Develop settings to {file}	已將 RAW 顯影 設定儲存到 {file}
 	Save the settings to each raw's sidecar without opening it	將設定儲存到每個 Raw 的附屬檔案，不開啟它
 	No settings saved: these raws can't keep a sidecar here	未儲存任何內容：這些 Raw 在此處無法擁有附屬檔案
 	Some settings could not be saved; the raws stay open	部分設定無法儲存；Raw 保持開啟
@@ -3279,3 +3278,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	自動調整版面尺寸
 	Keep Relative Position During Layer Reordering	重新排列圖層時保持相對位置
 	Shrinkwrap Canvas on Save	儲存時將版面縮至內容大小
+	Move Toolbar to the Right	將工具列移到右側
+	Move Toolbar to the Left	將工具列移到左側
+
+# RAW Develop feature labels
+	RAW Develop	RAW 顯影
+	RAW Develop Filter	RAW 顯影濾鏡
