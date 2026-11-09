@@ -825,7 +825,7 @@ mod align_edges_tests {
             let descriptor = parse_prefix_versioned(&raw.iter().find(|(key, _)| key == b"vstk").unwrap().1).unwrap();
             assert_eq!(bool_of(&descriptor, "strokeStyleStrokeAdjust"), adjust);
             assert_eq!(descriptor.get("unknownSetting"), Some(&Value::Integer(17)));
-            shape.stroke.as_mut().unwrap().width = 3.0;
+            shape.stroke.as_mut().unwrap().width = 5.0;
             shape_blocks(&shape, &mut raw, 100, 100, 72.0);
             let descriptor = parse_prefix_versioned(&raw.iter().find(|(key, _)| key == b"vstk").unwrap().1).unwrap();
             assert_eq!(bool_of(&descriptor, "strokeStyleStrokeAdjust"), adjust);
