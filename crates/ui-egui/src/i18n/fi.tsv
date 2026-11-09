@@ -351,7 +351,7 @@
 	Last Filter	Viimeisin suodatin
 	Filter Gallery…	Suodatingalleria…
 	Liquify…	Nesteytä…
-	Camera Raw Filter…	Camera Raw -suodatin…
+	RAW Develop Filter…	RAW-kehitys -suodatin…
 	Adaptive Wide Angle…	Mukautuva laajakulma…
 	Lens Correction…	Objektiivin korjaus…
 	Vanishing Point…	Pakopiste…
@@ -876,7 +876,7 @@
 	Working Black Plate	Työ-mustalevy
 	Working Gray Plate	Harmaa työlevy
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 	Basic	Perusasetukset
 	Detail	Yksityiskohdat
 	HSL/Grayscale	HSL/harmaasävy
@@ -906,8 +906,8 @@
 	Luminance Smoothness	Luminanssin tasaisuus
 	Vignetting	Vinjetointi
 	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
-	Camera Raw…	Camera Raw…
-	Camera Raw isn't open	Camera Raw ei ole auki
+	RAW Defaults…	RAW-oletukset…
+	RAW Develop isn't open	RAW-kehitys ei ole auki
 	Dehaze	Usvanpoisto
 	Texture	Tekstuuri
 	Focal Length	Polttoväli
@@ -1178,8 +1178,6 @@
 	Roman Hanging Punctuation	Latinalainen riippuva välimerkitys
 	Avoid Widows/Orphans	Vältä leski- ja orporivejä
 	Compose	Sommittele
-	Adobe Single-line Composer	Adobe yksirivinen asettelija
-	Adobe Every-line Composer	Adobe kaikkien rivien asettelija
 	Justification	Tasaus
 	Word Spacing	Sanaväli
 	Letter Spacing	Merkkiväli
@@ -1761,8 +1759,8 @@
 	Load Settings…	Lataa asetukset…
 	Save these settings as a Camera Raw .xmp file	Tallenna nämä asetukset Camera Raw .xmp -tiedostona
 	Load settings from a Camera Raw .xmp file	Lataa asetukset Camera Raw .xmp -tiedostosta
-	Loaded Camera Raw settings from {file}	Camera Raw -asetukset ladattu tiedostosta {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw -asetukset ladattu tiedostosta {file} ({n} tukematonta)
+	Loaded RAW Develop settings from {file}	RAW-kehitys -asetukset ladattu tiedostosta {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	RAW-kehitys -asetukset ladattu tiedostosta {file} ({n} tukematonta)
 	After (X)	Jälkeen (X)
 	Original	Alkuperäinen
 	Current	Nykyinen
@@ -2349,7 +2347,7 @@
 	CPU (no GPU acceleration)	CPU (ei GPU-kiihdytystä)
 	Cache levels	Välimuistitasot
 	Cache tile size	Välimuistin laatan koko
-	Camera Raw Defaults	Camera Raw -oletukset
+	RAW Defaults	RAW-oletukset
 	Canvas border	Kankaan reunus
 	Show canvas dots	Näytä kankaan pisteet
 	Clip thumbnails to layer bounds	Rajaa pikkukuvat tason rajoihin
@@ -2441,7 +2439,6 @@
 	Never	Ei koskaan
 	Normal tip	Normaali kärki
 	Open as smart object	Avaa älykkäänä objektina
-	Open in camera raw	Avaa Camera Raw'ssa
 	Open documents as tabs	Avaa asiakirjat välilehtinä
 	OpenGL	OpenGL
 	Orange	Oranssi
@@ -2582,9 +2579,9 @@
 	Tone Histogram	Sävyhistogrammi
 	Show Selected Region	Näytä valittu alue
 cameraRaw	Light	Valo
-# Camera Raw: contextual controls and window title
-	Camera Raw Filter ({layer})	Camera Raw -suodatin ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+# RAW Develop: contextual controls and window title
+	RAW Develop Filter ({layer})	RAW-kehitys -suodatin ({layer})
+	RAW Develop ({name})	RAW-kehitys ({name})
 	Aqua	Turkoosi
 cameraRaw	Amount	Määrä
 cameraRaw	Blacks	Mustat
@@ -3389,7 +3386,7 @@ curves	Smooth	Tasoita
 	{name} was changed by another app after it was opened or saved here.	Toinen ohjelma on muuttanut tiedostoa {name} sen jälkeen, kun se avattiin tai tallennettiin täällä.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Korvaa se tällä asiakirjalla, tai peruuta ja käytä komentoa Tiedosto › Tallenna nimellä, jos haluat säilyttää molemmat.
 
-# Dynamic UI labels (fourth pass): filter and adjustment parameters, Camera Raw panels,
+# Dynamic UI labels (fourth pass): filter and adjustment parameters, RAW Develop panels,
 # lighting, History/Layers/paths/channels menus, metadata, System Info, status templates and
 # dialog text that other catalogs already carry. Written from the meaning of the English labels
 # in the ordinary Russian graphics-editor vocabulary; no proprietary resource consulted.
@@ -3415,13 +3412,11 @@ curves	Smooth	Tasoita
 	Adjustment Layers	Säätötasot
 	Adjustment Properties	Säädön ominaisuudet
 	Adjustment layers have nothing to transform	Säätötasoilla ei ole mitään muunnettavaa
-	Adobe PDF Presets…	Adobe PDF -esiasetukset…
 	Adobe-rgb-compat	Adobe RGB -yhteensopiva
 	Adwaita (Dark)	Adwaita (tumma)
 	Adwaita (Light)	Adwaita (vaalea)
 	After	Jälkeen
 	Airbrush: keeps painting while the pointer rests.	Ilmasivellin: maalaa edelleen, kun osoitin on paikallaan.
-	All shortcuts reset to Photoshop defaults.	Kaikki pikanäppäimet palautettu Photoshopin oletuksiin.
 	Altitude	Korkeus
 	Ambience	Ympäristövalo
 	Ambient	Ympäristö
@@ -3506,8 +3501,8 @@ curves	Smooth	Tasoita
 	Brush Type	Siveltimen tyyppi
 	Burlap	Juuttikangas
 	Calculations	Laskutoimitukset
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw -suodatin
+	RAW Develop	RAW-kehitys
+	RAW Develop Filter	RAW-kehitys -suodatin
 	Cancel transform	Peruuta muunnos
 	Candle Light	Kynttilänvalo
 	Canvas Size	Kankaan koko
@@ -3654,7 +3649,6 @@ curves	Smooth	Tasoita
 	Deep Yellow	Syvä keltainen
 	Default Foreground and Background Colors	Oletusarvoiset edusta- ja taustavärit
 	Default Leaves	Oletuslehdet
-	Default Photoshop Size	Photoshopin oletuskoko
 	Defaults	Oletukset
 	Define Brush Preset	Määritä siveltimen esiasetus
 	Define Custom Shape	Määritä mukautettu muoto
@@ -4755,9 +4749,9 @@ shape	Appearance	Ulkoasu
 @plural	{n} document|{n} documents	{n} asiakirja|{n} asiakirjaa
 @plural	{n} pixel|{n} pixels	{n} pikseli|{n} pikseliä
 cameraRaw	Before (Y)	Ennen (Y)
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Camera Raw -suodatin ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw ei ole auki
+cameraRaw	RAW Develop ({name})	RAW-kehitys ({name})
+cameraRaw	RAW Develop Filter ({layer})	RAW-kehitys -suodatin ({layer})
+cameraRaw	RAW Develop isn't open	RAW-kehitys ei ole auki
 cameraRaw	Cancel	Peruuta
 cameraRaw	Canceled opening {name}	Tiedoston {name} avaaminen peruutettu
 cameraRaw	Canceled {label}	Peruutettu: {label}
@@ -4769,7 +4763,7 @@ cameraRaw	Highlight Clipping Warning (O)	Korostusten leikkautumisvaroitus (O)
 cameraRaw	Highlight Priority	Korostusten prioriteetti
 cameraRaw	Load Settings…	Lataa asetukset…
 cameraRaw	Load settings from a Camera Raw .xmp file	Lataa asetukset Camera Raw .xmp -tiedostosta
-cameraRaw	Loaded Camera Raw settings from {file}	Camera Raw -asetukset ladattu tiedostosta {file}
+cameraRaw	Loaded RAW Develop settings from {file}	RAW-kehitys -asetukset ladattu tiedostosta {file}
 cameraRaw	Noise Reduction	Kohinan vaimennus
 cameraRaw	OK	OK
 cameraRaw	Open	Avaa
@@ -4832,3 +4826,8 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Auto-size Canvas	Muuta kankaan kokoa automaattisesti
 	Keep Relative Position During Layer Reordering	Säilytä suhteellinen sijainti tasojen järjestystä muutettaessa
 	Shrinkwrap Canvas on Save	Pienennä kangas sisältöön tallennettaessa
+	Move Toolbar to the Right	Siirrä työkalupalkki oikealle
+	Move Toolbar to the Left	Siirrä työkalupalkki vasemmalle
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	RAW-kehityksen asetukset tallennettu tiedostoon {file}

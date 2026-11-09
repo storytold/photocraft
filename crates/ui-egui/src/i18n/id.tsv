@@ -29,7 +29,7 @@
 
 # Gradient Editor window, opened from the options bar's gradient swatch.
 
-# Labels added on main after this catalog (depth labels, Wayland drop, profiles, Camera Raw, Patch tool, rendering mode)
+# Labels added on main after this catalog (depth labels, Wayland drop, profiles, RAW Develop, Patch tool, rendering mode)
 
 # Warp grid presets (#388)
 
@@ -319,7 +319,7 @@
 	Plugins…	Plug-in…
 	Type…	Teks…
 	Enhanced Controls…	Kontrol Lanjutan…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Default RAW…
 	Raw Defaults…	Default Raw…
 	Integrations…	Integrasi…
 	AI Integrations…	Integrasi AI…
@@ -640,7 +640,7 @@
 	Last Filter	Filter Terakhir
 	Filter Gallery…	Galeri Filter…
 	Adaptive Wide Angle…	Adaptive Wide Angle…
-	Camera Raw Filter…	Filter Camera Raw…
+	RAW Develop Filter…	Filter Pengembangan RAW…
 	Liquify…	Liquify…
 	Vanishing Point…	Vanishing Point…
 	Blur	Blur
@@ -1010,8 +1010,8 @@
 	Load Settings…	Muat Pengaturan…
 	Save these settings as a Camera Raw .xmp file	Simpan pengaturan ini sebagai berkas .xmp Camera Raw
 	Load settings from a Camera Raw .xmp file	Muat pengaturan dari berkas .xmp Camera Raw
-	Loaded Camera Raw settings from {file}	Pengaturan Camera Raw dimuat dari {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Pengaturan Camera Raw dimuat dari {file} ({n} tidak didukung)
+	Loaded RAW Develop settings from {file}	Pengaturan Pengembangan RAW dimuat dari {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Pengaturan Pengembangan RAW dimuat dari {file} ({n} tidak didukung)
 	Begin recording	Mulai merekam
 	Bend:	Lengkung:
 	Bicubic	Bicubic
@@ -1039,7 +1039,7 @@
 	Brush Reconstruct Options	Opsi Rekonstruksi Kuas
 	Brush Tool Options	Opsi Alat Kuas
 	Cache Level:	Level Cache:
-	Camera Raw isn't open	Camera Raw tidak terbuka
+	RAW Develop isn't open	Pengembangan RAW tidak terbuka
 	Cancel	Batal
 	Cancel (Esc)	Batal (Esc)
 	Manage submitted jobs in the system print queue	Kelola pekerjaan yang dikirim dalam antrean cetak sistem
@@ -2001,7 +2001,7 @@
 	Brush preview color	Warna pratinjau kuas
 	Cache levels	Level cache
 	Cache tile size	Ukuran tile cache
-	Camera Raw Defaults	Default Camera Raw
+	RAW Defaults	Default RAW
 	Canvas border	Border kanvas
 	Show canvas dots	Tampilkan titik kanvas
 	Clip thumbnails to layer bounds	Pangkas thumbnail ke batas layer
@@ -2088,7 +2088,6 @@
 	Never	Tidak pernah
 	Normal tip	Ujung normal
 	Open as smart object	Buka sebagai smart object
-	Open in camera raw	Buka di Camera Raw
 	Open documents as tabs	Buka dokumen sebagai tab
 	Overscroll	Overscroll
 	Performance	Performa
@@ -2489,8 +2488,6 @@
 	Roman Hanging Punctuation	Tanda Baca Menggantung Roman
 	Avoid Widows/Orphans	Hindari Widow/Orphan
 	Compose	Komposisi
-	Adobe Single-line Composer	Adobe Single-line Composer
-	Adobe Every-line Composer	Adobe Every-line Composer
 	Justification	Justifikasi
 	Word Spacing	Spasi Kata
 	Letter Spacing	Spasi Huruf
@@ -2745,7 +2742,6 @@
 	Intersect with	Irisan dengan
 	Capture Comp	Tangkap Comp
 	No Layer Comps	Tidak Ada Layer Comp
-	Adobe PDF Presets…	Preset Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Pratinjau Teknologi…
 	Background from Layer	Background dari Layer
@@ -2821,8 +2817,8 @@
 	Tone Histogram	Histogram Nada
 	Show Selected Region	Tampilkan Wilayah Terpilih
 cameraRaw	Light	Cahaya
-	Camera Raw Filter ({layer})	Filter Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Filter Pengembangan RAW ({layer})
+	RAW Develop ({name})	Pengembangan RAW ({name})
 cameraRaw	Lights	Nada Terang
 cameraRaw	Darks	Nada Gelap
 cameraRaw	Blacks	Hitam
@@ -3641,7 +3637,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Tampilkan batas layer saat kursor di atasnya
 	Expand layer group on click	Perluas grup layer saat diklik
 	Show hover bounds from Layers	Tampilkan batas saat kursor di atas dari Layer
-	Saved Camera Raw settings to {file}	Pengaturan Camera Raw disimpan ke {file}
+	Saved RAW Develop settings to {file}	Pengaturan Pengembangan RAW disimpan ke {file}
 	Save the settings to each raw's sidecar without opening it	Simpan pengaturan ke file sidecar setiap raw tanpa membukanya
 	No settings saved: these raws can't keep a sidecar here	Tidak ada yang disimpan: raw ini tidak dapat memiliki file sidecar di sini
 	Some settings could not be saved; the raws stay open	Beberapa pengaturan tidak dapat disimpan; raw tetap terbuka
@@ -3653,3 +3649,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ubah ukuran kanvas otomatis
 	Keep Relative Position During Layer Reordering	Pertahankan posisi relatif saat mengurutkan ulang layer
 	Shrinkwrap Canvas on Save	Kecilkan kanvas sesuai konten saat menyimpan
+	Move Toolbar to the Right	Pindahkan bilah alat ke kanan
+	Move Toolbar to the Left	Pindahkan bilah alat ke kiri
+
+# RAW Develop feature labels
+	RAW Develop	Pengembangan RAW
+	RAW Develop Filter	Filter Pengembangan RAW

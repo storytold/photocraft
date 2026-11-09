@@ -49,7 +49,7 @@ fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
 }
 
 pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     let result = match d.target {
         Target::NewFilter => {
             let mut p = d.command_params();
@@ -251,12 +251,12 @@ fn raise_commands() -> [egui::ViewportCommand; 2] {
 }
 
 impl CameraRawDialog {
-    /// "Camera Raw (name)" for the open-time dialog, "Camera Raw Filter (layer)" otherwise.
+    /// "RAW Develop (name)" for the open-time dialog, "RAW Develop Filter (layer)" otherwise.
     fn window_title(&self) -> String {
         if self.target == Target::OpenRaw {
-            crate::i18n::fmt(tl!("Camera Raw ({name})"), &[("name", &self.layer_name)])
+            crate::i18n::fmt(tl!("RAW Develop ({name})"), &[("name", &self.layer_name)])
         } else {
-            crate::i18n::fmt(tl!("Camera Raw Filter ({layer})"), &[("layer", &self.layer_name)])
+            crate::i18n::fmt(tl!("RAW Develop Filter ({layer})"), &[("layer", &self.layer_name)])
         }
     }
 }
