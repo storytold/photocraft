@@ -77,6 +77,35 @@ fn every_copy_is_announced_even_when_it_is_not_exported() {
     assert_eq!(*copies.lock().unwrap(), 3);
 }
 
+/// A Copy step in an action is a copy like Edit › Copy (#7842): announced, and PhotoCraft's own,
+/// so text copied in another app since doesn't drop it as it drops an image imported from there.
+#[test]
+fn an_actions_copy_step_is_a_copy_too() {
+    let os: OsClip = Arc::default();
+    let copies = Arc::new(Mutex::new(0));
+    let (get, heard) = (os.clone(), copies.clone());
+    let services = Services {
+        clipboard_get_image: Some(Box::new(move || Ok(get.lock().unwrap().clone()))),
+        clipboard_copied: Some(Box::new(move || *heard.lock().unwrap() += 1)),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.session.execute("prefs.set", json!({"values": {"general.exportClipboard": false}})).unwrap();
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    app.sync_views();
+    // A 3×2 image from another app, pasted.
+    *os.lock().unwrap() = Some((3, 2, [255u8, 0, 0, 255].repeat(6)));
+    app.run("edit.paste", json!({})).unwrap();
+    let steps = vec![("select.rect".into(), json!({"x": 0, "y": 0, "width": 8, "height": 4})), ("edit.copyMerged".into(), json!({}))];
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action { name: "Copy".into(), steps, ..Default::default() });
+    app.run("actions.play", json!({"action": "Copy"})).unwrap();
+    assert_eq!(*copies.lock().unwrap(), 1);
+    *os.lock().unwrap() = None;
+    app.run("edit.paste", json!({})).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds().width(), 8);
+}
+
 type OsClip = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
 
 const CLIP_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><path d="M1 1 C2 0 6 0 7 1 L7 5 L1 5 Z" fill="#e03020"/></svg>"##;

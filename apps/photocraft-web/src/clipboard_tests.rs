@@ -10,9 +10,13 @@ fn png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
     photocraft_codecs::encode(&image, Format::Png, &EncodeOptions::default()).unwrap()
 }
 
-/// One browser paste of `file`: the event, then its image read.
+/// Ctrl+V with `file` on the clipboard: the keys, the paste event, then its image read.
 fn paste_image(clipboard: &WebClipboard, file: Vec<u8>) {
-    let number = clipboard.paste(true);
+    clipboard.key("ControlLeft", true);
+    clipboard.key("KeyV", true);
+    let number = clipboard.paste(true, false);
+    clipboard.key("KeyV", false);
+    clipboard.key("ControlLeft", false);
     clipboard.read(number, Ok(file));
 }
 
@@ -27,27 +31,28 @@ const BLUE: [u8; 4] = [0, 0, 255, 255];
 fn a_pasted_image_is_what_the_clipboard_holds_once_it_has_been_read() {
     let clipboard = WebClipboard::default();
     assert_eq!(clipboard.image(), Ok(None), "nothing is known before the first paste");
-    let number = clipboard.paste(true);
+    let number = clipboard.paste(true, false);
     assert!(clipboard.reading());
     clipboard.read(number, Ok(png(3, 2, RED)));
     assert!(!clipboard.reading());
     assert_eq!(clipboard.image(), Ok(Some((3, 2, RED.repeat(6)))));
     // Text copied since: the clipboard holds no image any more.
-    clipboard.paste(false);
+    clipboard.paste(false, true);
     assert_eq!(clipboard.image(), Ok(None));
 }
 
 #[test]
 fn a_slower_read_does_not_replace_a_newer_paste() {
     let clipboard = WebClipboard::default();
-    let older = clipboard.paste(true);
-    clipboard.paste(false);
+    let older = clipboard.paste(true, false);
+    clipboard.paste(false, true);
+    assert!(!clipboard.newest(older), "its bytes aren't worth copying");
     clipboard.read(older, Ok(png(3, 2, RED)));
     assert_eq!(clipboard.image(), Ok(None));
     assert!(!clipboard.reading());
 
-    let older = clipboard.paste(true);
-    let newer = clipboard.paste(true);
+    let older = clipboard.paste(true, false);
+    let newer = clipboard.paste(true, false);
     clipboard.read(newer, Ok(png(4, 4, BLUE)));
     assert!(clipboard.reading(), "the older read is still under way");
     clipboard.read(older, Ok(png(3, 2, RED)));
@@ -61,9 +66,56 @@ fn an_image_that_cannot_be_read_says_why() {
     paste_image(&clipboard, b"not an image".to_vec());
     let error = clipboard.image().unwrap_err();
     assert!(error.starts_with("Couldn't read the pasted image: "), "{error}");
-    let number = clipboard.paste(true);
+    let number = clipboard.paste(true, false);
     clipboard.read(number, Err("NotReadableError".into()));
     assert_eq!(clipboard.image(), Err("Couldn't read the pasted image: NotReadableError".into()));
+}
+
+#[test]
+fn a_file_too_large_to_decode_is_not_read() {
+    assert_eq!(too_large(max_file_bytes() + 1).as_deref(), Some("the file is too large"));
+    assert_eq!(too_large(max_file_bytes()), None);
+}
+
+/// Edit › Paste from PhotoCraft's menu has no paste event: after a trip to another app the
+/// image the last Ctrl+V showed may be gone, so it asks for Ctrl+V rather than paste it again.
+#[test]
+fn after_leaving_the_page_the_last_pasted_image_is_unknown() {
+    let clipboard = WebClipboard::default();
+    paste_image(&clipboard, png(3, 2, RED));
+    clipboard.left();
+    assert_eq!(clipboard.image(), Err("Press Ctrl+V (⌘V on a Mac) to paste from the system clipboard".into()));
+    paste_image(&clipboard, png(4, 4, BLUE));
+    assert_eq!(size(&clipboard), Some((4, 4)));
+    // A copy made here is pasted as before.
+    clipboard.copied();
+    clipboard.left();
+    assert_eq!(clipboard.image(), Ok(None));
+}
+
+/// The browser's Edit › Paste sends a paste event and no key press: once its image is read, the
+/// shell presses ⌘V for it, once. Ctrl+V has a press of its own, and eframe makes one from text.
+#[test]
+fn a_paste_from_a_menu_is_pressed_once_its_image_is_read() {
+    let clipboard = WebClipboard::default();
+    let number = clipboard.paste(true, false);
+    assert!(!clipboard.take_press(), "not before the image is read");
+    clipboard.read(number, Ok(png(3, 2, RED)));
+    assert!(clipboard.take_press());
+    assert!(!clipboard.take_press(), "once");
+
+    paste_image(&clipboard, png(3, 2, RED));
+    assert!(!clipboard.take_press(), "Ctrl+V");
+    let number = clipboard.paste(true, true);
+    clipboard.read(number, Ok(png(3, 2, RED)));
+    assert!(!clipboard.take_press(), "an image with text");
+
+    // A key held when the page lost focus is let go elsewhere.
+    clipboard.key("ShiftLeft", true);
+    clipboard.left();
+    let number = clipboard.paste(true, false);
+    clipboard.read(number, Ok(png(3, 2, RED)));
+    assert!(clipboard.take_press());
 }
 
 #[test]
@@ -93,28 +145,35 @@ fn an_image_first_seen_after_the_copy_is_older_while_the_page_kept_focus() {
     clipboard.left();
     paste_image(&clipboard, png(3, 2, RED));
     assert_eq!(clipboard.image(), Ok(None), "still the image that was under the copy");
-    clipboard.paste(false);
+    clipboard.paste(false, true);
     paste_image(&clipboard, png(3, 2, RED));
     assert_eq!(size(&clipboard), Some((3, 2)), "text came in between: the image was copied again");
 }
 
+/// Ctrl+V waits for its image, and so does a click after it (on another document's tab, say),
+/// so the image goes to the document that was active when Ctrl+V was pressed.
 #[test]
-fn keyboard_events_wait_for_the_pasted_image_and_keep_their_order() {
+fn input_waits_for_the_pasted_image_and_keeps_its_order() {
     let key = |pressed| egui::Event::Key { key: egui::Key::V, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::COMMAND };
-    let moved = |x| egui::Event::PointerMoved(egui::pos2(x, 0.0));
+    let click =
+        |pressed| egui::Event::PointerButton { pos: egui::pos2(1.0, 0.0), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     let mut held = Held::default();
-    let mut events = vec![moved(1.0), key(true), key(false)];
-    held.hold_or_release(true, &mut events);
-    assert_eq!(events, vec![moved(1.0)], "the pointer goes on");
-    let mut events = vec![egui::Event::Text("a".into())];
-    held.hold_or_release(true, &mut events);
+    let mut events = vec![key(true), key(false), click(true)];
+    held.hold_or_release(true, false, &mut events);
     assert!(events.is_empty());
-    let mut events = vec![moved(2.0)];
-    held.hold_or_release(false, &mut events);
-    assert_eq!(events, vec![key(true), key(false), egui::Event::Text("a".into()), moved(2.0)]);
-    let mut events = vec![moved(3.0)];
-    held.hold_or_release(false, &mut events);
-    assert_eq!(events, vec![moved(3.0)], "released once");
+    let mut events = vec![click(false)];
+    held.hold_or_release(true, false, &mut events);
+    assert!(events.is_empty());
+    let mut events = vec![egui::Event::Text("a".into())];
+    held.hold_or_release(false, false, &mut events);
+    assert_eq!(events, vec![key(true), key(false), click(true), click(false), egui::Event::Text("a".into())]);
+    let mut events = vec![click(true)];
+    held.hold_or_release(false, false, &mut events);
+    assert_eq!(events, vec![click(true)], "released once");
+    // A paste from a menu: its ⌘V goes ahead of what came after it.
+    let mut events = vec![click(false)];
+    held.hold_or_release(false, true, &mut events);
+    assert_eq!(events, vec![key(true), key(false), click(false)]);
 }
 
 #[test]
@@ -185,7 +244,7 @@ fn an_older_screenshot_does_not_replace_a_copy_made_here() {
 fn ctrl_v_with_text_on_the_clipboard_has_nothing_to_paste() {
     let clipboard = WebClipboard::default();
     let mut app = app(&clipboard);
-    clipboard.paste(false);
+    clipboard.paste(false, true);
     assert_eq!(app.run("edit.paste", json!({})), Ok(json!({"pasted": false})));
     assert_eq!(app.ui.status, "Nothing to paste: the clipboard holds no image");
     assert!(!app.ui.status_error);

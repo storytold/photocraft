@@ -78,8 +78,15 @@ impl PhotocraftApp {
         get().ok().map(|source| source.map(std::sync::Arc::new))
     }
 
+    /// Edit › Copy, Cut or Copy Merged succeeded, from the menu, a shortcut or an action's step:
+    /// the session clipboard holds PhotoCraft's own copy, newer than the OS clipboard's image.
+    pub(crate) fn copied_to_clipboard(&mut self) {
+        self.clip_external = false;
+        self.export_os_clipboard();
+    }
+
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
-    pub(super) fn export_os_clipboard(&mut self) {
+    fn export_os_clipboard(&mut self) {
         if let Some(copied) = self.services.clipboard_copied.as_mut() {
             copied();
         }

@@ -352,7 +352,7 @@ struct WebShell {
     place_inbox: PlaceInbox,
     /// What pastes have shown of the system clipboard (#7842).
     clipboard: crate::clipboard::WebClipboard,
-    /// Keyboard events waiting while a pasted image is read.
+    /// Input waiting while a pasted image is read.
     held: crate::clipboard::Held,
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
@@ -426,8 +426,10 @@ impl eframe::App for WebShell {
         // A tap reaches eframe as Pointer Events and Touch Events: keep one press per tap, or the
         // twin press closes the menu the first one opened (#2095).
         photocraft_ui_egui::touch_twins::drop_twins(ctx, raw_input);
-        // Ctrl+V reaches us before the image it pastes has been read: hold the keys until it has.
-        self.held.hold_or_release(self.clipboard.reading(), &mut raw_input.events);
+        // Ctrl+V reaches us before the image it pastes has been read: hold the input until it has.
+        // A paste from the browser's Edit menu has no Ctrl+V, so one is pressed for it then.
+        let press = self.clipboard.take_press();
+        self.held.hold_or_release(self.clipboard.reading(), press, &mut raw_input.events);
         // The browser build has no TCP control server, so `inject_synthetic` finds an empty
         // queue, but the clipboard key mapping (`Event::PasteImage`), legacy pinch, pen-hold and
         // titlebar normalization live in the app hook and must run here too.

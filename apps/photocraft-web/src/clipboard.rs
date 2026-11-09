@@ -8,12 +8,17 @@
 //! clipboard read does, and keyboard events wait while it is read, so the Ctrl+V among them
 //! pastes it.
 //!
+//! A paste from the browser's own Edit menu comes with no key press, so once its image has been
+//! read the shell presses ⌘V for it ([`WebClipboard::take_press`]).
+//!
 //! This build doesn't put PhotoCraft's own copies on the system clipboard, so a copy made in
 //! PhotoCraft stays newer than the image there. It stops being newer only once the page has lost
 //! focus (another app may copy then) and a later paste shows the clipboard holding something
-//! else.
+//! else. Losing focus also makes the image the last paste showed unknown: Edit › Paste from
+//! PhotoCraft's menu has no paste event to read, so it asks for Ctrl+V until one comes.
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::rc::Rc;
 
@@ -39,6 +44,13 @@ struct State {
     /// The last copy PhotoCraft made, for as long as it is newer than the system clipboard's
     /// image.
     copied: Option<Copied>,
+    /// The page lost focus since the last paste, so the clipboard may hold something else now.
+    stale: bool,
+    /// Keys held down on the page (`KeyboardEvent.code`): a paste while none is held came from a
+    /// menu, not from Ctrl+V.
+    keys: BTreeSet<String>,
+    /// A paste from a menu is waiting for its image, which is to be pasted once read.
+    press: bool,
 }
 
 struct Shown {
@@ -57,24 +69,40 @@ struct Copied {
 }
 
 impl WebClipboard {
-    /// A paste event, carrying an image file (`image`) or not. Returns the paste's number for
-    /// [`WebClipboard::read`].
-    pub fn paste(&self, image: bool) -> u64 {
+    /// A paste event, carrying an image file (`image`) and text (`text`) or not. Returns the
+    /// paste's number for [`WebClipboard::read`].
+    pub fn paste(&self, image: bool, text: bool) -> u64 {
         let mut s = self.0.borrow_mut();
         s.pastes += 1;
         if image {
             s.reading += 1;
+            // eframe turns a paste's text into a paste, and Ctrl+V's key press is one already.
+            s.press |= !text && s.keys.is_empty();
         } else {
             s.show(None);
         }
         s.pastes
     }
 
+    /// A key went down (`down`) or up on the page.
+    pub fn key(&self, code: &str, down: bool) {
+        let keys = &mut self.0.borrow_mut().keys;
+        if down {
+            keys.insert(code.to_owned());
+        } else {
+            keys.remove(code);
+        }
+    }
+
+    /// Paste `number` is still the newest, so its image is worth reading.
+    pub fn newest(&self, number: u64) -> bool {
+        self.0.borrow().pastes == number
+    }
+
     /// The image file of paste `number` has been read: its bytes, or why they couldn't be.
     /// It is decoded only while no newer paste has come.
     pub fn read(&self, number: u64, file: Result<Vec<u8>, String>) {
-        let newest = self.0.borrow().pastes == number;
-        let shown = newest.then(|| Shown::from_file(file));
+        let shown = self.newest(number).then(|| Shown::from_file(file));
         let mut s = self.0.borrow_mut();
         s.reading = s.reading.saturating_sub(1);
         if let Some(shown) = shown
@@ -89,6 +117,16 @@ impl WebClipboard {
         self.0.borrow().reading > 0
     }
 
+    /// A paste from a menu has read its image: true once, when the shell is to press ⌘V for it.
+    pub fn take_press(&self) -> bool {
+        let mut s = self.0.borrow_mut();
+        let press = s.press && s.reading == 0;
+        if press {
+            s.press = false;
+        }
+        press
+    }
+
     /// `Services::clipboard_copied`: PhotoCraft made a copy, which stays in the app, newer than
     /// the image on the system clipboard.
     pub fn copied(&self) {
@@ -97,20 +135,27 @@ impl WebClipboard {
         s.copied = Some(Copied { under, left: false });
     }
 
-    /// The page lost focus: another app may copy before it is back.
+    /// The page lost focus: another app may copy before it is back, and the keys held now are
+    /// let go elsewhere.
     pub fn left(&self) {
-        if let Some(copied) = &mut self.0.borrow_mut().copied {
+        let mut s = self.0.borrow_mut();
+        s.stale = true;
+        s.keys.clear();
+        if let Some(copied) = &mut s.copied {
             copied.left = true;
         }
     }
 
     /// `Services::clipboard_get_image`: the image the last paste showed on the system clipboard,
-    /// unless PhotoCraft has copied since and its copy is still the newer one.
+    /// unless PhotoCraft has copied since and its copy is still the newer one. Once the page has
+    /// lost focus that image may be gone, and only a paste event shows what is there now.
     pub fn image(&self) -> Result<Option<Pixels>, String> {
         let s = self.0.borrow();
         match &s.shown {
-            Some(shown) if s.copied.is_none() => shown.pixels.clone().map(Some),
-            _ => Ok(None),
+            _ if s.copied.is_some() => Ok(None),
+            Some(_) if s.stale => Err(i18n::t("Press Ctrl+V (⌘V on a Mac) to paste from the system clipboard").to_owned()),
+            Some(shown) => shown.pixels.clone().map(Some),
+            None => Ok(None),
         }
     }
 }
@@ -129,6 +174,7 @@ impl State {
             }
         }
         self.shown = shown;
+        self.stale = false;
     }
 }
 
@@ -155,40 +201,39 @@ fn unreadable(error: &str) -> String {
     i18n::fmt(i18n::t("Couldn't read the pasted image: {error}"), &[("error", error)])
 }
 
+/// The largest clipboard file read: the most a decoded image may take ([`photocraft_codecs::Limits`],
+/// 1 GiB on wasm32), as a larger file can't decode within it.
+pub fn max_file_bytes() -> u64 {
+    photocraft_codecs::Limits::default().max_alloc
+}
+
+/// Why a file of `bytes` isn't read, or `None` when it is.
+pub fn too_large(bytes: u64) -> Option<String> {
+    (bytes > max_file_bytes()).then(|| i18n::t("the file is too large").to_owned())
+}
+
 /// A clipboard file type that decodes to pixels. SVG is markup, so it isn't one.
 pub fn is_raster(mime: &str) -> bool {
     mime.starts_with("image/") && mime != "image/svg+xml"
 }
 
-/// Whether `event` waits while a pasted image is read: the keyboard and clipboard events, so the
-/// Ctrl+V among them pastes the new image rather than what the clipboard held before.
-pub fn waits(event: &egui::Event) -> bool {
-    matches!(
-        event,
-        egui::Event::Key { .. }
-            | egui::Event::Text(_)
-            | egui::Event::Paste(_)
-            | egui::Event::PasteImage(_)
-            | egui::Event::Copy
-            | egui::Event::Cut
-            | egui::Event::Ime(_)
-            | egui::Event::ImeResetCompleted { .. }
-            | egui::Event::ModifiersChanged(_)
-    )
-}
-
-/// Keyboard events held back while a pasted image is read ([`waits`]).
+/// Input held back while a pasted image is read: all of it, so the Ctrl+V among it pastes the new
+/// image rather than what the clipboard held before, into the document that was active when it
+/// was pressed (a click on another tab waits behind it).
 #[derive(Default)]
 pub struct Held(Vec<egui::Event>);
 
 impl Held {
-    /// While `reading`, takes the waiting events out of this frame's `events`; once it is done,
-    /// puts every held event back in front of them, in the order they came.
-    pub fn hold_or_release(&mut self, reading: bool, events: &mut Vec<egui::Event>) {
+    /// While `reading`, takes this frame's `events`; once it is done, puts every held event back
+    /// in front of them, in the order they came. With `press`, a ⌘V press for a paste from a menu
+    /// goes first ([`WebClipboard::take_press`]).
+    pub fn hold_or_release(&mut self, reading: bool, press: bool, events: &mut Vec<egui::Event>) {
+        if press {
+            let key = |pressed| egui::Event::Key { key: egui::Key::V, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::COMMAND };
+            self.0.splice(0..0, [key(true), key(false)]);
+        }
         if reading {
-            let (wait, rest): (Vec<_>, Vec<_>) = std::mem::take(events).into_iter().partition(waits);
-            self.0.extend(wait);
-            *events = rest;
+            self.0.append(events);
         } else if !self.0.is_empty() {
             let mut all = std::mem::take(&mut self.0);
             all.append(events);
@@ -197,8 +242,8 @@ impl Held {
     }
 }
 
-/// Reads the image of every paste on the page into `clipboard`, and notes when the page loses
-/// focus. `ctx` repaints once an image has been read.
+/// Reads the image of every paste on the page into `clipboard`, and notes the keys held and when
+/// the page loses focus. `ctx` repaints once an image has been read.
 #[cfg(target_arch = "wasm32")]
 pub fn listen(clipboard: &WebClipboard, ctx: &egui::Context) {
     use wasm_bindgen::JsCast as _;
@@ -207,12 +252,15 @@ pub fn listen(clipboard: &WebClipboard, ctx: &egui::Context) {
     let (pastes, ctx) = (clipboard.clone(), ctx.clone());
     let on_paste = Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |e: web_sys::ClipboardEvent| {
         // The file must be taken now: the event's data is gone once it has been handled.
-        let file = e.clipboard_data().and_then(|data| image_file(&data));
-        let number = pastes.paste(file.is_some());
+        let data = e.clipboard_data();
+        let file = data.as_ref().and_then(image_file);
+        // What eframe forwards as a paste: the text, when there is some.
+        let text = data.and_then(|data| data.get_data("text").ok()).is_some_and(|text| !text.is_empty());
+        let number = pastes.paste(file.is_some(), text);
         let Some(file) = file else { return };
         let (clipboard, ctx) = (pastes.clone(), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
-            clipboard.read(number, file_bytes(&file).await);
+            clipboard.read(number, file_bytes(&file, &clipboard, number).await);
             ctx.request_repaint();
         });
     });
@@ -220,6 +268,14 @@ pub fn listen(clipboard: &WebClipboard, ctx: &egui::Context) {
         && document.add_event_listener_with_callback("paste", on_paste.as_ref().unchecked_ref()).is_ok()
     {
         on_paste.forget();
+    }
+    for (name, down) in [("keydown", true), ("keyup", false)] {
+        let keys = clipboard.clone();
+        let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| keys.key(&e.code(), down));
+        // Captured on the window, so the key is seen before anything on the page can stop it.
+        if window.add_event_listener_with_callback_and_bool(name, on_key.as_ref().unchecked_ref(), true).is_ok() {
+            on_key.forget();
+        }
     }
     let blurred = clipboard.clone();
     let on_blur = Closure::<dyn FnMut()>::new(move || blurred.left());
@@ -239,10 +295,25 @@ fn image_file(data: &web_sys::DataTransfer) -> Option<web_sys::File> {
     item.get_as_file().ok().flatten()
 }
 
+/// The bytes of paste `number`'s `file`, copied into the app's memory only while that paste is
+/// still the newest and the copy fits.
 #[cfg(target_arch = "wasm32")]
-async fn file_bytes(file: &web_sys::File) -> Result<Vec<u8>, String> {
+async fn file_bytes(file: &web_sys::File, clipboard: &WebClipboard, number: u64) -> Result<Vec<u8>, String> {
+    if let Some(error) = too_large(file.size() as u64) {
+        return Err(error);
+    }
     let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|e| format!("{e:?}"))?;
-    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+    if !clipboard.newest(number) {
+        // A newer paste replaces this one's image: `read` drops it unread.
+        return Ok(Vec::new());
+    }
+    let array = js_sys::Uint8Array::new(&buffer);
+    let len = array.length() as usize;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(len).map_err(|_| i18n::t("the file is too large").to_owned())?;
+    bytes.resize(len, 0);
+    array.copy_to(&mut bytes);
+    Ok(bytes)
 }
 
 #[cfg(test)]
