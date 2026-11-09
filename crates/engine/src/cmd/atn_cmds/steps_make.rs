@@ -552,6 +552,10 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
     if let Some(mapped) = super::steps_layer_style::create_from_descriptor(d) {
         return mapped;
     }
+    // Layer › New › Frame from Layers (#10723).
+    if get_ref(d, "null").and_then(ref_class).as_deref() == Some("framedGroupSection") {
+        return super::steps_frame_section::from(d);
+    }
     if d.items == type_shape_descriptor().items {
         return none("type.convertToShape");
     }
@@ -719,6 +723,9 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     }
     if id == super::steps_layer_style::CREATE {
         return super::steps_layer_style::style_to(id, p);
+    }
+    if id == super::steps_frame_section::COMMAND {
+        return super::steps_frame_section::to(p);
     }
     if id == "type.convertToShape" {
         return p.as_object().filter(|p| p.is_empty()).map(|_| type_shape_descriptor());

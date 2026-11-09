@@ -135,8 +135,11 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 fn frame_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    // A `layer` of its own (a recorded step names its layer) is what the grouping below takes
+    // in, so the frame fits that layer, not whatever is selected.
+    let explicit = crate::commands::explicit_layer(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let ids = st.selected_layers();
+    let ids = explicit.map_or_else(|| st.selected_layers(), |id| vec![id]);
     let bounds = ids
         .iter()
         .filter_map(|id| st.doc.layer(*id))

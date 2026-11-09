@@ -691,6 +691,7 @@ fn every_mapped_command_exports_and_imports_back() {
                 "rotationAdaptation":"none","scale":true,"mirror":false,"output":"new"}),
         ),
         ("edit.fade", json!({"opacity":50,"mode":"Multiply"})),
+        ("layer.new.frameFromLayers", json!({"layer": "Photo", "name": "Frame 1"})),
         ("layer.linkLayers", json!({})),
         ("layer.smartObjects.stackMode.range", json!({})),
         ("layer.smartObjects.stackMode.entropy", json!({})),
