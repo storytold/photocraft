@@ -227,7 +227,10 @@ pub(crate) fn whole_tolerance_field(ui: &mut egui::Ui, value: &mut f32, draft: &
     // An edit the field never got to finish (the options bar was hidden while it had the
     // keyboard) has nothing left to say once the field is entered again.
     if r.gained_focus() {
-        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+        ui.ctx().data_mut(|d| {
+            d.remove_temp::<bool>(out_id);
+            d.remove_temp::<bool>(r.id.with("parses"));
+        });
     }
     if r.changed() && typed.is_finite() {
         *value = typed.round().clamp(1.0, 100.0);
@@ -243,10 +246,47 @@ pub(crate) fn whole_tolerance_field(ui: &mut egui::Ui, value: &mut f32, draft: &
             ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
         }
     }
+    // Text replaced by something that is no number (`150`, then `abc`) leaves the value alone
+    // when the field is left, with no alert (#12268).
+    if r.has_focus() && widgets::typed_text_parses(ui.ctx(), r.id) == Some(false) {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    }
     if !r.has_focus() {
         ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
     }
-    r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false)
+    let alert = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false);
+    // While a value typed out of range waits for the field to be left, the bar notes the pass, so
+    // a field that goes away instead (a tool shortcut that passes the field by) still alerts.
+    let owed = r.has_focus() && ui.ctx().data(|d| d.get_temp::<bool>(out_id)).unwrap_or(false);
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().data_mut(|d| {
+        if owed {
+            d.insert_temp(range_alert_owed_id(), pass);
+        } else {
+            d.remove_temp::<u64>(range_alert_owed_id());
+        }
+    });
+    alert
+}
+
+fn range_alert_owed_id() -> egui::Id {
+    egui::Id::unique("whole-tolerance-range-alert-owed")
+}
+
+/// Shows [`TOLERANCE_RANGE_ALERT`] for a whole-number Tolerance field that went away in the last
+/// pass while it held a value typed out of range (the tool changed by a shortcut, #12268). The
+/// options bar calls it before drawing a tool's options. An edit older than that (the bar was
+/// hidden meanwhile) is dropped, as the field drops it once entered again.
+pub(crate) fn alert_for_a_field_gone(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(seen) = ctx.data(|d| d.get_temp::<u64>(range_alert_owed_id())) else { return };
+    let now = ctx.cumulative_pass_nr();
+    if seen.saturating_add(1) >= now {
+        return;
+    }
+    ctx.data_mut(|d| d.remove_temp::<u64>(range_alert_owed_id()));
+    if seen.saturating_add(2) == now {
+        open_range_alert(app);
+    }
 }
 
 /// A Tolerance as the field stores it: a whole number in 1..=100, the default 50 for a value

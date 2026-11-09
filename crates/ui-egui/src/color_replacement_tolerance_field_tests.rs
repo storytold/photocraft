@@ -65,6 +65,40 @@ fn a_fraction_stores_a_whole_number_and_text_changes_nothing() {
     assert_eq!(alert(&h), None, "and no alert");
 }
 
+/// Types `text` into the Tolerance field and leaves it there, with the keyboard.
+fn type_without_leaving(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:")).expect("the Tolerance field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+}
+
+#[test]
+fn text_typed_over_a_value_past_the_range_does_not_alert() {
+    let mut h = bar();
+    type_without_leaving(&mut h, "150");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("abc".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(alert(&h), None, "the field is left holding text that is no number: no alert");
+}
+
+#[test]
+fn a_tool_change_while_typing_past_the_range_still_alerts() {
+    let mut h = bar();
+    type_without_leaving(&mut h, "150");
+    assert_eq!(alert(&h), None, "not yet: the field still has the keyboard");
+    // A tool shortcut the field passes by (a custom function key) changes the tool before the
+    // field is left, so the field is never drawn again.
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(4);
+    assert_eq!(tolerance(&h), 100.0);
+    assert_eq!(alert(&h).as_deref(), Some(TOLERANCE_RANGE_ALERT), "the alert the field owed");
+}
+
 #[test]
 fn the_bar_has_the_reference_tooltips() {
     for (role, label, tip) in [
