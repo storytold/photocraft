@@ -140,11 +140,12 @@ fn the_preview_matches_the_committed_layer() {
         }
         let n = shown.px.len();
         assert!(n > 4000, "{mode}/{depth}: {n}");
-        // The commit resamples bicubic and the preview bilinear, so soft edges differ a little
-        // (a mean of 0.002 here); a stroke of another width or a shadow falling elsewhere would
-        // differ over whole bands.
-        assert!(sum / n as f64 <= 0.006, "{mode}/{depth}: mean difference {}", sum / n as f64);
-        assert!(off * 500 <= n, "{mode}/{depth}: {off} of {n} pixels differ");
+        // The commit resamples bicubic and the preview bilinear, but over flat colours that only
+        // shows at the outline, which both cover by the same exact area (under 0.0001 here; with
+        // a footprint of their own each, 0.003); a stroke of another width or a shadow falling
+        // elsewhere would differ over whole bands.
+        assert!(sum / n as f64 <= 0.001, "{mode}/{depth}: mean difference {}", sum / n as f64);
+        assert_eq!(off, 0, "{mode}/{depth}: {off} of {n} pixels differ");
         // Something is there to compare: fill, stroke and shadow.
         assert!(committed.px.iter().filter(|p| p[3] > 0.5).count() > 2000, "{mode}/{depth}");
     }

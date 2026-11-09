@@ -490,7 +490,8 @@ fn transforms_re_render_from_source_losslessly() {
     let (es, er) = (mean_diff(&smart_result, &original), mean_diff(&raster_result, &original));
     assert!(es < 1e-6, "smart error {es}");
     assert!(er > 0.02, "raster error {er}");
-    // A non-integer move re-renders with bicubic; moving back is exact again.
+    // A non-integer move snaps to whole pixels, halves up (-5.5 to -5), as the reference
+    // application draws it; moving back is exact again.
     smart.execute("edit.transform", json!({"layer": sid, "matrix": [1, 0, 0, 1, 0.5, 0.25]})).unwrap();
     assert!(max_diff(&flat(&smart), &original) > 0.01);
     smart.execute("edit.transform", json!({"layer": sid, "matrix": [1, 0, 0, 1, -0.5, -0.25]})).unwrap();
@@ -1036,7 +1037,10 @@ fn identity_mesh_on_a_skewed_smart_object_changes_nothing() {
     let mesh = photocraft_geom::warp::BezierMesh::fit(&place, vec![0.0, 1.0], vec![0.0, 0.25, 1.0]);
     let rect = [x0, y0, x1, y1 + 10.0];
     s.execute("layer.smartObjects.warp", json!({"layer": id, "style": "custom", "rect": rect, "mesh": mesh})).unwrap();
-    assert!(mean_diff(&before, &flat(&s)) < 0.01, "mean diff {}", mean_diff(&before, &flat(&s)));
+    // The same geometry, though a warp samples bilinearly where the plain placement is bicubic:
+    // on this per-pixel noise that alone is a mean of 0.012. A placement lost or shifted (#10325)
+    // is far more.
+    assert!(mean_diff(&before, &flat(&s)) < 0.02, "mean diff {}", mean_diff(&before, &flat(&s)));
 }
 
 fn convert_to_layers(s: &mut Session) -> Value {

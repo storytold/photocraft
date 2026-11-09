@@ -78,6 +78,9 @@ mod selection_blur;
 pub mod separable;
 mod shape_blur;
 mod sharpen;
+pub mod smart_affine;
+pub mod smart_perspective;
+pub mod smart_scale;
 mod square_dilate;
 pub mod stack;
 mod stylize;
@@ -89,6 +92,7 @@ pub mod vanishing;
 pub mod vectorscope;
 mod video;
 pub mod warp;
+mod warp_tess;
 pub mod wideangle;
 
 pub use artistic::{GALLERY_CATEGORIES, GalleryEffect, GalleryFilter, GalleryParam, GalleryParamKind};

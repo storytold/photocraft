@@ -357,3 +357,68 @@ fn quad_to_quad_moves_each_corner_onto_its_partner() {
     assert!((x - 33.0).abs() < 1e-9 && (y - 17.0).abs() < 1e-9, "a box left where it started moves nothing");
     assert!(Homography::quad_to_quad([[0.0, 0.0]; 4], to).is_none(), "a collapsed quad has no transform");
 }
+
+/// A Distort that keeps one edge on the pixel grid keeps that edge crisp: no partial pixel spills
+/// past it, though the rest of the map is a perspective. The coverage used a footprint taken once
+/// per tile, which a perspective widened even across an edge on the grid (0.2 spilled past it,
+/// and the first pixel inside was 0.75). The first pixel inside isn't quite whole yet: the
+/// prefilter for the map's reduction softens the edge too.
+#[test]
+fn a_perspective_edge_on_the_pixel_grid_stays_crisp() {
+    let mut s = rgba();
+    s.fill_rect(Rect::new(0, 0, 40, 40), &[0.0, 0.0, 0.0, 1.0]);
+    // x' = (1.2 x + 10) / (0.02 x + 1), y' = y / (0.02 x + 1): the left edge (x = 0) stays at x' = 10.
+    let h = Homography([1.2, 0.0, 10.0, 0.0, 1.0, 0.0, 0.02, 0.0, 1.0]);
+    let out = warp_surface(&s, Rect::new(0, 0, 40, 40), &h, Interp::Bicubic).unwrap();
+    for y in [5, 15, 25] {
+        let px = out.read_region(Rect::new(9, y, 11, y + 1));
+        assert_eq!(px[3], 0.0, "row {y}: nothing spills past the edge");
+        assert!(px[7] > 0.9, "row {y}: the first pixel inside is nearly whole: {}", px[7]);
+    }
+}
+
+/// Along a rotated edge each pixel is as opaque as the area of it the picture covers, measured
+/// here by 64 x 64 samples a pixel.
+#[test]
+fn a_rotated_edge_covers_each_pixel_by_its_area() {
+    let mut s = rgba();
+    s.fill_rect(Rect::new(0, 0, 60, 60), &[0.0, 0.0, 0.0, 1.0]);
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let (tx, ty) = (40.0, 10.0);
+    let h = Homography([cos, -sin, tx, sin, cos, ty, 0.0, 0.0, 1.0]);
+    let out = warp_surface(&s, Rect::new(0, 0, 60, 60), &h, Interp::Bicubic).unwrap();
+    // The source's left edge (x = 0) near row 40; the other edges are far away.
+    let inside = |x: f64, y: f64| cos * (x - tx) + sin * (y - ty) > 0.0;
+    let y = 40;
+    let mut worst = 0.0f64;
+    for x in 18..28 {
+        let n = 64;
+        let covered = (0..n * n).filter(|k| inside(x as f64 + ((k % n) as f64 + 0.5) / n as f64, y as f64 + ((k / n) as f64 + 0.5) / n as f64)).count();
+        let exact = covered as f64 / (n * n) as f64;
+        let alpha = f64::from(out.read_region(Rect::new(x, y, x + 1, y + 1))[3]);
+        worst = worst.max((alpha - exact).abs());
+    }
+    assert!(worst < 2.0 / 255.0, "edge coverage off by {worst}");
+}
+
+/// The covered area of a pixel cut by a straight edge.
+#[test]
+fn edge_coverage_is_the_area_inside() {
+    // Along the grid: 0.5 + d, from 0 to 1.
+    for (d, c) in [(-0.6, 0.0), (-0.5, 0.0), (-0.25, 0.25), (0.0, 0.5), (0.3, 0.8), (0.5, 1.0)] {
+        assert!((edge_coverage(d, 1.0, 0.0) - c).abs() < 1e-12, "grid edge at {d}");
+        assert!((edge_coverage(d, 0.0, -1.0) - c).abs() < 1e-12, "grid edge at {d}, other axis");
+    }
+    // At 45 degrees the pixel spans ±√2/2 along the normal, and a corner cut is a triangle.
+    let r = std::f64::consts::FRAC_1_SQRT_2;
+    assert!((edge_coverage(0.0, r, r) - 0.5).abs() < 1e-12);
+    assert!(edge_coverage(r, r, r) == 1.0 && edge_coverage(-r, -r, r) == 0.0);
+    let t = r - 0.5;
+    assert!((edge_coverage(-0.5, r, r) - t * t).abs() < 1e-12, "a corner of side √2·t holds t²");
+    assert!((edge_coverage(0.5, r, r) - (1.0 - t * t)).abs() < 1e-12);
+    // Never outside 0..1, whatever comes in.
+    for d in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e9, 1e9] {
+        let c = edge_coverage(d, 0.6, 0.8);
+        assert!((0.0..=1.0).contains(&c), "{d}: {c}");
+    }
+}
