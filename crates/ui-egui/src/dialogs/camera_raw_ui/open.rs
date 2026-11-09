@@ -534,7 +534,7 @@ pub(super) enum Coverage {
 
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     if photocraft_engine::color_channels::selected(&app.session).is_some_and(|c| c.len() > 1) {
-        return Err("Camera Raw requires the composite or one colour channel".into());
+        return Err("RAW Develop requires the composite or one colour channel".into());
     }
     photocraft_engine::commands::find("filter.cameraRaw").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
@@ -552,7 +552,7 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
     };
     let filter = sm.smart_filters.get(index).ok_or("no such smart filter")?;
     if filter.command != RAW {
-        return Err("the smart filter is not a Camera Raw filter".into());
+        return Err("the smart filter is not a RAW Develop filter".into());
     }
     let params = raw_params(RAW, &filter.params).map_err(|e| e.to_string())?;
     let surf = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, index)
