@@ -5,21 +5,6 @@ fn rgba8(surface: &photocraft_raster::Surface, b: photocraft_geom::Rect) -> Vec<
     photocraft_algo::selection::rgba8_image(surface, b).into_flattened()
 }
 
-/// The largest copy mirrored to the OS clipboard, in pixels (64 MP: 256 MiB of RGBA, an
-/// 8192 × 8192 image). Larger clips stay PhotoCraft's own: Paste inside PhotoCraft is
-/// unaffected. Beyond this the mirror costs gigabytes of RGBA, and the clipboard library
-/// encodes it as PNG on the UI thread when the OS takes it, which froze the window for as long
-/// as that took; few other apps could open such an image anyway.
-pub(crate) const MAX_OS_CLIPBOARD_PIXELS: u64 = 64 << 20;
-
-/// The title of the notice for a copy too large for the system clipboard.
-const KEPT_IN_PHOTOCRAFT: &str = "Copy kept in PhotoCraft";
-
-/// Whether a copy of `b` is mirrored to the OS clipboard (see [`MAX_OS_CLIPBOARD_PIXELS`]).
-pub(super) fn mirrors_to_os(b: photocraft_geom::Rect) -> bool {
-    b.size().area() <= MAX_OS_CLIPBOARD_PIXELS
-}
-
 fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     let mut sig = (w as u64) << 32 | h as u64;
     for b in px.iter().step_by(997) {
@@ -110,18 +95,12 @@ impl PhotocraftApp {
     /// [`Self::poll_os_clipboard_export`] hands the pixels to the OS clipboard when they are ready.
     pub(crate) fn export_os_clipboard(&mut self) {
         self.clip_unmirrored = true;
-        // A new copy: a notice about an older one no longer applies, whatever happens to this one
-        // (export off, a failed write); it is posted again below if this copy is too large too.
-        self.ui.notices.retain(|n| n.title != KEPT_IN_PHOTOCRAFT);
+        // Every copy goes to the OS clipboard while Export Clipboard is on, however large.
         // One conversion at a time: a newer copy waits for the running one, which is then
         // dropped (see `poll_os_clipboard_export`), so superseded copies can't pile up workers.
         let exporting = self.session.prefs().general.export_clipboard && self.services.clipboard_set_image.is_some();
         if self.os_clip_export.is_some() {
             self.os_clip_export_again = true;
-            // Say at once that this copy won't reach other apps, not when the running one lands.
-            if exporting && self.session.clipboard.as_ref().is_some_and(|c| !c.bounds.is_empty() && !mirrors_to_os(c.bounds)) {
-                self.note_kept_in_photocraft();
-            }
             return;
         }
         if !exporting {
@@ -130,11 +109,6 @@ impl PhotocraftApp {
         let Some(clip) = self.session.clipboard.as_ref() else { return };
         let b = clip.bounds;
         if b.is_empty() {
-            return;
-        }
-        if !mirrors_to_os(b) {
-            log::info!("copy of {}×{} px kept in PhotoCraft: too large for the system clipboard", b.width(), b.height());
-            self.note_kept_in_photocraft();
             return;
         }
         if self.background_jobs {
@@ -150,22 +124,6 @@ impl PhotocraftApp {
         }
         let bytes = rgba8(&clip.surface, b);
         self.set_os_clipboard_image(b.width(), b.height(), &bytes);
-    }
-
-    /// Tell the user a copy is too large for the system clipboard. One notice however many such
-    /// copies follow: a newer one replaces it rather than stacking up and pushing others out.
-    fn note_kept_in_photocraft(&mut self) {
-        self.ui.notices.retain(|n| n.title != KEPT_IN_PHOTOCRAFT);
-        crate::notices::post(
-            self,
-            KEPT_IN_PHOTOCRAFT,
-            vec![
-                "PhotoCraft doesn't send copies over 64 megapixels to the system clipboard, so other apps can't paste this one.".into(),
-                "Paste in PhotoCraft may use an image from the system clipboard instead.".into(),
-            ],
-            false,
-            None,
-        );
     }
 
     /// Hand a finished background conversion (see [`Self::export_os_clipboard`]) to the OS
@@ -194,8 +152,6 @@ impl PhotocraftApp {
     fn set_os_clipboard_image(&mut self, w: u32, h: u32, bytes: &[u8]) {
         let Some(set) = self.services.clipboard_set_image.as_mut() else { return };
         if set(w, h, bytes).is_ok() {
-            // A newer copy reached the system clipboard: the notice about an older one is stale.
-            self.ui.notices.retain(|n| n.title != KEPT_IN_PHOTOCRAFT);
             self.os_clip_svg = None;
             self.os_clip_sig = Some(clip_signature(w, h, bytes));
             self.clip_unmirrored = false;
@@ -278,8 +234,6 @@ impl PhotocraftApp {
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;
-        // The copy the notice described has been replaced by the system clipboard's image.
-        self.ui.notices.retain(|n| n.title != KEPT_IN_PHOTOCRAFT);
         Ok(true)
     }
 }

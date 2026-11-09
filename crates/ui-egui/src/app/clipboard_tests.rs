@@ -667,14 +667,6 @@ fn pixel_paste_reads_the_bitmap_when_the_svg_read_fails() {
     assert!(app.run("edit.paste", json!({"as":"pixels"})).is_err());
 }
 
-#[test]
-fn only_copies_up_to_64_megapixels_go_to_the_os_clipboard() {
-    use photocraft_geom::Rect;
-    assert!(super::clipboard::mirrors_to_os(Rect::new(0, 0, 8192, 8192)));
-    assert!(!super::clipboard::mirrors_to_os(Rect::new(0, 0, 8192, 8193)), "a larger copy stays PhotoCraft's own");
-    assert!(!super::clipboard::mirrors_to_os(Rect::new(0, 0, 34_000, 34_000)));
-}
-
 /// An app whose OS clipboard setter stores the image in `os`.
 fn app_mirroring_to(os: &OsClip) -> PhotocraftApp {
     let a = os.clone();
@@ -686,39 +678,6 @@ fn app_mirroring_to(os: &OsClip) -> PhotocraftApp {
         ..Default::default()
     };
     PhotocraftApp::new(Session::new(), services)
-}
-
-#[test]
-fn an_oversized_copy_is_not_mirrored_and_says_so() {
-    let os: OsClip = Arc::default();
-    let mut app = app_mirroring_to(&os);
-    // A sparse clip: its bounds pass the limit, its pixels take no memory.
-    let bounds = photocraft_geom::Rect::new(0, 0, 9000, 9000);
-    app.session.clipboard = Some(photocraft_engine::edit_cmds::Clip {
-        svg: None,
-        components: None,
-        surface: photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8),
-        bounds,
-        layers: None,
-        resolution: None,
-        source: None,
-        board: None,
-    });
-    let notices = app.ui.notices.len();
-    app.export_os_clipboard();
-    assert!(os.lock().unwrap().is_none(), "the OS clipboard is left alone");
-    assert!(app.os_clip_export.is_none(), "no conversion was started");
-    assert_eq!(app.ui.notices.len(), notices + 1, "the user is told the copy stays in PhotoCraft");
-    let text = app.ui.notices.last().map(|n| n.lines.join(" ")).unwrap_or_default();
-    assert!(text.contains("may use an image from the system clipboard"), "it doesn't promise what Paste uses: {text:?}");
-    app.export_os_clipboard();
-    assert_eq!(app.ui.notices.len(), notices + 1, "a second oversized copy replaces the notice instead of stacking");
-
-    // A smaller copy next, with export turned off: the notice described the older copy and goes.
-    app.session.edit_prefs(|prefs| prefs.general.export_clipboard = false);
-    app.session.clipboard.as_mut().unwrap().bounds = photocraft_geom::Rect::new(0, 0, 10, 10);
-    app.export_os_clipboard();
-    assert_eq!(app.ui.notices.len(), notices, "a newer copy clears the notice even when it isn't exported");
 }
 
 #[test]
