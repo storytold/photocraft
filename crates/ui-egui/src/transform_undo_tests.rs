@@ -241,6 +241,33 @@ fn the_hand_tool_does_not_steal_a_free_transform_drag() {
     assert!(width(&h) > 150, "the committed resize applied: {}", width(&h));
 }
 
+/// With the Zoom tool selected, a Free Transform drag resizes the box rather than zooming the view:
+/// the open box owns the pointer, as it does for the Hand (#4799).
+#[test]
+fn the_zoom_tool_does_not_steal_a_free_transform_drag() {
+    let mut h = harness_tool(Tool::Zoom);
+    begin(&mut h);
+    let q0 = quad(&h);
+    let (zoom0, center0) = (h.state().ui.views[0].zoom, h.state().ui.views[0].center);
+    let inside = screen(&h, [150.0, 130.0]);
+    h.event(egui::Event::PointerMoved(inside));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: inside, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().ui.views[0].zoom, zoom0, "a click inside the box did not zoom");
+    drag(&mut h, q0[2], [300.0, 220.0]);
+    let q1 = quad(&h);
+    assert!(!close(q1, q0), "the drag scaled the box, not the view: {q1:?}");
+    assert_eq!(h.state().ui.views[0].zoom, zoom0, "the Zoom tool did not zoom");
+    assert_eq!(h.state().ui.views[0].center, center0, "the Zoom tool did not move the view");
+    key(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(h.state().ui.transform.is_none(), "the transform committed");
+    assert!(width(&h) > 150, "the committed resize applied: {}", width(&h));
+}
+
 /// With the (freehand) Lasso selected, a Free Transform of a lasso selection follows the drag: the
 /// Lasso reads its own pointer events, and dropped the moves and release of a drag it hadn't
 /// started, so the box never changed (#2153).
@@ -315,4 +342,47 @@ fn the_first_drag_from_the_move_tools_controls_undoes() {
     assert!(!close(quad(&h), [[100.0, 100.0], [200.0, 100.0], [200.0, 160.0], [100.0, 160.0]]));
     key(&mut h, Modifiers::COMMAND, Key::Z);
     assert!(close(quad(&h), [[100.0, 100.0], [200.0, 100.0], [200.0, 160.0], [100.0, 160.0]]), "{:?}", quad(&h));
+}
+
+/// #3402's layer-switch case (#5297): selected pixels moved with the Move tool, then moved again
+/// in the Free Transform box, land where the box left them when another layer is picked.
+#[test]
+fn picking_another_layer_applies_the_transform_of_moved_selected_pixels() {
+    let mut h = harness();
+    let layer = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 100, "height": 60})).unwrap();
+    drag(&mut h, [150.0, 130.0], [250.0, 180.0]);
+    begin(&mut h);
+    // Away from the centre, where a press would take the reference point instead.
+    drag(&mut h, [220.0, 165.0], [240.0, 175.0]);
+    assert_eq!(quad(&h), [[220.0, 160.0], [320.0, 160.0], [320.0, 220.0], [220.0, 220.0]]);
+    let other = h.state().session.active().unwrap().doc.layers.iter().map(|l| l.id).find(|id| *id != layer).unwrap();
+    h.state_mut().run("layer.select", json!({"layer": other.0})).unwrap();
+    crate::transform_tool::end_if_left(h.state_mut());
+    h.run_steps(3);
+    assert!(h.state().ui.transform.is_none(), "picking another layer applies the transform");
+    let st = h.state().session.active().unwrap();
+    let landed = photocraft_geom::Rect::new(220, 160, 320, 220);
+    let (pixels, selection) = (st.doc.layer(layer).unwrap().surface().unwrap().content_bounds(), st.doc.selection.as_ref().map(|s| s.content_bounds()));
+    assert_eq!((pixels, selection), (landed, Some(landed)));
+}
+
+/// #5297 through the real canvas: ⌘T with a selection wider than the layer opens the box on the
+/// selection, and dragging it moves the selected pixels and the selection together.
+#[test]
+fn free_transform_opens_on_the_selection_and_moves_it_with_the_pixels() {
+    let mut h = harness();
+    let layer = h.state().session.active().unwrap().active_layer.unwrap();
+    // The left 60 px of the red rectangle, and empty layer to its left, above and below.
+    h.state_mut().run("select.rect", json!({"x": 60, "y": 80, "width": 100, "height": 120})).unwrap();
+    begin(&mut h);
+    assert_eq!(quad(&h), [[60.0, 80.0], [160.0, 80.0], [160.0, 200.0], [60.0, 200.0]]);
+    drag(&mut h, [80.0, 100.0], [130.0, 130.0]);
+    assert_eq!(quad(&h), [[110.0, 110.0], [210.0, 110.0], [210.0, 230.0], [110.0, 230.0]]);
+    key(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(h.state().ui.transform.is_none());
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), photocraft_geom::Rect::new(110, 110, 210, 230));
+    // What stayed (160..200 × 100..160) and what moved (to 150..210 × 130..190).
+    assert_eq!(st.doc.layer(layer).unwrap().surface().unwrap().content_bounds(), photocraft_geom::Rect::new(150, 100, 210, 190));
 }

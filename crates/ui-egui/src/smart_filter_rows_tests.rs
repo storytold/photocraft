@@ -9,6 +9,7 @@ use photocraft_doc::{LayerContent, LayerId};
 use serde_json::json;
 
 use crate::PhotocraftApp;
+use crate::canvas::ToolEvent;
 
 /// Smart objects "Smart A" (Gaussian Blur and Offset) and "Smart B" (no filters), and a pixel
 /// layer "Pixels" on top: (harness, A, B, pixels).
@@ -136,7 +137,7 @@ fn a_camera_raw_filter_copies_and_its_copy_opens_on_the_target() {
     h.state_mut().run("layer.select", json!({"layer": a})).unwrap();
     h.state_mut().run("filter.cameraRaw", json!({"exposure": 1.0, "contrast": 20})).unwrap();
     h.run_steps(4);
-    let (from, to) = (at(&h, "Camera Raw Filter"), at(&h, "Smart B"));
+    let (from, to) = (at(&h, "RAW Develop Filter"), at(&h, "Smart B"));
     drag(&mut h, from, to, Modifiers::ALT);
     let raw = |h: &egui_kittest::Harness<'static, PhotocraftApp>, id: u64| match &h.state().session.active().unwrap().doc.layer(LayerId(id)).unwrap().content {
         LayerContent::Smart(sm) => sm.smart_filters.iter().find(|f| f.command == "filter.cameraRaw").map(|f| f.params.clone()),
@@ -146,7 +147,7 @@ fn a_camera_raw_filter_copies_and_its_copy_opens_on_the_target() {
     assert_eq!(raw(&h, b).unwrap()["exposure"], 1.0);
     // B is above A in the panel, so its copy is the upper of the two Camera Raw rows.
     let copy = h
-        .query_all_by_label("Camera Raw Filter")
+        .query_all_by_label("RAW Develop Filter")
         .filter(|n| n.accesskit_node().role() == Role::Button)
         .map(|n| n.rect().center())
         .min_by(|p, q| p.y.total_cmp(&q.y))
@@ -159,6 +160,242 @@ fn a_camera_raw_filter_copies_and_its_copy_opens_on_the_target() {
         h.run_steps(1);
     }
     h.run_steps(3);
-    let dialog = h.state().camera_raw.as_ref().expect("Camera Raw opened");
+    let dialog = h.state().camera_raw.as_ref().expect("RAW Develop opened");
     assert_eq!(dialog.layer, LayerId(b));
+}
+
+/// Dragging a filter up or down its own stack reorders it (Photoshop), which changes the result:
+/// the bottom filter is applied first (`smart_cmds::tests::filter_stack_order_blend_disable_and_clear`). A drop on the upper half of a row lands above it, on the
+/// lower half below it, on the Smart Filters row on top; the moved filter stays selected.
+#[test]
+fn dragging_a_filter_up_or_down_its_stack_reorders_it() {
+    let (mut h, a, _, _) = panel();
+    let (blur, offset) = ("filter.blur.gaussianBlur", "filter.other.offset");
+    let half = |p: Pos2, up: bool| p + egui::vec2(0.0, if up { -6.0 } else { 6.0 });
+    // Gaussian Blur (bottom) onto the upper half of Offset's row: blur now on top.
+    let (from, to) = (at(&h, "Gaussian Blur"), at(&h, "Offset"));
+    drag(&mut h, from, half(to, true), Modifiers::NONE);
+    assert_eq!(filters(&h, a), [offset, blur]);
+    assert!(selected(&h, "Gaussian Blur"), "the moved filter stays selected");
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    // Its lower half: back under it.
+    let (from, to) = (at(&h, "Gaussian Blur"), at(&h, "Offset"));
+    drag(&mut h, from, half(to, false), Modifiers::NONE);
+    assert_eq!(filters(&h, a), [blur, offset]);
+    // The Smart Filters row: on top again.
+    let (from, to) = (at(&h, "Gaussian Blur"), at(&h, "Smart Filters"));
+    drag(&mut h, from, to, Modifiers::NONE);
+    assert_eq!(filters(&h, a), [offset, blur]);
+    // Each drag is one undo step.
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(filters(&h, a), [blur, offset]);
+}
+
+fn click_at(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, p: Pos2) {
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+}
+
+/// #4751: with a filter's row selected, clicking Delete removes that filter, not the smart object.
+#[test]
+fn clicking_delete_removes_the_selected_filter() {
+    let (mut h, a, _, _) = panel();
+    let blur = at(&h, "Gaussian Blur");
+    click_at(&mut h, blur);
+    let trash = at(&h, "Delete layer");
+    click_at(&mut h, trash);
+    assert_eq!(filters(&h, a), ["filter.other.offset"]);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 4, "no layer was deleted");
+    // The deleted row's selection doesn't carry over to Offset, now at its index.
+    click_at(&mut h, trash);
+    assert_eq!(filters(&h, a), ["filter.other.offset"]);
+}
+
+/// Clicking the smart object's own row leaves its filters: Delete then deletes the layer as usual.
+#[test]
+fn clicking_the_smart_object_row_deselects_its_filter() {
+    let (mut h, a, _, _) = panel();
+    let offset = at(&h, "Offset");
+    click_at(&mut h, offset);
+    let row = at(&h, "Smart A");
+    click_at(&mut h, row);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(LayerId(a)));
+    assert!(!selected(&h, "Offset"));
+    let trash = at(&h, "Delete layer");
+    click_at(&mut h, trash);
+    assert_eq!(filters(&h, a).len(), 2, "the filters stay");
+}
+
+/// #4751: Delete or Backspace removes the selected filter, as the Delete button does, not the
+/// smart object; on the Smart Filters row it clears them all.
+#[test]
+fn the_delete_key_removes_the_selected_filter() {
+    let (mut h, a, _, _) = panel();
+    let blur = at(&h, "Gaussian Blur");
+    click_at(&mut h, blur);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(filters(&h, a), ["filter.other.offset"]);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 4, "no layer was deleted");
+    let row = at(&h, "Smart Filters");
+    click_at(&mut h, row);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(4);
+    assert!(filters(&h, a).is_empty());
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 4, "no layer was deleted");
+}
+
+/// A text field keeps its Delete: renaming the smart object leaves the selected filter alone.
+#[test]
+fn the_delete_key_in_a_text_field_leaves_the_filter() {
+    let (mut h, a, _, _) = panel();
+    let blur = at(&h, "Gaussian Blur");
+    click_at(&mut h, blur);
+    let ctx = h.ctx.clone();
+    crate::layer_row_ui::start_rename(&ctx, a, "Smart A");
+    h.run_steps(4);
+    assert!(selected(&h, "Gaussian Blur"), "the filter is still selected while renaming");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(filters(&h, a).len(), 2);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 4);
+}
+
+/// Quick Mask keeps Delete for Edit › Clear on the mask, even with a filter's row selected.
+#[test]
+fn the_delete_key_in_quick_mask_clears_the_mask_not_the_filter() {
+    let (mut h, a, _, _) = panel();
+    let blur = at(&h, "Gaussian Blur");
+    click_at(&mut h, blur);
+    // No selection: Quick Mask alone must keep the key, not a marquee's Edit › Clear.
+    h.state_mut().run("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    assert!(h.state().session.active().unwrap().doc.selection.is_none());
+    h.run_steps(4);
+    assert!(selected(&h, "Gaussian Blur"), "the filter is still selected in Quick Mask");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(filters(&h, a).len(), 2);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 4);
+}
+
+/// A filter whose row isn't drawn (here the panel is filtered by name) is no longer selected:
+/// Delete then deletes the active layer as usual, never a filter nobody sees highlighted.
+#[test]
+fn a_hidden_filter_row_is_deselected() {
+    let (mut h, a, _, _) = panel();
+    let blur = at(&h, "Gaussian Blur");
+    click_at(&mut h, blur);
+    h.state_mut().ui.layer_filter_by = crate::layer_filter_ui::FilterBy::Name;
+    h.state_mut().ui.layer_filter_name = "Pixels".into();
+    h.run_steps(4);
+    // Shown again, the row is no longer highlighted: the selection went, it wasn't just hidden.
+    h.state_mut().ui.layer_filter_name.clear();
+    h.run_steps(4);
+    assert!(!selected(&h, "Gaussian Blur"));
+    // The Name filter hid Smart A too, so it deselected it (#10879): select it again.
+    assert!(h.state().session.active().unwrap().selected_layers().is_empty());
+    h.state_mut().session.execute("layer.select", json!({"layer": a})).unwrap();
+    h.run_steps(4);
+    assert!(!selected(&h, "Gaussian Blur"), "selecting the layer does not bring the filter row back");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    let st = h.state().session.active().unwrap();
+    assert!(st.doc.layer(LayerId(a)).is_none(), "Delete reached Smart A itself");
+}
+
+/// With the Layers panel closed the selected row isn't on screen either, so Delete deletes the
+/// active layer as usual.
+#[test]
+fn with_the_layers_panel_closed_delete_leaves_the_filter() {
+    let (mut h, a, _, _) = panel();
+    let blur = at(&h, "Gaussian Blur");
+    click_at(&mut h, blur);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.toggle.layers", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.query_all_by_label("Gaussian Blur").next().is_none(), "the panel is closed");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(h.state().session.active().unwrap().doc.layer(LayerId(a)).is_none(), "Delete reached Smart A itself");
+}
+
+/// #8764: the bottom layer's filter rows sit where the empty space below the last row begins, so
+/// that space's deselect-all click (#8100) must start under them: a click on a filter of a new
+/// document's only layer, converted for Smart Filters, selects the filter.
+#[test]
+fn a_click_selects_a_filter_of_the_bottom_layer() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let id = s.execute("filter.convertForSmartFilters", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_max_steps(64).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(s, crate::Services::default())
+    });
+    h.run_steps(4);
+    let blur = at(&h, "Gaussian Blur");
+    click_at(&mut h, blur);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.active_layer, Some(LayerId(id)), "the smart object stays active");
+    assert_eq!(st.selected_layers(), [LayerId(id)], "the click did not deselect the layers");
+    assert!(selected(&h, "Gaussian Blur"));
+}
+
+/// A double-click whose two clicks land in one frame, as a real mouse delivers them when a frame
+/// takes longer than the gap between the clicks (`Harness::event` would run a frame per event).
+fn double_click_in_one_frame(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, p: Pos2) {
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false, true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(4);
+}
+
+/// #7153: a double-click on a filter of a smart object that isn't the active layer also selects
+/// it. That selection must not land after the editor captured its target, or OK refuses the edit
+/// ("The document or Smart Filter changed").
+#[test]
+fn double_clicking_a_filter_of_an_inactive_smart_object_edits_it() {
+    let (mut h, a, _, c) = panel();
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(LayerId(c)));
+    let blur = at(&h, "Gaussian Blur");
+    double_click_in_one_frame(&mut h, blur);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(LayerId(a)), "the smart object becomes active");
+    let d = h.state_mut().ui.dialogs.last_mut().expect("the filter's dialog opened");
+    d.fields.insert("radius".into(), json!(3.0));
+    let dialog = d.id;
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let LayerContent::Smart(sm) = &h.state().session.active().unwrap().doc.layer(LayerId(a)).unwrap().content else { panic!("smart object") };
+    assert_eq!(sm.smart_filters.len(), 2, "edited in place, not added");
+    assert_eq!(sm.smart_filters[0].params["radius"], json!(3.0));
+}
+
+/// The same for Liquify, whose workspace takes the strokes with it: a refused OK lost them.
+#[test]
+fn double_clicking_the_liquify_filter_of_an_inactive_smart_object_edits_it() {
+    let (mut h, a, _, c) = panel();
+    let stroke = json!({"tool": "forwardWarp", "size": 8, "points": [[4.0, 8.0, 1.0], [8.0, 8.0, 1.0]]});
+    h.state_mut().run("layer.select", json!({"layer": a})).unwrap();
+    h.state_mut().run("filter.liquify", json!({"strokes": [stroke], "meshSize": 3.0})).unwrap();
+    h.state_mut().run("layer.select", json!({"layer": c})).unwrap();
+    h.run_steps(4);
+    let liquify = at(&h, "Liquify");
+    double_click_in_one_frame(&mut h, liquify);
+    assert!(h.state().distort.liquify.is_some(), "the Liquify workspace opens");
+    for ev in [ToolEvent::Down { x: 6.0, y: 4.0, pressure: 1.0 }, ToolEvent::Move { x: 10.0, y: 4.0, pressure: 1.0 }, ToolEvent::Up { x: 10.0, y: 4.0 }] {
+        crate::liquify_ui::pointer(h.state_mut(), ev, Modifiers::NONE);
+    }
+    h.run_steps(2);
+    crate::liquify_ui::control(h.state_mut(), &json!({"commit": true})).unwrap();
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let LayerContent::Smart(sm) = &h.state().session.active().unwrap().doc.layer(LayerId(a)).unwrap().content else { panic!("smart object") };
+    let liquify = sm.smart_filters.iter().find(|f| f.command == photocraft_engine::distort_cmds::LIQUIFY).unwrap();
+    assert_eq!(liquify.params["strokes"].as_array().map(Vec::len), Some(2), "the new stroke was kept");
 }

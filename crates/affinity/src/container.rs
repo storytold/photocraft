@@ -15,6 +15,16 @@ const DOCUMENT_KIND: &[u8; 4] = b"nsrP";
 
 /// A save appends one table; real files have one to a few hundred.
 const MAX_TABLES: usize = 4096;
+/// Distinct ids the allocation tables may name; each costs a map slot even when only deleted.
+const MAX_ENTRIES: usize = 1 << 22;
+/// Bytes of entry names the allocation tables may name. A name is retained twice (in the entry
+/// and as its map key), and tables can point many names at the same bytes.
+const MAX_NAME_BYTES: usize = 32 << 20;
+/// File and directory records parsed across every allocation table. Each table walks its own
+/// records, and tables may start inside one another and share a long suffix, so the per-table
+/// counts do not bound the work: a few thousand overlapping tables could reparse one large run
+/// of records each. Real files hold a few hundred saves of a few thousand entries.
+const MAX_TABLE_RECORDS: usize = 1 << 25;
 /// zstd window ceiling: real documents use a few MiB; this stops a header from reserving gigabytes.
 const MAX_ZSTD_WINDOW: u64 = 64 << 20;
 
@@ -26,11 +36,16 @@ pub struct Limits {
     pub max_entry: usize,
     /// Total bytes extracted over the whole import.
     pub max_total: usize,
+    /// Bytes of decoded pixels one import may hold: every layer's RGBA together, plus the
+    /// temporary planes the layer being read decodes through. The entry limits bound what is
+    /// extracted, not what the layers materialized out of it cost (#4960).
+    pub max_pixel_bytes: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_entry: 256 << 20, max_total: 1 << 30 }
+        // The gigabyte the other importers allow decoded pixels (`io`'s `MAX_PIXEL_BYTES`).
+        Self { max_entry: 256 << 20, max_total: 1 << 30, max_pixel_bytes: 1 << 30 }
     }
 }
 
@@ -159,11 +174,13 @@ impl<'a> Archive<'a> {
     pub fn open(bytes: &'a [u8], limits: Limits) -> Result<Self, Error> {
         let header = header(bytes)?;
         // Newest record per id: (table date, table index, record).
-        let mut latest: HashMap<u32, (u64, usize, Option<Entry>)> = HashMap::new();
+        let mut latest: HashMap<u32, (u64, usize, Option<Box<Entry>>)> = HashMap::new();
         let mut names: HashMap<u32, String> = HashMap::new();
+        let mut name_bytes = 0usize;
         let mut seen = HashSet::new();
         let mut next = header.fat_offset;
         let mut tables = 0usize;
+        let mut records_left = MAX_TABLE_RECORDS;
         while next != 0 {
             if !seen.insert(next) {
                 return Err(Error::Malformed("allocation tables form a cycle"));
@@ -188,6 +205,9 @@ impl<'a> Archive<'a> {
             c.take(8)?;
             let dirs = c.u16()?;
             c.take(1)?;
+            // Charge the declared records before walking them.
+            let declared = usize::try_from(files).unwrap_or(usize::MAX).saturating_add(usize::from(dirs));
+            records_left = records_left.checked_sub(declared).ok_or(Error::Limit("too many allocation records"))?;
             for _ in 0..files {
                 let id = c.u32()?;
                 let flag = c.u8()?;
@@ -217,19 +237,31 @@ impl<'a> Archive<'a> {
                         } else {
                             stored
                         };
-                        record = Some(Entry { id, name: String::new(), offset, size, compressed, crc, compression });
+                        record = Some(Box::new(Entry { id, name: String::new(), offset, size, compressed, crc, compression }));
                     }
                     2 => {}
                     _ => return Err(Error::Malformed("unknown allocation record")),
                 }
                 if flag == 0 {
                     let len = usize::from(c.u16()?);
-                    let name = String::from_utf8_lossy(c.take(len)?).into_owned();
-                    names.entry(id).or_insert(name);
+                    let raw = c.take(len)?;
+                    // Only the first name per id is kept: charge and copy just that one.
+                    if let std::collections::hash_map::Entry::Vacant(slot) = names.entry(id) {
+                        let name = String::from_utf8_lossy(raw).into_owned();
+                        name_bytes = name_bytes.saturating_add(name.len());
+                        if name_bytes > MAX_NAME_BYTES {
+                            return Err(Error::Limit("archive entry names too large"));
+                        }
+                        slot.insert(name);
+                    }
                 }
                 // Equal dates: the first table in the chain (the newest) wins, as in afread.
                 let replace = latest.get(&id).is_none_or(|(d, _, _)| date > *d);
                 if replace {
+                    // Deletion records are five bytes each: cap what distinct ids may retain.
+                    if latest.len() >= MAX_ENTRIES && !latest.contains_key(&id) {
+                        return Err(Error::Limit("too many archive entries"));
+                    }
                     latest.insert(id, (date, tables, record));
                 }
             }
@@ -243,7 +275,7 @@ impl<'a> Archive<'a> {
         for (id, (_, _, record)) in latest {
             if let (Some(mut e), Some(name)) = (record, names.get(&id)) {
                 e.name = name.clone();
-                entries.insert(e.name.clone(), e);
+                entries.insert(e.name.clone(), *e);
             }
         }
         Ok(Self { bytes, header, entries, revisions: tables, extracted: 0, limits })
@@ -264,7 +296,31 @@ impl<'a> Archive<'a> {
 
     /// Extract an entry by name: decompress, undo the byte predictor and verify the CRC.
     pub fn read(&mut self, name: &str) -> Result<Vec<u8>, Error> {
-        let e = self.entries.get(name).ok_or(Error::Malformed("missing archive entry"))?.clone();
+        self.claim(name)?.decode()
+    }
+
+    /// Extract several entries, decoding them on worker threads. The entries are charged one
+    /// after the other exactly as the same number of [`read`](Self::read) calls would charge
+    /// them, and the first error in that order is the one returned.
+    pub(crate) fn read_many(&mut self, names: &[&str]) -> Result<Vec<Vec<u8>>, Error> {
+        let mut claimed = Vec::with_capacity(names.len());
+        let mut refused = None;
+        for name in names {
+            match self.claim(name) {
+                Ok(c) => claimed.push(c),
+                Err(e) => {
+                    refused = Some(e);
+                    break;
+                }
+            }
+        }
+        let decoded = decode_all(&claimed).into_iter().collect::<Result<Vec<_>, _>>()?;
+        refused.map_or(Ok(decoded), Err)
+    }
+
+    /// Check an entry against the limits, count it as extracted and locate its stored bytes.
+    fn claim(&mut self, name: &str) -> Result<Claimed<'a>, Error> {
+        let e = self.entries.get(name).ok_or(Error::Malformed("missing archive entry"))?;
         let size = usize::try_from(e.size).map_err(|_| Error::Limit("archive entry too large"))?;
         if size > self.limits.max_entry {
             return Err(Error::Limit("archive entry too large"));
@@ -273,6 +329,9 @@ impl<'a> Archive<'a> {
         if total > self.limits.max_total {
             return Err(Error::Limit("document too large"));
         }
+        // Charge before decoding: a corrupt entry that fails its checksum has already cost the
+        // decompression, and an importer that recovers must not get it again for free.
+        self.extracted = total;
         let mut c = Cursor::new(self.bytes, offset(e.offset)?);
         if c.take(4)? != b"#Fil" {
             return Err(Error::Malformed("archive entry has no data block"));
@@ -280,21 +339,77 @@ impl<'a> Archive<'a> {
         let method = e.compression & 3;
         let stored_len = if matches!(method, 1 | 2) { e.compressed } else { e.size };
         let data = c.take(offset(stored_len)?)?;
-        let mut out = match method {
-            1 => inflate(data, size)?,
-            2 => unzstd(data, size)?,
-            _ => data.to_vec(),
+        Ok(Claimed { data, size, compression: e.compression, crc: e.crc })
+    }
+}
+
+/// An entry that is charged and located but not yet decoded.
+struct Claimed<'a> {
+    data: &'a [u8],
+    size: usize,
+    compression: u8,
+    crc: u32,
+}
+
+impl Claimed<'_> {
+    fn decode(&self) -> Result<Vec<u8>, Error> {
+        let mut out = match self.compression & 3 {
+            1 => inflate(self.data, self.size)?,
+            2 => unzstd(self.data, self.size)?,
+            _ => self.data.to_vec(),
         };
-        if out.len() != size {
+        if out.len() != self.size {
             return Err(Error::Malformed("archive entry size mismatch"));
         }
-        unpredict(&mut out, e.compression)?;
-        if crc32fast::hash(&out) != e.crc {
+        unpredict(&mut out, self.compression)?;
+        if crc32fast::hash(&out) != self.crc {
             return Err(Error::Malformed("archive entry checksum mismatch"));
         }
-        self.extracted = total;
         Ok(out)
     }
+}
+
+/// Most threads decoding entries at once; each zstd frame may reserve its declared window.
+const MAX_DECODE_THREADS: usize = 8;
+/// Fewer entries than this are decoded in place: starting a thread costs more than they do.
+const MIN_PARALLEL_ENTRIES: usize = 4;
+
+/// Decode every entry, in parallel when there are enough of them. The results are in order.
+fn decode_all(jobs: &[Claimed<'_>]) -> Vec<Result<Vec<u8>, Error>> {
+    static THREADS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    // The browser build has no threads to start.
+    let threads = if jobs.len() < MIN_PARALLEL_ENTRIES || cfg!(target_arch = "wasm32") {
+        1
+    } else {
+        (*THREADS.get_or_init(|| std::thread::available_parallelism().map_or(1, usize::from).min(MAX_DECODE_THREADS))).min(jobs.len())
+    };
+    if threads <= 1 {
+        return jobs.iter().map(Claimed::decode).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    // The workers and this thread take the next undecoded entry until none is left.
+    let work = || {
+        let mut done = Vec::new();
+        loop {
+            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some(job) = jobs.get(i) else { break };
+            done.push((i, job.decode()));
+        }
+        done
+    };
+    let mut slots: Vec<Option<Result<Vec<u8>, Error>>> = jobs.iter().map(|_| None).collect();
+    std::thread::scope(|sc| {
+        // A thread that cannot be started just leaves its share to the others.
+        let workers: Vec<_> = (1..threads).filter_map(|_| std::thread::Builder::new().spawn_scoped(sc, work).ok()).collect();
+        let mut finished = vec![work()];
+        finished.extend(workers.into_iter().map(|w| w.join().unwrap_or_default()));
+        for (i, result) in finished.into_iter().flatten() {
+            if let Some(slot) = slots.get_mut(i) {
+                *slot = Some(result);
+            }
+        }
+    });
+    slots.into_iter().map(|r| r.unwrap_or(Err(Error::Malformed("tile decoder stopped")))).collect()
 }
 
 /// Read at most `size + 1` bytes so a stream that decodes past its declared size is caught
@@ -307,7 +422,7 @@ fn read_bounded(mut r: impl Read, size: usize) -> Result<Vec<u8>, Error> {
 }
 
 fn inflate(data: &[u8], size: usize) -> Result<Vec<u8>, Error> {
-    read_bounded(flate2::read::ZlibDecoder::new(data), size)
+    read_bounded(flate2::bufread::ZlibDecoder::new(data), size)
 }
 
 fn unzstd(data: &[u8], size: usize) -> Result<Vec<u8>, Error> {

@@ -4,22 +4,30 @@
 //! Colours are compared in the surface's own colour channels (RGB, CMYK, Gray, Lab… at any depth),
 //! so nothing is converted through RGB; only alpha changes.
 
+use photocraft_color::{SampleType, read_sample, write_sample};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
 use crate::replace::{Limits, Sampling};
-use crate::retouch::{Region, alpha_index, apply_dab_stroke};
+use crate::retouch::{Footprint, Region, alpha_index, apply_dab_stroke};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BgEraseSettings {
     pub sampling: Sampling,
+    /// Which matching pixels are erased. [`Limits::FindEdges`] grades the erase over the Tolerance
+    /// like [`Limits::Contiguous`] in this tool (#11904), unlike Color Replacement, where it turns
+    /// the soft falloff off.
     pub limits: Limits,
-    /// 0..1: largest per-channel difference from the sampled colour that is erased.
+    /// 0..1: how far from the sampled colour a colour is still partly erased. The distance is the
+    /// largest increase plus the largest decrease over the colour channels (`dist`); an exact
+    /// match is erased fully, then less the further a colour is, and colours at or beyond the
+    /// Tolerance are kept (`graded_weight`).
     pub tolerance: f32,
-    /// Keep pixels that match the foreground colour.
+    /// Keep the foreground colour: the erase narrows to the colours between the sampled colour and
+    /// the foreground colour (see [`protected_tolerance`]).
     pub protect_foreground: bool,
     /// Straight RGBA foreground colour (for Protect Foreground Color).
     pub foreground: [f32; 4],
@@ -40,46 +48,99 @@ impl Default for BgEraseSettings {
     }
 }
 
-/// Largest per-channel difference over the colour channels.
+/// Colour distance of `a` from `b` over the colour channels: the largest increase plus the largest
+/// decrease (#11901). Changes in the same direction count like the largest of them; changes in
+/// opposite directions add up, as the reference application measures them (a red-to-green edge is
+/// about twice as far as one channel alone). One channel (Gray) gives the absolute difference.
 fn dist(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+    let (up, down) = a.iter().zip(b).fold((0.0f32, 0.0f32), |(up, down), (x, y)| {
+        let diff = x - y;
+        (up.max(diff), down.max(-diff))
+    });
+    up + down
+}
+
+/// The Tolerance Protect Foreground Color leaves (#11903): it narrows to `limit`, the distance from
+/// the sampled colour to the foreground colour, so the sampled colour itself is still erased, the
+/// erase fades out towards the foreground, and colours at least as far from the sample as the
+/// foreground (the foreground itself included) are kept. `None` when the foreground is the sampled
+/// colour: nothing is erased.
+fn protected_tolerance(tol: f32, limit: f32) -> Option<f32> {
+    if limit.is_nan() || limit <= 0.0 {
+        return None;
+    }
+    Some(tol.min(limit))
+}
+
+/// `v` as the document stores it: rounded to the 8- or 16-bit levels, unchanged in 32-bit float.
+/// The sampled colour is read from stored pixels, so the foreground is compared at the same
+/// precision; otherwise a foreground between two levels misses its own stored colour (#11903).
+fn at_sample_precision(sample: SampleType, v: f32) -> f32 {
+    let mut bytes = [0u8; 4];
+    write_sample(&mut bytes, sample, 0, v);
+    read_sample(&bytes, sample, 0)
+}
+
+/// The match weight of one dab for a colour `d` away from the sampled colour (#11901): an exact
+/// match is erased fully, then the weight falls off linearly over the whole Tolerance `tol` after
+/// a short plateau `d0 = min(tol / 20, 8 levels)`, and colours at or beyond the Tolerance are kept.
+/// Measured in the reference application with single clicks (one dab) at Tolerance 10 to 100.
+fn graded_weight(d: f32, tol: f32) -> f32 {
+    if !d.is_finite() || d >= tol {
+        return if d <= 0.0 { 1.0 } else { 0.0 };
+    }
+    let d0 = (tol / 20.0).min(8.0 / 255.0);
+    if d <= d0 {
+        return 1.0;
+    }
+    (1.0 - (d - d0) / (tol - d0)).clamp(0.0, 1.0)
 }
 
 /// Erase along `stroke`. The brush opacity is ignored (Photoshop's Background Eraser has none);
 /// the selection limits the effect. Returns the damaged rectangle; empty when the surface has no
 /// alpha channel.
 pub fn apply_background_eraser(target: &mut Surface, stroke: &Stroke, bs: &BgEraseSettings, selection: Option<&Surface>) -> Rect {
-    let fmt = target.format();
-    let Some(a) = alpha_index(&fmt) else { return Rect::EMPTY };
-    let nc = a;
-    let tol = if bs.tolerance.is_finite() { bs.tolerance.clamp(0.0, 1.0) } else { 0.0 };
-    let soft = bs.limits != Limits::FindEdges;
-    let native = |c: [f32; 4]| -> Vec<f32> { from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec() };
-    let swatch = native(bs.background);
-    let fg = native(bs.foreground);
-    let mut once: Option<Option<Vec<f32>>> = None;
-    let match_w = |d: f32| -> f32 {
-        if d > tol {
-            0.0
-        } else if soft && tol > 0.0 {
-            // Soft falloff over the last quarter of the tolerance.
-            ((tol - d) / (tol * 0.25)).clamp(0.0, 1.0)
-        } else {
-            1.0
-        }
-    };
+    let Some(effect) = background_eraser_effect(target, bs) else { return Rect::EMPTY };
+    apply_dab_stroke(target, &background_eraser_stroke(stroke), selection, false, 0, effect)
+}
+
+/// The stroke [`apply_background_eraser`] runs its dabs along: full opacity (the tool has none),
+/// never the brush's erase flag. Live previews run the same dabs.
+pub fn background_eraser_stroke(stroke: &Stroke) -> Stroke {
     let mut stroke = stroke.clone();
     stroke.brush.opacity = 1.0;
     stroke.brush.erase = false;
-    // The pixels before the stroke, taken at the first dab. Sampling and matching read these, so a
-    // dab landing on pixels earlier dabs already erased still samples and matches (#1280).
+    stroke
+}
+
+/// One Background Eraser dab's edit of a working copy of `pre` (the target before the stroke):
+/// shared by [`apply_background_eraser`] and live previews that run the dabs as they come, so both
+/// erase the same pixels. `None` when `pre` has no alpha channel (nothing can be erased).
+pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<impl FnMut(&mut Region, &Footprint) + use<>> {
+    let fmt = pre.format();
+    let a = alpha_index(&fmt)?;
+    let nc = a;
+    let tol = if bs.tolerance.is_finite() { bs.tolerance.clamp(0.0, 1.0) } else { 0.0 };
+    let native = |c: [f32; 4]| -> Vec<f32> { from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec() };
+    let swatch = native(bs.background);
+    let fg: Vec<f32> = native(bs.foreground).into_iter().map(|v| at_sample_precision(fmt.sample, v)).collect();
+    let (sampling, limits, protect_foreground) = (bs.sampling, bs.limits, bs.protect_foreground);
+    let float = fmt.sample == SampleType::F32;
+    let mut once: Option<Option<Vec<f32>>> = None;
+    let pre = pre.clone();
+    // The pixels before the stroke under the working copy, read once per working area. Sampling
+    // and matching read these, so a dab landing on pixels earlier dabs already erased still
+    // samples and matches (#1280).
     let mut orig: Option<Region> = None;
-    apply_dab_stroke(target, &stroke, selection, false, 0, |work: &mut Region, fp| {
+    Some(move |work: &mut Region, fp: &Footprint| {
         let r = fp.rect.intersect(&work.rect);
         if r.is_empty() {
             return;
         }
-        let orig = &*orig.get_or_insert_with(|| work.clone());
+        if orig.as_ref().is_none_or(|o| o.rect != work.rect) {
+            orig = Some(Region::read(&pre, work.rect));
+        }
+        let Some(orig) = orig.as_ref() else { return };
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
         // The hotspot's colour (None where it was transparent before the stroke or is off the
         // working area).
@@ -90,34 +151,56 @@ pub fn apply_background_eraser(target: &mut Surface, stroke: &Stroke, bs: &BgEra
             let p = orig.px(cx, cy);
             (p[a] > 0.0).then(|| p[..nc].to_vec())
         };
-        let sampled = match bs.sampling {
+        let sampled = match sampling {
             Sampling::Continuous => hotspot(),
             Sampling::Once => once.get_or_insert_with(hotspot).clone(),
             Sampling::BackgroundSwatch => Some(swatch.clone()),
         };
         let Some(sampled) = sampled else { return };
+        // Protect Foreground Color narrows the Tolerance to the foreground colour (#11903), by the
+        // same distance as the sample match: the reference application measures a foreground that
+        // is off in two channels that way too.
+        let tol = if protect_foreground {
+            let Some(t) = protected_tolerance(tol, dist(&sampled, &fg)) else { return };
+            t
+        } else {
+            tol
+        };
+        // Find Edges grades soft edges like Contiguous does instead of cutting them hard (#11904):
+        // the reference application keeps at least as much of a blurred transition with it.
+        let match_w = |d: f32| -> f32 { graded_weight(d, tol) };
         let (w, h) = (r.width() as usize, r.height() as usize);
-        // Per-pixel match weight from the pre-stroke colours: the contiguous fill passes through
-        // pixels this stroke already erased.
+        // Which pixels the contiguous fill may pass, from the pre-stroke colours as before: it
+        // passes through pixels this stroke already erased.
+        let mut reach = vec![0.0f32; w * h];
+        // Per-pixel match weight from the working copy (#11902): a pixel an earlier dab erased
+        // partly is matched by its current, decontaminated colour, which is pushed away from the
+        // sampled colour, so later dabs erase it again only while it is still within the Tolerance.
         let mut weight = vec![0.0f32; w * h];
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
                 if fp.at(x, y) <= 0.0 {
                     continue;
                 }
-                let p = orig.px(x, y);
-                if p[a] <= 0.0 {
+                let o = orig.px(x, y);
+                if o[a] <= 0.0 {
                     continue;
                 }
-                let c = &p[..nc];
-                if bs.protect_foreground && dist(c, &fg) <= tol {
-                    continue;
+                let i = (y - r.y0) as usize * w + (x - r.x0) as usize;
+                reach[i] = match_w(dist(&o[..nc], &sampled));
+                let c = work.px(x, y);
+                if c[a] > 0.0 {
+                    weight[i] = match_w(dist(&c[..nc], &sampled));
                 }
-                weight[(y - r.y0) as usize * w + (x - r.x0) as usize] = match_w(dist(c, &sampled));
             }
         }
-        if bs.limits != Limits::Discontiguous {
-            keep_connected(&mut weight, w, h, (cx.clamp(r.x0, r.x1 - 1) - r.x0) as usize, (cy.clamp(r.y0, r.y1 - 1) - r.y0) as usize);
+        if limits != Limits::Discontiguous {
+            keep_connected(&mut reach, w, h, (cx.clamp(r.x0, r.x1 - 1) - r.x0) as usize, (cy.clamp(r.y0, r.y1 - 1) - r.y0) as usize);
+            for (wv, rv) in weight.iter_mut().zip(&reach) {
+                if *rv <= 0.0 {
+                    *wv = 0.0;
+                }
+            }
         }
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
@@ -125,14 +208,30 @@ pub fn apply_background_eraser(target: &mut Surface, stroke: &Stroke, bs: &BgEra
                 if k <= 0.0 {
                     continue;
                 }
+                let keep = 1.0 - k.min(1.0);
                 let p = work.px_mut(x, y);
-                p[a] *= 1.0 - k.min(1.0);
-                if p[a] <= 0.0 {
+                p[a] *= keep;
+                if p[a] <= 0.0 || keep <= 0.0 {
                     p.fill(0.0);
+                    continue;
                 }
+                decontaminate(&mut p[..nc], &sampled, keep, float);
             }
         }
     })
+}
+
+/// Colour decontamination of a partly erased pixel (#11902): of the colour `c`, the share `1 - keep`
+/// the dab removed was the sampled colour, so what stays is pushed away from it until compositing
+/// it at `keep` over the sampled colour gives back `c`: `(c - sampled × (1 - keep)) / keep` per
+/// channel, in the document's own channels. Clipped to the channel range (0..1; 32-bit float keeps
+/// values above 1 it already had).
+fn decontaminate(c: &mut [f32], sampled: &[f32], keep: f32, float: bool) {
+    for (v, s) in c.iter_mut().zip(sampled) {
+        let hi = if float { v.max(1.0) } else { 1.0 };
+        let d = (*v - s * (1.0 - keep)) / keep;
+        *v = if d.is_finite() { d.clamp(0.0, hi) } else { v.clamp(0.0, hi) };
+    }
 }
 
 /// Zeroes the weights not 4-connected to `(sx, sy)` through non-zero weights.
@@ -170,6 +269,22 @@ fn keep_connected(weight: &mut [f32], w: usize, h: usize, sx: usize, sy: usize) 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bg_erase_protect_foreground_tests.rs"]
+mod protect_foreground_tests;
+
+#[cfg(test)]
+#[path = "bg_erase_graded_alpha_tests.rs"]
+mod graded_alpha_tests;
+
+#[cfg(test)]
+#[path = "bg_erase_find_edges_tests.rs"]
+mod find_edges_tests;
+
+#[cfg(test)]
+#[path = "bg_erase_decontamination_tests.rs"]
+mod decontamination_tests;
 
 #[cfg(test)]
 mod tests {

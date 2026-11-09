@@ -1,4 +1,4 @@
-//! Unit tests on synthetic inputs; `tests/real_files.rs` covers public Affinity documents.
+//! Unit tests on synthetic inputs; `tests/it/real_files.rs` covers public Affinity documents.
 
 mod preview {
     use crate::container::header;
@@ -251,10 +251,24 @@ mod archive {
         broken[90] ^= 0x55;
         let mut a = Archive::open(&broken, Limits::default()).unwrap();
         assert!(a.read("doc.dat").is_err());
-        let mut a = Archive::open(&file, Limits { max_entry: d.len() - 1, max_total: usize::MAX }).unwrap();
+        let mut a = Archive::open(&file, Limits { max_entry: d.len() - 1, max_total: usize::MAX, ..Limits::default() }).unwrap();
         assert!(matches!(a.read("doc.dat"), Err(Error::Limit(_))));
-        let mut a = Archive::open(&file, Limits { max_entry: usize::MAX, max_total: d.len() + 1 }).unwrap();
+        let mut a = Archive::open(&file, Limits { max_entry: usize::MAX, max_total: d.len() + 1, ..Limits::default() }).unwrap();
         a.read("doc.dat").unwrap();
+        assert!(matches!(a.read("doc.dat"), Err(Error::Limit(_))));
+    }
+
+    #[test]
+    fn a_failed_read_still_spends_the_extraction_allowance() {
+        let d = doc();
+        let file = synth::container(&[("doc.dat", &d, Method::Zstd)], None);
+        let mut broken = file.clone();
+        broken[90] ^= 0x55;
+        // Room for exactly one read: the failed attempt must use it up, so a caller that
+        // recovers from the checksum error cannot make the same entry decode again.
+        let mut a = Archive::open(&broken, Limits { max_entry: usize::MAX, max_total: d.len(), ..Limits::default() }).unwrap();
+        assert!(a.read("doc.dat").is_err());
+        assert_eq!(a.extracted(), d.len());
         assert!(matches!(a.read("doc.dat"), Err(Error::Limit(_))));
     }
 
@@ -284,6 +298,42 @@ mod archive {
     }
 
     #[test]
+    fn allocation_records_are_charged_before_they_are_walked() {
+        let d = doc();
+        let mut file = synth::container(&[("doc.dat", &d, Method::Stored)], None);
+        let fat = u64::from_le_bytes(file[16..24].try_into().unwrap()) as usize;
+        // The table's file count sits after its tag, next, date and 24 reserved bytes.
+        let files = fat + 4 + 8 + 8 + 24;
+        file[files..files + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(Archive::open(&file, Limits::default()).unwrap_err(), Error::Limit("too many allocation records"));
+        // A count within the budget still reaches the records (and here fails on missing data).
+        file[files..files + 4].copy_from_slice(&1_000_000u32.to_le_bytes());
+        assert!(matches!(Archive::open(&file, Limits::default()), Err(Error::Malformed(_))));
+    }
+
+    #[test]
+    fn allocation_records_are_charged_across_every_table() {
+        let d = doc();
+        let mut file = synth::container(&[("doc.dat", &d, Method::Stored), ("other.dat", &d, Method::Stored)], None);
+        let fat = u64::from_le_bytes(file[16..24].try_into().unwrap()) as usize;
+        // Chain a copy of the (valid, two-record) table after it; the copy is the last table.
+        let second = file.len();
+        let table = file[fat..].to_vec();
+        file.extend(&table);
+        file[fat + 4..fat + 12].copy_from_slice(&(second as u64).to_le_bytes());
+        let files = second + 4 + 8 + 8 + 24;
+        // Each count alone is within the archive budget of 2^25; together they exceed it by one.
+        file[files..files + 4].copy_from_slice(&((1u32 << 25) - 1).to_le_bytes());
+        assert_eq!(Archive::open(&file, Limits::default()).unwrap_err(), Error::Limit("too many allocation records"));
+        // Exactly the budget is allowed: the second table is walked (and fails on missing data).
+        file[files..files + 4].copy_from_slice(&((1u32 << 25) - 2).to_le_bytes());
+        assert!(matches!(Archive::open(&file, Limits::default()), Err(Error::Malformed(_))));
+        // Directory records count too: one more (after the file count and 8 bytes) is over.
+        file[files + 12..files + 14].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(Archive::open(&file, Limits::default()).unwrap_err(), Error::Limit("too many allocation records"));
+    }
+
+    #[test]
     fn hostile_streams_fail_cleanly() {
         let deep = (0..2000).fold(Vec::new(), |inner, _| vec![(tag(b"Chld"), F::Obj(tag(b"Grup"), inner))]);
         assert_eq!(stream::parse(&synth::stream(&deep)).unwrap_err(), Error::Limit("objects nested too deeply"));
@@ -300,6 +350,17 @@ mod archive {
         for end in 0..d.len() {
             assert!(stream::parse(&d[..end]).is_err(), "{end}");
         }
+    }
+
+    #[test]
+    fn fixed_records_of_zero_width_are_rejected_before_any_value_is_made() {
+        // Four million records of no bytes each pass a length check that multiplies by the width.
+        let mut f = vec![0x80 | 0x2c];
+        f.extend(tag(b"Big_").0.to_le_bytes());
+        f.extend(4_000_000u32.to_le_bytes());
+        f.extend(0u16.to_le_bytes());
+        let d = synth::stream(&[(tag(b"Big_"), F::Raw(f))]);
+        assert_eq!(stream::parse(&d).unwrap_err(), Error::Malformed("array longer than its data"));
     }
 
     #[test]
@@ -391,11 +452,48 @@ mod shapes {
         rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap_or_else(|_| panic!("reading the document did not finish")).unwrap()
     }
 
+    #[test]
+    fn empty_subpaths_of_a_shared_curve_are_charged_for_every_occurrence() {
+        // One curve of 100k empty subpaths, placed 100 times: no records and no points, but
+        // ten million subpaths walked unless each one is charged.
+        let mut data = vec![F::U8(0), F::U32(100_000)];
+        for _ in 0..100_000 {
+            data.extend([F::Bool(false), F::Records(18, Vec::new())]);
+        }
+        let curve = F::Def(5, vec![tag(b"PCrv")], vec![(tag(b"Crvs"), F::Obj(tag(b"PCvD"), vec![(tag(b"Data"), F::Pos(data))]))]);
+        let group = F::Def(6, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared((0..100).map(|_| F::Ref(5)).collect()))]);
+        let d = read(vec![curve, group], 6);
+        assert!(d.warnings.iter().any(|w| w.contains("curve geometry budget exhausted")), "{:?}", d.warnings);
+    }
+
     fn path(document: &Document) -> &Path {
         match &document.spreads[0].nodes[0].kind {
             Kind::Shape { path, .. } => path,
             other => panic!("expected shape, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn artistic_text_reads_its_characters_runs_and_anchor() {
+        let glyphs = F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("Hi".into()))]);
+        let run = F::Obj(tag(b"Item"), vec![]);
+        let attributes = F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), vec![vec![(tag(b"Indx"), F::I32(2)), (tag(b"Item"), run)]]))]);
+        let block = vec![(tag(b"Glyp"), glyphs), (tag(b"GAtt"), attributes)];
+        let text = F::Def(
+            100,
+            vec![tag(b"TxtA")],
+            vec![
+                (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))])),
+                (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![block]))])),
+            ],
+        );
+        let document = read(vec![text], 100);
+        let Kind::Text(t) = &document.spreads[0].nodes[0].kind else { panic!("expected text") };
+        assert_eq!(t.runs.len(), 1);
+        assert_eq!(t.runs[0].text, "Hi");
+        assert_eq!(t.align, crate::model::Align::Left);
+        assert_eq!(t.anchor, Point { x: 0.0, y: 0.0 });
+        assert!(t.frame.is_none());
     }
 
     #[test]
@@ -457,5 +555,492 @@ mod shapes {
         let (sub, _) = corners(None);
         assert_eq!(sub.segments.len(), 8);
         assert_eq!(sub.segments[3][2], p(5.0, 20.0));
+    }
+}
+
+/// Aggregate materialized-pixel admission (#4960). The entry limits bound what the archive
+/// extracts; these cover what the decoded layers and their working planes cost, which is declared
+/// by each bitmap's `BmpW`/`BmpH` and needs no tile data at all.
+mod pixels {
+    use crate::Error;
+    use crate::container::Limits;
+    use crate::model::{Document, Kind};
+    use crate::synth::{self, F, Method, tag};
+
+    /// A `Rstr` pixel layer whose bitmap declares `w`×`h` pixels and holds no tiles.
+    fn layer(id: u32, w: i32, h: i32) -> F {
+        F::Def(
+            id,
+            vec![tag(b"Rstr")],
+            vec![
+                (tag(b"Desc"), F::Str(format!("Layer {id}"))),
+                (tag(b"Bitm"), F::Def(id + 1, vec![tag(b"DyBm")], vec![(tag(b"BmpW"), F::I32(w)), (tag(b"BmpH"), F::I32(h)), (tag(b"Frmt"), F::Enum(0, 0))])),
+            ],
+        )
+    }
+
+    /// A document whose one page holds a pixel layer per `sizes` entry.
+    fn document(sizes: &[(i32, i32)]) -> Vec<u8> {
+        let children: Vec<F> = sizes.iter().enumerate().map(|(i, &(w, h))| layer(10 + 2 * i as u32, w, h)).collect();
+        let data = synth::stream(&[(
+            tag(b"DocR"),
+            F::Def(
+                1,
+                vec![tag(b"DocN")],
+                vec![(
+                    tag(b"Chld"),
+                    F::Shared(vec![F::Def(
+                        2,
+                        vec![tag(b"Sprd")],
+                        vec![(tag(b"SprB"), F::F64s(vec![0.0, 0.0, 256.0, 256.0])), (tag(b"Chld"), F::Shared(children))],
+                    )]),
+                )],
+            ),
+        )]);
+        synth::container(&[("doc.dat", &data, Method::Zlib)], None)
+    }
+
+    fn imported_layers(d: &Document) -> usize {
+        d.spreads[0].nodes.iter().filter(|n| matches!(n.kind, Kind::Image(_))).count()
+    }
+
+    /// A 64×64 layer costs 16 KiB of RGBA and 16 KiB of planes, so 40 KiB admits one and not two.
+    const ONE_LAYER: usize = 40 << 10;
+
+    #[test]
+    fn a_pixel_layer_within_the_budget_imports() {
+        let limits = Limits { max_pixel_bytes: ONE_LAYER, ..Limits::default() };
+        let d = crate::model::read(&document(&[(64, 64)]), limits).unwrap();
+        assert_eq!(imported_layers(&d), 1, "{:?}", d.warnings);
+    }
+
+    #[test]
+    fn layers_past_the_pixel_budget_are_rejected_before_they_are_allocated() {
+        let limits = Limits { max_pixel_bytes: ONE_LAYER, ..Limits::default() };
+        // The document is a few hundred bytes: the sizes are in the headers, not the entries.
+        let bytes = document(&[(64, 64), (64, 64)]);
+        assert!(bytes.len() < 4096, "the fixture is {} bytes", bytes.len());
+        assert!(matches!(crate::model::read(&bytes, limits), Err(Error::Limit(_))), "the second layer materialized");
+        // Two layers fit once the budget covers their pixels together.
+        let room = Limits { max_pixel_bytes: ONE_LAYER + (32 << 10), ..Limits::default() };
+        assert_eq!(imported_layers(&crate::model::read(&bytes, room).unwrap()), 2);
+    }
+
+    #[test]
+    fn a_declared_size_larger_than_the_budget_is_rejected_on_its_own() {
+        // 2048×2048 is 16 MiB of RGBA and 16 MiB of planes, past a 1 MiB budget.
+        let limits = Limits { max_pixel_bytes: 1 << 20, ..Limits::default() };
+        assert!(
+            matches!(crate::model::read(&document(&[(2048, 2048)]), limits), Err(Error::Limit(_))),
+            "16 MiB of declared pixels materialized under a 1 MiB budget"
+        );
+    }
+}
+
+/// Spot colours that link to themselves or to each other. Each document is read on a 1 MiB
+/// stack, the smallest main-thread stack PhotoCraft runs on (Windows), first in a child process
+/// that must finish within 20 s. A stack overflow aborts the process it happens in, so unbounded
+/// recursion fails the one test that caused it instead of taking the other tests in the binary
+/// down with it.
+mod spot_colours {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use crate::container::Limits;
+    use crate::model::{Document, Kind};
+    use crate::paint::{Color, Paint};
+    use crate::stream::Tag;
+    use crate::synth::{self, F, Method, tag};
+
+    /// A one-page document whose page holds `top`, read in a child process first and then here.
+    fn read(top: Vec<F>) -> Document {
+        let spread = F::Def(2, vec![tag(b"Sprd")], vec![(tag(b"SprB"), F::F64s(vec![0.0, 0.0, 400.0, 300.0])), (tag(b"Chld"), F::Shared(top))]);
+        let data = synth::stream(&[(tag(b"DocR"), F::Def(1, vec![tag(b"DocN")], vec![(tag(b"Chld"), F::Shared(vec![spread]))]))]);
+        let bytes = synth::container(&[("doc.dat", &data, Method::Zlib)], None);
+        let test = std::thread::current().name().unwrap_or("reader").to_owned();
+        read_in_child(&bytes, &test);
+        read_on_small_stack(bytes, &test).unwrap()
+    }
+
+    /// Reads on a 1 MiB thread named after the test, so a stack overflow message names the test.
+    fn read_on_small_stack(bytes: Vec<u8>, test: &str) -> Result<Document, crate::Error> {
+        let reader = std::thread::Builder::new().name(test.to_owned()).stack_size(1 << 20).spawn(move || crate::read(&bytes, Limits::default())).unwrap();
+        reader.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+
+    /// Set in the child process to the name of the test it reads for.
+    const CHILD: &str = "PHOTOCRAFT_AFFINITY_READ_CHILD";
+
+    /// Runs `read_child` in a new process of this test binary on `bytes` and fails the test if
+    /// that process crashes, panics or takes over 20 s, or never read the document.
+    fn read_in_child(bytes: &[u8], test: &str) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["tests::spot_colours::read_child", "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+            .env(CHILD, test)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let drain = |mut pipe: Box<dyn Read + Send>| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = pipe.read_to_string(&mut text);
+                text
+            })
+        };
+        let stdout = drain(Box::new(child.stdout.take().unwrap()));
+        let stderr = drain(Box::new(child.stderr.take().unwrap()));
+        // Fed from a thread, so a child that never reads cannot block the deadline below; a child
+        // that dies first breaks the pipe and is reported by its exit status.
+        let (mut stdin, input) = (child.stdin.take().unwrap(), bytes.to_vec());
+        let feed = std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        feed.join().unwrap();
+        let output = format!("{}{}", stdout.join().unwrap(), stderr.join().unwrap());
+        match status {
+            None => panic!("reading the document did not finish within 20 s:\n{output}"),
+            Some(status) if !status.success() => panic!("reading the document failed in a child process ({status}):\n{output}"),
+            // A filter that matched no test would also exit successfully, having read nothing.
+            Some(_) => assert!(output.contains(&format!("read {} bytes", bytes.len())), "the child process did not read the document:\n{output}"),
+        }
+    }
+
+    /// Not a test of its own: `read_in_child` runs it in a child process to read the document on
+    /// its stdin. Without the variable, as when run with `--ignored`, it does nothing.
+    #[test]
+    #[ignore = "run by read_in_child in a child process"]
+    fn read_child() {
+        let Some(test) = std::env::var_os(CHILD) else { return };
+        let mut bytes = Vec::new();
+        std::io::stdin().read_to_end(&mut bytes).unwrap();
+        let len = bytes.len();
+        let _ = read_on_small_stack(bytes, &test.to_string_lossy());
+        println!("read {len} bytes");
+    }
+
+    /// An ellipse filled with `colour`.
+    fn filled(id: u32, colour: F) -> F {
+        F::Def(
+            id,
+            vec![tag(b"ShpN")],
+            vec![
+                (tag(b"ShpB"), F::F64s(vec![0.0, 0.0, 1.0, 1.0])),
+                (tag(b"Shpe"), F::Def(id + 1_000_000, vec![tag(b"ShpE")], vec![])),
+                (tag(b"BFFl"), F::Shared(vec![F::Def(id + 2_000_000, vec![tag(b"FilS")], vec![(tag(b"Colr"), colour)])])),
+            ],
+        )
+    }
+
+    fn spot(id: u32, fields: Vec<(Tag, F)>) -> F {
+        F::Def(id, vec![tag(b"Pant")], fields)
+    }
+
+    fn fills(doc: &Document) -> &[Paint] {
+        match &doc.spreads[0].nodes[0].kind {
+            Kind::Shape { fills, .. } => fills,
+            other => panic!("expected a shape, got {other:?}"),
+        }
+    }
+
+    fn warned(doc: &Document, what: &str) -> bool {
+        doc.warnings.iter().any(|w| w.contains(what))
+    }
+
+    #[test]
+    fn a_spot_colour_that_is_its_own_rgb_equivalent_is_refused() {
+        let doc = read(vec![filled(10, spot(20, vec![(tag(b"srgb"), F::Ref(20))]))]);
+        assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
+        assert!(warned(&doc, "spot colours nested deeper than 4 levels"), "{:?}", doc.warnings);
+    }
+
+    #[test]
+    fn spot_colours_that_are_each_others_base_and_rgb_equivalent_are_refused() {
+        let doc = read(vec![filled(10, spot(20, vec![(tag(b"base"), spot(21, vec![(tag(b"srgb"), F::Ref(20))]))]))]);
+        assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
+        assert!(warned(&doc, "spot colours nested deeper than 4 levels"), "{:?}", doc.warnings);
+    }
+
+    #[test]
+    fn spot_colours_of_spot_colours_do_not_take_exponential_time() {
+        // Each level's RGB equivalent and base are the next level, and the last is in an unknown
+        // model, so both are followed everywhere: 2^41 colour reads before the fix.
+        fn level(id: u32, left: u32) -> F {
+            if left == 0 {
+                return F::Def(id, vec![tag(b"XXXX")], vec![]);
+            }
+            spot(id, vec![(tag(b"srgb"), level(id + 1, left - 1)), (tag(b"base"), F::Ref(id + 1))])
+        }
+        let doc = read(vec![filled(10, level(100, 40))]);
+        assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
+    }
+
+    /// `spots` spot colours, each defined through the next, around an opaque RGB colour.
+    fn spots(id: u32, spots: u32) -> F {
+        if spots == 0 {
+            let rgba: Vec<u8> = [1.0f32, 0.5, 0.25, 1.0].iter().flat_map(|c| c.to_le_bytes()).collect();
+            return F::Def(id, vec![tag(b"RGBA")], vec![(tag(b"_col"), F::Struct(rgba))]);
+        }
+        spot(id, vec![(tag(b"srgb"), self::spots(id + 1, spots - 1))])
+    }
+
+    #[test]
+    fn spot_colours_nest_four_levels_and_no_deeper() {
+        let doc = read(vec![filled(10, spots(100, 4))]);
+        assert_eq!(fills(&doc), [Paint::Solid(Color::Rgb { r: 1.0, g: 0.5, b: 0.25, a: 1.0 })]);
+        let doc = read(vec![filled(10, spots(100, 5))]);
+        assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
+        assert!(warned(&doc, "spot colours nested deeper than 4 levels"), "{:?}", doc.warnings);
+    }
+}
+
+/// The raster fast paths against the code they replaced.
+mod raster_identity {
+    use crate::raster::{copy, interleave};
+
+    /// Deterministic filler (xorshift).
+    fn bytes(n: usize, mut x: u64) -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// The per-pixel `f64` conversion `decode` used before the tables.
+    fn reference(planes: &[Vec<u8>], channels: usize, bps: usize, n: usize) -> Vec<u8> {
+        let sample = |p: &Vec<u8>, i: usize| -> f64 {
+            if bps == 2 {
+                f64::from(u16::from_le_bytes([p.get(2 * i).copied().unwrap_or(0), p.get(2 * i + 1).copied().unwrap_or(0)])) / 65535.0
+            } else {
+                f64::from(p.get(i).copied().unwrap_or(0)) / 255.0
+            }
+        };
+        let mut rgba = vec![0u8; n * 4];
+        for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let v: Vec<f64> = planes.iter().map(|p| sample(p, i)).collect();
+            let (r, g, b, a) = if channels == 1 {
+                (v[0], v[0], v[0], 1.0)
+            } else if channels == 5 {
+                let k = 1.0 - v[3];
+                ((1.0 - v[0]) * k, (1.0 - v[1]) * k, (1.0 - v[2]) * k, v[4])
+            } else {
+                (v[0], v[1], v[2], v[3])
+            };
+            px.copy_from_slice(&[r, g, b, a].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+        }
+        rgba
+    }
+
+    #[test]
+    fn eight_bit_samples_round_trip() {
+        // Every byte through every position of the 4-channel and the grey path.
+        let ramp: Vec<u8> = (0..=255).collect();
+        let planes = vec![ramp.clone(), ramp.iter().rev().copied().collect(), ramp.clone(), ramp.iter().rev().copied().collect()];
+        assert_eq!(interleave(&planes, 4, 1, 256), reference(&planes, 4, 1, 256));
+        assert_eq!(interleave(&planes[..1], 1, 1, 256), reference(&planes[..1], 1, 1, 256));
+    }
+
+    #[test]
+    fn sixteen_bit_samples_are_exhaustive() {
+        // All 65536 values in each channel position (rotated so the channels differ).
+        let all: Vec<u8> = (0..=u16::MAX).flat_map(u16::to_le_bytes).collect();
+        let rot = |k: usize| -> Vec<u8> { (0..=u16::MAX).flat_map(|v| v.wrapping_add((k * 4099) as u16).to_le_bytes()).collect() };
+        let planes = vec![all, rot(1), rot(2), rot(3)];
+        assert_eq!(interleave(&planes, 4, 2, 65536), reference(&planes, 4, 2, 65536));
+        assert_eq!(interleave(&planes[..1], 1, 2, 65536), reference(&planes[..1], 1, 2, 65536));
+    }
+
+    #[test]
+    fn cmyk_is_exhaustive_over_colour_and_black() {
+        // Every (c, k) pair in each of the c, m and y positions; alpha is arbitrary.
+        let n = 256 * 256;
+        let k: Vec<u8> = (0..n).map(|i| (i >> 8) as u8).collect();
+        let c: Vec<u8> = (0..n).map(|i| i as u8).collect();
+        let m: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_mul(7).wrapping_add(3)).collect();
+        let y: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_mul(13).wrapping_add(250)).collect();
+        let planes = vec![c, m, y, k, bytes(n, 9)];
+        assert_eq!(interleave(&planes, 5, 1, n), reference(&planes, 5, 1, n));
+    }
+
+    #[test]
+    fn random_planes_match_for_every_format() {
+        for (channels, bps) in [(1, 1), (1, 2), (4, 1), (4, 2), (5, 1)] {
+            let n = 5000;
+            let planes: Vec<Vec<u8>> = (0..channels).map(|c| bytes(n * bps, 1 + c as u64)).collect();
+            assert_eq!(interleave(&planes, channels, bps, n), reference(&planes, channels, bps, n), "{channels}x{bps}");
+        }
+    }
+
+    /// The per-byte closure copy `plane` used before the row copies.
+    fn copy_reference(
+        out: &mut [u8],
+        row: usize,
+        (bx0, py0, bx1, py1): (usize, usize, usize, usize),
+        (ox, oy): (usize, usize),
+        at: impl Fn(usize, usize) -> u8,
+    ) {
+        for y in oy.max(py0)..(oy + 256).min(py1) {
+            for x in ox.max(bx0)..(ox + 256).min(bx1) {
+                if let Some(b) = out.get_mut((y - py0) * row + (x - bx0)) {
+                    *b = at(x - ox, y - oy);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tile_copy_matches_the_byte_loop_for_every_crop() {
+        let tile = bytes(256 * 256, 77);
+        // Crops that cut the tile on each side, sit inside it, and miss it.
+        for &(bx0, bx1, py0, py1) in
+            &[(0, 600, 0, 600), (10, 300, 20, 200), (100, 150, 100, 130), (256, 512, 0, 256), (0, 256, 300, 400), (255, 257, 255, 257), (300, 301, 0, 1)]
+        {
+            for &(ox, oy) in &[(0, 0), (256, 0), (0, 256), (256, 256), (512, 256)] {
+                let row = bx1 - bx0;
+                let mut old = vec![0xAAu8; row * (py1 - py0)];
+                let mut new = old.clone();
+                copy_reference(&mut old, row, (bx0, py0, bx1, py1), (ox, oy), |x, y| tile[y * 256 + x]);
+                copy(&mut new, row, (bx0, py0, bx1, py1), (ox, oy), Some(&tile), 0);
+                assert_eq!(old, new, "tile {ox},{oy} crop {bx0}..{bx1} x {py0}..{py1}");
+                copy_reference(&mut old, row, (bx0, py0, bx1, py1), (ox, oy), |_, _| 0xFF);
+                copy(&mut new, row, (bx0, py0, bx1, py1), (ox, oy), None, 0xFF);
+                assert_eq!(old, new, "fill {ox},{oy} crop {bx0}..{bx1} x {py0}..{py1}");
+            }
+        }
+    }
+}
+
+/// `Archive::read_many` against the same reads made one at a time.
+mod read_many {
+    use crate::synth::{self, Method};
+    use crate::{Archive, Error, Limits};
+
+    fn entry(i: usize) -> Vec<u8> {
+        (0..4096 + i * 37).map(|b| (b * 31 + i * 7) as u8).collect()
+    }
+
+    fn archive(count: usize, method: Method) -> Vec<u8> {
+        let datas: Vec<Vec<u8>> = (0..count).map(entry).collect();
+        let names: Vec<String> = (0..count).map(|i| format!("d/{i}")).collect();
+        let entries: Vec<(&str, &[u8], Method)> = names.iter().zip(&datas).map(|(n, d)| (n.as_str(), d.as_slice(), method)).collect();
+        synth::container(&entries, None)
+    }
+
+    #[test]
+    fn matches_serial_reads_and_charges_the_same() {
+        for method in [Method::Stored, Method::Zlib, Method::Zstd] {
+            for count in [1, 3, 4, 5, 40] {
+                let file = archive(count, method);
+                let names: Vec<String> = (0..count).map(|i| format!("d/{i}")).collect();
+                let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                let mut one = Archive::open(&file, Limits::default()).unwrap();
+                let serial: Vec<Vec<u8>> = names.iter().map(|n| one.read(n).unwrap()).collect();
+                let mut many = Archive::open(&file, Limits::default()).unwrap();
+                assert_eq!(many.read_many(&names).unwrap(), serial);
+                assert_eq!(many.extracted(), one.extracted());
+                assert_eq!(serial[count - 1], entry(count - 1));
+            }
+        }
+    }
+
+    #[test]
+    fn the_limit_stops_at_the_same_entry_as_serial_reads() {
+        let file = archive(12, Method::Zstd);
+        let names: Vec<String> = (0..12).map(|i| format!("d/{i}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let limits = Limits { max_total: (0..7).map(|i| entry(i).len()).sum(), ..Limits::default() };
+        let mut one = Archive::open(&file, limits).unwrap();
+        let failed = names.iter().position(|n| one.read(n).is_err()).unwrap();
+        assert_eq!(failed, 7);
+        let mut many = Archive::open(&file, limits).unwrap();
+        assert!(matches!(many.read_many(&names), Err(Error::Limit(_))));
+        assert_eq!(many.extracted(), one.extracted());
+    }
+
+    #[test]
+    fn the_first_failing_entry_in_order_is_reported() {
+        let mut file = archive(12, Method::Stored);
+        // Flip a data byte of entry 2 (checksum failure); entry 9 is missing from the list.
+        let at = file.windows(4).position(|w| w == b"#Fil").unwrap();
+        let second = at + 4 + entry(0).len();
+        let third = second + 4 + entry(1).len();
+        file[third + 4 + 10] ^= 0xFF;
+        let names: Vec<String> = (0..12).map(|i| if i == 9 { "gone".to_string() } else { format!("d/{i}") }).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut a = Archive::open(&file, Limits::default()).unwrap();
+        assert_eq!(a.read_many(&names).unwrap_err(), Error::Malformed("archive entry checksum mismatch"));
+        // Without the corrupt entry the missing one is what fails.
+        let intact = archive(12, Method::Stored);
+        let mut a = Archive::open(&intact, Limits::default()).unwrap();
+        assert_eq!(a.read_many(&names).unwrap_err(), Error::Malformed("missing archive entry"));
+    }
+}
+
+/// Object lookup and record arrays against the structures they replaced.
+mod stream_storage {
+    use crate::stream::{self, Kind, Object, Tag, Value};
+    use crate::synth::{self, F, tag};
+
+    /// The per-object map `Object::get` used before: first occurrence of each real tag.
+    fn reference(fields: &[(Tag, Value)], t: Tag) -> Option<&Value> {
+        let mut index = std::collections::HashMap::new();
+        for (i, (ft, _)) in fields.iter().enumerate() {
+            if ft.0 != 0 {
+                index.entry(*ft).or_insert(i);
+            }
+        }
+        index.get(&t).map(|&i| &fields[i].1)
+    }
+
+    #[test]
+    fn lookup_keeps_first_match_for_every_object_size() {
+        for n in 0..60u32 {
+            // Tags repeat (n % 7 distinct tags) and every fifth field is positional (tag 0).
+            let fields: Vec<(Tag, Value)> = (0..n).map(|i| (if i % 5 == 0 { Tag(0) } else { Tag(100 + i % 7) }, Value::UInt(u64::from(i)))).collect();
+            let object = Object::new(Tag(1), Kind::Inline, vec![Tag(1)], fields.clone());
+            for t in 0..120 {
+                assert_eq!(object.get(Tag(t)), reference(&fields, Tag(t)), "{n} fields, tag {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn last_lookup_keeps_last_match_for_every_object_size() {
+        for n in 0..60u32 {
+            let fields: Vec<(Tag, Value)> = (0..n).map(|i| (if i % 5 == 0 { Tag(0) } else { Tag(100 + i % 7) }, Value::UInt(u64::from(i)))).collect();
+            let object = Object::new(Tag(1), Kind::Inline, vec![Tag(1)], fields.clone());
+            for t in 0..120 {
+                let expected = if t == 0 { None } else { fields.iter().rev().find(|(k, _)| *k == Tag(t)).map(|(_, v)| v) };
+                assert_eq!(object.get_last(Tag(t)), expected, "{n} fields, tag {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_fixed_size_array_is_one_buffer_and_one_value_per_record() {
+        let records: Vec<u8> = (0..18 * 5).map(|i| i as u8).collect();
+        let bytes = synth::stream(&[(tag(b"Nods"), F::Records(18, records.chunks(18).map(<[u8]>::to_vec).collect()))]);
+        let s = stream::parse(&bytes).unwrap();
+        let root = s.object(s.root).unwrap();
+        assert_eq!(root.get(Tag::of(b"Nods")), Some(&Value::Records { size: 18, data: records }));
+        assert_eq!(root.get(Tag::of(b"Nods")).and_then(Value::array_len), Some(5));
     }
 }

@@ -28,6 +28,8 @@ pub mod ids {
     pub const EXIF: u16 = 1058;
     /// XMP metadata.
     pub const XMP: u16 = 1060;
+    /// Document timeline settings (versioned descriptor).
+    pub const TIMELINE_INFO: u16 = 1075;
 }
 
 /// One image resource block.
@@ -45,20 +47,24 @@ pub struct ImageResource {
 }
 
 /// Fixed-point resolution info (resource 1005).
+///
+/// `h_res_fixed` and `v_res_fixed` are always pixels per inch (16.16 fixed).
+/// `h_res_unit` and `v_res_unit` only say how to display that number
+/// (1 = pixels/inch, 2 = pixels/cm) and do not rescale the stored value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResolutionInfo {
-    /// Horizontal resolution, 16.16 fixed point (pixels per inch/cm).
+    /// Horizontal resolution, 16.16 fixed point, always pixels per inch.
     pub h_res_fixed: u32,
-    /// 1 = pixels per inch, 2 = pixels per cm.
+    /// Display unit for the horizontal resolution (1 = px/in, 2 = px/cm).
     pub h_res_unit: u16,
-    /// Display unit for width (1 in, 2 cm, 3 pt, 4 pica, 5 column).
+    /// Ruler unit for width (1 in, 2 cm, 3 pt, 4 pica, 5 column).
     pub width_unit: u16,
-    /// Vertical resolution, 16.16 fixed.
+    /// Vertical resolution, 16.16 fixed point, always pixels per inch.
     pub v_res_fixed: u32,
-    /// Vertical resolution unit.
+    /// Display unit for the vertical resolution (1 = px/in, 2 = px/cm).
     pub v_res_unit: u16,
-    /// Display unit for height.
+    /// Ruler unit for height (1 in, 2 cm, 3 pt, 4 pica, 5 column).
     pub height_unit: u16,
 }
 
@@ -68,11 +74,11 @@ impl ResolutionInfo {
         let f = (dpi * 65536.0).round().clamp(0.0, u32::MAX as f64) as u32;
         ResolutionInfo { h_res_fixed: f, h_res_unit: 1, width_unit: 1, v_res_fixed: f, v_res_unit: 1, height_unit: 1 }
     }
-    /// Horizontal resolution as float.
+    /// Horizontal resolution in pixels per inch.
     pub fn h_res(&self) -> f64 {
         f64::from(self.h_res_fixed) / 65536.0
     }
-    /// Vertical resolution as float.
+    /// Vertical resolution in pixels per inch.
     pub fn v_res(&self) -> f64 {
         f64::from(self.v_res_fixed) / 65536.0
     }
@@ -165,6 +171,10 @@ pub enum ResourceData<'a> {
     Exif(&'a [u8]),
     /// 1060: XMP packet (UTF-8).
     Xmp(&'a [u8]),
+    /// 1075: document timeline settings; tracks and rational times remain descriptor data.
+    TimelineInfo(crate::VersionedDescriptor),
+    /// A `mani` legacy animation resource in the plug-in resource id range (4000..=4999).
+    Animation(crate::animation::AnimationResource<'a>),
 }
 
 impl ImageResource {
@@ -195,6 +205,8 @@ impl ImageResource {
             ids::VERSION_INFO => VersionInfo::from_bytes(d).map(ResourceData::VersionInfo),
             ids::EXIF => Ok(ResourceData::Exif(d)),
             ids::XMP => Ok(ResourceData::Xmp(d)),
+            ids::TIMELINE_INFO => crate::animation::parse_descriptor(d).map(ResourceData::TimelineInfo),
+            4000..=4999 if d.starts_with(b"mani") => crate::animation::AnimationResource::from_bytes(d).map(ResourceData::Animation),
             _ => return None,
         })
     }
@@ -240,6 +252,16 @@ pub(crate) fn read_section(r: &mut Reader<'_>) -> Result<Vec<ImageResource>> {
         v.push(ImageResource::read(&mut s)?);
     }
     Ok(v)
+}
+
+/// Serialized size of the resource section [`write_section`] writes, its length field included.
+pub(crate) fn section_len(res: &[ImageResource]) -> u64 {
+    res.iter().fold(4u64, |n, r| {
+        let name = 1 + r.name.len().min(255);
+        let name = name + name % 2;
+        let data = r.data.len().saturating_add(r.data.len() % 2);
+        n.saturating_add((4 + 2 + name + 4) as u64).saturating_add(data as u64)
+    })
 }
 
 pub(crate) fn write_section(out: &mut Vec<u8>, res: &[ImageResource]) -> Result<()> {

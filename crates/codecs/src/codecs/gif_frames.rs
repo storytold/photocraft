@@ -14,16 +14,16 @@ use crate::error::CodecError;
 use crate::image::{ChannelLayout, DecodeWarning, Image};
 use crate::options::DecodeOptions;
 
-/// Most frames one GIF may yield. Frames are held in memory, and a tiny canvas could otherwise
-/// ask for millions of them while staying inside the byte budget.
+/// Most frames one GIF (or animated WebP) may yield. Frames are held in memory, and a tiny
+/// canvas could otherwise ask for millions of them while staying inside the byte budget.
 pub const MAX_GIF_FRAMES: usize = 100_000;
 
 /// One composited frame of an animation and how long it stays on screen.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnimationFrame {
     pub image: Image,
-    /// On-screen time in milliseconds. GIF counts in hundredths of a second, so this is a
-    /// multiple of 10 (0 when the file gives none).
+    /// On-screen time in milliseconds. GIF counts in hundredths of a second, so there this is a
+    /// multiple of 10 (0 when the file gives none); WebP counts in milliseconds.
     pub delay_ms: u32,
 }
 
@@ -48,6 +48,9 @@ pub fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<AnimationFrame>,
     decoder.set_limits(il).map_err(map)?;
     let (w, h) = decoder.dimensions();
     limits.check_bytes(w, h, 4)?;
+    // The backend initializes the whole logical screen before it reads the first frame, so the
+    // same file-size plausibility as the first-frame decode applies before iterating (#8597).
+    super::via_image::gif_plausible(bytes, w, h, 4)?;
     let frame_bytes = u64::from(w) * u64::from(h) * 4;
 
     let mut out: Vec<AnimationFrame> = Vec::new();
