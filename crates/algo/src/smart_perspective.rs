@@ -520,6 +520,26 @@ mod tests {
         }
     }
 
+    /// A cascade's intermediate keeps the colour bled into its transparent pixels, which its next
+    /// stage reads at the edges; a final render clears it (the references stop matching byte for
+    /// byte when the intermediate is cleared too).
+    #[test]
+    fn only_a_final_render_clears_hidden_colour() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        s.fill_rect(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0]);
+        let b = Rect::new(0, 0, 48, 48);
+        let h = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.004, 0.0, 1.0];
+        let hidden = |r: &Surface| {
+            let px = r.read_region(r.content_bounds());
+            px.chunks(4).filter(|p| p[3] == 0.0 && p[..3].iter().any(|v| *v != 0.0)).count()
+        };
+        let kept = render_with(&s, b, h, None, true, false).expect("drawn");
+        assert!(hidden(&kept) > 0, "an intermediate keeps the bled colour");
+        let cleared = render_with(&s, b, h, None, true, true).expect("drawn");
+        assert_eq!(hidden(&cleared), 0, "a final render clears it");
+    }
+
     #[test]
     fn affine_and_two_way_maps_are_left_to_other_paths() {
         use photocraft_color::{ColorMode, PixelFormat, SampleType};
