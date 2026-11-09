@@ -316,6 +316,10 @@ sync_github_name = false
 real_name = "David Vanhoucke"
 sync_github_name = true
 
+[people.rmsff]
+real_name = "Serikov Roman"
+sync_github_name = false
+
 [people.tronicum]
 real_name = "Stefan Sels"
 display_name = "tronicum"
