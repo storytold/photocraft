@@ -829,11 +829,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::Dodge | Tool::Burn => {
-            let tooltip = |response: egui::Response, text: &str| {
+            let tooltip = |response: egui::Response, text: &str, accessibility_id: egui::Id| {
                 // The checkbox's box is a mouse target, not its named accessibility node.
                 // Match on_hover_text: enrich existing nodes without inventing another control.
-                if response.ctx.has_accesskit_node(response.id) {
-                    response.ctx.accesskit_node_builder(response.id, |node| {
+                if response.ctx.has_accesskit_node(accessibility_id) {
+                    response.ctx.accesskit_node_builder(accessibility_id, |node| {
                         if node.description().is_none() {
                             node.set_description(text);
                         }
@@ -853,14 +853,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             let opts = [("shadows".to_string(), tl!("Shadows")), ("midtones".to_string(), tl!("Midtones")), ("highlights".to_string(), tl!("Highlights"))];
             crate::widgets::dropdown(ui, "tone-range", tl!("Range"), &mut o.tone_range, &opts, 100.0);
             if let Some(range) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("tone-range"))) {
-                tooltip(range, tl!("Painting Mode"));
+                let id = range.id;
+                tooltip(range, tl!("Painting Mode"), id);
             }
             opt(ui, tl!("Exposure:"));
-            tooltip(crate::widgets::value_field(ui, &mut o.exposure, 1.0..=100.0, "%", 58.0), tl!("Set exposure for stroke"));
-            tooltip(
-                crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones")),
-                tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"),
-            );
+            let exposure = crate::widgets::value_field(ui, &mut o.exposure, 1.0..=100.0, "%", 58.0);
+            let exposure_id = exposure.id;
+            tooltip(exposure, tl!("Set exposure for stroke"), exposure_id);
+            let (protect, protect_id) = crate::widgets::checkbox_with_accessibility_id(ui, &mut o.protect_tones, tl!("Protect Tones"));
+            tooltip(protect, tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"), protect_id);
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));

@@ -208,6 +208,11 @@ fn tooltip_descriptions_do_not_create_anonymous_accessibility_nodes() {
     for tool in [Tool::Burn, Tool::Dodge] {
         let mut h = bar(tool, Lang::EN, 1600.0, 1.0, false);
         for (role, label, tip) in CONTROLS {
+            assert_eq!(
+                h.get_by_role_and_label(role, label).accesskit_node().description().as_deref(),
+                Some(tip),
+                "{label}: the named control has its tooltip description"
+            );
             for node in h.query_all(by().predicate(|n| n.description().as_deref() == Some(tip))) {
                 assert_eq!(node.accesskit_node().role(), role, "{label}: tooltip metadata belongs on the named control");
                 assert_eq!(node.accesskit_node().label().as_deref(), Some(label));

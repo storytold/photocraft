@@ -213,6 +213,12 @@ fn button_impl_h(ui: &mut Ui, label: &str, min_width: f32, height: Option<f32>, 
 
 /// Spectrum-style checkbox (blue when checked).
 pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    checkbox_with_accessibility_id(ui, on, label).0
+}
+
+/// Return the combined mouse response and the named checkbox's accessibility ID.
+/// The response keeps the box ID; accessibility metadata belongs on the label instead.
+pub(crate) fn checkbox_with_accessibility_id(ui: &mut Ui, on: &mut bool, label: &str) -> (Response, egui::Id) {
     let t = Tokens::get(ui.ctx());
     let (mut resp, label_resp) = ui
         .horizontal(|ui| {
@@ -235,7 +241,7 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     // The label is the single named, focusable checkbox; the box is a mouse target.
     // Override Label's metadata instead of creating a second node with the same name.
     label_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, tl!(label)));
-    resp
+    (resp, label_resp.id)
 }
 
 /// The fill of a check box: the accent when `on`, else the field colour. While it's pressed
