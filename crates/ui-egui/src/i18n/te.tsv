@@ -4853,3 +4853,22 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Zoom current window to fill the screen	ప్రస్తుత విండో స్క్రీన్‌ను నింపేలా జూమ్ చేయి
 	Zoom current window to screen size	ప్రస్తుత విండోను స్క్రీన్ పరిమాణానికి జూమ్ చేయి
 	brush tool	బ్రష్ సాధనం
+	Allows rotation and scaling of selection	ఎంపికను తిప్పడానికి మరియు స్కేల్ చేయడానికి అనుమతిస్తుంది
+	Bottom align text	టెక్స్ట్‌ను క్రిందికి సమలేఖనం చేయి
+	Choose a remix mode	రీమిక్స్ మోడ్‌ను ఎంచుకోండి
+	Copy CSS	CSS కాపీ చేయి
+	Could not use the type tool because the layer is locked.	లేయర్ లాక్ చేయబడినందున టైప్ సాధనాన్ని ఉపయోగించలేకపోయాం.
+	Draws background color over foreground colors	ముందుభాగ రంగులపై నేపథ్య రంగును గీస్తుంది
+	Enable to remix all layers	అన్ని లేయర్‌లను రీమిక్స్ చేయడానికి ఆన్ చేయండి
+	No pixels are selected.	పిక్సెల్‌లు ఏవీ ఎంచుకోబడలేదు.
+	Open as Smart Object…	స్మార్ట్ ఆబ్జెక్ట్‌గా తెరువు…
+	Preparing Free Transform	స్వేచ్ఛా రూపాంతరాన్ని సిద్ధం చేస్తోంది
+	Scroll All Windows	అన్ని విండోలను స్క్రోల్ చేయి
+	Scroll all open document windows when using the hand tool	హ్యాండ్ సాధనాన్ని ఉపయోగిస్తున్నప్పుడు తెరిచి ఉన్న అన్ని పత్రాల విండోలను స్క్రోల్ చేయి
+	Search and select fonts	ఫాంట్‌లను శోధించి ఎంచుకోండి
+	Set font size	ఫాంట్ పరిమాణాన్ని సెట్ చేయి
+	Set font style	ఫాంట్ శైలిని సెట్ చేయి
+	Set text color	టెక్స్ట్ రంగును సెట్ చేయి
+	Set the brush angle	బ్రష్ కోణాన్ని సెట్ చేయి
+	The preference could not be saved: {error}	ప్రాధాన్యతను సేవ్ చేయలేకపోయాం: {error}
+	Top align text	టెక్స్ట్‌ను పైకి సమలేఖనం చేయి
