@@ -1242,4 +1242,5 @@ fn opens_a_jpeg_over_a_gigapixel() {
     let bytes = photocraft_codecs::encode(&Image::from_raw(w, h, ChannelLayout::Gray, S::U8, px).unwrap(), Format::Jpeg, &EncodeOptions::default()).unwrap();
     let r = photocraft_io::import("big.jpg", &bytes).unwrap();
     assert_eq!((r.document.size.width, r.document.size.height), (w, h));
+    assert_eq!((r.document.mode, r.document.depth), (ColorMode::Grayscale, SampleType::U8));
 }
