@@ -168,6 +168,9 @@ pub(crate) fn committing(app: &PhotocraftApp) -> Option<JobId> {
 /// A job ended (see [`crate::jobs_ui`]): when it was the commit, the session ends with it. Its
 /// status and errors are reported like any job's.
 pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
+    if super::begin::on_prepared(app, e) {
+        return;
+    }
     if committing(app) != Some(e.id) {
         return;
     }
@@ -367,6 +370,8 @@ pub(crate) const SAVE_FOR_WEB: &str = "file.export.saveForWebLegacy";
 /// Layer › Smart Objects › Reset Transform: refused under an open box, whose start is the
 /// placement it would reset.
 const RESET_TRANSFORM: &str = "layer.smartObjects.resetTransform";
+/// Layer › Copy CSS: refused under an open box too, as it would copy the bounds from before it.
+const COPY_CSS: &str = photocraft_engine::layer_css_cmds::ID;
 
 /// While transforming, Undo and Redo apply to the box: `Some(enabled)` for those commands (and
 /// Toggle Last State, which would change the document under the box), `None` for the rest.
@@ -392,7 +397,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         // Transform would change the placement the box opened on (Photoshop greys it until Enter).
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | RESET_TRANSFORM => Some(false),
         // Save for Web exports the committed document and would ignore the pending box (#6737).
-        SAVE_FOR_WEB => Some(false),
+        // Copy CSS, likewise, would copy the layers' bounds from before the box.
+        SAVE_FOR_WEB | COPY_CSS => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if box_preset(id).is_some() => Some(t.warp.is_none()),
         // One box over several layers doesn't warp (#6501).
@@ -440,7 +446,7 @@ fn box_preset(id: &str) -> Option<(f64, f64, f64)> {
 /// `None` for other commands or when not transforming.
 /// The commands the open box answers itself ([`is_enabled`], [`intercept`]).
 fn box_command(id: &str) -> bool {
-    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | RESET_TRANSFORM)
+    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | RESET_TRANSFORM | COPY_CSS)
         || box_preset(id).is_some()
 }
 
@@ -452,7 +458,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
     match id {
         "edit.undo" => Some(Ok(step(app, false))),
         "edit.redo" => Some(Ok(step(app, true))),
-        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | RESET_TRANSFORM => {
+        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | RESET_TRANSFORM | COPY_CSS => {
             Some(Err("Commit or cancel the transform first".into()))
         }
         _ => {

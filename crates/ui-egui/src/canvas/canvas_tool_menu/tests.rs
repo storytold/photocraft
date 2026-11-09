@@ -2,6 +2,9 @@ use super::*;
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
+#[path = "zoom_menu_anchor_tests.rs"]
+mod zoom_menu_anchor_tests;
+
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
@@ -399,8 +402,8 @@ fn selection_menus_follow_photoshop_order() {
             Some("Save Selection…"),
             Some("Make Work Path…"),
             None,
-            Some("Layer via Copy"),
-            Some("Layer via Cut"),
+            Some("Layer Via Copy"),
+            Some("Layer Via Cut"),
             Some("New Layer…"),
             None,
             Some("Free Transform"),
@@ -535,7 +538,8 @@ fn zoom_and_hand_right_click_opens_the_view_menu() {
         let inside = screen_of(h.state(), [300.0, 100.0]);
         right_click(&mut h, inside, Modifiers::NONE);
         let menu = h.state().ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: right-click opens no menu"));
-        assert!(rows(&menu) == VIEW_MENU, "{tool:?}: the view menu");
+        // The Hand's menu has only the fixed zooms (#12022).
+        assert!(rows(&menu) == if tool == Tool::Hand { HAND_MENU } else { VIEW_MENU }, "{tool:?}: the view menu");
         assert_eq!(h.state().ui.views[0].zoom, zoom, "{tool:?}: the right-click alone does not zoom");
         assert!(entry_enabled(h.state(), &menu, FILL_SCREEN) && entry_enabled(h.state(), &menu, "view.printSize"));
         // Outside the image the pasteboard colour menu wins, as for the other tools.
@@ -547,11 +551,12 @@ fn zoom_and_hand_right_click_opens_the_view_menu() {
 }
 
 #[test]
-fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
+fn view_menu_zoom_in_keeps_the_view_centre() {
     let mut app = zoom_app(400, 300);
     app.ui.tool = Tool::Zoom;
     let mut h = harness(app);
     let zoom = h.state().ui.views[0].zoom;
+    let center = h.state().ui.views[0].center;
     let doc = [300.0, 100.0];
     let p = screen_of(h.state(), doc);
     right_click(&mut h, p, Modifiers::NONE);
@@ -561,8 +566,7 @@ fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
     assert!(h.state().ui.canvas_tool_menu.is_none());
     let after = h.state().ui.views[0].zoom;
     assert_eq!(after, crate::zoom_levels::step(zoom, 1, [400, 300]), "one Zoom In step");
-    let s = screen_of(h.state(), doc);
-    assert!((s - p).length() < 1.0, "the right-clicked point stays put: {s:?} vs {p:?}");
+    assert_eq!(h.state().ui.views[0].center, center);
     assert_eq!(h.state().session.journal.last().map(|(id, _)| id.as_str()), Some("view.zoomIn"));
     // Zoom Out returns to where it was.
     right_click(&mut h, p, Modifiers::NONE);
@@ -573,12 +577,13 @@ fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
 }
 
 #[test]
-fn animated_zoom_off_view_menu_keeps_the_anchor_without_a_transition() {
+fn animated_zoom_off_view_menu_keeps_the_centre_without_a_transition() {
     for command in ["view.zoomIn", "view.zoomOut", FILL_SCREEN] {
         let mut app = zoom_app(400, 300);
         app.ui.tool = Tool::Zoom;
         app.run("prefs.set", json!({"values": {"general.animatedZoom": false, "tools.zoomClickedPointToCenter": false}})).unwrap();
         let mut h = harness(app);
+        let center = h.state().ui.views[0].center;
         let doc = [300.0, 100.0];
         let p = screen_of(h.state(), doc);
         right_click(&mut h, p, Modifiers::NONE);
@@ -591,17 +596,18 @@ fn animated_zoom_off_view_menu_keeps_the_anchor_without_a_transition() {
         assert_eq!((xf.zoom, xf.center), (v.zoom, v.center), "{command}");
         assert!(v.zoom_anchor.is_none() && v.zoom_transition.is_none(), "{command}");
         if command != FILL_SCREEN {
-            assert!(screen_of(h.state(), doc).distance(p) < 1.0, "{command}: preserve the clicked point");
+            assert_eq!(v.center, center, "{command}: preserve the view centre");
         }
     }
 }
 
 #[test]
-fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
+fn view_menu_zoom_keeps_its_centre_during_the_animation() {
     let mut app = zoom_app(400, 300);
     app.ui.tool = Tool::Zoom;
     let mut h = harness(app);
     let zoom = h.state().ui.views[0].zoom;
+    let center = h.state().ui.views[0].center;
     let doc = [300.0, 100.0];
     let p = screen_of(h.state(), doc);
     right_click(&mut h, p, Modifiers::NONE);
@@ -613,7 +619,7 @@ fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
     h.step();
     let displayed = crate::canvas::ViewXform::active(h.state()).unwrap();
     assert!(displayed.zoom > zoom && displayed.zoom < h.state().ui.views[0].zoom);
-    assert!(displayed.to_screen(doc[0], doc[1]).distance(p) < 1.0);
+    assert!(displayed.to_screen(center[0], center[1]).distance(displayed.rect.center()) < 1.0);
     h.input_mut().time = Some(ctx.input(|i| i.time) + 0.3);
     h.step();
     assert!(!h.state().ui.views[0].zoom_animating);
@@ -622,7 +628,8 @@ fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
 #[test]
 fn view_menu_zoom_in_centres_the_clicked_point_with_the_preference() {
     let mut app = zoom_app(400, 300);
-    app.ui.tool = Tool::Hand;
+    // Zoom In is on the Zoom tool's menu only (#12022).
+    app.ui.tool = Tool::Zoom;
     app.run("prefs.set", json!({"path": "tools.zoomClickedPointToCenter", "value": true})).unwrap();
     let mut h = harness(app);
     let doc = [300.0, 100.0];
