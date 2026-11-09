@@ -32,8 +32,7 @@ pub enum Pick {
     Mode(BlendMode),
     /// Painting tools only: paint transparency.
     Clear,
-    /// Painting tools only: paint behind the layer's pixels. Not implemented yet, so ⇧⌥Q is taken
-    /// (it must not reach another binding) and does nothing.
+    /// Brush and Pencil: paint behind the layer's pixels.
     Behind,
 }
 
@@ -203,14 +202,23 @@ fn set_tool_mode(app: &mut PhotocraftApp, mode: Option<BlendMode>) {
         _ => {}
     }
     crate::paint_mouse::sync_tool_brush(app);
+    // Behind is one of the painting modes in the reference application: picking any other mode
+    // (Clear too) leaves it, in the same one command (#11896). With Behind off, as before.
+    let mut brush = serde_json::Map::new();
     if let Some(m) = mode
         && let Ok(m) = serde_json::to_value(m)
     {
-        let _ = app.run("tools.setBrush", json!({ "brush": { "mode": m } }));
+        brush.insert("mode".into(), m);
+    }
+    if app.session.tools.brush.behind {
+        brush.insert("behind".into(), json!(false));
+    }
+    if !brush.is_empty() {
+        let _ = app.run("tools.setBrush", json!({ "brush": brush }));
     }
 }
 
-fn set_gradient_mode(app: &mut PhotocraftApp, mode: BlendMode) {
+pub(crate) fn set_gradient_mode(app: &mut PhotocraftApp, mode: BlendMode) {
     let before = app.ui.tool_options.clone();
     app.ui.tool_options.gradient_blend_mode = mode;
     // Live mode: a selected gradient fill layer follows, as with the dropdown.
@@ -265,7 +273,23 @@ pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
     let want = match pick {
         Pick::Mode(m) => Some(m),
         Pick::Clear => None,
-        Pick::Behind => return,
+        Pick::Behind => {
+            let item = crate::brush_mode_menu::Item::Behind;
+            let tool = app.ui.tool;
+            if app.session.active().is_none() || !crate::brush_mode_menu::enabled(app, item) {
+                return;
+            }
+            let Some((id, params)) = crate::brush_mode_menu::engine_call(app, tool, item) else { return };
+            crate::paint_mouse::sync_tool_brush(app);
+            if app.run(id, params).is_ok() {
+                match tool {
+                    Tool::Brush => app.ui.tool_options.brush_clear = false,
+                    Tool::Pencil => app.ui.tool_options.pencil_clear = false,
+                    _ => {}
+                }
+            }
+            return;
+        }
     };
     match target(app.ui.tool) {
         Target::Tool(modes) if modes.contains(&want) => set_tool_mode(app, want),
@@ -280,3 +304,11 @@ pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../brush_behind_key_tests.rs"]
+mod brush_behind_key_tests;
+
+#[cfg(test)]
+#[path = "../brush_blend_keys_behind_tests.rs"]
+mod brush_blend_keys_behind_tests;
