@@ -75,6 +75,7 @@ impl PhotocraftApp {
         vector_ui::finish_pen_if_left(self);
         transform_tool::end_if_left(self);
         shape_stroke_ui::sync_editor(self, ctx);
+        crate::dock::persist_pending(self, ctx);
         prefs_ui::tick(self, ctx);
         updates_ui::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
@@ -300,21 +301,44 @@ impl PhotocraftApp {
         if chrome && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);
         }
-        if ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home {
-            panels::toolbar(self, ui);
-        }
+        let toolbar_shown = ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home;
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
         let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
-        if docking {
-            panels::dock_area(self, ui);
-        } else {
+        let toolbar_side = self.ui.panels.toolbar_side.resolve();
+        let toolbar_right = toolbar_side == crate::state::ToolbarSide::Right;
+        // The compact layout stacks the dock, rail and toolbar on the dock's physical edge.
+        let dock_right = !crate::direction::is_rtl();
+        let toolbar_at_dock_edge = toolbar_right == dock_right;
+        // The dock-edge layout drops the canvas from craft-ui's split, which is only safe while
+        // nothing else is docked beside it. A panel already beside the canvas keeps the standard
+        // layout so it stays visible and dockable. The layout must not change once a drag starts:
+        // craft-ui records the areas on the press, and swapping the shape cancels the drag.
+        let dock_edge_layout = toolbar_shown && docking && toolbar_at_dock_edge && crate::panel_docking::canvas_alone(self);
+        if dock_edge_layout {
+            // Dock outermost, then its rail, then the toolbox, then the canvas: the toolbox sits
+            // between the canvas and the dock, not outside the dock at the window edge.
+            panels::dock_panel(self, ui);
+            panels::toolbar(self, ui);
             let t = theme::Tokens::get(&ctx);
             let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
                 canvas::document_area(self, ui);
             });
-            if !home {
-                panels::properties_window(self, &ctx);
+        } else {
+            if toolbar_shown {
+                panels::toolbar(self, ui);
+            }
+            if docking {
+                panels::dock_area(self, ui);
+            } else {
+                let t = theme::Tokens::get(&ctx);
+                let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
+                    canvas::document_area(self, ui);
+                });
+                if !home {
+                    panels::properties_window(self, &ctx);
+                }
             }
         }
         // The floating editor windows belong to the editor: Home covers them (dialogs and notices
