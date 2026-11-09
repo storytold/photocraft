@@ -15,7 +15,10 @@ impl Session {
     /// Runs synchronously, including job-capable commands (see [`jobs`]; [`Session::start`] runs
     /// those in the background).
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value> {
-        match self.dispatch(id, params, false)? {
+        let before = self.active_layer_stamp();
+        let result = self.dispatch(id, params, false);
+        self.note_layer_change(before);
+        match result? {
             jobs::Started::Done(v) => Ok(v),
             // Not reached: inline dispatch never starts a job. Waiting is still correct.
             jobs::Started::Job(j) => self.wait_job(j),
@@ -244,6 +247,9 @@ impl Session {
     /// still marks the document modified and leaves the redo states alone.
     pub(crate) fn edit_with<R>(&mut self, label: &str, record: bool, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
         let _acceleration = photocraft_plugins::acceleration::scope(self.effective_plugin_accelerator());
+        if record {
+            crate::actions_cmds::before_action_edit(self);
+        }
         // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
         // through this entry; the requesting session's authority must reach those renders.
         let _authorization = crate::jobs::render_authorization_scope(self.authorize);

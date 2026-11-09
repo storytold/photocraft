@@ -74,9 +74,10 @@ pub(super) fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
     let id = crate::commands::layer_param(s, p)?;
     s.edit("Rename Layer", |doc, _| {
-        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name = name;
+        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name.clone_from(&name);
         Ok(())
     })?;
+    crate::type_cmds::note_typed_name(s, id, &name);
     Ok(Value::Null)
 }
 
@@ -287,6 +288,7 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
             }
             copies.push(nid);
         }
+        relink_copies(doc, &copies)?;
         let a = new_active.or(copies.last().copied());
         *active = a;
         Ok((copies, a))
@@ -294,6 +296,49 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
     let out = copies.iter().map(|l| l.0).collect::<Vec<_>>();
     reselect(s, copies, active);
     Ok(json!({"layers": out, "layer": active.map(|l| l.0)}))
+}
+
+/// Link groups of fresh copies, as the reference application does (measured, #11217): a copy of
+/// one layer alone (Duplicate, Layer via Copy) joins its original's link group. With several
+/// layers copied, the copies of several layers of one link group are linked to each other under a
+/// group of their own, as `layer_copy_cmds::adapt_copies` remaps copies landing in another
+/// document, and a copy that is the only one from its link group is unlinked. `copies` are the
+/// copies just inserted in `doc` (the layers in copied groups are remapped with them); the
+/// originals keep their groups.
+pub(crate) fn relink_copies(doc: &mut Document, copies: &[LayerId]) -> Result<()> {
+    // One layer copied on its own keeps the link group it was copied with.
+    if let [only] = copies
+        && doc.layer(*only).is_some_and(|l| !matches!(l.content, LayerContent::Group(_)))
+    {
+        return Ok(());
+    }
+    // Every copied layer with the link group it was copied with. An explicit stack rather than
+    // recursion: documents can nest deeply.
+    let mut linked: Vec<(LayerId, u64)> = Vec::new();
+    let mut stack: Vec<&Layer> = copies.iter().filter_map(|id| doc.layer(*id)).collect();
+    while let Some(l) = stack.pop() {
+        if let Some(group) = l.link_group {
+            linked.push((l.id, group));
+        }
+        if let LayerContent::Group(g) = &l.content {
+            stack.extend(g.children.iter());
+        }
+    }
+    let mut groups: Vec<u64> = linked.iter().map(|(_, group)| *group).collect();
+    groups.sort_unstable();
+    groups.dedup();
+    for group in groups {
+        let members: Vec<LayerId> = linked.iter().filter(|(_, g)| *g == group).map(|(id, _)| *id).collect();
+        // The id is picked after the previous group's copies took theirs, so no two share one.
+        let fresh =
+            if members.len() < 2 { None } else { Some(doc.unused_link_group().ok_or_else(|| EngineError::Other("no free link group id is left".into()))?) };
+        for id in members {
+            if let Some(l) = doc.layer_mut(id) {
+                l.link_group = fresh;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Show/hide every selected layer in one step.

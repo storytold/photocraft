@@ -64,7 +64,7 @@ pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_d
     add_smart_filter_in(doc, id, sf, selection, &crate::jobs::JobCtx::new())
 }
 
-/// Cancellable version used by background plug-in runs.
+/// Append a filter while retaining the job's cancellation context through its re-render.
 pub(crate) fn add_smart_filter_in(
     doc: &mut Document,
     id: LayerId,
@@ -87,8 +87,7 @@ pub(crate) fn add_smart_filter_in(
     }
     let bounds = selection.map(Surface::content_bounds).filter(|b| !b.is_empty()).unwrap_or(canvas);
     let cache = sm.cache.as_ref().ok_or_else(|| other("smart object has no pixels"))?;
-    let out = ctx
-        .stage(0.0, 1.0, "Filtering", |ctl| crate::filters::apply_filter_to_surface(&sf.command, &sf.params, cache, bounds, selection, canvas, ctl))?
+    let out = crate::filters::apply_filter_to_surface_in(&sf.command, &sf.params, cache, bounds, selection, canvas, ctx)?
         .ok_or_else(|| other(format!("unknown filter {}", sf.command)))?;
     sm.cache = Some(out);
     sm.smart_filters.push(sf);
@@ -140,9 +139,40 @@ pub(super) fn set_filter_visible(s: &mut Session, p: &Value) -> Result<Value> {
 /// The Displace filter, whose map a smart filter keeps embedded in its params.
 const DISPLACE: &str = "filter.distort.displace";
 
+/// Merge a Shape Blur edit and resolve only geometry, before the cancellable re-render.
+fn edited_shape_params(s: &Session, previous: &Value, patch: &Value) -> Result<Value> {
+    let mut params = previous.clone();
+    match (&mut params, patch) {
+        (Value::Object(old), Value::Object(new)) => old.extend(new.clone()),
+        (slot, new) => *slot = new.clone(),
+    }
+    // A changed selector replaces incompatible stored selectors and geometry. Explicit fields
+    // in the patch still win; radius-only edits and echoed selectors keep portable geometry.
+    let clear: &[&str] = if let Some(id) = patch.get("shapeId") {
+        if Some(id) != previous.get("shapeId") { &["shapeName", "shapePath"] } else { &[] }
+    } else if let Some(name) = patch.get("shapeName") {
+        if Some(name) != previous.get("shapeName") { &["shapeId", "shapePath"] } else { &[] }
+    } else if patch.get("shape").is_some() && patch.get("shapePath").is_none() {
+        &["shapeId", "shapeName", "shapePath"]
+    } else {
+        &[]
+    };
+    if let Value::Object(map) = &mut params {
+        for key in clear {
+            if patch.get(*key).is_none() {
+                map.remove(*key);
+            }
+        }
+    }
+    crate::filters_ext::resolve_shape_path(s, "filter.blur.shapeBlur", &mut params)?;
+    Ok(params)
+}
+
 pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.smartFilter.setParams";
-    let new = p.get("params").cloned().ok_or_else(|| bad(CMD, "pass `params` (merged into the filter's parameters)"))?;
+    let new = p.get("params").cloned().ok_or_else(|| bad(CMD, "pass `params` (merged into the filter's parameters, or replacing them with `replace`)"))?;
+    // An editor holding all of a filter's settings replaces them, so a key it removed stops applying.
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
     let authorize = s.authorize;
     // A Displace given another open document as its map embeds that one in place of the old
     // (#7423). It is read here, before the edit, from the session; the request is authorized
@@ -151,10 +181,14 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
     // negative `mapDocument` (the dialog's "None"), names no map.
     let new_map_asked = crate::filters_ext::map_document(&new).is_some();
     let new_path = crate::filters_ext::map_path(&new).is_some();
-    let displace = {
+    let (displace, shape_params) = {
         let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
         let sm = smart(doc, layer_param(s, p)?)?;
-        sm.smart_filters.get(filter_index(CMD, p, sm)?).is_some_and(|f| f.command == DISPLACE)
+        let f = sm.smart_filters.get(filter_index(CMD, p, sm)?).ok_or_else(|| bad(CMD, "no smart filter at this index"))?;
+        let nothing = json!({});
+        let previous = if replace { &nothing } else { &f.params };
+        let shape_params = if f.command == "filter.blur.shapeBlur" { Some(edited_shape_params(s, previous, &new)?) } else { None };
+        (f.command == DISPLACE, shape_params)
     };
     let new_map = if displace && new_map_asked {
         // The old embedded map, if the edit passed it back, gives way to the one named.
@@ -177,9 +211,15 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         if f.command == photocraft_io::smart_map::UNSUPPORTED_FILTER {
             return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
         }
-        match (&mut f.params, new) {
-            (Value::Object(old), Value::Object(n)) => old.extend(n),
-            (slot, n) => *slot = n,
+        if let Some(params) = shape_params {
+            f.params = params;
+        } else if replace {
+            f.params = new;
+        } else {
+            match (&mut f.params, new) {
+                (Value::Object(old), Value::Object(n)) => old.extend(n),
+                (slot, n) => *slot = n,
+            }
         }
         if f.command == DISPLACE {
             if let Some(map) = &new_map {

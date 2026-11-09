@@ -425,6 +425,7 @@ pub(crate) fn overlay(
         command: "skin-smooth-mask".into(),
         params: json!({"values":fields,"__previewRegion":[region.x0,region.y0,region.x1,region.y1]}),
         k,
+        tool_colors: (app.session.tools.foreground, app.session.tools.background),
     };
     let preview = app.skin_smooth_mask.get_or_insert_default();
     #[cfg(not(target_arch = "wasm32"))]

@@ -458,7 +458,7 @@ fn skin_smooth_checks_icc_before_editing_at_every_depth() {
         assert_ne!(after, before);
         let mut largest_change = 0.0_f32;
         let mut full_change = 0.0_f32;
-        for (i, (original, filtered)) in before.chunks_exact(4).zip(after.chunks_exact(4)).enumerate() {
+        for (i, (original, filtered)) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0.iter()).enumerate() {
             assert_eq!(original[3], filtered[3]);
             let (x, y) = (i % 40, i / 40);
             if !(4..30).contains(&x) || !(4..20).contains(&y) {

@@ -226,6 +226,7 @@ fn background_mask_discards_stale_samples_and_cancel_releases_it() {
         command: "different-mask-request".into(),
         params: Value::Null,
         k: 1,
+        tool_colors: (app.session.tools.foreground, app.session.tools.background),
     };
     let worker = &mut app.skin_smooth_mask.as_mut().unwrap().worker;
     worker.supersede(&other, 0.0);

@@ -109,7 +109,7 @@ impl Accelerator for Backend {
         let rgba = if alpha {
             band.pixels.as_chunks::<4>().0
         } else {
-            expanded = band.pixels.chunks_exact(3).map(|p| [p[0], p[1], p[2], 1.0]).collect();
+            expanded = band.pixels.as_chunks::<3>().0.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect();
             expanded.as_slice()
         };
         let (left, top, right, bottom) = bounds(rgba, w, h, band.params);

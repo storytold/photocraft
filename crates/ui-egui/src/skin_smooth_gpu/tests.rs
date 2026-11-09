@@ -84,7 +84,7 @@ fn gpu_bands_match_wasm_for_depths_offsets_seams_selection_and_alpha() {
                     [(175. + noise) / 255., (120. + noise) / 255., (92. + noise) / 255., if i % 11 == 0 { 0. } else { (x % 7) as f32 / 6. }]
                 })
                 .collect();
-            let values = if alpha { values } else { values.chunks_exact(4).flat_map(|p| p[..3].iter().copied()).collect() };
+            let values = if alpha { values } else { values.as_chunks::<4>().0.iter().flat_map(|p| p[..3].iter().copied()).collect() };
             input.write_region(rect, &values);
             let mut mask = Surface::new(PixelFormat::GRAY8);
             mask.fill_rect(Rect::new(37, 43, 989, 251), &[0.4]);
