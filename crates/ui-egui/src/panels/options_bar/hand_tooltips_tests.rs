@@ -66,6 +66,9 @@ fn the_buttons_still_zoom_fit_and_fill() {
     h.run_steps(2);
     let v = &h.state().ui.views[0];
     assert!(v.fit_pending && !v.fill_pending, "Fit after Fill");
+    h.get_by_label("Fill Screen").click();
+    h.run_steps(2);
+    assert!(h.state().ui.views[0].fill_pending);
     h.get_by_label("100%").click();
     h.run_steps(2);
     let v = &h.state().ui.views[0];
