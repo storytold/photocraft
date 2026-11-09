@@ -111,7 +111,7 @@ fn finish_worker(d: &mut CameraRawDialog, ctx: &egui::Context) {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    panic!("the Camera Raw preview worker never finished");
+    panic!("the RAW Develop preview worker never finished");
 }
 
 /// The dialog's controls develop the proxy on a worker (#5964): the frame it shows is the one
@@ -200,7 +200,7 @@ fn a_worker_failure_is_reported_until_the_next_frame() {
     };
     let fail = |app: &mut PhotocraftApp| {
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(Err("Camera Raw preview failed".to_string())).unwrap();
+        tx.send(Err("RAW Develop preview failed".to_string())).unwrap();
         let d = app.camera_raw.as_mut().unwrap();
         d.pending = Some(rx);
         d.dirty = false;
@@ -213,7 +213,7 @@ fn a_worker_failure_is_reported_until_the_next_frame() {
     frame(&mut app);
     fail(&mut app);
     frame(&mut app);
-    assert!(app.ui.status_error && app.ui.status == "Camera Raw preview failed", "{}", app.ui.status);
+    assert!(app.ui.status_error && app.ui.status == "RAW Develop preview failed", "{}", app.ui.status);
     // No new frame yet: the error stays.
     frame(&mut app);
     assert!(app.ui.status_error);
@@ -372,7 +372,7 @@ fn raw_opens_in_camera_raw_and_open_redevelops() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
-    assert!(r.get("filter").is_some(), "contrast is applied as a Camera Raw step: {r}");
+    assert!(r.get("filter").is_some(), "contrast is applied as a RAW Develop step: {r}");
     assert!(app.camera_raw.is_none());
     assert_eq!(app.session.documents().len(), 1);
     let st = app.session.active().unwrap();
@@ -729,7 +729,7 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!((r["document"].as_u64(), r["redeveloped"].as_bool(), r.get("filter")), (Some(0), Some(false), None), "{r}");
-    assert_eq!(r.get("defaults"), None, "ProPhoto, 16-bit: no Camera Raw Default to apply: {r}");
+    assert_eq!(r.get("defaults"), None, "ProPhoto, 16-bit: no RAW Develop Default to apply: {r}");
     // Preference off: raws open straight away.
     app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
     app.open_bytes("c.dng", &dng).unwrap();
@@ -892,7 +892,7 @@ fn camera_raw_defaults_apply_when_a_raw_opens() {
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["defaults"], json!(["sharpenFor", "colorSpace"]), "{r}");
-    assert!(r.get("filter").is_some(), "Sharpen For is a Camera Raw step: {r}");
+    assert!(r.get("filter").is_some(), "Sharpen For is a RAW Develop step: {r}");
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.depth, photocraft_color::SampleType::U16);
     assert_eq!(st.saved_revision, st.revision);
