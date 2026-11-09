@@ -736,8 +736,8 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
         Tool::Hand => {
             widgets::checkbox(ui, &mut app.ui.tool_options.hand_scroll_all, tl!("Scroll All Windows"))
                 .on_hover_text(tl!("Scroll all open document windows when using the hand tool"));
-            hint(ui, tl!("Drag to pan  ·  hold Space with any tool"));
-            if widgets::secondary_button(ui, "100%", 0.0).clicked()
+            // The reference tooltips and no hint text, as on the Zoom bar (#12026).
+            if widgets::secondary_button(ui, "100%", 0.0).on_hover_text(tl!("Zoom current window to 1:1")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].zoom = 1.0;
@@ -746,7 +746,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 app.ui.views[i].fit_pending = false;
                 app.ui.views[i].fill_pending = false;
             }
-            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).clicked()
+            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).on_hover_text(tl!("Zoom current window to screen size")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].fit_pending = true;
@@ -754,7 +754,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 app.ui.views[i].zoom_anchor = None;
                 app.ui.views[i].fill_pending = false;
             }
-            if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).clicked()
+            if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).on_hover_text(tl!("Zoom current window to fill the screen")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].fill_pending = true;
@@ -770,6 +770,9 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
 
 #[cfg(test)]
 mod zoom_buttons_tests;
+
+#[cfg(test)]
+mod hand_tooltips_tests;
 
 /// Width of the Layers panel's Opacity and Fill fields, with room for their pop-up slider's ▾.
 pub(super) const LAYER_PCT_W: f32 = 66.0 + widgets::POPUP_ARROW_W;
