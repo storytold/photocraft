@@ -440,7 +440,8 @@ fn wrap_axis(delta: i32, period: i32) -> i32 {
 
 /// Move `s` by whole pixels, folding samples that start inside `tile` back into it. Samples
 /// already outside the tile stay where they are. A shift that never leaves the tile is an
-/// ordinary move. Anything we cannot copy exactly falls back to that ordinary move.
+/// ordinary move. Each wrap piece is a [`shift_surface`]-style tile copy of its source rect, so a
+/// live drag never materializes the in-canvas bounding rectangle as one buffer.
 pub(crate) fn wrap_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, tile: photocraft_geom::Rect) -> photocraft_raster::Surface {
     let Some((w, h)) = tile_period(tile) else { return shift_surface(s, dx, dy) };
     let dx = wrap_axis(dx, w);
@@ -448,41 +449,78 @@ pub(crate) fn wrap_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, til
     if dx == 0 && dy == 0 {
         return s.clone();
     }
-    let inside = photocraft_compose::bounds::content_bounds(s).intersect(&tile);
+    let content = photocraft_compose::bounds::content_bounds(s);
+    let inside = content.intersect(&tile);
     if inside.is_empty() {
-        return shift_surface(s, dx, dy);
+        return s.clone();
     }
     let moved = inside.translate(dx, dy);
-    if tile.contains_rect(&moved) {
+    if tile.contains_rect(&moved) && tile.contains_rect(&content) {
         return shift_surface(s, dx, dy);
     }
-    let bpp = s.format().bytes_per_pixel();
-    let bytes = match encoded_len(inside, bpp) {
-        Some(_) => s.to_interleaved(inside),
-        None => return shift_surface(s, dx, dy),
-    };
-    let pieces = wrap_pieces(inside, dx, dy, tile, w, h);
-    let mut chunks = Vec::with_capacity(pieces.len());
+    let mut pieces = wrap_pieces(inside, dx, dy, tile, w, h).into_iter();
+    let Some((dest, from)) = pieces.next() else { return s.clone() };
+    let Some(mut out) = shifted_piece(s, dest, from) else { return shift_surface(s, dx, dy) };
     for (dest, from) in pieces {
-        let Some(chunk) = slice_encoded(&bytes, inside, from, bpp) else { return shift_surface(s, dx, dy) };
-        if encoded_len(dest, bpp) != Some(chunk.len()) {
-            return shift_surface(s, dx, dy);
-        }
-        chunks.push((dest, chunk));
+        let Some(piece) = shifted_piece(s, dest, from) else { return shift_surface(s, dx, dy) };
+        copy_rect(&mut out, &piece, dest);
     }
-    let mut out = s.clone();
-    out.fill_rect(inside, &s.default_pixel());
-    for (dest, chunk) in chunks {
-        out.write_interleaved(dest, &chunk);
+    if !tile.contains_rect(&content) {
+        for (coord, _) in s.tiles() {
+            for r in rect_minus(coord.rect(), tile) {
+                copy_rect(&mut out, s, r);
+            }
+        }
     }
     out.prune();
     out
 }
 
-fn encoded_len(r: photocraft_geom::Rect, bpp: usize) -> Option<usize> {
-    let w = usize::try_from(r.width()).ok()?;
-    let h = usize::try_from(r.height()).ok()?;
-    w.checked_mul(h)?.checked_mul(bpp)
+fn shifted_piece(s: &photocraft_raster::Surface, dest: photocraft_geom::Rect, from: photocraft_geom::Rect) -> Option<photocraft_raster::Surface> {
+    let ox = dest.x0.checked_sub(from.x0)?;
+    let oy = dest.y0.checked_sub(from.y0)?;
+    Some(s.translated(ox, oy, from))
+}
+
+/// Copy `r` tile by tile (at most one 256×256 buffer at a time). Missing source tiles stay default.
+fn copy_rect(dst: &mut photocraft_raster::Surface, src: &photocraft_raster::Surface, r: photocraft_geom::Rect) {
+    if r.is_empty() {
+        return;
+    }
+    for tc in r.tiles() {
+        let tr = tc.rect().intersect(&r);
+        if tr.is_empty() || src.tile(tc).is_none() {
+            continue;
+        }
+        let bytes = src.to_interleaved(tr);
+        dst.write_interleaved(tr, &bytes);
+    }
+}
+
+/// `area` minus `hole`, as at most four rectangles.
+fn rect_minus(area: photocraft_geom::Rect, hole: photocraft_geom::Rect) -> Vec<photocraft_geom::Rect> {
+    let hit = area.intersect(&hole);
+    if hit.is_empty() {
+        return vec![area];
+    }
+    if hole.contains_rect(&area) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if area.x0 < hit.x0 {
+        out.push(photocraft_geom::Rect::new(area.x0, area.y0, hit.x0, area.y1));
+    }
+    if hit.x1 < area.x1 {
+        out.push(photocraft_geom::Rect::new(hit.x1, area.y0, area.x1, area.y1));
+    }
+    if area.y0 < hit.y0 {
+        out.push(photocraft_geom::Rect::new(hit.x0, area.y0, hit.x1, hit.y0));
+    }
+    if hit.y1 < area.y1 {
+        out.push(photocraft_geom::Rect::new(hit.x0, hit.y1, hit.x1, area.y1));
+    }
+    out.retain(|r| !r.is_empty());
+    out
 }
 
 /// `(destination inside the tile, source rect inside `src`)` for a non-negative `dx`/`dy`
@@ -517,29 +555,6 @@ fn wrap_pieces(
         out.push((dest, from));
     }
     out
-}
-
-fn slice_encoded(bytes: &[u8], src: photocraft_geom::Rect, from: photocraft_geom::Rect, bpp: usize) -> Option<Vec<u8>> {
-    if from.is_empty() || bpp == 0 || !src.contains_rect(&from) {
-        return None;
-    }
-    let sw = usize::try_from(src.width()).ok()?;
-    let fw = usize::try_from(from.width()).ok()?;
-    let fh = usize::try_from(from.height()).ok()?;
-    let row = fw.checked_mul(bpp)?;
-    let total = row.checked_mul(fh)?;
-    let x0 = usize::try_from(from.x0.checked_sub(src.x0)?).ok()?;
-    let y0 = usize::try_from(from.y0.checked_sub(src.y0)?).ok()?;
-    let mut out = vec![0u8; total];
-    for row_i in 0..fh {
-        let sy = y0.checked_add(row_i)?;
-        let src_off = sy.checked_mul(sw)?.checked_add(x0)?.checked_mul(bpp)?;
-        let dst_off = row_i.checked_mul(row)?;
-        let src_end = src_off.checked_add(row)?;
-        let dst_end = dst_off.checked_add(row)?;
-        out.get_mut(dst_off..dst_end)?.copy_from_slice(bytes.get(src_off..src_end)?);
-    }
-    Some(out)
 }
 
 /// Reorder one or multiple layers to a single destination in one undoable edit.

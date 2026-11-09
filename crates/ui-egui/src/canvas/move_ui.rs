@@ -246,7 +246,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let too_big = exceeds(&doc, &ids, LIVE_LIMIT, mask_target);
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
         let pattern = app.ui.view.pattern_preview;
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false, too_big, pattern });
+        app.move_preview =
+            Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false, too_big, pattern });
     }
     let p = app.move_preview.as_mut()?;
     if p.too_big {
@@ -404,7 +405,8 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
         return;
     }
     // `nest`: a layer dropped on another artboard joins it (Photoshop's auto-nesting).
-    let Ok(result) = app.run("layer.translate", pattern_wrap(app, json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": app.ui.artboard_tool.auto_nest})))
+    let Ok(result) =
+        app.run("layer.translate", pattern_wrap(app, json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": app.ui.artboard_tool.auto_nest})))
     else {
         return;
     };

@@ -2011,3 +2011,39 @@ fn translate_wrap_moves_a_shape_by_the_raw_delta() {
     assert_eq!(s.active().unwrap().history.past_len(), steps, "a mask moved alone folds away");
     assert!(doc(&s).layer(id).unwrap().mask.as_ref().unwrap().surface.sample_channel(0, 0, 0) > 0.9);
 }
+
+/// A contained wrap still leaves samples that started outside the canvas where they are.
+#[test]
+fn translate_wrap_leaves_off_canvas_samples_in_place() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = rect_layer(&mut s, Rect::new(2, 1, 3, 2));
+    s.edit("paint", |doc, _| {
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(-1, 1, 0, 2), &[0.0, 1.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.translate", json!({"dx": 1, "dy": 0, "wrap": true})).unwrap();
+    let px = |x, y| doc(&s).layer(id).unwrap().surface().unwrap().pixel(x, y);
+    assert!(px(3, 1)[0] > 0.9, "in-canvas red moved right");
+    assert!(px(-1, 1)[1] > 0.9, "off-canvas green stayed");
+    assert!(px(0, 1)[3] < 0.1, "the off-canvas sample did not enter the canvas");
+}
+
+/// Opposite-edge samples wrap by tile copies of each piece, not one buffer of their bounding rect.
+#[test]
+fn translate_wrap_folds_sparse_tiles_on_opposite_edges() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 512, "height": 256, "background": "transparent"})).unwrap();
+    let id = rect_layer(&mut s, Rect::new(0, 0, 1, 1));
+    s.edit("paint", |doc, _| {
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(511, 255, 512, 256), &[0.0, 0.0, 1.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.translate", json!({"dx": 1, "dy": 1, "wrap": true})).unwrap();
+    let surf = doc(&s).layer(id).unwrap().surface().unwrap();
+    assert!(surf.pixel(1, 1)[0] > 0.9, "red wrapped from the top-left");
+    assert!(surf.pixel(0, 0)[2] > 0.9, "blue wrapped from the bottom-right");
+    assert!(surf.pixel(0, 0)[0] < 0.1 && surf.pixel(511, 255)[3] < 0.1, "the old corners are empty");
+}
