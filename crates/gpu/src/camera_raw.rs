@@ -290,7 +290,7 @@ impl CameraRawDevelop {
         // A pass never binds the texture it renders: those are dummies in its group.
         let main = group(&all);
         if let Some(f) = frame {
-            let missing = || Unsupported("a Camera Raw stage's textures are missing".into());
+            let missing = || Unsupported("a RAW Develop stage's textures are missing".into());
             if stages.dehaze.is_some() {
                 let [_, _, dehazed] = f.haze().ok_or_else(missing)?;
                 f.record(encoder, &self.tone, Segment::Haze);
