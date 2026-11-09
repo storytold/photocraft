@@ -164,3 +164,22 @@ fn hidden_and_locked_fill_layers_keep_the_choice() {
         assert_eq!(dropdown(&bar(app)), (false, "Classic gradient".into()), "{setup}");
     }
 }
+
+/// A fill layer made active while the list is open, as a script or a layer shortcut can do: a
+/// pick from the still-open list doesn't overwrite the stored choice.
+#[test]
+fn an_open_list_does_not_overwrite_the_choice_once_a_fill_layer_is_active() {
+    let (mut app, pixels, fill) = doc();
+    app.ui.tool_options.gradient_classic = true;
+    select(&mut app, pixels);
+    let mut h = bar(app);
+    h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().value().as_deref() == Some("Classic gradient")).expect("the mode dropdown").click();
+    h.run_steps(2);
+    select(h.state_mut(), fill);
+    h.run_steps(2);
+    assert_eq!(dropdown(&h), (true, "Gradient".into()));
+    let option = h.query_all_by_label("Gradient").find(|n| n.accesskit_node().role() != Role::ComboBox).expect("the list stays open");
+    option.click();
+    h.run_steps(2);
+    assert!(h.state().ui.tool_options.gradient_classic, "the stored Classic choice is kept");
+}

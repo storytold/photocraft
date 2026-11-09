@@ -532,6 +532,8 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                     widgets::dropdown(ui, "gradient-mode", tl!("Mode"), &mut classic, &[(false, "Gradient"), (true, "Classic gradient")], 118.0)
                 })
                 .inner
+                // A list opened before a fill layer became active can still be clicked.
+                && !fill
             {
                 app.ui.tool_options.gradient_classic = classic;
             }
