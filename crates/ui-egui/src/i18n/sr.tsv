@@ -431,8 +431,8 @@
 	Artboard…	Radna tabla…
 	Artboard from Group…	Radna tabla od grupe…
 	Artboard from Layers…	Radna tabla od slojeva…
-	Layer via Copy	Sloj kopiranjem
-	Layer via Cut	Sloj isecanjem
+	Layer Via Copy	Sloj kopiranjem
+	Layer Via Cut	Sloj isecanjem
 	Layer From Background…	Sloj od pozadine…
 	Layer from Background…	Sloj od pozadine…
 	Background From Layer	Pozadina od sloja
@@ -4143,7 +4143,7 @@ layerLabel	No Color	Bez boje
 	Scroll menu down	Pomeri meni nadole
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Ovaj tekstualni sloj mora da se rasterizuje pre nastavka. Njegov tekst više neće moći da se uređuje. Rasterizovati tekst?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Ovaj sloj oblika mora da se rasterizuje pre nastavka. Više neće moći da se uređuje kao oblik. Rasterizovati oblik?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Ovaj pametni objekat mora da se rasterizuje pre nastavka. Njegov sadržaj više neće moći da se uređuje. Rasterizovati pametni objekat?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Ovaj pametni objekat mora da se rasterizuje pre nastavka. Njegov sadržaj više neće moći da se uređuje. Rasterizovati pametni objekat?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Ovaj sloj popune mora da se rasterizuje pre nastavka. Njegov sadržaj popune više neće moći da se uređuje. Rasterizovati sloj?
 	This layer must be rasterized before proceeding.	Ovaj sloj mora da se rasterizuje pre nastavka.
 	Color Picker (Background Color)	Birač boja (boja pozadine)
@@ -4584,8 +4584,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Skala nijansi sive
 	Current Colors	Trenutne boje
 	Make Ramp Web Safe	Učini skalu bezbednom za veb
+	Scroll All Windows	Pomeraj sve prozore
 	The path was kept as the Work Path	Putanja je sačuvana kao radna putanja
 	The path was discarded	Putanja je odbačena
+# Art History Brush (#213).
 	Art History Brush Tool	Alatka umetnička četkica istorije
 	Tight Short	Usko kratko
 	Tight Medium	Usko srednje
@@ -4676,6 +4678,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Izaberite drugi dokument za svaki kanal.
 	A picked document is no longer open.	Jedan izabrani dokument više nije otvoren.
 	A picked document is no longer a grayscale document of the same size.	Jedan izabrani dokument više nije dokument u nijansama sive iste veličine.
+	Netscape Gray	Netscape siva
 # Move tool options bar (#11381)
 	Align top edges	Poravnaj gornje ivice
 	Align vertical centers	Poravnaj vertikalne centre
@@ -4685,6 +4688,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Prikaži granice sloja pri prelasku miša
 	Expand layer group on click	Proširi grupu slojeva klikom
 	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi
+	Saved Camera Raw settings to {file}	Подешавања Camera Raw сачувана у {file}
+	Save the settings to each raw's sidecar without opening it	Sačuvaj podešavanja u prateću datoteku svakog raw snimka bez otvaranja
+	No settings saved: these raws can't keep a sidecar here	Ništa nije sačuvano: ovi raw snimci ovde ne mogu imati prateću datoteku
+	Some settings could not be saved; the raws stay open	Neka podešavanja nije moguće sačuvati; raw snimci ostaju otvoreni
+	Nothing to save: these raws are at their default settings	Nema šta da se sačuva: ovi raw snimci imaju podrazumevana podešavanja
 # Artboard tool options bar (#11385)
 	Distribute Widths	Raspodeli širine
 	Distribute Heights	Raspodeli visine

@@ -422,8 +422,8 @@
 	Artboard…	工作區域…
 	Artboard from Group…	從群組建立工作區域…
 	Artboard from Layers…	從圖層建立工作區域…
-	Layer via Copy	拷貝的圖層
-	Layer via Cut	剪下的圖層
+	Layer Via Copy	拷貝的圖層
+	Layer Via Cut	剪下的圖層
 	Layer From Background…	從背景建立圖層…
 	Layer from Background…	從背景建立圖層…
 	Background from Layer	從圖層建立背景
@@ -3141,8 +3141,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	灰階色帶
 	Current Colors	目前色彩
 	Make Ramp Web Safe	讓色帶成為網頁安全色
+	Scroll All Windows	捲動所有視窗
 	The path was kept as the Work Path	路徑已保留為工作路徑
 	The path was discarded	路徑已捨棄
+# Art History Brush (#213).
 	Art History Brush	藝術歷史畫筆
 	Art History Brush Tool	藝術歷史畫筆工具
 	Tight Short	緊密短
@@ -3258,6 +3260,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	請為每個色版選擇不同的文件。
 	A picked document is no longer open.	所選的一個文件已不再開啟。
 	A picked document is no longer a grayscale document of the same size.	所選的一個文件已不再是相同大小的灰階文件。
+	Netscape Gray	Netscape 灰色
 # Move tool options bar (#11381)
 	Align top edges	對齊頂端
 	Align vertical centers	垂直置中對齊
@@ -3267,6 +3270,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	滑過時顯示圖層邊界
 	Expand layer group on click	按一下時展開圖層群組
 	Show hover bounds from Layers	顯示來自圖層面板的滑過邊界
+	Saved Camera Raw settings to {file}	已將 Camera Raw 設定儲存到 {file}
+	Save the settings to each raw's sidecar without opening it	將設定儲存到每個 Raw 的附屬檔案，不開啟它
+	No settings saved: these raws can't keep a sidecar here	未儲存任何內容：這些 Raw 在此處無法擁有附屬檔案
+	Some settings could not be saved; the raws stay open	部分設定無法儲存；Raw 保持開啟
+	Nothing to save: these raws are at their default settings	無需儲存：這些 Raw 均為預設設定
 # Artboard tool options bar (#11385)
 	Distribute Widths	均分寬度
 	Distribute Heights	均分高度
