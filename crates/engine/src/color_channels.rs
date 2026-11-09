@@ -126,7 +126,7 @@ pub(crate) fn refusal(s: &Session, id: &str, p: &Value) -> Option<String> {
         return Some("This operation does not support a selected colour set".into());
     }
     if id == "filter.cameraRaw" {
-        return Some("Camera Raw requires the composite or one colour channel".into());
+        return Some("RAW Develop requires the composite or one colour channel".into());
     }
     None
 }
