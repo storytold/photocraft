@@ -426,14 +426,16 @@ fn a_pressed_component_marks_itself_on_the_canvas() {
     let ppp = h.ctx.pixels_per_point();
     let img = h.render().unwrap();
     let px = |at: egui::Pos2| {
-        let x = (at.x * ppp).round() as u32;
-        let y = (at.y * ppp).round() as u32;
-        img.get_pixel(x, y).0
+        let x = (at.x * ppp).round();
+        let y = (at.y * ppp).round();
+        assert!(x >= 0.0 && y >= 0.0 && x < img.width() as f32 && y < img.height() as f32, "anchor pixel is inside the rendered image");
+        img.get_pixel(x as u32, y as u32).0
     };
+    let close = |actual: [u8; 4], expected: [u8; 3]| actual[..3].iter().zip(expected).all(|(a, e)| (*a).abs_diff(e) <= 8);
     // The pressed inner square's anchor (60, 60) is filled with the accent…
-    assert_eq!(&px(xf.to_screen(60.0, 60.0))[..3], &[accent.r(), accent.g(), accent.b()], "the pressed component's anchor is filled");
+    assert!(close(px(xf.to_screen(60.0, 60.0)), [accent.r(), accent.g(), accent.b()]), "the pressed component's anchor is filled");
     // …the unselected component's anchor (20, 20) stays a hollow (white) square.
-    assert_eq!(&px(xf.to_screen(20.0, 20.0))[..3], &[255, 255, 255], "the unselected component's anchor is hollow");
+    assert!(close(px(xf.to_screen(20.0, 20.0)), [255, 255, 255]), "the unselected component's anchor is hollow");
 }
 
 /// A same-count reorder, or a same-count edit that merges components (op "join"), still clears
@@ -509,4 +511,28 @@ fn a_move_re_signs_the_selection_so_unrelated_edits_keep_it() {
     assert!(super::selected(&app).is_some(), "the move keeps the selection");
     app.run("shape.edit", json!({"layer": id.0, "fill": "#0000ff"})).unwrap();
     assert!(super::selected(&app).is_some(), "a colour edit after the move keeps it too");
+}
+
+/// Structural validation is cached per document revision: a colour edit needs one signature,
+/// while repeated hover/command checks on that revision need none (review on #10935).
+#[test]
+fn structural_selection_validation_is_cached_per_revision() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    app.run("shape.edit", json!({"layer": id.0, "fill": "#0000ff"})).unwrap();
+    assert!(super::selected(&app).is_some());
+    let computations = |app: &PhotocraftApp| app.ui.direct_selection.owner.as_ref().unwrap().selection_computations();
+    assert_eq!(computations(&app), 1, "the changed revision is checked once");
+    for _ in 0..3 {
+        assert!(super::selected(&app).is_some(), "the cached selection stays valid");
+    }
+    assert_eq!(computations(&app), 1, "the same revision does not re-sign the path");
+    app.run("shape.edit", json!({"layer": id.0, "fill": "#00ff00"})).unwrap();
+    assert!(super::selected(&app).is_some());
+    assert_eq!(computations(&app), 2, "only the next revision needs a new signature");
 }

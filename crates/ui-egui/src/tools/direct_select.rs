@@ -93,6 +93,16 @@ pub struct DirectSelection {
     pub(crate) signature: Option<crate::path_components::SelectionSignature>,
 }
 
+/// The cached structural check for one document revision. Type Paths are generated only when
+/// this cache misses, just like the other target paths are signed only then.
+#[derive(Clone, Debug, Default)]
+struct SelectionValidation {
+    revision: Option<u64>,
+    matches: bool,
+    #[cfg(test)]
+    computations: usize,
+}
+
 /// Runtime selection ownership is never restored from settings onto another document.
 #[derive(Clone, Debug)]
 pub(crate) struct Owner {
@@ -103,6 +113,7 @@ pub(crate) struct Owner {
     selected_path: Option<String>,
     vector_mask: bool,
     tool: Tool,
+    validation: std::cell::RefCell<SelectionValidation>,
 }
 
 impl PartialEq for Owner {
@@ -124,7 +135,13 @@ impl Owner {
             selected_path: app.ui.selected_path.clone(),
             vector_mask: app.ui.vector_mask_target || st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::VectorMask,
             tool: app.ui.tool,
+            validation: Default::default(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn selection_computations(&self) -> usize {
+        self.validation.borrow().computations
     }
 
     fn same_target(&self, app: &PhotocraftApp) -> bool {
@@ -157,28 +174,29 @@ pub(crate) fn still_valid(app: &PhotocraftApp, ds: &DirectSelection) -> bool {
         || component_selection_matches(app, ds)
 }
 
-/// The live path `target` addresses on the active document, if it still exists.
-pub(crate) fn path_of(app: &PhotocraftApp, target: &PathRef) -> Option<photocraft_doc::Path> {
+/// The live path `target` addresses on the active document, if it still exists. Existing paths
+/// are borrowed; only a Type Path is generated, and the revision cache limits how often.
+pub(crate) fn path_of<'a>(app: &'a PhotocraftApp, target: &PathRef) -> Option<std::borrow::Cow<'a, Path>> {
     let st = app.session.active()?;
     match target {
         PathRef::Layer(id) => st.doc.layer(photocraft_doc::LayerId(*id)).and_then(|l| match &l.content {
-            photocraft_doc::LayerContent::Shape(sh) => Some(sh.path.clone()),
-            _ => l.vector_mask.as_ref().map(|m| m.path.clone()),
+            photocraft_doc::LayerContent::Shape(sh) => Some(std::borrow::Cow::Borrowed(&sh.path)),
+            _ => l.vector_mask.as_ref().map(|m| std::borrow::Cow::Borrowed(&m.path)),
         }),
-        PathRef::Work => st.doc.work_path.clone(),
-        PathRef::Saved(i) => st.doc.paths.get(*i).map(|p| p.path.clone()),
+        PathRef::Work => st.doc.work_path.as_ref().map(std::borrow::Cow::Borrowed),
+        PathRef::Saved(i) => st.doc.paths.get(*i).map(|p| std::borrow::Cow::Borrowed(&p.path)),
         // The stored id is the layer whose Type Path this is; resolving by it confirms the match.
         PathRef::TypePath(id) => st.doc.layer(photocraft_doc::LayerId(*id)).and_then(|l| match &l.content {
-            photocraft_doc::LayerContent::Text(t) => photocraft_engine::type_extra_cmds::type_path(t),
+            photocraft_doc::LayerContent::Text(t) => photocraft_engine::type_extra_cmds::type_path(t).map(std::borrow::Cow::Owned),
             _ => None,
         }),
         PathRef::Pen => None,
     }
 }
 
-/// A Path Selection component selection outlives history revisions: the path's structure (its
-/// knot counts) is what the stored indices address. Valid while the target path still exists on
-/// the same document and carries the same signature.
+/// A Path Selection component selection outlives history revisions: ordered subpath geometry and
+/// the component partition are what the stored indices address. Valid while the target path still
+/// exists on the same document and carries the same signature.
 fn component_selection_matches(app: &PhotocraftApp, ds: &DirectSelection) -> bool {
     if ds.drag.is_some() || app.ui.tool != Tool::PathSelection {
         return false;
@@ -191,7 +209,21 @@ fn component_selection_matches(app: &PhotocraftApp, ds: &DirectSelection) -> boo
     if st.doc.id != owner.document {
         return false;
     }
-    path_of(app, target).is_some_and(|p| crate::path_components::selection_signature(&p) == *sig)
+    {
+        let cached = owner.validation.borrow();
+        if cached.revision == Some(st.revision) {
+            return cached.matches;
+        }
+    }
+    let matches = path_of(app, target).is_some_and(|p| crate::path_components::selection_signature(&p) == *sig);
+    let mut cached = owner.validation.borrow_mut();
+    cached.revision = Some(st.revision);
+    cached.matches = matches;
+    #[cfg(test)]
+    {
+        cached.computations += 1;
+    }
+    matches
 }
 
 /// Clear stale anchors and gestures, keeping the pointer until the old release arrives. True
