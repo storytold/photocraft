@@ -103,8 +103,15 @@ fn preserves_psd_grid(before: &Path, after: &Path) -> bool {
     }
     let first = |path: &Path| path.subpaths.first().and_then(|s| s.knots.first()).map(|k| k.anchor);
     let (Some(a), Some(b)) = (first(before), first(after)) else { return false };
-    let (dx, dy) = (b.x - a.x, b.y - a.y);
-    dx.is_finite() && dy.is_finite() && dx == dx.round() && dy == dy.round() && before.transform(&photocraft_geom::Affine::translate(dx, dy)) == *after
+    let integer_offset = |from: f64, to: f64| {
+        let delta = to - from;
+        // Recover subtraction roundoff, including when a move crosses a binade.
+        // The exact whole-path check below still rejects genuine fractional edits.
+        let tolerance = 1e-12_f64.max(4.0 * f64::EPSILON * from.abs().max(to.abs()));
+        (delta.is_finite() && (delta - delta.round()).abs() <= tolerance).then_some(delta.round())
+    };
+    let (Some(dx), Some(dy)) = (integer_offset(a.x, b.x), integer_offset(a.y, b.y)) else { return false };
+    before.transform(&photocraft_geom::Affine::translate(dx, dy)) == *after
 }
 
 fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {

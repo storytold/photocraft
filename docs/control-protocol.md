@@ -1,7 +1,12 @@
 # Control protocol
 
-Shape tool Align Edges is drivable with `ui.set {useAlignedRendering: true}` and
-reported as `ui.inspect.toolOptions.useAlignedRendering`.
+`ui.set {useAlignedRendering: true}` changes the Align Edges tool preference for
+subsequent shape creation. `ui.inspect.toolOptions.useAlignedRendering` reports
+that preference, not the selected shape's setting. With an existing shape selected,
+the options-bar checkbox displays the layer's value. Use
+`shape.edit {layer: id, useAlignedRendering: true}` to change an existing layer and
+`shape.info {layer: id}` to read its `useAlignedRendering` value (engine commands
+are invoked through `engine.execute` on this control channel).
 
 Shape stroke defaults are drivable with `ui.set {shapeStroke: {width, align, cap, join,
 miterLimit, dashes, dashOffset, opacity}}`; partial fields merge, null disables the stroke.

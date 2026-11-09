@@ -254,3 +254,42 @@ fn pixel_align_unchanged_path_and_whole_path_grid_move_keep_provenance() {
     let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!() };
     assert_eq!(sh.psd_coordinate_frame, Some([1000, 1000]));
 }
+
+/// Prior floating transforms can leave low mantissa bits while retaining PSD provenance.
+/// Whole-path integer edits must preserve that provenance across binade boundaries.
+#[test]
+fn pixel_align_grid_move_recovers_rounded_integer_offsets() {
+    use photocraft_doc::LayerContent;
+    for (coordinate, delta) in [(10.000000600000002_f64, 10.0), (-10.000000599999998, -10.0), (131070.00000003002, 10.0)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":100,"height":100})).unwrap();
+        s.execute("shape.create", json!({"rect":[coordinate,coordinate,20,20],"useAlignedRendering":true})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!("shape") };
+        sh.psd_coordinate_frame = Some([300_000, 300_000]);
+        let before = sh.path.clone();
+        let first = before.subpaths[0].knots[0].anchor;
+        assert_ne!((first.x + delta) - first.x, delta, "stored path must exercise subtraction roundoff");
+        s.execute("path.moveAnchors", json!({"name":"layer","anchors":[[0,0],[0,1],[0,2],[0,3]],"move":[delta,delta]})).unwrap();
+        let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("shape") };
+        assert_eq!(sh.psd_coordinate_frame, Some([300_000, 300_000]));
+        assert_eq!(sh.path, before.transform(&photocraft_geom::Affine::translate(delta, delta)), "stored coordinates must not be rounded");
+    }
+}
+
+/// A near-integer recovered delta alone does not prove a whole-path grid translation.
+#[test]
+fn pixel_align_grid_move_rejects_fractional_or_partial_offsets() {
+    use photocraft_doc::LayerContent;
+    for (anchors, dx) in [(json!([[0, 0], [0, 1], [0, 2], [0, 3]]), 10.0 + 5e-13), (json!([[0, 0]]), 10.0)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":100,"height":100})).unwrap();
+        s.execute("shape.create", json!({"rect":[10.0000006,10.0000006,20,20]})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!("shape") };
+        sh.psd_coordinate_frame = Some([1000, 1000]);
+        s.execute("path.moveAnchors", json!({"name":"layer","anchors":anchors,"move":[dx,10]})).unwrap();
+        let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("shape") };
+        assert!(sh.psd_coordinate_frame.is_none());
+    }
+}
