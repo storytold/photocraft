@@ -369,11 +369,14 @@ pub fn hit(path: &Path, p: Point, tol: f64, handles: &[([usize; 2], Handle)]) ->
             let n = ((len / tol.max(0.5)).ceil() as usize).clamp(16, 4096);
             let samples: Vec<(f64, f64)> = (0..=n).map(|i| i as f64 / n as f64).map(|t| (at(t), t)).collect();
             let step = 1.0 / n as f64;
-            // The curve between two samples is at most `len / n` from both, so every stretch that
-            // comes within `tol` lies beside a sample within `tol + len / n`: refine each of those
-            // (a curve can pass the pointer more than once, and the nearest sample may be on the
-            // farther pass).
-            let reach = tol + len / n as f64;
+            // The curve moves at most 3 * (longest control leg) per unit t, so a point between two
+            // samples is at most half of that over `1 / n` from the nearer one, and every stretch
+            // that comes within `tol` lies beside a sample within `reach`: refine each of those (a
+            // curve can pass the pointer more than once, and the nearest sample may be on the
+            // farther pass). `len / n` alone is too short where the curve runs fast, as next to an
+            // end with a long handle.
+            let leg = dist(seg[0], seg[1]).max(dist(seg[1], seg[2])).max(dist(seg[2], seg[3]));
+            let reach = tol + 1.5 * leg / n as f64;
             let refine = |&(d, t): &(f64, f64)| {
                 let (mut a, mut b) = ((t - step).max(0.0), (t + step).min(1.0));
                 const G: f64 = 0.618_033_988_749_894_8;
@@ -600,6 +603,19 @@ mod tests {
         assert!(nearest < 0.9, "the far pass runs {nearest} from the pointer");
         let Some(Hit::Segment([0, 0], t)) = hit(&path, p, 1.0, &[]) else { panic!("missed the pass inside the radius") };
         assert!(dist(eval(&seg, t), p) <= 1.0, "t={t} is not on the nearer pass");
+    }
+
+    #[test]
+    fn a_fast_stretch_between_samples_is_still_hit() {
+        // The whole handle length sits at the start, so the curve runs three times its average
+        // speed there; a click on it between the first two samples still counts.
+        let mut sp = Subpath::polyline(&[(0.0, 0.0), (50_000.0, 0.0)]);
+        sp.knots[0] = Knot::smooth(Point::new(0.0, 0.0), Point::new(0.0, 0.0), Point::new(50_000.0, 0.0));
+        let path = Path::new(vec![sp]);
+        let seg = path.subpaths[0].segments()[0];
+        let p = eval(&seg, 1.0 / 8192.0);
+        let Some(Hit::Segment([0, 0], t)) = hit(&path, p, 1.0, &[]) else { panic!("missed the segment at {p:?}") };
+        assert!(dist(eval(&seg, t), p) <= 1.0, "t={t}");
     }
 
     #[test]
