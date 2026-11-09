@@ -157,6 +157,23 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::toolbar_docking::show(app, ui, width, m, toolbar_content);
 }
 
+/// Content-driven floating palette height, using the same rows and footer as the docked toolbar.
+pub(super) fn floating_height(app: &PhotocraftApp, t: &Tokens) -> f32 {
+    let sections = visible_sections(&app.session.prefs().toolbar.hidden);
+    let double = app.ui.panels.toolbar_double;
+    let columns = if double { 2 } else { 1 };
+    let rows = if t.pro {
+        sections.iter().map(Vec::len).sum::<usize>().div_ceil(columns)
+    } else {
+        sections.iter().map(|section| section.len().div_ceil(columns)).sum()
+    };
+    let bx = if t.pro { 30.0 } else { 36.0 };
+    let footer =
+        (if t.pro { 8.0 } else { 14.0 }) + chips_height(t.pro, t.round_chips, t.round_chips && double) + 8.0 + if double { bx } else { bx * 2.0 + 3.0 } + 6.0;
+    let dividers = if t.pro { 0.0 } else { sections.len().saturating_sub(1) as f32 * 9.0 };
+    14.0 + 11.0 + 4.0 + rows as f32 * bx + dividers + footer + 6.0
+}
+
 fn toolbar_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let bx = if t.pro { 30.0 } else { 36.0 };
@@ -165,7 +182,8 @@ fn toolbar_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
     // Toolbar width is a user preference, not a Pro-only feature.
     // Keep the same hit target in every theme (including RTL layouts).
-    let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click_and_drag());
+    let (cr, _) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::hover());
+    let resp = ui.interact(cr, egui::Id::unique("tools-palette").with("columns"), Sense::click_and_drag());
     let (shrink, grow) = if crate::direction::is_rtl() { ("chevrons-right", "chevrons-left") } else { ("chevrons-left", "chevrons-right") };
     icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Toolbar")));

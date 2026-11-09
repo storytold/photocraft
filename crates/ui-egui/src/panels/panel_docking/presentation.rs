@@ -936,9 +936,6 @@ struct Landing {
     marker: Rect,
     compact: bool,
 }
-fn horizontal_landing(_ctx: &egui::Context, _p: Pos2) -> Option<Landing> {
-    None
-}
 
 fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2) -> Option<Landing> {
     let strips = ctx.data(|d| d.get_temp::<Vec<Strip>>(key("strips"))).unwrap_or_default();
@@ -946,9 +943,6 @@ fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2) -> Option<La
     let covered_by_float = strips.iter().any(|s| !s.attached && !s.panels().any(|id| id == source) && s.rect.contains(p));
     // Both full/stock and compact sources resolve against these exact fitted boundaries.
     let columns = ctx.data(|d| d.get_temp::<Vec<(String, Rect, Side)>>(key("columns"))).unwrap_or_default();
-    if !covered_by_float && let Some(target) = horizontal_landing(ctx, p) {
-        return Some(target);
-    }
     let mut edges = Vec::new();
     for (anchor, rect, side) in &columns {
         if covered_by_float || anchor == source || whole && strips.iter().any(|s| s.first == *anchor && s.panels().any(|id| id == source)) {
@@ -1159,10 +1153,7 @@ fn resolved_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, 
     if exclusive || full.is_some() {
         return full;
     }
-    super::document_header::landing(ctx, p)
-        .map(|(target, marker)| Landing { target, marker, compact: false })
-        .or_else(|| landing(ctx, source, whole, p))
-        .or(full)
+    landing(ctx, source, whole, p).or(full)
 }
 fn detached_target(app: &PhotocraftApp, layout: &Layout<String>, panel: &str, rect: Rect, bounds: Rect, pointer: Pos2) -> Target<String> {
     let mut action = Action::MoveGroup { panel: panel.into(), to: Target::Float { rect: Some([rect.left(), rect.top(), rect.width(), rect.height()]) } };

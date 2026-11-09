@@ -761,7 +761,7 @@ The `docking` object in `ui.state` and in saved workspaces is craft-ui's `Worksp
 `locked`. `dockingReturns` holds where each floating panel docks back, and
 `dockingCollapsed` retains legacy collapsed-group state. `panelPresentation` stores compact
 floating membership, compact widths, total column heights, editor flyout sizes,
-remembered normal floating sizes and Tools resize dimensions;
+remembered normal floating sizes and legacy Tools resize dimensions;
 `toolbarFloating` is a logical `[x,y]` position or `null` for docked Tools. These are view
 metadata; `Workspace` remains the owner of panel placement. Flyout visibility and drag/resize
 previews are transient and are never serialized.
@@ -820,8 +820,10 @@ inserts above it (otherwise below). `before` inserts a column before its named n
 The first mouse insertion slot lies below the grip lines, with separate middle/bottom slots.
 
 `window.tools.float {x?,y?,width?,height?}` and `window.tools.dock {}` move Tools as one palette; individual
-tools never detach. Coordinates must be finite; optional size is 42..240 by 160..100000 pt.
-Floating Tools has edge/corner resize handles and retains its size through workspace restore.
+tools never detach. Coordinates must be finite; legacy optional size is 42..240 by
+160..100000 pt and remains validated/stored for compatibility, but does not affect
+displayed geometry. Floating Tools has no edge/corner resize handles. Its header
+switches between one and two columns; visible tools determine its height.
 The palette has the same compact header,
 grip and narrow inset scrolling treatment as panel columns.
 

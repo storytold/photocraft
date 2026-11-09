@@ -88,6 +88,7 @@ fn document_harness_with(app: PhotocraftApp, theme: crate::theme::ThemeKind, sca
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_pixels_per_point(scale).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, theme);
         let mut app = app;
+        app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
         app.run("prefs.set", json!({"path":"interface.theme","value":theme.id()})).unwrap();
         app
     });
@@ -105,7 +106,7 @@ fn drop_below_documents(h: &mut Harness<'static, PhotocraftApp>, panel: &str) {
 }
 
 #[test]
-fn document_tab_surface_is_unique_clickable_and_survives_restore_and_close() {
+fn dropping_below_document_tabs_floats_without_adding_a_header_surface() {
     let mut app = full_pair();
     for _ in 0..2 {
         app.run("file.new", json!({"width":64,"height":64})).unwrap();
@@ -113,7 +114,9 @@ fn document_tab_surface_is_unique_clickable_and_survives_restore_and_close() {
     let mut h = document_harness(app);
     drop_below_documents(&mut h, "brushes");
     drop_below_documents(&mut h, "color");
-    assert_eq!(layout(h.state()).panels().iter().filter(|p| p.as_str() == document_header::ID).count(), 1);
+    assert!(!layout(h.state()).contains(&document_header::ID.to_owned()));
+    assert!(floats(layout(h.state()), "brushes"));
+    assert!(floats(layout(h.state()), "color"));
     let at = h.state().tab_strip.as_ref().unwrap().tabs.iter().find(|(doc, _)| *doc == 0).unwrap().1.center();
     super::super::tests::click(&mut h, at);
     assert_eq!(h.state().session.active_index(), Some(0));
@@ -121,9 +124,8 @@ fn document_tab_surface_is_unique_clickable_and_survives_restore_and_close() {
     crate::dock::apply(h.state_mut(), &saved);
     h.run_steps(5);
     assert_eq!(crate::dock::snapshot(h.state()), saved);
-    let row = h.state().tab_strip.as_ref().unwrap().rect;
-    assert!(group_rect(&h, "color").top() >= row.bottom() - 1.1);
-    assert!(group_rect(&h, "color").top() < group_rect(&h, "brushes").top());
+    assert!(floats(layout(h.state()), "color"));
+
     for _ in 0..2 {
         h.state_mut().run("file.close", json!({})).unwrap();
     }
@@ -132,11 +134,12 @@ fn document_tab_surface_is_unique_clickable_and_survives_restore_and_close() {
     h.state_mut().run("file.new", json!({"width":64,"height":64})).unwrap();
     h.run_steps(5);
     assert!(h.state().tab_strip.is_some());
-    assert!(group_rect(&h, "color").top() >= h.state().tab_strip.as_ref().unwrap().rect.bottom() - 1.1);
+    assert!(floats(layout(h.state()), "color"));
+    assert!(!layout(h.state()).contains(&document_header::ID.to_owned()));
 }
 
 #[test]
-fn panels_can_still_dock_above_the_document_row_after_below_docking() {
+fn dropping_above_document_tabs_also_floats() {
     let mut app = full_pair();
     app.run("file.new", json!({"width":64,"height":64})).unwrap();
     let mut h = document_harness(app);
@@ -147,10 +150,9 @@ fn panels_can_still_dock_above_the_document_row_after_below_docking() {
     press(&mut h, from, to);
     release(&mut h, to);
     h.run_steps(5);
-    let row = h.state().tab_strip.as_ref().unwrap().rect;
-    assert!(!floats(layout(h.state()), "color"));
-    assert!(group_rect(&h, "color").bottom() <= row.top() + 1.1);
-    assert!(group_rect(&h, "brushes").top() >= row.bottom() - 1.1);
+    assert!(floats(layout(h.state()), "color"));
+    assert!(!layout(h.state()).contains(&document_header::ID.to_owned()));
+    assert!(floats(layout(h.state()), "brushes"));
 }
 
 #[test]
@@ -253,8 +255,13 @@ fn protected_document_row_keeps_reorder_and_large_tab_preferences() {
     for _ in 0..2 {
         app.run("file.new", json!({"width":64,"height":64})).unwrap();
     }
+    // Previously saved protected header layouts remain readable, without new mouse targets.
+    app.run(
+        "window.panel.group",
+        json!({"panel":"brushes","operation":"drop","to":Target::At{anchor:document_header::ID.to_owned(),placement:Placement::Split(Zone::Bottom)}}),
+    )
+    .unwrap();
     let mut h = document_harness(app);
-    drop_below_documents(&mut h, "brushes");
     let name = h.state().session.documents().first().unwrap().doc.name.clone();
     let tabs = &h.state().tab_strip.as_ref().unwrap().tabs;
     let from = tabs.iter().find(|(doc, _)| *doc == 0).unwrap().1.center();
@@ -292,17 +299,17 @@ fn capture_native_height_and_document_header_review() {
             release(&mut h, to);
             h.event(Event::PointerMoved(pos2(1200.0, 760.0)));
             h.run_steps(5);
-            save(&mut h, "under-documents-docked");
-            let row = h.state().tab_strip.as_ref().unwrap().rect;
-            assert!(group_rect(&h, "brushes").top() >= row.bottom() - 1.1);
-            let border = crate::theme::Tokens::get(&h.ctx).card_border.to_array();
-            let image = h.render().unwrap();
-            let x = ((row.right() - 100.0) * scale).round() as u32;
-            let y = (((row.bottom() + group_rect(&h, "brushes").top()) * 0.5) * scale).round() as u32;
-            let count = (y.saturating_sub(2)..=y + 2).filter(|y| image.get_pixel(x, *y).0 == border).count();
-            assert_eq!(count, 1, "document header seam, theme{} scale{scale}", theme.id());
+            save(&mut h, "under-documents-floating");
+            assert!(floats(layout(h.state()), "brushes"));
+            assert!(!layout(h.state()).contains(&document_header::ID.to_owned()));
             click(&mut h, area_id().with(("full-chevron", "brushes")));
-            save(&mut h, "under-documents-collapsed");
+            save(&mut h, "floating-collapsed");
+            h.state_mut().run("window.tools.float", json!({"x":700,"y":150,"width":200,"height":300})).unwrap();
+            for double in [false, true] {
+                h.state_mut().ui.panels.toolbar_double = double;
+                h.run_steps(5);
+                save(&mut h, if double { "tools-two-columns" } else { "tools-one-column" });
+            }
             let mut h = document_harness_with(compact_stack(Zone::Top), theme, scale);
             save(&mut h, "vertical-compact");
             click(&mut h, key("expand").with("brushes"));
@@ -337,20 +344,19 @@ fn capture_native_height_and_document_header_review() {
 }
 
 #[test]
-fn a_panel_docks_immediately_below_the_document_tab_row() {
+fn dropping_below_document_tabs_does_not_reserve_canvas_height() {
     let mut app = full_pair();
     app.run("file.new", json!({"width":64,"height":64})).unwrap();
     let mut h = document_harness(app);
     let tabs = h.state().tab_strip.as_ref().unwrap().rect;
+    let canvas = h.state().last_canvas_rect;
     let from = tab_rect(&h, "brushes").center();
     let to = pos2(tabs.center().x, tabs.bottom() + 1.0);
     press(&mut h, from, to);
     release(&mut h, to);
     h.run_steps(5);
-    assert!(!floats(layout(h.state()), "brushes"));
+    assert!(floats(layout(h.state()), "brushes"));
     let after_tabs = h.state().tab_strip.as_ref().unwrap().rect;
-    let panel = group_rect(&h, "brushes");
-    assert!((after_tabs.top() - tabs.top()).abs() < 1.1, "document tabs moved below the docked panel");
-    assert!(panel.top() >= after_tabs.bottom() - 1.1);
-    assert!(h.state().last_canvas_rect.top() >= panel.bottom() - 1.1);
+    assert_eq!(after_tabs, tabs);
+    assert_eq!(h.state().last_canvas_rect, canvas);
 }

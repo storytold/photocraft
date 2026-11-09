@@ -1,6 +1,5 @@
-//! A protected document-tab surface in the existing shared workspace, created on demand.
-use super::{CANVAS, Layout, Node, SplitAxis, SplitSize, Target};
-use egui::{Context, Pos2, Rect};
+//! Compatibility for the protected document-tab surface in previously saved workspaces.
+use super::{CANVAS, Layout, Node, SplitAxis, SplitSize};
 
 pub(super) const ID: &str = "__photocraft_document_tabs__";
 
@@ -50,9 +49,4 @@ pub(super) fn valid(layout: &Layout<String>) -> bool {
         }
     }
     layout.root.as_ref().is_some_and(|node| shape(node, 0))
-}
-
-/// Document tabs are not panel docking surfaces. Keep the old surface readable for saved layouts.
-pub(super) fn landing(_ctx: &Context, _pointer: Pos2) -> Option<(Target<String>, Rect)> {
-    None
 }

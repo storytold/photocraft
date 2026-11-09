@@ -27,16 +27,9 @@ fn a_full_float_keeps_its_height_when_joining_and_leaving_a_short_compact_receiv
 }
 fn top_bar() -> Harness<'static, PhotocraftApp> {
     let mut app = full_pair();
-    app.run("window.panel.edge", json!({"panel":"history","edge":"floating","individual":true,"collapsed":true,"x":700,"y":150,"width":320,"height":400}))
-        .unwrap();
-    let mut h = harness(app);
-    let canvas = body_rect(&h, super::super::super::CANVAS);
-    let from = h.ctx.read_response(key("grip").with("history")).unwrap().rect.center();
-    let to = pos2(canvas.center().x, canvas.top() + 1.0);
-    press(&mut h, from, to);
-    release(&mut h, to);
-    h.run_steps(6);
-    h
+    app.run("window.panel.edge", json!({"panel":"history","edge":"top","individual":true,"collapsed":true})).unwrap();
+    // Legacy attached rows retain their own tab/drop behavior; the canvas offers no new targets.
+    harness(app)
 }
 #[test]
 fn a_top_tab_bar_expands_and_collapses_in_place_instead_of_becoming_a_float() {
@@ -165,16 +158,10 @@ fn capture_final_review_transitions() {
             h.state_mut()
                 .run(
                     "window.panel.edge",
-                    json!({"panel":"history","edge":"floating","individual":true,"collapsed":true,"x":700,"y":150,"width":320,"height":400}),
+                    json!({"panel":"history","edge":"top","individual":true,"collapsed":true}),
                 )
                 .unwrap();
             h.run_steps(5);
-            let canvas = body_rect(&h, super::super::super::CANVAS);
-            let from = h.ctx.read_response(key("grip").with("history")).unwrap().rect.center();
-            let to = pos2(canvas.center().x, canvas.top() + 1.0);
-            press(&mut h, from, to);
-            release(&mut h, to);
-            h.run_steps(6);
             save(&mut h, "top-collapsed");
             click(&mut h, area_id().with(("full-chevron", "history")));
             save(&mut h, "top-expanded");

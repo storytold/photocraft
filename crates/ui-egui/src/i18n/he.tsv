@@ -4571,3 +4571,8 @@ navigator	Zoom	תקריב
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	הגדרות פיתוח RAW נשמרו ב־{file}
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	לא ניתן לשחזר את פריסת החלוניות השמורה.
+	It has been preserved; editing panels or resetting the workspace will replace it.	הפריסה נשמרה; עריכת החלוניות או איפוס סביבת העבודה יחליפו אותה.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	לא ניתן לשחזר את פריסת החלוניות השמורה. הפריסה נשמרה; עריכת החלוניות או איפוס סביבת העבודה יחליפו אותה.

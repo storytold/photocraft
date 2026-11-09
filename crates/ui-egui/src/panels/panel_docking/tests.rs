@@ -245,7 +245,7 @@ fn a_tab_dropped_on_the_canvas_floats_there_and_redocks() {
 }
 
 #[test]
-fn brushes_tab_drag_opens_above_the_canvas_and_can_redock_into_another_tab_group() {
+fn brushes_tab_drag_at_the_canvas_edge_floats_and_can_redock_into_another_tab_group() {
     let mut app = app();
     crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.brushes", json!({})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
@@ -254,10 +254,7 @@ fn brushes_tab_drag_opens_above_the_canvas_and_can_redock_into_another_tab_group
     // The outer edge band along the canvas column's top.
     drag(&mut h, source, egui::pos2(canvas.center().x, canvas.top() + 6.0));
     let layout = lay(h.state());
-    assert!(canvas_side(layout).contains(&"brushes".to_string()), "{layout:?}");
-    assert!(!layout.floating.iter().any(|window| window.contains("brushes")));
-    let canvas_body = last_bodies(&h.ctx).into_iter().find(|(id, _)| id == CANVAS).expect("the canvas is drawn").1;
-    assert!(tab_rect(&h, "brushes").bottom() <= canvas_body.top(), "brushes is above the canvas");
+    assert!(layout.floating.iter().any(|window| window.contains("brushes")));
 
     let source = tab_rect(&h, "brushes").center();
     let destination = tab_rect(&h, "layers").right_center();

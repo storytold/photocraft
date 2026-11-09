@@ -4770,3 +4770,8 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	บันทึกการตั้งค่าการปรับแต่ง RAW ไปยัง {file} แล้ว
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	ไม่สามารถคืนค่าเค้าโครงแผงที่บันทึกไว้ได้
+	It has been preserved; editing panels or resetting the workspace will replace it.	เค้าโครงยังคงถูกเก็บไว้ การแก้ไขแผงหรือรีเซ็ตพื้นที่ทำงานจะแทนที่เค้าโครงนี้
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	ไม่สามารถคืนค่าเค้าโครงแผงที่บันทึกไว้ได้ เค้าโครงยังคงถูกเก็บไว้ การแก้ไขแผงหรือรีเซ็ตพื้นที่ทำงานจะแทนที่เค้าโครงนี้

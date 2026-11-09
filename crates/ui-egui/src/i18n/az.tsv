@@ -4630,3 +4630,8 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW emalı ayarları {file} faylında saxlanıldı
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Saxlanmış panel düzülüşünü bərpa etmək mümkün olmadı.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Düzülüş saxlanılıb; panellərin redaktəsi və ya iş sahəsinin sıfırlanması onu əvəz edəcək.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Saxlanmış panel düzülüşünü bərpa etmək mümkün olmadı. Düzülüş saxlanılıb; panellərin redaktəsi və ya iş sahəsinin sıfırlanması onu əvəz edəcək.

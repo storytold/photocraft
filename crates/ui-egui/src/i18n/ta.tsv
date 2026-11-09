@@ -4272,3 +4272,8 @@ navigator	Zoom	பெரிதாக்கல்
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW உருவாக்க அமைப்புகள் {file} இல் சேமிக்கப்பட்டன
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	சேமித்த பேனல் அமைப்பை மீட்டெடுக்க முடியவில்லை.
+	It has been preserved; editing panels or resetting the workspace will replace it.	அது பாதுகாக்கப்பட்டுள்ளது; பேனல்களைத் திருத்துவது அல்லது பணியிடத்தை மீட்டமைப்பது அதை மாற்றும்.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	சேமித்த பேனல் அமைப்பை மீட்டெடுக்க முடியவில்லை. அது பாதுகாக்கப்பட்டுள்ளது; பேனல்களைத் திருத்துவது அல்லது பணியிடத்தை மீட்டமைப்பது அதை மாற்றும்.

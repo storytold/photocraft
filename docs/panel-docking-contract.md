@@ -119,15 +119,15 @@ the owning layer, clipped to that owner's rectangle.
 
 ## Restore and fallback
 
-A drop immediately below the document tab row creates one protected
-`__photocraft_document_tabs__` node in the same shared workspace. This separates
-the existing document-tab view from the canvas body; it does not add an arrangement
-tree. The existing canvas tab renderer supplies its widgets, overflow, selection,
-reordering and close behavior. A per-viewport, per-pass record prevents drawing
-the row twice. Old layouts remain unchanged until that placement is used. Repeated
-drops reuse the node; Home and hidden-tab modes give it no header height. The node
-cannot float, close, or share a tab group with user panels. Placements above the
-document row remain distinct from placements below it.
+The document tab row and the canvas edges do not offer panel landing targets.
+Dropping above or immediately below document tabs leaves the panel floating;
+side columns and insertion above/below other panel groups remain available.
+Previously saved layouts containing the protected `__photocraft_document_tabs__`
+node remain readable. That legacy node separates the existing tab view from the
+canvas body without adding an arrangement tree. The existing canvas renderer
+supplies its widgets, overflow, selection, reordering and close behavior. A
+per-viewport, per-pass record prevents drawing the row twice. Home and hidden-tab
+modes give it no header height; it cannot float, close, or share a user tab group.
 
 Expanding a wholly compact floating stack restores its remembered normal group
 sizes into shared split ratios, then fits the outer frame to its viewport. A UI
@@ -180,8 +180,10 @@ path in the wasm log before accepting the result.
 ## Whole Tools palette
 
 `window.tools.float`/`window.tools.dock` and the palette header/grip move only the
-whole Tools owner. Individual buttons retain tool selection/flyouts. Both resize
-axes and normal palette sizes are saved with the existing view metadata. Workspace
+whole Tools owner. Individual buttons retain tool selection/flyouts. Floating
+Tools has no edge or corner resize handles: its header toggles one/two columns,
+and the visible tools determine its height. Legacy saved free-resize dimensions
+remain readable but no longer determine its displayed geometry. Workspace
 locking and generation changes cancel moves; invalid command coordinates/sizes
 return errors without changing the palette. Header/chrome token geometry now
 matches the compact panels in every theme.

@@ -81,6 +81,7 @@ fn benchmark_panel_hover_and_drag_frames() {
 
 fn full_pair() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
     for (panel, x) in [("color", 450), ("brushes", 850)] {
         app.run("window.panel.edge", json!({"panel":panel,"edge":"floating","individual":true,"collapsed":false,"x":x,"y":200,"width":320,"height":400}))
             .unwrap();
@@ -109,31 +110,14 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, id: egui::Id) {
     h.run_steps(5);
 }
 #[test]
-fn top_preview_is_exactly_as_wide_as_the_canvas_it_splits() {
+fn document_area_edges_do_not_offer_panel_landing_targets() {
     let h = harness(full_pair());
     let canvas = body_rect(&h, super::super::CANVAS);
-    let target = horizontal_landing(&h.ctx, pos2(canvas.center().x, canvas.top() + 1.0)).unwrap();
-    assert_eq!(target.marker.x_range(), canvas.x_range());
-    let mut commands = Vec::new();
-    let feedback = resolve_drag(
-        h.state(),
-        &h.ctx,
-        &DropRequest {
-            panel: &"brushes".into(),
-            pointer: pos2(canvas.center().x, canvas.top() + 1.0),
-            targets: &[],
-            floating_rect: Some(body_rect(&h, "brushes")),
-            whole_group: true,
-            released: false,
-            workspace: h.ctx.content_rect(),
-            screen: h.ctx.content_rect(),
-        },
-        &mut commands,
-    )
-    .unwrap();
-    assert!(feedback.preview.is_none());
-    assert_eq!(feedback.insertion.unwrap().x_range(), canvas.x_range());
+    for y in [canvas.top() + 1.0, canvas.bottom() - 1.0] {
+        assert!(resolved_landing(&h.ctx, layout(h.state()), "properties", false, pos2(canvas.center().x, y), true).is_none());
+    }
 }
+
 #[test]
 fn full_groups_only_offer_tab_slots_and_distinct_outer_split_edges() {
     let mut app = full_pair();

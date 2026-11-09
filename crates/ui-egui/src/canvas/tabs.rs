@@ -136,6 +136,33 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     canvas_view(app, ui, idx, rect, view, app.session.active_index() == Some(idx));
 }
 
+/// Window › Arrange: the borders between the documents are dragged to give one more room, as in
+/// Photoshop (#10101). Laid out after the canvases, so a grip over a cell's edge takes the press.
+fn drag_borders(app: &mut PhotocraftApp, ui: &egui::Ui, rect: Rect) {
+    let n = docked_document_indices(app).len();
+    let layout = app.ui.view.arrange.clone();
+    for (border, grip) in border_grips(app, rect) {
+        let response = ui.interact(grip, ui.scope_id().with(("arrange-border", border.split)), Sense::drag());
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(if border.vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
+        }
+        if response.dragged()
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            crate::view_cmds::drag_border(&layout, rect, n, &mut app.ui.view.arrange_splits, border.split, p);
+        }
+    }
+}
+
+/// The arrangement's borders, each with the strip either side of it that grabs it.
+fn border_grips(app: &PhotocraftApp, rect: Rect) -> Vec<(crate::view_cmds::Border, Rect)> {
+    let n = docked_document_indices(app).len();
+    crate::view_cmds::borders(&app.ui.view.arrange, rect, n, &app.ui.view.arrange_splits)
+        .into_iter()
+        .map(|b| (b, b.line.expand2(if b.vertical { egui::vec2(3.0, 0.0) } else { egui::vec2(0.0, 3.0) })))
+        .collect()
+}
+
 fn header_key(ctx: &egui::Context) -> egui::Id {
     egui::Id::unique("photocraft-document-header").with(ctx.viewport_id())
 }
@@ -166,10 +193,6 @@ fn document_header_record_expires_when_a_layout_pass_is_discarded() {
     assert_eq!(passes, 2);
 }
 
-pub(crate) fn document_header_rect(ctx: &egui::Context) -> Option<Rect> {
-    header_state(ctx).map(|(rect, _)| rect)
-}
-
 /// Height of the same tab row, whether it is in the canvas or a protected workspace surface.
 pub(crate) fn document_header_height(app: &PhotocraftApp) -> f32 {
     let n = app.session.documents().len();
@@ -198,6 +221,7 @@ fn paint_document_header(app: &mut PhotocraftApp, ui: &mut egui::Ui, external: b
         ui.spacing_mut().item_spacing.y = 0.0;
     }
     let strip = tabs(app, ui);
+    publish_shown(app);
     let ctx = ui.ctx();
     let frame = ctx.cumulative_pass_nr();
     let key = header_key(ctx);
