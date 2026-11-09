@@ -232,11 +232,32 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             let held = app.held_erase;
             paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held);
             whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, if t.pro { 62.0 } else { 66.0 });
+            if t.pro {
+                // Between Opacity and Smoothing, as measured (#11962).
+                let pressure = pressure_button(ui, b.pressure_opacity, tl!("Always use pressure for opacity"), true);
+                if pressure.on_hover_text(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure")).clicked() {
+                    b.pressure_opacity = !b.pressure_opacity;
+                }
+            }
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
             widgets::vline(ui, 22.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"))
                 .on_hover_text(tl!("Draws background color over foreground colors"));
+            widgets::vline(ui, 22.0);
+            if t.pro {
+                // Between Auto Erase and the Symmetry button the bar adds after this arm (#11962).
+                let pressure = pressure_button(ui, b.pressure_size, tl!("Always use pressure for size"), true);
+                if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
+                    b.pressure_size = !b.pressure_size;
+                }
+            } else {
+                // The other themes show the Brush's labelled switches; the Pencil gets them too.
+                widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size"))
+                    .on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure"));
+                widgets::toggle(ui, &mut b.pressure_opacity, tl!("Pressure for Opacity"))
+                    .on_hover_text(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure"));
+            }
         }
         Tool::Brush | Tool::Eraser => {
             brush_preset_chip(ui, b, &mut app.ui);
