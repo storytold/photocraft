@@ -201,12 +201,14 @@ fn turn(img: &Image) -> Image {
 /// `y' = b x + d y + f`, with `x, y` measured from `bounds`' corner). `None` for a mirror flip, a
 /// degenerate map, or a size past [`MAX_SAMPLES`].
 pub fn render(src: &Surface, bounds: Rect, m: [f64; 6]) -> Option<Surface> {
-    render_with(src, bounds, m, true)
+    render_with(src, bounds, m, true, true)
 }
 
 /// [`render`], bleeding the contents or (for a perspective cascade's intermediate, which keeps
 /// its computed colours under transparency) not.
-pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_contents: bool) -> Option<Surface> {
+/// `clear`: a final result, whose fully transparent pixels lose their colour ([`crate::smart_scale::clear_hidden`]);
+/// not a cascade's intermediate, whose colours its next stage reads.
+pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_contents: bool, clear: bool) -> Option<Surface> {
     let fmt = src.format();
     let nc = src.channels();
     if !fmt.alpha || nc == 0 || bounds.is_empty() || m.iter().any(|v| !v.is_finite()) {
@@ -292,7 +294,9 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
             *v /= unit;
         }
     });
-    crate::smart_scale::clear_hidden(&mut data, &fmt);
+    if clear {
+        crate::smart_scale::clear_hidden(&mut data, &fmt);
+    }
     surface.write_region_par(Rect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32), &data);
     Some(surface)
 }

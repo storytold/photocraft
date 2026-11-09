@@ -198,13 +198,16 @@ fn draw(img: &Image, h: &[f64; 9], depth: Depth, kernel: Option<(f64, f64)>) -> 
 /// `None` when the map isn't a one-way perspective (affine, or converging both ways), folds over,
 /// or the size passes [`MAX_SAMPLES`].
 pub fn render(src: &Surface, bounds: Rect, h: [f64; 9]) -> Option<Surface> {
-    render_with(src, bounds, h, None, true)
+    render_with(src, bounds, h, None, true, true)
 }
 
 /// [`render`] with the projective pass's kernel fixed (`None`: Automatic) and the bleed optional
 /// (a cascade's intermediate keeps its computed colours), for the cascade's stages. A map that
 /// is neither a one-way perspective nor a general quad is `None`.
-fn render_with(src: &Surface, bounds: Rect, h: [f64; 9], kernel: Option<(f64, f64)>, bleed_contents: bool) -> Option<Surface> {
+/// `clear`: a final result, whose fully transparent pixels lose their colour
+/// ([`crate::smart_scale::clear_hidden`]); not a cascade's intermediate, whose colours its next
+/// stage reads.
+fn render_with(src: &Surface, bounds: Rect, h: [f64; 9], kernel: Option<(f64, f64)>, bleed_contents: bool, clear: bool) -> Option<Surface> {
     let fmt = src.format();
     let nc = src.channels();
     if !fmt.alpha || nc == 0 || bounds.is_empty() || h.iter().any(|v| !v.is_finite()) || h[8].abs() < FLAT {
@@ -218,7 +221,7 @@ fn render_with(src: &Surface, bounds: Rect, h: [f64; 9], kernel: Option<(f64, f6
     let down = !flat(h[7]) && flat(h[6]) && flat(h[3] / h[4].abs().max(FLAT));
     if !(side || down) {
         // Any other perspective: two one-way stages (an affine map is for `smart_affine`).
-        return if flat(h[6]) && flat(h[7]) || kernel.is_some() { None } else { cascade(src, bounds, &h) };
+        return if flat(h[6]) && flat(h[7]) || kernel.is_some() { None } else { cascade(src, bounds, &h, clear) };
     }
     let depth = Depth::of(fmt.sample);
     let unit = depth.levels.unwrap_or(1.0);
@@ -255,7 +258,9 @@ fn render_with(src: &Surface, bounds: Rect, h: [f64; 9], kernel: Option<(f64, f6
             *v /= unit;
         }
     });
-    crate::smart_scale::clear_hidden(&mut data, &fmt);
+    if clear {
+        crate::smart_scale::clear_hidden(&mut data, &fmt);
+    }
     let rect = Rect::new(i32::try_from(x0).ok()?, i32::try_from(y0).ok()?, i32::try_from(x0 + out.w as i64).ok()?, i32::try_from(y0 + out.h as i64).ok()?);
     surface.write_region_par(rect, &data);
     Some(surface)
@@ -407,7 +412,7 @@ fn transposed_surface(s: &Surface, r: Rect) -> Option<(Surface, Rect)> {
 
 /// A general quad (see the module docs): two one-way stages through a stretched intermediate.
 /// `h` is normalised and measured from `bounds`' corner.
-fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9]) -> Option<Surface> {
+fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9], clear: bool) -> Option<Surface> {
     let (w, hgt) = (f64::from(bounds.width()), f64::from(bounds.height()));
     let normal = plan(h, w, hgt);
     let mirrored = plan(&transposed(h), hgt, w);
@@ -425,14 +430,14 @@ fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9]) -> Option<Surface> {
     };
     if turned {
         let (ts, tb) = transposed_surface(src, bounds)?;
-        let out = cascade_normal(&ts, tb, &transposed(h), &p)?;
+        let out = cascade_normal(&ts, tb, &transposed(h), &p, clear)?;
         let r = out.content_bounds();
         if r.is_empty() {
             return Some(Surface::new(out.format()));
         }
         return transposed_surface(&out, r).map(|(s, _)| s);
     }
-    cascade_normal(src, bounds, h, &p)
+    cascade_normal(src, bounds, h, &p, clear)
 }
 
 /// `s` without the rows at or below `end` (document rows; `end` is exclusive).
@@ -453,12 +458,12 @@ fn clip_rows_below(s: Surface, end: f64) -> Option<Surface> {
     Some(out)
 }
 
-fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan) -> Option<Surface> {
+fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan, clear: bool) -> Option<Surface> {
     let flat = |v: f64| v.abs() <= FLAT;
     let w = f64::from(bounds.width());
     if flat(p.stage2_shear) && flat(p.h2) {
         // Stage 2 would be a plain translation: the one stage draws the whole map.
-        return render_with(src, bounds, *h, None, true);
+        return render_with(src, bounds, *h, None, true, clear);
     }
     // The intermediate: stage 1 stretched along stage 2's walk axis by stage 2's largest walk
     // magnification and along its projective axis to the final box's height; its left edge on the
@@ -470,9 +475,9 @@ fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan) -> Option
     let m1s = mul(&s, &p.m1);
     let k1 = automatic(p.sx * (p.fb[2] - p.fb[0]), w);
     let inter = if flat(m1s[6]) && flat(m1s[7]) {
-        crate::smart_affine::render(src, bounds, [m1s[0], m1s[3], m1s[1], m1s[4], m1s[2], m1s[5]])?
+        crate::smart_affine::render_with(src, bounds, [m1s[0], m1s[3], m1s[1], m1s[4], m1s[2], m1s[5]], true, false)?
     } else {
-        render_with(src, bounds, m1s, Some(k1), true)?
+        render_with(src, bounds, m1s, Some(k1), true, false)?
     };
     // The intermediate lives in a buffer of ceil(height) rows from the whole pixel above the
     // stretched quad's top (floor), while its rows are drawn from the nearest pixel edge (round):
@@ -490,9 +495,9 @@ fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan) -> Option
     let m2 = m2.map(|v| v / m2[8]);
     if flat(m2[6]) && flat(m2[7]) {
         // Stage 2 is a horizontal shear (and the translation): the exact affine walk.
-        return crate::smart_affine::render_with(&inter, ib, [m2[0], m2[3], m2[1], m2[4], m2[2], m2[5]], false);
+        return crate::smart_affine::render_with(&inter, ib, [m2[0], m2[3], m2[1], m2[4], m2[2], m2[5]], false, clear);
     }
-    render_with(&inter, ib, m2, Some(SHARPER), false)
+    render_with(&inter, ib, m2, Some(SHARPER), false, clear)
 }
 
 /// `h` (row-major, in the contents' own coordinates) measured instead from the point `(x, y)`, the
@@ -689,7 +694,7 @@ mod tests {
             let data: Vec<f32> = bytes.iter().map(|&b| f32::from(b) / 255.0).collect();
             s.write_region(Rect::new(0, 0, w, hgt), &data);
             let h: [f64; 9] = h.try_into().expect("nine");
-            let r = render_with(&s, Rect::new(0, 0, w, hgt), h, kern, true);
+            let r = render_with(&s, Rect::new(0, 0, w, hgt), h, kern, true, true);
             let px = r.map(|r| r.read_region(Rect::new(0, 0, 320, 320))).unwrap_or_else(|| vec![0.0; 320 * 320 * 4]);
             let b: Vec<u8> = px.iter().map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8).collect();
             std::fs::write(format!("{out}/{}.rust.rgba", f[0]), b).expect("write");
