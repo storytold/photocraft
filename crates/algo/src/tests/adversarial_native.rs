@@ -2,6 +2,42 @@ use super::*;
 use photocraft_raster::{Interrupt, Surface};
 
 #[test]
+/// Without an owner extent, the requested area supplies Average's domain even beyond reference bounds.
+fn average_without_extent_uses_requested_area_beyond_reference_bounds() {
+    let bounds = Rect::new(0, 0, 1, 1);
+    let area = Rect::new(-1, 0, 2, 1);
+    for sample in SampleType::ALL {
+        let mut source = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        let colors = if sample == SampleType::F32 { [[-2., 0., 4.], [0., 2., 2.], [2., 4., 0.]] } else { [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]] };
+        for (x, (color, alpha)) in (-1..2).zip(colors.into_iter().zip([0., 0.5, 1.])) {
+            source.write_pixel(x, 0, &[color[0], color[1], color[2], alpha]);
+        }
+        source.write_pixel(-2, 0, &[0.25, 0.5, 0.75, 1.]);
+        source.write_pixel(2, 0, &[0.75, 0.5, 0.25, 1.]);
+        let before = source.clone();
+        let params = FilterParams::Average;
+        for output in [
+            apply(&source, &params, area, bounds, None),
+            apply_tiled(&source, &params, area, bounds, None, 1, None),
+            apply_tiled_with(&source, &params, area, bounds, None, 2, None, &Interrupt::NONE).unwrap(),
+        ] {
+            let expected = if sample == SampleType::F32 { [0., 2., 2.] } else { [1. / 3.; 3] };
+            for x in -1..2 {
+                let pixel = output.pixel(x, 0);
+                for (value, expected) in pixel.iter().zip(expected) {
+                    assert!((value - expected).abs() < 1e-6, "{sample:?}, x={x}: {pixel:?}");
+                }
+                assert_eq!(pixel[3], source.pixel(x, 0)[3], "native alpha is preserved");
+            }
+            for x in [-2, 2] {
+                assert_eq!(output.pixel(x, 0), source.pixel(x, 0), "the requested area still limits publication");
+            }
+        }
+        assert_eq!(source, before);
+    }
+}
+
+#[test]
 /// Checked and optional Average replay publish the requested owner area beyond the document canvas.
 fn average_dispatch_uses_owner_extent_for_off_canvas_mean_and_writes() {
     let canvas = Rect::new(0, 0, 2, 1);
