@@ -4725,3 +4725,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shrinkwrap Canvas on Save	Riduci il quadro al contenuto al salvataggio
 	Move Toolbar to the Right	Sposta la barra degli strumenti a destra
 	Move Toolbar to the Left	Sposta la barra degli strumenti a sinistra
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Scegli un formato o una dimensione di ritaglio predefiniti
+	Set the aspect ratio for the crop box	Imposta le proporzioni del riquadro di ritaglio
+	Clear aspect ratio values	Cancella i valori delle proporzioni
+	Set the overlay options for the Crop Tool	Imposta le opzioni della sovrapposizione di ritaglio
+	Determines if pixel data outside the crop box is retained or deleted	Determina se i pixel esterni al riquadro di ritaglio vengono conservati o eliminati
+	How expanded crop area gets filled	Come viene riempita l'area di ritaglio estesa
+	Displays pop-up help for the fill methods	Mostra la guida a comparsa sui metodi di riempimento
+	Fill options	Opzioni di riempimento
+	Background (default):	Sfondo (predefinito):
+	Fill the expanded area with your background color or transparent pixels	Riempie l'area estesa con il colore di sfondo o pixel trasparenti
+	Content-aware fill	Riempimento in base al contenuto
+	Sample content from part of the image and use it to fill a small area	Preleva contenuto da una parte dell'immagine per riempire una piccola area
+	Reset the crop box, image rotation, and aspect ratio settings	Reimposta il riquadro di ritaglio, la rotazione dell'immagine e le proporzioni

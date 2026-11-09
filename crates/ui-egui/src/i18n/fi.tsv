@@ -4831,3 +4831,17 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW-kehityksen asetukset tallennettu tiedostoon {file}
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Valitse esiasetettu kuvasuhde tai rajaustittikoko
+	Set the aspect ratio for the crop box	Aseta rajauskehyksen kuvasuhde
+	Clear aspect ratio values	Tyhjennä kuvasuhteen arvot
+	Set the overlay options for the Crop Tool	Aseta rajauksen peittokuvan asetukset
+	Determines if pixel data outside the crop box is retained or deleted	Määrittää, säilytetäänkö rajauskehyksen ulkopuoliset pikselit vai poistetaanko ne
+	How expanded crop area gets filled	Miten laajennettu rajausalue täytetään
+	Displays pop-up help for the fill methods	Näyttää ponnahdusohjeen täyttötavoista
+	Fill options	Täyttöasetukset
+	Background (default):	Tausta (oletus):
+	Fill the expanded area with your background color or transparent pixels	Täytä laajennettu alue taustavärillä tai läpinäkyvillä pikseleillä
+	Content-aware fill	Sisältöön perustuva täyttö
+	Sample content from part of the image and use it to fill a small area	Ota sisältöä kuvan osasta pienen alueen täyttämiseksi
+	Reset the crop box, image rotation, and aspect ratio settings	Palauta rajauskehys, kuvan kierto ja kuvasuhde

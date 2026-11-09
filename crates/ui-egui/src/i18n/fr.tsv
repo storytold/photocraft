@@ -4649,3 +4649,17 @@ shape	Appearance	Apparence
 	Shrinkwrap Canvas on Save	Réduire le canevas au contenu à l'enregistrement
 	Move Toolbar to the Right	Déplacer la barre d'outils à droite
 	Move Toolbar to the Left	Déplacer la barre d'outils à gauche
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Choisir un format d'image ou une taille de recadrage prédéfini
+	Set the aspect ratio for the crop box	Définir le format du cadre de recadrage
+	Clear aspect ratio values	Effacer les valeurs de format
+	Set the overlay options for the Crop Tool	Définir les options de superposition du recadrage
+	Determines if pixel data outside the crop box is retained or deleted	Détermine si les pixels en dehors du cadre de recadrage sont conservés ou supprimés
+	How expanded crop area gets filled	Comment la zone de recadrage étendue est remplie
+	Displays pop-up help for the fill methods	Affiche l'aide contextuelle des méthodes de remplissage
+	Fill options	Options de remplissage
+	Background (default):	Arrière-plan (par défaut) :
+	Fill the expanded area with your background color or transparent pixels	Remplir la zone étendue avec la couleur d'arrière-plan ou des pixels transparents
+	Content-aware fill	Remplissage basé sur le contenu
+	Sample content from part of the image and use it to fill a small area	Prélever le contenu d'une partie de l'image pour remplir une petite zone
+	Reset the crop box, image rotation, and aspect ratio settings	Réinitialiser le cadre de recadrage, la rotation de l'image et le format

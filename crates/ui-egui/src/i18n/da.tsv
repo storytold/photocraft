@@ -4830,3 +4830,17 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW-fremkaldelsesindstillinger gemt i {file}
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Vælg et forudindstillet billedformat eller beskæringsstørrelse
+	Set the aspect ratio for the crop box	Angiv billedformatet for beskæringsrammen
+	Clear aspect ratio values	Ryd værdier for billedformat
+	Set the overlay options for the Crop Tool	Angiv indstillinger for beskæringsoverlejringen
+	Determines if pixel data outside the crop box is retained or deleted	Bestemmer, om pixels uden for beskæringsrammen bevares eller slettes
+	How expanded crop area gets filled	Hvordan det udvidede beskæringsområde fyldes
+	Displays pop-up help for the fill methods	Viser pop op-hjælp til fyldningsmetoderne
+	Fill options	Fyldningsindstillinger
+	Background (default):	Baggrund (standard):
+	Fill the expanded area with your background color or transparent pixels	Fyld det udvidede område med baggrundsfarven eller gennemsigtige pixels
+	Content-aware fill	Indholdsbaseret udfyldning
+	Sample content from part of the image and use it to fill a small area	Hent indhold fra en del af billedet for at fylde et lille område
+	Reset the crop box, image rotation, and aspect ratio settings	Nulstil beskæringsrammen, billedrotationen og billedformatet
