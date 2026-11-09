@@ -146,11 +146,15 @@ fn a_loaded_step_frames_the_named_layer_and_undoes() {
 #[test]
 fn a_loaded_step_plays_with_no_layer_selected() {
     let (mut s, _) = load(vec![recorded(by_name("Photo"), "Frame 1")]);
-    two_layers(&mut s);
+    let (photo, other) = two_layers(&mut s);
     s.execute("select.deselectLayers", json!({})).unwrap();
     let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
     assert_eq!(played["ran"], 1, "{played}");
     assert_eq!(frames(&s, "Frame 1").into_iter().map(|f| f.1).collect::<Vec<_>>(), vec![[10.0, 15.0, 30.0, 30.0]]);
+    // The frame took in Photo, not Other.
+    let doc = &s.active().unwrap().doc;
+    assert!(doc.layer(photo).is_none(), "Photo went into the frame");
+    assert!(doc.layers.iter().any(|l| l.id == other), "Other stays a top-level layer");
 }
 
 /// Without a layer of its own the command still frames the selected layers.
