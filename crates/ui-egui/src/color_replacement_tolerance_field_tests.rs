@@ -87,6 +87,21 @@ fn text_typed_over_a_value_past_the_range_does_not_alert() {
 }
 
 #[test]
+fn a_value_past_the_range_typed_again_after_text_alerts() {
+    let mut h = bar();
+    type_without_leaving(&mut h, "150");
+    for text in ["abc", "150"] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(tolerance(&h), 100.0);
+    assert_eq!(alert(&h).as_deref(), Some(TOLERANCE_RANGE_ALERT), "the field is left holding 150 again");
+}
+
+#[test]
 fn a_tool_change_while_typing_past_the_range_still_alerts() {
     let mut h = bar();
     type_without_leaving(&mut h, "150");

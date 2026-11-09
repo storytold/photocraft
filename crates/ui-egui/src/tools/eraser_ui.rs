@@ -247,9 +247,23 @@ pub(crate) fn whole_tolerance_field(ui: &mut egui::Ui, value: &mut f32, draft: &
         }
     }
     // Text replaced by something that is no number (`150`, then `abc`) leaves the value alone
-    // when the field is left, with no alert (#12268).
-    if r.has_focus() && widgets::typed_text_parses(ui.ctx(), r.id) == Some(false) {
-        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    // when the field is left, with no alert (#12268). A number typed again after it (`150` once
+    // more) owes the alert again, even though the value did not change.
+    let no_number_id = r.id.with("no-number-typed");
+    if r.has_focus() {
+        match widgets::typed_text_parses(ui.ctx(), r.id) {
+            Some(false) => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(out_id);
+                d.insert_temp(no_number_id, true);
+            }),
+            Some(true) if ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number_id)).unwrap_or(false) => {
+                let out = typed.is_finite() && !(1.0..=100.0).contains(&typed);
+                ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+            }
+            _ => {}
+        }
+    } else {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number_id));
     }
     if !r.has_focus() {
         ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
@@ -269,6 +283,7 @@ pub(crate) fn whole_tolerance_field(ui: &mut egui::Ui, value: &mut f32, draft: &
     alert
 }
 
+/// Where a whole-number Tolerance field notes the pass in which it last owed the range alert.
 fn range_alert_owed_id() -> egui::Id {
     egui::Id::unique("whole-tolerance-range-alert-owed")
 }
