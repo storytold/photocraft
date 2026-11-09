@@ -496,10 +496,8 @@ fn import_pdf_pages_as_layers(
         let budget = (MAX_PAGE_PIXELS as f64 / page_pixels as f64).sqrt();
         let fit = (f64::from(MAX_SIDE) / f64::from(width)).min(f64::from(MAX_SIDE) / f64::from(height)).min(budget).min(1.0);
         if fit < 1.0 {
-            warnings.push(format!(
-                "PDF page {number}: the {width} × {height} px page was scaled down to fit {MAX_SIDE} px and {} MP",
-                MAX_PAGE_PIXELS / 1_000_000
-            ));
+            warnings
+                .push(format!("PDF page {number}: the {width} × {height} px page was scaled down to fit {MAX_SIDE} px and {} MP", MAX_PAGE_PIXELS / 1_000_000));
             width = ((f64::from(width) * fit).floor() as u32).max(1);
             height = ((f64::from(height) * fit).floor() as u32).max(1);
         }
@@ -564,11 +562,8 @@ fn import_pdf_pages_as_layers(
             original.locks.all = true;
             let mut board = Layer::group(format!("PDF Page {}", info.number), vec![original]);
             if let LayerContent::Group(ref mut group) = board.content {
-                group.artboard = Some(Artboard {
-                    rect: region,
-                    background: ArtboardBackground::White,
-                    preset: format!("photocraft.pdf.page.v1:{}", info.number),
-                });
+                group.artboard =
+                    Some(Artboard { rect: region, background: ArtboardBackground::White, preset: format!("photocraft.pdf.page.v1:{}", info.number) });
             }
             doc.layers.push(board);
         } else {
@@ -623,7 +618,9 @@ pub fn images(bytes: &[u8], password: Option<&str>) -> Result<Vec<PdfImage>, IoE
         codec_check(page)?;
         let m = marks(page, None);
         if out.len().saturating_add(m.images.len()) > MAX_PDF_IMAGES {
-            return Err(IoError::Pdf(format!("the PDF contains more than {MAX_PDF_IMAGES} raster images; Images mode is limited to {MAX_PDF_IMAGES} images per PDF")));
+            return Err(IoError::Pdf(format!(
+                "the PDF contains more than {MAX_PDF_IMAGES} raster images; Images mode is limited to {MAX_PDF_IMAGES} images per PDF"
+            )));
         }
         for placed in m.images {
             out.push(PdfImage { index: out.len() + 1, page: p + 1, width: placed.size.0, height: placed.size.1 });
@@ -722,9 +719,7 @@ fn load(bytes: &[u8], password: Option<&str>) -> Result<Pdf, IoError> {
 pub fn read_file(path: &std::path::Path) -> Result<Vec<u8>, IoError> {
     let file = std::fs::File::open(path).map_err(|e| IoError::Read(format!("{}: {e}", path.display())))?;
     let mut bytes = Vec::new();
-    file.take(MAX_PDF_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| IoError::Read(format!("{}: {e}", path.display())))?;
+    file.take(MAX_PDF_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| IoError::Read(format!("{}: {e}", path.display())))?;
     if bytes.len() > MAX_PDF_BYTES {
         return Err(IoError::Pdf(format!("the PDF is larger than the {} MiB import limit", MAX_PDF_BYTES / (1024 * 1024))));
     }

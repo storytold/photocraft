@@ -842,34 +842,34 @@ fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImpor
             // Multiple PDF pages may have different dimensions: a single manual
             // width/height would stretch or truncate all of them. Only DPI is shared.
             ui.add_enabled_ui(!flag(f, "pagesAsArtboards", false), |ui| {
-            for (key, label, cur, other) in [("width", "Width:", w, h), ("height", "Height:", h, w)] {
-                field(ui, label, &mut |ui| {
-                    let mut v = crate::new_doc_ui::to_unit(cur as f32, &unit, ppi);
-                    let r = widgets::value_field_prec(ui, &mut v, 0.0..=300_000.0, "", 70.0, decimals).accessible_name(tl!(label));
-                    if r.changed() && !r.dragged() {
-                        let px = crate::new_doc_ui::from_unit(v, &unit, ppi).round().clamp(1.0, 300_000.0) as u32;
-                        let (nw, nh) = if constrain && cur > 0 {
-                            let o = (f64::from(px) * f64::from(other) / f64::from(cur)).round().clamp(1.0, 300_000.0) as u32;
-                            if key == "width" { (px, o) } else { (o, px) }
-                        } else if key == "width" {
-                            (px, other.max(1))
-                        } else {
-                            (other.max(1), px)
-                        };
-                        f.insert("pixelSize".into(), json!([nw, nh]));
-                    }
-                    ui.add_space(6.0);
-                    let mut u = unit.clone();
-                    let unit_name = if key == "width" { tl!("Width Unit:") } else { tl!("Height Unit:") };
-                    if widgets::dropdown(ui, &format!("pdf-unit-{key}"), unit_name, &mut u, &units, 110.0) {
-                        f.insert("unit".into(), json!(u));
-                    }
-                });
-            }
-            let mut c = constrain;
-            if widgets::checkbox(ui, &mut c, tl!("Constrain Proportions")).changed() {
-                f.insert("constrain".into(), json!(c));
-            }
+                for (key, label, cur, other) in [("width", "Width:", w, h), ("height", "Height:", h, w)] {
+                    field(ui, label, &mut |ui| {
+                        let mut v = crate::new_doc_ui::to_unit(cur as f32, &unit, ppi);
+                        let r = widgets::value_field_prec(ui, &mut v, 0.0..=300_000.0, "", 70.0, decimals).accessible_name(tl!(label));
+                        if r.changed() && !r.dragged() {
+                            let px = crate::new_doc_ui::from_unit(v, &unit, ppi).round().clamp(1.0, 300_000.0) as u32;
+                            let (nw, nh) = if constrain && cur > 0 {
+                                let o = (f64::from(px) * f64::from(other) / f64::from(cur)).round().clamp(1.0, 300_000.0) as u32;
+                                if key == "width" { (px, o) } else { (o, px) }
+                            } else if key == "width" {
+                                (px, other.max(1))
+                            } else {
+                                (other.max(1), px)
+                            };
+                            f.insert("pixelSize".into(), json!([nw, nh]));
+                        }
+                        ui.add_space(6.0);
+                        let mut u = unit.clone();
+                        let unit_name = if key == "width" { tl!("Width Unit:") } else { tl!("Height Unit:") };
+                        if widgets::dropdown(ui, &format!("pdf-unit-{key}"), unit_name, &mut u, &units, 110.0) {
+                            f.insert("unit".into(), json!(u));
+                        }
+                    });
+                }
+                let mut c = constrain;
+                if widgets::checkbox(ui, &mut c, tl!("Constrain Proportions")).changed() {
+                    f.insert("constrain".into(), json!(c));
+                }
             });
             if flag(f, "pagesAsArtboards", false) {
                 ui.small(tl!("Each PDF page keeps its full dimensions; change Resolution to change image quality."));
@@ -877,7 +877,8 @@ fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImpor
             field(ui, "Resolution:", &mut |ui| {
                 let res_unit = s(f, "resolutionUnit", "in").to_string();
                 let mut v = if res_unit == "cm" { ppi / 2.54 } else { ppi };
-                let r = widgets::value_field_prec(ui, &mut v, 0.1..=pdf_import::MAX_RESOLUTION, "", 70.0, if res_unit == "cm" { 2 } else { 0 }).accessible_name(tl!("Resolution:"));
+                let r = widgets::value_field_prec(ui, &mut v, 0.1..=pdf_import::MAX_RESOLUTION, "", 70.0, if res_unit == "cm" { 2 } else { 0 })
+                    .accessible_name(tl!("Resolution:"));
                 if r.changed() && !r.dragged() {
                     let new = (if res_unit == "cm" { v * 2.54 } else { v }).clamp(pdf_import::MIN_RESOLUTION, pdf_import::MAX_RESOLUTION);
                     // A typed size is a physical size: it keeps its inches, so its pixels follow.

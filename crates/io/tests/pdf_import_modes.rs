@@ -46,7 +46,6 @@ fn individual_pdf_pages_keep_their_dimensions_and_content() {
     }
 }
 
-
 /// Minimal one-page PDF containing only a 1x1 red RGB image.
 /// Construct offsets so the test does not depend on an external PDF generator.
 fn one_image_pdf() -> Vec<u8> {
@@ -56,7 +55,12 @@ fn one_image_pdf() -> Vec<u8> {
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
         [format!("<< /Length {} >>\nstream\n", drawing.len()).into_bytes(), drawing.to_vec(), b"endstream".to_vec()].concat(),
-        [b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n".to_vec(), vec![255, 0, 0], b"\nendstream".to_vec()].concat(),
+        [
+            b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n".to_vec(),
+            vec![255, 0, 0],
+            b"\nendstream".to_vec(),
+        ]
+        .concat(),
     ];
     let mut bytes = b"%PDF-1.4\n".to_vec();
     let mut offsets = vec![0usize];
@@ -84,35 +88,22 @@ fn single_image_pdf_never_allows_direct_save_over_original() {
     assert_eq!((result.document.size.width, result.document.size.height), (1, 1));
 }
 
-
 #[test]
 fn invalid_pdf_page_selection_returns_error_instead_of_panicking() {
     for page in [0, 4, usize::MAX] {
-        let opts = ImportOptions {
-            pdf: Some(PdfOpenOptions { page, ..Default::default() }),
-            ..Default::default()
-        };
+        let opts = ImportOptions { pdf: Some(PdfOpenOptions { page, ..Default::default() }), ..Default::default() };
         assert!(import_with_options("colors.pdf", PDF, &opts).is_err(), "invalid page {page}");
     }
     for selected in [vec![], vec![0], vec![4], vec![usize::MAX]] {
-        let opts = ImportOptions {
-            pdf: Some(PdfOpenOptions { pages_as_layers: Some(selected.clone()), ..Default::default() }),
-            ..Default::default()
-        };
+        let opts = ImportOptions { pdf: Some(PdfOpenOptions { pages_as_layers: Some(selected.clone()), ..Default::default() }), ..Default::default() };
         assert!(import_with_options("colors.pdf", PDF, &opts).is_err(), "invalid selection {selected:?}");
     }
 }
 
-
 #[test]
 fn pdf_pages_as_artboards_keep_page_identity_and_individual_sizes() {
     let opts = ImportOptions {
-        pdf: Some(PdfOpenOptions {
-            pages_as_artboards: Some(vec![1, 2, 3]),
-            resolution: 72.0,
-            crop: CropTo::MediaBox,
-            ..Default::default()
-        }),
+        pdf: Some(PdfOpenOptions { pages_as_artboards: Some(vec![1, 2, 3]), resolution: 72.0, crop: CropTo::MediaBox, ..Default::default() }),
         ..Default::default()
     };
     let result = import_with_options("colors.pdf", PDF, &opts).unwrap();
@@ -144,35 +135,25 @@ fn pdf_pages_as_artboards_keep_page_identity_and_individual_sizes() {
 #[test]
 fn pdf_artboards_reject_empty_and_invalid_page_selection() {
     for selected in [vec![], vec![0], vec![4], vec![1, usize::MAX], vec![2, 2]] {
-        let opts = ImportOptions {
-            pdf: Some(PdfOpenOptions { pages_as_artboards: Some(selected), ..Default::default() }),
-            ..Default::default()
-        };
+        let opts = ImportOptions { pdf: Some(PdfOpenOptions { pages_as_artboards: Some(selected), ..Default::default() }), ..Default::default() };
         assert!(import_with_options("colors.pdf", PDF, &opts).is_err());
     }
 }
 
-
 #[test]
 fn pdf_page_identity_survives_editable_psd_save_and_reopen() {
     let opts = ImportOptions {
-        pdf: Some(PdfOpenOptions {
-            pages_as_artboards: Some(vec![3, 1, 2]),
-            resolution: 72.0,
-            crop: CropTo::MediaBox,
-            ..Default::default()
-        }),
+        pdf: Some(PdfOpenOptions { pages_as_artboards: Some(vec![3, 1, 2]), resolution: 72.0, crop: CropTo::MediaBox, ..Default::default() }),
         ..Default::default()
     };
     let source = import_with_options("colors.pdf", PDF, &opts).unwrap().document;
     let saved = photocraft_io::export(&source, "editable.psd", &photocraft_io::ExportOptions::default())
-        .expect("save the imported multipage document as a layered PSD").bytes;
+        .expect("save the imported multipage document as a layered PSD")
+        .bytes;
     let reopened = photocraft_io::import("editable.psd", &saved).expect("reopen editable PSD").document;
     assert_eq!(reopened.artboards().len(), 3);
-    let actual: Vec<_> = reopened.artboards().iter()
-        .map(|(_, _, board)| (board.preset.clone(), board.rect.width(), board.rect.height())).collect();
-    let expected: Vec<_> = source.artboards().iter()
-        .map(|(_, _, board)| (board.preset.clone(), board.rect.width(), board.rect.height())).collect();
+    let actual: Vec<_> = reopened.artboards().iter().map(|(_, _, board)| (board.preset.clone(), board.rect.width(), board.rect.height())).collect();
+    let expected: Vec<_> = source.artboards().iter().map(|(_, _, board)| (board.preset.clone(), board.rect.width(), board.rect.height())).collect();
     assert_eq!(actual, expected, "PDF-page identity and sizes must survive saving");
     for layer in &reopened.layers {
         let children = layer.children().expect("PDF page should remain an editable group");
@@ -181,16 +162,13 @@ fn pdf_page_identity_survives_editable_psd_save_and_reopen() {
     }
 }
 
-
 #[test]
 fn multipage_pdf_import_cannot_silently_save_as_one_big_page() {
-    let opts=ImportOptions{
-        pdf:Some(PdfOpenOptions{
-            pages_as_artboards:Some(vec![1,2,3]),resolution:72.0,
-            crop:CropTo::MediaBox,..Default::default()
-        }),..Default::default()
+    let opts = ImportOptions {
+        pdf: Some(PdfOpenOptions { pages_as_artboards: Some(vec![1, 2, 3]), resolution: 72.0, crop: CropTo::MediaBox, ..Default::default() }),
+        ..Default::default()
     };
-    let doc=import_with_options("multi.pdf",PDF,&opts).unwrap().document;
-    let result=photocraft_io::export(&doc,"wrong.pdf",&photocraft_io::ExportOptions::default());
-    assert!(result.is_err(),"legacy single-page PDF writer must refuse tagged multipage documents");
+    let doc = import_with_options("multi.pdf", PDF, &opts).unwrap().document;
+    let result = photocraft_io::export(&doc, "wrong.pdf", &photocraft_io::ExportOptions::default());
+    assert!(result.is_err(), "legacy single-page PDF writer must refuse tagged multipage documents");
 }

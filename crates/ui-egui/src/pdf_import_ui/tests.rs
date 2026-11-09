@@ -1,8 +1,5 @@
 use super::*;
-use egui_kittest::{
-    Harness,
-    kittest::Queryable,
-};
+use egui_kittest::{Harness, kittest::Queryable};
 use std::time::{Duration, Instant};
 
 const PDF: &[u8] = include_bytes!("../../../io/tests/fixtures/pdf-three-pages.pdf");
@@ -56,7 +53,13 @@ fn finish(h: &mut Harness<'_, PhotocraftApp>) {
     h.get_by_label("OK").click();
     h.run_steps(2);
     wait(h, |a| a.jobs.opens.is_empty());
-    assert!(h.state().ui.dialogs.iter().all(|d| !owns(&d.fields)), "PDF import dialog still open; status: {}; error: {}; fields: {:?}", h.state().ui.status, h.state().ui.status_error, h.state().ui.dialogs.iter().filter(|d| owns(&d.fields)).map(|d| d.fields.clone()).collect::<Vec<_>>());
+    assert!(
+        h.state().ui.dialogs.iter().all(|d| !owns(&d.fields)),
+        "PDF import dialog still open; status: {}; error: {}; fields: {:?}",
+        h.state().ui.status,
+        h.state().ui.status_error,
+        h.state().ui.dialogs.iter().filter(|d| owns(&d.fields)).map(|d| d.fields.clone()).collect::<Vec<_>>()
+    );
     assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
 }
 
@@ -140,7 +143,6 @@ fn pdf_dialog_subset_and_cancel_preserve_the_requested_page_set() {
     assert!(h.state().pdf_import.is_empty());
     assert!(h.state().jobs.opens.is_empty());
 }
-
 
 #[test]
 fn pdf_dialog_artboard_mode_recognizes_pages_without_confusing_them_with_layers() {
