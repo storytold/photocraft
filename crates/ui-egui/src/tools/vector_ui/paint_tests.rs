@@ -1169,3 +1169,18 @@ fn pixel_align_properties_keeps_pending_live_geometry_expression() {
         assert_eq!(shape(h.state()), &after);
     }
 }
+
+#[test]
+fn pixel_align_round2_locked_shape_toolbar_restores_preference() {
+    let mut app = app("rgb", 8);
+    app.run("shape.create", json!({"rect":[20,20,60,60],"pixelAlignStroke":false})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(id).unwrap().locks.all = true;
+    app.ui.tool_options.pixel_align_stroke = false;
+    let mut h = harness(app, false);
+    h.get_by_label("Pixel Align Stroke").click();
+    h.run_steps(3);
+    assert!(h.state().ui.status_error);
+    assert!(!h.state().ui.tool_options.pixel_align_stroke);
+    assert!(!shape(h.state()).pixel_align_stroke);
+}

@@ -197,6 +197,32 @@ fn new_document_preview(
     } else {
         let mut work = PreviewReduction::new(compiled, layout);
         work.advance();
+        if !work.complete() {
+            // Keep the whole changing shape visible while exact document coverage is streamed.
+            // Cap this extra raster at 512 pixels per axis, independently of document dimensions.
+            let preview_factor = bounds.width().max(bounds.height()).div_ceil(512).max(layout.factor);
+            let size = [bounds.width().div_ceil(preview_factor) as usize, bounds.height().div_ceil(preview_factor) as usize];
+            let scale = 1.0 / f64::from(preview_factor);
+            let mut proxy = shape.clone();
+            proxy.path =
+                proxy.path.transform(&photocraft_geom::Affine { m: [scale, 0.0, 0.0, scale, -f64::from(bounds.x0) * scale, -f64::from(bounds.y0) * scale] });
+            proxy.live = None;
+            proxy.pixel_align_stroke = false;
+            proxy.feather *= scale as f32;
+            if let Some(stroke) = &mut proxy.stroke {
+                stroke.width *= scale as f32;
+            }
+            let output = photocraft_geom::Rect::new(0, 0, size[0] as i32, size[1] as i32);
+            let frame = photocraft_geom::Rect::new(
+                ((f64::from(canvas.x0) - f64::from(bounds.x0)) * scale).floor() as i32,
+                ((f64::from(canvas.y0) - f64::from(bounds.y0)) * scale).floor() as i32,
+                ((f64::from(canvas.x1) - f64::from(bounds.x0)) * scale).ceil() as i32,
+                ((f64::from(canvas.y1) - f64::from(bounds.y0)) * scale).ceil() as i32,
+            );
+            let fallback = photocraft_vector::CompiledShape::with_frames(&proxy, photocraft_vector::DEFAULT_TOLERANCE, output, frame).render_rgba(output);
+            let bytes: Vec<u8> = fallback.iter().flat_map(|p| p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+            work.set_fallback(egui::ColorImage::from_rgba_unmultiplied(size, &bytes));
+        }
         let image = work.image();
         let reduction = (!work.complete()).then(|| Arc::new(Mutex::new(work)));
         (image, reduction, egui::TextureOptions::LINEAR)

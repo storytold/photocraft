@@ -4718,3 +4718,26 @@ fn pixel_align_psd_effect_layer_roi_matches_document_frame() {
         }
     }
 }
+
+#[test]
+fn pixel_align_round2_effect_identity_tracks_alignment_provenance() {
+    use std::hash::Hasher;
+    let mut layer = Layer::new("shape", LayerContent::Shape(photocraft_doc::ShapeLayer::default()));
+    let key = |layer: &Layer| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        super::fx_cache::layer_identity(layer, &mut h, &mut |_| {});
+        h.finish()
+    };
+    let original = key(&layer);
+    let LayerContent::Shape(sh) = &mut layer.content else { panic!() };
+    sh.pixel_align_stroke = true;
+    let aligned = key(&layer);
+    assert_ne!(original, aligned);
+    let LayerContent::Shape(sh) = &mut layer.content else { panic!() };
+    sh.psd_coordinate_frame = Some([1000, 2000]);
+    let framed = key(&layer);
+    assert_ne!(aligned, framed);
+    let LayerContent::Shape(sh) = &mut layer.content else { panic!() };
+    sh.psd_raw = Some(std::sync::Arc::new(Vec::new()));
+    assert_ne!(framed, key(&layer));
+}

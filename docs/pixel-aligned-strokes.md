@@ -23,7 +23,9 @@ the legacy renderer. Native projects serialize the option only when enabled.
 PSD shapes map it to the `vstk` descriptor's `strokeStyleStrokeAdjust` boolean
 ([Adobe Generator documentation](https://github.com/adobe-photoshop/generator-core/wiki/JSON-event-format/6a7f39780beb75b0f9988779975201f44e6978f2));
 a missing field defaults to false. Changing only this flag preserves unknown
-stroke descriptor entries. This mapping does not claim pixel-for-pixel Photoshop
+stroke descriptor entries when the imported fill state also matches. If a shape
+has `vstk` but no fill block, normalizing its fill state can rebuild the descriptor
+and discard unknown stroke entries. This mapping does not claim pixel-for-pixel Photoshop
 rendering parity.
 
 ## Rendering policy
@@ -68,7 +70,8 @@ Rectangle clipping and normal coverage account for that error at render time,
 while the original path still determines dash lengths and phase. Native paths
 retain the strict floating-point epsilon; genuinely fractional centerlines beyond
 the allowance retain legacy rendering. Appearance edits preserve the allowance
-while the original PSD path block is retained.
+using saved coordinate provenance, independently of the raw PSD block. Integer-grid
+reflections and quarter-turns retain it; point edits that change geometry clear it.
 
 ## Deliberate limits
 
@@ -87,13 +90,14 @@ so zoom cannot make a fractional-width stroke eligible. Integer grid zooms use
 nearest filtering; rotated or fractional views filter the document coverage.
 The preview texture is capped at 2048 pixels per dimension. Larger visible bounds
 are reduced by box-filtering the original aligned document pixels, using small
-native tiles and premultiplied colour averages. No alignment is disabled at the
-size threshold, and stored geometry and dash phase remain unchanged. Very large
+native tiles and premultiplied colour averages. The completed preview retains
+alignment across the size threshold; stored geometry and dash phase remain unchanged. Very large
 previews complete progressively: each draw pass processes at most 4,194,304 source
 pixels, requests another frame if needed, and releases the working sums when
-complete or when the drag ends. While dragging such a large shape, its painted preview can be partial
-until the remaining tiles have been processed; the vector feedback outline stays
-visible. This bounds both allocation and per-frame raster work, including on WASM.
+complete or when the drag ends. A complete approximation, rasterized at the bounded
+texture size, fills unprocessed pixels while geometry changes. Native coverage
+replaces it as reduction completes. This bounds both allocation and per-frame
+raster work, including on WASM.
 
 Filled Line/ArrowLine alignment requires live parameters matching the current
 path, and is disabled for density/feather masks. A point edit or transform that

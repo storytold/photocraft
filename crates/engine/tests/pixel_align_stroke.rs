@@ -212,3 +212,30 @@ fn pixel_align_psd_integer_translation_retains_coordinate_allowance() {
     let LayerContent::Shape(fractional) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("shape") };
     assert!(fractional.psd_coordinate_frame.is_none());
 }
+
+#[test]
+fn pixel_align_round2_grid_transforms_conversion_and_point_edits() {
+    use photocraft_doc::LayerContent;
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":1000,"height":2000})).unwrap();
+    s.execute("shape.create", json!({"rect":[10,10,60,60],"pixelAlignStroke":true})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!() };
+    sh.psd_coordinate_frame = Some([1000, 2000]);
+    for (matrix, frame) in [(json!([-1, 0, 0, 1, 100, 0]), [1000, 2000]), (json!([0, 1, -1, 0, 100, 0]), [2000, 1000])] {
+        s.execute("shape.edit", json!({"layer":id.0,"transform":matrix})).unwrap();
+        let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!() };
+        assert_eq!(sh.psd_coordinate_frame, Some(frame));
+        s.undo();
+    }
+    s.execute("path.toShape", json!({"name":"layer","pixelAlignStroke":true,"stroke":{"width":1}})).unwrap();
+    let copied = s.active().unwrap().active_layer.unwrap();
+    let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(copied).unwrap().content else { panic!() };
+    assert_eq!(sh.psd_coordinate_frame, Some([1000, 2000]));
+    s.execute("path.moveAnchors", json!({"name":"layer","layer":copied.0,"anchors":[[0,0]],"move":[0.00001,0]})).unwrap();
+    let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(copied).unwrap().content else { panic!() };
+    assert!(sh.psd_coordinate_frame.is_none());
+    s.undo();
+    let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(copied).unwrap().content else { panic!() };
+    assert_eq!(sh.psd_coordinate_frame, Some([1000, 2000]));
+}

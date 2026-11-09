@@ -13,11 +13,10 @@ fn same(a: f64, b: f64) -> bool {
 
 /// A PSD path is rounded to signed 8.24 fractions of the document dimensions. Only
 /// imported PSD geometry gets its half-quantum allowance; native paths keep the strict epsilon.
-pub(crate) fn coordinate_tolerance(shape: &ShapeLayer, canvas: Rect) -> (f64, f64) {
+pub(crate) fn coordinate_tolerance(shape: &ShapeLayer, _canvas: Rect) -> (f64, f64) {
     let [width, height] = match shape.psd_coordinate_frame {
         Some(frame) => frame,
-        // Compatibility with shapes loaded from older native files.
-        None if shape.psd_raw.is_some() => [canvas.width(), canvas.height()],
+        // Import and native-load migration supply provenance. A render ROI cannot.
         None => return (ALIGN_EPSILON, ALIGN_EPSILON),
     };
     // Valid PSB dimensions need less than 0.009 px; cap hostile oversized frames too.
@@ -265,13 +264,22 @@ fn equivalent_live_path(expected: &Path, stored: &Path) -> bool {
         if !a.closed || !b.closed || a.op != b.op || a.knots.len() != b.knots.len() {
             return false;
         }
+        let matching = |left: &[photocraft_doc::Knot], right: &[photocraft_doc::Knot]| {
+            left.iter().zip(right).all(|(l, r)| {
+                l.smooth == r.smooth
+                    && [l.anchor, l.in_ctrl, l.out_ctrl].into_iter().zip([r.anchor, r.in_ctrl, r.out_ctrl]).all(|(p, q)| same(p.x, q.x) && same(p.y, q.y))
+            })
+        };
+        if matching(&a.knots, &b.knots) {
+            return true;
+        }
         let mut reversed = a.knots.clone();
         reversed.reverse();
         for knot in &mut reversed {
             std::mem::swap(&mut knot.in_ctrl, &mut knot.out_ctrl);
         }
         for _ in 0..reversed.len() {
-            if reversed == b.knots {
+            if matching(&reversed, &b.knots) {
                 return true;
             }
             reversed.rotate_left(1);

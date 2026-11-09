@@ -1027,3 +1027,32 @@ fn pixel_align_preview_views_progress_independently_and_release_hidden_view() {
     assert!(ctx.data(|d| d.get_temp::<DocumentDragCache>(ids[1])).is_none());
     assert!(ctx.data(|d| d.get_temp::<DocumentDragCache>(ids[0])).is_some());
 }
+
+#[test]
+fn pixel_align_round2_changing_preview_has_complete_fill() {
+    let ctx = egui::Context::default();
+    let mut shape = photocraft_doc::ShapeLayer {
+        path: photocraft_vector::shapes::rect(0.0, 0.0, 2050.0, 2050.0),
+        fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
+        pixel_align_stroke: true,
+        ..Default::default()
+    };
+    for x in [0.0, 1.0, 2.0] {
+        shape.path = photocraft_vector::shapes::rect(x, 0.0, 2050.0, 2050.0);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.ctx().layer_painter(egui::LayerId::background());
+            let cache = new_document_preview(
+                &painter,
+                &shape,
+                photocraft_geom::Rect::new(0, 0, 2200, 2200),
+                photocraft_geom::Rect::new(0, 0, 2200, 2200),
+                egui::TextureOptions::LINEAR,
+            )
+            .unwrap();
+            assert!(cache.reduction.is_some());
+            let image = cache.reduction.as_ref().unwrap().lock().unwrap().image();
+            assert!(image.pixels[(image.size[1] - 5) * image.size[0] + image.size[0] - 5].a() > 240);
+        });
+        output.textures_delta.clear();
+    }
+}

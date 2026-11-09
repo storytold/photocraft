@@ -1137,3 +1137,20 @@ fn pixel_align_stroke_roundtrips_and_defaults_for_legacy_files() {
     let disabled_json = serde_json::to_value(disabled).unwrap();
     assert!(disabled_json.get("pixel_align_stroke").is_none());
 }
+
+#[test]
+fn pixel_align_round2_legacy_psd_provenance_is_migrated() {
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let layer = Layer::new(
+        "legacy PSD",
+        LayerContent::Shape(photocraft_doc::ShapeLayer { pixel_align_stroke: true, psd_raw: Some(std::sync::Arc::new(vec![1, 2, 3])), ..Default::default() }),
+    );
+    let id = layer.id;
+    doc.layers.push(layer);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let loaded = load_from_bytes(&bytes).unwrap();
+    let LayerContent::Shape(sh) = &loaded.layer(id).unwrap().content else { panic!() };
+    assert_eq!(sh.psd_coordinate_frame, Some([doc.size.width, doc.size.height]));
+    let saved = save_to_bytes(&loaded, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&saved).unwrap(), loaded);
+}

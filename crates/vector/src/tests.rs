@@ -1455,7 +1455,8 @@ fn pixel_alignment_psd_allowance_is_axis_specific_and_render_only() {
         path: Path::new(vec![Subpath::polyline(&[(10.0, quantize(20.0, 300_000.0)), (54.0, quantize(20.0, 300_000.0))])]),
         pixel_align_stroke: true,
         stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
-        // The renderer uses only the retained-block marker; decoded coordinates remain authoritative.
+        // Provenance is independent of the render region and raw export block.
+        psd_coordinate_frame: Some([100, 300_000]),
         psd_raw: Some(std::sync::Arc::new(Vec::new())),
         ..Default::default()
     };
@@ -1579,4 +1580,37 @@ fn pixel_alignment_reflected_live_line_accepts_reversed_outline_but_rejects_stal
     assert_eq!(pixels[20 * 64 + 30][3], 1.0);
     shape.path.subpaths[0].knots[0].out_ctrl.x += 0.25;
     assert!(pixel_aligned_line_fill_path(&shape).is_none());
+}
+
+#[test]
+fn pixel_alignment_round2_quarter_turn_accepts_roundoff_not_stale_controls() {
+    let live = photocraft_doc::LiveShape::Line { from: [0.0, 20.0], to: [40.0, 20.0], weight: 1.0 };
+    let a = photocraft_geom::Affine::rotate(std::f64::consts::FRAC_PI_2).then(&photocraft_geom::Affine::translate(40.0, 0.0));
+    let p = a.apply(photocraft_geom::Point::new(0.0, 20.0));
+    let q = a.apply(photocraft_geom::Point::new(40.0, 20.0));
+    let mut sh = ShapeLayer {
+        path: shapes::live_path(&live).transform(&a),
+        live: Some(photocraft_doc::LiveShape::Line { from: [p.x, p.y], to: [q.x, q.y], weight: 1.0 }),
+        fill: Some(Fill::Solid(Color::BLACK)),
+        pixel_align_stroke: true,
+        ..Default::default()
+    };
+    assert!(pixel_aligned_line_fill_path(&sh).is_some());
+    sh.path.subpaths[0].knots[0].out_ctrl.x += 0.001;
+    assert!(pixel_aligned_line_fill_path(&sh).is_none());
+}
+
+#[test]
+fn pixel_alignment_round2_missing_provenance_does_not_depend_on_roi() {
+    let sh = ShapeLayer {
+        path: shapes::rect(10.00001, 10.00001, 60.0, 60.0),
+        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        pixel_align_stroke: true,
+        psd_raw: Some(std::sync::Arc::new(Vec::new())),
+        ..Default::default()
+    };
+    let clip = Rect::new(0, 0, 80, 80);
+    let a = CompiledShape::new(&sh, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    let b = CompiledShape::with_frames(&sh, DEFAULT_TOLERANCE, clip, Rect::new(0, 0, 1000, 1000)).render_rgba(clip);
+    assert_eq!(a, b);
 }

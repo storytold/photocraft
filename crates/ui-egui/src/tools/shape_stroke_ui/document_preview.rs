@@ -37,13 +37,29 @@ pub(super) struct PreviewReduction {
     compiled: CompiledShape,
     layout: PreviewLayout,
     sums: Vec<[f64; 4]>,
+    weights: Vec<f64>,
+    fallback: Option<egui::ColorImage>,
     cursor: [i32; 2],
 }
 
 impl PreviewReduction {
     /// Allocate only the validated output grid, retaining the compiled document renderer.
     pub fn new(compiled: CompiledShape, layout: PreviewLayout) -> Self {
-        Self { compiled, layout, sums: vec![[0.0; 4]; layout.size[0] * layout.size[1]], cursor: [layout.bounds.x0, layout.bounds.y0] }
+        Self {
+            compiled,
+            layout,
+            sums: vec![[0.0; 4]; layout.size[0] * layout.size[1]],
+            weights: vec![0.0; layout.size[0] * layout.size[1]],
+            fallback: None,
+            cursor: [layout.bounds.x0, layout.bounds.y0],
+        }
+    }
+
+    /// A bounded full-shape approximation fills pixels not yet visited by native reduction.
+    pub fn set_fallback(&mut self, image: egui::ColorImage) {
+        if image.size.into_iter().all(|side| side > 0) && image.size[0] <= self.layout.size[0] && image.size[1] <= self.layout.size[1] {
+            self.fallback = Some(image);
+        }
     }
 
     /// Every native source tile has contributed to the reduced image.
@@ -85,6 +101,9 @@ impl PreviewReduction {
             let y = i64::from(tile.y0) - i64::from(self.layout.bounds.y0) + (i / tile.width() as usize) as i64;
             let index = (y as usize / factor) * self.layout.size[0] + x as usize / factor;
             let Some(sum) = self.sums.get_mut(index) else { continue };
+            if let Some(weight) = self.weights.get_mut(index) {
+                *weight += 1.0;
+            }
             let alpha = f64::from(pixel[3].clamp(0.0, 1.0));
             for channel in 0..3 {
                 sum[channel] += f64::from(pixel[channel].clamp(0.0, 1.0)) * alpha;
@@ -93,13 +112,30 @@ impl PreviewReduction {
         }
     }
 
-    /// Unvisited source pixels and partial final footprints are transparent, not stretched.
+    /// Blend the complete approximation into unvisited pixels; completion uses native sums only.
     pub fn image(&self) -> egui::ColorImage {
         let area = f64::from(self.layout.factor).powi(2);
         let pixels = self
             .sums
             .iter()
-            .map(|sum| {
+            .enumerate()
+            .map(|(index, sum)| {
+                let mut sum = *sum;
+                if !self.complete()
+                    && let Some(pixel) = self.fallback.as_ref().and_then(|image| {
+                        let x = index % self.layout.size[0] * image.size[0] / self.layout.size[0];
+                        let y = index / self.layout.size[0] * image.size[1] / self.layout.size[1];
+                        image.pixels.get(y * image.size[0] + x)
+                    })
+                {
+                    let missing = (area - self.weights.get(index).copied().unwrap_or(0.0)).max(0.0);
+                    let color = pixel.to_srgba_unmultiplied();
+                    let alpha = f64::from(color[3]) / 255.0;
+                    for channel in 0..3 {
+                        sum[channel] += f64::from(color[channel]) / 255.0 * alpha * missing;
+                    }
+                    sum[3] += alpha * missing;
+                }
                 if sum[3] <= 0.0 {
                     return egui::Color32::TRANSPARENT;
                 }

@@ -204,8 +204,15 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
 
     sh.path = sh.path.transform(a);
     let [m0, m1, m2, m3, tx, ty] = a.m;
-    // Only integer translations preserve the original quantization error per axis.
-    if m0 != 1.0 || m1 != 0.0 || m2 != 0.0 || m3 != 1.0 || !tx.is_finite() || !ty.is_finite() || tx != tx.round() || ty != ty.round() {
+    // Signed axis permutations preserve the original quantization error.
+    let near = |x: f64, target: f64| (x - target).abs() <= 1e-12;
+    let unit = |x: f64| near(x.abs(), 1.0);
+    let translation = tx.is_finite() && ty.is_finite() && near(tx, tx.round()) && near(ty, ty.round());
+    if translation && unit(m0) && unit(m3) && near(m1, 0.0) && near(m2, 0.0) {
+        // Translation or reflection keeps the original axes.
+    } else if translation && unit(m1) && unit(m2) && near(m0, 0.0) && near(m3, 0.0) {
+        sh.psd_coordinate_frame = sh.psd_coordinate_frame.map(|[w, h]| [h, w]);
+    } else {
         sh.psd_coordinate_frame = None;
     }
     let axis_aligned = m1.abs() < 1e-12 && m2.abs() < 1e-12 && m0 > 0.0 && m3 > 0.0;
@@ -409,6 +416,9 @@ pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl F
         let LayerContent::Shape(mut sh) = std::mem::replace(&mut l.content, LayerContent::Fill(Fill::Solid(Color::BLACK))) else {
             return Err(EngineError::Other(format!("layer {} is not a shape layer", id.0)));
         };
+        if sh.psd_coordinate_frame.is_none() && sh.psd_raw.is_some() {
+            sh.psd_coordinate_frame = Some([snapshot.size.width, snapshot.size.height]);
+        }
         let r = f(&mut sh, l);
         if r.is_ok() {
             refresh_shape(&snapshot, &mut sh);
@@ -537,7 +547,16 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.clone()),
         Some(_) => return Err(bad(CMD, "`layerName` must be a name that isn't empty")),
     };
-    let mut sh = ShapeLayer { path, fill, stroke, pixel_align_stroke, ..Default::default() };
+    let psd_coordinate_frame = if name == Some("layer") && p.get("path").is_none_or(Value::is_null) {
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|layer| match &layer.content {
+            LayerContent::Shape(source) => source.psd_coordinate_frame.or_else(|| source.psd_raw.as_ref().map(|_| [st.doc.size.width, st.doc.size.height])),
+            _ => None,
+        })
+    } else {
+        None
+    };
+    let mut sh = ShapeLayer { path, fill, stroke, pixel_align_stroke, psd_coordinate_frame, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));

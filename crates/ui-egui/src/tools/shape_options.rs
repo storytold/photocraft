@@ -109,6 +109,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             o.stroke_width = enabled_stroke_width(o.stroke_width);
         }
     }
+    let previous_alignment_preference = o.pixel_align_stroke;
     let alignment_edit = pixel_align_option(ui, &mut o.pixel_align_stroke, target.as_ref().map(|s| s.pixel_align_stroke), paint);
     match tool {
         Tool::Rectangle => {
@@ -190,10 +191,13 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     }
     // A click can commit a numeric expression and toggle alignment in the same frame.
     // Merge after the other controls so both changes reach the same history step.
-    edit = merge_pixel_alignment_edit(edit, alignment_edit);
+    edit = merge_pixel_alignment_edit(edit, alignment_edit.clone());
     if let (Some(mut p), Some(s)) = (edit, &target) {
         p["layer"] = json!(s.layer.0);
         if let Err(e) = app.run("shape.edit", p) {
+            if alignment_edit.is_some() {
+                app.ui.tool_options.pixel_align_stroke = previous_alignment_preference;
+            }
             app.ui.status = e;
             app.ui.status_error = true;
             recent = None;

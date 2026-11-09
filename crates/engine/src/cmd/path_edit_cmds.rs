@@ -78,7 +78,11 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
     let shape = layer.filter(|id| s.active().and_then(|d| d.doc.layer(*id)).is_some_and(|l| matches!(l.content, LayerContent::Shape(_))));
     let path = match shape {
         Some(id) => with_shape(s, id, label, |sh, _| {
+            let previous = sh.path.clone();
             f(&mut sh.path).map_err(|e| bad(cmd, e))?;
+            if sh.path != previous {
+                sh.psd_coordinate_frame = None;
+            }
             sh.live = None;
             sh.psd_raw = None;
             Ok(path_json(&sh.path))
