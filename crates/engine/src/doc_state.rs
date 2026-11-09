@@ -273,7 +273,7 @@ impl Default for ToolState {
 pub struct CopiedStyle {
     pub effects: photocraft_doc::Effects,
     pub blend: photocraft_color::BlendMode,
-    /// The layer's Opacity (Photoshop's Paste Layer Style sets it too; dragging effects does not).
+    /// The layer's Opacity: Paste Layer Style sets it too; dragging the fx badge does not.
     pub opacity: f32,
     pub fill: f32,
     pub advanced: photocraft_doc::AdvancedBlending,
