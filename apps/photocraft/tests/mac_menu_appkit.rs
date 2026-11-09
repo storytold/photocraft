@@ -243,6 +243,15 @@ fn main() {
     switch_language(&mut app, "Language", "简体中文", "zh-hans");
     assert_chinese_app_menu(&main_menu());
 
+    // A preference commit can trigger a menu sync before drawing picks up the new language.
+    switch_language(&mut app, "语言", "English", "en");
+    app.run("prefs.set", json!({"values": {"interface.language": "zh-hans"}})).expect("commit Simplified Chinese");
+    i18n::with_language(i18n::Lang::EN, || {
+        frame(&mut app, egui::RawInput::default());
+        assert_eq!(i18n::current(), i18n::Lang::EN, "menu sync restores the drawing language");
+    });
+    assert_chinese_app_menu(&main_menu());
+
     println!("mac_menu_appkit: ok");
 }
 

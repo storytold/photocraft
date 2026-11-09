@@ -716,7 +716,9 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if menu.state == Some(state) && !menu.dirty {
         return;
     }
-    let lang = crate::i18n::current();
+    // Preferences can change after the frame has set its drawing language.
+    let lang = Lang::from_pref(&app.session.prefs().interface.language);
+    let _menu_language = crate::i18n::language_scope(lang);
     let mut items = crate::menus::menu_items(app);
     for it in &mut items {
         it.enabled &= crate::menus::modal_allows(app, &it.id);
