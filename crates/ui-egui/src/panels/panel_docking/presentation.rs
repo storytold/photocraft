@@ -936,19 +936,7 @@ struct Landing {
     marker: Rect,
     compact: bool,
 }
-fn horizontal_landing(ctx: &egui::Context, p: Pos2) -> Option<Landing> {
-    let canvas = super::last_bodies(ctx).into_iter().find(|(id, _)| id == super::CANVAS)?.1;
-    for bottom in [false, true] {
-        let y = if bottom { canvas.bottom() } else { canvas.top() };
-        if canvas.x_range().contains(p.x) && (p.y - y).abs() <= 12.0 {
-            let pixel = ctx.pixels_per_point().recip();
-            return Some(Landing {
-                target: Target::At { anchor: super::CANVAS.into(), placement: Placement::Edge(if bottom { Zone::Bottom } else { Zone::Top }) },
-                marker: Rect::from_min_max(pos2(canvas.left(), y - pixel * 0.5), pos2(canvas.right(), y + pixel * 0.5)),
-                compact: false,
-            });
-        }
-    }
+fn horizontal_landing(_ctx: &egui::Context, _p: Pos2) -> Option<Landing> {
     None
 }
 

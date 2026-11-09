@@ -124,9 +124,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
                 .frame(egui::Frame::NONE.fill(t.chrome))
                 .show(ui, |_| {});
         }
-        let size = app.ui.panel_presentation.tools_size.unwrap_or([width, (bounds.bottom() - position.y).clamp(160.0, bounds.height().max(160.0))]);
-        let width = size[0].max(width).min(240.0).min(bounds.width().max(width));
-        let height = size[1].clamp(160.0, bounds.height().max(160.0));
+        // Serialized free-resize dimensions from earlier versions are retained but no longer
+        // determine the palette geometry. The header's column toggle owns its dimensions.
+        let sections = super::toolbar::visible_sections(&app.session.prefs().toolbar.hidden);
+        let columns = if app.ui.panels.toolbar_double { 2 } else { 1 };
+        let rows: usize = sections.iter().map(|section| section.len().div_ceil(columns)).sum();
+        let bx = if t.pro { 30.0 } else { 36.0 };
+        let height = (rows as f32 * bx + 150.0).min(bounds.height().max(1.0));
         let position = egui::pos2(
             position.x.clamp(ctx.content_rect().left(), (ctx.content_rect().right() - width).max(ctx.content_rect().left())),
             position.y.clamp(ctx.content_rect().top(), (ctx.content_rect().bottom() - height).max(ctx.content_rect().top())),
@@ -137,14 +141,14 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
         chrome.stroke = egui::Stroke::new(ctx.pixels_per_point().recip(), t.card_border);
         let rect = Rect::from_min_size(position, vec2(width, height));
         let blocked = crate::panel_docking::modal_open(app, &ctx);
-        let response = craft_ui::docking::chrome::FloatingFrame::new(key("floating"), rect)
+        let _response = craft_ui::docking::chrome::FloatingFrame::new(key("floating"), rect)
             .bounds(bounds)
             .limits(craft_ui::docking::PanelLimits {
                 min: vec2(crate::panel_docking::COMPACT_COLUMN_WIDTH + if app.ui.panels.toolbar_double { 32.0 } else { 0.0 }, 160.0),
                 max: vec2(240.0, bounds.height().max(160.0)),
             })
             .reserve_top_resize_band(false)
-            .resizable(!app.session.prefs().workspace_locked && !blocked)
+            .resizable(false)
             .opacity(if drag.is_some() { 0.85 } else { 1.0 })
             .show(&ctx, &chrome, |ui, body| {
                 if blocked {
@@ -159,11 +163,6 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
                 });
                 crate::panel_visibility::chrome(ui.ctx(), "tools", rect);
             });
-        if let Some(resized) = response.resized
-            && let Err(error) = app.run("window.tools.float", json!({"x":resized.left(),"y":resized.top(),"width":resized.width(),"height":resized.height()}))
-        {
-            app.ui.status = error;
-        }
         if let Some(drag) = drag {
             if docking {
                 let rect = Rect::from_min_max(egui::pos2(dock_x - 2.0, bounds.top()), egui::pos2(dock_x + 2.0, bounds.bottom()));

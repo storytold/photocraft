@@ -69,13 +69,20 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
     for (i, item) in a.items.iter().enumerate() {
-        let mapped = match (event_for(&item.event), &item.descriptor) {
-            (Some(e), Some(d)) => (e.from)(d),
-            (Some(e), None) => (e.from)(&Descriptor::default()),
-            (None, _) => Mapped::Unsupported { harmless: false },
+        let menu = item.descriptor.is_none().then(|| super::menu_item::from_event(&item.event)).flatten();
+        let mapped = match (menu, event_for(&item.event), &item.descriptor) {
+            (Some(params), _, _) => Mapped::Steps(vec![(super::MENU_ITEM.into(), params)]),
+            (_, Some(e), Some(d)) => (e.from)(d),
+            (_, Some(e), None) => (e.from)(&Descriptor::default()),
+            _ => Mapped::Unsupported { harmless: false },
         };
         let (new_steps, enabled) = match mapped {
-            Mapped::Steps(s) => (s, item.enabled),
+            Mapped::Steps(mut s) => {
+                super::steps_gallery::remember_event(item, &mut s);
+                super::steps_stack::remember_item(item, &mut s);
+                super::steps_video::remember(item, &mut s);
+                (s, item.enabled)
+            }
             Mapped::Unsupported { harmless } => {
                 let label = file.item_label(item);
                 unsupported.push(Unsupported { action: name.clone(), step: i, event: item.event.id(), name: label.clone() });
@@ -131,6 +138,9 @@ pub struct Skipped {
 }
 
 pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
+    if id == super::MENU_ITEM {
+        return super::menu_item::export(params);
+    }
     if id == PHOTOSHOP_STEP {
         let event = jstr(params, "event")?;
         let event = match params.get("eventKind") {
@@ -151,12 +161,20 @@ pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem
         return Some(AtnItem { event, dictionary: jstr(params, "name").unwrap_or("").as_bytes().to_vec(), descriptor, ..Default::default() });
     }
     let mut params = params.clone();
-    if (id == "actions.play" || id == "actions.conditional") && params.get("set").is_none() {
+    if (id == "actions.play" || id == "actions.conditional") && params.get("set").is_none_or(Value::is_null) {
         params["set"] = json!(set);
     }
     let (e, descriptor) = event_and_descriptor(id, &params)?;
-    let event = if e.code.is_empty() { AtnEvent::name(e.name) } else { AtnEvent::Code(e.code.as_bytes().try_into().ok()?) };
-    Some(AtnItem { event, dictionary: e.label.as_bytes().to_vec(), descriptor: Some(descriptor), ..Default::default() })
+    // A Filter Gallery effect loaded from its own event saves back as that event (#10592).
+    if e.code == "GEfc"
+        && let Some((event, name)) = super::steps_gallery::recorded_event(id, &params)
+    {
+        return Some(AtnItem { event, dictionary: name, descriptor: Some(descriptor), ..Default::default() });
+    }
+    let event = if id == "path.set" || e.code.is_empty() { AtnEvent::name(e.name) } else { AtnEvent::Code(e.code.as_bytes().try_into().ok()?) };
+    let omit_descriptor = super::steps_stack::without_descriptor(id, &params) || super::steps_video::omitted(id, &params);
+    let descriptor = (!omit_descriptor).then_some(descriptor);
+    Some(AtnItem { event, dictionary: e.label.as_bytes().to_vec(), descriptor, ..Default::default() })
 }
 
 /// Photoshop applies only the rename when a Set mixes it with opacity or blend mode (#8304).
@@ -255,18 +273,18 @@ pub fn export(
 /// Assigns names not already used, as `name`, `name 2`, `name 3`… A plain linear scan of the
 /// taken list per candidate is cubic when an action file repeats one base name many times, so
 /// membership uses a set and the next suffix to try is cached per base name.
-pub(super) struct UniqueNames {
+pub(crate) struct UniqueNames {
     taken: std::collections::HashSet<String>,
     next_suffix: std::collections::HashMap<String, u32>,
 }
 
 impl UniqueNames {
-    pub(super) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
+    pub(crate) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
         UniqueNames { taken: existing.into_iter().collect(), next_suffix: std::collections::HashMap::new() }
     }
 
     /// Reserves and returns a unique name derived from `name`, recording it as taken.
-    pub(super) fn claim(&mut self, name: &str) -> String {
+    pub(crate) fn claim(&mut self, name: &str) -> String {
         if self.taken.insert(name.to_string()) {
             return name.to_string();
         }
