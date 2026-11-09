@@ -91,6 +91,9 @@ fn jpeg_quality_arrows_and_enter_save() {
 #[test]
 fn jpeg_quality_focus_returns_only_when_reopened() {
     let (mut h, _) = jpeg_app("unused.jpg");
+    h.state_mut().session.prefs.edit(|p| {
+        p.dialogs.insert("file.jpegOptions".into(), json!({"quality": 10}));
+    });
     h.state_mut().save_as(Some("p.jpg".into())).unwrap();
     h.run_steps(2);
     let quality_focus = h.ctx.memory(|m| m.focused()).expect("Quality starts focused");

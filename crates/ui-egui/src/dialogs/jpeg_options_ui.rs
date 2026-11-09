@@ -268,7 +268,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 if up != 0 || down != 0 {
                     // egui may already have queued a focus move for the consumed arrow.
                     ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
-                    quality = usize::from(quality).saturating_add(up).saturating_sub(down).min(usize::from(MAX_QUALITY)) as u8;
+                    let stepped = usize::from(quality).saturating_add(up).saturating_sub(down);
+                    quality = u8::try_from(stepped).map_or(MAX_QUALITY, |q| q.min(MAX_QUALITY));
                 }
             }
             ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
