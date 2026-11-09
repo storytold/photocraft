@@ -62,9 +62,11 @@ pub fn install(ctx: egui::Context) -> Receiver<ControlRequest> {
     let (queue, requests) = channel::<ControlRequest>();
     let request: Request = Rc::new(move |method, mut params| {
         // `ui.screenshot` rejects fields it does not know (`path`, `focus`), and the crate adds `data: true`
-        // to ask for an inline PNG. Without a `path` the reply is inline already, so drop it.
+        // to ask for an inline PNG. Without a `path` the reply is inline already, so drop that one value;
+        // any other `data` still reaches the method's own validation and is rejected there.
         if method == "ui.screenshot"
             && let Some(fields) = params.as_object_mut()
+            && fields.get("data") == Some(&json!(true))
         {
             fields.remove("data");
         }
