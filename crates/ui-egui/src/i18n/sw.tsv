@@ -4851,3 +4851,22 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Zoom current window to fill the screen	Kuza dirisha la sasa lijaze skrini
 	Zoom current window to screen size	Kuza dirisha la sasa hadi ukubwa wa skrini
 	brush tool	zana ya brashi
+	Allows rotation and scaling of selection	Huruhusu kuzungusha na kubadilisha kipimo cha uteuzi
+	Bottom align text	Panga maandishi chini
+	Choose a remix mode	Chagua hali ya kuchanganya upya
+	Copy CSS	Nakili CSS
+	Could not use the type tool because the layer is locked.	Imeshindwa kutumia zana ya maandishi kwa sababu safu imefungwa kwa kufuli.
+	Draws background color over foreground colors	Huchora rangi ya nyuma juu ya rangi za mbele
+	Enable to remix all layers	Washa ili kuchanganya upya safu zote
+	No pixels are selected.	Hakuna pikseli zilizoteuliwa.
+	Open as Smart Object…	Fungua kama kitu erevu…
+	Preparing Free Transform	Inaandaa Geuza huru
+	Scroll All Windows	Sogeza madirisha yote
+	Scroll all open document windows when using the hand tool	Sogeza madirisha yote ya hati yaliyo wazi unapotumia zana ya mkono
+	Search and select fonts	Tafuta na uchague fonti
+	Set font size	Weka ukubwa wa fonti
+	Set font style	Weka mtindo wa fonti
+	Set text color	Weka rangi ya maandishi
+	Set the brush angle	Weka pembe ya brashi
+	The preference could not be saved: {error}	Mapendeleo hayakuweza kuhifadhiwa: {error}
+	Top align text	Panga maandishi juu
