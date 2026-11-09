@@ -9,21 +9,34 @@ const BANNED: &[&str] = &[
     "Default Photoshop Size",
     "All shortcuts reset to Photoshop defaults.",
 ];
-const ALLOWED: &[&str] = &["Adobe Camera Raw Filter", "Save these settings as a Camera Raw .xmp file", "Load settings from a Camera Raw .xmp file"];
+// Photoshop's own wording where it is stored data or a search alias, never a label: the .atn step
+// name Save Actions writes back (the menu item and window read "RAW Develop"), and the names a
+// command list is filtered by.
+const ALLOWED: &[&str] = &[
+    "Adobe Camera Raw Filter",
+    "Camera Raw Filter",
+    "Camera Raw Defaults",
+    "Save these settings as a Camera Raw .xmp file",
+    "Load settings from a Camera Raw .xmp file",
+];
+// The only catalog rows that may say "Camera Raw": their English text names Photoshop's .xmp files.
+const ALLOWED_KEYS: &[&str] = &["Save these settings as a Camera Raw .xmp file", "Load settings from a Camera Raw .xmp file"];
 const ROOTS: &[&str] = &["src", "../engine/src"];
 
 fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-fn banned_display(text: &str) -> bool {
-    if ALLOWED.contains(&text) {
-        return false;
-    }
+/// The bans as written, before any exemption: does `text` say one of them as a whole word?
+fn mentions_banned(text: &str) -> bool {
     BANNED.iter().any(|banned| {
         text.match_indices(banned)
             .any(|(at, _)| !text[..at].chars().next_back().is_some_and(is_word) && !text[at + banned.len()..].chars().next().is_some_and(is_word))
     })
+}
+
+fn banned_display(text: &str) -> bool {
+    !ALLOWED.contains(&text) && mentions_banned(text)
 }
 
 // Read ordinary and raw Rust string literals, ignoring comments. No compiler dependency is
@@ -186,9 +199,9 @@ fn catalogs_do_not_restore_retired_display_names() {
         for line in source.lines().filter(|line| !line.starts_with('#')) {
             let columns: Vec<_> = line.split('\t').collect();
             if let [_, key, value] = columns.as_slice() {
-                assert!(!banned_display(key), "{}: retired key {key}", path.display());
-                if !ALLOWED.contains(key) {
-                    assert!(!banned_display(value), "{}: retired display text {value}", path.display());
+                assert!(ALLOWED_KEYS.contains(key) || !mentions_banned(key), "{}: retired key {key}", path.display());
+                if !ALLOWED_KEYS.contains(key) {
+                    assert!(!mentions_banned(value), "{}: retired display text {value}", path.display());
                 }
                 assert_ne!(*key, "Open in camera raw", "{}: dormant key", path.display());
             }

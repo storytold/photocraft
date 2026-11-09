@@ -246,7 +246,7 @@ impl CameraRawDevelop {
             Some(e) => {
                 // A half-done upload must not be taken for the cached source next time.
                 self.source = None;
-                Err(Unsupported(format!("GPU RAW Develop develop failed: {e}")))
+                Err(Unsupported(format!("GPU RAW Develop failed: {e}")))
             }
             None => result,
         }
