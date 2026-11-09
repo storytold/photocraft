@@ -471,13 +471,13 @@ fn layer_mask_display_options() {
 /// Overlay coverage of the live Quick Mask at (x, y): how much colour the canvas shows there.
 fn qm_overlay(s: &Session, x: i32, y: i32) -> f32 {
     let q = doc(s).quick_mask.as_ref().unwrap();
-    q.overlay_coverage(q.surface.sample_channel(x, y, 0))
+    1.0 - q.surface.sample_channel(x, y, 0)
 }
 
 #[test]
 fn quick_mask_without_selection_starts_empty_in_both_modes() {
     // #2743 case 1: nothing selected → nothing selected in the mask, whichever way the colour
-    // reads; painting white adds to the selection that comes out.
+    // reads; painting black adds to the selection in Selected Areas mode.
     for depth in [8, 16, 32] {
         // Selected Areas set before entering.
         let mut s = session_depth(depth);
@@ -487,7 +487,7 @@ fn quick_mask_without_selection_starts_empty_in_both_modes() {
         s.execute("select.editInQuickMaskMode", json!({"on": false})).unwrap();
         assert!(doc(&s).selection.is_none(), "depth {depth}: untouched → no selection");
         s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
-        s.execute("paint.stroke", json!({"points": [[5, 5]], "size": 4, "hardness": 1.0, "color": "#ffffff"})).unwrap();
+        s.execute("paint.stroke", json!({"points": [[5, 5]], "size": 4, "hardness": 1.0, "color": "#000000"})).unwrap();
         assert!(qm_overlay(&s, 5, 5) > 0.99 && qm_overlay(&s, 30, 10) == 0.0, "depth {depth}");
         s.execute("select.editInQuickMaskMode", json!({"on": false})).unwrap();
         assert!(sel_at(&s, 5, 5) > 0.99 && sel_at(&s, 30, 10) == 0.0, "depth {depth}: painted area is the selection");
@@ -1255,4 +1255,20 @@ fn merge_channels_waits_for_three_grayscale_documents() {
     assert!(s.is_enabled("channel.merge"));
     s.execute("channel.merge", json!({"mode": "lab"})).unwrap();
     assert_eq!(s.documents().len(), 2, "the three of one size merged; the other is left");
+}
+
+#[test]
+fn quick_mask_selected_areas_round_trip_and_preferences() {
+    let mut s = session();
+    rect(&mut s, 0, 0, 20, 20, "replace");
+    s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    s.execute("channel.options", json!({"channel": "quickMask", "indicates": "selected"})).unwrap();
+    assert_eq!((qm_overlay(&s, 5, 5), qm_overlay(&s, 30, 5)), (1.0, 0.0));
+    s.execute("paint.stroke", json!({"points": [[30, 10]], "size": 4, "hardness": 1.0, "color": "#000000"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[5, 5]], "size": 4, "hardness": 1.0, "color": "#ffffff"})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({"on": false})).unwrap();
+    assert_eq!((sel_at(&s, 5, 5), sel_at(&s, 12, 12), sel_at(&s, 30, 10)), (0.0, 1.0, 1.0));
+    let mut restored = session();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restored.quick_mask_options.indicates, ColorIndicates::SelectedAreas);
 }

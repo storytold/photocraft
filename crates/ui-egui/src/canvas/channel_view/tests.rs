@@ -101,6 +101,18 @@ fn quick_mask_overlay_is_red_over_masked_areas() {
 }
 
 #[test]
+fn quick_mask_selected_areas_colors_the_selection() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    s.execute("channel.options", json!({"channel": "quickMask", "indicates": "selected"})).unwrap();
+    let st = s.active().unwrap();
+    let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
+    assert_eq!(px[0], Color32::from_rgba_premultiplied(128, 0, 0, 128));
+    assert_eq!(px[6], Color32::TRANSPARENT);
+}
+
+#[test]
 fn quick_mask_without_selection_shows_no_overlay_in_either_mode() {
     // #2743: nothing selected is a colourless mask, whichever way the colour reads.
     for (before, after) in [(None, Some("selected")), (Some("selected"), None), (Some("selected"), Some("masked"))] {

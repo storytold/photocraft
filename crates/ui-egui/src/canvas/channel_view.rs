@@ -435,7 +435,9 @@ fn render_with_source(
             Some((ink, solidity)) => (ink, 0.5 + 0.5 * solidity),
             None => (ch.color, ch.opacity),
         };
-        tint(sample(&ch.surface, r, factor), color, opacity, &|x| ch.overlay_coverage(x));
+        tint(sample(&ch.surface, r, factor), color, opacity, &|x| {
+            if doc.quick_mask.as_ref().is_some_and(|q| std::ptr::eq(q, ch)) { 1.0 - x } else { ch.overlay_coverage(x) }
+        });
     }
     // ⇧⌥-click mask view (#196): the layer mask tinted over the hidden areas in the Layer Mask
     // Display Options colour and opacity (red at 50 % unless set).

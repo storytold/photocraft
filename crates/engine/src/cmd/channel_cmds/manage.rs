@@ -1,6 +1,6 @@
 use super::planes::{channel_format, color_count, edit_mode, next_alpha_name, plane_surface, read_plane};
 use super::refs::{ChanRef, alpha_index, bad, doc_index, gray_plane, parse_ref};
-use super::selection::{uniform, unselected_surface};
+use super::selection::uniform;
 use super::targeting::target;
 use super::view::{ChannelTarget, QuickMaskOptions, color_names, composite_name, fix_view, touch};
 use super::{
@@ -317,7 +317,7 @@ pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
             s.edit("Channel Options", |doc, _| apply(&mut doc.channels[i]))?;
         }
         ChanRef::QuickMask => {
-            // Quick Mask Options persist for the session; the live Quick Mask follows them.
+            // Keep the display mode across sessions; the live Quick Mask follows the options.
             let mut probe = AlphaChannel {
                 color: s.quick_mask_options.color,
                 opacity: s.quick_mask_options.opacity,
@@ -328,6 +328,7 @@ pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
             if probe.spot.is_some() {
                 return Err(bad(cmd, "Quick Mask can't be a spot channel"));
             }
+            s.edit_prefs(|p| p.quick_mask_selected_areas = probe.indicates == ColorIndicates::SelectedAreas);
             s.quick_mask_options = QuickMaskOptions { color: probe.color, opacity: probe.opacity, indicates: probe.indicates };
             if s.active().is_some_and(|d| d.doc.quick_mask.is_some()) {
                 let o = s.quick_mask_options;
@@ -336,12 +337,11 @@ pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
                     let fmt = channel_format(doc);
                     let unselected = doc.quick_mask_unselected;
                     if let Some(q) = &mut doc.quick_mask {
-                        // An untouched no-selection mask stays colourless (nothing selected)
-                        // when the colour switches between masked and selected areas.
-                        if unselected && q.indicates != o.indicates {
-                            let empty = if q.indicates == ColorIndicates::SelectedAreas { 0.0 } else { 1.0 };
-                            if uniform(&read_plane(&q.surface, area), empty) {
-                                q.surface = unselected_surface(area, fmt, o.indicates);
+                        if q.indicates != o.indicates {
+                            let mut vals = read_plane(&q.surface, area);
+                            if !(unselected && uniform(&vals, 1.0)) {
+                                vals.iter_mut().for_each(|v| *v = 1.0 - *v);
+                                q.surface = plane_surface(&vals, area, fmt);
                             }
                         }
                         q.color = o.color;
