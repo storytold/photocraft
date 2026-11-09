@@ -1,7 +1,7 @@
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_compose::Ancestors;
 
-use super::{Document, Layer, LayerContent, LayerId, Rect, Session, VideoData};
+use super::{Document, Layer, LayerContent, LayerId, Rect, VideoData};
 
 /// Calls `f` with the rect of every tile that differs between two surfaces of the same format and
 /// default pixel: a tile only one side has, or a different copy-on-write tile pointer at the same
@@ -238,7 +238,8 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         clipping_path: _,
         quick_mask,
         quick_mask_unselected: _,
-        patterns,
+        // Compared by `patterns_pixels_equal`.
+        patterns: _,
         color_table,
         duotone,
         layer_comps: _,
@@ -265,9 +266,55 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
             (Some(x), Some(y)) => alpha_channels_equal(x, y),
             _ => false,
         }
-        && *patterns == b.patterns
+        && patterns_pixels_equal(a, b)
         && *color_table == b.color_table
         && *duotone == b.duotone
+}
+
+/// Whether `a`'s and `b`'s pattern libraries composite the same. Layers draw a pattern only
+/// through a reference that `photocraft_doc::pattern::find` resolves (fill and shape layers,
+/// Pattern Overlay, pattern strokes and glows, Bevel textures), so patterns appended after an
+/// unchanged prefix change nothing unless some reference now resolves differently: to an
+/// appended pattern where it resolved to an earlier one or to none. A same-named addition that
+/// loses to an existing id match changes nothing. Pattern Stamp copies its pattern into the
+/// document this way on first use; the pixels it paints are a raster change, diffed by tile like
+/// any other.
+fn patterns_pixels_equal(a: &Document, b: &Document) -> bool {
+    use photocraft_doc::effects::{Effect, FxPaint};
+    use photocraft_doc::{Fill, Pattern, pattern::find};
+    if a.patterns == b.patterns {
+        return true;
+    }
+    if a.patterns.len() >= b.patterns.len() || !b.patterns.starts_with(a.patterns.as_slice()) {
+        return false;
+    }
+    // The index a reference resolves to; the prefix is equal, so equal indices mean equal patterns.
+    let at = |ps: &[Pattern], id: &str, name: &str| find(ps, id, name).and_then(|p| ps.iter().position(|q| std::ptr::eq(q, p)));
+    let hits = |id: &str, name: &str| at(&a.patterns, id, name) != at(&b.patterns, id, name);
+    let fill = |f: &Fill| matches!(f, Fill::Pattern { id, name, .. } if hits(id, name));
+    let paint = |p: &FxPaint| matches!(p, FxPaint::Pattern { id, name, .. } if hits(id, name));
+    // Past a nesting depth no real document reaches, assume a reference (unequal), as
+    // `pixels_equal_with` does.
+    fn any_layer(layers: &[Layer], depth: usize, refers: &dyn Fn(&Layer) -> bool) -> bool {
+        depth >= 256 || layers.iter().any(|l| refers(l) || matches!(&l.content, LayerContent::Group(g) if any_layer(&g.children, depth + 1, refers)))
+    }
+    let refers = |l: &Layer| {
+        let effect = l.effects.items.iter().any(|e| match e {
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => paint(&g.paint),
+            Effect::Stroke(s) => paint(&s.paint),
+            Effect::PatternOverlay { id, name, .. } => hits(id, name),
+            Effect::BevelEmboss(b) => b.texture.as_ref().is_some_and(|t| hits(&t.id, &t.name)),
+            Effect::DropShadow(_) | Effect::InnerShadow(_) | Effect::ColorOverlay { .. } | Effect::GradientOverlay { .. } | Effect::Satin(_) => false,
+        });
+        effect
+            || match &l.content {
+                LayerContent::Fill(f) => fill(f),
+                LayerContent::Shape(s) => s.fill.as_ref().is_some_and(fill) || s.stroke.as_ref().is_some_and(|st| fill(&st.paint)),
+                // A smart object draws its cache; its own document holds its own patterns.
+                LayerContent::Raster(_) | LayerContent::Group(_) | LayerContent::Adjustment(_) | LayerContent::Text(_) | LayerContent::Smart(_) => false,
+            }
+    };
+    !any_layer(&b.layers, 0, &refers)
 }
 
 /// Whether `a` and `b` composite to the same pixels: they differ at most in fields the
@@ -558,9 +605,8 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                         add(out, grow(bx, a.bounds()));
                         add(out, grow(by, b.bounds()));
                     }
-                    let reach = |l: &Layer| if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
                     let inner = Around {
-                        reach: around.reach.saturating_add(reach(x).max(reach(y))),
+                        reach: around.reach.saturating_add(effects_reach(x).max(effects_reach(y))),
                         spans_frame: around.spans_frame || photocraft_compose::effects::spans_frame(x) || photocraft_compose::effects::spans_frame(y),
                     };
                     let (qx, qy): (Vec<_>, Vec<_>) = (px.iter().copied().chain([(xs, xk)]).collect(), py.iter().copied().chain([(ys, yk)]).collect());
@@ -634,9 +680,54 @@ pub(crate) fn hint_misses(before: &Document, after: &Document, hint: Rect) -> us
     misses
 }
 
+/// `hint`, a command's own rect for pixels it changed in one of `doc`'s layers, grown as far as
+/// [`step_damage`] grows a change there ([`grow_in_layer`], then by the effects of the groups
+/// around the layer), for whichever layer that was: the hint doesn't say. A brush dab on a
+/// feathered mask changes a soft ring around the dab; cut to the bare dab, the ring stayed stale.
+/// Layers the compositor doesn't draw are skipped as it skips them (a hidden layer, a clipped
+/// layer over a hidden base, and everything inside a hidden group): a change there shows nowhere,
+/// and growing by a hidden layer's effects widened every dab elsewhere.
+pub(crate) fn grow_hint(doc: &Document, hint: Rect) -> Rect {
+    fn walk(layers: &[Layer], reach: i32, hint: Rect, out: &mut Rect) {
+        let mut base_visible = true;
+        for l in layers {
+            if !l.clipped {
+                base_visible = l.visible;
+            }
+            if !l.visible || !base_visible {
+                continue;
+            }
+            let feather = l.mask.as_ref().map_or(0.0, |m| m.feather);
+            *out = out.union(&grow_in_layer(l, hint, feather).inflate(reach));
+            if let Some(children) = l.children() {
+                walk(children, reach.saturating_add(effects_reach(l)), hint, out);
+            }
+        }
+    }
+    let mut out = hint;
+    if !hint.is_empty() {
+        walk(&doc.layers, 0, hint, &mut out);
+    }
+    out
+}
+
+/// How far layer `l`'s own effects carry a change to its pixels: 0 without effects.
+fn effects_reach(l: &Layer) -> i32 {
+    if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 }
+}
+
+/// `r`, changed pixels of a surface layer `l` draws from, grown as far as the change can show in
+/// `l`'s own render: by the `feather` (in pixels) the compositor blurs the surface by, then by
+/// `l`'s effects.
+fn grow_in_layer(l: &Layer, r: Rect, feather: f32) -> Rect {
+    let r = if feather > 0.0 { photocraft_vector::feather::grow(r, photocraft_vector::feather::feather_sigma(feather)) } else { r };
+    let margin = effects_reach(l);
+    if r.is_empty() || margin == 0 { r } else { r.inflate(margin) }
+}
+
 /// The pixels a change from layer `a` to layer `b` (the same layer on either side of a step) can
 /// have changed when only the pixels of its surfaces changed: the tiles that differ
-/// ([`surface_damage`]), a mask's grown by its feather, all grown by the layer's own effects.
+/// ([`surface_damage`]), grown as far as each shows in the layer's render ([`grow_in_layer`]).
 /// Empty when the layers render identically. `None` when anything else changed (a property, the
 /// content kind, a surface's format or default pixel): the caller then takes the layer's whole
 /// extents. Children of groups are not compared (the caller walks them).
@@ -644,16 +735,11 @@ fn tile_damage(a: &Layer, b: &Layer) -> Option<Rect> {
     let mut tiles = Rect::EMPTY;
     let only_pixels = layer_pixels_cmp(a, b, &mut |x, y, feather| {
         let Some(r) = surface_damage(x, y) else { return false };
-        let r = if feather > 0.0 { photocraft_vector::feather::grow(r, photocraft_vector::feather::feather_sigma(feather)) } else { r };
-        tiles = tiles.union(&r);
+        // Effects are equal on both sides here (they are compared before any surface).
+        tiles = tiles.union(&grow_in_layer(b, r, feather));
         true
     });
-    if !only_pixels {
-        return None;
-    }
-    // Effects are equal on both sides here (they are compared before any surface).
-    let margin = if photocraft_compose::effects::has_effects(b) { photocraft_compose::effects::margin(b) } else { 0 };
-    Some(if tiles.is_empty() || margin == 0 { tiles } else { tiles.inflate(margin) })
+    only_pixels.then_some(tiles)
 }
 
 /// Neither `l` nor anything inside it is a video layer or excludes channels.
@@ -700,12 +786,18 @@ fn inert_at(layers: &[Layer], k: usize) -> bool {
         && (l.clipped || layers.get(k + 1).is_none_or(|above| !above.clipped))
 }
 
-/// Report the pixels a command made of more than one edit changed since `before` ([`step_damage`]),
-/// so the canvas recomposites only where its new layers draw instead of the whole document.
-/// A single [`Session::edit`] already reports its own damage: don't call this after one (#5695).
-pub(crate) fn note_insert(s: &mut Session, before: &Document) {
-    let Some(st) = s.active_mut() else { return };
-    st.last_damage = step_damage(before, &st.doc);
+/// How much of the document (percent, rounded down) changed between `a` and `b`, when that is
+/// some but under 25 %: what [`step_damage`] finds, which a command that reported "redraw
+/// everything" (`None`) should have reported instead. `None` when nothing changed (a view-only
+/// change), when it's 25 % or more, or when `step_damage` can't bound it (a canvas-size change).
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn small_change_pct(a: &Document, b: &Document) -> Option<u64> {
+    let d = step_damage(a, b).filter(|d| !d.is_empty())?;
+    let doc = b.bounds();
+    let whole = u64::from(doc.width()) * u64::from(doc.height());
+    let changed = d.intersect(&doc);
+    let pct = u64::from(changed.width()) * u64::from(changed.height()) * 100 / whole.max(1);
+    (pct < 25).then_some(pct)
 }
 
 /// Content bounds of a layer's pixels as stored (type and shape layers: their cached render), or
