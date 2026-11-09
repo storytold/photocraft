@@ -115,7 +115,8 @@ fn contiguous_limits_skip_a_matching_island_that_discontiguous_recolours() {
 /// 8 (the live stroke keeps its working pixels in the layer's depth between dabs).
 #[test]
 fn a_stroke_is_drawn_live_and_is_one_history_step() {
-    for depth in [8, 32] {
+    // Color Replacement refuses 32-bit RGB documents, as the reference application does (#11923).
+    for depth in [8, 16] {
         live_stroke_at(depth);
     }
 }

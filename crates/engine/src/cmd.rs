@@ -69,6 +69,10 @@ pub mod comps_cmds;
 pub mod contour_lib_cmds;
 #[cfg(test)]
 mod count_delete_group_tests;
+#[cfg(test)]
+mod count_history_names_tests;
+#[cfg(test)]
+mod count_record_label_tests;
 pub mod cutout_cmds;
 pub mod distort_cmds;
 pub mod document_preset_cmds;
@@ -99,6 +103,7 @@ pub mod history_select_cmds;
 pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
+pub mod layer_css_cmds;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
@@ -115,6 +120,8 @@ pub(super) mod migrate_cmds;
 pub mod mode_cmds;
 pub mod multichannel_cmds;
 pub mod notes_cmds;
+#[cfg(test)]
+mod notes_stored_values_tests;
 mod ops;
 pub mod paint_cmds;
 mod params;
@@ -151,6 +158,8 @@ pub mod type_area_cmds;
 pub mod type_caret_cmds;
 pub mod type_cmds;
 pub mod type_extra_cmds;
+#[cfg(test)]
+mod type_indexed_mode_tests;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
@@ -200,9 +209,14 @@ pub fn list_entry(s: &Session, c: &CommandSpec, reason: Option<String>) -> Value
 
 /// Other names a command is looked for by, beyond its id and label: the Photoshop tools and
 /// options it stands for (#5060). `select.rect` is also the Elliptical and Single Row/Column
-/// Marquee, which an agent searches for as "ellipse" or "marquee".
-pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] =
-    &[("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")")];
+/// Marquee, which an agent searches for as "ellipse" or "marquee". The RAW Develop filter and
+/// RAW Defaults keep Photoshop's "Camera Raw" name as a search alias only: the menus and windows
+/// say "RAW Develop" (#12403).
+pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] = &[
+    ("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")"),
+    ("filter.cameraRaw", "Camera Raw Filter"),
+    ("edit.preferences.rawDefaults", "Camera Raw Defaults"),
+];
 
 /// [`SEARCH_KEYWORDS`] of command `id`, if it has any.
 pub fn search_keywords(id: &str) -> Option<&'static str> {
@@ -574,6 +588,7 @@ fn build() -> Vec<CommandSpec> {
                 let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
                 // The dialog offers Duplicate Layer's own name: only a different one was typed (#9023).
                 let mut typed = None;
+                let mut shift = (0, 0);
                 let nid = s.edit("Duplicate Layer", |doc, active| {
                     let mut dup = layer_copy(doc, id, add_copy)?;
                     if let Some(name) = name.as_ref().filter(|n| **n != dup.name) {
@@ -584,11 +599,12 @@ fn build() -> Vec<CommandSpec> {
                     // A lone copy joins its original's link group, as in the reference application (#11217).
                     crate::layer_multi_cmds::relink_copies(doc, &[nid])?;
                     if !in_place {
-                        crate::artboard_cmds::place_copy(doc, nid)?;
+                        shift = crate::artboard_cmds::place_copy(doc, nid)?;
                     }
                     *active = Some(nid);
                     Ok(nid)
                 })?;
+                crate::artboard_cmds::follow_shift(s, shift);
                 if let Some(name) = typed {
                     crate::type_cmds::note_typed_name(s, nid, &name);
                 }
@@ -1390,6 +1406,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::adjust_cmds::specs());
     v.extend(crate::layer_menu_cmds::specs());
     v.extend(crate::layer_label_cmds::specs());
+    v.extend(crate::layer_css_cmds::specs());
     v.extend(crate::layer_xmp_cmds::specs());
     v.extend(crate::mode_cmds::specs());
     v.extend(crate::multichannel_cmds::specs());

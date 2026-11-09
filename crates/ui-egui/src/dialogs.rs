@@ -277,13 +277,16 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 /// it. Returns `Some(true)` / `Some(false)` when the body itself answered OK / Cancel.
 /// The body of a command dialog: the first handler whose marker the fields carry. The prompts and
 /// small editors come first; the rest are in `command_body_more`.
-/// The delete confirmations: a layer from the Layers panel's trash, or a note (#11788).
+/// The delete confirmations: a layer from the Layers panel's trash, a note (#11788), or all notes
+/// (#11791).
 fn delete_prompt(fields: &Fields) -> bool {
-    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields)
+    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields) || crate::analysis_ui::owns_clear_notes(fields)
 }
 
 fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
-    if crate::analysis_ui::owns_delete_note(fields) {
+    if crate::analysis_ui::owns_clear_notes(fields) {
+        crate::analysis_ui::clear_notes_body(ui);
+    } else if crate::analysis_ui::owns_delete_note(fields) {
         crate::analysis_ui::delete_note_body(ui, fields);
     } else {
         crate::delete_layer_prompt::body(ui, fields);
@@ -405,6 +408,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
         DialogKind::LayerStyle => outcome = crate::layer_style::body_with_response(app, ui, fields, interactive),
         DialogKind::Error => {
             ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
+            dont_show_again::body(ui, fields);
         }
     }
     outcome
@@ -892,6 +896,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::shape_dialog::owns,
     crate::delete_layer_prompt::owns,
     crate::analysis_ui::owns_delete_note,
+    crate::analysis_ui::owns_clear_notes,
     crate::disk_change_prompt::owns,
     crate::actions::owns_stop_message,
     crate::actions::owns_insert_stop,
@@ -1129,6 +1134,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if crate::genai_ui::owns(&d.fields) => crate::genai_ui::confirm(app, &d.fields),
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
+        _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
@@ -1161,13 +1167,18 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         }
         DialogKind::Command => confirm_command(app, d),
         DialogKind::LayerStyle => crate::layer_style::confirm(app, &d.fields),
-        DialogKind::About | DialogKind::Error => Ok(Value::Null),
+        DialogKind::About => Ok(Value::Null),
+        DialogKind::Error => {
+            dont_show_again::closed(app, &d);
+            Ok(Value::Null)
+        }
     }
 }
 
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    dont_show_again::closed(app, &closed);
     crate::guide_edit::cancel(app, id);
     // A Color Picker puts back what its live preview showed in its target.
     crate::color_picker_ui::live_preview::end(app, id);
@@ -1278,6 +1289,7 @@ pub mod dialog_blend_ui;
 pub mod discard_ui;
 pub mod disk_change_prompt;
 pub mod distort_ui;
+pub mod dont_show_again;
 pub mod duplicate_layer_ui;
 pub mod edit_history;
 pub mod equalize_ui;

@@ -41,6 +41,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
+        // The Background Eraser and the Healing Brush start with their own measured tips instead,
+        // as the whole brush Reset Tool gives them (#11911, #12099).
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing) => fresh_brush(tool, &current),
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
             BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, ..current }
@@ -70,14 +73,22 @@ fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettin
 /// The Brush tool's tip after Reset Tool, as the reference measures it (#11810): size, hardness
 /// and spacing of a 13 px soft round at 25 % spacing.
 const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Background Eraser's tip after Reset Tool (#11911): a 13 px hard round at 25 % spacing.
+const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
+/// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing.
+const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
-/// [`BRUSH_TOOL_TIP`]; the other tools keep the default tip.
+/// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
+/// [`HEALING_BRUSH_TIP`]; the other tools keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
-    if tool == Tool::Brush {
-        (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP;
+    match tool {
+        Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
+        Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
+        Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
+        _ => {}
     }
     session_fields(current, &brush)
 }
@@ -348,7 +359,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
     // Decided by the modifiers held when the button went down, not by those of the release frame that reports the click.
-    let mode_menu = crate::brush_mode_menu::is_gesture(tool, crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods)));
+    let mode_menu =
+        crate::brush_mode_menu::opens_on(app, tool, crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods)));
     if mode_menu && !resizing && app.drag.is_none() {
         app.secondary_erase = false;
         if let Some(p) = right_click_at(response) {
@@ -425,7 +437,7 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
         app.brush_resize_armed = down && app.drag.is_none();
         return true;
     }
-    if crate::brush_mode_menu::is_gesture(tool, mods) && app.drag.is_none() && app.brush_resize.is_none() {
+    if crate::brush_mode_menu::opens_on(app, tool, mods) && app.drag.is_none() && app.brush_resize.is_none() {
         app.secondary_erase = false;
         if down {
             crate::brush_mode_menu::open(app, ctx, at);

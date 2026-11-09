@@ -832,6 +832,21 @@ fn mixer_load_pixel(s: &mut Session, p: &Value) -> Result<Value> {
 /// channel or Quick Mask `target` is refused rather than recolouring the layer instead.
 fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSettings, photocraft_doc::LayerId)> {
     let cmd = "paint.colorReplacement";
+    // The modes and depths the reference application refuses, with its words (#11923). The live
+    // stroke runs this setup too, so it previews nothing in them. 32-bit Grayscale, CMYK and Lab,
+    // Multichannel and Duotone weren't measured and keep painting.
+    if let Some(st) = s.active() {
+        use photocraft_color::{ColorMode, SampleType};
+        let why = match (st.doc.mode, st.doc.depth) {
+            (ColorMode::Indexed, _) => Some("it does not work with Indexed Color images (convert image to RGB Color mode to edit)."),
+            (ColorMode::Bitmap, _) | (ColorMode::Grayscale, SampleType::U8 | SampleType::U16) => Some("it only works in full color modes."),
+            (ColorMode::Rgb, SampleType::F32) => Some("it does not work with 32 bit per channel images (convert image to 8 or 16 bit per channel to edit)."),
+            _ => None,
+        };
+        if let Some(why) = why {
+            return Err(EngineError::Other(format!("Could not use the Color Replacement tool because {why}")));
+        }
+    }
     if let Some(t) = p.get("target").filter(|t| t.as_str() != Some("pixels"))
         && crate::color_channels::explicit(p, s.active().map_or(0, |st| crate::channel_cmds::color_count(&st.doc)))?.is_none()
     {
@@ -1385,6 +1400,10 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "color_replacement_modes_tests.rs"]
+mod color_replacement_modes_tests;
 
 #[cfg(test)]
 mod mixer_live_tests;

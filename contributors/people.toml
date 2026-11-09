@@ -320,3 +320,10 @@ sync_github_name = false
 [people.davidvhk]
 real_name = "David Vanhoucke"
 sync_github_name = true
+
+[people.Kaedo17]
+sync_github_name = true
+
+[people.rmsff]
+real_name = "Serikov Roman"
+sync_github_name = false
