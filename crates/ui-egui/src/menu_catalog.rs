@@ -259,6 +259,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Layer", "New"], "---", None, "---"),
     (&["Layer", "New"], "Layer Via Copy", Some("Cmd+J"), "layer.new.layerViaCopy"),
     (&["Layer", "New"], "Layer Via Cut", Some("Cmd+Shift+J"), "layer.new.layerViaCut"),
+    (&["Layer"], "Copy CSS", None, "layer.copyCSS"),
     (&["Layer"], "Duplicate Layer…", None, "layer.duplicate"),
     (&["Layer", "Delete"], "Layer", None, "layer.delete"),
     (&["Layer", "Delete"], "Hidden Layers", None, "layer.delete.hiddenLayers"),
