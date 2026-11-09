@@ -450,34 +450,80 @@ fn attachment_keeps_named_numeric_droplet_targets_in_their_source_library() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn attachment_keeps_explicit_droplet_ids_in_their_source_library() {
+    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing.pcdroplet");
+    let saved = temp.path().join("disk.pcdroplet");
+    let early_id = "00000000000000000000000000000001";
+    let disk_id = "00000000000000000000000000000002";
+    let disk_steps = vec![("file.new".to_string(), json!({"width":7,"height":8}))];
+    let mut disk_action = Action::new("Disk", disk_steps.clone());
+    disk_action.action_id = Some(disk_id.into());
+    let caller = Action::new(
+        "Disk caller",
+        vec![
+            ("file.automate.createDroplet".into(), json!({"actionId":early_id,"path":missing,"shim":false})),
+            ("file.automate.createDroplet".into(), json!({"actionId":disk_id,"path":saved,"shim":false})),
+        ],
+    );
+    let store = MemBackend::default();
+    store.write(ACTIONS_FILE, json!({"version":1,"actions":[disk_action,caller]}).to_string().as_bytes()).unwrap();
+    let mut early = Action::new("Early", vec![("file.new".into(), json!({"width":4,"height":5}))]);
+    early.action_id = Some(early_id.into());
+    let mut s = Session::new();
+    s.actions.list.push(early);
+    assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+    let mut reopened = Session::new();
+    assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
+    for session in [&mut s, &mut reopened] {
+        let calls = session.actions.list[2].steps.clone();
+        assert_eq!(calls[0].1.get("actionId"), Some(&serde_json::Value::Null));
+        assert!(session.execute(&calls[0].0, calls[0].1.clone()).is_err());
+        assert!(!missing.exists());
+        session.execute(&calls[1].0, calls[1].1.clone()).unwrap();
+        let artifact: serde_json::Value = serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
+        assert_eq!(artifact["action"]["steps"], json!(disk_steps));
+    }
+}
+
+#[test]
 fn whole_replace_preserves_explicit_atn_play_and_conditional_set_scopes() {
     use crate::actions_cmds::{conditional_branch, resolve_play_target};
     use photocraft_psd::atn::{AtnEvent, AtnItem};
     use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, Value as D};
 
-    let name_ref =
-        |class, name| ReferenceItem::Name { class: Class { name: UnicodeString::default(), class_id: Id::new(class) }, name: UnicodeString::new_nul(name) };
+    let class = |id| Class { name: UnicodeString::default(), class_id: Id::new(id) };
+    let name_ref = |id, name| ReferenceItem::Name { class: class(id), name: UnicodeString::new_nul(name) };
     let target = |set| D::Reference(vec![name_ref("Actn", "Target"), name_ref("ASet", set)]);
-    let play = |set| AtnItem { event: AtnEvent::Code(*b"Ply "), descriptor: Some(Descriptor::default().with("null", target(set))), ..Default::default() };
-    let conditional = AtnItem {
+    let indexed_target = || D::Reference(vec![name_ref("Actn", "Target"), ReferenceItem::Index { class: class("ASet"), index: 2 }]);
+    let play = |reference| AtnItem { event: AtnEvent::Code(*b"Ply "), descriptor: Some(Descriptor::default().with("null", reference)), ..Default::default() };
+    let conditional = |otherwise| AtnItem {
         event: AtnEvent::name("conditional"),
         descriptor: Some(
             Descriptor::default()
                 .with("null", D::Enumerated { type_id: Id::new("Cndt"), value: Id::new("Lyrs") })
                 .with("then", target("Wanted"))
-                .with("else", target("Missing")),
+                .with("else", otherwise),
         ),
         ..Default::default()
     };
     let caller = write(&AtnFile {
         name: UnicodeString::new_nul("Caller set"),
-        actions: vec![AtnAction { name: UnicodeString::new_nul("Caller"), items: vec![play("Wanted"), play("Missing"), conditional], ..Default::default() }],
+        actions: vec![AtnAction {
+            name: UnicodeString::new_nul("Caller"),
+            items: vec![play(target("Wanted")), play(target("Missing")), conditional(target("Missing")), play(indexed_target()), conditional(indexed_target())],
+            ..Default::default()
+        }],
         ..Default::default()
     })
     .unwrap();
     let ordinary = crate::atn_cmds::import(&caller).unwrap();
     assert!(ordinary.actions[0].steps[0].1.get("set").is_none());
     assert!(ordinary.actions[0].steps[2].1.get("thenSet").is_none());
+    assert!(ordinary.actions[0].steps[3].1.get("set").is_none());
 
     let mut archive = set("Decoy", Some(("Target", 0)));
     archive.extend_from_slice(&set("Wanted", Some(("Target", 0)))[4..]);
@@ -495,6 +541,12 @@ fn whole_replace_preserves_explicit_atn_play_and_conditional_set_scopes() {
     assert_eq!(resolve_play_target(list, &then, "actions.conditional").unwrap(), 1);
     assert_eq!(steps[2].1["elseSet"], "Missing");
     let otherwise = conditional_branch(&steps[2].1, "else").unwrap().unwrap();
+    assert!(resolve_play_target(list, &otherwise, "actions.conditional").is_err());
+    assert_eq!(steps[3].1["set"], 2);
+    assert!(resolve_play_target(list, &steps[3].1, "actions.play").is_err());
+    let then = conditional_branch(&steps[4].1, "then").unwrap().unwrap();
+    assert_eq!(resolve_play_target(list, &then, "actions.conditional").unwrap(), 1);
+    let otherwise = conditional_branch(&steps[4].1, "else").unwrap().unwrap();
     assert!(resolve_play_target(list, &otherwise, "actions.conditional").is_err());
 }
 

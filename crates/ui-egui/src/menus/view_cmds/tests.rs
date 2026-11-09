@@ -489,31 +489,39 @@ fn batch_menu_keeps_the_selected_same_name_and_set_occurrence() {
 
 #[test]
 fn batch_records_the_selected_idless_occurrence() {
-    let (mut app, ctx) = app_with(0);
-    app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
-    for _ in 0..2 {
-        app.session.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
+    for (row, namesake) in [(0, 2), (2, 0)] {
+        let (mut app, ctx) = app_with(0);
+        app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
+        for _ in 0..2 {
+            app.session.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
+        }
+        app.session.actions.list[row].steps = vec![("image.imageRotation.90cw".into(), json!({}))];
+        assert!(app.session.actions.list[row].action_id.is_none());
+        app.run("actions.record", json!({"name": "Recorder"})).unwrap();
+        let (_, recorder) = app.session.actions.recording.unwrap();
+        app.ui.actions.selected = Some(row);
+
+        let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
+        fields.insert("source".into(), json!("open"));
+        fields.remove("output");
+        let result = crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert_eq!(result["errors"], json!([]), "{result}");
+        let size = app.session.active().unwrap().doc.size;
+        assert_eq!((size.width, size.height), (1, 2), "selected occurrence {row} ran");
+
+        app.run("actions.stop", json!({})).unwrap();
+        let id = app.session.actions.list[row].action_id.as_ref().unwrap();
+        assert_ne!(app.session.actions.list[namesake].action_id.as_ref(), Some(id));
+        let (_, params) = app.session.actions.list[recorder].steps.iter().find(|(command, _)| command == "file.automate.batch").unwrap();
+        assert_eq!(params["actionId"], json!(id));
+
+        app.run("actions.move", json!({"action": row, "to": namesake})).unwrap();
+        let replay = app.run("actions.play", json!({"action": "Recorder"})).unwrap();
+        assert!(replay.get("failed").is_none(), "{replay}");
+        let size = app.session.active().unwrap().doc.size;
+        assert_eq!((size.width, size.height), (2, 1), "recorded occurrence {row} survived the reorder");
     }
-    app.session.actions.list[2].steps = vec![("image.imageRotation.90cw".into(), json!({}))];
-    assert!(app.session.actions.list[2].action_id.is_none());
-    app.run("actions.record", json!({"name": "Recorder"})).unwrap();
-    let (_, recorder) = app.session.actions.recording.unwrap();
-    app.ui.actions.selected = Some(2);
-
-    let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
-    fields.insert("source".into(), json!("open"));
-    fields.remove("output");
-    let result = crate::dialogs::confirm(&mut app, dialog).unwrap();
-    assert_eq!(result["errors"], json!([]), "{result}");
-    let size = app.session.active().unwrap().doc.size;
-    assert_eq!((size.width, size.height), (1, 2), "the selected later occurrence ran");
-
-    app.run("actions.stop", json!({})).unwrap();
-    let id = app.session.actions.list[2].action_id.as_ref().expect("the later occurrence gets a stable ID");
-    assert_ne!(app.session.actions.list[0].action_id.as_ref(), Some(id));
-    let (_, params) = app.session.actions.list[recorder].steps.iter().find(|(command, _)| command == "file.automate.batch").unwrap();
-    assert_eq!(params["actionId"], json!(id));
 }
 
 #[test]

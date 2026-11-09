@@ -88,9 +88,25 @@ pub struct ActionsUi {
     batch_dialog_targets: std::collections::BTreeMap<u64, std::collections::BTreeMap<usize, ActionOccurrence>>,
     #[serde(skip)]
     deferred_shortcut_conflicts: Vec<DeferredShortcutConflicts>,
+    #[serde(skip)]
+    volatile_shortcut_keys: BTreeSet<String>,
+    #[serde(skip)]
+    preset_store_disconnected: bool,
 }
 
 impl ActionsUi {
+    pub(crate) fn set_preset_store_disconnected(&mut self, disconnected: bool) {
+        self.preset_store_disconnected = disconnected;
+    }
+
+    pub(crate) fn shortcut_write_pending(&self, key: &str) -> bool {
+        self.volatile_shortcut_keys.contains(key)
+    }
+
+    pub(crate) fn shortcut_writes_pending(&self) -> bool {
+        self.preset_store_disconnected || !self.volatile_shortcut_keys.is_empty()
+    }
+
     /// Select an action (and one of its steps): it replaces a selected set, so a later deselect
     /// (Delete, a removed row) doesn't bring back a set the user moved away from.
     fn select(&mut self, action: usize, step: Option<usize>) {
@@ -193,8 +209,8 @@ pub(crate) fn batch_dialog_params(app: &mut PhotocraftApp, dialog: u64, choice: 
     }
     let row = target.resolve(&app.session).ok_or("the selected action changed while Batch was open")?;
     let list = &app.session.actions.list;
-    let first = list.iter().position(|action| action.name == target.action.name && (set.is_none() || action.set == target.action.set));
-    if first == Some(row) {
+    let mut matches = list.iter().enumerate().filter(|(_, action)| action.name == target.action.name && (set.is_none() || action.set == target.action.set));
+    if matches.next().is_some_and(|(index, _)| index == row) && (app.session.actions.recording.is_none() || matches.next().is_none()) {
         return Ok(());
     }
     let id = match actions_cmds::PlaybackTarget::from(&target.action).id {
@@ -396,7 +412,9 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
     let legacy = format!("{}{}", actions_cmds::PLAY_SHORTCUT_PREFIX, list[index].name);
     let prefs = app.session.prefs();
     let previous = list[index].action_id.is_none().then(|| (prefs.shortcuts.clone(), prefs.alternate_shortcuts.clone()));
-    let pending = app.services.preset_store.is_some() && app.session.preset_store.is_none();
+    let pending = (app.services.preset_store.is_some() && app.session.preset_store.is_none())
+        || app.ui.actions.preset_store_disconnected
+        || app.ui.actions.shortcut_write_pending(&id);
     let legacy_owner = !pending && actions_cmds::shortcut_row(list, &legacy) == Some(index);
     // Retain the old key as a fallback if an asynchronous store never commits the ID.
     // A live ID-based override shadows it, including an explicit "None" assignment.
@@ -436,6 +454,7 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
         deferred = (!conflicts.primary.is_empty() || !conflicts.alternate.is_empty()).then_some(conflicts);
     }
     set.insert(id.clone(), json!(shortcut));
+    let volatile_keys = pending.then(|| set.keys().chain(alternates.keys()).cloned().collect::<Vec<_>>());
     let result = app.run("edit.keyboardShortcuts", json!({"set": set, "alternates": alternates, "allowUnknown": true, "removeConflicts": false}))?;
     if let Err(error) = actions_cmds::commit_action_id(&mut app.session, index, action_id) {
         if let Some((shortcuts, alternate_shortcuts)) = previous {
@@ -449,7 +468,8 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
         app.ui.status_error = true;
         return Err(error);
     }
-    if pending {
+    if let Some(keys) = volatile_keys {
+        app.ui.actions.volatile_shortcut_keys.extend(keys);
         let queued = &mut app.ui.actions.deferred_shortcut_conflicts;
         queued.retain(|conflicts| conflicts.winner != id);
         queued.extend(deferred);
@@ -457,10 +477,15 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
     Ok(result)
 }
 
-/// Complete pending legacy conflict removal only after the native definitions were written.
+/// Release pending shortcut writes and apply legacy conflicts only after the native definitions were written.
 pub(crate) fn finish_deferred_shortcut_conflicts(app: &mut PhotocraftApp, actions_written: bool) {
+    if !actions_written {
+        return;
+    }
+    app.ui.actions.preset_store_disconnected = false;
+    app.ui.actions.volatile_shortcut_keys.clear();
     let deferred = std::mem::take(&mut app.ui.actions.deferred_shortcut_conflicts);
-    if !actions_written || deferred.is_empty() {
+    if deferred.is_empty() {
         return;
     }
     let list = &app.session.actions.list;

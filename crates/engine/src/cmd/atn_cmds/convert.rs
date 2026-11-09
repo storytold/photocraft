@@ -72,11 +72,19 @@ fn retain_action_scopes(d: &Descriptor, id: &str, params: &mut Value) {
         _ => return,
     };
     for (reference, scope) in fields {
-        if let Some([ReferenceItem::Name { class: action, .. }, ReferenceItem::Name { class: set, name }, ..]) = get_ref(d, reference)
+        if let Some([ReferenceItem::Name { class: action, .. }, set, ..]) = get_ref(d, reference)
             && action.class_id.is("Actn")
-            && set.class_id.is("ASet")
         {
-            params[*scope] = json!(clip_name(&name.to_string_lossy()));
+            match set {
+                ReferenceItem::Name { class, name } if class.class_id.is("ASet") => {
+                    params[*scope] = json!(clip_name(&name.to_string_lossy()));
+                }
+                // An indexed set is explicit, but its archive occurrence is unknown.
+                ReferenceItem::Index { class, index } if class.class_id.is("ASet") => {
+                    params[*scope] = json!(index);
+                }
+                _ => {}
+            }
         }
     }
 }

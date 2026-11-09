@@ -16,6 +16,7 @@ fn block_unknown_ids(list: &mut [Action]) {
             let fields: &[&str] = match command {
                 "actions.play" | "file.automate.batch" => &["actionId"],
                 "actions.conditional" => &["thenActionId", "elseActionId"],
+                _ if named_droplet(command, params) => &["actionId"],
                 _ => &[],
             };
             for field in fields {
@@ -29,12 +30,13 @@ fn block_unknown_ids(list: &mut [Action]) {
     }
 }
 
-// A Droplet with explicit steps does not use a named action. A set requires a name.
+fn named_droplet(command: &str, params: &Value) -> bool {
+    command == "file.automate.createDroplet" && params.get("steps").is_none() && !params.get("action").is_some_and(Value::is_array)
+}
+
+// A set requires a name when there is no explicit ID.
 fn numeric_droplet(command: &str, params: &Value) -> bool {
-    command == "file.automate.createDroplet"
-        && params.get("steps").is_none()
-        && params.get("set").is_none_or(Value::is_null)
-        && params.get("action").is_some_and(Value::is_number)
+    named_droplet(command, params) && params.get("set").is_none_or(Value::is_null) && params.get("action").is_some_and(Value::is_number)
 }
 
 pub(super) fn pin_disk_targets(s: &mut Session, disk: &mut [Action], warnings: &mut Vec<String>) {

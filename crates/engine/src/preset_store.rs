@@ -563,8 +563,10 @@ pub struct PresetStore {
     /// Tip hash → file size, for every tip file the store owns.
     tips: HashMap<String, u64>,
     index: Option<IndexFile>,
-    /// [`crate::actions_cmds::ActionState::rev`] last written (or loaded).
+    /// [`crate::actions_cmds::ActionState::rev`] last loaded, written, or skipped.
     actions_rev: u64,
+    /// Revision acknowledged by a successful definitions write to this backend.
+    actions_written_rev: Option<u64>,
     /// `actions.json` exists but failed to load: left on disk untouched, so it is never written.
     actions_skipped: bool,
     /// The pattern files and index (`patterns.json`).
@@ -679,6 +681,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         tips: HashMap::new(),
         index: None,
         actions_rev: 0,
+        actions_written_rev: None,
         actions_skipped,
         patterns: pattern_files,
         warnings: Vec::new(),
@@ -1128,6 +1131,7 @@ impl PresetStore {
         match self.backend.write(ACTIONS_FILE, &bytes) {
             Ok(()) => {
                 self.actions_rev = rev;
+                self.actions_written_rev = Some(rev);
                 true
             }
             Err(e) => {
@@ -1141,6 +1145,7 @@ impl PresetStore {
         let bytes = self.action_bytes(state)?;
         self.backend.write(ACTIONS_FILE, &bytes).map_err(|error| format!("Couldn't save actions: {error}"))?;
         self.actions_rev = rev;
+        self.actions_written_rev = Some(rev);
         Ok(())
     }
 
@@ -1269,6 +1274,11 @@ impl Session {
     /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
     pub fn sync_preset_store(&mut self) {
         self.sync_preset_store_with_action_write();
+    }
+
+    /// Whether this store confirmed a successful definitions write for the current Actions revision.
+    pub fn action_definitions_written(&self) -> bool {
+        self.preset_store.as_ref().is_some_and(|store| store.actions_written_rev == Some(self.actions.rev))
     }
 
     fn sync_preset_store_with_action_write(&mut self) -> bool {

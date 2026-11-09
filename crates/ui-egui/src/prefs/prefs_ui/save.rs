@@ -59,6 +59,7 @@ pub(super) struct SaveRetry {
 /// change retries sooner); the status bar reports the first failure and a notice a persistent
 /// one. Returns the seconds until the next retry while one is pending.
 pub(super) fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
+    finish_written_action_shortcuts(app);
     let rev = app.session.prefs.rev();
     if rev == app.prefs_rt.saved_rev {
         return None;
@@ -109,25 +110,32 @@ pub(super) fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
     }
 }
 
-/// Hold only Action shortcut changes while the library's separate browser transaction is
-/// pending. Keep saving other preferences against the same three-way merge base.
+fn finish_written_action_shortcuts(app: &mut PhotocraftApp) {
+    if app.ui.actions.shortcut_writes_pending() && app.session.action_definitions_written() {
+        crate::actions::finish_deferred_shortcut_conflicts(app, true);
+    }
+}
+
+/// Hold Action shortcut changes whose definitions have not been written. Keep saving
+/// other preferences against the same three-way merge base.
 fn persistable_preferences(app: &PhotocraftApp, mut ours: Value) -> Result<(Value, bool), String> {
-    let pending = app.services.actions_write_pending.as_ref().is_some_and(|pending| pending());
+    let browser_pending = app.services.actions_write_pending.as_ref().is_some_and(|pending| pending());
+    let native_pending = app.ui.actions.shortcut_writes_pending();
+    let is_held = |key: &str| (browser_pending && photocraft_engine::actions_cmds::is_action_key(key)) || app.ui.actions.shortcut_write_pending(key);
     let base = app.prefs_rt.saved_value.as_ref();
     let mut deferred = false;
     for section in ["shortcuts", "alternateShortcuts"] {
         let bindings = ours.get_mut(section).and_then(Value::as_object_mut).ok_or_else(|| format!("serialized preferences {section} must be an object"))?;
-        if !pending {
+        if !browser_pending && !native_pending {
             continue;
         }
         let saved = base.and_then(|value| value.get(section)).and_then(Value::as_object);
-        let is_action = |key: &str| photocraft_engine::actions_cmds::is_action_key(key);
         bindings.retain(|key, _| {
-            let keep = !is_action(key) || saved.is_some_and(|map| map.contains_key(key));
+            let keep = !is_held(key) || saved.is_some_and(|map| map.contains_key(key));
             deferred |= !keep;
             keep
         });
-        for (key, value) in saved.into_iter().flatten().filter(|(key, _)| is_action(key)) {
+        for (key, value) in saved.into_iter().flatten().filter(|(key, _)| is_held(key)) {
             if bindings.get(key) != Some(value) {
                 deferred = true;
                 bindings.insert(key.clone(), value.clone());
@@ -219,6 +227,7 @@ pub(super) fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
 /// Write the preferences now, through the same merge as [`persist`], for recovery choices that
 /// need the result immediately. The pending revision stays unsaved when the write fails.
 pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
+    finish_written_action_shortcuts(app);
     let rev = app.session.prefs.rev();
     let ours = app.session.prefs_value();
     let (ours, deferred) = save_prepared_preferences(app, ours, false)?;
