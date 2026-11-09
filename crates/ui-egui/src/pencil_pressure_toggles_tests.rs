@@ -62,22 +62,26 @@ fn the_pro_toggles_edit_the_pencils_own_flags_and_brush_get_sees_them() {
 #[test]
 fn the_brush_keeps_its_own_pressure_flags() {
     let mut h = bar(ThemeKind::ProMedium);
-    h.get_by_label("Always use pressure for opacity").click();
-    h.run_steps(2);
-    assert!(h.state().session.tools.brush.pressure_opacity, "the Pencil's flag is on");
-    // Switch to the Brush and give it the opposite value.
+    // Give the Brush its own brush first, so the Pencil's later toggle cannot be "inherited" on
+    // the first switch and hide a leak.
     h.state_mut().ui.tool = Tool::Brush;
     h.run_steps(4);
     h.state_mut().session.tools.brush.pressure_opacity = false;
     h.run_steps(2);
-    // Back to the Pencil: its own value is still on.
+
+    h.state_mut().ui.tool = Tool::Pencil;
+    h.run_steps(4);
+    h.get_by_label("Always use pressure for opacity").click();
+    h.run_steps(2);
+    assert!(h.state().session.tools.brush.pressure_opacity, "the Pencil's flag is on");
+
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(4);
+    assert!(!h.state().session.tools.brush.pressure_opacity, "the Pencil's toggle did not change the Brush");
+
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
     assert!(h.state().session.tools.brush.pressure_opacity, "the Pencil's flag came back");
-    // And the Brush still has the opposite one.
-    h.state_mut().ui.tool = Tool::Brush;
-    h.run_steps(4);
-    assert!(!h.state().session.tools.brush.pressure_opacity, "the Brush kept its own flag");
 }
 
 #[test]
@@ -125,6 +129,7 @@ fn pressure_for_size_narrows_a_low_pressure_pencil_stroke() {
     app.run("paint.pencil", json!({"points": [[20.0, 50.0, 0.2], [30.0, 50.0, 0.2], [60.0, 50.0, 1.0]]})).unwrap();
     let (low, high) = (width(app, 22, 50), width(app, 58, 50));
     assert!(low < high, "pressure for size on: low-pressure {low} px, high-pressure {high} px");
+    assert!((2..=4).contains(&low), "pressure for size on: the 0.2 stroke is about 3 px, got {low}");
 
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("tools.setBrush", json!({"brush": {"pressureSize": false}})).unwrap();
