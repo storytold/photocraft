@@ -678,9 +678,17 @@ fn pattern_preview_drag_wraps_pixels_across_the_canvas_edge() {
     crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 36.0, y: 8.0, pressure: 1.0 }, m);
     let id = app.session.active().unwrap().active_layer.unwrap();
     let blue = |d: &photocraft_doc::Document, x: i32| d.layer(id).and_then(|l| l.surface()).is_some_and(|s| s.pixel(x, 6)[2] > 0.9);
-    let shown = super::display_doc(&mut app, 0).expect("a wrapped preview").0;
+    let (shown, key) = super::display_doc(&mut app, 0).expect("a wrapped preview");
+    let st = app.session.active().unwrap();
+    let damage = super::damage(&app, st.doc.id, st.revision, 0, key);
+    assert!(damage.is_none_or(|r| r.contains(2, 6) && r.contains(30, 6)), "damage covers both changed edges");
     assert!(blue(&shown, 2), "the preview brings the block in on the left");
     assert!(!blue(&shown, 30), "the preview clears where the block was");
+    app.ui.view.pattern_preview = false;
+    let shown = super::display_doc(&mut app, 0).expect("a rebuilt preview").0;
+    assert!(!blue(&shown, 2), "turning Pattern Preview off mid-drag stops wrapping");
+    assert!(blue(&shown, 34), "the block sits at the raw offset");
+    app.ui.view.pattern_preview = true;
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 8.0 }, m);
     let committed = &app.session.active().unwrap().doc;
     assert!(blue(committed, 2) && !blue(committed, 30), "release commits the wrap");

@@ -92,8 +92,8 @@ pub(crate) fn move_layers(doc: &mut Document, before: &Document, moves: &[(Layer
     move_layers_wrapped(doc, before, moves, None)
 }
 
-/// [`move_layers`]. `wrap` is the canvas when View › Pattern Preview is on: raster pixels that
-/// leave it come back on the opposite edge. The deltas are already reduced into one tile.
+/// [`move_layers`]. `wrap` is the canvas when View › Pattern Preview is on: raster pixels and
+/// linked masks on those layers that leave it come back on the opposite edge. `dx`/`dy` stay raw.
 pub(crate) fn move_layers_wrapped(doc: &mut Document, before: &Document, moves: &[(LayerId, i32, i32)], wrap: Option<photocraft_geom::Rect>) -> Result<()> {
     for &(id, dx, dy) in moves {
         if dx == 0 && dy == 0 {
@@ -105,7 +105,7 @@ pub(crate) fn move_layers_wrapped(doc: &mut Document, before: &Document, moves: 
             return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
         }
         crate::commands::translate_layer_wrapped(before, l, dx, dy, wrap);
-        crate::vector_cmds::translate_vectors(before, l, dx as f64, dy as f64);
+        crate::vector_cmds::translate_vectors_wrapped(before, l, dx as f64, dy as f64, wrap);
     }
     Ok(())
 }
@@ -146,6 +146,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let carry = flag("selection")?;
     let nest = flag("nest")?;
+    let wrap = flag("wrap")?;
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
@@ -157,11 +158,6 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other("no active layer".into()));
     }
     let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
-    let wrap = match p.get("wrap") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(v)) => *v,
-        Some(_) => return Err(bad("layer.translate", "`wrap` must be a boolean")),
-    };
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let tile = wrap.then(|| before.bounds());
     // A whole number of canvases changes nothing only when every target is raster samples.
@@ -371,11 +367,15 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
     if let Some(r) = &mut l.effects.reference {
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
     }
+    let mask_wrap = wrap.filter(|_| wraps_linked_masks(&l.content));
     if let Some(m) = l.mask.as_mut().filter(|m| m.linked) {
-        m.surface = move_surface(&m.surface, dx, dy, wrap);
+        m.surface = move_surface(&m.surface, dx, dy, mask_wrap);
     }
     if let Some(vm) = l.vector_mask.as_mut().filter(|v| v.linked) {
-        vm.path = vm.path.transform(&a);
+        vm.path = match mask_wrap {
+            Some(tile) => wrap_path(&vm.path, dx, dy, tile),
+            None => vm.path.transform(&a),
+        };
     }
     match &mut l.content {
         LayerContent::Raster(s) => *s = move_surface(s, dx, dy, wrap),
@@ -399,8 +399,8 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
 
 /// True when a whole-canvas `dx`/`dy` would leave every targeted layer unchanged: each move is
 /// raster samples (or a mask moved alone) folding back onto themselves. A group counts only when
-/// every descendant does. Text, shapes, smart objects, artboards, linked vector masks and effect
-/// reference points do not.
+/// every descendant does. Text, shapes, smart objects, artboards and effect reference points do
+/// not. A linked vector mask on a wrapping layer folds with it.
 fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool) -> bool {
     let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().copied().partition(|id| mask_target && doc.layer(*id).is_some_and(moves_mask_alone));
     let ids = move_targets(doc, &rest);
@@ -411,7 +411,10 @@ fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool) -> bo
 }
 
 fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
-    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() || l.vector_mask.as_ref().is_some_and(|m| m.linked) {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() {
+        return false;
+    }
+    if l.vector_mask.as_ref().is_some_and(|m| m.linked) && !wraps_linked_masks(&l.content) {
         return false;
     }
     match &l.content {
@@ -426,6 +429,12 @@ fn move_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, wrap: Option<p
         Some(tile) => wrap_surface(s, dx, dy, tile),
         None => shift_surface(s, dx, dy),
     }
+}
+
+/// Linked raster and vector masks wrap with the layer when its pixels wrap (raster, groups,
+/// adjustments, fills). Type, shapes and smart objects keep the raw delta, so their masks do too.
+pub(crate) fn wraps_linked_masks(content: &LayerContent) -> bool {
+    !matches!(content, LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_))
 }
 
 fn tile_period(tile: photocraft_geom::Rect) -> Option<(i32, i32)> {
@@ -468,7 +477,11 @@ pub(crate) fn wrap_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, til
     if !tile.contains_rect(&content) {
         for (coord, _) in s.tiles() {
             for r in rect_minus(coord.rect(), tile) {
-                copy_rect(&mut out, s, r);
+                if r.is_empty() {
+                    continue;
+                }
+                let bytes = s.to_interleaved(r);
+                out.write_interleaved(r, &bytes);
             }
         }
     }
@@ -479,22 +492,78 @@ pub(crate) fn wrap_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, til
 fn shifted_piece(s: &photocraft_raster::Surface, dest: photocraft_geom::Rect, from: photocraft_geom::Rect) -> Option<photocraft_raster::Surface> {
     let ox = dest.x0.checked_sub(from.x0)?;
     let oy = dest.y0.checked_sub(from.y0)?;
-    Some(s.translated(ox, oy, from))
+    let mut piece = s.translated(ox, oy, from);
+    clip_to_rect(&mut piece, dest);
+    Some(piece)
 }
 
-/// Copy `r` tile by tile (at most one 256×256 buffer at a time). Missing source tiles stay default.
+/// Drop samples `translated` kept because a tile-aligned shift clones whole 256×256 tiles.
+fn clip_to_rect(s: &mut photocraft_raster::Surface, dest: photocraft_geom::Rect) {
+    let extra = s.tile_bounds();
+    if extra.is_empty() || dest.contains_rect(&extra) {
+        return;
+    }
+    let px = s.default_pixel();
+    for r in rect_minus(extra, dest) {
+        s.fill_rect(r, &px);
+    }
+    s.prune();
+}
+
+/// Copy `r` from stored source tiles (at most one 256×256 buffer at a time). Empty source tiles stay default.
 fn copy_rect(dst: &mut photocraft_raster::Surface, src: &photocraft_raster::Surface, r: photocraft_geom::Rect) {
     if r.is_empty() {
         return;
     }
-    for tc in r.tiles() {
+    for (tc, _) in src.tiles() {
         let tr = tc.rect().intersect(&r);
-        if tr.is_empty() || src.tile(tc).is_none() {
+        if tr.is_empty() {
             continue;
         }
         let bytes = src.to_interleaved(tr);
         dst.write_interleaved(tr, &bytes);
     }
+}
+
+/// Fold a vector mask the way [`wrap_surface`] folds samples: union of the wrap-zone copies that
+/// still overlap `tile`. Type and shapes keep the raw delta; this is only for linked masks on
+/// wrapping layers.
+pub(crate) fn wrap_path(path: &photocraft_doc::Path, dx: i32, dy: i32, tile: photocraft_geom::Rect) -> photocraft_doc::Path {
+    let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
+    let Some((w, h)) = tile_period(tile) else { return path.transform(&a) };
+    let dx = wrap_axis(dx, w);
+    let dy = wrap_axis(dy, h);
+    if dx == 0 && dy == 0 {
+        return path.clone();
+    }
+    let moved = path.transform(&photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
+    if path_inside_tile(&moved, tile) {
+        return moved;
+    }
+    let mut out = photocraft_doc::Path { subpaths: Vec::new(), fill_rule: moved.fill_rule, inverted: moved.inverted };
+    for (sx, sy) in [(0, 0), (-w, 0), (0, -h), (-w, -h)] {
+        let copy = moved.transform(&photocraft_geom::Affine::translate(f64::from(sx), f64::from(sy)));
+        if !path_overlaps_tile(&copy, tile) {
+            continue;
+        }
+        for (i, mut sub) in copy.subpaths.into_iter().enumerate() {
+            if !out.subpaths.is_empty() && i == 0 {
+                sub.op = photocraft_doc::PathOp::Combine;
+            }
+            out.subpaths.push(sub);
+        }
+    }
+    if out.subpaths.is_empty() { moved } else { out }
+}
+
+fn path_inside_tile(path: &photocraft_doc::Path, tile: photocraft_geom::Rect) -> bool {
+    path.control_bounds()
+        .is_some_and(|(x0, y0, x1, y1)| x0 >= f64::from(tile.x0) && y0 >= f64::from(tile.y0) && x1 <= f64::from(tile.x1) && y1 <= f64::from(tile.y1))
+}
+
+fn path_overlaps_tile(path: &photocraft_doc::Path, tile: photocraft_geom::Rect) -> bool {
+    path.control_bounds()
+        .is_some_and(|(x0, y0, x1, y1)| x1 > f64::from(tile.x0) && x0 < f64::from(tile.x1) && y1 > f64::from(tile.y0) && y0 < f64::from(tile.y1))
 }
 
 /// `area` minus `hole`, as at most four rectangles.

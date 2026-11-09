@@ -620,10 +620,11 @@ fn fold_recorded_nudges(steps: impl IntoIterator<Item = (String, Value)>) -> Vec
     let mut out: Vec<(String, Value)> = Vec::new();
     let mut last_run: Option<String> = None;
     for (id, mut params) in steps {
+        let wrap_of = |p: &Value| p.get("wrap").and_then(Value::as_bool).unwrap_or(false);
         let run = (id == "layer.translate")
             .then(|| params.as_object())
             .flatten()
-            .filter(|p| p.keys().all(|key| matches!(key.as_str(), "dx" | "dy" | "coalesce")))
+            .filter(|p| p.keys().all(|key| matches!(key.as_str(), "dx" | "dy" | "coalesce" | "wrap")) && p.get("wrap").is_none_or(|v| v.is_boolean()))
             .and_then(|p| p.get("coalesce").and_then(Value::as_str).filter(|run| run.starts_with("nudge:")))
             .map(str::to_string);
         if let Some(run) = &run {
@@ -637,6 +638,7 @@ fn fold_recorded_nudges(steps: impl IntoIterator<Item = (String, Value)>) -> Vec
                 if last_run.as_ref() == Some(run)
                     && let Some((last_id, previous)) = out.last_mut()
                     && last_id == &id
+                    && wrap_of(previous) == wrap_of(&params)
                 {
                     let sum_x = previous.get("dx").and_then(Value::as_f64).unwrap_or(0.0) + dx;
                     let sum_y = previous.get("dy").and_then(Value::as_f64).unwrap_or(0.0) + dy;

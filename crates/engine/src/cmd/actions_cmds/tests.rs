@@ -395,6 +395,23 @@ fn recording_folds_one_run_of_move_tool_nudges() {
     assert_eq!(steps, &[("layer.translate".into(), json!({"dx": 3.0, "dy": 10.0})), ("layer.translate".into(), json!({"dx": 0.0, "dy": 1.0}))]);
 }
 
+/// Pattern Preview nudges fold when `wrap` matches, and stay separate when it does not.
+#[test]
+fn recording_folds_wrapped_move_tool_nudges() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24, "background": "transparent"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Target"})).unwrap();
+    s.execute("actions.record", json!({"name": "Nudge"})).unwrap();
+    for (dx, wrap, run) in [(1, true, "nudge:1"), (2, true, "nudge:1"), (1, false, "nudge:1")] {
+        s.execute("layer.translate", json!({"dx": dx, "dy": 0, "wrap": wrap, "coalesce": run})).unwrap();
+    }
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(
+        s.actions.list[0].steps,
+        [("layer.translate".into(), json!({"dx": 3.0, "dy": 0.0, "wrap": true})), ("layer.translate".into(), json!({"dx": 1.0, "dy": 0.0, "wrap": false}))]
+    );
+}
+
 /// Each nudge moves by whole pixels, so two 0.6 px steps fold into the 2 px they moved, not 1.2.
 #[test]
 fn folded_nudges_add_whole_pixel_steps() {

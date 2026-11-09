@@ -1961,8 +1961,10 @@ fn translate_wrap_folds_pixels_back_into_the_canvas() {
     assert!(blue[2] > 0.9 && blue[3] > 0.9, "blue wrapped from x=7 to x=1: {blue:?}");
     assert!(px(&s, 0, 1)[3] < 0.1 && px(&s, 9, 1)[3] < 0.1, "the old and the off-canvas spots are empty");
     let before = (px(&s, 2, 0), s.active().unwrap().history.past_len());
-    assert!(s.execute("layer.translate", json!({"dx": 1, "wrap": "yes"})).is_err());
-    assert_eq!((px(&s, 2, 0), s.active().unwrap().history.past_len()), before, "a bad wrap changes nothing");
+    for dx in [1, 0] {
+        assert!(s.execute("layer.translate", json!({"dx": dx, "wrap": "yes"})).is_err(), "dx {dx}: a bad wrap is an error");
+        assert_eq!((px(&s, 2, 0), s.active().unwrap().history.past_len()), before, "dx {dx}: a bad wrap changes nothing");
+    }
 }
 
 /// Pattern Preview folding is only for raster samples. A shape keeps the raw delta, including a
@@ -2046,4 +2048,66 @@ fn translate_wrap_folds_sparse_tiles_on_opposite_edges() {
     assert!(surf.pixel(1, 1)[0] > 0.9, "red wrapped from the top-left");
     assert!(surf.pixel(0, 0)[2] > 0.9, "blue wrapped from the bottom-right");
     assert!(surf.pixel(0, 0)[0] < 0.1 && surf.pixel(511, 255)[3] < 0.1, "the old corners are empty");
+}
+
+/// A 256-pixel wrap on a 300-pixel canvas clones a whole tile; only the destination piece is kept.
+#[test]
+fn translate_wrap_clips_a_tile_aligned_piece_to_its_destination() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 300, "height": 64, "background": "transparent"})).unwrap();
+    let id = rect_layer(&mut s, Rect::new(0, 0, 1, 1));
+    s.edit("paint", |doc, _| {
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 0, 51, 1), &[0.0, 0.0, 1.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.translate", json!({"dx": 256, "dy": 0, "wrap": true})).unwrap();
+    let px = |x, y| doc(&s).layer(id).unwrap().surface().unwrap().pixel(x, y);
+    assert!(px(256, 0)[0] > 0.9, "red stayed on-canvas at x+256");
+    assert!(px(6, 0)[2] > 0.9, "blue wrapped from x=50 to x=6");
+    assert!(px(306, 0)[3] < 0.1, "the tile clone did not leak past the canvas");
+    assert!(px(50, 0)[3] < 0.1, "the old blue spot is empty");
+}
+
+/// A linked vector mask on raster wraps with the pixels so it still covers them on the far edge.
+#[test]
+fn translate_wrap_folds_a_linked_vector_mask_with_raster() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = rect_layer(&mut s, Rect::new(7, 1, 8, 2));
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(id).unwrap().vector_mask = Some(photocraft_doc::VectorMask::new(photocraft_vector::shapes::rect(7.0, 1.0, 1.0, 1.0)));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.translate", json!({"dx": 1, "dy": 0, "wrap": true})).unwrap();
+    let l = doc(&s).layer(id).unwrap();
+    assert!(l.surface().unwrap().pixel(0, 1)[0] > 0.9, "the sample wrapped");
+    let vm = l.vector_mask.as_ref().unwrap();
+    let left = photocraft_vector::vector_mask_values(vm, Rect::new(0, 1, 1, 2));
+    let right = photocraft_vector::vector_mask_values(vm, Rect::new(7, 1, 8, 2));
+    assert!(left[0] > 0.5, "the mask covers the wrapped sample");
+    assert!(right[0] < 0.5, "the mask left the old edge");
+}
+
+/// A linked raster mask on a shape follows the raw delta, like the shape itself.
+#[test]
+fn translate_wrap_moves_a_shape_mask_by_the_raw_delta() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [2, 1, 3, 2]})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(id).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(2, 1, 3, 2), &[1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.translate", json!({"dx": 7, "dy": 0, "wrap": true})).unwrap();
+    let l = doc(&s).layer(id).unwrap();
+    let LayerContent::Shape(sh) = &l.content else { panic!("shape") };
+    let photocraft_doc::LiveShape::Rect { rect, .. } = sh.live.as_ref().expect("live rect") else { panic!("rect") };
+    assert_eq!([rect[0], rect[1]], [9.0, 1.0], "the shape kept the raw delta");
+    let mask = &l.mask.as_ref().unwrap().surface;
+    assert!(mask.sample_channel(9, 1, 0) > 0.9, "the mask followed the shape off-canvas");
+    assert!(mask.sample_channel(1, 1, 0) < 0.1, "the mask did not wrap onto the opposite edge");
 }
