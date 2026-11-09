@@ -20,6 +20,7 @@
 //! bilinear source on a downsampled RGBA copy, re-rendered only where a dab changed things.
 
 use crate::par;
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
@@ -816,6 +817,200 @@ pub struct ProxyImage {
 
 const MAX_FULL_RES_SOURCE_PIXELS: usize = 8 * 1024 * 1024;
 
+/// Original destination pixel and selection/filter-mask coverage for a preview.
+/// Both the original and warped colour are premultiplied before mixing.
+#[derive(Clone, Copy, Debug)]
+pub struct PreviewBlend {
+    pub original: [f32; 4],
+    pub coverage: f32,
+}
+
+impl PreviewBlend {
+    fn mix(&self, warped: [f32; 4]) -> [f32; 4] {
+        let coverage = self.coverage.clamp(0.0, 1.0);
+        std::array::from_fn(|i| self.original[i] + (warped[i] - self.original[i]) * coverage)
+    }
+}
+
+/// Straight native samples of the warp source and the unfiltered image, one proxy pixel each.
+/// CMYK and Lab conversion does not commute with mask mixing, so the preview mixes here and
+/// converts to premultiplied RGBA only afterwards.
+pub struct NativeMaskSamples {
+    format: PixelFormat,
+    channels: usize,
+    filtered: Vec<f32>,
+    original: Vec<f32>,
+}
+
+impl NativeMaskSamples {
+    /// Box-averages `filtered` and `original` on `proxy`'s grid. `None` for RGB and gray, where
+    /// converting then mixing matches mixing then converting.
+    pub fn from_proxy(filtered: &Surface, original: &Surface, proxy: &ProxyImage) -> Option<Self> {
+        if filtered.format() != original.format() || !mixes_native(&filtered.format()) {
+            return None;
+        }
+        let n = filtered.channels();
+        if n == 0 || n > 8 || proxy.w == 0 || proxy.h == 0 {
+            return None;
+        }
+        let scale = proxy.scale;
+        if !scale.is_finite() || scale < 1.0 || scale > f64::from(i32::MAX) {
+            return None;
+        }
+        let filtered_px = native_grid(filtered, proxy.bounds, proxy.w, proxy.h, scale.round() as i32);
+        let original_px = native_grid(original, proxy.bounds, proxy.w, proxy.h, scale.round() as i32);
+        let expect = proxy.w.saturating_mul(proxy.h).saturating_mul(n);
+        if filtered_px.len() != expect || original_px.len() != expect {
+            return None;
+        }
+        Some(Self { format: filtered.format(), channels: n, filtered: filtered_px, original: original_px })
+    }
+
+    fn matches(&self, w: usize, h: usize) -> bool {
+        let n = self.channels;
+        n > 0
+            && n <= 8
+            && self.format.channels() == n
+            && self.filtered.len() == w.saturating_mul(h).saturating_mul(n)
+            && self.original.len() == self.filtered.len()
+    }
+
+    fn premul(&self, index: usize, warped: &[f32], coverage: f32) -> [f32; 4] {
+        let n = self.channels;
+        let start = index.saturating_mul(n);
+        let base = start.checked_add(n).and_then(|end| self.original.get(start..end)).unwrap_or(&[]);
+        let filtered = warped.get(..n).unwrap_or(&[]);
+        mix_native_premul(&self.format, base, filtered, coverage)
+    }
+}
+
+fn mixes_native(format: &PixelFormat) -> bool {
+    matches!(format.mode, ColorMode::Cmyk | ColorMode::Lab)
+}
+
+/// [`photocraft_compose::filter_mask::mix`] for one pixel, then the same premultiplied RGBA a
+/// proxy stores. Integer samples are quantized the way the surface stores the mixed cache.
+fn mix_native_premul(format: &PixelFormat, base: &[f32], filtered: &[f32], coverage: f32) -> [f32; 4] {
+    let n = format.channels();
+    if n == 0 || n > 8 || base.len() < n || filtered.len() < n {
+        return [0.0; 4];
+    }
+    let m = coverage.clamp(0.0, 1.0);
+    let mut mixed = [0.0f32; 8];
+    if !format.alpha {
+        for (c, slot) in mixed.iter_mut().enumerate().take(n) {
+            let b = base.get(c).copied().unwrap_or(0.0);
+            let f = filtered.get(c).copied().unwrap_or(0.0);
+            *slot = stored_sample(format.sample, b + (f - b) * m);
+        }
+    } else {
+        let a = n - 1;
+        let (ba, fa) = (base.get(a).copied().unwrap_or(0.0), filtered.get(a).copied().unwrap_or(0.0));
+        let oa = ba + (fa - ba) * m;
+        mixed[a] = stored_sample(format.sample, oa);
+        for (c, slot) in mixed.iter_mut().enumerate().take(a) {
+            let (b, f) = (base.get(c).copied().unwrap_or(0.0), filtered.get(c).copied().unwrap_or(0.0));
+            let pm = b * ba + (f * fa - b * ba) * m;
+            let straight = if oa > 0.0 { (pm / oa).clamp(0.0, 1.0) } else { 0.0 };
+            *slot = stored_sample(format.sample, straight);
+        }
+    }
+    let rgba = photocraft_raster::to_rgba(format, &mixed);
+    let alpha = if format.alpha { rgba[3] } else { 1.0 };
+    [rgba[0] * alpha, rgba[1] * alpha, rgba[2] * alpha, alpha]
+}
+
+fn stored_sample(sample: SampleType, v: f32) -> f32 {
+    match sample {
+        SampleType::U8 => f32::from((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8) / 255.0,
+        SampleType::U16 => f32::from((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16) / 65535.0,
+        SampleType::F32 => v,
+    }
+}
+
+fn native_grid(src: &Surface, bounds: Rect, w: usize, h: usize, scale: i32) -> Vec<f32> {
+    let n = src.channels();
+    let Some(len) = w.checked_mul(h).and_then(|px| px.checked_mul(n)) else { return Vec::new() };
+    let mut out = Vec::new();
+    if n == 0 || n > 8 || scale < 1 || w == 0 || h == 0 || out.try_reserve(len).is_err() {
+        return out;
+    }
+    out.resize(len, 0.0);
+    let Ok(scale_px) = usize::try_from(scale) else { return out };
+    let fill = |y: usize, row: &mut [f32]| {
+        let Some(y_off) = i32::try_from(y).ok().and_then(|y| y.checked_mul(scale)) else { return };
+        let y0 = bounds.y0.saturating_add(y_off);
+        let Some(y1) = y0.checked_add(scale).map(|y1| y1.min(bounds.y1)) else { return };
+        if y1 <= y0 {
+            return;
+        }
+        let Some(x1) = i32::try_from(w).ok().and_then(|w| w.checked_mul(scale)).and_then(|span| bounds.x0.checked_add(span)) else { return };
+        let rect = Rect::new(bounds.x0, y0, x1, y1);
+        let mut samples = Vec::new();
+        src.read_region_into(rect, &mut samples);
+        let rw = rect.width() as usize;
+        let rh = rect.height() as usize;
+        for x in 0..w {
+            let mut acc = [0.0f32; 8];
+            let mut count = 0.0f32;
+            for dy in 0..rh {
+                for dx in 0..scale_px {
+                    let Some(sx) = x.checked_mul(scale_px).and_then(|sx| sx.checked_add(dx)) else { continue };
+                    if sx >= rw {
+                        continue;
+                    }
+                    let Some(i) = dy.checked_mul(rw).and_then(|i| i.checked_add(sx)).and_then(|i| i.checked_mul(n)) else { continue };
+                    let Some(px) = i.checked_add(n).and_then(|end| samples.get(i..end)) else { continue };
+                    for (c, slot) in acc.iter_mut().enumerate().take(n) {
+                        *slot += px.get(c).copied().unwrap_or(0.0);
+                    }
+                    count += 1.0;
+                }
+            }
+            if count > 0.0 {
+                for (c, &v) in acc.iter().enumerate().take(n) {
+                    if let Some(slot) = x.checked_mul(n).and_then(|i| i.checked_add(c)).and_then(|i| row.get_mut(i)) {
+                        *slot = v / count;
+                    }
+                }
+            }
+        }
+    };
+    let Some(stride) = w.checked_mul(n) else { return out };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        out.par_chunks_mut(stride).enumerate().for_each(|(y, row)| fill(y, row));
+    }
+    #[cfg(target_arch = "wasm32")]
+    out.chunks_mut(stride).enumerate().for_each(|(y, row)| fill(y, row));
+    out
+}
+
+fn bilinear_plane(samples: &[f32], w: usize, h: usize, n: usize, u: f64, v: f64) -> [f32; 8] {
+    if w == 0 || h == 0 || n == 0 || n > 8 {
+        return [0.0; 8];
+    }
+    let (iu, iv) = (u.floor(), v.floor());
+    let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
+    let at = |x: f64, y: f64| {
+        let x = (x.clamp(0.0, (w - 1) as f64) as usize).min(w - 1);
+        let y = (y.clamp(0.0, (h - 1) as f64) as usize).min(h - 1);
+        let mut p = [0.0f32; 8];
+        let base = y.saturating_mul(w).saturating_add(x).saturating_mul(n);
+        for (c, slot) in p.iter_mut().enumerate().take(n) {
+            *slot = base.checked_add(c).and_then(|i| samples.get(i)).copied().unwrap_or(0.0);
+        }
+        p
+    };
+    let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
+    let mut out = [0.0f32; 8];
+    for k in 0..n {
+        out[k] = (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv;
+    }
+    out
+}
+
 impl ProxyImage {
     /// Box-downsamples `src` over `bounds` so the longer side is at most `max_side`.
     pub fn new(src: &Surface, bounds: Rect, max_side: usize) -> Self {
@@ -863,6 +1058,21 @@ impl ProxyImage {
     /// Renders proxy pixels `r` (proxy coordinates) through the field into `out` (premultiplied
     /// RGBA8, `w × h`): bilinear field, bilinear source.
     pub fn render(&self, field: &LiquifyField, r: [usize; 4], out: &mut [[u8; 4]]) {
+        self.render_blended(field, r, out, &[]);
+    }
+
+    /// Like `render`, with destination mask samples matching the proxy dimensions.
+    /// An empty blend slice preserves the unmasked path.
+    pub fn render_blended(&self, field: &LiquifyField, r: [usize; 4], out: &mut [[u8; 4]], blend: &[PreviewBlend]) {
+        self.render_blended_native(field, r, out, blend, None);
+    }
+
+    /// [`render_blended`], mixing `native` in document channels before RGBA conversion.
+    pub fn render_blended_native(&self, field: &LiquifyField, r: [usize; 4], out: &mut [[u8; 4]], blend: &[PreviewBlend], native: Option<&NativeMaskSamples>) {
+        if !blend.is_empty() && blend.len() != self.px.len() {
+            return;
+        }
+        let native = native.filter(|n| !blend.is_empty() && n.matches(self.w, self.h));
         let [x0, y0, x1, y1] = [r[0].min(self.w), r[1].min(self.h), r[2].min(self.w), r[3].min(self.h)];
         if x0 >= x1 || y0 >= y1 {
             return;
@@ -875,14 +1085,19 @@ impl ProxyImage {
                 let px = bx + (x as f64 + 0.5) * s;
                 let d = field.sample(px, py);
                 let (u, v) = ((px + d[0] - bx) / s - 0.5, (py + d[1] - by) / s - 0.5);
-                let (iu, iv) = (u.floor(), v.floor());
-                let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
-                let at = |x: f64, y: f64| self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize];
-                let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
-                *slot = std::array::from_fn(|k| {
-                    let v = (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv;
-                    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
-                });
+                let rgba = if let Some(native) = native {
+                    let warped = bilinear_plane(&native.filtered, self.w, self.h, native.channels, u, v);
+                    let coverage = blend.get(y * self.w + x).map(|b| b.coverage).unwrap_or(0.0);
+                    native.premul(y * self.w + x, &warped, coverage)
+                } else {
+                    let (iu, iv) = (u.floor(), v.floor());
+                    let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
+                    let at = |x: f64, y: f64| self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize];
+                    let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
+                    let warped = std::array::from_fn(|k| (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv);
+                    blend.get(y * self.w + x).map_or(warped, |b| b.mix(warped))
+                };
+                *slot = rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
             }
         };
         let rows = &mut out[y0 * self.w..y1 * self.w];
@@ -908,11 +1123,28 @@ impl ProxyImage {
         out: &mut [[u8; 4]],
         source_scratch: &mut Vec<[f32; 4]>,
     ) -> bool {
+        Self::render_full_resolution_blended(src, field, bounds, region, out, source_scratch, &[], None)
+    }
+
+    /// Full-resolution rendering with cached destination mask samples over `bounds`.
+    /// `unfiltered` is the placed source a filter mask mixes back; CMYK and Lab mix it in native
+    /// channels before the preview is converted to RGBA.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_full_resolution_blended(
+        src: &Surface,
+        field: &LiquifyField,
+        bounds: Rect,
+        region: Rect,
+        out: &mut [[u8; 4]],
+        source_scratch: &mut Vec<[f32; 4]>,
+        blend: &[PreviewBlend],
+        unfiltered: Option<&Surface>,
+    ) -> bool {
         let bounds = bounds.intersect(&field.bounds);
         let region = region.intersect(&bounds);
         let (width, height) = (bounds.width() as usize, bounds.height() as usize);
         let Some(out_len) = width.checked_mul(height) else { return false };
-        if region.is_empty() || out.len() != out_len || width == 0 || height == 0 {
+        if region.is_empty() || out.len() != out_len || width == 0 || height == 0 || (!blend.is_empty() && blend.len() != out_len) {
             return false;
         }
 
@@ -1001,6 +1233,61 @@ impl ProxyImage {
             let (a, b, c, d) = (at(sx0, sy0), at(sx1, sy0), at(sx0, sy1), at(sx1, sy1));
             std::array::from_fn(|channel| (a[channel] * (1.0 - tx) + b[channel] * tx) * (1.0 - ty) + (c[channel] * (1.0 - tx) + d[channel] * tx) * ty)
         };
+        let nch = src.channels();
+        let native =
+            unfiltered.filter(|original| original.format() == src.format() && mixes_native(&src.format()) && !blend.is_empty() && (1..=8).contains(&nch));
+        let mut native_filtered = Vec::new();
+        let mut native_original = Vec::new();
+        if let Some(original) = native {
+            let Some(need) = source_len.checked_mul(nch) else { return false };
+            if native_filtered.try_reserve(need).is_err() {
+                return false;
+            }
+            src.read_region_into(src_rect, &mut native_filtered);
+            let orig_len = (region.width() as usize).saturating_mul(region.height() as usize).saturating_mul(nch);
+            if native_original.try_reserve(orig_len).is_err() {
+                return false;
+            }
+            original.read_region_into(region, &mut native_original);
+        }
+        let native_at = |x: f64, y: f64| -> [f32; 8] {
+            let fx = (x - 0.5).clamp(f64::from(canvas.x0), f64::from(canvas.x1 - 1));
+            let fy = (y - 0.5).clamp(f64::from(canvas.y0), f64::from(canvas.y1 - 1));
+            let ix = fx.floor();
+            let iy = fy.floor();
+            let (tx, ty) = ((fx - ix) as f32, (fy - iy) as f32);
+            let sx0 = (ix as i32).clamp(src_rect.x0, src_rect.x1 - 1);
+            let sy0 = (iy as i32).clamp(src_rect.y0, src_rect.y1 - 1);
+            let sx1 = (sx0 + 1).min(src_rect.x1 - 1);
+            let sy1 = (sy0 + 1).min(src_rect.y1 - 1);
+            let at = |sx: i32, sy: i32| -> [f32; 8] {
+                let mut p = [0.0f32; 8];
+                let Ok(ox) = usize::try_from(sx - src_rect.x0) else { return p };
+                let Ok(oy) = usize::try_from(sy - src_rect.y0) else { return p };
+                let base = oy.saturating_mul(sw).saturating_add(ox).saturating_mul(nch);
+                for (c, slot) in p.iter_mut().enumerate().take(nch) {
+                    *slot = base.checked_add(c).and_then(|i| native_filtered.get(i)).copied().unwrap_or(0.0);
+                }
+                p
+            };
+            let (a, b, c, d) = (at(sx0, sy0), at(sx1, sy0), at(sx0, sy1), at(sx1, sy1));
+            let mut p = [0.0f32; 8];
+            for channel in 0..nch {
+                p[channel] = (a[channel] * (1.0 - tx) + b[channel] * tx) * (1.0 - ty) + (c[channel] * (1.0 - tx) + d[channel] * tx) * ty;
+            }
+            p
+        };
+        let original_at = |x: i32, y: i32| -> [f32; 8] {
+            let mut p = [0.0f32; 8];
+            let Ok(ox) = usize::try_from(x - region.x0) else { return p };
+            let Ok(oy) = usize::try_from(y - region.y0) else { return p };
+            let rw = region.width() as usize;
+            let base = oy.saturating_mul(rw).saturating_add(ox).saturating_mul(nch);
+            for (c, slot) in p.iter_mut().enumerate().take(nch) {
+                *slot = base.checked_add(c).and_then(|i| native_original.get(i)).copied().unwrap_or(0.0);
+            }
+            p
+        };
         let render_rows = |first_y: usize, rows: &mut [[u8; 4]]| {
             for (offset, row) in rows.chunks_mut(width).enumerate() {
                 let y = bounds.y0 + (first_y + offset) as i32;
@@ -1009,7 +1296,15 @@ impl ProxyImage {
                     let x = bounds.x0 + (x0 + offset_x) as i32;
                     let p = [f64::from(x) + 0.5, f64::from(y) + 0.5];
                     let d = field.sample(p[0], p[1]);
-                    let rgba = source_at(p[0] + d[0], p[1] + d[1]);
+                    let index = (first_y + offset) * width + x0 + offset_x;
+                    let rgba = if native.is_some() {
+                        let warped = native_at(p[0] + d[0], p[1] + d[1]);
+                        let coverage = blend.get(index).map(|b| b.coverage).unwrap_or(0.0);
+                        mix_native_premul(&src.format(), &original_at(x, y), &warped, coverage)
+                    } else {
+                        let rgba = source_at(p[0] + d[0], p[1] + d[1]);
+                        blend.get(index).map_or(rgba, |b| b.mix(rgba))
+                    };
                     *pixel = rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
                 }
             }
