@@ -197,7 +197,6 @@
 	Plug-ins…	ప్లగిన్‌లు…
 	Type…	టైప్…
 	Enhanced Controls…	మెరుగైన నియంత్రణలు…
-	Camera Raw…	Camera Raw…
 	Raw Defaults…	Raw డిఫాల్ట్‌లు…
 	Integrations…	ఇంటిగ్రేషన్‌లు…
 	AI Integrations…	AI ఇంటిగ్రేషన్‌లు…
@@ -508,7 +507,6 @@
 	Last Filter	చివరి ఫిల్టర్
 	Filter Gallery…	ఫిల్టర్ గ్యాలరీ…
 	Adaptive Wide Angle…	అడాప్టివ్ వైడ్ యాంగిల్…
-	Camera Raw Filter…	Camera Raw ఫిల్టర్…
 	Liquify…	లిక్విఫై…
 	Vanishing Point…	వానిషింగ్ పాయింట్…
 	Blur	బ్లర్
@@ -858,7 +856,6 @@
 	Brush Reconstruct Options	బ్రష్ పునర్నిర్మాణ ఐచ్ఛికాలు
 	Brush Tool Options	బ్రష్ సాధనం ఐచ్ఛికాలు
 	Cache Level:	కాష్ స్థాయి:
-	Camera Raw isn't open	Camera Raw తెరిచి లేదు
 	Cancel	రద్దు చేయి
 	Cancel (Esc)	రద్దు చేయి (Esc)
 	Cancel any current edits (Esc)	ప్రస్తుత సవరణలన్నింటినీ రద్దు చేయి (Esc)
@@ -1809,7 +1806,6 @@
 	Brush preview color	బ్రష్ ప్రివ్యూ రంగు
 	Cache levels	కాష్ స్థాయిలు
 	Cache tile size	కాష్ టైల్ పరిమాణం
-	Camera Raw Defaults	Camera Raw డిఫాల్ట్‌లు
 	Canvas border	కాన్వాస్ సరిహద్దు
 	Show canvas dots	కాన్వాస్ చుక్కలు చూపించు
 	Canvas color	కాన్వాస్ రంగు
@@ -1889,7 +1885,6 @@
 	Never	ఎప్పుడూ వద్దు
 	Normal tip	సాధారణ టిప్
 	Open as smart object	స్మార్ట్ ఆబ్జెక్ట్‌గా తెరువు
-	Open in camera raw	Camera Raw లో తెరువు
 	Open documents as tabs	పత్రాలను ట్యాబ్‌లుగా తెరువు
 	Overscroll	ఓవర్‌స్క్రోల్
 	Performance	పనితీరు
@@ -2273,8 +2268,6 @@
 	Roman Hanging Punctuation	రోమన్ హ్యాంగింగ్ పంక్చుయేషన్
 	Avoid Widows/Orphans	విడోస్/ఆర్ఫన్స్ నివారించు
 	Compose	కూర్పు
-	Adobe Single-line Composer	Adobe సింగిల్-లైన్ కంపోజర్
-	Adobe Every-line Composer	Adobe ఎవ్రీ-లైన్ కంపోజర్
 	Justification	జస్టిఫికేషన్
 	Word Spacing	పదాల అంతరం
 	Letter Spacing	అక్షరాల అంతరం
@@ -2527,7 +2520,6 @@
 	Intersect with	దీనితో ఖండించు
 	Capture Comp	కాంప్ క్యాప్చర్ చేయి
 	No Layer Comps	లేయర్ కాంప్‌లు లేవు
-	Adobe PDF Presets…	Adobe PDF ప్రీసెట్‌లు…
 	3D…	3D…
 	Technology Previews…	టెక్నాలజీ ప్రివ్యూలు…
 	Background from Layer	లేయర్ నుండి నేపథ్యం
@@ -2615,8 +2607,6 @@
 	Tone Histogram	టోన్ హిస్టోగ్రామ్
 	Show Selected Region	ఎంచుకున్న ప్రాంతాన్ని చూపించు
 cameraRaw	Light	కాంతి
-	Camera Raw Filter ({layer})	Camera Raw ఫిల్టర్ ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	లేత భాగాలు
 cameraRaw	Darks	ముదురు భాగాలు
 cameraRaw	Blacks	నలుపులు
@@ -3579,8 +3569,6 @@ layerLabel	No Color	రంగు లేదు
 	Border	సరిహద్దు
 	Box Blur	బాక్స్ బ్లర్
 	Calculations	గణనలు
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw ఫిల్టర్
 	Channel1	ఛానెల్1
 	Channel2	ఛానెల్2
 	Channel3	ఛానెల్3
@@ -4053,7 +4041,6 @@ shape	Appearance	రూపం
 	Add Mask to Selection	మాస్క్‌ను ఎంపికకు జోడించు
 	Add Open Files	తెరిచిన ఫైళ్లను జోడించు
 	Add to Dictionary	నిఘంటువుకు జోడించు
-	All shortcuts reset to Photoshop defaults.	అన్ని షార్ట్‌కట్‌లు Photoshop డిఫాల్ట్‌లకు రీసెట్ చేయబడ్డాయి.
 	Allow Continue	కొనసాగడానికి అనుమతించు
 	Attempt to Automatically Align Source Images	మూల చిత్రాలను స్వయంచాలకంగా సమలేఖనం చేయడానికి ప్రయత్నించు
 	Auto Add/Delete	ఆటో జోడించు/తొలగించు
@@ -4072,7 +4059,6 @@ shape	Appearance	రూపం
 	Color Indicates:	రంగు సూచించేది:
 	Copy Texture to Other Tools	టెక్స్చర్‌ను ఇతర సాధనాలకు కాపీ చేయి
 	Create Smart Object after Loading Layers	లేయర్‌లను లోడ్ చేసిన తర్వాత స్మార్ట్ ఆబ్జెక్ట్ సృష్టించు
-	Default Photoshop Size	డిఫాల్ట్ Photoshop పరిమాణం
 	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	క్రాప్ పెట్టెను లాగండి · కదిలించడానికి లోపల లాగండి · అంచులు పరిమాణం మారుస్తాయి ({ratio} నిష్పత్తి, {centre} మధ్య) · గీసేటప్పుడు Space కదిలిస్తుంది · {commit} నిర్ధారిస్తుంది · Esc రద్దు చేస్తుంది
 	Drag to pan · Scroll to zoom · Double-click to fit	ప్యాన్ చేయడానికి లాగండి · జూమ్ చేయడానికి స్క్రోల్ చేయండి · సరిపోయేలా చేయడానికి డబుల్-క్లిక్ చేయండి
 	Drag: draw freehand · Release on the start point: close	లాగండి: స్వేచ్ఛగా గీయండి · ప్రారంభ బిందువుపై వదలండి: మూసివేయండి
@@ -4091,8 +4077,6 @@ shape	Appearance	రూపం
 	Load Actions…	చర్యలను లోడ్ చేయి…
 	Load Settings…	సెట్టింగ్‌లను లోడ్ చేయి…
 	Load settings from a Camera Raw .xmp file	Camera Raw .xmp ఫైల్ నుండి సెట్టింగ్‌లను లోడ్ చేయి
-	Loaded Camera Raw settings from {file}	{file} నుండి Camera Raw సెట్టింగ్‌లు లోడ్ చేయబడ్డాయి
-	Loaded Camera Raw settings from {file} ({n} not supported)	{file} నుండి Camera Raw సెట్టింగ్‌లు లోడ్ చేయబడ్డాయి ({n} మద్దతు లేదు)
 	Mask Channel	మాస్క్ ఛానెల్
 	Message:	సందేశం:
 	No Spelling Suggestions	స్పెల్లింగ్ సూచనలు లేవు
@@ -4543,9 +4527,6 @@ layerLabel	Magenta	మెజెంటా
 @plural	{n} document|{n} documents	{n} పత్రం|{n} పత్రాలు
 @plural	{n} pixel|{n} pixels	{n} పిక్సెల్|{n} పిక్సెల్‌లు
 cameraRaw	Before (Y)	ముందు (Y)
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Camera Raw ఫిల్టర్ ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw తెరిచి లేదు
 cameraRaw	Cancel	రద్దు చేయి
 cameraRaw	Cancelled opening {name}	{name} తెరవడం రద్దు చేయబడింది
 cameraRaw	Cancelled {label}	{label} రద్దు చేయబడింది
@@ -4557,7 +4538,6 @@ cameraRaw	Highlight Clipping Warning (O)	హైలైట్ క్లిప్�
 cameraRaw	Highlight Priority	హైలైట్ ప్రాధాన్యత
 cameraRaw	Load Settings…	సెట్టింగ్‌లను లోడ్ చేయి…
 cameraRaw	Load settings from a Camera Raw .xmp file	Camera Raw .xmp ఫైల్ నుండి సెట్టింగ్‌లను లోడ్ చేయి
-cameraRaw	Loaded Camera Raw settings from {file}	{file} నుండి Camera Raw సెట్టింగ్‌లు లోడ్ చేయబడ్డాయి
 cameraRaw	Noise Reduction	నాయిస్ తగ్గింపు
 cameraRaw	OK	సరే
 cameraRaw	Open	తెరువు
@@ -4820,7 +4800,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Sample: foreground color	నమూనా: ముందుభాగ రంగు
 	Save canceled	సేవ్ రద్దు చేయబడింది
 	Save the settings to each raw's sidecar without opening it	ప్రతి రా ఫైల్‌ను తెరవకుండానే దాని సైడ్‌కార్‌లో సెట్టింగ్‌లను సేవ్ చేయి
-	Saved Camera Raw settings to {file}	Camera Raw సెట్టింగ్‌లు {file} లో సేవ్ చేయబడ్డాయి
 	Select an action first.	ముందుగా ఒక చర్యను ఎంచుకోండి.
 	Select an action step first.	ముందుగా ఒక చర్య దశను ఎంచుకోండి.
 	Selected Slices	ఎంచుకున్న స్లైస్‌లు
@@ -4872,3 +4851,24 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Set the brush angle	బ్రష్ కోణాన్ని సెట్ చేయి
 	The preference could not be saved: {error}	ప్రాధాన్యతను సేవ్ చేయలేకపోయాం: {error}
 	Top align text	టెక్స్ట్‌ను పైకి సమలేఖనం చేయి
+# RAW Develop (renamed from Camera Raw), notes, toolbar side, layer thumbnail menu
+	RAW Develop	RAW డెవలప్
+	RAW Develop Filter	RAW డెవలప్ ఫిల్టర్
+	RAW Develop Filter…	RAW డెవలప్ ఫిల్టర్…
+	RAW Defaults	RAW డిఫాల్ట్‌లు
+	RAW Defaults…	RAW డిఫాల్ట్‌లు…
+	RAW Develop ({name})	RAW డెవలప్ ({name})
+cameraRaw	RAW Develop ({name})	RAW డెవలప్ ({name})
+	RAW Develop Filter ({layer})	RAW డెవలప్ ఫిల్టర్ ({layer})
+cameraRaw	RAW Develop Filter ({layer})	RAW డెవలప్ ఫిల్టర్ ({layer})
+	RAW Develop isn't open	RAW డెవలప్ తెరిచి లేదు
+cameraRaw	RAW Develop isn't open	RAW డెవలప్ తెరిచి లేదు
+	Loaded RAW Develop settings from {file}	{file} నుండి RAW డెవలప్ సెట్టింగ్‌లు లోడ్ చేయబడ్డాయి
+cameraRaw	Loaded RAW Develop settings from {file}	{file} నుండి RAW డెవలప్ సెట్టింగ్‌లు లోడ్ చేయబడ్డాయి
+	Loaded RAW Develop settings from {file} ({n} not supported)	{file} నుండి RAW డెవలప్ సెట్టింగ్‌లు లోడ్ చేయబడ్డాయి ({n} మద్దతు లేదు)
+	Saved RAW Develop settings to {file}	RAW డెవలప్ సెట్టింగ్‌లు {file} లో సేవ్ చేయబడ్డాయి
+	Are you sure you want to delete all notes?	మీరు ఖచ్చితంగా అన్ని గమనికలను తొలగించాలనుకుంటున్నారా?
+	Move Toolbar to the Left	టూల్‌బార్‌ను ఎడమకు కదిలించు
+	Move Toolbar to the Right	టూల్‌బార్‌ను కుడికి కదిలించు
+	Select Pixels	పిక్సెల్‌లను ఎంచుకో
+	The document changed. Please choose Clear All again.	పత్రం మారింది. దయచేసి "అన్నీ తుడిచివేయి"ని మళ్ళీ ఎంచుకోండి.
