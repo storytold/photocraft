@@ -615,12 +615,138 @@ fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
     crate::widgets::value_field(ui, v, 1.0..=100.0, "%", 58.0);
 }
 
+const STRUCTURE_RANGE_ALERT: &str = "An integer between 1 and 7 is required. Closest value inserted.";
+const COLOR_RANGE_ALERT: &str = "An integer between 0 and 10 is required. Closest value inserted.";
+const STRUCTURE_TIP: &str = "Adjust how strictly the source structure is preserved";
+const COLOR_TIP: &str = "Adjust how much the source color can be modified";
+
+/// Structure or Color on the Content-Aware Move bar (#12193): a whole-number field and a slider
+/// popup. A typed value outside `lo..=hi` becomes the closest value; returns true once the field
+/// is left, so the caller opens the alert. A scrub stops at the end without an alert.
+fn cam_integer_popup(ui: &mut egui::Ui, id: &str, name: &str, value: &mut f32, lo: f32, hi: f32, tip: &str) -> bool {
+    *value = if value.is_finite() { value.round().clamp(lo, hi) } else { lo };
+    let draft_id = ui.make_persistent_id(egui::IdSalt::new(id)).with("typed");
+    let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(draft_id));
+    let mut typed = draft.filter(|(_, stored)| *stored == *value).map_or(*value, |(typed, _)| typed);
+    // Wide range so a typed 99 reaches here unclamped. The caption just before this names the field.
+    let r = crate::widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "", 40.0).on_hover_text(tl!(tip));
+    let out_id = r.id.with("out-of-range");
+    if r.gained_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    }
+    if r.changed() && typed.is_finite() {
+        *value = typed.round().clamp(lo, hi);
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
+        let out = typing && !(lo..=hi).contains(&typed);
+        ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+        if typing && r.has_focus() {
+            ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, *value)));
+        } else {
+            ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+        }
+    }
+    if !r.has_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+    }
+    cam_amount_slider(ui, name, value, lo, hi, tip);
+    r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false)
+}
+
+/// The ▾ beside a Content-Aware Move amount: its pop-up slider snaps to whole numbers in `lo..=hi`.
+fn cam_amount_slider(ui: &mut egui::Ui, name: &str, value: &mut f32, lo: f32, hi: f32, tip: &str) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 22.0), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
+    let resp = resp.on_hover_text(tl!(tip));
+    let popup = egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let open = popup.is_open();
+    if resp.hovered() || open {
+        let t = Tokens::get(ui.ctx());
+        ui.painter().rect_filled(rect, t.radius_sm, t.field_border.gamma_multiply(0.6));
+    }
+    crate::widgets::chevron_icon(ui, rect, ui.style().interact(&resp), open);
+    let parent_layer = resp.layer_id;
+    popup.show(|ui| {
+        crate::press_menu::above_parent_ui(parent_layer, ui);
+        ui.set_min_width(160.0);
+        let mut v = *value;
+        let s = crate::widgets::slider(ui, &mut v, lo..=hi, None);
+        if v.is_finite() {
+            let snapped = v.round().clamp(lo, hi);
+            if snapped != *value {
+                *value = snapped;
+            }
+        }
+        s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), name));
+    });
+}
+
+fn open_cam_range_alert(app: &mut PhotocraftApp, message: &str) {
+    let message = tl!(message).to_owned();
+    let shown =
+        app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(message.as_str()));
+    if !shown {
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
+}
+
+/// Content-Aware Move's options (#12193). While the Transform On Drop box is up, the controls are
+/// greyed and Cancel then Commit sit at the right end.
+fn content_aware_move_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let live = crate::cam_transform::active(app);
+    ui.add_enabled_ui(!live, |ui| {
+        crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+        crate::widgets::vline(ui, 22.0);
+        opt(ui, tl!("Mode:"));
+        let modes = [("move".to_string(), tl!("Move")), ("extend".to_string(), tl!("Extend"))];
+        crate::widgets::dropdown(ui, "cam-mode", tl!("Mode"), &mut app.ui.tool_options.cam_mode, &modes, 90.0);
+        if let Some(mode) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("cam-mode"))) {
+            mode.on_hover_text(tl!("Choose a remix mode"));
+        }
+        opt(ui, tl!("Structure:"));
+        if cam_integer_popup(ui, "cam-structure", "Structure", &mut app.ui.tool_options.cam_structure, 1.0, 7.0, STRUCTURE_TIP) {
+            open_cam_range_alert(app, STRUCTURE_RANGE_ALERT);
+        }
+        opt(ui, tl!("Color:"));
+        if cam_integer_popup(ui, "cam-color", "Color", &mut app.ui.tool_options.cam_color, 0.0, 10.0, COLOR_TIP) {
+            open_cam_range_alert(app, COLOR_RANGE_ALERT);
+        }
+        crate::widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.content_aware_move, tl!("Sample All Layers"))
+            .on_hover_text(tl!("Enable to remix all layers"));
+        crate::widgets::checkbox(ui, &mut app.ui.tool_options.cam_transform_on_drop, tl!("Transform On Drop"))
+            .on_hover_text(tl!("Allows rotation and scaling of selection"));
+    });
+    crate::widgets::vline(ui, 22.0);
+    if live {
+        // right_to_left places the first widget at the right, so Commit is the rightmost and
+        // Cancel sits just to its left.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let tip = crate::i18n::fmt(tl!("Commit transform ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]);
+            let commit = crate::icons::button(ui, "check", 26.0, false, &tip);
+            commit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Commit transform"));
+            if commit.clicked() {
+                crate::cam_transform::commit(app);
+            }
+            let cancel = crate::icons::button(ui, "ban", 26.0, false, tl!("Cancel transform (Esc)"));
+            cancel.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cancel transform"));
+            if cancel.clicked() {
+                crate::cam_transform::cancel(app);
+            }
+        });
+    } else {
+        opt(ui, tl!("Lasso around an area, then drag the selection"));
+    }
+}
+
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
         || matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)
     {
         return false;
+    }
+    if tool == Tool::ContentAwareMove {
+        content_aware_move_bar(app, ui);
+        return true;
     }
     let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
     let o = &mut app.ui.tool_options;
@@ -681,37 +807,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Lasso around an area, then drag the selection"));
-        }
-        Tool::ContentAwareMove => {
-            // The lasso's selection mode leads, as on the Patch tool's bar (#11024).
-            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
-            crate::widgets::vline(ui, 22.0);
-            opt(ui, tl!("Mode:"));
-            let modes = [("move".to_string(), tl!("Move")), ("extend".to_string(), tl!("Extend"))];
-            crate::widgets::dropdown(ui, "cam-mode", tl!("Mode"), &mut o.cam_mode, &modes, 90.0);
-            opt(ui, tl!("Structure:"));
-            crate::widgets::value_field(ui, &mut o.cam_structure, 1.0..=7.0, "", 40.0);
-            opt(ui, tl!("Color:"));
-            crate::widgets::value_field(ui, &mut o.cam_color, 0.0..=10.0, "", 40.0);
-            crate::widgets::checkbox(ui, &mut o.sample_all.content_aware_move, tl!("Sample All Layers"));
-            crate::widgets::checkbox(ui, &mut o.cam_transform_on_drop, tl!("Transform On Drop"));
-            crate::widgets::vline(ui, 22.0);
-            if crate::cam_transform::active(app) {
-                // The box on the dropped patch: ✓ computes the move, ⊘ drops it (as ↩ / Esc).
-                let tip = crate::i18n::fmt(tl!("Commit transform ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]);
-                let commit = crate::icons::button(ui, "check", 26.0, false, &tip);
-                commit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Commit transform"));
-                if commit.clicked() {
-                    crate::cam_transform::commit(app);
-                }
-                let cancel = crate::icons::button(ui, "ban", 26.0, false, tl!("Cancel transform (Esc)"));
-                cancel.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cancel transform"));
-                if cancel.clicked() {
-                    crate::cam_transform::cancel(app);
-                }
-            } else {
-                opt(ui, tl!("Lasso around an area, then drag the selection"));
-            }
         }
         Tool::PatternStamp => {
             pattern_stamp_options(app, ui);
@@ -890,3 +985,7 @@ fn pattern_stamp_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../cam_options_bar_tests.rs"]
+mod cam_options_bar_tests;
