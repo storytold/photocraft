@@ -12,6 +12,7 @@
 #[allow(unused_imports, dead_code)]
 mod mac_menu;
 
+/// Exercise the installed AppKit menu and dispatch its events on the main thread.
 #[cfg(target_os = "macos")]
 fn main() {
     use objc2::MainThreadMarker;
@@ -19,7 +20,7 @@ fn main() {
     use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventSubtype, NSEventType, NSMenu};
     use objc2_foundation::{NSPoint, NSString};
     use photocraft_ui_egui::PhotocraftApp;
-    use photocraft_ui_egui::native_menu;
+    use photocraft_ui_egui::{i18n, native_menu};
     use serde_json::json;
 
     // Without a harness nothing answers cargo-nextest's `--list`, so it ran the whole test as its
@@ -94,11 +95,13 @@ fn main() {
     };
 
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
+    app.session.prefs.edit(|prefs| prefs.interface.language = "en".into());
     let ctx = egui::Context::default();
     let frame = |app: &mut PhotocraftApp, raw: egui::RawInput| {
         let mut out = ctx.run_ui(raw, |ui| {
             native_menu::run(app, ui.ctx());
             photocraft_ui_egui::shortcuts::handle(app, ui.ctx());
+            i18n::set_current(i18n::Lang::from_pref(&app.session.prefs().interface.language));
             native_menu::sync(app, ui.ctx());
         });
         out.textures_delta.clear();
@@ -201,6 +204,22 @@ fn main() {
     assert_eq!(app.session.active_index(), Some(0), "choosing the first row brought it forward");
     let window = submenu(&main_menu(), "Window");
     assert!(checked(&window, rows[0]) && !checked(&window, rows[1]), "the check moved in place");
+
+    // Choose a new language on the installed menu and read the replacement back from AppKit.
+    let english_bar = main_menu();
+    let language = submenu(&submenu(&english_bar, "PhotoCraft"), "Language");
+    dequeue(&other());
+    language.performActionForItemAtIndex(index(&language, "简体中文"));
+    let mut raw = egui::RawInput::default();
+    eframe::App::raw_input_hook(&mut app, &ctx, &mut raw);
+    frame(&mut app, raw);
+    assert_eq!(app.session.prefs().interface.language, "zh-hans");
+    let chinese_bar = main_menu();
+    assert_ne!(Retained::as_ptr(&english_bar), Retained::as_ptr(&chinese_bar), "switching languages replaces the installed menu bar");
+    let names = titles(&submenu(&chinese_bar, "PhotoCraft"));
+    for want in ["关于 PhotoCraft", "设置", "服务", "隐藏 PhotoCraft", "隐藏其他", "全部显示", "退出 PhotoCraft"] {
+        assert!(names.iter().any(|n| n == want), "{want} missing after switching to Simplified Chinese: {names:?}");
+    }
 
     println!("mac_menu_appkit: ok");
 }
