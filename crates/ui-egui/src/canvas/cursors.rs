@@ -144,11 +144,9 @@ pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon 
 }
 
 /// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
-/// OS cursor to set (hidden).
+/// OS cursor to set. Native windows use a cached bitmap that moves independently of rendering.
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
-    // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
-    crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
-    egui::CursorIcon::None
+    crate::tool_cursor::pipette(ctx, p)
 }
 
 /// The filter dialogs' preview locator: a small square centred on `p`, the point a click centres

@@ -1153,3 +1153,36 @@ fn continue_path_bitmap_has_the_centre_cross_and_a_slash_beside_it() {
         assert_eq!(at(0.0, 9.0), 0, "apart from the cross");
     }
 }
+
+#[test]
+fn pipette_bitmaps_are_readable_at_each_dpi_and_bound_allocations() {
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let image = rasterize(&Shape::Pipette, scale).unwrap();
+        assert!(image.rgba.as_chunks::<4>().0.iter().any(|p| p[0] > 230 && p[3] > 230));
+        assert!(image.rgba.as_chunks::<4>().0.iter().any(|p| p[0] < 25 && p[3] > 100));
+        assert_eq!(alpha(&image, 0, 0), 0);
+        assert!(alpha(&image, image.hotspot[0], image.hotspot[1]) > 230);
+    }
+    for scale in [f32::NAN, f32::INFINITY, -1.0, 0.0, f32::MAX, 500.0] {
+        assert!(rasterize(&Shape::Pipette, scale).is_none());
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn pipette_bitmap_uses_the_platform_cursor_units_at_high_dpi() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    ctx.set_pixels_per_point(2.0);
+    frame(&ctx, |_| {});
+    let output = frame(&ctx, |ui| {
+        let icon = pipette(ui.ctx(), egui::pos2(100.0, 100.0));
+        ui.ctx().set_cursor_icon(icon);
+    });
+    assert_eq!(ctx.pixels_per_point(), 2.0);
+    let image = output.platform_output.cursor_image.unwrap();
+    let scale = if cfg!(target_os = "macos") { ctx.zoom_factor() } else { 2.0 };
+    let expected = rasterize(&Shape::Pipette, scale).unwrap();
+    assert_eq!((image.size, image.hotspot), (expected.size, expected.hotspot));
+    assert_eq!(image.rgba, expected.rgba);
+}

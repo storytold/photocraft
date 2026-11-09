@@ -34,6 +34,17 @@ fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
     h.state().current_zoom()
 }
 
+fn assert_pipette(h: &Harness<'static, PhotocraftApp>) {
+    let output = &h.output().platform_output;
+    if cfg!(target_arch = "wasm32") {
+        assert_eq!(output.cursor_icon, egui::CursorIcon::None, "web paints the pipette");
+        assert!(output.cursor_image.is_none());
+    } else {
+        assert_eq!(output.cursor_icon, egui::CursorIcon::Crosshair, "visible fallback underneath the native pipette");
+        assert!(output.cursor_image.is_some(), "the pipette must reach the OS");
+    }
+}
+
 fn open_dialog(h: &mut Harness<'static, PhotocraftApp>) {
     crate::dialogs::open_command_dialog(h.state_mut(), "image.adjustments.brightnessContrast", "Brightness/Contrast…");
     h.run_steps(3);
@@ -279,10 +290,11 @@ fn color_picker_samples_the_image_under_its_pipette() {
 
     h.hover_at(red);
     h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the pipette replaces the pointer");
+    assert_pipette(&h);
     h.hover_at(r.center());
     h.run_steps(1);
     assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "over the dialog it is the normal pointer");
+    assert!(h.output().platform_output.cursor_image.is_none(), "dialog widgets must release the pipette");
 
     // A click samples; the press and release may land in one frame (`ui.click`).
     h.hover_at(red);
@@ -350,7 +362,7 @@ fn curves_picker_samples_document_coordinates_through_the_view_transform() {
     let left = pos2(canvas.left() + 60.0, canvas.center().y);
     h.hover_at(left);
     h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+    assert_pipette(&h);
     press(&mut h, left, true);
     press(&mut h, left, false);
     h.run_steps(3);
@@ -1013,10 +1025,12 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
         h.output().platform_output.cursor_icon
     };
     h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
-    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "the pipette replaces the pointer");
+    cursor(&mut h);
+    assert_pipette(&h);
     h.state_mut().ui.tool = crate::state::Tool::Brush;
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
-    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "⌥ samples with a pipette");
+    cursor(&mut h);
+    assert_pipette(&h);
     h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
     // Every platform reports the crosshair. The desktop builds also hand the OS a black-and-white
     // bitmap for it (`tool_cursor`, #1160, #1343), with `Crosshair` underneath as the fallback.
@@ -1504,4 +1518,34 @@ fn marquee_drag_after_hiding_extras_restores_selection_visibility() {
     assert!(!h.state().ui.view.extras, "the user can hide the existing selection again");
     h.state_mut().run("edit.fill", json!({"color": "#22cc44"})).unwrap();
     assert!(!h.state().ui.view.extras, "painting an existing selection must preserve the user's hide choice");
+}
+
+/// Text Color Picker hover must use a cached OS bitmap instead of an app-painted cursor.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn text_color_picker_pipette_is_native_cached_and_released_over_dialog() {
+    let mut h = harness();
+    h.state_mut().run("type.create", json!({"text":"Cursor test","color":"#000000","size":24,"x":10,"y":60})).unwrap();
+    h.state_mut().ui.tool = crate::state::Tool::Type;
+    let v = &mut h.state_mut().ui.views[0];
+    (v.zoom, v.center, v.fit_pending) = (4.0, [200.0, 150.0], false);
+    crate::type_tool::open_color_picker(h.state_mut(), [0.0; 3]);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["__label"], "Color Picker (Text Color)");
+    let r = h.state().last_canvas_rect;
+    let p = pos2(r.left() + 60.0, r.center().y);
+    h.hover_at(p);
+    h.run_steps(1);
+    assert_pipette(&h);
+    let image = h.output().platform_output.cursor_image.clone().unwrap();
+    h.hover_at(p + vec2(20.0, 0.0));
+    h.run_steps(1);
+    let moved = h.output().platform_output.cursor_image.as_ref().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&image.rgba, &moved.rgba), "pointer motion must reuse the OS cursor bitmap");
+    h.hover_at(r.center());
+    h.run_steps(1);
+    assert!(h.output().platform_output.cursor_image.is_none(), "dialog widgets release the pipette");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.dialogs.is_empty());
 }
