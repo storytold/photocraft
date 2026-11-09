@@ -133,12 +133,18 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                 json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "line": line, "antiAlias": false, "feather": feather}),
             );
         }
-        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
+        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+            crate::retouch_ui::finish_patch(app, d.start, crate::retouch_ui::patch_end(&d, [end[0], end[1]]))
+        }
         Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
             crate::retouch_ui::finish_content_aware_move(app, d.start, [end[0], end[1]])
         }
         Tool::Lasso | Tool::Patch | Tool::ContentAwareMove => {
             let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();
+            // A Content-Aware Move drag with nothing to select only says so (#12192).
+            if d.tool == Tool::ContentAwareMove && crate::retouch_ui::content_aware_move_no_pixels(app, &pts) {
+                return;
+            }
             if pts.len() >= 3 {
                 let mode = selection_mode(app, d.modifiers);
                 let o = &app.ui.tool_options;

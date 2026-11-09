@@ -373,8 +373,8 @@
 	Artboard…	Tekengebied…
 	Artboard from Group…	Tekengebied uit groep…
 	Artboard from Layers…	Tekengebied uit lagen…
-	Layer via Copy	Laag via kopiëren
-	Layer via Cut	Laag via knippen
+	Layer Via Copy	Laag via kopiëren
+	Layer Via Cut	Laag via knippen
 	Layer From Background…	Laag uit achtergrond…
 	Layer from Background…	Laag uit achtergrond…
 	Background From Layer	Achtergrond uit laag
@@ -4265,8 +4265,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Grijswaardenbalk
 	Current Colors	Huidige kleuren
 	Make Ramp Web Safe	Balk beperken tot webkleuren
+	Scroll All Windows	Alle vensters schuiven
 	The path was kept as the Work Path	Het pad is behouden als werkpad
 	The path was discarded	Het pad is weggegooid
+# Art History Brush (#213).
 	Art History Brush Tool	Artistiek historiepenseel
 	Tight Short	Strak kort
 	Tight Medium	Strak middel
@@ -4360,6 +4362,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Kies voor elk kanaal een ander document.
 	A picked document is no longer open.	Een gekozen document is niet meer geopend.
 	A picked document is no longer a grayscale document of the same size.	Een gekozen document is geen grijswaardendocument van hetzelfde formaat meer.
+	Netscape Gray	Netscape-grijs
 # Move tool options bar (#11381)
 	Align top edges	Bovenranden uitlijnen
 	Align vertical centers	Verticale middens uitlijnen

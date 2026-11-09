@@ -99,6 +99,7 @@ impl PhotocraftApp {
             fonts_ready: false,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             arrange_start: 0,
+            drawing_window: None,
             ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
@@ -159,6 +160,8 @@ impl PhotocraftApp {
             clip_read_for_paste: false,
             smart_svg: Default::default(),
             transform_preview: None,
+            transform_area: None,
+            transform_preparing: None,
             move_mods: Default::default(),
             nudge_bundle: Default::default(),
             style_preview: None,
@@ -227,7 +230,6 @@ impl PhotocraftApp {
         histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
-        notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         app
