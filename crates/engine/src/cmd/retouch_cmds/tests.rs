@@ -2662,6 +2662,7 @@ fn art_history_brush_from_another_format_paints_as_a_full_conversion() {
     }
     cases.push((8, "image.mode.grayscale".into()));
     for (src, change) in &cases {
+        let flat = active_pixels(&history_after_mode_change(*src, change));
         for pts in [&[[100.0, 100.0], [280.0, 140.0]][..], &[[-6.0, 290.0], [30.0, 299.0]][..]] {
             let p = json!({"points": pts, "size": 12, "area": 30, "tolerance": 0, "state": 1});
             let run = || {
@@ -2673,6 +2674,8 @@ fn art_history_brush_from_another_format_paints_as_a_full_conversion() {
             let ((got_r, got), tiles) = converted_tiles(run);
             assert_eq!(got_r, want_r, "{src}-bit source, {change}, {pts:?}");
             assert!(first_difference(&got, &want).is_none(), "{src}-bit source, {change}, {pts:?}: differs from a full conversion");
+            assert!(first_difference(&got, &flat).is_some(), "{src}-bit source, {change}, {pts:?}: restored nothing");
+            assert!(tiles > 0, "{src}-bit source, {change}, {pts:?}: converted no tiles");
             assert!(tiles < 6, "{src}-bit source, {change}, {pts:?}: converted {tiles} tiles, the whole source");
         }
     }
