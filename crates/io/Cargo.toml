@@ -47,11 +47,11 @@ flate2 = { workspace = true }
 # ora.rs reads OpenRaster's stack.xml (already in the tree through usvg).
 roxmltree = "0.21"
 # Reuse usvg's locked header reader to bound embedded SVG raster data before decoding.
-imagesize = "0.13"
+imagesize = "0.15"
 # SVG import (svg.rs): usvg parses, resvg rasterises what the shape model can't hold. Both are
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 # The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
 ttf-parser = { version = "0.25", default-features = false }
 # PDF import (pdf_import.rs): craft-pdf rasterizes pages in pure Rust; no shared library ships.
@@ -64,7 +64,7 @@ kurbo = { version = "0.13", optional = true }
 resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }
 
 [dev-dependencies]
-lopdf = { version = "0.38", default-features = false }
+lopdf = { version = "0.47", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"
 photocraft-affinity = { workspace = true, features = ["synth"] }
