@@ -195,9 +195,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     if let (Some(mut p), Some(s)) = (edit, &target) {
         p["layer"] = json!(s.layer.0);
         if let Err(e) = app.run("shape.edit", p) {
-            if alignment_edit.is_some() {
-                app.ui.tool_options.pixel_align_stroke = previous_alignment_preference;
-            }
+            app.ui.tool_options.pixel_align_stroke = alignment_edit.as_ref().map_or(app.ui.tool_options.pixel_align_stroke, |_| previous_alignment_preference);
             app.ui.status = e;
             app.ui.status_error = true;
             recent = None;
