@@ -39,9 +39,9 @@ mod masks_panel;
 mod menu;
 mod open;
 mod panels;
-mod wb_picker;
 mod proxy;
 mod sidecar;
+mod wb_picker;
 
 pub use controls::show;
 #[cfg(test)]

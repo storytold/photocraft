@@ -60,7 +60,6 @@ use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
 mod black_white;
 mod color_mixer;
-mod optics;
 mod colour_lut;
 mod contrast;
 mod exposure;
@@ -70,6 +69,7 @@ mod local_detail;
 mod local_detail_tables;
 mod local_tone;
 pub mod masks;
+mod optics;
 mod per_pixel;
 mod presence;
 mod white_balance;
@@ -79,8 +79,8 @@ pub use per_pixel::{
     CURVE_LUT, FIX_GRID, Grade, Grain, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, TONE_STEPS, Vignette, VignetteStyle, WhitesBlacks,
     per_pixel, white_black_points,
 };
-pub use whites_blacks::{RowOn, TonePoints, Tones};
 pub use white_balance::{auto_white_balance, white_balance_from_sample};
+pub use whites_blacks::{RowOn, TonePoints, Tones};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
 /// Adobe RGB's 2.2), and in which primaries. The tone controls work on light, so the document's
@@ -1556,7 +1556,11 @@ mod tests {
         assert_eq!(a, b);
         // The GPU stages leave B&W to the CPU develop.
         assert!(per_pixel(&p, 24, 16, false, None).is_none());
-        for bad in [CameraRaw { treatment: "sepia".into(), ..Default::default() }, CameraRaw { treatment: "BW".into(), ..Default::default() }, CameraRaw { bw_mix: [f32::NAN; 8], ..Default::default() }] {
+        for bad in [
+            CameraRaw { treatment: "sepia".into(), ..Default::default() },
+            CameraRaw { treatment: "BW".into(), ..Default::default() },
+            CameraRaw { bw_mix: [f32::NAN; 8], ..Default::default() },
+        ] {
             assert!(bad.validate().is_err() && bad.validate_changes(&CameraRaw::default()).is_err(), "{:?}", bad.treatment);
         }
         // Older settings without the fields load as colour.
