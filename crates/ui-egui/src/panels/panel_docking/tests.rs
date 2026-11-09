@@ -1219,6 +1219,7 @@ fn disabling_the_ui_cancels_a_dock_edge_drag() {
     );
     h.run_steps(4);
     let stored = dock_width(h.state());
+    let before = h.state().session.prefs().panel_layout.clone();
     let rail = if h.state().ui.panels.rail { if h.state().ui.theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
     let edge = 1280.0 - (stored + rail);
     h.event(Event::PointerMoved(pos2(edge, 400.0)));
@@ -1228,11 +1229,17 @@ fn disabling_the_ui_cancels_a_dock_edge_drag() {
     h.event(Event::PointerMoved(pos2(edge + 40.0, 400.0)));
     h.run_steps(2);
     assert!(crate::panels::dock_edge_drag_active(&h.ctx), "the resize drag started");
+    assert_eq!(h.state().session.prefs().panel_layout, before, "a held drag is not saved");
 
     disabled.store(true, Ordering::Relaxed);
     h.event(Event::PointerButton { pos: pos2(edge + 40.0, 400.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "a disabled UI clears the stored drag");
+    // Saves resume once the drag is dropped, even while the UI stays disabled: the width the
+    // held drag reached, which was not saved while held, is saved now.
+    let saved = &h.state().session.prefs().panel_layout;
+    assert_ne!(*saved, before, "the cancelled drag's width is saved");
+    assert_eq!(*saved, crate::dock::snapshot(h.state()), "the saved layout is the live one after the cancel");
     let settled = dock_width(h.state());
 
     disabled.store(false, Ordering::Relaxed);
@@ -1240,6 +1247,15 @@ fn disabling_the_ui_cancels_a_dock_edge_drag() {
     h.event(Event::PointerMoved(pos2(edge - 120.0, 400.0)));
     h.run_steps(2);
     assert!((dock_width(h.state()) - settled).abs() < 0.5, "a stale drag start must not resize the dock after re-enable");
+    // Saves resume: a width change made after re-enabling reaches the saved layout.
+    let resumed = h.state().session.prefs().panel_layout.clone();
+    let ctx = h.ctx.clone();
+    assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth": settled + 60.0}))["ok"], true);
+    h.run_steps(3);
+    assert!((dock_width(h.state()) - settled - 60.0).abs() < 0.5, "the new width is applied, got {}", dock_width(h.state()));
+    let saved = &h.state().session.prefs().panel_layout;
+    assert_ne!(*saved, resumed, "the width change after re-enable is saved");
+    assert_eq!(*saved, crate::dock::snapshot(h.state()), "the saved layout is the new live one");
 }
 
 /// `ui.set {dockWidth}` sets the whole end dock, scaling every column rather than only the outer
