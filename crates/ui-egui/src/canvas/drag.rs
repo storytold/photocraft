@@ -16,6 +16,9 @@ pub struct Drag {
     pub clear: bool,
     /// ⇧ constraint of a painting stroke (stroke_constraint.rs).
     pub constrain: Option<crate::stroke_constraint::Axis>,
+    /// A ⇧-click line from the previous stroke's end. Smoothing doesn't apply to it, so it ends
+    /// at the click whatever Catch-up on Stroke End is set to, as in Photoshop (#11887).
+    pub line: bool,
     /// Modifiers held now (updated on every pointer event of the gesture).
     pub live: egui::Modifiers,
     /// Which of the modifiers held at the press have been released since.
@@ -55,6 +58,7 @@ impl Drag {
             erase,
             clear: false,
             constrain: None,
+            line: false,
             live: modifiers,
             released: egui::Modifiers::NONE,
             reposition: false,
@@ -84,6 +88,12 @@ impl Drag {
         if self.tool == Tool::FreeformPen {
             self.pen_owner = crate::vector_ui::capture_pen_owner(app);
         }
+    }
+
+    /// The document and target a vector drag was pressed on are still the current ones
+    /// ([`VectorGestureOwner`]); false for a drag that captured none.
+    pub(crate) fn vector_owner_valid(&self, app: &PhotocraftApp) -> bool {
+        self.vector_owner.as_ref().is_some_and(|owner| owner.valid(app))
     }
 
     /// Reposition: move the start and every point so the last one lands on `to` (same size).

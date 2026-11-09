@@ -985,7 +985,11 @@ fn mixer_brush_uses_the_brush_mixer_settings() {
     let mut s = session(200, 30);
     s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     // No wet/load params: the brush's Mixer settings (a dry brush with 0 % Load) apply.
-    s.execute("tools.setBrush", json!({"brush": {"pressureSize": false, "spacing": 0.25, "mixer": {"wet": 0, "load": 0, "mix": 0}}})).unwrap();
+    s.execute(
+        "tools.setBrush",
+        json!({"brush": {"pressureSize": false, "spacing": 0.25, "mixer": {"wet": 0, "load": 0, "mix": 0}, "smoothing": {"catchUpOnEnd": true}}}),
+    )
+    .unwrap();
     s.execute("paint.mixerBrush", json!({"points": [[5, 15], [195, 15]], "size": 8})).unwrap();
     assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 190, 15)[3] < 0.5, "the brush's 0 % Load dries out");
     // A param still overrides the brush.
@@ -1378,6 +1382,22 @@ fn restored_brush_settings_are_clamped_or_rejected() {
     for bad in [json!({"size": 1e30}), json!({"size": "big"}), json!(null), json!([1]), json!("brush")] {
         assert!(restored_settings(&s, &bad).is_none(), "{bad}");
     }
+}
+
+/// #11812: a brush remembered at 0 % opacity (saved before the 1 % floor) reads back at 1 %, the
+/// value its options-bar field shows, so it paints instead of laying down nothing.
+#[test]
+fn restored_brush_opacity_floors_at_one_percent() {
+    let s = Session::new();
+    for opacity in [0.0, -1.0, 0.004] {
+        let b = restored_settings(&s, &json!({"opacity": opacity})).unwrap();
+        assert_eq!(b.opacity, 0.01, "{opacity}");
+    }
+    assert_eq!(restored_settings(&s, &json!({"opacity": 0.37})).unwrap().opacity, 0.37, "values above the floor are kept");
+    let mut t = Session::new();
+    t.prefs.edit(|p| p.last_brush = json!({"brush": {"opacity": 0.0}}));
+    restore_brush(&mut t);
+    assert_eq!(t.tools.brush.opacity, 0.01, "the remembered session brush");
 }
 
 #[test]

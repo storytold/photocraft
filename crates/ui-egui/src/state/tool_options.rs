@@ -74,7 +74,9 @@ pub struct ToolOptions {
     pub cam_mode: String,
     pub cam_structure: f32,
     pub cam_color: f32,
-    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch).
+    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch). On by
+    /// default (#12185); a saved `false` stays off.
+    #[serde(default = "yes")]
     pub cam_transform_on_drop: bool,
     /// Dodge/Burn: shadows | midtones | highlights, exposure %, protect tones.
     pub tone_range: String,
@@ -145,8 +147,8 @@ pub struct ToolOptions {
     #[serde(default = "one")]
     pub slice_height: f32,
     /// Move tool: Auto-Select (with "layer" or "group" target) and Show Transform Controls.
-    /// Auto-Select is on with the "group" target by default, as in current Photoshop;
-    /// ⌘/Ctrl-click inverts it.
+    /// Auto-Select is on with the "layer" target by default, as Photoshop's Reset Tool leaves it
+    /// (measured for #11380; #4056 had asked for "group"); ⌘/Ctrl-click inverts it.
     #[serde(default = "yes")]
     pub move_auto_select: bool,
     #[serde(default = "default_move_target")]
@@ -168,6 +170,10 @@ pub struct ToolOptions {
     /// transforms still turn and scale about it (#11098).
     #[serde(default)]
     pub transform_reference_point: bool,
+    /// Transform options bar: X and Y show the reference point's offset from where the box started
+    /// instead of its position (Photoshop's relative positioning, off by default, #11679).
+    #[serde(default)]
+    pub transform_relative_position: bool,
     /// Last interpolation selected in the Transform options bar; unset follows General's default.
     #[serde(default)]
     pub transform_interpolation: Option<photocraft_engine::prefs::Interpolation>,
@@ -222,6 +228,9 @@ pub struct ToolOptions {
     pub bg_limits: String,
     pub bg_tolerance: f32,
     pub bg_protect_fg: bool,
+    /// The Background Eraser popup's "Tolerance:" pen control (#11910): `off`, `penPressure` (the
+    /// reference's default) or `stylusWheel`.
+    pub bg_tolerance_control: String,
     /// Color Replacement: mode (hue | saturation | color | luminosity), sampling (continuous |
     /// once | backgroundSwatch), limits (discontiguous | contiguous | findEdges), tolerance % and
     /// anti-alias, as `paint.colorReplacement` takes them.
@@ -233,6 +242,10 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
+    /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
+    #[serde(default)]
+    pub hand_scroll_all: bool,
     /// Pencil › Auto Erase: a stroke that starts on the foreground colour paints the background colour.
     #[serde(default)]
     pub pencil_auto_erase: bool,
@@ -247,6 +260,9 @@ pub struct ToolOptions {
     /// `paint.pencil`), as in Photoshop's options bar (#2662).
     #[serde(default = "default_eraser_mode")]
     pub eraser_mode: String,
+    /// Mixer Brush › Useful mixer brush combinations: the entry last picked, an index into
+    /// `brush_controls::MIXER_COMBINATIONS` (0 = Custom, #11946).
+    pub mixer_combination: usize,
     /// Magnetic Lasso: detection width (px, 1..256), edge contrast (%, 1..100), how often it
     /// fastens points by itself (0..100), and whether pen pressure narrows the width.
     pub magnetic_width: f32,
@@ -292,7 +308,7 @@ fn default_crop_resolution_unit() -> String {
 }
 
 fn default_move_target() -> String {
-    "group".into()
+    "layer".into()
 }
 
 fn default_pen_path_op() -> String {
@@ -349,10 +365,10 @@ fn default_eyedropper_sample() -> String {
 }
 
 /// Each tool's Sample All Layers (the Paint Bucket calls it All Layers). Photoshop keeps one per
-/// tool, all off by default: turning it on for the Magic Wand must not leave Blur or Smudge
-/// copying the composite onto the active layer (#5524). The Mixer Brush keeps its own with the
-/// brush (`MixerSettings`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// tool, all off by default except the Patch tool's Content-Aware Sample All Layers (#5524,
+/// #12125): turning it on for the Magic Wand must not leave Blur or Smudge copying the composite
+/// onto the active layer. The Mixer Brush keeps its own with the brush (`MixerSettings`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SampleAllLayers {
     pub magic_wand: bool,
@@ -367,6 +383,25 @@ pub struct SampleAllLayers {
     pub blur: bool,
     pub sharpen: bool,
     pub smudge: bool,
+}
+
+impl Default for SampleAllLayers {
+    fn default() -> Self {
+        Self {
+            magic_wand: false,
+            quick_selection: false,
+            object_selection: false,
+            paint_bucket: false,
+            magic_eraser: false,
+            spot_healing: false,
+            patch: true,
+            content_aware_move: false,
+            remove: false,
+            blur: false,
+            sharpen: false,
+            smudge: false,
+        }
+    }
 }
 
 impl SampleAllLayers {
@@ -417,7 +452,7 @@ impl Default for ToolOptions {
             bucket_clear: false,
             type_font: "Inter".into(),
             type_style: "Regular".into(),
-            type_size: 48.0,
+            type_size: 50.0,
             type_aa: "sharp".into(),
             type_align: "left".into(),
             type_style_defaults: serde_json::Map::new(),
@@ -436,7 +471,7 @@ impl Default for ToolOptions {
             cam_mode: "move".into(),
             cam_structure: 4.0,
             cam_color: 0.0,
-            cam_transform_on_drop: false,
+            cam_transform_on_drop: true,
             tone_range: "midtones".into(),
             exposure: 50.0,
             protect_tones: true,
@@ -478,6 +513,7 @@ impl Default for ToolOptions {
             move_expand_group_on_click: true,
             move_show_layers_hover_bounds: true,
             transform_reference_point: false,
+            transform_relative_position: false,
             transform_interpolation: None,
             crop_ratio: String::new(),
             crop_custom_ratio_width: 0.0,
@@ -498,16 +534,19 @@ impl Default for ToolOptions {
             bg_limits: "contiguous".into(),
             bg_tolerance: 50.0,
             bg_protect_fg: false,
+            bg_tolerance_control: "penPressure".into(),
             cr_mode: "color".into(),
             cr_sampling: "continuous".into(),
             cr_limits: "contiguous".into(),
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,
             pencil_clear: false,
             eraser_mode: default_eraser_mode(),
+            mixer_combination: 0,
             magnetic_width: 10.0,
             magnetic_contrast: 10.0,
             magnetic_frequency: 57.0,
@@ -523,3 +562,7 @@ impl Default for ToolOptions {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../cam_transform_on_drop_default_tests.rs"]
+mod cam_transform_on_drop_default_tests;
