@@ -320,13 +320,16 @@ Fit Image is the script event `3caa3434-cb67-11d1-bc43-0060b0a13dc4` that follow
 the Image Size step it runs, which stays a step of its own. `Wdth` and
 `Hght` (pixel unit floats above 0) and `limit` (Don't Enlarge) play as
 `file.automate.fitImage`, which leaves a document that already fits unchanged.
-`Msge` is the script's own text, not a setting: a loaded step saves back with its
-recorded descriptor (message, class, key order), and once its settings change it
-saves them with the recorded message. A step recorded in PhotoCraft saves an empty
-`Msge` and class `null`. Another unit, a side of 0, a missing or extra key stays a
-kept step. A native step with a missing or 0 side (the document's own size) or a
-resampling method other than the default refuses export, because the event has no
-key for it.
+The descriptor's class is `cjsp` with an empty class name (measured, in two UI
+languages). `Msge` is the script's own text, not a setting: the reference plays the
+step the same with the recorded text, an empty one, unrelated text or the key
+removed, so the three-key form without `Msge` maps too. A loaded step saves back
+with its recorded descriptor (message or none, class, key order), and once its
+settings change it saves them into that descriptor. A step recorded in PhotoCraft
+saves class `cjsp` and an empty `Msge`. Another unit, a side of 0, a repeated `Msge`,
+a missing `Wdth`, `Hght` or `limit`, or an extra key stays a kept step. A native
+step with a missing or 0 side (the document's own size) or a resampling method
+other than the default refuses export, because the event has no key for it.
 
 ### Perspective Warp recordings
 

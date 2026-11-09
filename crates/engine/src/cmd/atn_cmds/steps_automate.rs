@@ -1,6 +1,8 @@
 //! File › Automate › Fit Image, recorded as the script event `3caa3434-cb67-11d1-bc43-0060b0a13dc4`
-//! after the Image Size it runs, as `docs/atn.md` ("Recorded with source files") measures it:
-//! `Msge` text, `Hght` and `Wdth` in pixels, `limit` (Don't Enlarge), in that order (#10723).
+//! after the Image Size it runs, as measured in the reference application (#10723): class `cjsp`
+//! with an empty class name, then `Msge` text, `Hght` and `Wdth` in pixels and `limit`
+//! (Don't Enlarge, a long key), in that order. `Msge` isn't needed to play the step: the
+//! reference plays it the same with the key removed.
 
 use super::descriptors::{PX, desc, jstr, px, text};
 use super::fields::{Mapped, step};
@@ -10,6 +12,8 @@ use super::{D, Descriptor, Value, json};
 pub(super) const FIT_IMAGE_EVENT: &str = "3caa3434-cb67-11d1-bc43-0060b0a13dc4";
 /// The native command the event plays as.
 pub(super) const FIT_IMAGE: &str = "file.automate.fitImage";
+/// The class the reference application records the event's descriptor with.
+const CLASS: &str = "cjsp";
 /// The recorded descriptor, kept when it differs from the one [`fit_image_to`] would write
 /// (its message, class, key order or ID encoding), so a load and save keeps the step unchanged.
 const SOURCE: &str = "_atnFitImageDescriptor";
@@ -30,27 +34,42 @@ fn side(v: &D) -> Option<f64> {
     }
 }
 
-/// The measured form only: each of the four keys exactly once and nothing else. Another unit,
-/// a box side of zero (which the native command reads as "keep that side") or an extra key
-/// keeps the whole step as recorded.
+/// The measured form only: `Hght`, `Wdth` and `limit` exactly once, `Msge` at most once (the
+/// reference plays a step without it), and nothing else. Another unit, a box side of zero (which
+/// the native command reads as "keep that side") or an extra key keeps the whole step as recorded.
 fn recorded(d: &Descriptor) -> Option<Fit> {
-    if d.items.len() != 4 || ["Msge", "Hght", "Wdth", "limit"].iter().any(|key| d.items.iter().filter(|(k, _)| k.is(key)).count() != 1) {
+    let count = |key: &str| d.items.iter().filter(|(k, _)| k.is(key)).count();
+    let messages = count("Msge");
+    if messages > 1 || d.items.len() != 3 + messages || ["Hght", "Wdth", "limit"].iter().any(|key| count(key) != 1) {
         return None;
     }
-    let D::Text(_) = d.get("Msge")? else { return None };
+    if !matches!(d.get("Msge"), None | Some(D::Text(_))) {
+        return None;
+    }
     let D::Boolean(dont_enlarge) = d.get("limit")? else { return None };
     Some(Fit { width: side(d.get("Wdth")?)?, height: side(d.get("Hght")?)?, dont_enlarge: *dont_enlarge })
 }
 
-/// The event's descriptor for `fit` with `message` as its `Msge`.
-fn descriptor(fit: &Fit, message: D) -> Descriptor {
-    desc("null").with("Msge", message).with("Hght", px(fit.height)).with("Wdth", px(fit.width)).with("limit", D::Boolean(fit.dont_enlarge))
+/// The descriptor a step recorded in PhotoCraft saves as: the measured class and key order. The
+/// message is empty: it is the script's own text, not a setting, and no text of the reference
+/// application is copied.
+fn canonical(fit: &Fit) -> Descriptor {
+    desc(CLASS).with("Msge", text("")).with("Hght", px(fit.height)).with("Wdth", px(fit.width)).with("limit", D::Boolean(fit.dont_enlarge))
 }
 
-/// The descriptor a step recorded in PhotoCraft saves as. The message is empty: it is the
-/// script's own text, not a setting, and no text of the reference application is copied.
-fn canonical(fit: &Fit) -> Descriptor {
-    descriptor(fit, text(""))
+/// The recorded descriptor `d` holding `fit`'s settings instead of its own. Everything else stays
+/// the recording's: its class, its message or the lack of one, and its key order and encoding.
+fn with_settings(mut d: Descriptor, fit: &Fit) -> Descriptor {
+    for (key, value) in &mut d.items {
+        if key.is("Hght") {
+            *value = px(fit.height);
+        } else if key.is("Wdth") {
+            *value = px(fit.width);
+        } else if key.is("limit") {
+            *value = D::Boolean(fit.dont_enlarge);
+        }
+    }
+    d
 }
 
 /// Map the measured form; any other stays a complete kept step.
@@ -90,13 +109,13 @@ fn source(p: &Value) -> Option<(Descriptor, Fit)> {
 }
 
 /// Save the recorded descriptor while the step still holds its settings; once they were
-/// changed, write the new settings with the recorded message. The settings decide whether the
+/// changed, write the new settings into the recorded descriptor. The settings decide whether the
 /// step saves: a recorded descriptor that is missing or damaged only loses its message.
 pub(super) fn fit_image_to(_: &str, p: &Value) -> Option<Descriptor> {
     let fit = native(p)?;
     Some(match source(p) {
         Some((d, recorded)) if recorded == fit => d,
-        Some((d, _)) => descriptor(&fit, d.get("Msge")?.clone()),
+        Some((d, _)) => with_settings(d, &fit),
         None => canonical(&fit),
     })
 }
