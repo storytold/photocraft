@@ -49,7 +49,6 @@ const GROUP_LAYOUT_GAP: f32 = 0.0;
 #[derive(Clone, Copy, Debug)]
 struct ItemGridLayout {
     content_indent: f32,
-    root_level_items: bool,
     display_mode: crate::pickers::state::PickerDisplayMode,
     wrap_list: bool,
     center_grid: bool,
@@ -831,7 +830,7 @@ fn browser_segment_open(
 
 /// Allocate the item grid/list area and return the geometry shared by every item in this segment.
 fn allocate_browser_item_grid(ui: &mut egui::Ui, item_count: usize, layout: ItemGridLayout) -> ItemGrid {
-    let ItemGridLayout { content_indent, root_level_items, display_mode, wrap_list, center_grid } = layout;
+    let ItemGridLayout { content_indent, display_mode, wrap_list, center_grid, .. } = layout;
     let list = display_mode.uses_list_layout();
     let width = ui.available_width();
     let pad = content_indent;
@@ -851,7 +850,10 @@ fn allocate_browser_item_grid(ui: &mut egui::Ui, item_count: usize, layout: Item
     // spacing and leave uneven vertical gaps.
     let grid_height = if rows == 0 { 0.0 } else { rows as f32 * cell.y + rows.saturating_sub(1) as f32 * gap };
     let (area, _) = ui.allocate_exact_size(vec2(width, grid_height), Sense::hover());
-    let origin_x = if root_level_items { ui.clip_rect().left() + 1.0 } else { area.left() + 1.0 };
+    // Group headers anchor their visible row to the clip's left edge, not the allocated
+    // grid area's layout-aligned left edge. Anchor every card grid the same way so its
+    // explicit hierarchy padding is the only horizontal offset between header and card.
+    let origin_x = ui.clip_rect().left() + 1.0;
     ItemGrid { area, cell, columns: cols, rows, pad, center_offset, gap, origin_x, column_major: wrap_list, item_count, list }
 }
 
@@ -1420,7 +1422,6 @@ pub(crate) fn browser_with_root_sequence(
                                 items.len(),
                                 ItemGridLayout {
                                     content_indent: if root_level_items { 0.0 } else { row_indent(depth + group_path.len() + 1) },
-                                    root_level_items,
                                     display_mode,
                                     wrap_list,
                                     center_grid,
