@@ -50,6 +50,7 @@ mod steps_layer;
 mod steps_layer_style;
 mod steps_lookup;
 mod steps_make;
+mod steps_mode_change;
 mod steps_path;
 mod steps_perspective_warp;
 mod steps_type_path;
@@ -195,3 +196,6 @@ mod render_tests;
 
 #[cfg(test)]
 mod recorded_tools_tests;
+
+#[cfg(test)]
+mod mode_change_tests;

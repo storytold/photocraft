@@ -859,6 +859,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("type.saveDefaultTypeStyles", json!({})),
         ("image.analysis.recordMeasurements", json!({})),
         ("layer.videoLayers.insertBlankFrame", json!({})),
+        ("file.automate.conditionalModeChange", json!({"from": ["grayscale", "rgb"], "to": "cmyk"})),
         ("layer.videoLayers.duplicateFrame", json!({})),
         ("layer.videoLayers.deleteFrame", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({})),
