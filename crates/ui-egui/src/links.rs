@@ -45,9 +45,10 @@ pub fn report_issue(app: &mut PhotocraftApp, ctx: &egui::Context) -> Value {
     if app.services.open_url.is_none() {
         return open_issues(app, ctx);
     }
-    // In a UI pass the copy goes out when this root frame ends. A hidden window runs `logic`
-    // alone, outside any pass, and its output goes out as that call returns: `None`.
-    let frame = crate::type_tool::in_ui_pass(ctx).then(|| ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT));
+    // In a UI pass the copy goes out when this root frame ends; a hidden window's logic-only
+    // call hands its output over as it returns. The frame is kept either way, so a pass not yet
+    // marked as one (hooks installed during the first pass) still waits for the next frame.
+    let frame = ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT);
     ctx.data_mut(|d| d.insert_temp(pending_id(), frame));
     ctx.request_repaint();
     json!({"url": ISSUES})
@@ -57,14 +58,14 @@ pub fn report_issue(app: &mut PhotocraftApp, ctx: &egui::Context) -> Value {
 /// [`report_issue`] queued in an earlier call, once its output (the copy) has been delivered.
 /// Not in a later pass of the frame that copied.
 pub fn open_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(queued) = ctx.data(|d| d.get_temp::<Option<u64>>(pending_id())) else { return };
+    let Some(queued) = ctx.data(|d| d.get_temp::<u64>(pending_id())) else { return };
     // A logic-only call runs after every earlier call's output was handed over.
-    let delivered = !crate::type_tool::in_ui_pass(ctx) || queued.is_none_or(|frame| ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT) > frame);
+    let delivered = !crate::type_tool::in_ui_pass(ctx) || ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT) > queued;
     if !delivered {
         ctx.request_repaint();
         return;
     }
-    ctx.data_mut(|d| d.remove::<Option<u64>>(pending_id()));
+    ctx.data_mut(|d| d.remove::<u64>(pending_id()));
     open_issues(app, ctx);
 }
 
@@ -229,6 +230,41 @@ mod tests {
         .clear();
         logic(&mut app, &|app, ctx| open_pending(app, ctx));
         assert_eq!(opened.lock().unwrap().len(), 3);
+    }
+
+    /// A host that installs the pass hooks during its first pass: that pass isn't marked, the
+    /// next pass of the same frame is, and the page still waits for the frame's copy.
+    #[test]
+    fn report_issue_waits_for_its_frame_when_hooks_arrive_late() {
+        use std::sync::{Arc, Mutex};
+        let opened: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = opened.clone();
+        let services = crate::Services {
+            open_url: Some(Box::new(move |u: &str| {
+                rec.lock().unwrap().push(u.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::new(2).expect("two passes"));
+        let mut passes = 0;
+        ctx.run_ui(Default::default(), |ui| {
+            open_pending(&mut app, ui.ctx());
+            if passes == 0 {
+                PhotocraftApp::install_type_reset_hooks(ui.ctx());
+                crate::menus::invoke(&mut app, ui.ctx(), "help.reportIssue", json!({})).unwrap();
+                ui.ctx().request_discard("a second pass of the frame that copied");
+            }
+            passes += 1;
+        })
+        .textures_delta
+        .clear();
+        assert_eq!(passes, 2);
+        assert!(opened.lock().unwrap().is_empty(), "not in a later pass of the frame that copied");
+        ctx.run_ui(Default::default(), |ui| open_pending(&mut app, ui.ctx())).textures_delta.clear();
+        assert_eq!(opened.lock().unwrap().as_slice(), [ISSUES.to_string()]);
     }
 
     #[test]

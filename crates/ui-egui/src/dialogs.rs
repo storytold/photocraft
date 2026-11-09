@@ -150,6 +150,9 @@ pub fn free_press(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui::Pos2>
 /// scrolls.
 const DIALOG_CHROME: f32 = 150.0;
 
+/// Height of System Info's Copy button and the space above it (points), below its report.
+const SYSTEM_INFO_COPY_ROW: f32 = 40.0;
+
 /// Draw a dialog body that opens on its first number, selected, as Photoshop's value dialogs do:
 /// typing replaces it and Enter applies it (#1757). Once per dialog `id`, on the first laid-out
 /// frame.
@@ -374,8 +377,10 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
         }
         DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => {
             let lines = crate::gpu_status::system_info_ui(app);
-            // The render-path history and the slow frames can run to a hundred lines.
-            egui::ScrollArea::vertical().max_height(420.0).auto_shrink([false, true]).show(ui, |ui| {
+            // The render-path history and the slow frames can run to a hundred lines. In a short
+            // window the title, Copy and OK stay inside it: the report scrolls in what is left.
+            let room = (ui.ctx().content_rect().height() - DIALOG_CHROME - SYSTEM_INFO_COPY_ROW).clamp(120.0, 420.0);
+            egui::ScrollArea::vertical().max_height(room).auto_shrink([false, true]).show(ui, |ui| {
                 for l in &lines {
                     ui.add(egui::Label::new(egui::RichText::new(l).font(crate::theme::mono(12.0))).selectable(true));
                 }

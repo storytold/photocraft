@@ -272,10 +272,18 @@ pub fn diagnostics_report(app: &PhotocraftApp) -> Vec<String> {
     crate::i18n::with_language(crate::i18n::Lang::EN, || diagnostics_report_ui(app))
 }
 
-/// The adapter part of [`diagnostics_report`] as one English log line.
+/// The adapter part of [`diagnostics_report`] as one English log line, the home folder as `~`
+/// (a monitor profile's path in its reason names the user).
 pub fn adapter_report_line(app: &PhotocraftApp) -> String {
     let lines = crate::i18n::with_language(crate::i18n::Lang::EN, || adapter_report_ui(app));
-    format!("adapter report: {}", lines.join("; ").replace(['\n', '\r'], " "))
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok();
+    without_home(&format!("adapter report: {}", lines.join("; ").replace(['\n', '\r'], " ")), home.as_deref())
+}
+
+/// `text` with each path inside `home` starting at `~` instead.
+fn without_home(text: &str, home: Option<&str>) -> String {
+    let Some(home) = home.map(|h| h.trim_end_matches(['/', '\\'])).filter(|h| !h.is_empty()) else { return text.to_string() };
+    text.replace(&format!("{home}/"), "~/").replace(&format!("{home}\\"), "~\\")
 }
 
 /// Log the adapter report once at `info`: at startup, once the window's adapter is known, and
@@ -530,6 +538,15 @@ mod tests {
         assert!(report.contains(&format!("Fallback: {note}")), "{report:?}");
         assert!(report.iter().all(|l| !l.starts_with("Why this adapter")), "{report:?}");
         assert!(report.iter().any(|l| l == "Selected at launch: dx12"), "{report:?}");
+        // A backend note beside a request the adapter matched (`WGPU_BACKEND` on Linux): both.
+        let note = "WGPU_BACKEND=vulkan overrides the backend";
+        app.perf.gpu_info.fallback = Some(note.into());
+        app.perf.gpu_info.selected = "env".into();
+        app.perf.gpu_info.requested_adapter = Some("intel".into());
+        let report = diagnostics_report(&app);
+        assert!(report.contains(&format!("Fallback: {note}")), "{report:?}");
+        assert!(report.iter().any(|l| l == "Why this adapter: the Graphics Adapter preference (\"intel\")"), "{report:?}");
+        app.perf.gpu_info.requested_adapter = None;
         // The only adapter: nothing else to pick.
         app.perf.gpu_info.adapters = vec!["Intel UHD".into()];
         assert!(diagnostics_report(&app).iter().any(|l| l == "Other graphics adapters: none"));
@@ -575,6 +592,15 @@ mod tests {
             // The adapter part of the report, not the render path or the slow frames.
             assert!(!line.contains("Render path"), "{line}");
         });
+    }
+
+    #[test]
+    fn adapter_report_log_line_keeps_the_home_folder_out() {
+        let reason = "cannot read profile `/home/ann/Profiles/Mine.icc`: not found; /home/annex/x.icc";
+        assert_eq!(without_home(reason, Some("/home/ann/")), "cannot read profile `~/Profiles/Mine.icc`: not found; /home/annex/x.icc");
+        assert_eq!(without_home(r"C:\Users\Ann\p.icc", Some(r"C:\Users\Ann")), r"~\p.icc");
+        assert_eq!(without_home(reason, Some("/")), reason, "a root home redacts nothing");
+        assert_eq!(without_home(reason, None), reason);
     }
 
     #[test]

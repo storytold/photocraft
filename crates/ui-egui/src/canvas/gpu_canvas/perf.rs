@@ -203,22 +203,26 @@ impl GpuInfo {
                 crate::i18n::fmt(tl!(template), &[("reason", l)])
             });
         }
-        // Why this adapter, when no fallback note already says: the adapter request it matched
-        // (the Graphics Adapter preference or `PHOTOCRAFT_GPU_ADAPTER`), or the automatic pick
-        // (within the chosen backend). A missed request is a fallback note. Then the ones it could
-        // have used instead (#8332: the wrong adapter picked).
-        if self.fallback.is_none() && !self.adapter.is_empty() {
+        // Why this adapter: the adapter request it matched (the Graphics Adapter preference or
+        // `PHOTOCRAFT_GPU_ADAPTER`), even beside a fallback note (`WGPU_BACKEND` chose the backend,
+        // the request still chose the adapter), or else, when no fallback note already says, the
+        // automatic pick (within the chosen backend). A missed request is a fallback note. Then
+        // the ones it could have used instead (#8332: the wrong adapter picked).
+        if !self.adapter.is_empty() {
             let requested = self.requested_adapter.as_deref().filter(|w| photocraft_engine::prefs::gpu_adapter_matches(&self.adapter, w));
             let why = match requested {
                 Some(name) if self.requested_adapter_env => {
-                    crate::i18n::fmt(tl!("the PHOTOCRAFT_GPU_ADAPTER environment override (\"{name}\")"), &[("name", name)])
+                    Some(crate::i18n::fmt(tl!("the PHOTOCRAFT_GPU_ADAPTER environment override (\"{name}\")"), &[("name", name)]))
                 }
-                Some(name) => crate::i18n::fmt(tl!("the Graphics Adapter preference (\"{name}\")"), &[("name", name)]),
-                None if self.selected.is_empty() || self.selected == "auto" => tl!("the automatic choice").to_string(),
-                None => crate::i18n::fmt(tl!("the automatic choice, {backend} only"), &[("backend", &self.selected)]),
+                Some(name) => Some(crate::i18n::fmt(tl!("the Graphics Adapter preference (\"{name}\")"), &[("name", name)])),
+                None if self.fallback.is_some() => None,
+                None if self.selected.is_empty() || self.selected == "auto" => Some(tl!("the automatic choice").to_string()),
+                None => Some(crate::i18n::fmt(tl!("the automatic choice, {backend} only"), &[("backend", &self.selected)])),
             };
-            let template = "Why this adapter: {reason}";
-            v.push(crate::i18n::fmt(tl!(template), &[("reason", &why)]));
+            if let Some(why) = why {
+                let template = "Why this adapter: {reason}";
+                v.push(crate::i18n::fmt(tl!(template), &[("reason", &why)]));
+            }
         }
         if !self.adapters.is_empty() {
             let others: Vec<&str> = self.adapters.iter().map(String::as_str).filter(|a| *a != self.adapter).collect();
