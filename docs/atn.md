@@ -234,6 +234,13 @@ row; the action still adds only one Undo entry.
 | (string ID only) | insertBlankFrame | Insert Blank Frame | `layer.videoLayers.insertBlankFrame` |
 | (string ID only) | duplicateFrame | Duplicate Frame | `layer.videoLayers.duplicateFrame` |
 | (string ID only) | deleteFrame | Delete Frame | `layer.videoLayers.deleteFrame` |
+| (string ID only) | restoreFrame | Restore Frame | `layer.videoLayers.restoreFrame` |
+| (string ID only) | restoreAllFrames | Restore All Frames | `layer.videoLayers.restoreAllFrames` |
+| (string ID only) | reloadFrame | Reload Frame | `layer.videoLayers.reloadFrame` |
+| (string ID only) | showAlteredVideo | Show Altered Video | `layer.videoLayers.showAlteredVideo {"show":true}` |
+| (string ID only) | hideAlteredVideo | Hide Altered Video | `layer.videoLayers.showAlteredVideo {"show":false}` |
+| (string ID only) | addVideoLayer | New Video Layer from File (`Pth ` path) | `layer.videoLayers.newVideoLayerFromFile` |
+| (string ID only) | replaceFootage | Replace Footage (`Pth ` path) | `layer.videoLayers.replaceFootage` |
 | (string ID only) | isolateLayers | Isolate Layers | `select.isolateLayers` |
 | (string ID only) | textLoadDefaultTypeStyles | Load Default Type Styles | `type.loadDefaultTypeStyles` |
 | (string ID only) | textSaveDefaultTypeStyles | Save Default Type Styles | `type.saveDefaultTypeStyles` |
@@ -293,10 +300,24 @@ imported None step had an empty descriptor or no descriptor. Unknown classes,
 extra settings and unrecognized descriptor forms stay as kept steps. Native
 steps with explicit layer targets cannot be exported to these forms.
 
-Insert Blank Frame, Duplicate Frame and Delete Frame use the active video layer
-and current playhead. They take no settings. Extra keys or unrecognized
-descriptor metadata stay as kept steps. Save retains whether the recorded item
-had an empty descriptor or no descriptor.
+Insert Blank Frame, Duplicate Frame, Delete Frame, Restore Frame, Restore All
+Frames and Reload Frame use the active video layer and current playhead. They take
+no settings. Extra keys or unrecognized descriptor metadata stay as kept steps.
+Save retains whether the recorded item had an empty descriptor or no descriptor.
+Reload Frame reloads the layer's footage from its file, as the native command does.
+
+Show Altered Video and Hide Altered Video take no settings either and play as
+`layer.videoLayers.showAlteredVideo` with `show` true or false, which sets the
+state instead of toggling it. The menu item's toggle (no `show`) depends on the
+layer it plays on, so such a step refuses export.
+
+New Video Layer from File (`addVideoLayer`) and Replace Footage (`replaceFootage`)
+hold the video file in `null`. Only the `Pth ` text form that saves back
+unchanged maps. Alias bytes, another class and extra keys (such as a frame rate)
+stay as kept steps, and a native step with a frame rate refuses export. File
+access happens at playback; a missing or unreadable file reports the native
+command's error. Interpret Footage stays a kept step: its alpha interpretation and
+colour-conversion settings have no native options yet.
 
 Convert Type to Shape retains Make's `contentLayer` class reference and `Usng`
 target `textLayer` reference; it does not export a separate `convertToShape`

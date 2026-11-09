@@ -238,9 +238,16 @@ fn restore_all(s: &mut Session, _p: &Value) -> Result<Value> {
     })
 }
 
-fn show_altered(s: &mut Session, _p: &Value) -> Result<Value> {
-    edit_video(s, "Show Altered Video", |v, _| {
-        v.show_altered = !v.show_altered;
+/// Show Altered Video: `show` sets the state, as a recorded Show / Hide Altered Video step does;
+/// without it the menu item toggles.
+fn show_altered(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.videoLayers.showAlteredVideo";
+    let show = match p.get("show") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| EngineError::BadParams { cmd: CMD.into(), msg: "\"show\" must be true or false".into() })?),
+    };
+    edit_video(s, "Show Altered Video", move |v, _| {
+        v.show_altered = show.unwrap_or(!v.show_altered);
         Ok(())
     })
 }
@@ -753,7 +760,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.videoLayers.deleteFrame", "Delete Frame", vl, active_video, |s, p| delete_frame(s, p)),
         spec!("layer.videoLayers.restoreFrame", "Restore Frame", vl, active_video, |s, p| restore_frame(s, p)),
         spec!("layer.videoLayers.restoreAllFrames", "Restore All Frames", vl, active_video, |s, p| restore_all(s, p)),
-        spec!("layer.videoLayers.showAlteredVideo", "Show Altered Video", vl, active_video, |s, p| show_altered(s, p)),
+        CommandSpec {
+            id: "layer.videoLayers.showAlteredVideo",
+            label: "Show Altered Video",
+            menu: vl,
+            shortcut: None,
+            params: "{\"show\":bool? (default: toggle)} → {}",
+            enabled: active_video,
+            journal: true,
+            run: |s, p| show_altered(s, p),
+        },
         spec!("layer.videoLayers.rasterize", "Rasterize", vl, active_video, |s, p| rasterize(s, p)),
         spec!("layer.rasterize.video", "Video", &["Layer", "Rasterize"], active_video, |s, p| rasterize(s, p)),
         spec!("layer.videoLayers.newVideoLayerFromFile", "New Video Layer from File…", vl, has_doc, |s, p| new_from_file(s, p)),
