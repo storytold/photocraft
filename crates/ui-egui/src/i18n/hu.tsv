@@ -34,7 +34,7 @@
 
 # Adjustments and filters
 
-# Camera Raw and camera data
+# RAW Develop and camera data
 
 # Dialogs, preferences and file formats
 
@@ -409,8 +409,8 @@
 	Layer Content Options…	Rétegtartalom beállításai…
 	Layer from Background…	Réteg a háttérből…
 	Layer Style	Rétegstílus
-	Layer via Copy	Réteg másolással
-	Layer via Cut	Réteg kivágással
+	Layer Via Copy	Réteg másolással
+	Layer Via Cut	Réteg kivágással
 	Layer…	Réteg…
 	Left Edges	Bal szélek
 	Link Layer Mask	Rétegmaszk összekapcsolása
@@ -544,7 +544,7 @@
 	Brush Settings	Ecsetbeállítások
 	Brushes	Ecsetek
 	brushes	ecsetek
-	Camera Raw Filter…	Camera Raw szűrő…
+	RAW Develop Filter…	RAW-előhívás szűrő…
 	Canvas Guides	Vászon-segédvonalak
 	Cascade	Lépcsőzetes
 	Change Panel Group	Panelcsoport váltása
@@ -2573,11 +2573,11 @@ navigator	Zoom	Nagyítás mértéke
 	Balance	Egyensúly
 	Before (Y)	Előtte (Y)
 	Blending	Keverés
-	Camera Raw	Camera Raw
-	Camera Raw ({name})	Camera Raw ({name})
-	Camera Raw Filter	Camera Raw szűrő
-	Camera Raw Filter ({layer})	Camera Raw szűrő ({layer})
-	Camera Raw isn't open	A Camera Raw nincs megnyitva
+	RAW Develop	RAW-előhívás
+	RAW Develop ({name})	RAW-előhívás ({name})
+	RAW Develop Filter	RAW-előhívás szűrő
+	RAW Develop Filter ({layer})	RAW-előhívás szűrő ({layer})
+	RAW Develop isn't open	A RAW-előhívás nincs megnyitva
 	Canceled opening {name}	Megnyitás megszakítva: {name}
 	Damaged Photoshop document	Sérült Photoshop-dokumentum
 	The document “{name}” may be damaged.	A(z) „{name}” dokumentum sérült lehet.
@@ -2630,7 +2630,6 @@ navigator	Zoom	Nagyítás mértéke
 	Noise Luminance	Zajcsökkentés: luminancia
 	Noise Luminance Detail	Zajcsökkentés: luminancia-részletesség
 	Noise Reduction	Zajcsökkentés
-	Open in camera raw	Megnyitás a Camera Raw-ban
 	Paint Overlay	Ráfestés
 	Previous	Előző
 	Purple	Lila
@@ -3090,7 +3089,7 @@ cameraRaw	Yellow	Sárga
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	A folytatáshoz a kitöltőréteget raszterizálni kell. A kitöltés tartalma ezután nem lesz szerkeszthető. Raszterizálod a réteget?
 	This layer must be rasterized before proceeding.	A folytatáshoz a réteget raszterizálni kell.
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	A folytatáshoz az alakzatréteget raszterizálni kell. Ezután alakzatként nem lesz szerkeszthető. Raszterizálod az alakzatot?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	A folytatáshoz az intelligens objektumot raszterizálni kell. A tartalma ezután nem lesz szerkeszthető. Raszterizálod az intelligens objektumot?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	A folytatáshoz az intelligens objektumot raszterizálni kell. A tartalma ezután nem lesz szerkeszthető. Raszterizálod az intelligens objektumot?
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	A folytatáshoz a szövegréteget raszterizálni kell. A szöveg ezután nem lesz szerkeszthető. Raszterizálod a szöveget?
 	TIFF Options	TIFF-beállítások
 	Top:	Felső:
@@ -3188,8 +3187,8 @@ cameraRaw	Yellow	Sárga
 	Cache levels	Gyorsítótár-szintek
 	Cache tile size	Gyorsítótár csempemérete
 	Camera Data	Fényképezőgép adatai
-	Camera Raw Defaults	Camera Raw-alapértékek
-	Camera Raw…	Camera Raw…
+	RAW Defaults	RAW-alapértékek
+	RAW Defaults…	RAW-alapértékek…
 	Cancel opening	Megnyitás megszakítása
 	Canvas border	Vászonszegély
 	Canvas extension color:	Vászonbővítés színe:
@@ -3779,9 +3778,6 @@ cameraRaw	Yellow	Sárga
 	Add to selection  (⇧)	Hozzáadás a kijelöléshez  (⇧)
 	Adds grain to the soft edges of the brush tip.	Szemcsézettséget ad az ecsethegy lágy széleihez.
 	Adjustment Layers	Korrekciós rétegek
-	Adobe Every-line Composer	Adobe többsoros szedőmotor
-	Adobe PDF Presets…	Adobe PDF-előbeállítások…
-	Adobe Single-line Composer	Adobe egysoros szedőmotor
 	Advanced Controls	Speciális vezérlők
 	After (X)	Utána (X)
 	Airbrush: keeps painting while the pointer rests.	Festékszóró: a festés akkor is folytatódik, amikor a mutató áll.
@@ -4193,8 +4189,8 @@ cameraRaw	Yellow	Sárga
 	Load Settings…	Beállítások betöltése…
 	Save these settings as a Camera Raw .xmp file	A beállítások mentése Camera Raw .xmp-fájlként
 	Load settings from a Camera Raw .xmp file	Beállítások betöltése Camera Raw .xmp-fájlból
-	Loaded Camera Raw settings from {file}	Camera Raw-beállítások betöltve innen: {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw-beállítások betöltve innen: {file} ({n} nem támogatott)
+	Loaded RAW Develop settings from {file}	RAW-előhívás-beállítások betöltve innen: {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	RAW-előhívás-beállítások betöltve innen: {file} ({n} nem támogatott)
 	Auto Add/Delete	Automatikus hozzáadás/törlés
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	A nyomtatási beállításokban ne jelöld be a tükrözést is: a két tükrözés kioltja egymást.
 	Print Settings…	Nyomtatási beállítások…
@@ -4427,8 +4423,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Szürkeárnyalatos sáv
 	Current Colors	Aktuális színek
 	Make Ramp Web Safe	Sáv korlátozása webes színekre
+	Scroll All Windows	Összes ablak görgetése
 	The path was kept as the Work Path	Az útvonal munkaútvonalként megmaradt
 	The path was discarded	Az útvonal el lett vetve
+# Art History Brush (#213).
 	Art History Brush Tool	Művészi előzményecset eszköz
 	Tight Short	Szoros, rövid
 	Tight Medium	Szoros, közepes
@@ -4514,6 +4512,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
 	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
 	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
+	Netscape Gray	Netscape-szürke
 # Move tool options bar (#11381)
 	Align top edges	Felső szélek igazítása
 	Align vertical centers	Függőleges középpontok igazítása
@@ -4523,7 +4522,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Réteghatárok megjelenítése rámutatáskor
 	Expand layer group on click	Rétegcsoport kibontása kattintásra
 	Show hover bounds from Layers	Határok megjelenítése a Rétegek panelről rámutatáskor
-	Saved Camera Raw settings to {file}	Camera Raw-beállítások mentve ide: {file}
+	Saved RAW Develop settings to {file}	RAW-előhívás-beállítások mentve ide: {file}
 	Save the settings to each raw's sidecar without opening it	A beállítások mentése minden raw kísérőfájljába megnyitás nélkül
 	No settings saved: these raws can't keep a sidecar here	Nincs mentve semmi: ezek a raw fájlok itt nem kaphatnak kísérőfájlt
 	Some settings could not be saved; the raws stay open	Néhány beállítást nem sikerült menteni; a raw fájlok nyitva maradnak
