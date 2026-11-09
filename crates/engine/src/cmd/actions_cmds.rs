@@ -77,11 +77,21 @@ pub(crate) fn note_automation_edit(s: &mut Session, idx: usize) {
 /// steps while an automation gate is installed: a step a control client, MCP or synthetic input
 /// runs during the user's recording keeps automation's gate when the action plays.
 pub fn note_automation_step(s: &mut Session, id: &str, params: &Value) {
-    if s.authorize.is_some()
+    note_step_origin(s, s.authorize.is_some(), id, params);
+}
+
+/// Mark the action being recorded as automation's when `id` (with `params`) becomes one of its
+/// steps on behalf of a request that ran under an automation gate (`automation`). A background
+/// job's step is journaled when the job is applied, after its request returned and its gate was
+/// removed, so the job passes the origin it captured when it was admitted rather than whatever
+/// gate the caller polling it has.
+pub(crate) fn note_step_origin(s: &mut Session, automation: bool, id: &str, params: &Value) {
+    if automation
         && recorded(id, params)
         && let Some((_, idx)) = s.actions.recording
+        && let Some(action) = s.actions.list.get_mut(idx)
     {
-        note_automation_edit(s, idx);
+        action.automation = true;
     }
 }
 
