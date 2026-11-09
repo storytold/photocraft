@@ -230,6 +230,17 @@ pub fn specs() -> Vec<CommandSpec> {
             run: |s, p| path_to_selection_with_mode(s, p, "subtract"),
             journal: true,
         },
+        // ⇧⌥⌘↩ / Ctrl+Alt+Shift+Enter intersects the path with the selection (#7726).
+        CommandSpec {
+            id: "path.intersectWithSelection",
+            label: "Intersect Path with Selection",
+            menu: &[],
+            shortcut: Some("Cmd+Alt+Shift+Enter"),
+            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "intersect")"##,
+            enabled: has_doc,
+            run: |s, p| path_to_selection_with_mode(s, p, "intersect"),
+            journal: true,
+        },
         spec!(
             "path.toShape",
             "Make Shape from Path",

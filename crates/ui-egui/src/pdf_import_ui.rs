@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use photocraft_io::pdf_import::{self, CropTo, PdfImage, PdfInfo, PdfOpenOptions};
+use photocraft_io::pdf_import_dialog::{self as pdf_import, CropTo, PdfImage, PdfInfo, PdfOpenOptions};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;

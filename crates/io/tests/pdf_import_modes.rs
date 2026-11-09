@@ -2,7 +2,7 @@
 use photocraft_color::SampleType;
 use photocraft_io::{
     ImportOptions, import_with_options,
-    pdf_import::{CropTo, PdfOpenOptions},
+    pdf_import_dialog::{CropTo, PdfOpenOptions},
 };
 
 const PDF: &[u8] = include_bytes!("fixtures/pdf-three-pages.pdf");
@@ -82,7 +82,8 @@ fn one_image_pdf() -> Vec<u8> {
 #[test]
 fn single_image_pdf_never_allows_direct_save_over_original() {
     let bytes = one_image_pdf();
-    let result = import_with_options("scanned.pdf", &bytes, &ImportOptions::default()).unwrap();
+    let options = ImportOptions { pdf: Some(PdfOpenOptions::default()), ..Default::default() };
+    let result = import_with_options("scanned.pdf", &bytes, &options).unwrap();
     assert!(result.source_read_only, "even a PDF containing only an image must require Save As");
     assert_eq!(result.document.layers.len(), 1);
     assert_eq!((result.document.size.width, result.document.size.height), (1, 1));
@@ -163,12 +164,14 @@ fn pdf_page_identity_survives_editable_psd_save_and_reopen() {
 }
 
 #[test]
-fn multipage_pdf_import_cannot_silently_save_as_one_big_page() {
+fn multipage_pdf_import_exports_each_artboard_as_one_pdf_page() {
     let opts = ImportOptions {
         pdf: Some(PdfOpenOptions { pages_as_artboards: Some(vec![1, 2, 3]), resolution: 72.0, crop: CropTo::MediaBox, ..Default::default() }),
         ..Default::default()
     };
     let doc = import_with_options("multi.pdf", PDF, &opts).unwrap().document;
     let result = photocraft_io::export(&doc, "wrong.pdf", &photocraft_io::ExportOptions::default());
-    assert!(result.is_err(), "legacy single-page PDF writer must refuse tagged multipage documents");
+    let bytes = result.expect("multi-page PDF export should preserve every artboard as a PDF page").bytes;
+    let pdf = lopdf::Document::load_mem(&bytes).expect("exported valid PDF");
+    assert_eq!(pdf.get_pages().len(), 3, "export must preserve all selected PDF pages");
 }
