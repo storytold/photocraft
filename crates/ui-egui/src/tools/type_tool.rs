@@ -151,6 +151,8 @@ mod mask_replace_selection_tests;
 
 #[cfg(test)]
 mod commit_tests;
+#[cfg(test)]
+mod locked_layer_alert_tests;
 
 #[cfg(test)]
 mod ime_tests;
