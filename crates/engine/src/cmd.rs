@@ -208,9 +208,14 @@ pub fn list_entry(s: &Session, c: &CommandSpec, reason: Option<String>) -> Value
 
 /// Other names a command is looked for by, beyond its id and label: the Photoshop tools and
 /// options it stands for (#5060). `select.rect` is also the Elliptical and Single Row/Column
-/// Marquee, which an agent searches for as "ellipse" or "marquee".
-pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] =
-    &[("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")")];
+/// Marquee, which an agent searches for as "ellipse" or "marquee". The RAW Develop filter and
+/// RAW Defaults keep Photoshop's "Camera Raw" name as a search alias only: the menus and windows
+/// say "RAW Develop" (#12403).
+pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] = &[
+    ("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")"),
+    ("filter.cameraRaw", "Camera Raw Filter"),
+    ("edit.preferences.rawDefaults", "Camera Raw Defaults"),
+];
 
 /// [`SEARCH_KEYWORDS`] of command `id`, if it has any.
 pub fn search_keywords(id: &str) -> Option<&'static str> {
@@ -582,6 +587,7 @@ fn build() -> Vec<CommandSpec> {
                 let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
                 // The dialog offers Duplicate Layer's own name: only a different one was typed (#9023).
                 let mut typed = None;
+                let mut shift = (0, 0);
                 let nid = s.edit("Duplicate Layer", |doc, active| {
                     let mut dup = layer_copy(doc, id, add_copy)?;
                     if let Some(name) = name.as_ref().filter(|n| **n != dup.name) {
@@ -592,11 +598,12 @@ fn build() -> Vec<CommandSpec> {
                     // A lone copy joins its original's link group, as in the reference application (#11217).
                     crate::layer_multi_cmds::relink_copies(doc, &[nid])?;
                     if !in_place {
-                        crate::artboard_cmds::place_copy(doc, nid)?;
+                        shift = crate::artboard_cmds::place_copy(doc, nid)?;
                     }
                     *active = Some(nid);
                     Ok(nid)
                 })?;
+                crate::artboard_cmds::follow_shift(s, shift);
                 if let Some(name) = typed {
                     crate::type_cmds::note_typed_name(s, nid, &name);
                 }

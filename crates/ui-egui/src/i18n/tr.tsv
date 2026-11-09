@@ -251,7 +251,7 @@
 	Plugins…	Eklentiler…
 	Type…	Metin…
 	Enhanced Controls…	Gelişmiş Kontroller…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	RAW Varsayılanları…
 	Raw Defaults…	Ham Varsayılanlar…
 	Integrations…	Entegrasyonlar…
 	AI Integrations…	Yapay Zeka Entegrasyonları…
@@ -582,7 +582,7 @@
 	Last Filter	Son Filtre
 	Filter Gallery…	Filtre Galerisi…
 	Adaptive Wide Angle…	Uyarlanabilir Geniş Açı…
-	Camera Raw Filter…	Camera Raw Filtresi…
+	RAW Develop Filter…	RAW Geliştirme Filtresi…
 	Liquify…	Sıvılaştır…
 	Vanishing Point…	Ufuk Noktası…
 	Blur	Bulanıklaştırma
@@ -948,7 +948,7 @@
 	Brush Reconstruct Options	Fırçayla Yeniden Yapılandırma Seçenekleri
 	Brush Tool Options	Fırça Aracı Seçenekleri
 	Cache Level:	Önbellek Düzeyi:
-	Camera Raw isn't open	Camera Raw açık değil
+	RAW Develop isn't open	RAW Geliştirme açık değil
 	Cancel	İptal
 	Reset	Sıfırla
 	Cancel (Esc)	İptal (Esc)
@@ -1914,7 +1914,7 @@
 	Brush preview color	Fırça önizleme rengi
 	Cache levels	Önbellek düzeyleri
 	Cache tile size	Önbellek kutucuğu boyutu
-	Camera Raw Defaults	Camera Raw Varsayılanları
+	RAW Defaults	RAW Varsayılanları
 	Canvas border	Tuval kenarlığı
 	Show canvas dots	Tuval noktalarını göster
 	Clip thumbnails to layer bounds	Küçük resimleri katman sınırlarına kırp
@@ -2001,7 +2001,6 @@
 	Never	Asla
 	Normal tip	Normal uç
 	Open as smart object	Akıllı nesne olarak aç
-	Open in camera raw	Camera raw'da aç
 	Open documents as tabs	Belgeleri sekmeler halinde aç
 	Overscroll	Aşırı kaydırma
 	Performance	Performans
@@ -2352,8 +2351,8 @@
 	3 x 3	3 x 3
 	4 x 4	4 x 4
 	5 x 5	5 x 5
-	Camera Raw Filter ({layer})	Camera Raw Filtresi ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	RAW Geliştirme Filtresi ({layer})
+	RAW Develop ({name})	RAW Geliştirme ({name})
 	Edit Type	Metni Düzenle
 	Grid:	Izgara:
 	Highlight Clipping Warning (O)	Parlak Ton Kırpma Uyarısı (O)
@@ -3354,7 +3353,6 @@ cameraRaw	Color	Renk
 	Add Pins	Pim Ekle
 	Add a mask  (from the selection; ⌥ inverts)	Bir maske ekleyin (seçimden; ⌥ tersine çevirir)
 	Adds grain to the soft edges of the brush tip.	Fırça ucunun yumuşak kenarlarına gren ekler.
-	Adobe PDF Presets…	Adobe PDF Ön Ayarları…
 	Advanced Blending	Gelişmiş Karıştırma
 	After (X)	Sonra (X)
 	Airbrush: keeps painting while the pointer rests.	Airbrush: İşaretçi dururken boyamaya devam eder.
@@ -3381,8 +3379,8 @@ cameraRaw	Color	Renk
 	Border	Kenarlık
 	Box Blur	Kutu Bulanıklığı
 	Calculations	Hesaplamalar
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw Filtresi
+	RAW Develop	RAW Geliştirme
+	RAW Develop Filter	RAW Geliştirme Filtresi
 	Canvas rotation	Tuval döndürme
 	Channel1	Kanal 1
 	Channel2	Kanal 2
@@ -3665,8 +3663,6 @@ cameraRaw	Whites	Beyazlar
 	Mac Crisp	Mac Net
 	Mac Strong	Mac Güçlü
 	Mac Smooth	Mac Yumuşak
-	Adobe Single-line Composer	Adobe Tek Satırlı Dizgi Motoru
-	Adobe Every-line Composer	Adobe Tüm Satırlı Dizgi Motoru
 	X	X
 	Y	Y
 	30 fps	30 fps
@@ -4002,8 +3998,8 @@ cameraData	Lens	Lens
 	Load Settings…	Ayarları Yükle…
 	Save these settings as a Camera Raw .xmp file	Bu ayarları Camera Raw .xmp dosyası olarak kaydet
 	Load settings from a Camera Raw .xmp file	Ayarları bir Camera Raw .xmp dosyasından yükle
-	Loaded Camera Raw settings from {file}	Camera Raw ayarları {file} dosyasından yüklendi
-	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw ayarları {file} dosyasından yüklendi ({n} desteklenmiyor)
+	Loaded RAW Develop settings from {file}	RAW Geliştirme ayarları {file} dosyasından yüklendi
+	Loaded RAW Develop settings from {file} ({n} not supported)	RAW Geliştirme ayarları {file} dosyasından yüklendi ({n} desteklenmiyor)
 	Auto Add/Delete	Otomatik Ekle/Sil
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Yazdırma Ayarlarında ayrıca Ayna Görüntüsünü açmayın: iki yansıtma birbirini iptal eder.
 	Print Settings…	Yazdırma Ayarları…
@@ -4349,7 +4345,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Üzerine gelince katman sınırlarını göster
 	Expand layer group on click	Tıklayınca katman grubunu genişlet
 	Show hover bounds from Layers	Katmanlar'dan üzerine gelme sınırlarını göster
-	Saved Camera Raw settings to {file}	Camera Raw ayarları {file} dosyasına kaydedildi
+	Saved RAW Develop settings to {file}	RAW Geliştirme ayarları {file} dosyasına kaydedildi
 	Save the settings to each raw's sidecar without opening it	Ayarları her raw dosyasının yan dosyasına kaydet, açmadan
 	No settings saved: these raws can't keep a sidecar here	Hiçbir şey kaydedilmedi: bu raw dosyaları burada yan dosyaya sahip olamaz
 	Some settings could not be saved; the raws stay open	Bazı ayarlar kaydedilemedi; raw dosyaları açık kalıyor
@@ -4361,3 +4357,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Tuvali Otomatik Boyutlandır
 	Keep Relative Position During Layer Reordering	Katmanları Yeniden Sıralarken Göreli Konumu Koru
 	Shrinkwrap Canvas on Save	Kaydederken Tuvali İçeriğe Göre Küçült
+	Move Toolbar to the Right	Araç çubuğunu sağa taşı
+	Move Toolbar to the Left	Araç çubuğunu sola taşı

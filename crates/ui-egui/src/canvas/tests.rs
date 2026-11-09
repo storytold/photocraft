@@ -2304,12 +2304,66 @@ fn brush_drag_shows_the_real_stroke_and_commits_it() {
     assert_eq!(alpha(&app.session.documents()[0].doc, 40, 30), 0.0, "not committed yet");
     // The canvas redraws only what the stroke touched.
     let dk = canvas_display(&app, &app.session.documents()[0].doc, None).1;
-    let d = damage_since(&app, 0, (rev, dk), (rev, key), dk, None).unwrap();
+    let d = damage_since(&app, 0, (rev, dk), (rev, key), dk, (rev, None)).unwrap();
     assert!(d.contains(40, 30) && !d.contains(40, 2) && d.height() < 60, "{d:?}");
     tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 30.0 }, m);
     let doc = app.session.documents()[0].doc.clone();
     assert!(app.live_stroke.is_none() && display_doc(&mut app, 0).1 == 0);
     assert_eq!((alpha(&doc, 40, 30), alpha(&doc, 40, 38)), (alpha(&shown, 40, 30), alpha(&shown, 40, 38)), "commit matches the preview");
+}
+
+/// #9329 PR C: Paste Into is three revisions; the canvas redraws what the whole command
+/// changed (the pasted area), not the whole document as when only one revision counted.
+#[test]
+fn paste_into_refreshes_only_the_pasted_area() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = false;
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+    app.run("select.rect", json!({"x": 40, "y": 40, "width": 100, "height": 100})).unwrap();
+    app.run("edit.copy", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 500, "y": 400, "width": 90, "height": 60})).unwrap();
+    ensure_texture(&mut app, &ctx, 0, None).expect("a texture");
+    let rev = app.session.active().unwrap().revision;
+    app.perf.last_refresh_px = 0;
+    app.run("edit.pasteSpecial.pasteInto", json!({})).unwrap();
+    assert!(app.session.active().unwrap().revision >= rev + 2, "several revisions");
+    ensure_texture(&mut app, &ctx, 0, None).expect("a texture");
+    let px = app.perf.last_refresh_px;
+    assert!(px > 0 && px < 800 * 600 / 4, "refreshed {px} px of {}", 800 * 600);
+}
+
+/// The Move tool's Auto-Select pick is its own revision that changes no pixels: the drag
+/// that follows still redraws only where the layer was and is.
+#[test]
+fn auto_select_move_is_still_bounded() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = false;
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+    for (x, color) in [(100, "#ff0000"), (500, "#0000ff")] {
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": x, "y": 100, "width": 40, "height": 40})).unwrap();
+        app.run("edit.fill", json!({"color": color})).unwrap();
+    }
+    app.run("select.deselect", json!({})).unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = true;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let active = app.session.active().unwrap().active_layer;
+    ensure_texture(&mut app, &ctx, 0, None).expect("a texture");
+    let rev = app.session.active().unwrap().revision;
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 120.0, y: 120.0, pressure: 1.0 }, m);
+    assert_ne!(app.session.active().unwrap().active_layer, active, "Auto-Select picked the red layer");
+    assert_eq!(app.session.active().unwrap().revision, rev + 1, "the pick is one revision");
+    tool_event(&mut app, ToolEvent::Move { x: 150.0, y: 130.0, pressure: 1.0 }, m);
+    app.perf.last_refresh_px = 0;
+    ensure_texture(&mut app, &ctx, 0, None).expect("a texture");
+    let px = app.perf.last_refresh_px;
+    assert!(px > 0 && px < 800 * 600 / 4, "refreshed {px} px of {}", 800 * 600);
+    tool_event(&mut app, ToolEvent::Up { x: 150.0, y: 130.0 }, m);
 }
 
 #[test]
@@ -2356,6 +2410,8 @@ fn drag_frames(smoothing: f32, xs: &[f64]) -> (std::sync::Arc<Document>, std::sy
     app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5}})).unwrap();
     // What the options bar's Smoothing field writes.
     app.session.tools.brush.smoothing.amount = smoothing;
+    // Catch-up on Stroke End starts off (#11887); these tests draw the catch-up tail.
+    app.session.tools.brush.smoothing.catch_up_on_end = true;
     app.ui.tool = Tool::Brush;
     ensure_texture(&mut app, &ctx, 0, None);
     let m = egui::Modifiers::NONE;
@@ -2427,7 +2483,7 @@ fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     // And the commit is what `paint.stroke` gives with that smoothing.
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 200, "height": 80, "background": "transparent"})).unwrap();
-    s.execute("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5, "smoothing": {"amount": 0.5}}})).unwrap();
+    s.execute("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5, "smoothing": {"amount": 0.5, "catchUpOnEnd": true}}})).unwrap();
     let mut pts = vec![json!([10.0, 40.0, 1.0])];
     pts.extend(xs.iter().map(|&x| json!([x, 40.0 + (x / 7.0).sin() * 8.0, 1.0])));
     // (Round tips without dynamics draw the same for any seed.)
@@ -3305,14 +3361,14 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let (_, key) = display_doc(&mut app, 0);
     assert_eq!(key, crate::transform_tool::preview_key(app.transform_preview.as_ref().unwrap().session));
     let dk = canvas_display(&app, &app.session.documents()[0].doc, None).1;
-    let opened = damage_since(&app, 0, (rev, dk), (rev, key), dk, None).expect("opening the box has a damage area");
+    let opened = damage_since(&app, 0, (rev, dk), (rev, key), dk, (rev, None)).expect("opening the box has a damage area");
     assert!(opened.contains(20, 20) && opened.contains(59, 49), "{opened:?}");
     assert!(opened.width() < 400 && opened.height() < 200, "not the whole canvas: {opened:?}");
-    let canceled = damage_since(&app, 0, (rev, key ^ dk), (rev, 0), dk, None).expect("canceling has one too");
+    let canceled = damage_since(&app, 0, (rev, key ^ dk), (rev, 0), dk, (rev, None)).expect("canceling has one too");
     assert_eq!(canceled, opened);
     // A commit (one revision later) adds what it changed; anything else redraws everything.
     let moved = photocraft_geom::Rect::new(100, 20, 140, 50);
-    let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, Some(moved)).expect("committing too");
+    let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, (rev, Some(moved))).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
-    assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, Some(moved)).is_none(), "a later revision isn't ours");
+    assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
 }
