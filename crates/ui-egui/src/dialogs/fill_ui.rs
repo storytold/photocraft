@@ -116,8 +116,9 @@ pub fn foreground_hex(app: &PhotocraftApp) -> String {
 
 /// Show a recorded step in the dialog: what the step carries, and the engine's defaults for the
 /// rest (not the remembered choices): contents `color`, colour = `foreground` (a hex string),
-/// Normal 100%, no transparency lock, colour adaptation on, no pattern.
-pub fn load_step(f: &mut Map<String, Value>, step: &Value, foreground: &str) {
+/// Normal 100%, no transparency lock, colour adaptation on, the library's first pattern
+/// (`first_pattern`, none when the library is empty).
+pub fn load_step(f: &mut Map<String, Value>, step: &Value, foreground: &str, first_pattern: Option<&str>) {
     let Some(o) = step.as_object() else { return };
     let kept: Map<String, Value> =
         o.iter().filter(|(k, _)| !PARAM_KEYS.contains(&k.as_str()) && !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -140,30 +141,31 @@ pub fn load_step(f: &mut Map<String, Value>, step: &Value, foreground: &str) {
             f.insert(k.into(), v);
         }
     }
-    // The engine uses the library's first pattern only when asked; without one headless playback
-    // fails the same way, and the dialog shows no pattern.
-    if !is_set("pattern") {
-        f.remove("pattern");
+    if !is_set("pattern")
+        && let Some(p) = first_pattern
+    {
+        f.insert("pattern".into(), json!(p));
     }
 }
 
 /// The `edit.fill` params of the dialog's fields: only the options of the chosen contents.
 pub fn params(f: &Map<String, Value>) -> Value {
     let mut p = own_params(f);
-    if let (Some(out), Some(kept)) = (p.as_object_mut(), f.get(KEPT).and_then(Value::as_object)) {
+    if let Some(kept) = f.get(KEPT).and_then(Value::as_object) {
         for (k, v) in kept {
-            out.entry(k.clone()).or_insert_with(|| v.clone());
+            p.entry(k.clone()).or_insert_with(|| v.clone());
         }
     }
-    p
+    Value::Object(p)
 }
 
-fn own_params(f: &Map<String, Value>) -> Value {
+fn own_params(f: &Map<String, Value>) -> Map<String, Value> {
     let contents = f.get("contents").and_then(Value::as_str).unwrap_or("foreground");
-    let mut p = json!({ "contents": contents });
+    let mut p = Map::new();
+    p.insert("contents".into(), json!(contents));
     for k in ["mode", "opacity", "preserveTransparency"] {
         if let Some(v) = f.get(k) {
-            p[k] = v.clone();
+            p.insert(k.into(), v.clone());
         }
     }
     let extra = match contents {
@@ -175,7 +177,7 @@ fn own_params(f: &Map<String, Value>) -> Value {
     if let Some(k) = extra
         && let Some(v) = f.get(k)
     {
-        p[k] = v.clone();
+        p.insert(k.into(), v.clone());
     }
     p
 }

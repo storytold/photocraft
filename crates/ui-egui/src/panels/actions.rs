@@ -392,7 +392,8 @@ fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &
     let active_layer = app.session.active().and_then(|st| st.active_layer);
     let dialog = crate::dialogs::open_command_dialog(app, id, &label);
     let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
-    let foreground = crate::fill_ui::foreground_hex(app);
+    let fill_defaults =
+        (id == crate::fill_ui::COMMAND).then(|| (crate::fill_ui::foreground_hex(app), app.session.patterns.items.first().map(|p| p.id.to_string())));
     let mut receiver = None;
     if let Some(d) = app.ui.dialog_mut(dialog) {
         if let Some(o) = p.as_object() {
@@ -401,8 +402,8 @@ fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &
         }
         if id == crate::color_range_ui::COMMAND {
             crate::color_range_ui::load_step(&mut d.fields, p);
-        } else if id == crate::fill_ui::COMMAND {
-            crate::fill_ui::load_step(&mut d.fields, p, &foreground);
+        } else if let Some((foreground, pattern)) = &fill_defaults {
+            crate::fill_ui::load_step(&mut d.fields, p, foreground, pattern.as_deref());
         }
         d.fields.insert(RESUME.into(), json!(token));
         // Kept for every implicit step, also one opened on a document target: the dialog

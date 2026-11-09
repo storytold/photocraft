@@ -3167,9 +3167,44 @@ fn color_range_step_dialog_preview_matches_ok() {
 fn color_range_resampled_drops_recorded_color() {
     let mut app = two_tone_app();
     let id = pause_on(&mut app, (RANGE_STEP, json!({"select": "sampledColors", "color": "#ff0000", "fuzziness": 10})));
-    app.ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[12.0, 8.0]]));
+    sample_in_dialog(&mut app, id, [12.0, 8.0], egui::Modifiers::NONE);
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert_eq!(probe(&mut app), (1.0, 0.0), "only the blue half was selected: the red half is untouched");
+}
+
+/// Click the eyedropper at `at` in the paused dialog `id`, through the dialog's own handler.
+fn sample_in_dialog(app: &mut PhotocraftApp, id: u64, at: [f64; 2], mods: egui::Modifiers) {
+    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    crate::color_range_ui::pick(app, &mut fields, at, mods);
+    app.ui.dialog_mut(id).unwrap().fields = fields;
+}
+
+#[test]
+fn color_range_step_dialog_keeps_points_and_color() {
+    let mut app = two_tone_app();
+    let step = json!({"select": "sampledColors", "color": "#ff0000", "points": [[12.0, 8.0]], "fuzziness": 10});
+    let id = pause_on(&mut app, (RANGE_STEP, step));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(probe(&mut app), (0.0, 0.0), "the recorded red and the clicked blue are both selected");
+}
+
+#[test]
+fn color_range_shift_sample_keeps_recorded_color() {
+    let mut app = two_tone_app();
+    let id = pause_on(&mut app, (RANGE_STEP, json!({"select": "sampledColors", "color": "#ff0000", "fuzziness": 10})));
+    sample_in_dialog(&mut app, id, [12.0, 8.0], egui::Modifiers { shift: true, ..Default::default() });
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(probe(&mut app), (0.0, 0.0), "red (recorded) and blue (added) are selected");
+}
+
+#[test]
+fn fill_step_dialog_switch_to_pattern_fills_pattern() {
+    let mut app = two_tone_app();
+    assert!(!app.session.patterns.items.is_empty(), "the library has a pattern");
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "black"})));
+    app.ui.dialog_mut(id).unwrap().fields.insert("contents".into(), json!("pattern"));
+    assert!(app.ui.dialog_mut(id).unwrap().fields.get("pattern").and_then(Value::as_str).is_some_and(|p| !p.is_empty()));
+    crate::dialogs::confirm(&mut app, id).unwrap();
 }
 
 #[test]

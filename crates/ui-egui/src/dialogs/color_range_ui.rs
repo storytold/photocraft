@@ -178,17 +178,20 @@ fn merge_kept(f: &Map<String, Value>, p: &mut Map<String, Value>) {
 
 /// The `select.colorRange` params for the dialog's state: only what the Select mode uses.
 pub fn params(f: &Map<String, Value>) -> Value {
-    let Value::Object(mut p) = own_params(f) else { return Value::Null };
+    let mut p = own_params(f);
     merge_kept(f, &mut p);
-    // The user sampled again: the recorded colours no longer apply.
-    if !points(f, "points").is_empty() || !points(f, "subtractPoints").is_empty() {
-        p.remove("color");
-        p.remove("colors");
-    }
     Value::Object(p)
 }
 
-fn own_params(f: &Map<String, Value>) -> Value {
+/// A new replacing sample (plain eyedropper, Clear Samples) supersedes the recorded colours.
+fn forget_kept_colors(f: &mut Map<String, Value>) {
+    if let Some(kept) = f.get_mut(KEPT).and_then(Value::as_object_mut) {
+        kept.remove("color");
+        kept.remove("colors");
+    }
+}
+
+fn own_params(f: &Map<String, Value>) -> Map<String, Value> {
     let select = s(f, "select", "sampledColors");
     let c = controls(f);
     let mut p = Map::new();
@@ -226,7 +229,7 @@ fn own_params(f: &Map<String, Value>) -> Value {
         };
         p.insert("tonalRange".into(), range);
     }
-    Value::Object(p)
+    p
 }
 
 /// OK: run the command on the document (one history step).
@@ -610,6 +613,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 if add + sub > 0 && widgets::secondary_button(ui, tl!("Clear Samples"), 0.0).clicked() {
                     set_points(f, "points", &[]);
                     set_points(f, "subtractPoints", &[]);
+                    forget_kept_colors(f);
                     f.insert("__order".into(), json!([]));
                 }
             });
@@ -799,6 +803,7 @@ pub fn pick(app: &PhotocraftApp, f: &mut Map<String, Value>, at: [f64; 2], mods:
             order.push(json!("-"));
         }
         _ => {
+            forget_kept_colors(f);
             set_points(f, "points", &[at]);
             set_points(f, "subtractPoints", &[]);
             order = vec![json!("+")];
