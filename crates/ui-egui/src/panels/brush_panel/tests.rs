@@ -656,7 +656,7 @@ fn mixer_brush_clean_brush_and_the_automatic_load_keep_the_foreground_out() {
     assert_eq!(h.state().session.tools.mixer.reservoir, None);
 
     // The stroke the canvas commits on release lays down only the red it picks up.
-    crate::retouch_ui::finish_stroke(h.state_mut(), crate::state::Tool::MixerBrush, &[[5.0, 20.0, 1.0], [195.0, 20.0, 1.0]], egui::Modifiers::NONE);
+    crate::retouch_ui::finish_stroke(h.state_mut(), crate::state::Tool::MixerBrush, &[[5.0, 20.0, 1.0], [195.0, 20.0, 1.0]], egui::Modifiers::NONE, false);
     let d = h.state().session.active().unwrap();
     let c = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(100, 20);
     assert!(c[3] > 0.1 && c[0] > 0.99 && c[2] < 0.01, "the stroke carries no foreground: {c:?}");
@@ -1875,6 +1875,47 @@ fn checkboxes_show_a_pressed_state_from_their_label() {
     h.run();
     assert!(*h.state(), "the release checks it");
     assert_eq!(fill(&h), Some(widgets::check_box_fill(true, false, &t)));
+}
+
+#[test]
+fn spacing_row_edits_route_only_the_changed_fields_through_the_brush_command() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let mut h = harness(0, 0);
+    h.state_mut().run("tools.setBrush", json!({"brush": {"spacing": 0.427, "spacingEnabled": false}})).unwrap();
+    h.run_steps(2);
+    let journal = h.state().session.journal.len();
+    let spacing = h.state().session.tools.brush.spacing;
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
+    checkbox.click();
+    h.run_steps(2);
+    assert!(h.state().session.tools.brush.spacing_enabled);
+    assert_eq!(h.state().session.tools.brush.spacing, spacing);
+    assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacingEnabled": true}));
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(43.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacing": 0.44_f32}));
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
+    checkbox.click();
+    h.run_steps(2);
+    assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacingEnabled": false}));
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(44.0)).unwrap();
+    assert!(field.accesskit_node().is_disabled());
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(h.state().session.journal.len(), journal + 3, "disabled input adds no command");
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
+    checkbox.click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.spacing, 0.44);
+    assert_eq!(h.state().session.journal.len(), journal + 4);
 }
 
 #[test]
