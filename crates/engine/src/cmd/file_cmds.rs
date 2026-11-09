@@ -38,9 +38,9 @@ use batch_run::same_format;
 #[cfg(not(target_arch = "wasm32"))]
 pub use batch_run::validate_flat_outputs;
 pub use batch_run::{BatchInput, OutputClaims, encode_batch_error_log, list_images_tree};
+pub(crate) use batch_run::{BatchState, batch_action, batch_handles_step, batch_inputs, batch_keeps_step, batch_save_point, process_files};
 #[cfg(test)]
 pub(crate) use batch_run::{MAX_SUBFOLDER_DEPTH, list_files_tree};
-pub(crate) use batch_run::{batch_action, batch_inputs, batch_keeps_step, batch_save_point, process_files};
 pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;

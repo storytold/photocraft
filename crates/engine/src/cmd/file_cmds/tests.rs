@@ -4381,3 +4381,208 @@ fn save_and_close_refuses_a_read_only_source() {
         assert_eq!(std::fs::read(&source).unwrap(), bytes, "overrideOpen {override_open}: the source is unchanged");
     }
 }
+
+/// Runs Batch on `red` with an action that plays `Finish`, whose steps are `finish`.
+fn batch_playing_finish(red: &str, out: &str, finish: Value) -> Value {
+    let called = json!([{"name": "Finish", "steps": finish}]);
+    let steps = json!([["actions.play", {"action": "Finish"}]]);
+    Session::new().execute("file.automate.batch", json!({"input": [red], "output": out, "format": "png", "steps": steps, "calledActions": called})).unwrap()
+}
+
+/// The pixel at (1, 1) of `out/red.png`.
+fn batch_pixel(out: &str) -> [f32; 4] {
+    let saved = photocraft_io::import("red.png", &std::fs::read(join(out, "red.png")).unwrap()).unwrap().document;
+    photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).px[0]
+}
+
+/// A save step inside an action that Batch plays marks the result as a top-level one does; it
+/// used to fail the file as an unknown command.
+#[test]
+fn batch_takes_the_result_at_a_save_inside_a_played_action() {
+    let dir = tmp("batch-nested-save");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let r = batch_playing_finish(&red, &out, json!([["image.adjustments.invert", {}], ["file.saveAs", {}], ["file.close", {}]]));
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0], "the inverted red");
+}
+
+/// A nested Save or Save As marks the document as saved so a following Close that asks
+/// (`"save":"ask"`) closes it cleanly, while a nested Save a Copy leaves it changed and an
+/// unwritten or failed Opened Files batch leaves the document changed.
+#[test]
+fn batch_nested_save_marks_the_document_saved_for_a_close_that_asks() {
+    let dir = tmp("batch-nested-save-close-ask");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    for (tag, save_cmd) in [("save", "file.save"), ("save-as", "file.saveAs")] {
+        let out = join(&dir, tag);
+        let r = batch_playing_finish(&red, &out, json!([["image.adjustments.invert", {}], [save_cmd, {}], ["file.close", {"save": "ask"}]]));
+        assert_eq!(r["errors"], json!([]), "{tag}: {r}");
+        assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0], "{tag}");
+    }
+    let copy_out = join(&dir, "copy");
+    let r = batch_playing_finish(&red, &copy_out, json!([["image.adjustments.invert", {}], ["file.saveACopy", {}], ["file.close", {"save": "ask"}]]));
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(1), "{r}");
+
+    let open_out = join(&dir, "open-out");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"name": "First", "width": 8, "height": 6})).unwrap();
+    let called = json!([{"name": "Finish", "steps": [["image.adjustments.invert", {}], ["file.save", {}], ["file.close", {"save": "ask"}]]}]);
+    let r = s
+        .execute(
+            "file.automate.batch",
+            json!({"source": "open", "steps": [["actions.play", {"action": "Finish"}]], "calledActions": called, "output": open_out, "format": "png"}),
+        )
+        .unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(r["files"], json!([join(&open_out, "First.png")]), "{r}");
+    assert!(s.documents().is_empty());
+
+    let mut s = Session::new();
+    s.execute("file.new", json!({"name": "First", "width": 8, "height": 6})).unwrap();
+    let called_save = json!([{"name": "Finish", "steps": [["image.adjustments.invert", {}], ["file.save", {}]]}]);
+    let r =
+        s.execute("file.automate.batch", json!({"source": "open", "steps": [["actions.play", {"action": "Finish"}]], "calledActions": called_save})).unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert!(s.documents()[0].is_dirty(), "with no destination a nested Save leaves the document changed");
+
+    let fail_dir = join(&dir, "open-fail");
+    std::fs::create_dir_all(join(&fail_dir, "First.png")).unwrap();
+    let r = s
+        .execute(
+            "file.automate.batch",
+            json!({"source": "open", "steps": [["actions.play", {"action": "Finish"}]], "calledActions": called_save, "output": fail_dir, "format": "png"}),
+        )
+        .unwrap();
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(1), "{r}");
+    assert!(s.documents()[0].is_dirty(), "a failed write restores the earlier saved revision");
+}
+
+/// A nested Save a Copy marks the result too, and its recorded path is never written: it used to
+/// write that file for every input, outside the destination folder. Played outside Batch, the
+/// same action still writes it.
+#[test]
+fn batch_never_writes_the_recorded_path_of_a_nested_save_a_copy() {
+    let dir = tmp("batch-nested-copy");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let elsewhere = join(&dir, "elsewhere.png");
+    let finish = |path: &str| json!([["image.adjustments.invert", {}], ["file.saveACopy", {"path": path}], ["file.close", {}]]);
+    let r = batch_playing_finish(&red, &out, finish(&elsewhere));
+    assert!(!std::path::Path::new(&elsewhere).exists(), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0]);
+
+    let played = join(&dir, "played.png");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let steps: Vec<(String, Value)> = serde_json::from_value(finish(&played)).unwrap();
+    s.actions.list.push(crate::actions_cmds::Action::new("Finish", steps));
+    let r = s.execute("actions.play", json!({"action": "Finish"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert!(std::path::Path::new(&played).exists(), "outside Batch the Save a Copy runs");
+}
+
+/// The steps Batch drops at the top of an action are dropped inside a played action too: a nested
+/// Fit on Screen, what an .atn View menu step imports as, failed the file as an unknown command.
+#[test]
+fn batch_skips_view_steps_inside_a_played_action() {
+    let dir = tmp("batch-nested-view");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let r = batch_playing_finish(&red, &out, json!([["view.fitOnScreen", {}], ["image.adjustments.invert", {}]]));
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0]);
+}
+
+/// A nested Quick Export is dropped like a top-level one: it wrote its recorded path for every
+/// input, outside the destination folder.
+#[test]
+fn batch_skips_quick_export_inside_a_played_action() {
+    let dir = tmp("batch-nested-quick");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let quick = join(&dir, "quick-export.png");
+    let r = batch_playing_finish(&red, &out, json!([["image.adjustments.invert", {}], ["file.export.quickExport", {"path": quick}]]));
+    assert!(!std::path::Path::new(&quick).exists(), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0]);
+}
+
+/// Refuses filesystem file commands, as an untrusted session's authorize hook does for Save a
+/// Copy and Open. Batch and Close stay allowed so a Batch run can start and can close the
+/// document its save point marked; Save a Copy is not on the list.
+fn deny_ambient_file(id: &str, _: &Value) -> Result<()> {
+    const ALLOWED: &[&str] = &["file.automate.batch", "file.close", "file.new"];
+    if id.starts_with("file.") && !ALLOWED.contains(&id) { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+}
+
+/// Batch on `red` with the authorize hook installed, playing `Finish`.
+fn batch_playing_finish_authorized(red: &str, out: &str, finish: Value) -> Value {
+    let called = json!([{"name": "Finish", "steps": finish}]);
+    let steps = json!([["actions.play", {"action": "Finish"}]]);
+    let mut s = Session::new();
+    s.authorize = Some(deny_ambient_file);
+    s.execute("file.automate.batch", json!({"input": [red], "output": out, "format": "png", "steps": steps, "calledActions": called})).unwrap()
+}
+
+/// A Save a Copy inside an action Batch plays is a save point, including when the session's
+/// authorize hook would refuse that command. The hook used to run first and fail the file.
+#[test]
+fn batch_handles_a_nested_save_before_authorize() {
+    let dir = tmp("batch-nested-save-auth");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let elsewhere = join(&dir, "elsewhere.png");
+    let finish = json!([["image.adjustments.invert", {}], ["file.saveACopy", {"path": elsewhere}], ["file.close", {}]]);
+    let r = batch_playing_finish_authorized(&red, &out, finish);
+    assert!(!std::path::Path::new(&elsewhere).exists(), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0], "the inverted red");
+}
+
+/// Steps Batch does not intercept stay behind the authorize hook: a nested Open is refused and
+/// writes nothing, and the same Save a Copy played outside Batch is refused too. A top-level
+/// Save a Copy in the same authorized run is still only a save point.
+#[test]
+fn authorize_still_rejects_a_step_batch_does_not_handle() {
+    let dir = tmp("batch-auth-keeps-gate");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let missing = join(&dir, "missing.png");
+    let opened = batch_playing_finish_authorized(&red, &join(&dir, "opened"), json!([["image.adjustments.invert", {}], ["file.open", {"path": missing}]]));
+    let error = opened["errors"].as_array().and_then(|e| e.first()).and_then(|e| e["error"].as_str()).unwrap_or("");
+    assert!(error.contains("file.open") && error.contains("disabled"), "{opened}");
+    assert!(!std::path::Path::new(&join(&dir, "opened/red.png")).exists(), "{opened}");
+    assert!(!std::path::Path::new(&missing).exists());
+
+    let played = join(&dir, "played.png");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "#ff0000"})).unwrap();
+    s.authorize = Some(deny_ambient_file);
+    s.actions.list.push(crate::actions_cmds::Action::new(
+        "Finish",
+        vec![("image.adjustments.invert".into(), json!({})), ("file.saveACopy".into(), json!({"path": played}))],
+    ));
+    let r = s.execute("actions.play", json!({"action": "Finish"})).unwrap();
+    assert_eq!(r["failed"]["id"], "file.saveACopy");
+    assert!(r["failed"]["error"].as_str().unwrap_or("").contains("disabled"), "{r}");
+    assert!(!std::path::Path::new(&played).exists(), "outside Batch the refused Save a Copy writes nothing");
+
+    let elsewhere = join(&dir, "top-elsewhere.png");
+    let mut top = Session::new();
+    top.authorize = Some(deny_ambient_file);
+    let top = top
+        .execute(
+            "file.automate.batch",
+            json!({"input": [red], "output": join(&dir, "top"), "format": "png", "steps": [
+                ["image.adjustments.invert", {}],
+                ["file.saveACopy", {"path": elsewhere}],
+                ["file.close", {}],
+            ]}),
+        )
+        .unwrap();
+    assert!(!std::path::Path::new(&elsewhere).exists(), "{top}");
+    assert_eq!(top["errors"], json!([]), "{top}");
+    assert_eq!(batch_pixel(&join(&dir, "top")), [0.0, 1.0, 1.0, 1.0]);
+}

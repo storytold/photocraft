@@ -603,9 +603,59 @@ pub(crate) fn batch_save_point(id: &str) -> bool {
 }
 
 /// Whether Batch and droplets keep a recorded step: save points mark the result, while other
-/// shell-only saves and view steps (zoom, fit) don't change the output (#2752).
+/// shell-only saves, Quick Export and view steps (zoom, fit) don't change the output (#2752).
 pub(crate) fn batch_keeps_step(id: &str) -> bool {
-    (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
+    (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id) && id != "file.export.quickExport"
+}
+
+/// What a Batch run has marked on the current input so far: the document as the last recorded save
+/// found it, whether the run writes to a destination (so a Save or Save As marks the document as
+/// saved), and the first marked document's earlier `saved_revision` (restored when an Opened Files
+/// input is not written).
+pub(crate) struct BatchState {
+    saved: Option<Arc<Document>>,
+    writes_output: bool,
+    marked: Option<(u64, u64)>,
+}
+
+impl BatchState {
+    fn new(writes_output: bool) -> Self {
+        Self { saved: None, writes_output, marked: None }
+    }
+}
+
+/// Inside a Batch run, a step is handled as at the top of the action, also inside an action the
+/// run plays: a recorded save marks the result, taking the active document as the save finds it,
+/// and the steps Batch drops (view steps, other shell-only saves, Quick Export) are skipped.
+/// `false` outside Batch and for a step that runs.
+pub(crate) fn batch_handles_step(s: &mut Session, id: &str) -> Result<bool> {
+    let Some(writes_output) = s.batch.as_ref().map(|run| run.writes_output) else {
+        return Ok(false);
+    };
+    if batch_save_point(id) {
+        let (doc, marked) = {
+            let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+            let doc = st.doc.clone();
+            // Batch performs the action's Save / Save As (to its destination), so the
+            // document is saved there as far as the steps after it see: a Close recorded
+            // without a save policy (`"save":"ask"`) then closes it. A Save a Copy, or an
+            // Opened Files run with no destination, leaves the document as changed as it was.
+            let marked = (id != "file.saveACopy" && writes_output).then(|| {
+                let prev = (st.doc.id.0, st.saved_revision);
+                st.saved_revision = st.revision;
+                prev
+            });
+            (doc, marked)
+        };
+        if let Some(run) = s.batch.as_mut() {
+            run.saved = Some(doc);
+            if run.marked.is_none() {
+                run.marked = marked;
+            }
+        }
+        return Ok(true);
+    }
+    Ok(!batch_keeps_step(id))
 }
 
 pub(crate) fn batch_action(list: &[crate::actions_cmds::Action], p: &Value) -> Result<usize> {
@@ -716,7 +766,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         .or_else(|| p.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| "Batch".into());
     // Preserve the current Save snapshots and view-step policy while adding named actions.
-    steps.retain(|(id, _)| batch_keeps_step(id) && id != "file.export.quickExport");
+    steps.retain(|(id, _)| batch_keeps_step(id));
     if let Some(value) = p.get("overrideSaveAs").filter(|v| !v.is_null()) {
         let override_save = value.as_bool().ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "overrideSaveAs must be a boolean".into() })?;
         let has_save = steps.iter().any(|(id, _)| batch_save_point(id));
@@ -965,7 +1015,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     crate::actions_cmds::begin_document_history(scratch, &action_name);
                 }
                 let result = (|| -> std::result::Result<bool, FileFailure> {
-                    let mut saved: Option<Arc<Document>> = None;
+                    scratch.batch = Some(BatchState::new(true));
                     for (id, params) in &steps {
                         ctx.check()?;
                         if ctx.batch_interrupt_requested() {
@@ -973,16 +1023,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         }
                         // A recorded Save is a step too: Batch writes the output for it.
                         charge_script_step(scratch)?;
-                        if batch_save_point(id) {
-                            let st = scratch.active_mut().ok_or(EngineError::NoDocument)?;
-                            saved = Some(st.doc.clone());
-                            // Batch performs the action's Save / Save As (to its destination), so the
-                            // document is saved there as far as the steps after it see: a Close recorded
-                            // without a save policy (`"save":"ask"`) then closes it. A Save a Copy leaves
-                            // the document as changed as it was.
-                            if id != "file.saveACopy" {
-                                st.saved_revision = st.revision;
-                            }
+                        if batch_handles_step(scratch, id)? {
                             continue;
                         }
                         let params = crate::actions_cmds::playback_params(scratch, id, params)?;
@@ -993,6 +1034,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                             return Err(FileFailure { error: EngineError::Other(error), result: Some(r) });
                         }
                     }
+                    let saved = scratch.batch.take().and_then(|run| run.saved);
                     // While the saved document is still open the steps after the save reach the result too
                     // (#3058), so it is saved after the action as usual. Closed after its save, or with another
                     // document left active, it is written as the save found it.
@@ -1009,6 +1051,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         }
                     }
                 })();
+                scratch.batch = None;
                 if owns_history {
                     crate::actions_cmds::finish_document_history(scratch);
                 }
@@ -1108,10 +1151,8 @@ fn batch_open_documents(
     let mut done = 0;
     let mut written = OutputClaims::default();
     let check_duplicates = recorded_output_guard(p);
+    let outer_batch = s.batch.take();
     for (index, (id, name, path)) in originals.iter().enumerate() {
-        // The document a recorded Save / Save As marked as saved, with its earlier saved
-        // revision: when Batch then writes nothing, it reads as changed again.
-        let mut marked: Option<(u64, u64)> = None;
         let result = (|| -> std::result::Result<(), FileFailure> {
             // A rejected destination cannot edit the next document either.
             if check_duplicates && let Some(paths) = &planned {
@@ -1120,20 +1161,11 @@ fn batch_open_documents(
             }
             let position = s.documents().iter().position(|state| state.doc.id.0 == *id).ok_or(EngineError::NoDocument)?;
             s.set_active(position);
-            let mut saved: Option<Arc<Document>> = None;
+            s.batch = Some(BatchState::new(planned.is_some()));
             for (command, params) in steps {
                 // A recorded Save is a step too: Batch writes the output for it.
                 charge_script_step(s)?;
-                if batch_save_point(command) {
-                    let state = s.active_mut().ok_or(EngineError::NoDocument)?;
-                    saved = Some(state.doc.clone());
-                    // With no destination nothing is written, so the document stays changed.
-                    if command != "file.saveACopy" && planned.is_some() {
-                        if marked.is_none() {
-                            marked = Some((state.doc.id.0, state.saved_revision));
-                        }
-                        state.saved_revision = state.revision;
-                    }
+                if batch_handles_step(s, command)? {
                     continue;
                 }
                 let params = crate::actions_cmds::playback_params(s, command, params)?;
@@ -1142,6 +1174,7 @@ fn batch_open_documents(
                     return Err(FileFailure { error: EngineError::Other(error), result: Some(response) });
                 }
             }
+            let saved = s.batch.as_mut().and_then(|run| run.saved.take());
             let Some(paths) = &planned else { return Ok(()) };
             let out = paths.get(index).ok_or_else(|| EngineError::Other("batch output plan is incomplete".into()))?;
             let doc = match saved {
@@ -1155,6 +1188,9 @@ fn batch_open_documents(
             files.push(out.clone());
             Ok(())
         })();
+        // The document a recorded Save / Save As marked as saved, with its earlier saved
+        // revision: when Batch then writes nothing, it reads as changed again.
+        let marked = s.batch.take().and_then(|run| run.marked);
         done = index + 1;
         if result.is_err()
             && let Some((doc, revision)) = marked
@@ -1173,6 +1209,7 @@ fn batch_open_documents(
             }
         }
     }
+    s.batch = outer_batch;
     if let Some(id) = previous
         && let Some(position) = s.documents().iter().position(|state| state.doc.id.0 == id)
     {
