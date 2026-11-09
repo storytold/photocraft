@@ -30,18 +30,18 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen, Tool::AddAnchorPoint, Tool::DeleteAnchorPoint, Tool::ConvertPoint],
         &[Tool::Type, Tool::VerticalType, Tool::VerticalTypeMask, Tool::HorizontalTypeMask],
         &[Tool::PathSelection, Tool::DirectSelection],
-        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape],
+        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::Line, Tool::CustomShape],
     ],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
 ];
 
-/// The tool a slot shows: the current tool if it belongs to the slot, else the last one used.
-fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool {
+/// The tool a slot shows: the current tool if it belongs to the slot, else the last one used
+/// (`group_tools`, most recent first), else the slot's first tool.
+pub(super) fn slot_tool(current: Tool, group_tools: &[Tool], slot: &[Tool]) -> Tool {
     if slot.contains(&current) {
-        ui.data_mut(|d| d.insert_temp(key, current));
         return current;
     }
-    ui.data(|d| d.get_temp::<Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
+    group_tools.iter().chain(slot).copied().find(|t| slot.contains(t)).unwrap_or(current)
 }
 
 /// Next tool in a toolbar flyout slot after `from`, wrapping (Photoshop Alt/Option-click). An
@@ -61,7 +61,7 @@ pub(crate) fn toolbar_position(tool: Tool) -> usize {
 /// dialog writes `Tool` debug names, `edit.toolbar` takes any name `Tool::from_name` reads). A
 /// slot keeps only its visible tools, so its flyout lists just those; a slot with none left is
 /// dropped, and so is a section with no slots. Each slot carries its index in `TOOL_SECTIONS`,
-/// so its remembered tool and flyout stay put when other slots are hidden.
+/// so its flyout stays put when other slots are hidden.
 pub(super) fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
     let hidden: Vec<Tool> = hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
     let mut index = 0usize;
@@ -91,6 +91,63 @@ pub(super) fn tool_flyout_drag_open(button: Rect, origin: Option<Pos2>, pointer:
 /// A toolbar press cannot click a flyout row in egui because the press began elsewhere.
 pub(super) fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bool, from_button: bool) -> bool {
     released && from_button && pointer.is_some_and(|p| row.contains(p))
+}
+
+fn more_flyout_id() -> egui::Id {
+    egui::Id::unique("toolbar-more-flyout-open")
+}
+
+/// Whether the "…" button's flyout is open: it owns Escape then (`shortcuts::handle`).
+pub(crate) fn more_flyout_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(more_flyout_id())).unwrap_or(false)
+}
+
+/// Right-click on the "…" button opens a flyout with one row, "Edit Toolbar…", drawn like a tool
+/// flyout. The row runs `edit.toolbar` and closes the flyout; Escape or a press outside closes it
+/// without running anything.
+fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::Response, t: &Tokens) {
+    let open_id = more_flyout_id();
+    let open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    if button.secondary_clicked() {
+        ui.data_mut(|d| d.insert_temp(open_id, !open));
+        ui.ctx().request_repaint();
+        return;
+    }
+    if !open {
+        return;
+    }
+    let (pivot, pos) = if crate::direction::is_rtl() {
+        (egui::Align2::RIGHT_BOTTOM, button.rect.left_bottom() - vec2(6.0, 0.0))
+    } else {
+        (egui::Align2::LEFT_BOTTOM, button.rect.right_bottom() + vec2(6.0, 0.0))
+    };
+    let area = egui::Area::new(egui::Id::unique("toolbar-more-flyout")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let label = tl!("Edit Toolbar…");
+            let label_w = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(12.5), t.text).size().x;
+            let (r, row) = ui.allocate_exact_size(vec2((label_w + 24.0).max(180.0), 26.0), Sense::click());
+            row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            if row.hovered() {
+                ui.painter().rect_filled(r, 3.0, t.hover);
+            }
+            ui.painter().text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), t.text);
+            row.clicked()
+        })
+    });
+    if area.inner.inner {
+        ui.data_mut(|d| d.remove::<bool>(open_id));
+        let ctx = ui.ctx().clone();
+        if let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return;
+    }
+    let pressed_outside =
+        ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !button.rect.contains(p)));
+    if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.data_mut(|d| d.remove::<bool>(open_id));
+    }
 }
 
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -169,7 +226,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             ui.horizontal(|ui| {
                                 for (slot_index, slot) in row.iter() {
                                     let key = egui::Id::unique(("tool-slot", *slot_index));
-                                    let tool = slot_tool(ui, app.ui.tool, slot, key);
+                                    let tool = slot_tool(app.ui.tool, &app.ui.group_tools, slot);
                                     let sel = slot.contains(&app.ui.tool);
                                     let tip = match crate::tool_shortcuts::shortcut(app, tool) {
                                         Some(sc) => format!("{}  ({})", tl!(tool.label()), crate::shortcuts::pretty(&sc)),
@@ -351,9 +408,14 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             });
                         }
                     }
-                    if icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
-                        let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
+                    let more = icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…"));
+                    if more.clicked()
+                        && let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}))
+                    {
+                        app.ui.status = e;
+                        app.ui.status_error = true;
                     }
+                    more_slot_flyout(app, ui, &more, &t);
                     reveal_focused_control(ui);
                 });
             ui.add_space(if t.pro { 8.0 } else { 14.0 });
@@ -612,13 +674,13 @@ pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_column
         p.rect_stroke(b, 1.0, Stroke::new(1.0, ink(d)), StrokeKind::Inside);
     }
     if let Some(d) = &d {
-        d.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Default colours (D)")));
+        d.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Default Foreground and Background Colors (D)")));
     }
-    s.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Swap colours (X)")));
-    if s.on_hover_text(tl!("Swap colours (X)")).clicked() {
+    s.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Switch Foreground and Background Colors (X)")));
+    if s.on_hover_text(tl!("Switch Foreground and Background Colors (X)")).clicked() {
         chip_command(app, "tools.swapColors");
     }
-    if d.is_some_and(|d| d.on_hover_text(tl!("Default colours (D)")).clicked()) {
+    if d.is_some_and(|d| d.on_hover_text(tl!("Default Foreground and Background Colors (D)")).clicked()) {
         chip_command(app, "tools.defaultColors");
     }
 }

@@ -2143,6 +2143,21 @@ fn shapeless_effects_render_the_same_in_bands_and_parts() {
     }
 }
 
+/// The interruptible composite renders band by band: with shapeless effects (whose maps are built
+/// per band) it still gives the whole-document composite.
+#[test]
+fn interruptible_composite_with_shapeless_effects_matches_the_whole_composite() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let d = shapeless_fx_doc(depth);
+        let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
+        purge_effect_cache();
+        let expected = composite_to_surface(&d, d.bounds(), fmt, None);
+        purge_effect_cache();
+        let actual = composite_to_surface_with_interrupt(&d, d.bounds(), fmt, None, &photocraft_raster::Interrupt::NONE).unwrap();
+        assert!(actual.read_region(d.bounds()) == expected.read_region(d.bounds()), "{depth:?}: the interruptible composite differs");
+    }
+}
+
 #[test]
 fn shapeless_effect_maps_cover_only_the_band_being_rendered() {
     // Transparency Shapes Layer off makes an effect region the whole canvas: on a 1920 × 103675
