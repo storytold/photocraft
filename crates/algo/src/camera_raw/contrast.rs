@@ -191,8 +191,10 @@ pub(crate) fn adaptive_row(c: f32, tones: Option<Tones>) -> [f32; STEPS] {
         let l2 = (l + mv(l)).clamp(0.0, 100.0);
         super::linear_to_srgb(super::lstar_inverse(l2))
     });
-    // Black stays black, and the curve never falls.
+    // Black and white stay (as on Photoshop's ramp, where every measured curve keeps both), and
+    // the curve never falls.
     out[0] = 0.0;
+    out[STEPS - 1] = 1.0;
     for k in 1..STEPS {
         out[k] = out[k].max(out[k - 1]).min(1.0);
     }
@@ -219,6 +221,17 @@ mod tests {
         }
         // Black and white stay.
         assert!(grey(100.0, 0.0) < 0.5 && grey(-100.0, 255.0) > 254.5);
+    }
+
+    /// Through `develop` on the 256-level ramp (where the curve adapts to the ramp's tones),
+    /// Contrast −100 keeps white white, as Photoshop does.
+    #[test]
+    fn the_ramp_keeps_white_through_develop() {
+        let (w, h) = (256usize, 16usize);
+        let mut px: Vec<[f32; 4]> = (0..w * h).map(|i| [(i % w) as f32 / 255.0; 3]).map(|[r, g, b]| [r, g, b, 1.0]).collect();
+        super::super::develop(&mut px, w, h, &super::super::CameraRaw { contrast: -100.0, ..Default::default() }, false);
+        assert!(px[255][..3].iter().all(|v| *v * 255.0 > 254.5), "{:?}", px[255]);
+        assert!((px[208][0] * 255.0 - 188.1).abs() < 4.0 && (px[48][0] * 255.0 - 72.4).abs() < 4.0, "{:?} {:?}", px[208], px[48]);
     }
 
     #[test]
@@ -251,6 +264,7 @@ mod tests {
                 assert!(r[0] == 0.0 && r.windows(2).all(|p| p[1] >= p[0]) && r[STEPS - 1] <= 1.0, "{c} {t:?}");
             }
             assert!(adaptive_row(-100.0, t)[16] > 16.0 / 64.0);
+            assert!([-100.0, -50.0, 50.0, 100.0].iter().all(|c| adaptive_row(*c, t)[STEPS - 1] == 1.0), "{t:?}");
         }
         // Up to +25 the move grows with the slider.
         let m = |c: f32| adaptive_row(c, Some([-8.1, -5.3, 0.0, -4.6]))[48] - 0.75;

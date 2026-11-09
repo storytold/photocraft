@@ -851,12 +851,12 @@ fn add_haze(px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
     let a = (-v).min(100.0);
     let k: [f32; 3] = if a <= 50.0 { AT_50.map(|x| x * a / 50.0) } else { std::array::from_fn(|i| AT_50[i] + (AT_100[i] - AT_50[i]) * (a - 50.0) / 50.0) };
     // The haze colour from a ≤ 256 px linear copy of the visible pixels (a fully transparent
-    // one holds no colour).
+    // one holds no colour, and one that is not a number would poison the estimate).
     let s = w.max(h).div_ceil(256).max(1);
     let (sw, sh) = (w.div_ceil(s), h.div_ceil(s));
     let mut small = vec![0.0f32; sw * sh * 3];
     let mut count = vec![0.0f32; sw * sh];
-    for (i, q) in px.iter().enumerate().filter(|(_, q)| q[3] > 0.0) {
+    for (i, q) in px.iter().enumerate().filter(|(_, q)| q[3] > 0.0 && q[..3].iter().all(|v| v.is_finite())) {
         let j = (i / w / s) * sw + (i % w) / s;
         for c in 0..3 {
             if let Some(d) = small.get_mut(j * 3 + c) {
@@ -867,13 +867,28 @@ fn add_haze(px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
             *n += 1.0;
         }
     }
-    for (j, n) in count.iter().enumerate() {
+    for (j, n) in count.iter_mut().enumerate() {
         for c in 0..3 {
             small[j * 3 + c] /= n.max(1.0);
         }
+        // From here on, whether the cell holds any colour: blurred alongside the colour so
+        // empty cells (transparent padding) don't dilute it.
+        *n = if *n > 0.0 { 1.0 } else { 0.0 };
     }
     crate::fxutil::gauss_blur_n(&mut small, sw, sh, 3, 4.0);
-    let mut dark: Vec<(f32, usize)> = (0..sw * sh).map(|j| (small[j * 3].min(small[j * 3 + 1]).min(small[j * 3 + 2]), j)).collect();
+    crate::fxutil::gauss_blur_n(&mut count, sw, sh, 1, 4.0);
+    let mut dark: Vec<(f32, usize)> = (0..sw * sh)
+        .filter(|j| count[*j] > 1e-3)
+        .map(|j| {
+            for c in 0..3 {
+                small[j * 3 + c] /= count[j];
+            }
+            (small[j * 3].min(small[j * 3 + 1]).min(small[j * 3 + 2]), j)
+        })
+        .collect();
+    if dark.is_empty() {
+        return;
+    }
     dark.sort_by(|x, y| y.0.total_cmp(&x.0));
     let top = (dark.len() / 1000).max(1);
     let mut air = [0.0f32; 3];
@@ -1121,6 +1136,42 @@ mod tests {
         assert_eq!(tone_points(&clear, w, h, Encoding(0.0), |q| q), [-16.0, -1.0, 0.0, -1.0]);
     }
 
+    /// A pixel that is not a number takes no part in the haze colour, so negative Dehaze
+    /// can't turn the rest of a float image into NaN.
+    #[test]
+    fn a_nan_pixel_stays_out_of_the_haze_colour() {
+        let (w, h) = (64usize, 64usize);
+        let base: Vec<[f32; 4]> = (0..w * h).map(|i| [0.2 + 0.6 * ((i % w) as f32 / w as f32), 0.4, 0.3, 1.0]).collect();
+        let (mut with_nan, mut hidden) = (base.clone(), base.clone());
+        with_nan[100] = [0.5, f32::NAN, 0.5, 1.0];
+        hidden[100] = [0.5, 0.5, 0.5, 0.0];
+        add_haze(&mut with_nan, w, h, -100.0, Encoding(0.0));
+        add_haze(&mut hidden, w, h, -100.0, Encoding(0.0));
+        for i in (0..w * h).filter(|i| *i != 100) {
+            assert!(with_nan[i][..3].iter().all(|v| v.is_finite()), "pixel {i}: {:?}", with_nan[i]);
+            assert_eq!(with_nan[i], hidden[i], "pixel {i}");
+        }
+    }
+
+    /// Transparent padding around a small object doesn't dilute the haze colour: the object
+    /// comes out as it does when it fills the canvas.
+    #[test]
+    fn transparent_padding_does_not_darken_the_haze_colour() {
+        let (w, h) = (512usize, 512usize);
+        let object = [0.9, 0.85, 0.8, 1.0];
+        // In the middle: at a canvas edge the blur repeats the edge cells and hides the padding.
+        let inside = |i: usize| (240..272).contains(&(i % w)) && (240..272).contains(&(i / w));
+        let mut padded: Vec<[f32; 4]> = (0..w * h).map(|i| if inside(i) { object } else { [0.0; 4] }).collect();
+        let mut full = vec![object; w * h];
+        add_haze(&mut padded, w, h, -100.0, Encoding(0.0));
+        add_haze(&mut full, w, h, -100.0, Encoding(0.0));
+        for i in (0..w * h).filter(|i| inside(*i)) {
+            for c in 0..3 {
+                assert!((padded[i][c] - full[i][c]).abs() < 1e-4, "pixel {i}: {:?} vs {:?}", padded[i], full[i]);
+            }
+        }
+    }
+
     /// Fewer pixels than the dimensions claim: no panic, the pixels unchanged.
     #[test]
     fn a_short_buffer_is_left_alone() {
@@ -1287,7 +1338,7 @@ mod tests {
         let blues: Vec<[f32; 4]> = vec![[0.2, 0.2, 0.8, 1.0]; w * h];
         let mut b = blues.clone();
         develop(&mut b, w, h, &CameraRaw { hsl_sat: hs, ..Default::default() }, false);
-        assert!((b[0][2] - 0.8).abs() < 2e-3 && (b[0][0] - 0.2).abs() < 2e-3, "blues untouched: {:?}", b[0]);
+        assert!((b[0][2] - 0.8).abs() < 2e-3 && (b[0][0] - 0.2).abs() < 2e-3 && (b[0][1] - 0.2).abs() < 2e-3, "blues untouched: {:?}", b[0]);
         // Grading: blue shadows tint dark pixels, leave bright ones nearly alone.
         let mut g: Vec<[f32; 4]> = vec![[0.1, 0.1, 0.1, 1.0], [0.95, 0.95, 0.95, 1.0]];
         develop(&mut g, 2, 1, &CameraRaw { grade_shadows: Wheel { hue: 220.0, sat: 80.0, lum: 0.0 }, ..Default::default() }, false);

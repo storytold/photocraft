@@ -441,12 +441,15 @@ fn profile_tone_curve_and_hue_sat_map_apply() {
     // ProfileToneCurve through (0.25, 0.5), on linear values.
     let curve = centre(&profiled(grey, vec![(50940, Val::Double(vec![0.0, 0.0, 0.25, 0.5, 1.0, 1.0]))]));
     assert!(curve.iter().all(|v| (v - 0.5).abs() < 0.01), "{curve:?}");
-    // A hue / saturation map that doubles the value.
-    let (dims, data) = hsv_map(6, 2, [0.0, 1.0, 2.0]);
-    let brighter = centre(&profiled(grey, vec![(50937, dims), (50938, data)]));
-    assert!(brighter.iter().all(|v| (v - 0.5).abs() < 0.01), "{brighter:?}");
-    // Saturation scale 0 turns a colour neutral; a look table does the same after exposure.
+    // A hue / saturation map that doubles the value away from neutral: grey keeps its value
+    // (the specification fixes the value scale at saturation 0 to 1), a colour brightens.
     let red = [0.4f32, 0.1, 0.1];
+    let doubling = || vec![(50937, Val::Long(vec![6, 2, 1])), (50938, Val::Double((0..6).flat_map(|_| [0.0, 1.0, 1.0, 0.0, 1.0, 2.0]).collect()))];
+    let kept = centre(&profiled(grey, doubling()));
+    assert!(kept.iter().all(|v| (v - 0.25).abs() < 0.005), "{kept:?}");
+    let (plain_red, brighter) = (centre(&profiled(red, Vec::new())), centre(&profiled(red, doubling())));
+    assert!(brighter[0] > plain_red[0] * 1.2, "{plain_red:?} -> {brighter:?}");
+    // Saturation scale 0 turns a colour neutral; a look table does the same after exposure.
     let (dims, data) = hsv_map(6, 2, [0.0, 0.0, 1.0]);
     for tags in [vec![(50937, dims.clone()), (50938, data.clone())], vec![(50981, dims), (50982, data)]] {
         let o = centre(&profiled(red, tags));
@@ -466,6 +469,9 @@ fn malformed_profile_tags_are_ignored() {
         vec![(50937, Val::Long(vec![u32::MAX, u32::MAX, u32::MAX])), (50938, Val::Double(vec![0.0; 9]))],
         vec![(50981, Val::Long(vec![0, 0, 0])), (50982, Val::Double(Vec::new()))],
         vec![(50937, Val::Long(vec![1, 2, 1])), (50938, Val::Double(vec![0.0, -1.0, 2.0, 0.0, 1.0, f64::NAN]))],
+        // A value scale other than 1 at zero saturation, and dimensions with a fourth count.
+        vec![(50937, Val::Long(vec![6, 2, 1])), (50938, Val::Double((0..12).flat_map(|_| [0.0, 1.0, 2.0]).collect()))],
+        vec![(50937, Val::Long(vec![6, 2, 1, 1])), (50938, Val::Double((0..12).flat_map(|_| [0.0, 1.0, 1.0]).collect()))],
         // A tone curve that falls, leaves 0..1 or has an odd number of values.
         vec![(50940, Val::Double(vec![0.0, 0.0, 0.6, 0.5, 0.4, 0.6, 1.0, 1.0]))],
         vec![(50940, Val::Double(vec![0.0, 0.0, 2.0, 3.0]))],

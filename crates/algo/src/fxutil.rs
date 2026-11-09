@@ -294,6 +294,21 @@ pub(crate) fn gauss_blur_n(buf: &mut [f32], w: usize, h: usize, n: usize, sigma:
     }
 }
 
+/// [`gauss_blur_n`] that first checks its scratch memory can be had: `None` (the buffer
+/// untouched) when it can't, instead of aborting the app. The passes need at most a row or a
+/// column of samples, or a strip of [`STRIP_BYTES`].
+pub(crate) fn try_gauss_blur_n(buf: &mut [f32], w: usize, h: usize, n: usize, sigma: f32) -> Option<()> {
+    if sigma < 0.3 {
+        return Some(());
+    }
+    let need = w.max(h).checked_mul(n)?.max(STRIP_BYTES / 4);
+    let mut probe: Vec<f32> = Vec::new();
+    probe.try_reserve_exact(need).ok()?;
+    drop(probe);
+    gauss_blur_n(buf, w, h, n, sigma);
+    Some(())
+}
+
 /// Jittered feature point of grid cell `(cx, cy)` (cells of `cell` px anchored at `origin`).
 #[inline]
 pub(crate) fn cell_point(cx: i32, cy: i32, cell: f32, seed: u32, origin: (f32, f32)) -> (f32, f32) {

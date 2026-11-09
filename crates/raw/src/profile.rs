@@ -39,7 +39,8 @@ impl HsvMap {
     }
 
     /// A map from its dimensions tag, its data and its encoding tag (0 linear, 1 sRGB); `None`
-    /// when the dimensions and data don't agree or hold a value the specification excludes, or
+    /// when the dimensions and data don't agree or hold a value the specification excludes
+    /// (zero-saturation entries must have a value scale of 1.0, so neutrals keep their value), or
     /// a map with a value axis has an encoding the specification doesn't define.
     pub fn new(dims: &[u32], data: &[f64], encoding: u32) -> Option<HsvMap> {
         let [h, s, v] = dims else { return None };
@@ -51,10 +52,14 @@ impl HsvMap {
             .as_chunks::<3>()
             .0
             .iter()
-            .map(|e| {
+            .enumerate()
+            .map(|(i, e)| {
                 // Finite as f32 too: a huge f64 narrows to infinity.
                 let v = [e[0] as f32, e[1] as f32, e[2] as f32];
-                let ok = v.iter().all(|x| x.is_finite()) && v[1] >= 0.0 && v[2] >= 0.0;
+                // Saturation is the innermost loop, so entry `i` is at saturation `i % sat_divs`.
+                // A tolerance for the rounding of a value written as 1.0.
+                let neutral_ok = i % sat_divs != 0 || (v[2] - 1.0).abs() <= 1e-5;
+                let ok = v.iter().all(|x| x.is_finite()) && v[1] >= 0.0 && v[2] >= 0.0 && neutral_ok;
                 ok.then_some(v)
             })
             .collect::<Option<_>>()?;
@@ -99,7 +104,8 @@ impl HsvMap {
         } else {
             (0, 0, 0.0)
         };
-        let lerp = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
+        // As a weighted sum: `b − a` overflows for finite entries of opposite sign near f32::MAX.
+        let lerp = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|k| a[k] * (1.0 - t) + b[k] * t);
         let plane = |vi: usize| {
             let a = lerp(self.entry(vi, h0, s0), self.entry(vi, h0, s0 + 1), st);
             let b = lerp(self.entry(vi, h1, s0), self.entry(vi, h1, s0 + 1), st);
@@ -302,15 +308,16 @@ mod tests {
 
     #[test]
     fn saturation_and_value_scales_apply() {
-        // Saturation halved and value doubled everywhere.
-        let data: Vec<f64> = (0..6 * 2).flat_map(|_| [0.0, 0.5, 2.0]).collect();
+        // Saturation halved everywhere; value kept at saturation 0 (as the specification
+        // requires) and doubled at full saturation.
+        let data: Vec<f64> = (0..6).flat_map(|_| [0.0, 0.5, 1.0, 0.0, 0.5, 2.0]).collect();
         let m = HsvMap::new(&[6, 2, 1], &data, 0).unwrap();
         let o = m.apply([0.4, 0.2, 0.2]);
-        // HSV (0°, 0.5, 0.4) → (0°, 0.25, 0.8): (0.8, 0.6, 0.6).
-        assert!((o[0] - 0.8).abs() < 1e-5 && (o[1] - 0.6).abs() < 1e-5 && (o[2] - 0.6).abs() < 1e-5, "{o:?}");
-        // Grey stays grey (saturation 0), only brighter.
+        // HSV (0°, 0.5, 0.4), value scale 1.5 halfway → (0°, 0.25, 0.6): (0.6, 0.45, 0.45).
+        assert!((o[0] - 0.6).abs() < 1e-5 && (o[1] - 0.45).abs() < 1e-5 && (o[2] - 0.45).abs() < 1e-5, "{o:?}");
+        // Grey (saturation 0) is left as it is.
         let g = m.apply([0.3, 0.3, 0.3]);
-        assert!(g.iter().all(|v| (v - 0.6).abs() < 1e-5), "{g:?}");
+        assert!(g.iter().all(|v| (v - 0.3).abs() < 1e-5), "{g:?}");
     }
 
     #[test]
@@ -329,6 +336,51 @@ mod tests {
             let o = m.apply(c);
             assert!(o.iter().zip(c).all(|(a, b)| (a - b).abs() < 1e-5), "{c:?} -> {o:?}");
         }
+    }
+
+    /// The specification requires a value scale of 1.0 at zero saturation: a map that would
+    /// brighten or darken neutrals is malformed.
+    #[test]
+    fn zero_saturation_entries_keep_the_value() {
+        for dims in [[6u32, 2, 1], [6, 3, 2]] {
+            let mut bad = identity(dims[0], dims[1], dims[2]);
+            let last_zero_sat = (dims.iter().product::<u32>() - dims[1]) as usize;
+            bad[last_zero_sat * 3 + 2] = 2.0;
+            assert!(HsvMap::new(&dims, &bad, 0).is_none(), "{dims:?}");
+            // Other saturations may scale the value.
+            let mut ok = identity(dims[0], dims[1], dims[2]);
+            ok[(last_zero_sat + 1) * 3 + 2] = 2.0;
+            assert!(HsvMap::new(&dims, &ok, 0).is_some(), "{dims:?}");
+        }
+    }
+
+    /// Hue shifts of opposite sign near f32::MAX side by side: their difference overflows, and
+    /// the interpolation must still give a finite colour.
+    #[test]
+    fn extreme_neighbouring_entries_interpolate_without_overflow() {
+        let mut data = identity(2, 2, 1);
+        for (i, shift) in [(0, 3e38), (1, 3e38), (2, -3e38), (3, -3e38)] {
+            data[i * 3] = shift;
+        }
+        let m = HsvMap::new(&[2, 2, 1], &data, 0).unwrap();
+        for c in [[0.5f32, 0.0, 0.0], [0.5, 0.25, 0.25], [0.0, 0.5, 0.5], [0.5, 0.5, 0.0]] {
+            let o = m.apply(c);
+            assert!(o.iter().all(|v| v.is_finite()), "{c:?} -> {o:?}");
+        }
+    }
+
+    /// With encoding 1 the value axis is indexed by the sRGB-encoded value: linear 0.2 sits at
+    /// encoded 0.4845, so the value scale there is about 1.48, not the 1.2 a linear index gives.
+    #[test]
+    fn the_encoded_value_axis_is_looked_up_encoded() {
+        // Value divisions at 0 and 1 (value scale 1 → 2), saturation divisions at 0 and 1.
+        let data: Vec<f64> = [[0.0, 1.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 2.0]].iter().flat_map(|e| e.iter().copied()).collect();
+        let (srgb, linear) = (HsvMap::new(&[1, 2, 2], &data, 1).unwrap(), HsvMap::new(&[1, 2, 2], &data, 0).unwrap());
+        // Fully saturated red at linear value 0.2.
+        let scale = |m: &HsvMap| m.apply([0.2, 0.0, 0.0])[0] / 0.2;
+        let encoded = srgb_encode(0.2);
+        assert!((scale(&srgb) - (1.0 + encoded)).abs() < 1e-4, "{}", scale(&srgb));
+        assert!((scale(&linear) - 1.2).abs() < 1e-4, "{}", scale(&linear));
     }
 
     #[test]

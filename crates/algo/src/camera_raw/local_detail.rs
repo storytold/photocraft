@@ -26,7 +26,7 @@
 
 use super::Encoding;
 use super::local_detail_tables as t;
-use crate::fxutil::gauss_blur_n;
+use crate::fxutil::try_gauss_blur_n;
 use crate::photo_util::{linear_to_srgb, srgb_to_linear};
 
 /// Knots of `l`: 0, 1/7, … 1.
@@ -109,8 +109,8 @@ fn filled<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
 }
 
 /// Applies `model` at slider `v` (−100 … 100) to straight RGBA pixels (`w × h`, encoded with
-/// `enc`). Without the memory for its working planes (about 80 bytes a pixel for Texture) the
-/// pixels are left unchanged.
+/// `enc`). Without the memory for its working planes (about 80 bytes a pixel for Texture) or
+/// for a blur's scratch row the pixels are left unchanged.
 pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
     let Some(k) = model.coefficients(v) else { return };
     let n = w.saturating_mul(h);
@@ -165,7 +165,10 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
     let ns = model.scales.len();
     for (si, s) in model.scales.iter().enumerate() {
         blur.copy_from_slice(&planes);
-        gauss_blur_n(&mut blur, w, h, np, s * long);
+        // Without the memory for the blur's scratch row, the pixels are left unchanged.
+        if try_gauss_blur_n(&mut blur, w, h, np, s * long).is_none() {
+            return;
+        }
         for (i, m) in mv.iter_mut().enumerate() {
             let dl = term(1 + ps * si, i, planes[i * np] - blur[i * np]);
             for c in 0..3 {
@@ -203,6 +206,21 @@ mod tests {
     fn working_planes_too_large_for_memory_are_refused() {
         assert!(filled(usize::MAX / 2, 0.0f32).is_none());
         assert_eq!(filled(3, 1u8), Some(vec![1, 1, 1]));
+    }
+
+    /// The blur's scratch row is reserved fallibly: a row too large for memory is refused with
+    /// the buffer untouched, and otherwise the blur is the plain one.
+    #[test]
+    fn blur_scratch_too_large_for_memory_is_refused() {
+        let mut empty: [f32; 0] = [];
+        assert!(try_gauss_blur_n(&mut empty, usize::MAX / 8, 1, 4, 2.0).is_none());
+        assert!(try_gauss_blur_n(&mut empty, usize::MAX, 1, 4, 2.0).is_none());
+        let src: Vec<f32> = (0..12 * 9 * 2).map(|i| ((i * 37) % 11) as f32 / 10.0).collect();
+        let (mut a, mut b) = (src.clone(), src.clone());
+        assert!(try_gauss_blur_n(&mut a, 12, 9, 2, 1.5).is_some());
+        crate::fxutil::gauss_blur_n(&mut b, 12, 9, 2, 1.5);
+        assert_eq!(a, b);
+        assert_ne!(a, src);
     }
 
     /// A pixel that is not a number stays its own problem: its neighbours develop as without it.
