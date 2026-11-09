@@ -1455,7 +1455,7 @@ fn an_iconic_dock_column_takes_its_iconic_width() {
     };
     app.ui.docking = Some(Workspace::new(layout));
     assert!((dock_width(&app) - 36.0).abs() < 0.5, "the iconic column displays 36 points, got {}", dock_width(&app));
-    assert!(set_end_dock_total(&mut app, 220.0), "the dock-edge resize accepts an iconic dock");
+    assert!(set_end_dock_total(&mut app, 220.0).is_some(), "the dock-edge resize accepts an iconic dock");
     assert!((dock_width(&app) - 220.0).abs() < 1.0, "after the resize the dock displays 220 points, got {}", dock_width(&app));
     let root = app.ui.docking.as_ref().unwrap().layout.root.as_ref().unwrap();
     let dock = match root {
@@ -1551,4 +1551,145 @@ fn an_empty_dock_has_no_panels() {
         **second = Node::Dock { side: Side::End, columns: Vec::new() };
     }
     assert!(dock_is_empty(&app), "a dock with no columns has nothing to show");
+}
+
+/// Width refused by the iconic 240-point cap reaches a column that can still grow.
+#[test]
+fn iconic_cap_surplus_goes_to_expandable_columns() {
+    let mut app = app();
+    let mut layout = legacy(&app);
+    let used: std::collections::HashSet<String> = layout.panels().into_iter().map(|panel| panel.to_string()).collect();
+    let extra = PANELS.iter().map(|(id, _, _)| *id).find(|id| !used.contains(*id)).expect("a free panel id");
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns[0].iconic = true;
+        columns[0].iconic_width = Some(240.0);
+        columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 220.0));
+    }
+    app.ui.docking = Some(Workspace::new(layout));
+    set_dock_width(&mut app, 600.0);
+    let root = app.ui.docking.as_ref().expect("a workspace").layout.root.as_ref().expect("root");
+    let dock = match root {
+        Node::Split { second, .. } => second.as_ref(),
+        _ => root,
+    };
+    let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+    let displayed: Vec<f32> =
+        columns.iter().map(|column| if column.iconic { column.iconic_width.unwrap_or(36.0).clamp(36.0, 240.0) } else { column.width }).collect();
+    let total: f32 = displayed.iter().sum();
+    assert!((total - 600.0).abs() < 1.0, "the requested total is reached: {displayed:?}");
+    assert!((displayed[0] - 240.0).abs() < 0.5, "the iconic column stays at its cap: {displayed:?}");
+    assert!((displayed[1] - 360.0).abs() < 1.0, "the expandable column takes the surplus: {displayed:?}");
+}
+
+/// The rendered panel uses the width the model actually stored when a drag asks for less than the
+/// column minimum, during the drag and after release.
+#[test]
+fn dock_panel_draws_the_actual_minimum_during_and_after_a_drag() {
+    let mut app = app();
+    let mut layout = legacy(&app);
+    let used: std::collections::HashSet<String> = layout.panels().into_iter().map(|panel| panel.to_string()).collect();
+    let extra = PANELS.iter().map(|(id, _, _)| *id).find(|id| !used.contains(*id)).expect("a free panel id");
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
+    }
+    app.ui.docking = Some(Workspace::new(layout));
+    let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
+    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
+    let edge = 1280.0 - (dock_width(h.state()) + rail);
+    h.event(Event::PointerMoved(pos2(edge, 400.0)));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: pos2(edge, 400.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerMoved(pos2(edge + 240.0, 400.0)));
+    h.run_steps(2);
+    let during = dock_width(h.state());
+    let drawn = crate::panels::dock_panel_width(&h.ctx);
+    assert!((during - 440.0).abs() < 1.0, "the model stops at the 440-point minimum, got {during}");
+    assert!((drawn - (during + rail)).abs() < 2.0, "the panel follows the stored width, got {drawn} for {during}+{rail}");
+    h.event(Event::PointerButton { pos: pos2(edge + 240.0, 400.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    let after = dock_width(h.state());
+    assert!((after - during).abs() < 1.0, "the release keeps the model width, got {after} then {during}");
+    let drawn = crate::panels::dock_panel_width(&h.ctx);
+    assert!((drawn - (after + rail)).abs() < 2.0, "the release frame follows the stored width, got {drawn} for {after}+{rail}");
+}
+
+/// A workspace replacement during a drag invalidates the stored gesture before it can write.
+#[test]
+fn replacing_the_workspace_cancels_the_dock_drag() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
+    let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
+    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
+    let edge = 1280.0 - (dock_width(h.state()) + rail);
+    h.event(Event::PointerMoved(pos2(edge, 400.0)));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: pos2(edge, 400.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerMoved(pos2(edge + 120.0, 400.0)));
+    h.run_steps(2);
+    assert!(crate::panels::dock_edge_drag_active(&h.ctx), "the drag started");
+
+    let mut replacement = legacy(h.state());
+    {
+        let root = replacement.root.as_mut().expect("root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns[0].width = 520.0;
+    }
+    h.state_mut().ui.docking = Some(Workspace::new(replacement));
+    h.state_mut().ui.docking_generation += 1;
+    h.run_steps(2);
+    assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "the old workspace drag is cleared");
+    let target = dock_width(h.state());
+    h.event(Event::PointerButton { pos: pos2(edge + 120.0, 400.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!((dock_width(h.state()) - target).abs() < 1.0, "the release does not overwrite the new workspace: got {} from {target}", dock_width(h.state()));
+}
+
+/// A window too narrow for the column minima does not panic while resizing and keeps the panel
+/// inside the available space.
+#[test]
+fn constrained_width_does_not_panic_while_resizing() {
+    let mut app = app();
+    let mut layout = legacy(&app);
+    let used: std::collections::HashSet<String> = layout.panels().into_iter().map(|panel| panel.to_string()).collect();
+    let extra = PANELS.iter().map(|(id, _, _)| *id).find(|id| !used.contains(*id)).expect("a free panel id");
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
+    }
+    app.ui.docking = Some(Workspace::new(layout));
+    let mut h = dock_edge_harness(app, vec2(300.0, 600.0));
+    let drawn = crate::panels::dock_panel_width(&h.ctx);
+    assert!(drawn <= 80.0, "the dock stays within the narrow window, got {drawn}");
+    let edge = 300.0 - drawn;
+    h.event(Event::PointerMoved(pos2(edge, 300.0)));
+    h.event(Event::PointerButton { pos: pos2(edge, 300.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerMoved(pos2(edge + 40.0, 300.0)));
+    h.run_steps(2);
+    h.event(Event::PointerButton { pos: pos2(edge + 40.0, 300.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(crate::panels::dock_panel_width(&h.ctx) <= 80.0, "the panel stays within the narrow window after release");
 }

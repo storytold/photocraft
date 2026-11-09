@@ -60,7 +60,6 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 },
             );
         }
-        // The dock became empty: a drag start from before this transition can never finish.
         crate::panels::clear_dock_edge_drag(ui.ctx());
         // A child that does not consume the parent's layout space: the docking pass still draws
         // floating windows, but the toolbox and canvas keep their room.
@@ -70,44 +69,60 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::color_panel_ui::persist(app);
         return;
     }
-    // An iconic-only dock keeps its narrow displayed width instead of being raised to the expanded
-    // minimum; other docks keep the usual minimum and maximum.
     let iconic = metrics.iconic_only;
-    let min_visible = if iconic { crate::panel_docking::ICONIC_WIDTH } else { min_dock };
-    let mut stored = if iconic { metrics.width.clamp(1.0, max_dock) } else { metrics.width.clamp(min_dock, max_dock) };
+    let natural_min = if iconic { crate::panel_docking::ICONIC_WIDTH } else { metrics.minimum.max(min_dock) };
+    let max_dock = max_dock.min(if metrics.maximum.is_finite() { metrics.maximum.max(natural_min) } else { max_dock });
+    let feasible = natural_min <= max_dock + 0.5;
+    let min_visible = natural_min.min(max_dock);
+    // Draw the width the layout actually has, not the minimum the gestures enforce.
+    let mut stored = metrics.width.clamp(1.0, max_dock);
+    let generation = app.ui.docking_generation;
     let drag_id = egui::Id::unique("dock-edge-drag");
-    // Resizing is unavailable while locked, modal, or when the parent UI is disabled (screen
-    // picking disables it). A disabled handle never receives drag_stopped, so drop any stored
-    // start here; otherwise it blocks persistence and can apply to a later pointer.
-    let resizable = !locked && !modal && ui.is_enabled();
-    let mut drag = if resizable {
-        ui.ctx().data(|d| d.get_temp::<(f32, f32)>(drag_id))
-    } else {
-        crate::panels::clear_dock_edge_drag(ui.ctx());
-        None
+    // Resizing is unavailable while locked, modal, when the parent UI is disabled (screen picking
+    // disables it), or when the window cannot fit the column minima. A disabled handle never
+    // receives drag_stopped, so drop any stored start here; a start from another workspace
+    // generation is stale and must not touch this one.
+    let resizable = !locked && !modal && ui.is_enabled() && feasible;
+    let mut drag = match if resizable { ui.ctx().data(|d| d.get_temp::<(f32, f32, u64)>(drag_id)) } else { None } {
+        Some((start_x, start_w, saved)) if saved == generation => Some((start_x, start_w)),
+        Some(_) => {
+            crate::panels::clear_dock_edge_drag(ui.ctx());
+            None
+        }
+        None => {
+            if !resizable {
+                crate::panels::clear_dock_edge_drag(ui.ctx());
+            }
+            None
+        }
+    };
+    let lower = (min_visible + rw).min(max_dock + rw);
+    let upper = max_dock + rw;
+    let pointer_width = |start_x: f32, start_w: f32| {
+        let pointer = ui.ctx().input(|i| i.pointer.latest_pos()).map_or(start_x, |pos| pos.x);
+        let dx = if crate::direction::is_rtl() { pointer - start_x } else { start_x - pointer };
+        (start_w + dx).clamp(lower, upper)
     };
     // The release frame still carries the final pointer position; apply it before dropping the
     // drag, so the dock keeps the width the user released at instead of the previous frame's.
     if let Some((start_x, start_w)) = drag
         && !ui.ctx().input(|i| i.pointer.any_down())
     {
-        let pointer = ui.ctx().input(|i| i.pointer.latest_pos()).map_or(start_x, |pos| pos.x);
-        let dx = if crate::direction::is_rtl() { pointer - start_x } else { start_x - pointer };
-        let final_w = (start_w + dx).clamp(min_visible + rw, max_dock + rw);
-        crate::panel_docking::set_end_dock_total(app, (final_w - rw).clamp(min_visible, max_dock));
-        // This frame has no drag value any more: draw the panel at the width just stored, so the
-        // panel and toolbar match the release instead of the previous frame.
-        stored = final_w - rw;
+        let final_w = pointer_width(start_x, start_w);
+        let requested = (final_w - rw).clamp(min_visible, max_dock);
+        stored = crate::panel_docking::set_end_dock_total(app, requested).unwrap_or(requested).clamp(1.0, max_dock);
         drag = None;
-        ui.ctx().data_mut(|d| d.remove::<(f32, f32)>(drag_id));
+        ui.ctx().data_mut(|d| d.remove::<(f32, f32, u64)>(drag_id));
     }
-    let panel_w = if let Some((start_x, start_w)) = drag {
-        let pointer = ui.ctx().input(|i| i.pointer.latest_pos()).map_or(start_x, |pos| pos.x);
-        let dx = if crate::direction::is_rtl() { pointer - start_x } else { start_x - pointer };
-        (start_w + dx).clamp(min_visible + rw, max_dock + rw)
-    } else {
-        stored + rw
-    };
+    let mut panel_w = if let Some((start_x, start_w)) = drag { pointer_width(start_x, start_w) } else { (stored + rw).clamp(lower, upper) };
+    if drag.is_some() && resizable {
+        let requested = (panel_w - rw).clamp(min_visible, max_dock);
+        if let Some(actual) = crate::panel_docking::set_end_dock_total(app, requested) {
+            // The model can land somewhere other than the pointer request (minimums, iconic
+            // caps); draw the panel at the width that was actually stored.
+            panel_w = (actual + rw).clamp(lower, upper);
+        }
+    }
     #[cfg(test)]
     ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("photo-dock-panel-width"), panel_w));
     if drag.is_some() && resizable {
@@ -170,13 +185,13 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.ctx().layer_painter(line).vline(panel_edge, panel_rect.y_range(), Stroke::new(1.0, color));
             if response.drag_started() {
                 let start_x = response.interact_pointer_pos().map_or(panel_edge, |pos| pos.x);
-                ui.ctx().data_mut(|d| d.insert_temp(drag_id, (start_x, panel_w)));
+                ui.ctx().data_mut(|d| d.insert_temp(drag_id, (start_x, panel_w, generation)));
             }
             if response.dragged() {
                 ui.ctx().request_repaint();
             }
             if response.drag_stopped() {
-                ui.ctx().data_mut(|d| d.remove::<(f32, f32)>(drag_id));
+                ui.ctx().data_mut(|d| d.remove::<(f32, f32, u64)>(drag_id));
             }
         },
     );
@@ -187,12 +202,12 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// True while the dock-edge resize drag has a stored start: a synthetic/accessibility click can
 /// arrive with no pointer button down, but the in-progress dock width must not be persisted.
 pub(crate) fn dock_edge_drag_active(ctx: &egui::Context) -> bool {
-    ctx.data(|data| data.get_temp::<(f32, f32)>(egui::Id::unique("dock-edge-drag")).is_some())
+    ctx.data(|data| data.get_temp::<(f32, f32, u64)>(egui::Id::unique("dock-edge-drag")).is_some())
 }
 
 /// Drops a dock-edge drag start that can no longer be completed (its panel stopped rendering).
 pub(crate) fn clear_dock_edge_drag(ctx: &egui::Context) {
-    ctx.data_mut(|data| data.remove::<(f32, f32)>(egui::Id::unique("dock-edge-drag")));
+    ctx.data_mut(|data| data.remove::<(f32, f32, u64)>(egui::Id::unique("dock-edge-drag")));
 }
 
 /// The width the dock column took in the last frame (tests: an iconic-only dock must take its

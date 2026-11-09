@@ -106,6 +106,8 @@ pub(crate) struct DockMetrics {
     pub(crate) empty: bool,
     pub(crate) iconic_only: bool,
     pub(crate) width: f32,
+    pub(crate) minimum: f32,
+    pub(crate) maximum: f32,
 }
 
 /// The end dock's displayed width, whether it has no panels, and whether every column is iconic.
@@ -120,8 +122,10 @@ pub(crate) fn dock_metrics(app: &PhotocraftApp) -> DockMetrics {
             empty: columns.iter().all(|column| column.groups.iter().all(|group| group.panels.is_empty())),
             iconic_only: columns.iter().all(|column| column.iconic),
             width: columns.iter().map(display_width).sum(),
+            minimum: columns_minimum(columns),
+            maximum: columns_maximum(columns),
         },
-        _ => DockMetrics { empty: true, iconic_only: false, width: default_width(app.ui.theme.is_pro()) },
+        _ => DockMetrics { empty: true, iconic_only: false, width: default_width(app.ui.theme.is_pro()), minimum: 0.0, maximum: f32::INFINITY },
     }
 }
 
@@ -165,6 +169,16 @@ fn columns_minimum(columns: &[Column<String>]) -> f32 {
     columns.iter().map(column_minimum).sum()
 }
 
+/// The greatest displayed width of a column: iconic columns stop at the renderer's cap, expanded
+/// columns can use whatever the window gives them.
+fn column_maximum(column: &Column<String>) -> f32 {
+    if column.iconic { ICONIC_MAX_WIDTH } else { f32::INFINITY }
+}
+
+fn columns_maximum(columns: &[Column<String>]) -> f32 {
+    columns.iter().map(column_maximum).sum()
+}
+
 /// Sets a column's displayed width. An iconic column keeps its expanded width for when the user
 /// expands it again; only `iconic_width` changes.
 fn set_display_width(column: &mut Column<String>, width: f32) {
@@ -182,24 +196,52 @@ fn scale_columns(columns: &mut [Column<String>], total: f32) -> f32 {
     if columns.is_empty() {
         return 0.0;
     }
-    let current: f32 = columns.iter().map(display_width).sum();
-    let minimum: f32 = columns_minimum(columns);
-    let target = total.max(minimum).max(1.0);
-    if current > 0.0 && (current - target).abs() < 0.5 {
-        return current;
-    }
-    // Every column keeps its minimum; the rest of the target is shared in proportion to each
-    // column's width above its minimum, so the total lands on the request.
-    let extra = (target - minimum).max(0.0);
-    let flexible: f32 = columns.iter().map(|column| (display_width(column) - column_minimum(column)).max(0.0)).sum();
-    let count = columns.len() as f32;
+    // Bring the existing widths into their bounds, then move the total toward the request in
+    // passes, freezing columns that hit a bound so their refused space reaches the others.
     for column in columns.iter_mut() {
-        let base = column_minimum(column);
-        let width = if flexible > 0.0 { base + extra * (display_width(column) - base).max(0.0) / flexible } else { base + extra / count };
+        let width = display_width(column).clamp(column_minimum(column), column_maximum(column));
         set_display_width(column, width);
     }
-    columns.iter().map(display_width).sum()
+    let minimum = columns_minimum(columns);
+    let maximum = columns_maximum(columns);
+    let target = total.clamp(minimum, maximum.max(minimum)).max(1.0);
+    let mut sum: f32 = columns.iter().map(display_width).sum();
+    for _ in 0..8 {
+        let diff = target - sum;
+        if diff.abs() < 0.5 {
+            break;
+        }
+        let candidates: Vec<usize> = columns
+            .iter()
+            .enumerate()
+            .filter(
+                |(_, column)| {
+                    if diff > 0.0 { display_width(column) < column_maximum(column) - 0.01 } else { display_width(column) > column_minimum(column) + 0.01 }
+                },
+            )
+            .map(|(index, _)| index)
+            .collect();
+        if candidates.is_empty() {
+            break;
+        }
+        let share = diff / candidates.len() as f32;
+        let mut changed = false;
+        for index in candidates {
+            let old = display_width(&columns[index]);
+            let width = (old + share).clamp(column_minimum(&columns[index]), column_maximum(&columns[index]));
+            if (width - old).abs() > 0.001 {
+                set_display_width(&mut columns[index], width);
+                changed = true;
+            }
+        }
+        sum = columns.iter().map(display_width).sum();
+        if !changed {
+            break;
+        }
+    }
+    sum
 }
+
 /// The end dock's columns, following the same horizontal second-child path as [`end_dock_node`].
 fn dock_columns_mut(node: &mut Node<String>) -> Option<&mut Vec<Column<String>>> {
     match node {
@@ -976,18 +1018,21 @@ pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
 
 /// Set the end dock's total width in place, keeping its columns' proportions and the horizontal
 /// split that holds the dock at its edge in step. Creates the custom workspace from the legacy
-/// dock the first time. `false` when there is no end dock.
-pub(crate) fn set_end_dock_total(app: &mut PhotocraftApp, total: f32) -> bool {
+/// dock the first time. Returns the resulting displayed width, or `None` when there is no end dock.
+pub(crate) fn set_end_dock_total(app: &mut PhotocraftApp, total: f32) -> Option<f32> {
     if !total.is_finite() || total <= 0.0 || app.session.prefs().workspace_locked {
-        return false;
+        return None;
     }
     if app.ui.docking.is_none() {
         set_dock_width(app, total);
     }
-    let Some(workspace) = app.ui.docking.as_mut() else { return false };
-    let Some(root) = workspace.layout.root.as_mut() else { return false };
+    let workspace = app.ui.docking.as_mut()?;
+    let root = workspace.layout.root.as_mut()?;
     let mut actual = total;
-    resize_end_dock(root, total, &mut actual)
+    if !resize_end_dock(root, total, &mut actual) {
+        return None;
+    }
+    Some(actual)
 }
 
 /// The end dock's columns at `total`, and the split that holds the dock at its window edge.
