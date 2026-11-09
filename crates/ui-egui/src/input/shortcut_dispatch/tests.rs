@@ -8,6 +8,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::LayerContent;
 use photocraft_engine::actions_cmds;
+use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend};
 use serde_json::json;
 
 use super::{Focus, Outcome, bindings, set_dry_run, take_log};
@@ -899,28 +900,28 @@ fn new_occurrence_key_shadows_legacy_primary_until_the_identity_is_missing() {
     assert!(bindings(h.state()).iter().any(|(id, _)| id == "actions.play:Target"));
 }
 
+struct RejectActionsWrite(MemBackend);
+impl PresetBackend for RejectActionsWrite {
+    fn list(&self) -> Result<Vec<(String, u64)>, String> {
+        self.0.list()
+    }
+    fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
+        self.0.read(name, max)
+    }
+    fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        if name == ACTIONS_FILE {
+            return Err("injected Actions write failure".into());
+        }
+        self.0.write(name, bytes)
+    }
+    fn remove(&self, name: &str) -> Result<(), String> {
+        self.0.remove(name)
+    }
+}
+
 #[test]
 fn failed_action_id_write_keeps_the_legacy_shortcut_after_reopen() {
     use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
-
-    struct RejectActionsWrite(MemBackend);
-    impl PresetBackend for RejectActionsWrite {
-        fn list(&self) -> Result<Vec<(String, u64)>, String> {
-            self.0.list()
-        }
-        fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
-            self.0.read(name, max)
-        }
-        fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-            if name == ACTIONS_FILE {
-                return Err("injected Actions write failure".into());
-            }
-            self.0.write(name, bytes)
-        }
-        fn remove(&self, name: &str) -> Result<(), String> {
-            self.0.remove(name)
-        }
-    }
 
     let store = MemBackend::default();
     let file = json!({"version":1,"actions":[{"name":"Target","steps":[["layer.new.layer",{"name":"legacy target"}]]}]});
@@ -944,6 +945,75 @@ fn failed_action_id_write_keeps_the_legacy_shortcut_after_reopen() {
     assert!(!h.state().session.prefs().shortcuts.values().any(|key| key == "F4"));
     press(&mut h, "F2");
     assert_eq!(active_name(&h), "legacy target");
+}
+
+#[test]
+fn deferred_action_shortcut_conflicts_clear_only_after_matching_native_write() {
+    use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
+
+    let loser = "actions.play:Disk";
+    let edited = "actions.play:Edited";
+    let own = "actions.play:Winner";
+    let orphan = "actions.play:Missing";
+    for (reject, winner_drift) in [(false, false), (true, false), (false, true)] {
+        let store = MemBackend::default();
+        let original = br#"{"version":1,"actions":[{"name":"Disk"},{"name":"Edited"}]}"#;
+        store.write(ACTIONS_FILE, original).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut h = harness();
+        let app = h.state_mut();
+        app.services.preset_store = Some(rx);
+        app.session.actions.list.push(actions_cmds::Action::new("Winner", vec![("layer.new.layer".into(), json!({"name":"winner ran"}))]));
+        app.session.edit_prefs(|prefs| {
+            for key in [loser, edited, own, orphan] {
+                prefs.shortcuts.insert(key.into(), "F4".into());
+                prefs.alternate_shortcuts.insert(key.into(), vec!["F4".into(), "F8".into()]);
+            }
+        });
+        crate::actions::assign_shortcut(app, 0, "F4").unwrap();
+        let winner = actions_cmds::occurrence_key(app.session.actions.list[0].action_id.as_deref().unwrap());
+        assert_eq!(app.session.prefs().shortcuts[loser], "F4");
+        assert_eq!(app.session.prefs().alternate_shortcuts[loser], ["F4", "F8"]);
+        assert_eq!(store.read(ACTIONS_FILE, 4096).unwrap(), original);
+        app.session.edit_prefs(|prefs| {
+            prefs.shortcuts.insert(edited.into(), "F6".into());
+            prefs.alternate_shortcuts.insert(edited.into(), vec!["F4".into(), "F9".into()]);
+            if winner_drift {
+                prefs.shortcuts.insert(winner.clone(), "F5".into());
+            }
+        });
+        let backend: Box<dyn PresetBackend> = if reject { Box::new(RejectActionsWrite(store.clone())) } else { Box::new(store.clone()) };
+        tx.send(open(backend)).unwrap();
+        h.run_steps(2);
+        let app = h.state();
+        assert!(app.services.preset_store.is_none() && app.session.preset_store.is_some());
+        let prefs = app.session.prefs();
+        assert_eq!(prefs.shortcuts[&winner], if winner_drift { "F5" } else { "F4" });
+        assert_eq!(prefs.shortcuts[edited], "F6");
+        assert_eq!(prefs.alternate_shortcuts[edited], ["F4", "F9"]);
+        for key in [own, orphan] {
+            assert_eq!(prefs.shortcuts[key], "F4");
+            assert_eq!(prefs.alternate_shortcuts[key], ["F4", "F8"]);
+        }
+        if reject || winner_drift {
+            assert_eq!(prefs.shortcuts[loser], "F4");
+            assert_eq!(prefs.alternate_shortcuts[loser], ["F4", "F8"]);
+        } else {
+            assert!(prefs.shortcuts.get(loser).is_none_or(String::is_empty));
+            assert_eq!(prefs.alternate_shortcuts[loser], ["F8"]);
+            press(&mut h, "F4");
+            assert_eq!(active_name(&h), "winner ran");
+        }
+
+        let mut reopened = photocraft_engine::Session::new();
+        assert!(reopened.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+        if reject {
+            assert_eq!(store.read(ACTIONS_FILE, 4096).unwrap(), original);
+            assert!(actions_cmds::shortcut_row(&reopened.actions.list, &winner).is_none());
+        } else {
+            assert_eq!(actions_cmds::shortcut_row(&reopened.actions.list, &winner), Some(0));
+        }
+    }
 }
 
 #[test]

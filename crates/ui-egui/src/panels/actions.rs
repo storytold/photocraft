@@ -4,6 +4,8 @@
 //! `play` / `list` / `get` / `delete` / `move` / `rename`), so the panel, the CLI and MCP share them. This module
 //! keeps only which row is selected and which rows are expanded.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -84,6 +86,8 @@ pub struct ActionsUi {
     renaming: Option<RenameAction>,
     #[serde(skip)]
     batch_dialog_targets: std::collections::BTreeMap<u64, std::collections::BTreeMap<usize, ActionOccurrence>>,
+    #[serde(skip)]
+    deferred_shortcut_conflicts: Vec<DeferredShortcutConflicts>,
 }
 
 impl ActionsUi {
@@ -102,6 +106,14 @@ struct RenameAction {
     index: usize,
     text: String,
     focused: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DeferredShortcutConflicts {
+    winner: String,
+    chord: String,
+    primary: Vec<String>,
+    alternate: Vec<(String, Vec<String>)>,
 }
 
 pub(crate) fn label_of(id: &str) -> String {
@@ -395,23 +407,35 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
     };
     let mut set = serde_json::Map::new();
     let mut alternates = serde_json::Map::new();
+    let mut deferred = None;
     if let Some(key) = photocraft_engine::prefs::normalize_shortcut(shortcut) {
+        let pending_legacy = |other: &str| pending && other.starts_with(actions_cmds::PLAY_SHORTCUT_PREFIX);
+        let mut conflicts = DeferredShortcutConflicts { winner: id.clone(), chord: key.clone(), primary: Vec::new(), alternate: Vec::new() };
         for (other, assigned) in &prefs.shortcuts {
-            if assigned == &key && can_clear(other) {
-                set.insert(other.clone(), json!(""));
-            }
-        }
-        for (other, assigned) in &prefs.alternate_shortcuts {
-            if can_clear(other) {
-                let remaining: Vec<_> =
-                    assigned.iter().filter(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned).as_ref() != Some(&key)).collect();
-                if remaining.len() != assigned.len() {
-                    alternates.insert(other.clone(), json!(remaining));
+            if assigned == &key {
+                if pending_legacy(other) {
+                    conflicts.primary.push(other.clone());
+                } else if can_clear(other) {
+                    set.insert(other.clone(), json!(""));
                 }
             }
         }
+        for (other, assigned) in &prefs.alternate_shortcuts {
+            if can_clear(other) || pending_legacy(other) {
+                let remaining: Vec<_> =
+                    assigned.iter().filter(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned).as_ref() != Some(&key)).collect();
+                if remaining.len() != assigned.len() {
+                    if pending_legacy(other) {
+                        conflicts.alternate.push((other.clone(), assigned.clone()));
+                    } else {
+                        alternates.insert(other.clone(), json!(remaining));
+                    }
+                }
+            }
+        }
+        deferred = (!conflicts.primary.is_empty() || !conflicts.alternate.is_empty()).then_some(conflicts);
     }
-    set.insert(id, json!(shortcut));
+    set.insert(id.clone(), json!(shortcut));
     let result = app.run("edit.keyboardShortcuts", json!({"set": set, "alternates": alternates, "allowUnknown": true, "removeConflicts": false}))?;
     if let Err(error) = actions_cmds::commit_action_id(&mut app.session, index, action_id) {
         if let Some((shortcuts, alternate_shortcuts)) = previous {
@@ -425,7 +449,52 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
         app.ui.status_error = true;
         return Err(error);
     }
+    if pending {
+        let queued = &mut app.ui.actions.deferred_shortcut_conflicts;
+        queued.retain(|conflicts| conflicts.winner != id);
+        queued.extend(deferred);
+    }
     Ok(result)
+}
+
+/// Complete pending legacy conflict removal only after the native definitions were written.
+pub(crate) fn finish_deferred_shortcut_conflicts(app: &mut PhotocraftApp, actions_written: bool) {
+    let deferred = std::mem::take(&mut app.ui.actions.deferred_shortcut_conflicts);
+    if !actions_written || deferred.is_empty() {
+        return;
+    }
+    let list = &app.session.actions.list;
+    let prefs = app.session.prefs();
+    let mut primary = BTreeSet::new();
+    let mut alternate = BTreeMap::new();
+    for pending in deferred {
+        let Some(winner) = actions_cmds::shortcut_row(list, &pending.winner) else { continue };
+        if prefs.shortcuts.get(&pending.winner) != Some(&pending.chord) {
+            continue;
+        }
+        let losing = |key: &str| actions_cmds::shortcut_row(list, key).is_some_and(|row| row != winner);
+        for key in pending.primary {
+            if losing(&key) && prefs.shortcuts.get(&key) == Some(&pending.chord) {
+                primary.insert(key);
+            }
+        }
+        for (key, original) in pending.alternate {
+            if losing(&key) && prefs.alternate_shortcuts.get(&key) == Some(&original) {
+                alternate
+                    .entry(key)
+                    .or_insert(original)
+                    .retain(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned).as_ref() != Some(&pending.chord));
+            }
+        }
+    }
+    if !primary.is_empty() || !alternate.is_empty() {
+        app.session.edit_prefs(|prefs| {
+            for key in primary {
+                prefs.shortcuts.insert(key, String::new());
+            }
+            prefs.alternate_shortcuts.extend(alternate);
+        });
+    }
 }
 
 /// Replay edits synchronously, with view steps handled by the shell in the same order.

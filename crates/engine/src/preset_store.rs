@@ -1104,21 +1104,31 @@ impl PresetStore {
     /// An oversized list is warned once and not retried. An I/O error is warned and retried
     /// on the next command.
     pub fn sync_actions(&mut self, state: &crate::actions_cmds::ActionState) {
+        self.write_unsynced_actions(state);
+    }
+
+    fn write_unsynced_actions(&mut self, state: &crate::actions_cmds::ActionState) -> bool {
         let rev = state.rev;
         if self.actions_rev == rev {
-            return;
+            return false;
         }
         let bytes = match self.action_bytes(state) {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.warnings.push(error);
                 self.actions_rev = rev;
-                return;
+                return false;
             }
         };
         match self.backend.write(ACTIONS_FILE, &bytes) {
-            Ok(()) => self.actions_rev = rev,
-            Err(e) => self.warnings.push(format!("Couldn't save actions: {e}")),
+            Ok(()) => {
+                self.actions_rev = rev;
+                true
+            }
+            Err(e) => {
+                self.warnings.push(format!("Couldn't save actions: {e}"));
+                false
+            }
         }
     }
 
@@ -1158,6 +1168,11 @@ impl Session {
     /// built-in of the same name; presets created before the store finished loading win), hide
     /// deleted built-ins, then sync. Returns the load warnings.
     pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
+        self.attach_preset_store_with_action_write(opened).0
+    }
+
+    /// Attach as usual and report whether the merged Actions definitions were written.
+    pub fn attach_preset_store_with_action_write(&mut self, opened: Opened) -> (Vec<String>, bool) {
         let Opened { store, presets, hidden_builtins, order, mut warnings, actions: mut disk, action_sets, action_set_rows, patterns } = opened;
         let builtins = crate::pattern_cmds::builtin();
         for l in patterns {
@@ -1234,7 +1249,7 @@ impl Session {
             self.actions.rev = self.actions.rev.saturating_add(1).max(1);
         }
         self.brush_presets_changed();
-        self.sync_preset_store();
+        let actions_written = self.sync_preset_store_with_action_write();
         // A brush remembered from the previous run (or picked before the store loaded) may be
         // painting with previews; load the full tips now (a missing one keeps its preview).
         let mut brush = std::mem::take(&mut self.tools.brush);
@@ -1243,11 +1258,15 @@ impl Session {
         if let Some(st) = self.preset_store.as_mut() {
             warnings.extend(st.take_warnings());
         }
-        warnings
+        (warnings, actions_written)
     }
 
     /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
     pub fn sync_preset_store(&mut self) {
+        self.sync_preset_store_with_action_write();
+    }
+
+    fn sync_preset_store_with_action_write(&mut self) -> bool {
         let rev = self.tools.presets_rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
@@ -1259,9 +1278,11 @@ impl Session {
                     self.tools.brush_changed();
                 }
             }
-            st.sync_actions(&self.actions);
+            let actions_written = st.write_unsynced_actions(&self.actions);
             st.sync_patterns(&self.patterns);
+            return actions_written;
         }
+        false
     }
 
     /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so

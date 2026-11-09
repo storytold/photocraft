@@ -219,7 +219,8 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
         match rx.try_recv() {
             Ok(opened) => {
                 app.services.preset_store = None;
-                let warnings = app.session.attach_preset_store(opened);
+                let (warnings, actions_written) = app.session.attach_preset_store_with_action_write(opened);
+                crate::actions::finish_deferred_shortcut_conflicts(app, actions_written);
                 if let Some(w) = warnings.first() {
                     app.ui.status = if warnings.len() == 1 {
                         w.clone()
@@ -237,7 +238,10 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => app.services.preset_store = None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                app.services.preset_store = None;
+                crate::actions::finish_deferred_shortcut_conflicts(app, false);
+            }
         }
     }
     if let Some(w) = app.session.preset_store.as_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {
