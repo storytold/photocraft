@@ -816,3 +816,7 @@ pub(crate) fn command_guide_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mod
     let idle = app.ui.polygon.is_empty() && !crate::lasso_ui::active(app) && app.ui.transform.is_none() && app.ui.text_edit.is_none() && app.drag.is_none();
     (moves && mods.command && idle).then(|| crate::rulers::guide_at(app, p[0], p[1])).flatten()
 }
+
+#[cfg(test)]
+#[path = "art_history_shift_click_tests.rs"]
+mod art_history_shift_click_tests;
