@@ -30,6 +30,8 @@ pub(crate) struct PlaceSteps {
     bytes: Arc<Vec<u8>>,
     /// Cut the work into small pieces (for a session without threads).
     fine: bool,
+    normalize_historical: bool,
+    normalized: Option<Arc<Vec<u8>>>,
     stage: Stage,
     /// Where the placed image lands, known once it is decoded.
     plan: Plan,
@@ -63,7 +65,7 @@ impl PlaceSteps {
     /// `fine` cuts the work into pieces of a few milliseconds, as a session without worker
     /// threads needs; without it each stage is one unit of work.
     pub(crate) fn new(input: PlaceInput, fine: bool) -> Self {
-        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default() }
+        Self { input, bytes: Arc::new(Vec::new()), fine, normalize_historical: false, normalized: None, stage: Stage::Decode, plan: Plan::default() }
     }
 
     /// An import error as the engine reports it: a cancel stays one and a refused memory budget
@@ -142,6 +144,16 @@ impl PlaceSteps {
         };
         let (name, fmt) = (&self.input.name, self.input.fmt);
         crate::memory_gate::ensure(&format!("place \u{201c}{}\u{201d}", file_name(name)), crate::memory_gate::place_need(&self.bytes, fmt.bytes_per_pixel()))?;
+        // A historical sample interpretation must survive later Smart Object replay.
+        if (self.input.smart || self.input.frame.is_some()) && self.input.opts.historical_xcf_sample_order.is_some() {
+            let request = ctx
+                .stage(0.0, 0.05, "Checking historical sample order", |ctl| photocraft_io::historical_xcf_sample_order_request_with(name, &self.bytes, ctl))
+                .map_err(|e| self.io_error(e))?;
+            if request.is_some() && self.input.linked.is_some() {
+                return Err(EngineError::Other("Historical high-depth XCF linked contents cannot retain a sample byte-order choice. Open the XCF with the chosen byte order, save it as .pcraft, then use Place Linked on that native file.".into()));
+            }
+            self.normalize_historical = request.is_some();
+        }
         // A path isn't read when the input is made, so whether it is a vector source is decided now.
         let vector = self.input.frame.is_some() || photocraft_io::is_svg_input(name, &self.bytes);
         self.input.doc = self.input.doc.take().filter(|_| vector);
@@ -157,7 +169,13 @@ impl PlaceSteps {
                 self.input.name
             )));
         }
-        let src = imported.document;
+        ctx.check()?;
+        let mut src = imported.document;
+        crate::import_prepare::prepare_imported_document(&mut src, ctx)?;
+        if self.normalize_historical {
+            crate::allocation::checkpoint("normalizing historical placed contents")?;
+            self.normalized = Some(Arc::new(crate::smart_cmds::encode_source(&src)?));
+        }
         let (w, h) = (src.size.width as f64, src.size.height as f64);
         let (cw, ch) = self.input.canvas;
         let p = &self.input.params;
@@ -229,9 +247,10 @@ impl PlaceSteps {
         // A frame's image is always a smart object.
         let smart = input.smart || input.frame.is_some();
         let content = if smart {
-            let source = match &input.linked {
-                Some(path) => SmartSource::Linked { path: path.clone() },
-                None => SmartSource::Embedded { file_name: file_name(&input.name), bytes: Arc::clone(&self.bytes) },
+            let source = match (&input.linked, &self.normalized) {
+                (Some(path), _) => SmartSource::Linked { path: path.clone() },
+                (None, Some(native)) => SmartSource::Embedded { file_name: format!("{}.pcraft", stem(&input.name)), bytes: Arc::clone(native) },
+                (None, None) => SmartSource::Embedded { file_name: file_name(&input.name), bytes: Arc::clone(&self.bytes) },
             };
             let mut so = SmartObject::new(source, placement, px);
             // A vector source (SVG) or a frame's image renders at its placement scale instead of

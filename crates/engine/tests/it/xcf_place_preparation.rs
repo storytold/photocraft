@@ -368,3 +368,32 @@ fn historical_linked_place_requires_native_source_and_is_atomic() {
     assert!(Arc::ptr_eq(&before, &session.active().unwrap().doc));
     assert_eq!(session.active().unwrap().history.entries(), history);
 }
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+/// Open as Smart Object must embed the chosen historical interpretation as replayable native contents.
+fn historical_open_as_smart_object_normalizes_source_for_edit_contents() {
+    for little_endian in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("historical.xcf");
+        let original = historical_xcf(little_endian);
+        std::fs::write(&path, &original).unwrap();
+        let mut session = Session::new();
+        session
+            .execute(
+                "file.openAsSmartObject",
+                json!({
+                    "path": path,
+                    "historicalXcfSampleOrder": if little_endian { "little-endian" } else { "big-endian" },
+                }),
+            )
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let id = session.active().unwrap().active_layer.unwrap();
+        let (name, native) = smart_cmds::contents_of(&session.active().unwrap().doc, id).unwrap();
+        assert_eq!(name, "historical.pcraft");
+        assert_historical_samples(&smart_cmds::decode_source(&name, &native).unwrap());
+        session.execute("layer.smartObjects.editContents", json!({"layer": id.0})).unwrap();
+        assert_historical_samples(&session.active().unwrap().doc);
+    }
+}

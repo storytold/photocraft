@@ -1012,7 +1012,7 @@ fn native_average_smart_filter_matches_raster_undo_and_persistence() {
 }
 
 #[test]
-fn average_feathered_selection_does_not_reveal_hidden_color() {
+fn average_feathered_selection_preserves_coverage_and_includes_hidden_color() {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     use photocraft_raster::Surface;
 
@@ -1032,8 +1032,9 @@ fn average_feathered_selection_does_not_reveal_hidden_color() {
         let before = doc(&s).clone();
         s.execute("filter.blur.average", json!({})).unwrap();
         let hidden = pixel(&s, 0, 0);
-        assert_eq!(&hidden[..3], &[0., 0., 1.], "{depth}: hidden red must not enter the feathered result");
-        assert!((hidden[3] - 1. / 3.).abs() < 1. / 255., "{depth}: {hidden:?}");
+        assert!((hidden[0] - 2. / 3.).abs() < 1. / 255., "{depth}: {hidden:?}");
+        assert!((hidden[2] - 1. / 3.).abs() < 1. / 255., "{depth}: {hidden:?}");
+        assert_eq!(hidden[3], 0., "{depth}: Average keeps original coverage");
         assert_eq!(pixel(&s, 2, 0), vec![0.; 4], "{depth}: zero coverage stays untouched");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(doc(&s), &before);

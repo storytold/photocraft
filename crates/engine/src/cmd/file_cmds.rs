@@ -52,8 +52,7 @@ pub use open::{
     PLACE_EMBEDDED, historical_xcf_sample_order, open_bytes_as, open_bytes_as_with_options, open_bytes_as_with_sample_order, place_bytes, raw_defaults,
 };
 pub(crate) use open::{
-    PlaceInput, apply_place, import, import_with_options, raw_open_resolution, raw_resolution, tag_exr_colorspace,
-    tag_exr_colorspace_with_policy,
+    PlaceInput, apply_place, import, import_with_options, raw_open_resolution, raw_resolution, tag_exr_colorspace, tag_exr_colorspace_with_policy,
 };
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub use open_as_smart_object::admit_as_smart_object;

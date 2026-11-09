@@ -199,7 +199,7 @@ impl Session {
 
     /// Whether a document held back for its prompt already has `name`.
     pub(crate) fn held_open_named(&self, name: &str) -> bool {
-        self.held_opens.iter().any(|(_, d, _)| d.name == name)
+        self.held_opens.iter().any(|(_, held)| held.document.name == name)
     }
 
     /// Hold decoded native data with the request-time color settings used by its pending prompt.
