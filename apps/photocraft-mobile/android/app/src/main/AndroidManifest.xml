@@ -28,9 +28,9 @@
                 <data android:mimeType="image/tiff" />
                 <data android:mimeType="image/gif" />
                 <data android:mimeType="image/bmp" />
+                <data android:mimeType="image/x-ms-bmp" />
                 <data android:mimeType="image/heic" />
                 <data android:mimeType="image/heif" />
-                <data android:mimeType="image/avif" />
                 <data android:mimeType="image/vnd.adobe.photoshop" />
                 <data android:mimeType="image/x-photoshop" />
                 <data android:mimeType="application/x-photoshop" />
@@ -60,9 +60,9 @@
                 <data android:mimeType="image/tiff" />
                 <data android:mimeType="image/gif" />
                 <data android:mimeType="image/bmp" />
+                <data android:mimeType="image/x-ms-bmp" />
                 <data android:mimeType="image/heic" />
                 <data android:mimeType="image/heif" />
-                <data android:mimeType="image/avif" />
                 <data android:mimeType="image/vnd.adobe.photoshop" />
             </intent-filter>
         </activity>
