@@ -1910,6 +1910,7 @@ impl Session {
         // A layer-mask view ends when another layer becomes active (#196).
         if let Some(st) = self.active_mut() {
             crate::mask_view_cmds::fix(st);
+            st.drop_stale_selection_layers();
         }
         crate::edit_menu_cmds::after_command(self, id, &params);
         crate::automate_cmds::after_command(self, id);

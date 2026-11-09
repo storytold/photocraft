@@ -146,6 +146,14 @@ impl DocState {
         }
         Some(ids.clone())
     }
+    /// Forget [`Self::selection_layers`] once the selection is no longer the one it built (after
+    /// Deselect, a marquee, Undo…): its copy of that selection would otherwise keep tiles the
+    /// document let go. While it is current it shares the selection's tiles and costs nothing.
+    pub(crate) fn drop_stale_selection_layers(&mut self) {
+        if self.selection_layers.as_ref().is_some_and(|(kept, _)| self.doc.selection.as_ref() != Some(kept)) {
+            self.selection_layers = None;
+        }
+    }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
         self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))
     }

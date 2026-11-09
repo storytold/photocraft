@@ -675,6 +675,35 @@ fn paste_into_each_uses_the_thumbnails_that_built_the_selection() {
     assert_eq!(s.active().unwrap().selection_sources(), None, "only ⌘-click and ⌘⇧-click build the list");
 }
 
+/// Each copy's mask is its frame's transparency exactly: a hole stays clear, a half-transparent
+/// pixel half selected, and nothing outside the frame.
+#[test]
+fn paste_into_each_masks_keep_holes_and_soft_edges() {
+    let mut s = session(8);
+    let frame = active(&s).id;
+    paint_square(&mut s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+    paint_square(&mut s, Rect::new(4, 4, 5, 5), [0.0, 0.0, 0.0, 0.0]);
+    paint_square(&mut s, Rect::new(6, 6, 7, 7), [1.0, 0.0, 0.0, 0.5]);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint_square(&mut s, Rect::new(14, 4, 18, 8), [0.0, 0.0, 1.0, 1.0]);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    {
+        let st = s.active_mut().unwrap();
+        st.selected_layers = vec![frame];
+        st.active_layer = Some(frame);
+    }
+    let r = s.execute("edit.pasteSpecial.pasteIntoEach", json!({})).unwrap();
+    let copy = LayerId(r["layers"][0].as_u64().unwrap());
+    let d = doc(&s);
+    let m = d.layer(copy).unwrap().mask.as_ref().unwrap();
+    assert_eq!(m.value(2, 2), 1.0, "opaque frame pixel: revealed");
+    assert_eq!(m.value(4, 4), 0.0, "the hole stays clear");
+    assert!((m.value(6, 6) - 0.5).abs() < 0.01, "half transparent: half revealed, {}", m.value(6, 6));
+    assert_eq!(m.value(12, 12), 0.0, "outside the frame");
+}
+
 /// Rule 9: no clipboard, wrong-type params or only an empty layer to paste into fail with an
 /// error, never a panic.
 #[test]
