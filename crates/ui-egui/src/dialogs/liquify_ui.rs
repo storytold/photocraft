@@ -9,7 +9,7 @@
 //! OK runs `filter.liquify` with the same strokes and gets the same field.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, MAX_LIVE_MS, ProxyImage, auto_cell};
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -355,11 +355,15 @@ impl LiquifyDialog {
         self.last_dab = now;
     }
 
+    /// Continues the stroke to `p`. The point is recorded live, with the milliseconds since the
+    /// previous one, so the brush follows the pointer exactly and the stationary tools work by
+    /// real elapsed time ([`LiquifyField::stroke_segment_live`]); OK replays the same.
     fn extend(&mut self, p: [f64; 3], now: f64) {
         let Some((mut s, last)) = self.cur.take() else { return };
+        let ms = if (now - self.last_dab).is_finite() { (now - self.last_dab).max(0.0) } else { 0.0 };
         let t0 = crate::gpu_canvas::now_ms();
-        let d = self.field.stroke_segment(&s, last, p);
-        s.points.push(p.to_vec());
+        let d = self.field.stroke_segment_live(&s, last, p, ms);
+        s.points.push(vec![p[0], p[1], p[2], ms]);
         self.mark(d, matches!(s.tool, LiquifyTool::Freeze | LiquifyTool::Thaw));
         self.render_dirty();
         self.dab_ms = crate::gpu_canvas::now_ms() - t0;
@@ -813,7 +817,37 @@ fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32, zoom: f3
 /// pointer-down subtracts from the freeze mask (lasso), reverses a twirl and swaps Pucker/Bloat;
 /// Shift adds to the mask, same as no modifier.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
-    let now = crate::gpu_canvas::now_ms();
+    pointer_at(app, ev, mods, crate::gpu_canvas::now_ms());
+}
+
+/// One frame's queued pointer events, at frame time `now` (ms). The frame's moves share the time
+/// since the last point evenly, as they would arriving one per frame: the events are handled one
+/// after another, so reading the clock for each gave the first move nearly the whole frame and
+/// the rest only processing time, which changed the stationary tools' strength and where it
+/// landed. After a stall the frame counts for at most [`MAX_LIVE_MS`] in all, as one point would.
+fn dispatch_frame(app: &mut PhotocraftApp, events: Vec<ToolEvent>, mods: egui::Modifiers, now: f64) {
+    let moves = events.iter().filter(|e| matches!(e, ToolEvent::Move { .. })).count();
+    let mut start = now;
+    if let Some(d) = app.distort.liquify.as_mut().filter(|d| d.cur.is_some()) {
+        if now - d.last_dab > MAX_LIVE_MS {
+            d.last_dab = now - MAX_LIVE_MS;
+        }
+        start = d.last_dab;
+    }
+    let mut k = 0usize;
+    for ev in events {
+        let t = if matches!(ev, ToolEvent::Move { .. }) && start.is_finite() && start < now {
+            k += 1;
+            start + (now - start) * k as f64 / moves as f64
+        } else {
+            now
+        };
+        pointer_at(app, ev, mods, t);
+    }
+}
+
+/// [`pointer`] at time `now` (ms).
+fn pointer_at(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, now: f64) {
     let Some(d) = app.distort.liquify.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, pressure } => {
@@ -1356,9 +1390,21 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 events.push(ToolEvent::Down { x: q[0], y: q[1], pressure: pr });
             } else if resp.dragged() || resp.is_pointer_button_down_on() {
                 let moved = d.cur.as_ref().is_some_and(|(_, l)| l[0] != q[0] || l[1] != q[1]);
-                // Stationary tools keep working while the brush is held still (30 dabs/s).
-                let held = d.opts.tool.is_stationary() && crate::gpu_canvas::now_ms() - d.last_dab > 33.0;
-                if moved || held {
+                // Stationary tools keep working while the brush is held still: a point every
+                // frame, each worth the time since the last, so the speed is the same at any
+                // frame rate and never stalls while the brush creeps.
+                let held = d.opts.tool.is_stationary();
+                // Every pointer position the platform reported this frame, not just the last, so
+                // a quick curved stroke keeps its curve instead of being cut into one straight
+                // chord per frame, and a detour that returns to where it began is not dropped.
+                let path: Vec<Pos2> =
+                    ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
+                let detour = path.len() > 1;
+                for p in path.iter().take(path.len().saturating_sub(1)) {
+                    let m = to_doc(d, area, *p);
+                    events.push(ToolEvent::Move { x: m[0], y: m[1], pressure: pr });
+                }
+                if moved || held || detour {
                     events.push(ToolEvent::Move { x: q[0], y: q[1], pressure: pr });
                 }
                 ctx.request_repaint();
@@ -1371,9 +1417,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             events.push(ToolEvent::Up { x: q[0], y: q[1] });
         }
     });
-    for ev in events {
-        pointer(app, ev, mods);
-    }
+    dispatch_frame(app, events, mods, crate::gpu_canvas::now_ms());
     match action {
         Some("ok") => {
             let _ = commit(app);

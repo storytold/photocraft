@@ -858,6 +858,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("type.loadDefaultTypeStyles", json!({})),
         ("type.saveDefaultTypeStyles", json!({})),
         ("image.analysis.recordMeasurements", json!({})),
+        ("image.analysis.setMeasurementScale", json!({"preset": "custom", "pixelLength": 120, "logicalLength": 2.5, "units": "mm"})),
         ("layer.videoLayers.insertBlankFrame", json!({})),
         ("layer.videoLayers.duplicateFrame", json!({})),
         ("layer.videoLayers.deleteFrame", json!({})),
@@ -3832,13 +3833,16 @@ fn loaded_camera_raw_filter_steps_save_back_unchanged() {
     assert_eq!(s.actions.list[0].steps[0].0, "filter.cameraRaw");
     let saved_step = |r: &Value| {
         let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
-        saved.actions[0].items.first().map(|i| (i.event.clone(), i.descriptor.clone()))
+        saved.actions[0].items.first().map(|i| (i.event.clone(), i.dictionary.clone(), i.descriptor.clone()))
     };
-    // Strict save, and the Actions panel's save (which skips what can't be written).
+    // Strict save, and the Actions panel's save (which skips what can't be written). The step's
+    // dictionary is stored action data, so it keeps Photoshop's wording and not the menu label
+    // ("RAW Develop Filter"): a loaded step reads the same in Photoshop's Actions panel.
     for skip in [false, true] {
         let r = s.execute("actions.save", json!({"action": "A", "skipUnsupported": skip})).unwrap();
         assert_eq!(r["skipped"], json!([]), "{r}");
-        assert_eq!(saved_step(&r), Some((AtnEvent::name("Adobe Camera Raw Filter"), Some(recorded.clone()))));
+        let expected = (AtnEvent::name("Adobe Camera Raw Filter"), b"Camera Raw Filter".to_vec(), Some(recorded.clone()));
+        assert_eq!(saved_step(&r), Some(expected));
     }
     // It plays.
     s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
