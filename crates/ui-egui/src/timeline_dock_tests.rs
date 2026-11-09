@@ -539,6 +539,9 @@ fn onion_skin_settings_survive_the_saved_ui_state() {
 fn onion_skin_is_off_the_bar_until_the_options_menu_turns_it_on() {
     let mut h = harness();
     assert!(h.query_all_by_label_contains("Onion Skin").next().is_none(), "not shown by default");
+    // The Move tool's gear on the options bar is "Options" too: take a tool without one.
+    h.state_mut().ui.tool = crate::state::Tool::Hand;
+    h.run_steps(2);
     h.get_by_label("Options").click();
     h.run_steps(4);
     h.query_all_by_label_contains("Onion Skin").next().expect("the checkbox").click();
@@ -610,6 +613,9 @@ fn the_tween_menu_adds_frames_between_two() {
 #[test]
 fn the_options_menu_turns_the_tween_menu_on() {
     let mut h = harness();
+    // The Move tool's gear on the options bar is "Options" too: take a tool without one.
+    h.state_mut().ui.tool = crate::state::Tool::Hand;
+    h.run_steps(2);
     h.get_by_label("Options").click();
     h.run_steps(4);
     h.query_all_by_label_contains("Tween").next().expect("the checkbox").click();

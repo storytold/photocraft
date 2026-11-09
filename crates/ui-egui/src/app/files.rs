@@ -149,6 +149,7 @@ impl PhotocraftApp {
                 question,
                 animated,
                 policy_applied: false,
+                smart_object: false,
             },
         );
         Ok(warnings)
@@ -674,6 +675,8 @@ impl PhotocraftApp {
                     // The job locked the document, but record the revision that was written.
                     st.saved_revision = revision;
                     app.remember_stamp(doc, path);
+                    // History Options › Automatically Create New Snapshot When Saving (#2966).
+                    photocraft_engine::history_options_cmds::snapshot_on_save(&mut app.session);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
                 if hooks && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, doc) {
