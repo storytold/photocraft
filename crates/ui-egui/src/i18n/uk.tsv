@@ -3102,6 +3102,8 @@ cameraRaw	Masking	Маскування
 	Wavelength Max	Максимальна довжина хвилі
 	Amplitude Min	Мінімальна амплітуда
 	Amplitude Max	Максимальна амплітуда
+	Scale Horizontal	Масштаб по горизонталі
+	Scale Vertical	Масштаб по вертикалі
 	Undefined Areas	Невизначені області
 	Preserve	Зберегти
 	Max Radius	Максимальний радіус

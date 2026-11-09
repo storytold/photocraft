@@ -3028,6 +3028,8 @@ cameraRaw	Color	Renk
 	Wavelength Max	Maksimum Dalga Boyu
 	Amplitude Min	Minimum Genlik
 	Amplitude Max	Maksimum Genlik
+	Scale Horizontal	Yatay Ölçek
+	Scale Vertical	Dikey Ölçek
 	Undefined Areas	Tanımsız Alanlar
 	Preserve	Koru
 	Max Radius	Maksimum Yarıçap

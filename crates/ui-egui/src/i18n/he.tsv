@@ -3444,6 +3444,8 @@ layerLabel	No Color	בלי צבע
 	Wavelength Max	אורך גל מקסימלי
 	Amplitude Min	אמפליטודה מינימלית
 	Amplitude Max	אמפליטודה מקסימלית
+	Scale Horizontal	קנה מידה אופקי
+	Scale Vertical	קנה מידה אנכי
 	Undefined Areas	אזורים לא מוגדרים
 	Preserve	שמור
 	Max Radius	רדיוס מקסימלי

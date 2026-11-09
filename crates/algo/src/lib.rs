@@ -204,6 +204,11 @@ pub enum PolarMode {
     PolarToRectangular,
 }
 
+/// Wave's Scale Horiz. and Vert. when stored parameters predate them: 100 %, the whole wave.
+fn full_scale() -> f32 {
+    100.0
+}
+
 /// A filter and its parameters, in Photoshop's dialog units (pixels,
 /// percent, degrees, levels 0–255).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -314,6 +319,12 @@ pub enum FilterParams {
         wavelength_max: f32,
         amplitude_min: f32,
         amplitude_max: f32,
+        /// Scale Horiz. and Vert., 1–100 %: how much of the horizontal and vertical
+        /// displacement is applied. Parameters saved before they existed are 100 %.
+        #[serde(default = "full_scale")]
+        scale_horizontal: f32,
+        #[serde(default = "full_scale")]
+        scale_vertical: f32,
         wave_type: WaveType,
         undefined: UndefinedAreas,
         seed: u32,
@@ -798,7 +809,18 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::Twirl { angle } => distort::twirl(src, out, ctx, *angle),
         FilterParams::Pinch { amount } => distort::pinch(src, out, ctx, *amount),
         FilterParams::Spherize { amount, mode } => distort::spherize(src, out, ctx, *amount, *mode),
-        FilterParams::Wave { generators, wavelength_min, wavelength_max, amplitude_min, amplitude_max, wave_type, undefined, seed } => distort::wave(
+        FilterParams::Wave {
+            generators,
+            wavelength_min,
+            wavelength_max,
+            amplitude_min,
+            amplitude_max,
+            scale_horizontal,
+            scale_vertical,
+            wave_type,
+            undefined,
+            seed,
+        } => distort::wave(
             src,
             out,
             ctx,
@@ -806,6 +828,7 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
                 generators: *generators,
                 wavelength: (*wavelength_min, *wavelength_max),
                 amplitude: (*amplitude_min, *amplitude_max),
+                scale: (*scale_horizontal / 100.0, *scale_vertical / 100.0),
                 wave_type: *wave_type,
                 undefined: *undefined,
                 seed: *seed,

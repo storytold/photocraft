@@ -2984,6 +2984,8 @@ cameraData	Lens	Ống kính
 	Ambience	Không khí
 	Ambient	Môi trường
 	Amplitude Max	Biên độ lớn nhất
+	Scale Horizontal	Tỷ lệ ngang
+	Scale Vertical	Tỷ lệ dọc
 	Amplitude Min	Biên độ nhỏ nhất
 	Angled Strokes	Nét chéo
 	Anisotropic	Dị hướng

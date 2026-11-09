@@ -1956,3 +1956,42 @@ fn indexed_matte_cancel_keeps_the_previous_choice() {
     assert_eq!(parent.fields.get("matte").and_then(Value::as_str), None, "cancel restores the previous None choice");
     assert!(!parent.fields.contains_key("__pickColorDefault"));
 }
+
+/// Wave's dialog has Photoshop's Scale Horiz. and Vert. after the amplitudes: 1–100 %, 100 by
+/// default, percentages a reduced preview leaves as they are. OK applies the scales set there.
+#[test]
+fn wave_dialog_shows_and_applies_its_scales() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    let spec = photocraft_engine::commands::find("filter.distort.wave").expect("filter.distort.wave is registered");
+    let params = parse_spec(spec.params);
+    let at = |key: &str| params.iter().position(|p| p.key == key).unwrap_or_else(|| panic!("no {key}"));
+    assert!(at("amplitudeMax") < at("scaleHorizontal") && at("scaleHorizontal") < at("scaleVertical") && at("scaleVertical") < at("type"));
+    for key in ["scaleHorizontal", "scaleVertical"] {
+        assert_eq!(params[at(key)].kind, Kind::Range { min: 1.0, max: 100.0, default: 100.0 }, "{key}");
+        assert!(!is_pixel_param_of("filter.distort.wave", key), "{key} is a percentage");
+    }
+
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+    s.execute("filter.render.clouds", json!({"seed": 4})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 1000.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "filter.distort.wave").unwrap();
+    h.run_steps(3);
+    for name in ["Scale Horizontal", "Scale Vertical"] {
+        assert!(h.query_all_by_label(name).count() > 0, "the dialog shows {name}");
+    }
+    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    assert_eq!((fields.get("scaleHorizontal"), fields.get("scaleVertical")), (Some(&json!(100.0)), Some(&json!(100.0))));
+    fields.insert("scaleHorizontal".into(), json!(30.0));
+    fields.insert("scaleVertical".into(), json!(5.0));
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let (command, applied) = h.state().session.journal.last().cloned().expect("the Wave was applied");
+    assert_eq!(command, "filter.distort.wave");
+    assert_eq!((applied["scaleHorizontal"].as_f64(), applied["scaleVertical"].as_f64()), (Some(30.0), Some(5.0)), "{applied}");
+}

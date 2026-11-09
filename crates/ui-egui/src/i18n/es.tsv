@@ -3531,6 +3531,8 @@ layerLabel	No Color	Sin color
 	Wavelength Max	Longitud de onda máxima
 	Amplitude Min	Amplitud mínima
 	Amplitude Max	Amplitud máxima
+	Scale Horizontal	Escala horizontal
+	Scale Vertical	Escala vertical
 	Undefined Areas	Áreas no definidas
 	Preserve	Conservar
 	Max Radius	Radio máximo

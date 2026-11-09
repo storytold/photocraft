@@ -3072,6 +3072,8 @@ cameraRaw	Color	Kleur
 	Wavelength Max	Golflengte max.
 	Amplitude Min	Amplitude min.
 	Amplitude Max	Amplitude max.
+	Scale Horizontal	Schaal horizontaal
+	Scale Vertical	Schaal verticaal
 	Undefined Areas	Niet-gedefinieerde gebieden
 	Preserve	Behouden
 	Max Radius	Max. straal

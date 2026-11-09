@@ -2468,6 +2468,8 @@ cameraRaw	Color	색상
 	Wavelength Max	최대 파장
 	Amplitude Min	최소 진폭
 	Amplitude Max	최대 진폭
+	Scale Horizontal	가로 비율
+	Scale Vertical	세로 비율
 	Undefined Areas	정의되지 않은 영역
 	Preserve	유지
 	Max Radius	최대 반경

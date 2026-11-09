@@ -2943,6 +2943,8 @@ cameraRaw	Roughness	Chropowatość
 	Wavelength Max	Maksymalna długość fali
 	Amplitude Min	Minimalna amplituda
 	Amplitude Max	Maksymalna amplituda
+	Scale Horizontal	Skala w poziomie
+	Scale Vertical	Skala w pionie
 	Undefined Areas	Obszary niezdefiniowane
 	Preserve	Zachowaj
 	Max Radius	Maksymalny promień

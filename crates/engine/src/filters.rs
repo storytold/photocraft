@@ -149,6 +149,8 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             wavelength_max: f(p, "wavelengthMax", 120.0).clamp(2.0, 999.0),
             amplitude_min: f(p, "amplitudeMin", 5.0).clamp(1.0, 998.0),
             amplitude_max: f(p, "amplitudeMax", 35.0).clamp(1.0, 999.0),
+            scale_horizontal: f(p, "scaleHorizontal", 100.0).clamp(1.0, 100.0),
+            scale_vertical: f(p, "scaleVertical", 100.0).clamp(1.0, 100.0),
             wave_type: match s(p, "type", "sine") {
                 "triangle" => WaveType::Triangle,
                 "square" => WaveType::Square,
@@ -519,7 +521,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.distort.wave",
             "Wave…",
             ["Filter", "Distort"],
-            r##"{"generators":1..999=5,"wavelengthMin":1..998=10,"wavelengthMax":2..999=120,"amplitudeMin":1..998=5,"amplitudeMax":1..999=35,"type":"sine|triangle|square","undefinedAreas":"wrap|repeat","seed":u32=0}"##
+            r##"{"generators":1..999=5,"wavelengthMin":1..998=10,"wavelengthMax":2..999=120,"amplitudeMin":1..998=5,"amplitudeMax":1..999=35,"scaleHorizontal":1..100=100,"scaleVertical":1..100=100,"type":"sine|triangle|square","undefinedAreas":"wrap|repeat","seed":u32=0}"##
         ),
         filter_cmd!("filter.distort.ripple", "Ripple…", ["Filter", "Distort"], r##"{"amount":-999..999=100,"size":"small|medium|large"}"##),
         filter_cmd!("filter.distort.polarCoordinates", "Polar Coordinates…", ["Filter", "Distort"], r##"{"mode":"rectangularToPolar|polarToRectangular"}"##),

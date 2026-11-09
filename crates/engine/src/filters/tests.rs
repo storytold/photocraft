@@ -548,3 +548,87 @@ fn filter_without_output_is_cancelled_only_when_the_job_was() {
     let surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
     assert!(filter_output(Some(surface), true).is_ok());
 }
+
+/// Paints the active layer with a ramp along x (`along_x`) or y: pixel `i` along it is `5 i / 255`,
+/// a distinct value at every 8-bit level, so a moved pixel shows exactly where it came from.
+fn paint_ramp(s: &mut Session, along_x: bool) {
+    s.edit("ramp", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        for y in 0..32 {
+            for x in 0..48 {
+                let v = (if along_x { x } else { y }) as f32 * 5.0 / 255.0;
+                surf.write_pixel(x, y, &[v, v, v, 1.0]);
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Wave's Scale Horiz. and Vert. (Photoshop's Wave dialog) reach the renderer, each on its own
+/// axis. One square-wave generator of 4 px amplitude moves every pixel exactly 4 px each way;
+/// 25 % horizontal scale moves it exactly 1 px sideways, so a ramp along x reads its neighbour's
+/// exact 8-bit value, and 50 % vertical exactly 2 px up or down on a ramp along y. The command
+/// echoes the scales it applied, and undo restores the ramp.
+#[test]
+fn wave_scales_move_pixels_by_exactly_the_scaled_amplitude() {
+    // The shift of each line across the ramp (each row of a ramp along x, each column of one
+    // along y): the same for the whole line, as the wave displaces along x by y and along y by x.
+    let shifts = |along_x: bool, scales: Value| -> Vec<i32> {
+        let mut s = session();
+        paint_ramp(&mut s, along_x);
+        let before = active_pixels(&s);
+        let mut p = json!({"generators": 1, "amplitudeMin": 4, "amplitudeMax": 4, "wavelengthMin": 30, "wavelengthMax": 30,
+            "type": "square", "undefinedAreas": "repeat", "seed": 7});
+        p.as_object_mut().unwrap().extend(scales.as_object().unwrap().clone());
+        let r = s.execute("filter.distort.wave", p.clone()).unwrap();
+        for key in ["scaleHorizontal", "scaleVertical"] {
+            assert_eq!(r["filter"][key].as_f64(), Some(p.get(key).and_then(Value::as_f64).unwrap_or(100.0)), "{p}");
+        }
+        let after = active_pixels(&s);
+        let value = |px: &[f32], x: i32, y: i32| px[((y * 48 + x) * 4) as usize];
+        let (lines, len) = if along_x { (32, 48) } else { (48, 32) };
+        let shifts = (0..lines)
+            .map(|line| {
+                let at = |px: &[f32], i: i32| if along_x { value(px, i, line) } else { value(px, line, i) };
+                // Away from the ends, where Repeat Edge Pixels holds the ramp's end values.
+                let moved: Vec<i32> = (8..len - 8).map(|i| ((at(&after, i) - at(&before, i)) * 255.0 / 5.0).round() as i32).collect();
+                assert!(moved.iter().all(|m| *m == moved[0]), "{p}: line {line} moved unevenly: {moved:?}");
+                for i in 8..len - 8 {
+                    assert_eq!(at(&after, i), at(&before, i + moved[0]), "{p}: line {line}, pixel {i}");
+                }
+                moved[0]
+            })
+            .collect();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(active_pixels(&s), before, "{p}: undo");
+        shifts
+    };
+    let whole = |along_x| shifts(along_x, json!({}));
+    for along_x in [true, false] {
+        let unscaled = whole(along_x);
+        assert!(unscaled.iter().all(|m| m.abs() == 4) && unscaled.contains(&4) && unscaled.contains(&-4), "{unscaled:?}");
+    }
+    let quarter: Vec<i32> = whole(true).iter().map(|m| m / 4).collect();
+    assert_eq!(shifts(true, json!({"scaleHorizontal": 25, "scaleVertical": 100})), quarter);
+    let half: Vec<i32> = whole(false).iter().map(|m| m / 2).collect();
+    assert_eq!(shifts(false, json!({"scaleHorizontal": 100, "scaleVertical": 50})), half);
+    // Each scale leaves the other axis alone.
+    assert_eq!(shifts(true, json!({"scaleVertical": 1})), whole(true));
+    assert_eq!(shifts(false, json!({"scaleHorizontal": 1})), whole(false));
+}
+
+/// The scales map to the renderer's percentages: stored records without them, or with values
+/// outside 1–100 (only a hand-edited record has those), render within Photoshop's range.
+#[test]
+fn wave_scale_params_default_to_100_and_clamp_to_photoshops_range() {
+    let scales = |p: Value| match params_for("filter.distort.wave", &p) {
+        Some(FilterParams::Wave { scale_horizontal, scale_vertical, .. }) => (scale_horizontal, scale_vertical),
+        other => panic!("{p}: {other:?}"),
+    };
+    assert_eq!(scales(json!({})), (100.0, 100.0));
+    assert_eq!(scales(json!({"scaleHorizontal": 35, "scaleVertical": 80.5})), (35.0, 80.5));
+    assert_eq!(scales(json!({"scaleHorizontal": 0, "scaleVertical": 400})), (1.0, 100.0));
+    assert!(validate_params("filter.distort.wave", &json!({"scaleHorizontal": 0})).is_err());
+    assert!(validate_params("filter.distort.wave", &json!({"scaleVertical": 100.5})).is_err());
+}

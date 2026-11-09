@@ -3119,6 +3119,8 @@ curves	Smooth	Glätten
 	Wavelength Max	Wellenlänge max.
 	Amplitude Min	Amplitude min.
 	Amplitude Max	Amplitude max.
+	Scale Horizontal	Skalierung horizontal
+	Scale Vertical	Skalierung vertikal
 	Sine	Sinus
 	Ridges	Grate
 	Pond Ripples	Teichwellen

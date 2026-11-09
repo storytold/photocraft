@@ -2836,6 +2836,8 @@ cameraData	Lens	Objektiv
 	Ambience	Okolní světlo
 	Ambient	Okolní
 	Amplitude Max	Max. amplituda
+	Scale Horizontal	Měřítko vodorovně
+	Scale Vertical	Měřítko svisle
 	Amplitude Min	Min. amplituda
 	Angled Strokes	Šikmé tahy
 	Anisotropic	Anizotropní
