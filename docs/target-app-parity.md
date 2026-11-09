@@ -590,7 +590,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | minor | Selections row: Edit › Stroke of a hard selection bevels its outer corners (Outside and Center) with a 45° cut, as Photoshop does, instead of rounding them (#10775); curves, Inside strokes and straight edges unchanged. Percentages and estimates unchanged |
+| 2026-11-02 | minor | Selections row: Edit › Stroke of a hard selection bevels its outer corners (Outside and Center) with a 45° cut, as Photoshop does, instead of rounding them (#10775); curves, Inside strokes and straight edges unchanged. The corner check scans each quadrant only until it meets a selected pixel and, after eight canvases' worth of long scans, answers from a summed-area table, so speckled selections stay fast: 24 MP of isolated speckles stroked 250 px Outside, at most about 100 ms for the bevel pass (was about 220 ms), output unchanged (#10828 review). Percentages and estimates unchanged |
 | 2026-11-02 | minor | Automation Batch: Esc Continue/Stop preserves one file plan and error log; a read-only input preview replaces the progress bar; full live tabs remain open, AUTO-219-5 partial (#4579); percentages and estimates unchanged |
 | 2026-11-02 | minor | AUTO-219-1: action recording folds Move-tool nudges, records relative document switches and scales point text placement to the playback canvas; duplicate names and paragraph box placement remain open; Automation parity estimate unchanged |
 | 2026-11-01 | minor | AUTO-219-1: action recording uses implicit or uniquely named layers and folds Type keystrokes into whole-text steps; duplicate names remain ambiguous; Automation parity estimate unchanged |

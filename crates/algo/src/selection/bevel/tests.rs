@@ -161,3 +161,124 @@ fn a_selection_beyond_reach_leaves_the_corner_cut() {
     let g = bevelled(&m, n, n, r);
     assert_eq!((g[(49 + 11) * n + 49 + 11], g[(49 + r) * n + 49 + r]), (1.0, 1.0));
 }
+
+/// A hard `w` × `h` selection of `size` × `size` speckles, each cell of that size selected with
+/// probability `p` (Magic Wand on noise, Color Range).
+fn speckles(w: usize, h: usize, p: f64, size: usize, seed: u64) -> Vec<f32> {
+    let mut state = seed;
+    let (cw, ch) = (w.div_ceil(size), h.div_ceil(size));
+    let cells: Vec<bool> = (0..cw * ch).map(|_| ((crate::photo_util::splitmix64(&mut state) >> 11) as f64) / ((1u64 << 53) as f64) < p).collect();
+    mask(w, h, |x, y| cells[y / size * cw + x / size])
+}
+
+/// Isolated pixels in chains `r - 1` rows apart, each one column right of the last, chains
+/// `3r` columns apart: every corner's nearest other pixel in reach lies `r - 1` rows out, so the
+/// scan reads most of each quadrant's reach before finding it (its worst case).
+fn chains(w: usize, h: usize, r: usize) -> Vec<f32> {
+    let step = r.saturating_sub(1).max(1);
+    mask(w, h, |x, y| y % step == 0 && x % (3 * r) == (y / step) % (3 * r))
+}
+
+#[test]
+#[ignore = "release timing of the bevel pass on speckled 24 MP selections"]
+#[allow(clippy::assertions_on_constants)]
+fn speckled_24_mp_release_timing() {
+    use std::{hint::black_box, time::Instant};
+    assert!(!cfg!(debug_assertions), "run with --release");
+    let (w, h) = (6000usize, 4000usize);
+    let median = |check: Check, m: &[f32], r: usize, reference: Option<&Vec<f32>>| -> (f64, Vec<f32>, bool) {
+        let mut ms = Vec::new();
+        let (mut out, mut switched) = (Vec::new(), false);
+        for _ in 0..5 {
+            let mut g = vec![1.0f32; w * h];
+            let start = Instant::now();
+            switched = bevel_with(black_box(&mut g), black_box(m), w, h, r, check);
+            ms.push(start.elapsed().as_secs_f64() * 1000.0);
+            if let Some(reference) = reference {
+                assert!(g == *reference, "{check:?} r {r}");
+            }
+            out = g;
+        }
+        ms.sort_by(f64::total_cmp);
+        (ms[2], out, switched)
+    };
+    // Outside 100 and 250 px reach 100 and 250; Center 100 and 250 reach 50 and 125.
+    for r in [50usize, 100, 125, 250] {
+        let mut cases: Vec<(String, Vec<f32>)> = [(0.0001, 1), (0.001, 1), (0.01, 1), (0.05, 1), (0.2, 1), (0.5, 1), (0.01, 3), (0.2, 3)]
+            .into_iter()
+            .map(|(p, size)| (format!("p={p} size={size}"), speckles(w, h, p, size, 7)))
+            .collect();
+        cases.push(("chains".into(), chains(w, h, r)));
+        cases.push(("rectangle".into(), mask(w, h, |x, y| (1000..5000).contains(&x) && (800..3200).contains(&y))));
+        for (name, m) in &cases {
+            let (scan_ms, reference, _) = median(Check::Scan, m, r, None);
+            let (table_ms, _, _) = median(Check::Table, m, r, Some(&reference));
+            let (auto_ms, _, switched) = median(Check::Auto, m, r, Some(&reference));
+            println!("SPECKLE {name} r={r} scan_ms={scan_ms:.1} table_ms={table_ms:.1} auto_ms={auto_ms:.1} switched={switched}");
+        }
+    }
+}
+
+fn bevelled_with(m: &[f32], w: usize, h: usize, r: usize, check: Check) -> Vec<f32> {
+    let mut g = expand(m, w, h, r as f32);
+    bevel_with(&mut g, m, w, h, r, check);
+    g
+}
+
+#[test]
+fn the_summed_area_table_and_the_scan_agree() {
+    // Speckles of every density and a few sizes, plus the shapes above: the table's quadrant
+    // check is the scan's, pixel for pixel, so the cut is too.
+    let (w, h) = (97, 83);
+    let mut masks: Vec<Vec<f32>> = Vec::new();
+    for (seed, p) in [0.002, 0.01, 0.05, 0.2, 0.5].into_iter().enumerate() {
+        for size in [1, 2, 3] {
+            masks.push(speckles(w, h, p, size, seed as u64 * 10 + size as u64));
+        }
+    }
+    masks.push(mask(w, h, |x, y| (20..=60).contains(&x) && (15..=50).contains(&y)));
+    masks.push(mask(w, h, |x, y| (30..=39).contains(&x) && (30..=69).contains(&y) || (30..=69).contains(&x) && (60..=69).contains(&y)));
+    masks.push(mask(w, h, |x, y| (x as f32 - 48.5).hypot(y as f32 - 41.5) <= 30.0));
+    for (k, m) in masks.iter().enumerate() {
+        for r in [2, 3, 7, 16, 40, 200] {
+            let scan = bevelled_with(m, w, h, r, Check::Scan);
+            assert_eq!(bevelled_with(m, w, h, r, Check::Table), scan, "mask {k} r {r}");
+            assert_eq!(bevelled_with(m, w, h, r, Check::Auto), scan, "mask {k} r {r}");
+        }
+    }
+    // Chains make every scan read far; with no budget the table takes over after the first long
+    // scans, partway through the pass, while other rows' scans are still running.
+    for r in [16, 40] {
+        let m = chains(w, h, r);
+        let scan = bevelled_with(&m, w, h, r, Check::Scan);
+        let mut auto = expand(&m, w, h, r as f32);
+        assert!(bevel_with(&mut auto, &m, w, h, r, Check::Budget(0)), "chains r {r} switch to the table");
+        assert_eq!(auto, scan, "chains r {r}");
+        assert_eq!(bevelled_with(&m, w, h, r, Check::Table), scan, "chains r {r}");
+    }
+}
+
+#[test]
+fn a_heavily_speckled_selection_strokes() {
+    // Magic Wand on noise: 5% of the pixels selected, one by one, about 48 000 candidate
+    // corners, stroked 100 px Outside. The table answers each in a few lookups and the result
+    // is the scan's; a lone speckle with nothing else within reach is still an octagon.
+    let (w, h, r) = (600, 400, 100);
+    let m = speckles(w, h, 0.05, 1, 3);
+    let g = bevelled_with(&m, w, h, r, Check::Auto);
+    assert_eq!(g, bevelled_with(&m, w, h, r, Check::Scan));
+    let round = expand(&m, w, h, r as f32);
+    for (i, (v, o)) in g.iter().zip(&round).enumerate() {
+        assert!(*v <= *o, "({}, {})", i % w, i / w);
+        if m[i] > 0.0 {
+            assert_eq!(*v, 1.0);
+        }
+    }
+    let mut lone = m.clone();
+    lone.iter_mut().for_each(|v| *v = 0.0);
+    lone[200 * w + 300] = 1.0;
+    let g = bevelled_with(&lone, w, h, r, Check::Table);
+    for (i, v) in g.iter().enumerate() {
+        assert_eq!(*v > 0.0, rect_model(i % w, i / w, (300, 300, 200, 200), r), "({}, {})", i % w, i / w);
+    }
+}
