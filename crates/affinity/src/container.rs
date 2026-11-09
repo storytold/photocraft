@@ -20,6 +20,11 @@ const MAX_ENTRIES: usize = 1 << 22;
 /// Bytes of entry names the allocation tables may name. A name is retained twice (in the entry
 /// and as its map key), and tables can point many names at the same bytes.
 const MAX_NAME_BYTES: usize = 32 << 20;
+/// File and directory records parsed across every allocation table. Each table walks its own
+/// records, and tables may start inside one another and share a long suffix, so the per-table
+/// counts do not bound the work: a few thousand overlapping tables could reparse one large run
+/// of records each. Real files hold a few hundred saves of a few thousand entries.
+const MAX_TABLE_RECORDS: usize = 1 << 25;
 /// zstd window ceiling: real documents use a few MiB; this stops a header from reserving gigabytes.
 const MAX_ZSTD_WINDOW: u64 = 64 << 20;
 
@@ -175,6 +180,7 @@ impl<'a> Archive<'a> {
         let mut seen = HashSet::new();
         let mut next = header.fat_offset;
         let mut tables = 0usize;
+        let mut records_left = MAX_TABLE_RECORDS;
         while next != 0 {
             if !seen.insert(next) {
                 return Err(Error::Malformed("allocation tables form a cycle"));
@@ -199,6 +205,9 @@ impl<'a> Archive<'a> {
             c.take(8)?;
             let dirs = c.u16()?;
             c.take(1)?;
+            // Charge the declared records before walking them.
+            let declared = usize::try_from(files).unwrap_or(usize::MAX).saturating_add(usize::from(dirs));
+            records_left = records_left.checked_sub(declared).ok_or(Error::Limit("too many allocation records"))?;
             for _ in 0..files {
                 let id = c.u32()?;
                 let flag = c.u8()?;
@@ -287,7 +296,31 @@ impl<'a> Archive<'a> {
 
     /// Extract an entry by name: decompress, undo the byte predictor and verify the CRC.
     pub fn read(&mut self, name: &str) -> Result<Vec<u8>, Error> {
-        let e = self.entries.get(name).ok_or(Error::Malformed("missing archive entry"))?.clone();
+        self.claim(name)?.decode()
+    }
+
+    /// Extract several entries, decoding them on worker threads. The entries are charged one
+    /// after the other exactly as the same number of [`read`](Self::read) calls would charge
+    /// them, and the first error in that order is the one returned.
+    pub(crate) fn read_many(&mut self, names: &[&str]) -> Result<Vec<Vec<u8>>, Error> {
+        let mut claimed = Vec::with_capacity(names.len());
+        let mut refused = None;
+        for name in names {
+            match self.claim(name) {
+                Ok(c) => claimed.push(c),
+                Err(e) => {
+                    refused = Some(e);
+                    break;
+                }
+            }
+        }
+        let decoded = decode_all(&claimed).into_iter().collect::<Result<Vec<_>, _>>()?;
+        refused.map_or(Ok(decoded), Err)
+    }
+
+    /// Check an entry against the limits, count it as extracted and locate its stored bytes.
+    fn claim(&mut self, name: &str) -> Result<Claimed<'a>, Error> {
+        let e = self.entries.get(name).ok_or(Error::Malformed("missing archive entry"))?;
         let size = usize::try_from(e.size).map_err(|_| Error::Limit("archive entry too large"))?;
         if size > self.limits.max_entry {
             return Err(Error::Limit("archive entry too large"));
@@ -306,20 +339,77 @@ impl<'a> Archive<'a> {
         let method = e.compression & 3;
         let stored_len = if matches!(method, 1 | 2) { e.compressed } else { e.size };
         let data = c.take(offset(stored_len)?)?;
-        let mut out = match method {
-            1 => inflate(data, size)?,
-            2 => unzstd(data, size)?,
-            _ => data.to_vec(),
+        Ok(Claimed { data, size, compression: e.compression, crc: e.crc })
+    }
+}
+
+/// An entry that is charged and located but not yet decoded.
+struct Claimed<'a> {
+    data: &'a [u8],
+    size: usize,
+    compression: u8,
+    crc: u32,
+}
+
+impl Claimed<'_> {
+    fn decode(&self) -> Result<Vec<u8>, Error> {
+        let mut out = match self.compression & 3 {
+            1 => inflate(self.data, self.size)?,
+            2 => unzstd(self.data, self.size)?,
+            _ => self.data.to_vec(),
         };
-        if out.len() != size {
+        if out.len() != self.size {
             return Err(Error::Malformed("archive entry size mismatch"));
         }
-        unpredict(&mut out, e.compression)?;
-        if crc32fast::hash(&out) != e.crc {
+        unpredict(&mut out, self.compression)?;
+        if crc32fast::hash(&out) != self.crc {
             return Err(Error::Malformed("archive entry checksum mismatch"));
         }
         Ok(out)
     }
+}
+
+/// Most threads decoding entries at once; each zstd frame may reserve its declared window.
+const MAX_DECODE_THREADS: usize = 8;
+/// Fewer entries than this are decoded in place: starting a thread costs more than they do.
+const MIN_PARALLEL_ENTRIES: usize = 4;
+
+/// Decode every entry, in parallel when there are enough of them. The results are in order.
+fn decode_all(jobs: &[Claimed<'_>]) -> Vec<Result<Vec<u8>, Error>> {
+    static THREADS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    // The browser build has no threads to start.
+    let threads = if jobs.len() < MIN_PARALLEL_ENTRIES || cfg!(target_arch = "wasm32") {
+        1
+    } else {
+        (*THREADS.get_or_init(|| std::thread::available_parallelism().map_or(1, usize::from).min(MAX_DECODE_THREADS))).min(jobs.len())
+    };
+    if threads <= 1 {
+        return jobs.iter().map(Claimed::decode).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    // The workers and this thread take the next undecoded entry until none is left.
+    let work = || {
+        let mut done = Vec::new();
+        loop {
+            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some(job) = jobs.get(i) else { break };
+            done.push((i, job.decode()));
+        }
+        done
+    };
+    let mut slots: Vec<Option<Result<Vec<u8>, Error>>> = jobs.iter().map(|_| None).collect();
+    std::thread::scope(|sc| {
+        // A thread that cannot be started just leaves its share to the others.
+        let workers: Vec<_> = (1..threads).filter_map(|_| std::thread::Builder::new().spawn_scoped(sc, work).ok()).collect();
+        let mut finished = vec![work()];
+        finished.extend(workers.into_iter().map(|w| w.join().unwrap_or_default()));
+        for (i, result) in finished.into_iter().flatten() {
+            if let Some(slot) = slots.get_mut(i) {
+                *slot = Some(result);
+            }
+        }
+    });
+    slots.into_iter().map(|r| r.unwrap_or(Err(Error::Malformed("tile decoder stopped")))).collect()
 }
 
 /// Read at most `size + 1` bytes so a stream that decodes past its declared size is caught
@@ -332,7 +422,7 @@ fn read_bounded(mut r: impl Read, size: usize) -> Result<Vec<u8>, Error> {
 }
 
 fn inflate(data: &[u8], size: usize) -> Result<Vec<u8>, Error> {
-    read_bounded(flate2::read::ZlibDecoder::new(data), size)
+    read_bounded(flate2::bufread::ZlibDecoder::new(data), size)
 }
 
 fn unzstd(data: &[u8], size: usize) -> Result<Vec<u8>, Error> {

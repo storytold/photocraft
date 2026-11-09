@@ -60,7 +60,7 @@ fn selection_sampling_refuses_oversized_canvases_before_reading_pixels() {
         None,
     );
     for all_layers in [false, true] {
-        assert!(sample_pixels(&s, all_layers).unwrap_err().to_string().contains("too large to sample"));
+        assert!(sample_pixels(&s, all_layers, None).unwrap_err().to_string().contains("too large to sample"));
     }
     assert!(!s.active().unwrap().history.can_undo());
 }
@@ -75,6 +75,20 @@ fn selection_sampling_allocation_failure_keeps_the_selection() {
     let result = s.execute("select.similar", json!({"sampleAllLayers": false}));
     let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
     assert!(result.is_err());
+    assert_eq!(*s.active().unwrap().doc, *before);
+    assert_eq!(s.active().unwrap().history.entries(), history);
+}
+
+#[test]
+fn selection_sampling_all_layers_reports_a_failed_composite_and_keeps_the_selection() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 4, "height": 4})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.entries();
+    // Sample All Layers renders the composite: the failure is reported there, before the mask.
+    crate::allocation::fail_next_for_test();
+    let err = s.execute("select.similar", json!({"sampleAllLayers": true})).unwrap_err().to_string();
+    assert!(err.contains("not enough memory for sampling pixels for a selection"), "{err}");
     assert_eq!(*s.active().unwrap().doc, *before);
     assert_eq!(s.active().unwrap().history.entries(), history);
 }
@@ -275,7 +289,7 @@ fn color_range_prepared_query_samples_visible_layers_not_the_active_layer() {
         clear_selection(&mut s);
         let p = json!({"points": [[7, 7]], "sampleAllLayers": all_layers, "fuzziness": 0});
         let query = ColorRangeSamples::new(&s, &p).unwrap();
-        let (area, px) = sample_pixels(&s, all_layers).unwrap();
+        let (area, px) = sample_pixels(&s, all_layers, None).unwrap();
         let shown = query.coverage(&px, area.width() as usize, 1.0, [0.0, 0.0]);
         s.execute("select.colorRange", p).unwrap();
         assert_eq!(shown[7 * 40 + 7], coverage(&s, 7, 7));
@@ -642,6 +656,69 @@ fn grow_and_similar() {
 }
 
 #[test]
+fn grow_and_similar_multi_color_does_not_select_intermediate_hull() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
+    s.edit("paint", |doc, _| {
+        let bg = doc.layers[0].surface_mut().unwrap();
+        bg.fill_rect(Rect::new(5, 5, 15, 15), &[1.0, 0.0, 0.0, 1.0]);
+        bg.fill_rect(Rect::new(25, 5, 35, 15), &[0.0, 0.0, 1.0, 1.0]);
+        bg.fill_rect(Rect::new(5, 18, 15, 28), &[0.0, 0.0, 0.0, 1.0]);
+        bg.fill_rect(Rect::new(25, 18, 35, 28), &[0.5, 0.0, 0.5, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+
+    // Select a patch of Red and a patch of Blue
+    s.execute("select.rect", json!({"x": 6, "y": 6, "width": 2, "height": 2})).unwrap();
+    s.execute("select.rect", json!({"x": 26, "y": 6, "width": 2, "height": 2, "mode": "add"})).unwrap();
+
+    // Similar should select the remaining Red and Blue, but NOT Black or Purple
+    s.execute("select.similar", json!({"tolerance": 5})).unwrap();
+    assert_eq!(coverage(&s, 10, 10), 1.0, "red rect should be selected");
+    assert_eq!(coverage(&s, 30, 10), 1.0, "blue rect should be selected");
+    assert_eq!(coverage(&s, 10, 22), 0.0, "black rect must not be selected");
+    assert_eq!(coverage(&s, 30, 22), 0.0, "purple rect must not be selected");
+
+    // Grow from just the Red patch should not reach disconnected Blue
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 6, "y": 6, "width": 2, "height": 2})).unwrap();
+    s.execute("select.grow", json!({"tolerance": 5})).unwrap();
+    assert_eq!(coverage(&s, 10, 10), 1.0, "contiguous red rect should be grown");
+    assert_eq!(coverage(&s, 30, 10), 0.0, "disconnected blue rect must not be grown");
+}
+
+#[test]
+fn grow_and_similar_report_a_failed_mask_allocation_and_keep_the_selection() {
+    for cmd in ["select.grow", "select.similar"] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
+        s.execute("select.rect", json!({"x": 6, "y": 6, "width": 4, "height": 4})).unwrap();
+        // The first fallible allocation samples the layer; the second is the canvas-sized result.
+        crate::allocation::fail_after_for_test(1);
+        let err = s.execute(cmd, json!({"tolerance": 5})).unwrap_err().to_string();
+        assert!(err.contains("not enough memory for growing a selection"), "{cmd}: {err}");
+        assert_eq!(coverage(&s, 7, 7), 1.0, "{cmd}: the selection must be untouched");
+        assert_eq!(coverage(&s, 20, 20), 0.0, "{cmd}: the selection must be untouched");
+    }
+}
+
+#[test]
+fn grow_reports_a_failed_frontier_push_mid_traversal_and_keeps_the_selection() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
+    s.execute("select.rect", json!({"x": 6, "y": 6, "width": 4, "height": 4})).unwrap();
+    // Two buffer allocations (sample, result), then the 12 ring pixels of the 4x4 selection seed the
+    // frontier; three more clean pushes happen while flood-filling outwards before the next one fails.
+    crate::allocation::fail_after_for_test(2 + 12 + 3);
+    let err = s.execute("select.grow", json!({"tolerance": 5})).unwrap_err().to_string();
+    assert!(err.contains("not enough memory for growing a selection"), "{err}");
+    assert_eq!(coverage(&s, 7, 7), 1.0, "the selection must be untouched");
+    assert_eq!(coverage(&s, 20, 20), 0.0, "the flood fill must not have been committed");
+    assert_eq!(coverage(&s, 11, 7), 0.0, "the flood fill must not have been committed");
+}
+
+#[test]
 fn lasso_polygon() {
     let mut s = session();
     s.execute("select.lasso", json!({"points": [[0, 0], [20, 0], [0, 20]]})).unwrap();
@@ -723,5 +800,115 @@ fn lasso_over_its_rows_matches_the_whole_canvas() {
         let got = s.active().unwrap().doc.selection.clone();
         let read = |x: &Option<Surface>| x.as_ref().map(|s| s.read_region(area));
         assert_eq!(read(&got), read(&want), "case {case}: {m}, anti-alias {aa}, {pts:?}");
+    }
+}
+
+#[test]
+fn feather_window_is_bounded_and_clipped_before_growing() {
+    let canvas = Rect::new(0, 0, 6000, 4000);
+    let window = feather_window(Rect::from_xywh(3000, 2000, 50, 50), canvas, 4.0);
+    assert_eq!(window, Rect::new(2987, 1987, 3063, 2063));
+    assert_eq!(window.size().area(), 5776);
+    assert_eq!(feather_window(Rect::from_xywh(3000, 2000, 50, 50), canvas, 1000.0), canvas);
+    assert_eq!(feather_window(Rect::new(-5, -5, 10, 10), canvas, 2.5), Rect::new(0, 0, 19, 19));
+    assert_eq!(feather_window(Rect::new(-20, -20, -1, -1), canvas, 20.0), Rect::EMPTY);
+    assert_eq!(feather_window(Rect::EMPTY, canvas, 1000.0), Rect::EMPTY);
+}
+
+/// The stored coverage and history must match the previous full-canvas paths, including soft
+/// old selections outside the working window and shapes clipped at every canvas edge.
+#[test]
+fn windowed_tool_feather_matches_full_canvas() {
+    let area = Rect::new(0, 0, 192, 160);
+    let shapes = [
+        Rect::new(72, 61, 97, 89),
+        Rect::new(-12, -7, 24, 25),
+        Rect::new(177, 143, 210, 180),
+        Rect::new(-15, 65, -2, 80),
+        Rect::new(75, 65, 75, 80),
+        Rect::new(-5, -5, 200, 170),
+    ];
+    for (case, r) in shapes.into_iter().enumerate() {
+        for tool in ["rect", "ellipse", "lasso"] {
+            for aa in [false, true] {
+                for radius in [0.05, 2.5, 7.0] {
+                    let pts = [
+                        (r.x0 as f32 + 0.125, r.y0 as f32 + 0.375),
+                        (r.x1 as f32, r.y0 as f32),
+                        (r.x1 as f32 - 0.25, r.y1 as f32 + 0.125),
+                        (r.x0 as f32, r.y1 as f32),
+                    ];
+                    let input = if tool == "lasso" {
+                        sel::polygon(&pts, area, aa)
+                    } else {
+                        let mut shape = Surface::new(photocraft_color::PixelFormat::GRAY8);
+                        if tool == "ellipse" {
+                            shape = sel::ellipse_surface(r, area, aa);
+                        } else {
+                            shape.fill_rect(r.intersect(&area), &[1.0]);
+                        }
+                        sel::mask_from_surface(Some(&shape), area)
+                    };
+                    let mask = sel::feather(&input, area.width() as usize, area.height() as usize, radius);
+                    for m in ["replace", "add", "subtract", "intersect"] {
+                        for has_old in [false, true] {
+                            let mut s = Session::new();
+                            s.execute("file.new", json!({"width": area.width(), "height": area.height()})).unwrap();
+                            if has_old {
+                                s.edit("soft selection", |doc, _| {
+                                    let mut old = Surface::new(photocraft_color::PixelFormat::GRAY8);
+                                    old.fill_rect(Rect::new(3, 4, 180, 150), &[0.6]);
+                                    old.fill_rect(Rect::new(70, 60, 90, 80), &[1.0]);
+                                    doc.selection = Some(old);
+                                    Ok(())
+                                })
+                                .unwrap();
+                            }
+                            let before = s.active().unwrap().doc.selection.clone();
+                            let want = sel::combine(before.as_ref(), &mask, area, SelectionMode::parse(m));
+                            let steps = s.active().unwrap().history.past_len();
+                            let result = if tool == "lasso" {
+                                s.execute("select.lasso", json!({"points": pts, "antiAlias": aa, "feather": radius, "mode": m})).unwrap()
+                            } else {
+                                s.execute("select.rect", json!({"x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(), "ellipse": tool == "ellipse", "antiAlias": aa, "feather": radius, "mode": m})).unwrap()
+                            };
+                            let got = s.active().unwrap().doc.selection.clone();
+                            let read = |v: &Option<Surface>| sel::mask_from_surface(v.as_ref(), area);
+                            assert_eq!(read(&got), read(&want), "case {case}, {tool}, aa={aa}, radius={radius}, mode={m}, old={has_old}");
+                            assert_eq!(got.is_some(), want.is_some());
+                            if tool == "lasso" {
+                                assert_eq!(result["selected"], want.is_some());
+                            }
+                            assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+                            s.execute("edit.undo", json!({})).unwrap();
+                            assert_eq!(read(&s.active().unwrap().doc.selection), read(&before));
+                            s.execute("edit.redo", json!({})).unwrap();
+                            assert_eq!(read(&s.active().unwrap().doc.selection), read(&want));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn small_feathered_tools_work_on_large_sparse_documents_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 6000, "height": 4000, "depth": depth, "background": "transparent"})).unwrap();
+        for ellipse in [false, true] {
+            s.execute("select.rect", json!({"x": 3000, "y": 2000, "width": 50, "height": 50, "ellipse": ellipse, "feather": 4})).unwrap();
+            let selection = s.active().unwrap().doc.selection.as_ref().unwrap();
+            assert!(selection.tile_count() <= 4);
+            assert!(Rect::new(2987, 1987, 3063, 2063).contains_rect(&selection.content_bounds()));
+            assert!(coverage(&s, 3025, 2025) > 0.95);
+            assert!(coverage(&s, 3000, 2025) > 0.1 && coverage(&s, 3000, 2025) < 0.8);
+        }
+        s.execute("select.lasso", json!({"points": [[3000, 2000], [3050, 2000], [3050, 2050], [3000, 2050]], "feather": 4})).unwrap();
+        let selection = s.active().unwrap().doc.selection.as_ref().unwrap();
+        assert!(selection.tile_count() <= 4);
+        assert!(Rect::new(2987, 1987, 3063, 2063).contains_rect(&selection.content_bounds()));
+        assert!(coverage(&s, 3025, 2025) > 0.95);
     }
 }

@@ -180,38 +180,52 @@ fn worker(rx: Receiver<Job>, bundle: PathBuf, sidecar: PathBuf, last: Arc<Mutex<
     }
 }
 
+/// Publish a recovery sidecar atomically: a flushed temporary file renamed over the old one.
+///
+/// The replacing step is a plain rename on every platform, never `ReplaceFileW` (what
+/// [`crate::atomic::RealFs`] uses on Windows to keep a user file's ACL and named streams). That
+/// call first moves the old file to a backup name and only then moves the new one in, so for a
+/// moment `<key>.json` does not exist: a listing in between took the entry for a sidecar-less
+/// bundle and listed it twice, or not at all (#9034). A rename swaps the name in one step, and
+/// recovery data is private to the app, so there is no metadata to keep.
 fn write_sidecar(path: &Path, bytes: &[u8]) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        struct PrivateFs;
-        impl crate::atomic::AtomicFs for PrivateFs {
-            fn write_new(&self, tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    struct SidecarFs;
+    impl crate::atomic::AtomicFs for SidecarFs {
+        // As before: Windows refuses a read-only sidecar up front, Unix replaces it.
+        #[cfg(not(unix))]
+        fn is_readonly(&self, path: &Path) -> bool {
+            crate::atomic::RealFs.is_readonly(path)
+        }
+        fn write_new(&self, tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+            #[cfg(unix)]
+            {
                 use std::io::Write;
+                use std::os::unix::fs::OpenOptionsExt;
                 let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(tmp)?;
                 f.write_all(bytes)?;
                 crate::atomic::sync_file(&f)
             }
-            fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
-                crate::atomic::RealFs.rename(from, to)
-            }
-            fn remove(&self, path: &Path) -> std::io::Result<()> {
-                crate::atomic::RealFs.remove(path)
-            }
-            fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
-                crate::atomic::RealFs.sync_dir(dir)
-            }
-            fn copy_metadata(&self, from: &Path, to: &Path) -> std::io::Result<()> {
-                crate::atomic::RealFs.copy_metadata(from, to)
+            #[cfg(not(unix))]
+            {
+                crate::atomic::RealFs.write_new(tmp, bytes)
             }
         }
-        crate::atomic::atomic_write_with(&PrivateFs, crate::atomic::RenameRetry::platform(), path, bytes)?;
-        Ok(())
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            crate::atomic::RealFs.rename(from, to)
+        }
+        // `replace_existing` keeps the trait's default: this same one-step rename.
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            crate::atomic::RealFs.remove(path)
+        }
+        fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+            crate::atomic::RealFs.sync_dir(dir)
+        }
+        fn copy_metadata(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            crate::atomic::RealFs.copy_metadata(from, to)
+        }
     }
-    #[cfg(not(unix))]
-    {
-        crate::store::write_atomic(path, bytes)
-    }
+    crate::atomic::atomic_write_with(&SidecarFs, crate::atomic::RenameRetry::platform(), path, bytes)?;
+    Ok(())
 }
 
 fn read_sidecar_bounded(path: &Path, max: usize) -> Option<Vec<u8>> {
@@ -437,7 +451,7 @@ fn sweep_orphans(recovery_dir: &Path, min_age: std::time::Duration) {
         }
         // Anything at the sidecar's path (even a broken one) keeps the bundle.
         let has_sidecar = std::fs::symlink_metadata(recovery_dir.join(format!("{key}.json"))).is_ok();
-        let parts = [path.clone(), path.join("tiles"), path.join("blobs")];
+        let parts = [path.clone(), path.join(craft_pcraft_format::TILES_DIR), path.join(craft_pcraft_format::BLOBS_DIR)];
         // A committed bundle is recoverable work: keep exactly what `list_recovery` lists.
         if !has_sidecar && sidecarless_entry(recovery_dir, &path).is_none() && parts.iter().all(|p| untouched_for(p, min_age, true)) {
             let _ = std::fs::remove_dir_all(&path);
@@ -459,10 +473,8 @@ fn sweep_orphans(recovery_dir: &Path, min_age: std::time::Duration) {
 #[cfg(not(target_arch = "wasm32"))]
 fn sweep_temp_file(path: &Path, min_age: std::time::Duration) {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return };
-    // `.{stem}.{pid}-{n}.pcsave.tmp`
-    let Some(rest) = name.strip_prefix('.').and_then(|n| n.strip_suffix(".pcsave.tmp")) else { return };
-    let Some((_, owner)) = rest.rsplit_once('.') else { return };
-    let Some(pid) = owner.split_once('-').and_then(|(pid, _)| pid.parse::<u32>().ok()) else { return };
+    // `{stem}.{pid}-{n}.pcsave.tmp`, or `.{stem}…` from versions before #11624.
+    let Some(pid) = crate::atomic::temp_owner(name) else { return };
     if pid != std::process::id() && untouched_for(path, min_age, false) {
         let _ = std::fs::remove_file(path);
     }
@@ -556,6 +568,30 @@ mod tests {
         let entries = list_recovery(&dir);
         assert_eq!(entries.len(), 1, "the complete entry survives");
         assert_eq!(recover(&entries[0]).unwrap(), *doc);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #11624: temp files are no longer dot files; the sweep removes another process's in both
+    /// forms, so what older versions left is still cleaned up.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn sweep_removes_temp_files_of_both_name_forms() {
+        let dir = std::env::temp_dir().join(format!(
+            "pcraft-sweep-forms-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let foreign = [dir.join("kept.json.4294967294-3.pcsave.tmp"), dir.join(".kept.json.4294967294-4.pcsave.tmp")];
+        let own = [dir.join(crate::atomic::temp_name("kept.json")), dir.join(format!(".kept.json.{}-9.pcsave.tmp", std::process::id()))];
+        let others = [dir.join("kept.json"), dir.join("kept.json.4294967294-3.tmp"), dir.join("kept.json.pcsave.tmp")];
+        for p in foreign.iter().chain(&own).chain(&others) {
+            std::fs::write(p, b"tmp").unwrap();
+        }
+        sweep_orphans(&dir, std::time::Duration::ZERO);
+        assert!(foreign.iter().all(|p| !p.exists()), "another process's temp files are swept, either form");
+        assert!(own.iter().all(|p| p.is_file()), "this process's temp files are kept");
+        assert!(others.iter().all(|p| p.is_file()), "anything else is left alone");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1,5 +1,5 @@
 use super::strokes::live_stroke;
-use super::*;
+use super::{Color32, Document, LayerContent, PhotocraftApp, TextureOptions};
 
 pub(super) fn checker(app: &mut PhotocraftApp, ctx: &egui::Context) -> egui::TextureId {
     // Preferences › Transparency & Gamut colours (the texture is rebuilt when they change).
@@ -107,7 +107,13 @@ pub(crate) const GPU_OUTPUT: u32 = u32::MAX;
 
 /// The document to render: the committed one, or a clone with the live adjustment preview applied.
 pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>, u64) {
+    if let Some(shown) = crate::frame_tool::display_doc(app, idx) {
+        return shown;
+    }
     if let Some(shown) = crate::type_panels_ui::color_picker::display_doc(app, idx) {
+        return shown;
+    }
+    if let Some(shown) = crate::color_picker_preview::display_doc(app, idx) {
         return shown;
     }
     if let Some(shown) = crate::solid_fill_ui::display_doc(app, idx) {
@@ -171,7 +177,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
         && pv.doc.id == st.doc.id
         && st.doc.layer(photocraft_doc::LayerId(t.layer)).is_some()
     {
-        return (pv.doc.clone(), (1 << 40) + pv.session);
+        return (pv.doc.clone(), crate::transform_tool::preview_key(pv.session));
     }
     // Layer Style dialog: show its effects live (Cancel just drops the preview).
     let style = app.ui.dialogs.iter().find(|d| d.kind == crate::state::DialogKind::LayerStyle);

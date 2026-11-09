@@ -1,8 +1,11 @@
 use super::invoke::{panel_alias, proof_preset, workspace_name};
 use super::items::MenuItem;
-use super::*;
+use super::{DOCUMENT_ITEM, PhotocraftApp, Value};
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
+    if id == "layer.selectUnderCursor" {
+        return app.session.active().is_some() && app.drag.is_none() && app.brush_resize.is_none();
+    }
     if crate::tool_shortcuts::tool(id).is_some() {
         return true;
     }
@@ -77,6 +80,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         // "Custom…" is the full Proof Setup dialog.
         "view.proofSetup.custom" => app.session.active().is_some(),
         "view.rulers" | "view.show.grid" | "view.show.guides" | "view.snap" | "view.lockGuides" => true,
+        "view.editSelectedGuides" | "view.clearSelectedGuides" => crate::guide_select::selected(app).is_some(),
         "edit.cut" | "edit.copy" if app.ui.text_edit.is_some() => crate::type_tool::selected_range(app).is_some(),
         "edit.paste" | "select.all" if app.ui.text_edit.is_some() => true,
         // An image copied in another app can only be seen by reading the OS clipboard, which happens
@@ -195,6 +199,7 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "window.toggle.dock" => p.dock,
         "window.togglePanels" => p.toolbar || p.options_bar || p.dock,
         "window.toggle.options" => p.options_bar,
+        "window.toggle.contextualTaskBar" => p.context_task_bar,
         "window.toggle.brushSettings" => p.brush_settings,
         "window.toggle.brushes" => p.brushes,
         _ => return None,
@@ -208,7 +213,7 @@ pub(crate) fn reveal_label() -> &'static str {
     if cfg!(target_os = "macos") {
         "Reveal in Finder"
     } else if cfg!(windows) {
-        "Show in Explorer"
+        "Reveal in Explorer"
     } else {
         "Show in Folder"
     }

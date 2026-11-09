@@ -11,6 +11,15 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+mod modify_window;
+
+#[cfg(test)]
+mod color_range_performance;
+#[cfg(test)]
+mod color_range_window_tests;
+#[cfg(test)]
+mod wand_seed_outside_tests;
+
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
@@ -43,14 +52,17 @@ fn scope_color_range(mask: &mut [f32], doc: &Document, area: Rect, m: SelectionM
 }
 
 /// RGBA pixels the tools sample: the composite, or the active layer.
-fn sample_pixels(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[f32; 4]>)> {
+fn sample_pixels(s: &Session, all_layers: bool, window: Option<Rect>) -> Result<(Rect, Vec<[f32; 4]>)> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let area = d.doc.bounds();
+    let area = window.map_or(d.doc.bounds(), |r| r.intersect(&d.doc.bounds()));
     // Match the decoders' raster budget before either the layer or composite path allocates.
     let len = area.size().area();
     let max_bytes: u64 = if cfg!(target_pointer_width = "64") { 8 << 30 } else { 2 << 30 };
     if len > max_bytes / std::mem::size_of::<[f32; 4]>() as u64 {
         return Err(EngineError::Other("the canvas is too large to sample for a selection".into()));
+    }
+    if area.is_empty() {
+        return Ok((area, Vec::new()));
     }
     let layer = d.active_layer.and_then(|id| d.doc.layer(id)).and_then(|l| l.surface());
     match (all_layers, layer) {
@@ -60,7 +72,11 @@ fn sample_pixels(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[f32; 4]>)>
             surf.read_rgba_into(area, &mut px);
             Ok((area, px))
         }
-        _ => Ok((area, photocraft_compose::render(&d.doc, area).px)),
+        _ => {
+            // The composite allocates inside compose; report a failure at its boundary.
+            crate::allocation::checkpoint("sampling pixels for a selection")?;
+            Ok((area, photocraft_compose::render(&d.doc, area).into_px()))
+        }
     }
 }
 
@@ -125,9 +141,15 @@ fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
         Some(plane) => plane,
         None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
     };
-    let region = sel::wand_region(&img, area, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true));
-    drop(img);
     let m = mode(p);
+    // Subtract and Intersect grow the region from the seed through the selection only (#11779).
+    // A global match (Contiguous off) ignores the limit, so it skips the full-area mask.
+    let contiguous = b(p, "contiguous", true);
+    let within = (contiguous && matches!(m, SelectionMode::Subtract | SelectionMode::Intersect))
+        .then(|| s.active().and_then(|st| st.doc.selection.as_ref()).map(|sel| sel::mask_from_surface(Some(sel), area)))
+        .flatten();
+    let region = sel::wand_region_within(&img, area, (x, y), f(p, "tolerance", 32.0), contiguous, b(p, "antiAlias", true), within.as_deref());
+    drop(img);
     let selected = s.edit("Magic Wand", |doc, _| {
         doc.selection = sel::combine_region(doc.selection.as_ref(), region.as_ref(), m);
         Ok(doc.selection.is_some())
@@ -145,31 +167,6 @@ fn parse_color(p: &Value) -> [f32; 3] {
         }
         _ => [0.0; 3],
     }
-}
-
-/// Eyedropper samples from `key` (`[[x, y], …]` in document pixels): the colour under each point
-/// and where it was picked (area-local, for Localized Color Clusters).
-fn eyedropper_samples(p: &Value, key: &str, area: Rect, px: &[[f32; 4]], bad: &impl Fn(String) -> EngineError) -> Result<Vec<sel::RangeSample>> {
-    let Some(pts) = p.get(key) else { return Ok(Vec::new()) };
-    let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], …]")))?;
-    let w = area.width() as usize;
-    let mut out = Vec::with_capacity(pts.len().min(4096));
-    for pt in pts {
-        let xy = pt.as_array().and_then(|a| match a.as_slice() {
-            [x, y] => Some((x.as_f64()?, y.as_f64()?)),
-            _ => None,
-        });
-        let Some((x, y)) = xy.filter(|(x, y)| x.is_finite() && y.is_finite()) else {
-            return Err(bad(format!("bad point {pt} in `{key}` (want [x, y])")));
-        };
-        let (xi, yi) = (x.floor() as i32, y.floor() as i32);
-        let q = if area.contains(xi, yi) { px.get((yi - area.y0) as usize * w + (xi - area.x0) as usize) } else { None };
-        let Some(&[r, g, b, _]) = q else {
-            return Err(bad(format!("point [{x}, {y}] in `{key}` is outside the canvas")));
-        };
-        out.push(sel::RangeSample { color: [r, g, b], at: Some(((xi - area.x0) as f32, (yi - area.y0) as f32)) });
-    }
-    Ok(out)
 }
 
 /// Composite RGB (the compositor's output profile for the document) → CIE Lab D50.
@@ -344,6 +341,23 @@ impl ColorRangeSamples {
     }
 }
 
+/// Replace refines the existing selection; no output outside its nonzero bounds survives.
+fn color_range_area(doc: &Document, m: SelectionMode) -> Rect {
+    let canvas = doc.bounds();
+    let Some(selection) = doc.selection.as_ref().filter(|_| m == SelectionMode::Replace) else { return canvas };
+    // content_bounds describes differences from the default, not implicit selected pixels.
+    if selection.default_pixel().first().is_some_and(|v| *v != 0.0) {
+        return canvas;
+    }
+    // content_bounds orders raw tile coordinates by their differences. Reject coordinates
+    // outside the pixel-addressable range before those differences can overflow.
+    let valid = (i32::MIN / photocraft_geom::TILE_SIZE)..=(i32::MAX / photocraft_geom::TILE_SIZE);
+    if selection.tiles().any(|(tile, _)| !valid.contains(&tile.tx) || !valid.contains(&tile.ty)) {
+        return canvas;
+    }
+    selection.content_bounds().intersect(&canvas)
+}
+
 fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "select.colorRange";
     let bad = |msg: String| EngineError::BadParams { cmd: CMD.into(), msg };
@@ -355,17 +369,16 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
     if b(p, "detectFaces", false) {
         return Err(bad("detectFaces: face detection isn't available yet; select without it".into()));
     }
+    let area = color_range_area(&s.active().ok_or(EngineError::NoDocument)?.doc, selection_mode);
     let (area, mut mask) = match preset {
         "sampledColors" => {
-            let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true))?;
+            let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true), Some(area))?;
             let w = area.width() as usize;
             // The dialog's eyedroppers: colours picked on the image, at their positions.
             // Like Photoshop's, they may sample anywhere on the canvas: an active selection only
             // limits the result (scope_color_range), not where colours are picked (#5244).
-            let plus = eyedropper_samples(p, "points", area, &px, &bad)?;
-            let minus = eyedropper_samples(p, "subtractPoints", area, &px, &bad)?;
-            let query = ColorRangeSamples::with_samples(s, p, area, &plus, &minus)?;
-            let mask = query.coverage(&px, w, 1.0, [0.0, 0.0]);
+            let query = ColorRangeSamples::new(s, p)?;
+            let mask = query.coverage(&px, w, 1.0, [area.x0 as f32, area.y0 as f32]);
             (area, mask)
         }
         "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" => {
@@ -377,11 +390,11 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
                 "blues" => 240.0,
                 _ => 300.0,
             };
-            let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true))?;
+            let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true), Some(area))?;
             (area, sel::hue_range(&px, center))
         }
         "skinTones" => {
-            let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true))?;
+            let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true), Some(area))?;
             (area, sel::skin_tones(&px, fuzz(40.0).min(200.0)))
         }
         "highlights" | "midtones" | "shadows" => {
@@ -404,7 +417,7 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
                     .filter(|(l, h)| l <= h)
                     .ok_or_else(|| bad(format!("tonalRange: want [low, high] levels 0..255 (got {v})")))?,
             };
-            let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true))?;
+            let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true), Some(area))?;
             (area, sel::tone_range(&px, lo, hi, fuzz(20.0).min(100.0) / 100.0 * 255.0))
         }
         "outOfGamut" => {
@@ -452,17 +465,21 @@ fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     // or a Select All would border to nothing.
     let at_bounds = op == "border" || b(p, "applyAtCanvasBounds", false);
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let area = doc.bounds();
-    if area.size().area() > MAX_MODIFY_PIXELS as u64 {
+    let canvas = doc.bounds();
+    if canvas.size().area() > MAX_MODIFY_PIXELS as u64 {
         return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
     }
-    let (_, m) = current_mask(doc);
+    // Feather reaches ⌈3σ⌉ (σ = r, as in Photoshop); the others reach at most ceil(r).
+    let reach = if op == "feather" { sel::feather_reach(r) } else { r.ceil() as usize };
+    // Keep both mask conversion and tiled replacement within the affected region. The
+    // zero halo makes internal window edges inert; nonzero edges can only be canvas edges,
+    // so the existing Apply effect at canvas bounds padding still has the same meaning.
+    let area = modify_window::area(doc, reach as f32);
+    let m = sel::mask_from_surface(doc.selection.as_ref(), area);
     let (w, h) = (area.width() as usize, area.height() as usize);
-    // Feather reaches 3σ = 3 r (σ = r, as in Photoshop); the others reach r. A margin past that
-    // keeps the canvas edge out of reach. A selection clear of the canvas edge needs none: both
-    // readings agree there.
-    let reach = if op == "feather" { r * 3.0 } else { r };
-    let pad = if touches_edge(&m, w, h) { reach.ceil() as usize + 2 } else { 0 };
+    // A margin past the reach keeps the padded edge out of reach. A selection clear of the
+    // canvas edge needs none: both readings agree there.
+    let pad = if touches_edge(&m, w, h) { reach.saturating_add(2) } else { 0 };
     let grown = |n: usize| pad.checked_mul(2).and_then(|p| n.checked_add(p));
     let (Some(pw), Some(ph)) = (grown(w), grown(h)) else {
         return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
@@ -535,42 +552,67 @@ fn crop_mask(m: &[f32], pw: usize, pad: usize, w: usize, h: usize) -> Vec<f32> {
     out
 }
 
+/// Pushes a pixel onto the grow frontier, reporting an allocation failure instead of aborting.
+fn try_push(stack: &mut Vec<usize>, i: usize) -> Result<()> {
+    crate::allocation::try_push(stack, i, "growing a selection")
+}
+
 /// Grow (contiguous) / Similar (anywhere): pixels whose colour lies within
-/// the selected pixels' colour range widened by the tolerance.
+/// tolerance of any selected pixel (indexed via ColorMatcher BVH).
 fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
     let tol = f(p, "tolerance", 32.0) / 255.0;
-    let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", false))?;
+    let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", false), None)?;
     let (_, m) = current_mask(&s.active().ok_or(EngineError::NoDocument)?.doc);
-    let (mut lo, mut hi) = ([f32::MAX; 4], [f32::MIN; 4]);
-    for (q, v) in px.iter().zip(&m) {
-        if *v >= 0.5 {
-            for c in 0..4 {
-                lo[c] = lo[c].min(q[c]);
-                hi[c] = hi[c].max(q[c]);
-            }
-        }
-    }
-    if lo[0] > hi[0] {
+    let matcher =
+        sel::ColorMatcher::new(px.iter().zip(&m).filter_map(|(q, v)| (*v >= 0.5).then_some(*q)), tol).map_err(|message| EngineError::Other(message.into()))?;
+    if matcher.is_empty() {
         return Err(EngineError::Other("selection is empty".into()));
     }
-    let inside = |q: &[f32; 4]| (0..4).all(|c| q[c] >= lo[c] - tol - 1e-6 && q[c] <= hi[c] + tol + 1e-6);
     let (w, h) = (area.width() as usize, area.height() as usize);
-    let mut out: Vec<f32> = m.iter().map(|v| if *v >= 0.5 { 1.0 } else { 0.0 }).collect();
+    let mut out = crate::allocation::filled(m.len(), 0.0f32, "growing a selection")?;
+    for (o, v) in out.iter_mut().zip(&m) {
+        *o = if *v >= 0.5 { 1.0 } else { 0.0 };
+    }
     if contiguous {
-        let mut stack: Vec<usize> = (0..out.len()).filter(|i| out[*i] > 0.0).collect();
+        // Frontier stack: only push selected pixels adjacent to at least one unselected pixel.
+        // Every push goes through `try_push` so a canvas-sized stack fails instead of aborting.
+        let mut stack: Vec<usize> = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                if out[i] == 0.0 {
+                    continue;
+                }
+                let has_unselected_neighbor =
+                    (x > 0 && out[i - 1] == 0.0) || (x + 1 < w && out[i + 1] == 0.0) || (y > 0 && out[i - w] == 0.0) || (y + 1 < h && out[i + w] == 0.0);
+                if has_unselected_neighbor {
+                    try_push(&mut stack, i)?;
+                }
+            }
+        }
         while let Some(i) = stack.pop() {
             let (x, y) = (i % w, i / w);
             let n = [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), (y > 0).then(|| i - w), (y + 1 < h).then(|| i + w)];
             for j in n.into_iter().flatten() {
-                if out[j] == 0.0 && inside(&px[j]) {
+                if out[j] == 0.0 && matcher.matches(px[j]) {
                     out[j] = 1.0;
-                    stack.push(j);
+                    try_push(&mut stack, j)?;
                 }
             }
         }
     } else {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            out.par_iter_mut().zip(px.par_iter()).for_each(|(o, q)| {
+                if *o == 0.0 && matcher.matches(*q) {
+                    *o = 1.0;
+                }
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
         for (o, q) in out.iter_mut().zip(&px) {
-            if inside(q) {
+            if *o == 0.0 && matcher.matches(*q) {
                 *o = 1.0;
             }
         }
@@ -587,7 +629,32 @@ fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 3 {
         return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "needs at least 3 points".into() });
     }
-    polygon_selection(s, "select.lasso", "Lasso", &pts, p)
+    // The History step is named after the tool: the Polygonal Lasso sends `polygonal` (Photoshop).
+    // The Patch and Content-Aware Move tools draw with this command and send their own name as
+    // `historyName`, so the plain Lasso tool keeps "Lasso".
+    // A bad name is refused even when `polygonal` picks the step's name.
+    let named = match p.get("historyName") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) if history_name(n).is_some() => history_name(n),
+        Some(_) => {
+            let msg = "historyName must be 1-64 characters with a visible one, and no control, line-break or hidden format characters";
+            return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: msg.into() });
+        }
+    };
+    let step = if b(p, "polygonal", false) { "Polygonal Lasso" } else { named.unwrap_or("Lasso") };
+    polygon_selection(s, "select.lasso", step, &pts, p)
+}
+
+/// The History step name for `historyName` `n`: refused when it has a control or line-break
+/// character anywhere; otherwise without its invisible end padding (see
+/// [`photocraft_plugins::manifest::trim_name`]), so a name that looks like "Patch Tool" is "Patch Tool",
+/// and then held to the plug-in menu-label rule.
+fn history_name(n: &str) -> Option<&str> {
+    if n.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')) {
+        return None;
+    }
+    let t = photocraft_plugins::manifest::trim_name(n);
+    photocraft_plugins::manifest::printable_name(t).then_some(t)
 }
 
 /// Selects the polygon `pts` with the lasso tools' `mode`, `antiAlias` and `feather` params, as
@@ -600,10 +667,26 @@ pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[
     }
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     if feather > 0.0 {
-        // The blur spreads past the polygon and isn't bit-identical over a smaller window.
-        let mut mask = sel::polygon(pts, area, b(p, "antiAlias", true));
-        mask = sel::feather(&mask, area.width() as usize, area.height() as usize, feather);
-        return set_selection(s, label, area, mask, mode(p));
+        let (mut lo, mut hi) = ((f32::INFINITY, f32::INFINITY), (f32::NEG_INFINITY, f32::NEG_INFINITY));
+        for &(x, y) in pts {
+            if x.is_finite() && y.is_finite() {
+                lo = (lo.0.min(x), lo.1.min(y));
+                hi = (hi.0.max(x), hi.1.max(y));
+            }
+        }
+        let bounds = if lo.0 <= hi.0 && lo.1 <= hi.1 {
+            Rect::new(lo.0.floor() as i32, lo.1.floor() as i32, hi.0.ceil() as i32, hi.1.ceil() as i32)
+        } else {
+            Rect::EMPTY
+        };
+        let window = feather_window(bounds, area, feather);
+        let mask = sel::polygon_window(pts, area, window, b(p, "antiAlias", true));
+        let mask = sel::feather(&mask, window.width() as usize, window.height() as usize, feather);
+        let selected = s.edit(label, |doc, _| {
+            doc.selection = combine_band(doc.selection.as_ref(), &mask, window, mode(p));
+            Ok(doc.selection.is_some())
+        })?;
+        return Ok(json!({ "selected": selected }));
     }
     // Only the rows the polygon spans (#4532): rows outside it are empty, and full-width rows
     // keep `polygon`'s coverage bit-identical (its x arithmetic is relative to the area's left
@@ -633,17 +716,19 @@ fn polygon_rows(pts: &[(f32, f32)], area: Rect) -> Rect {
 /// [`sel::combine`] of a mask covering only `band` (zero elsewhere), giving exactly what the
 /// whole-canvas combine gives: Replace and Intersect are empty outside the band, and Add and
 /// Subtract keep the old selection there.
-fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMode) -> Option<Surface> {
-    let inside = sel::combine(old, mask, band, m);
-    let Some(old) = old.filter(|_| matches!(m, SelectionMode::Add | SelectionMode::Subtract)) else { return inside };
-    if band.is_empty() {
-        return Some(old.clone());
+pub(crate) fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMode) -> Option<Surface> {
+    sel::combine_band(old, mask, band, m)
+}
+
+/// Keep dense feather masks local to the drawn shape. Clip before inflating: pixels outside
+/// the canvas never contribute to the original full-canvas blur, even near a canvas edge.
+pub(crate) fn feather_window(bounds: Rect, canvas: Rect, feather: f32) -> Rect {
+    let bounds = bounds.intersect(&canvas);
+    if bounds.is_empty() {
+        return Rect::EMPTY;
     }
-    let values = inside.map_or_else(|| vec![0.0; band.width() as usize * band.height() as usize], |w| w.read_region(band));
-    let mut s = old.clone();
-    s.write_region(band, &values);
-    s.prune();
-    (s.tile_count() > 0).then_some(s)
+    let reach = i32::try_from(sel::feather_reach(feather)).unwrap_or(i32::MAX);
+    bounds.inflate(reach.saturating_add(1)).intersect(&canvas)
 }
 
 macro_rules! spec {
@@ -702,7 +787,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.lasso",
             "Lasso",
             [],
-            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0}"##,
+            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"polygonal":bool=false,"historyName"?:text (1..64 characters with a visible one, no control, line-break or hidden format characters, invisible padding at the ends (spaces, joiners, fillers, blank Braille and other default-ignorable blanks, and selectors cut off by them) trimmed; the History step name when a tool other than the Lasso draws it, e.g. "Patch Tool"; default "Lasso")}"##,
             has_doc,
             lasso
         ),
