@@ -4773,6 +4773,8 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 	Info Panel Options	ตัวเลือกแผงข้อมูล
 	Readouts	ค่าที่อ่านได้
 	Total Spot Ink	หมึกสปอตทั้งหมด
+	Move Toolbar to the Right	ย้ายแถบเครื่องมือไปทางขวา
+	Move Toolbar to the Left	ย้ายแถบเครื่องมือไปทางซ้าย
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	บันทึกการตั้งค่าการปรับแต่ง RAW ไปยัง {file} แล้ว

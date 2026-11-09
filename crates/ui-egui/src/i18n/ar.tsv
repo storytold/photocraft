@@ -3628,6 +3628,8 @@ curves	Smooth	تنعيم
 	Auto-size Canvas	تحديد حجم مساحة الرسم تلقائيًا
 	Keep Relative Position During Layer Reordering	الإبقاء على الموضع النسبي عند إعادة ترتيب الطبقات
 	Shrinkwrap Canvas on Save	تقليص مساحة الرسم إلى المحتوى عند الحفظ
+	Move Toolbar to the Right	نقل شريط الأدوات إلى اليمين
+	Move Toolbar to the Left	نقل شريط الأدوات إلى اليسار
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	تم حفظ إعدادات معالجة RAW في {file}

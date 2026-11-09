@@ -4832,6 +4832,8 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Auto-size Canvas	Muuta kankaan kokoa automaattisesti
 	Keep Relative Position During Layer Reordering	Säilytä suhteellinen sijainti tasojen järjestystä muutettaessa
 	Shrinkwrap Canvas on Save	Pienennä kangas sisältöön tallennettaessa
+	Move Toolbar to the Right	Siirrä työkalupalkki oikealle
+	Move Toolbar to the Left	Siirrä työkalupalkki vasemmalle
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW-kehityksen asetukset tallennettu tiedostoon {file}

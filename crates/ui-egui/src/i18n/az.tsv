@@ -4633,6 +4633,8 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Auto-size Canvas	Kətanın ölçüsünü avtomatik təyin edin
 	Keep Relative Position During Layer Reordering	Qatları yenidən sıralayarkən nisbi mövqeyi saxlayın
 	Shrinkwrap Canvas on Save	Saxlayarkən kətanı məzmuna sıxın
+	Move Toolbar to the Right	Alət panelini sağa köçür
+	Move Toolbar to the Left	Alət panelini sola köçür
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW emalı ayarları {file} faylında saxlanıldı

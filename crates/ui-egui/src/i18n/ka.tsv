@@ -4717,6 +4717,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Info Panel Options	ინფორმაციის პანელის პარამეტრები
 	Readouts	მაჩვენებლები
 	Total Spot Ink	სპოტ-ფერის საღებავის ჯამი
+	Move Toolbar to the Right	ხელსაწყოების პანელის მარჯვნივ გადატანა
+	Move Toolbar to the Left	ხელსაწყოების პანელის მარცხნივ გადატანა
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW დამუშავების პარამეტრები შენახულია {file}-ში
