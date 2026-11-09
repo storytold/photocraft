@@ -24,6 +24,7 @@ mod overlay;
 mod path_ops;
 mod paths_panel;
 mod pen;
+mod pen_resume;
 mod shapes;
 
 pub(crate) use curvature::curvature_anchor_at;
@@ -217,7 +218,11 @@ mod pen_path_ops_tests;
 #[cfg(test)]
 mod paint_tests;
 
+#[cfg(test)]
+mod pen_resume_tests;
+
 pub(crate) use pen::freeform_locked_shape;
+pub(crate) use pen_resume::{FinishedPen, box_steps, pen_blocks_redo, pen_finish_on_redo, pen_resume_on_undo};
 
 /// Where a Pen draft goes, captured at its first anchor.
 #[derive(Clone, Debug)]

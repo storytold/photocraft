@@ -13,8 +13,12 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return crate::symmetry_ui::can_transform(app);
     }
     // Draft Pen points can be undone even when the document has no History entries.
-    if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
+    if id == "edit.undo" && !crate::vector_ui::box_steps(app, id) && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
         return true;
+    }
+    // Redo would put a finished Pen path back beside its own edited draft.
+    if id == "edit.redo" && crate::vector_ui::pen_blocks_redo(app) {
+        return false;
     }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {

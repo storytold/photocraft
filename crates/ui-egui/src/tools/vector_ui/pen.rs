@@ -349,9 +349,11 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
     let mut original = pen.clone();
     original.dragging = false;
     original.adjusting_last = false;
+    let draft = super::pen_resume::draft_before_finish(&pen);
     if pen.curvature {
         curvature_refresh(&mut pen, closed);
     }
+    let before = super::pen_resume::current_doc(app);
     if let Err(e) = commit_path(app, &pen, closed) {
         app.ui.pen = Some(PenPath { commit_failed: true, ..original });
         app.ui.status = e.clone();
@@ -359,6 +361,8 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
         return Err(e);
     }
     app.ui.pen_doc = None;
+    // Undo back to this finish gives the path back to the Pen (`pen_resume_on_undo`).
+    super::pen_resume::remember_finish(app, draft, &before);
     Ok(())
 }
 

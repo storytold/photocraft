@@ -105,8 +105,23 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
         return Some(r);
     }
     // A pending Pen anchor is gesture state; Edit › Undo must match the keyboard.
-    if id == "edit.undo" && crate::vector_ui::pen_undo_last_point(app) {
+    // An open Free Transform or Crop box steps itself first.
+    if id == "edit.undo" && !crate::vector_ui::box_steps(app, id) && crate::vector_ui::pen_undo_last_point(app) {
         return Some(Ok(Value::Null));
+    }
+    // Undo back to where a Pen path was finished (closed, ↩/Esc, another tool) gives the path
+    // back to the Pen rather than deleting it; Redo finishes it again.
+    if id == "edit.undo" {
+        match crate::vector_ui::pen_resume_on_undo(app) {
+            Ok(false) => {}
+            r => return Some(r.map(|_| Value::Null)),
+        }
+    }
+    if id == "edit.redo" {
+        match crate::vector_ui::pen_finish_on_redo(app) {
+            Ok(false) => {}
+            r => return Some(r.map(|_| Value::Null)),
+        }
     }
     // Image › Crop while the Crop tool has a pending frame commits that frame (#1918).
     if id == "image.crop" && crate::crop_ui::pending(app) {
