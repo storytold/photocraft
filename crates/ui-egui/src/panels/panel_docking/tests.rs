@@ -2000,3 +2000,130 @@ fn queued_external_width_precedes_but_does_not_eagerly_consume_native_migration(
     h.run_steps(2);
     assert!((dock_width(h.state()) - 520.0).abs() < 0.5);
 }
+
+fn remember_native_width_for_request_test(ctx: &egui::Context, width: f32) -> egui::Id {
+    let key = crate::panels::panel_state_id(ctx, "dock");
+    let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(pos2(900.0, 0.0), vec2(width, 700.0)) };
+    ctx.data_mut(|data| data.insert_persisted(key, state));
+    key
+}
+
+#[test]
+fn explicit_legacy_noop_width_supersedes_native_migration_with_ready_canvas() {
+    for compact in [false, true] {
+        for locked in [false, true] {
+            let mut app = app();
+            app.session.prefs.edit(|prefs| prefs.workspace_locked = locked);
+            let mut h = if compact { dock_edge_harness(app, vec2(1280.0, 800.0)) } else { harness(app, vec2(1280.0, 800.0)) };
+            assert!(h.state().last_canvas_rect.is_positive());
+            assert!(h.state().ui.docking.is_none());
+            let requested = dock_width(h.state());
+            let key = remember_native_width_for_request_test(&h.ctx, 380.0);
+            let ctx = h.ctx.clone();
+            assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
+            h.run_steps(1);
+            assert_eq!(dock_width(h.state()), requested, "compact={compact}, locked={locked}: migration cannot override an explicit legacy no-op");
+            assert!(h.state().ui.docking.is_none(), "a same-width request must not customize the legacy workspace");
+            assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
+            assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
+            h.run_steps(2);
+            assert_eq!(dock_width(h.state()), requested);
+            assert!(h.state().ui.docking.is_none());
+        }
+    }
+}
+
+#[test]
+fn explicit_legacy_noop_width_supersedes_native_migration_after_canvas_becomes_ready() {
+    for locked in [false, true] {
+        let mut app = app();
+        app.last_canvas_rect = egui::Rect::NOTHING;
+        app.session.prefs.edit(|prefs| prefs.workspace_locked = locked);
+        let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
+        let requested = dock_width(h.state());
+        let key = remember_native_width_for_request_test(&h.ctx, 380.0);
+        let ctx = h.ctx.clone();
+        assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
+        h.run_steps(1);
+        assert!(!h.state().last_canvas_rect.is_positive());
+        assert_eq!(dock_width(h.state()), requested);
+        assert!(h.state().ui.docking.is_none());
+        let native_retained_after_request = h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some();
+        assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
+        h.state_mut().last_canvas_rect = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0));
+        h.run_steps(1);
+        assert_eq!(dock_width(h.state()), requested, "locked={locked}: later canvas readiness cannot revive the superseded native width");
+        assert!(!native_retained_after_request, "consuming the explicit request retires native migration even before canvas readiness");
+        assert!(h.state().ui.docking.is_none(), "the legacy no-op still must not customize the workspace");
+        assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
+    }
+}
+
+#[test]
+fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspace_recovery() {
+    let mut h = dock_edge_harness(app(), vec2(1280.0, 800.0));
+    let requested = dock_width(h.state());
+    let key = remember_native_width_for_request_test(&h.ctx, 380.0);
+    let invalid = Workspace::new(Layout { root: None, floating: Vec::new() });
+    assert!(!valid_workspace(&invalid));
+    h.state_mut().ui.docking = Some(invalid.clone());
+    let ctx = h.ctx.clone();
+    assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
+    apply_pending_dock_width(h.state_mut(), &ctx);
+    assert_eq!(h.state().ui.docking, Some(invalid));
+    assert_eq!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())), Some(requested));
+    assert!(
+        h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(),
+        "neither queued request nor native state is consumed before recovery"
+    );
+    h.run_steps(1);
+    assert_eq!(dock_width(h.state()), requested, "the restored legacy workspace honors the explicit no-op instead of the saved native width");
+    assert!(h.state().ui.docking.is_none());
+    assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
+    assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
+}
+
+#[test]
+fn explicit_width_requests_retire_native_state_even_when_clamped_or_empty() {
+    for empty in [false, true] {
+        let mut h = dock_edge_harness(if empty { app_with_columns(&[], false) } else { app() }, vec2(1280.0, 800.0));
+        let before = h.state().ui.docking.clone();
+        let key = remember_native_width_for_request_test(&h.ctx, 380.0);
+        let ctx = h.ctx.clone();
+        assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":20}))["ok"], true);
+        apply_pending_dock_width(h.state_mut(), &ctx);
+        assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
+        assert!(
+            h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(),
+            "an accepted explicit request supersedes migration even when empty={empty}"
+        );
+        if empty {
+            assert_eq!(h.state().ui.docking, before, "an empty dock still has no width to change");
+        } else {
+            assert_eq!(dock_width(h.state()), 250.0, "the existing request clamp remains unchanged");
+        }
+    }
+}
+
+#[test]
+fn native_migration_still_waits_and_runs_without_an_accepted_explicit_request() {
+    for rejected in [false, true] {
+        let mut app = app();
+        app.last_canvas_rect = egui::Rect::NOTHING;
+        let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
+        let key = remember_native_width_for_request_test(&h.ctx, 380.0);
+        if rejected {
+            let ctx = h.ctx.clone();
+            assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":"not a width"}))["ok"], false);
+        }
+        assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
+        h.run_steps(1);
+        assert!(h.state().ui.docking.is_none());
+        assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(), "absent/rejected requests do not discard a pending migration");
+        h.state_mut().last_canvas_rect = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0));
+        h.run_steps(1);
+        assert_eq!(dock_width(h.state()), 380.0);
+        assert!(h.state().ui.docking.is_some());
+        assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "the unchanged native migration consumes its state once");
+    }
+}

@@ -761,8 +761,8 @@ fn canvas_alone_layout(layout: &Layout<String>) -> bool {
 }
 
 /// Apply an external width request before the dock-edge panel measures its allocation.
-/// Standard rendering consumes the same queue. Native PanelState migration stays in `show`,
-/// after this request and its existing canvas-readiness guard.
+/// Standard rendering consumes the same queue. Without an explicit request, native PanelState
+/// migration stays in `show` with its existing canvas-readiness guard.
 pub(crate) fn apply_pending_dock_width(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let id = crate::panels::dock_width_id();
     let Some(width) = ctx.data(|data| data.get_temp::<f32>(id)) else { return };
@@ -770,7 +770,13 @@ pub(crate) fn apply_pending_dock_width(app: &mut PhotocraftApp, ctx: &egui::Cont
     if app.ui.docking.as_ref().is_some_and(|workspace| !valid_workspace(workspace)) {
         return;
     }
-    ctx.data_mut(|data| data.remove::<f32>(id));
+    // An explicit request supersedes one-time native migration, including a legacy no-op
+    // that must not create a custom workspace or wait for the canvas to become ready.
+    let native_id = crate::panels::panel_state_id(ctx, "dock");
+    ctx.data_mut(|data| {
+        data.remove::<f32>(id);
+        data.remove::<egui::PanelState>(native_id);
+    });
     let range = crate::panels::dock_width_range(ctx.content_rect().width());
     set_dock_width(app, width.clamp(*range.start(), *range.end()));
 }
