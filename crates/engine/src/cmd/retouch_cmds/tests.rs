@@ -730,6 +730,32 @@ fn erase_to_history_refuses_a_new_layer_from_a_state_holding_only_a_group() {
     assert!(s.execute("paint.historyBrush", json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": 2, "eraseToHistory": true})).is_err());
 }
 
+/// A state whose one root item is a group of several layers counts one root layer, but a group has
+/// no pixels to paint back: refused like the one-layer group (FredApps' review of #10692).
+#[test]
+fn erase_to_history_refuses_a_new_layer_from_a_state_holding_one_group_of_several_layers() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[0, 5], [40, 5]], "size": 6, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[0, 15], [40, 15]], "size": 6, "hardness": 1.0, "color": "#0000ff"})).unwrap();
+    let ids: Vec<LayerId> = s.active().unwrap().doc.layers.iter().map(|l| l.id).collect();
+    assert_eq!(ids.len(), 2);
+    s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
+    s.execute("layer.select", json!({"layer": ids[1].0, "mode": "toggle"})).unwrap();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert_eq!(doc.layers.len(), 1, "one group at the root");
+    assert_eq!(doc.layers[0].children().map(<[_]>::len), Some(2), "holding both layers");
+    let state = s.active().unwrap().history.past_len();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let before = layer_pixels(&s);
+    let r = s.execute("paint.historyBrush", json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": state, "eraseToHistory": true}));
+    let err = r.expect_err("refused").to_string();
+    assert!(err.contains("did not exist"), "refused as having no pixels there: {err}");
+    assert!(layer_pixels(&s) == before, "nothing painted");
+}
+
 #[test]
 fn erase_to_history_on_a_new_layer_without_pixels_names_the_target_not_the_document() {
     let mut s = Session::new();
