@@ -205,16 +205,20 @@ fn every_open_format_has_its_own_filter() {
 }
 
 /// File › Open's All Formats offers every extension of each format `photocraft-codecs` reads in
-/// this build, every camera raw extension the raw reader recognizes, and every preset file
-/// extension File › Open imports except `.psp`, which File › Open reads only when the file is
-/// a keyboard shortcut set (Photoshop's `Keyboard Shortcuts.psp`).
+/// this build, every camera raw extension the raw reader recognizes except `.srf`, which the
+/// reader does not decode, and every preset file extension File › Open imports except `.psp`,
+/// which File › Open reads only when the file is a keyboard shortcut set (Photoshop's
+/// `Keyboard Shortcuts.psp`).
 #[test]
 fn all_formats_lists_every_readable_codec_raw_and_preset_extension() {
     let readable = photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read).flat_map(|f| f.extensions().iter().copied());
+    let raws = photocraft_io::raw::EXTENSIONS.iter().copied().filter(|ext| *ext != "srf");
     let presets = photocraft_ui_egui::preset_files_ui::PRESET_EXTS.iter().copied().filter(|ext| *ext != "psp");
-    for ext in readable.chain(photocraft_io::raw::EXTENSIONS.iter().copied()).chain(presets) {
+    for ext in readable.chain(raws).chain(presets) {
         assert!(OPEN_EXTS.contains(&ext), ".{ext} is missing from File › Open's All Formats");
     }
+    let listed = OPEN_EXTS.iter().chain(OPEN_FILTERS.iter().flat_map(|(_, exts)| exts.iter())).any(|ext| *ext == "srf");
+    assert!(!listed, "File › Open lists .srf, which the raw reader does not decode");
 }
 
 #[cfg(not(all(unix, not(target_os = "macos"))))]
