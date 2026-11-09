@@ -469,3 +469,9 @@ fn the_vertex_shaders_return_the_position_directly() {
         }
     }
 }
+
+#[test]
+fn shader_fingerprint_is_fnv1a_of_embedded_source() {
+    assert_eq!(super::fnv1a(b"hello"), 0xa430_d846_80aa_bd0b);
+    assert_eq!(super::shader_fingerprint(), super::fnv1a(super::SHADER.as_bytes()));
+}
