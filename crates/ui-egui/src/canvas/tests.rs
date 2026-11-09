@@ -1636,6 +1636,39 @@ fn home_recent_list_hides_when_the_preference_is_off() {
     assert_eq!(h.state().0.ui.recent_files.len(), 1, "the list itself is kept");
 }
 
+/// #12234: Home lists as many recent files as Preferences › File Handling › Recent File List
+/// Contains keeps, not only the first 11.
+#[test]
+fn home_recent_list_follows_the_recent_file_count() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for i in 1..=15 {
+        app.push_recent(&format!("/tmp/photocraft-12234/file{i:02}.psd"));
+    }
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 760.0)).build_ui_state(
+        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            if *ready {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+            }
+        },
+        (app, false),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    h.state_mut().1 = true;
+    h.run_steps(3);
+    let listed = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| (1..=15).filter(|i| h.query_by_label(&format!("file{i:02}.psd")).is_some()).count();
+    assert_eq!(listed(&h), 15, "all 15 under the default of 20");
+    assert!(h.query_by_label("file01.psd").is_some(), "the oldest is listed too");
+
+    h.state_mut().0.run("prefs.set", serde_json::json!({"values": {"fileHandling.recentFileCount": 12}})).unwrap();
+    // The app's frame mirrors the stored list into the UI state; this harness draws only the
+    // document area.
+    h.state_mut().0.sync_recent();
+    h.run_steps(3);
+    assert_eq!(listed(&h), 12, "the preference caps the list");
+    assert!(h.query_by_label("file03.psd").is_none(), "the oldest drop off first");
+}
+
 #[test]
 fn start_screen_narrow_window_renders_actions_row() {
     use egui_kittest::kittest::Queryable;
