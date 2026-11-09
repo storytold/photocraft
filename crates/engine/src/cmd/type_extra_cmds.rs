@@ -1,7 +1,7 @@
 //! The Type menu: anti-aliasing, orientation, point ⇄ paragraph conversion, Create Work Path,
-//! Convert to Shape, Rasterize, Warp Text, the OpenType toggles (with the Numerals submenu),
-//! Paste Lorem Ipsum, Update All Text Layers, missing-font replacement and the default type
-//! styles.
+//! Convert to Shape, Rasterize, Warp Text, the OpenType toggles (with the Numerals submenu and the 20
+//! Stylistic Sets), Paste Lorem Ipsum, Update All Text Layers, missing-font replacement and the
+//! default type styles.
 //!
 //! Everything edits the typed [`TextLayer`] model and re-renders through `type_cmds::refresh`,
 //! so the PSD `TySh` data (and with it warp, anti-aliasing and the OpenType flags) is regenerated
@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, explicit_layer, layer_param};
 use crate::type_cmds::{
-    check_text_unlocked, format_targets, has_format_target, is_auto_named, layer_name, refresh_at, replace_text, style_paragraphs, style_range,
+    check_text_unlocked, format_targets, has_format_target, is_auto_named, layer_name, refresh_at, replace_text, style_paragraphs, style_range, typed_name,
     with_text_targets,
 };
 use crate::{EngineError, Result, Session};
@@ -76,16 +76,19 @@ fn has_defaults(s: &Session) -> std::result::Result<(), String> {
 pub(crate) fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
     let id = layer_param(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    let typed = typed_name(s, id);
     s.edit(label, |doc, _| {
         let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let auto_named = is_auto_named(l);
+        let auto_named = is_auto_named(l, typed.as_deref());
         let LayerContent::Text(t) = &mut l.content else {
             return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
         };
+        // Only a text change renames: a style or layout edit keeps a copy's "Title copy" (#9023).
+        let old_text = auto_named.then(|| t.text.clone());
         let r = f(t, dpi)?;
         refresh_at(dpi, format, t);
-        let name = auto_named.then(|| layer_name(&t.text));
+        let name = old_text.is_some_and(|old| old != t.text).then(|| layer_name(&t.text));
         if let Some(n) = name {
             l.name = n;
         }
@@ -503,6 +506,12 @@ fn warp_text(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- OpenType toggles ----------
 
+/// The OpenType tags of Type › OpenType › Stylistic Sets: `STYLISTIC_SET_TAGS[n - 1]` is Set n.
+pub const STYLISTIC_SET_TAGS: [&str; 20] = [
+    "ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09", "ss10", "ss11", "ss12", "ss13", "ss14", "ss15", "ss16", "ss17", "ss18", "ss19",
+    "ss20",
+];
+
 /// OpenType figure tags Type › OpenType › Numerals clears or sets (`lnum`/`onum`/`pnum`/`tnum`).
 pub const NUMERAL_FEATURE_TAGS: [&str; 4] = ["lnum", "onum", "pnum", "tnum"];
 
@@ -879,7 +888,14 @@ pub fn specs() -> Vec<CommandSpec> {
     const LP: &str = r##"{"layer":id?}"##;
     const FP: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers)}"##;
     const OT: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"on":bool? (default: toggle representative),"range":[startChar,endChar]? (single layer; default all)}"##;
-    vec![
+    // One toggle per stylistic set; a run fn can't capture, so each indexes the tag table itself.
+    macro_rules! stylistic_sets {
+        ($($n:literal),* $(,)?) => {
+            [$(spec!(concat!("type.openType.stylisticSets.set", $n), concat!("Set ", $n), &["Type", "OpenType", "Stylistic Sets"], OT, has_format_target, |s, p| toggle_opentype(s, p, STYLISTIC_SET_TAGS[$n - 1]))),*]
+        };
+    }
+    let sets = stylistic_sets![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+    let mut all = vec![
         spec!("type.antiAlias.none", "None", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::None)),
         spec!("type.antiAlias.sharp", "Sharp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Sharp)),
         spec!("type.antiAlias.crisp", "Crisp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Crisp)),
@@ -995,7 +1011,9 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| save_defaults(s)
         ),
         spec!("type.loadDefaultTypeStyles", "Load Default Type Styles", &["Type"], FP, has_defaults, load_defaults),
-    ]
+    ];
+    all.extend(sets);
+    all
 }
 
 #[cfg(test)]

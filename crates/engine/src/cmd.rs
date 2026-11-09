@@ -67,6 +67,12 @@ pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
+#[cfg(test)]
+mod count_delete_group_tests;
+#[cfg(test)]
+mod count_history_names_tests;
+#[cfg(test)]
+mod count_record_label_tests;
 pub mod cutout_cmds;
 pub mod distort_cmds;
 pub mod document_preset_cmds;
@@ -83,7 +89,7 @@ pub mod fill_cmds;
 pub mod fill_key_cmds;
 pub mod float_cmds;
 pub mod font_library_cmds;
-pub(super) mod frame_cmds;
+pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
@@ -96,6 +102,7 @@ pub mod history_select_cmds;
 pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
+pub mod layer_css_cmds;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
@@ -112,6 +119,8 @@ pub(super) mod migrate_cmds;
 pub mod mode_cmds;
 pub mod multichannel_cmds;
 pub mod notes_cmds;
+#[cfg(test)]
+mod notes_stored_values_tests;
 mod ops;
 pub mod paint_cmds;
 mod params;
@@ -148,6 +157,8 @@ pub mod type_area_cmds;
 pub mod type_caret_cmds;
 pub mod type_cmds;
 pub mod type_extra_cmds;
+#[cfg(test)]
+mod type_indexed_mode_tests;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
@@ -169,7 +180,7 @@ use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_layer, has_pixel
 pub use layer_params::blend_from_str;
 pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, layer_param, mask_at_depth, mask_new_layer, selection_mask};
 pub(crate) use layer_references::{recorded_drop, recorded_layer};
-use ops::{arrange, merge_group, set_mask, set_mask_and_deselect};
+use ops::{arrange, merge_group, move_mask, set_mask, set_mask_and_deselect};
 pub(crate) use ops::{layer_copy, translate_layer};
 use params::{bad, set_clipped};
 pub(crate) use params::{check_f32_values, cmyk_param, color_param, int, int_i32, parse_hex, u32_id, u32_id_param};
@@ -569,18 +580,26 @@ fn build() -> Vec<CommandSpec> {
                 }
                 let id = layer_param(s, p)?;
                 let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
+                // The dialog offers Duplicate Layer's own name: only a different one was typed (#9023).
+                let mut typed = None;
                 let nid = s.edit("Duplicate Layer", |doc, active| {
                     let mut dup = layer_copy(doc, id, add_copy)?;
-                    if let Some(name) = &name {
+                    if let Some(name) = name.as_ref().filter(|n| **n != dup.name) {
                         dup.name.clone_from(name);
+                        typed = Some(name.clone());
                     }
                     let nid = doc.insert_above(Some(id), dup);
+                    // A lone copy joins its original's link group, as in the reference application (#11217).
+                    crate::layer_multi_cmds::relink_copies(doc, &[nid])?;
                     if !in_place {
                         crate::artboard_cmds::place_copy(doc, nid)?;
                     }
                     *active = Some(nid);
                     Ok(nid)
                 })?;
+                if let Some(name) = typed {
+                    crate::type_cmds::note_typed_name(s, nid, &name);
+                }
                 Ok(json!({ "layer": nid.0 }))
             }
         ),
@@ -722,6 +741,10 @@ fn build() -> Vec<CommandSpec> {
                     }
                     Ok(())
                 })?;
+                // The Layers panel's in-place rename: a name the user typed (#9023).
+                if let (Some(name), [id]) = (p.get("name").and_then(Value::as_str), ids.as_slice()) {
+                    crate::type_cmds::note_typed_name(s, *id, name);
+                }
                 Ok(Value::Null)
             }
         ),
@@ -795,6 +818,15 @@ fn build() -> Vec<CommandSpec> {
             "Delete Layer Mask",
             None
         )),
+        cmd!(
+            "layer.layerMask.moveTo",
+            "Move Layer Mask",
+            [],
+            None,
+            r##"{"layer":id? (the mask's layer, default active),"to":id|name (the layer or group it goes to; a recorded step names it),"toOccurrence":n? (which of several layers named `to`, in document order),"copy":bool=false (⌥-drag: a copy goes and the original stays),"replace":bool=false (replace a mask already there; otherwise refused)} → {layer,to,copy}"##,
+            has_layer,
+            move_mask
+        ),
         cmd!("layer.mergeDown", "Merge Down", ["Layer"], None, r##"{"layer":id?}"##, has_layer, |s, p| {
             let id = layer_param(s, p)?;
             s.edit("Merge Down", |doc, active| {
@@ -870,7 +902,7 @@ fn build() -> Vec<CommandSpec> {
             "Gradient…",
             ["Layer", "New Fill Layer"],
             None,
-            r##"{"from":"#rrggbb","to":"#rrggbb","angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
+            r##"{"from":"#rrggbb","to":"#rrggbb","angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask),"stops"?,"transparency"?,"midpoints"?,"scale"?,"offset"?,"dither"?,"align"? (as gradient.fill.set; stops replace from/to)}"##,
             has_doc,
             |s, p| {
                 let a = color_param("layer.newFillLayer.gradient", p, "from", s.tools.foreground)?;
@@ -879,15 +911,26 @@ fn build() -> Vec<CommandSpec> {
                 let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
                 let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
+                // The rest of a recorded Gradient Fill (a loaded action's Make): applied as
+                // `gradient.fill.set` would, in the same step.
+                let rest: serde_json::Map<String, Value> = ["stops", "transparency", "midpoints", "scale", "offset", "dither", "align"]
+                    .iter()
+                    .filter_map(|k| p.get(*k).map(|v| ((*k).to_string(), v.clone())))
+                    .collect();
+                let (fg, bg) = (s.tools.foreground, s.tools.background);
                 let id = s.edit("New Gradient Fill Layer", |doc, active| {
-                    let fill = Fill::gradient(
+                    let mut fill = Fill::gradient(
                         vec![(0.0, Color::rgba(a[0], a[1], a[2], a[3])), (1.0, Color::rgba(b[0], b[1], b[2], b[3]))],
                         angle,
                         1.0,
                         style,
                         reverse,
-                    )
-                    .in_mode(doc.mode);
+                    );
+                    if !rest.is_empty() {
+                        let l = Layer::new(String::new(), LayerContent::Fill(fill.clone()));
+                        fill = crate::gradient_fill_cmds::apply_set(&l, &fill, doc.bounds(), &Value::Object(rest.clone()), fg, bg)?;
+                    }
+                    let fill = fill.in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
                     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
@@ -942,7 +985,7 @@ fn build() -> Vec<CommandSpec> {
             "Move Layer",
             [],
             None,
-            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels","selection":bool=false} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer; selection: the selection moves too, in the same step)"##,
+            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels","selection":bool=false,"nest":bool=false} → null | {nested:[id]} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer; selection: the selection moves too, in the same step; nest: auto-nesting as the Move tool does it, a layer whose bounds centre lands on another artboard joins it and one whose centre is off every artboard leaves for the top level; a clipping base takes the layers clipped to it along and a clipped layer goes only where its base goes; artboards, the Background, empty layers, layers whose board doesn't change, groups that would nest too deep and layers locked with Prevent Auto-Nesting (on the layer, a group around it or the destination board) stay put, with their whole clipping group; nested lists the layers that changed board)"##,
             has_layer,
             crate::layer_multi_cmds::translate
         ),
@@ -1205,7 +1248,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "colorLookup",
             "Color Lookup…",
-            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":json} (file: .cube/.3dl/.look path; data: file text + "fileName")"##,
+            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":text,"dataEncoding":"text|base64"="text","fileName":text?,"lutFormat":"cube|3dl|look"?} (file: LUT path; data: file text or encoded bytes; lutFormat overrides format detection)"##,
         ),
     ];
     for &(kind, label, params) in ADJ {
@@ -1216,7 +1259,7 @@ fn build() -> Vec<CommandSpec> {
             label,
             menu: &["Layer", "New Adjustment Layer"],
             shortcut: None,
-            params: Box::leak(format!(r#"{params} + {{{NEW_LAYER_PATH},"opacity":0..1=1}}"#).into_boxed_str()),
+            params: Box::leak(format!(r#"{params} + {{{NEW_LAYER_PATH},"opacity":0..1=1,"name":str?=the adjustment's name + number,"mode":blend mode name="normal" (not Pass Through),"clipToPrevious":bool=false}}"#).into_boxed_str()),
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
@@ -1355,6 +1398,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::adjust_cmds::specs());
     v.extend(crate::layer_menu_cmds::specs());
     v.extend(crate::layer_label_cmds::specs());
+    v.extend(crate::layer_css_cmds::specs());
     v.extend(crate::layer_xmp_cmds::specs());
     v.extend(crate::mode_cmds::specs());
     v.extend(crate::multichannel_cmds::specs());
