@@ -1,10 +1,10 @@
 //! #12022: the Hand tool's canvas right-click lists only Fit on Screen, 100%, 200% and Print Size;
-//! the Zoom tool's menu is unchanged.
+//! the Zoom tool's menu keeps its zoom steps.
 
 use egui::Context;
 use serde_json::json;
 
-use super::{FILL_SCREEN, HAND_MENU, Row, VIEW_MENU, choose, open_view, rows};
+use super::{HAND_MENU, Row, VIEW_MENU, choose, open_view, rows};
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
@@ -34,14 +34,11 @@ fn the_hand_menu_lists_only_the_fixed_zooms() {
 }
 
 #[test]
-fn the_zoom_menu_is_unchanged() {
+fn the_zoom_menu_keeps_its_zoom_steps() {
     let app = menu_app(Tool::Zoom, false);
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     assert!(rows(&menu) == VIEW_MENU);
-    assert_eq!(
-        labels(rows(&menu)),
-        vec![Some("Fit on Screen"), Some("Fill Screen"), Some("100%"), Some("200%"), Some("Print Size"), None, Some("Zoom In"), Some("Zoom Out")]
-    );
+    assert_eq!(labels(rows(&menu)), vec![Some("Fit on Screen"), Some("100%"), Some("200%"), Some("Print Size"), None, Some("Zoom In"), Some("Zoom Out")]);
 }
 
 #[test]
@@ -52,7 +49,7 @@ fn the_hand_entries_zoom_and_add_no_history() {
     assert_eq!(app.ui.views[0].zoom, 2.0);
     assert_eq!(app.session.active().unwrap().history.past_len(), before);
     // Rows that left the Hand's menu can't be run through it.
-    for gone in [FILL_SCREEN, "view.zoomIn", "view.zoomOut"] {
+    for gone in ["view.fillScreen", "view.zoomIn", "view.zoomOut"] {
         let mut app = menu_app(Tool::Hand, false);
         let zoom = app.ui.views[0].zoom;
         choose(&mut app, &Context::default(), gone);

@@ -374,11 +374,10 @@ pub fn cycle_canvas_color(app: &mut PhotocraftApp, backward: bool) -> Result<(),
     app.run("prefs.set", json!({"values": {"interface.canvasColor": name}})).map(|_| ())
 }
 
-/// The Zoom tool's context menu: the fixed zooms of the View menu (plus Fill Screen), then the
-/// zoom steps last, in Photoshop's order (#6005).
+/// The Zoom tool's context menu: the fixed zooms of the View menu, then the zoom steps last, in
+/// Photoshop's order (#6005); no Fill Screen, as measured (#12069).
 pub const VIEW_MENU: &[Row] = &[
     Some(("Fit on Screen", "view.fitOnScreen")),
-    Some(("Fill Screen", FILL_SCREEN)),
     Some(("100%", "view.actualPixels")),
     Some(("200%", "view.twoHundredPercent")),
     Some(("Print Size", "view.printSize")),
@@ -394,10 +393,6 @@ pub const HAND_MENU: &[Row] = &[
     Some(("200%", "view.twoHundredPercent")),
     Some(("Print Size", "view.printSize")),
 ];
-
-/// The view menu's Fill Screen row. Photoshop has no View menu command for it, so the menu sets
-/// the view itself.
-pub const FILL_SCREEN: &str = "view.fillScreen";
 
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
 /// Fill row has no PhotoCraft command and is left out. Rows stay visible and grey out exactly like
@@ -975,9 +970,6 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if menu.transform && command == "edit.transform.warp" {
         return app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.target.is_none());
     }
-    if menu.anchor.is_some() && command == FILL_SCREEN {
-        return app.session.active().is_some();
-    }
     if menu.text {
         return match command {
             SPELLING_NONE => false,
@@ -1138,14 +1130,6 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
 /// centring is enabled. Other view-tool cases retain their pressed-point anchoring.
 fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
     let i = app.session.active_index().ok_or("no document")?;
-    if command == FILL_SCREEN {
-        let v = app.ui.views.get_mut(i).ok_or("no document view")?;
-        v.fit_pending = false;
-        v.fill_pending = true;
-        v.request_zoom_animation(app.session.prefs().general.animated_zoom);
-        v.zoom_anchor = None;
-        return Ok(());
-    }
     let before = app.ui.views.get(i).map(|v| (v.zoom, v.center));
     crate::menus::invoke(app, ctx, command, json!({}))?;
     if !matches!(command, "view.zoomIn" | "view.zoomOut") {
@@ -1557,3 +1541,6 @@ mod pen_free_transform_label_tests;
 
 #[cfg(test)]
 mod make_selection_dialog_tests;
+
+#[cfg(test)]
+mod zoom_menu_entries_tests;
