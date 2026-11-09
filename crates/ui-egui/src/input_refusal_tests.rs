@@ -186,6 +186,22 @@ fn a_direct_request_failing_during_synthetic_input_is_not_reported_to_input() {
     assert_eq!(r, json!({"ok": true, "result": null}), "the V press caused no refusal");
 }
 
+/// The other way round: a refused key in flight while a direct call fails. Each reply carries
+/// only its own refusal.
+#[test]
+fn a_refused_key_and_a_failing_direct_request_keep_their_own_refusals() {
+    let (mut h, tx) = harness(deny_files(), true);
+    let rx = send(&tx, "ui.key", json!({"key": "S", "command": true}));
+    pump(&mut h, 1);
+    let direct = send(&tx, "engine.execute", json!({"command": "layer.delete", "params": {"layer": 999_999}}));
+    let r = reply(&mut h, &rx);
+    let direct = direct.try_recv().expect("the direct call replied");
+    assert_eq!(r["errors"], json!(["filesystem command denied"]), "only the key's refusal: {r}");
+    assert_eq!(direct["ok"], false, "{direct}");
+    assert!(direct["error"].as_str().is_some_and(|e| e.contains("no such layer")), "its own error: {direct}");
+    assert!(direct.get("errors").is_none(), "the key's refusal stays out of it: {direct}");
+}
+
 /// Input of several requests handled in one frame would share one pass: each request's input
 /// is its own step, so `ui.move` before a refused `ui.key` doesn't take the key's refusal.
 #[test]

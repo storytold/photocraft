@@ -8,8 +8,9 @@
 //! request owns the slice of that log from when the input queued before it had been handled to
 //! the end of the pass that handled its own last event, so with several requests in flight each
 //! reply carries only the refusals its own input caused. A reply with refusals is
-//! `{"ok": false, "error": <first>, "errors": [...]}`; input that was handled without one still
-//! replies `{"ok": true, "result": null}`.
+//! `{"ok": false, "error": <first>, "errors": [...]}`, plus `"truncated": true` when the cap
+//! dropped some of them; input that was handled without one still replies
+//! `{"ok": true, "result": null}`.
 
 use super::PhotocraftApp;
 use crate::ControlResponse;
@@ -28,6 +29,8 @@ struct Waiter {
     until_taken: u64,
     /// The log length once the pass that handled its last event finished.
     to: Option<usize>,
+    /// `MAX_ERRORS` dropped some of its refusals: its `errors` is incomplete.
+    truncated: bool,
 }
 
 /// Waiting replies and the refusals logged for them.
@@ -65,9 +68,12 @@ impl InputReplies {
         }
         if self.errors.len() >= MAX_ERRORS {
             let len = self.errors.len();
-            let current = self.waiters.iter().find(|w| w.to.is_none());
-            let has_own = current.is_none_or(|w| w.from.is_none_or(|from| len > from));
+            let current = self.waiters.iter_mut().find(|w| w.to.is_none());
+            let has_own = current.as_ref().is_none_or(|w| w.from.is_none_or(|from| len > from));
             if has_own {
+                if let Some(w) = current {
+                    w.truncated = true;
+                }
                 return;
             }
         }
@@ -85,10 +91,12 @@ impl InputReplies {
         self.waiters.iter().map(|w| w.until_taken).filter(|&end| end > self.taken).min()
     }
 
-    /// The reply for refusals `errors` (none: the input was handled).
-    fn reply(errors: &[String]) -> ControlResponse {
+    /// The reply for refusals `errors` (none: the input was handled); `truncated` when the cap
+    /// dropped some of them, so a client knows `errors` is incomplete.
+    fn reply(errors: &[String], truncated: bool) -> ControlResponse {
         match errors.first() {
             None => serde_json::json!({"ok": true, "result": null}),
+            Some(first) if truncated => serde_json::json!({"ok": false, "error": first, "errors": errors, "truncated": true}),
             Some(first) => serde_json::json!({"ok": false, "error": first, "errors": errors}),
         }
     }
@@ -100,7 +108,7 @@ impl InputReplies {
         for w in self.waiters.drain(..) {
             let to = w.to.unwrap_or(errors.len());
             let mine = errors.get(w.from.unwrap_or(to)..to).unwrap_or_default();
-            let _ = w.reply.send(Self::reply(mine));
+            let _ = w.reply.send(Self::reply(mine, w.truncated));
         }
         self.status_before = None;
     }
@@ -110,7 +118,7 @@ impl InputReplies {
     fn fail(&mut self, error: &str) {
         for w in self.waiters.drain(..) {
             let reply = match w.to {
-                Some(to) => Self::reply(self.errors.get(w.from.unwrap_or(to)..to).unwrap_or_default()),
+                Some(to) => Self::reply(self.errors.get(w.from.unwrap_or(to)..to).unwrap_or_default(), w.truncated),
                 None => serde_json::json!({"ok": false, "error": error}),
             };
             let _ = w.reply.send(reply);
@@ -128,7 +136,7 @@ impl PhotocraftApp {
         let until_taken = r.taken.saturating_add(self.synthetic.len() as u64);
         // Input queued by earlier requests is handled first: this one's refusals start after it.
         let from = r.waiters.last().map_or(Some(r.errors.len()), |prev| prev.to);
-        r.waiters.push(Waiter { reply, from, until_taken, to: None });
+        r.waiters.push(Waiter { reply, from, until_taken, to: None, truncated: false });
     }
 
     /// Note that `n` synthetic events were taken for delivery.
@@ -230,9 +238,10 @@ mod tests {
     /// No refusal replies `ok`; refusals reply the first as `error` and all of them as `errors`.
     #[test]
     fn no_refusal_replies_ok_and_refusals_reply_the_first_with_all() {
-        assert_eq!(InputReplies::reply(&[]), json!({"ok": true, "result": null}));
+        assert_eq!(InputReplies::reply(&[], false), json!({"ok": true, "result": null}));
         let errors = ["a".to_string(), "b".to_string()];
-        assert_eq!(InputReplies::reply(&errors), json!({"ok": false, "error": "a", "errors": ["a", "b"]}));
+        assert_eq!(InputReplies::reply(&errors, false), json!({"ok": false, "error": "a", "errors": ["a", "b"]}));
+        assert_eq!(InputReplies::reply(&errors, true), json!({"ok": false, "error": "a", "errors": ["a", "b"], "truncated": true}));
     }
 
     /// The log drops blank refusals and a repeat right after itself, and stops at `MAX_ERRORS`.
@@ -256,7 +265,7 @@ mod tests {
     fn a_waiter_out_of_range_of_the_log_still_gets_an_answer() {
         let mut r = InputReplies::default();
         let (tx, rx) = std::sync::mpsc::channel();
-        r.waiters.push(super::Waiter { reply: tx, from: Some(5), until_taken: 0, to: Some(2) });
+        r.waiters.push(super::Waiter { reply: tx, from: Some(5), until_taken: 0, to: Some(2), truncated: false });
         r.settle();
         assert_eq!(rx.recv().unwrap()["ok"], true);
     }
@@ -267,8 +276,8 @@ mod tests {
         let mut r = InputReplies::default();
         let (first_tx, first) = std::sync::mpsc::channel();
         let (second_tx, second) = std::sync::mpsc::channel();
-        r.waiters.push(super::Waiter { reply: first_tx, from: Some(0), until_taken: 1, to: None });
-        r.waiters.push(super::Waiter { reply: second_tx, from: None, until_taken: 2, to: None });
+        r.waiters.push(super::Waiter { reply: first_tx, from: Some(0), until_taken: 1, to: None, truncated: false });
+        r.waiters.push(super::Waiter { reply: second_tx, from: None, until_taken: 2, to: None, truncated: false });
         for i in 0..super::MAX_ERRORS + 10 {
             r.log(&format!("first {i}"));
         }
@@ -279,8 +288,14 @@ mod tests {
         r.log("second refused");
         r.log("second again");
         r.settle();
-        assert_eq!(first.recv().unwrap()["errors"].as_array().map(Vec::len), Some(super::MAX_ERRORS));
-        assert_eq!(second.recv().unwrap(), json!({"ok": false, "error": "second refused", "errors": ["second refused"]}));
+        let first = first.recv().unwrap();
+        assert_eq!(first["errors"].as_array().map(Vec::len), Some(super::MAX_ERRORS));
+        assert_eq!(first["truncated"], true, "the first request says its list is incomplete: {first}");
+        assert_eq!(
+            second.recv().unwrap(),
+            json!({"ok": false, "error": "second refused", "errors": ["second refused"], "truncated": true}),
+            "the second's later refusal was dropped too"
+        );
     }
 
     /// Later queued input is cancelled: requests whose input was already handled keep their own
@@ -291,11 +306,11 @@ mod tests {
         let (refused_tx, refused) = std::sync::mpsc::channel();
         let (handled_tx, handled) = std::sync::mpsc::channel();
         let (pending_tx, pending) = std::sync::mpsc::channel();
-        r.waiters.push(super::Waiter { reply: refused_tx, from: Some(0), until_taken: 1, to: None });
+        r.waiters.push(super::Waiter { reply: refused_tx, from: Some(0), until_taken: 1, to: None, truncated: false });
         r.log("A refused");
         r.waiters[0].to = Some(1);
-        r.waiters.push(super::Waiter { reply: handled_tx, from: Some(1), until_taken: 2, to: Some(1) });
-        r.waiters.push(super::Waiter { reply: pending_tx, from: Some(1), until_taken: 3, to: None });
+        r.waiters.push(super::Waiter { reply: handled_tx, from: Some(1), until_taken: 2, to: Some(1), truncated: false });
+        r.waiters.push(super::Waiter { reply: pending_tx, from: Some(1), until_taken: 3, to: None, truncated: false });
         r.fail("input cancelled: the document changed");
         assert_eq!(refused.recv().unwrap(), json!({"ok": false, "error": "A refused", "errors": ["A refused"]}));
         assert_eq!(handled.recv().unwrap(), json!({"ok": true, "result": null}));
