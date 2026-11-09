@@ -118,7 +118,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Shape Layer Info",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?} → {layer,name,kind,path,fill,stroke,live,bounds:[x,y,w,h]}"##,
+            params: r##"{"layer":id?} → {layer,name,kind,path,fill,stroke,useAlignedRendering,live,bounds:[x,y,w,h]}"##,
             enabled: has_layer,
             run: |s, p| {
                 let id = layer_id(s, p)?;

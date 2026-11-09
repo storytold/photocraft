@@ -1428,7 +1428,7 @@ fn pixel_aligned_one_pixel_dashes_keep_phase_at_half_offsets() {
     }
 }
 
-/// A PSD-sized canvas must not broaden eligibility for native fractional centerlines.
+/// Native fractional centerlines snap independently of the canvas dimensions.
 #[test]
 fn align_edges_snaps_native_fractional_centerlines() {
     let clip = Rect::new(0, 0, 64, 64);
@@ -1451,33 +1451,35 @@ fn align_edges_snaps_native_fractional_centerlines() {
     }
 }
 
-/// PSD allowances follow each document axis and never turn a genuine fractional line axial.
+/// Align Edges snaps quantized and genuinely fractional PSD centerlines on both axes,
+/// regardless of the old tolerance frame, without changing stored geometry.
 #[test]
-fn pixel_alignment_psd_allowance_is_axis_specific_and_render_only() {
+fn align_edges_psd_paths_match_snapped_output_on_both_axes() {
     let clip = Rect::new(0, 0, 64, 64);
     let canvas = Rect::new(0, 0, 100, 300_000);
     let quantize = |coordinate: f64, side: f64| (coordinate / side * 16_777_216.0).round() / 16_777_216.0 * side;
-    let mut horizontal = ShapeLayer {
-        path: Path::new(vec![Subpath::polyline(&[(10.0, quantize(20.0, 300_000.0)), (54.0, quantize(20.0, 300_000.0))])]),
-        use_aligned_rendering: true,
-        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
-        // Provenance is independent of the render region and raw export block.
-        psd_coordinate_frame: Some([100, 300_000]),
-        psd_raw: Some(std::sync::Arc::new(Vec::new())),
-        ..Default::default()
-    };
-    let stored = horizontal.path.clone();
-    let pixels = CompiledShape::with_frames(&horizontal, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip);
-    for x in 14..50 {
-        assert_eq!(pixels[19 * 64 + x][3], 0.0);
-        assert!((pixels[20 * 64 + x][3] - 1.0).abs() < 1e-6);
+    for vertical in [false, true] {
+        let (source, snapped) = if vertical {
+            ([(quantize(20.001, 100.0), 10.0), (quantize(20.001, 100.0), 54.0)], [(20.0, 10.0), (20.0, 54.0)])
+        } else {
+            ([(10.0, quantize(20.0, 300_000.0)), (54.0, quantize(20.0, 300_000.0))], [(10.0, 20.0), (54.0, 20.0)])
+        };
+        let shape = ShapeLayer {
+            path: Path::new(vec![Subpath::polyline(&source)]),
+            use_aligned_rendering: true,
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            psd_coordinate_frame: Some([100, 300_000]),
+            psd_raw: Some(std::sync::Arc::new(Vec::new())),
+            ..Default::default()
+        };
+        let stored = shape.path.clone();
+        let expected = ShapeLayer { path: Path::new(vec![Subpath::polyline(&snapped)]), psd_coordinate_frame: None, psd_raw: None, ..shape.clone() };
+        let pixels = CompiledShape::with_frames(&shape, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip);
+        let snapped_pixels = CompiledShape::with_frames(&expected, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip);
+        let mismatch = pixels.iter().zip(&snapped_pixels).position(|(actual, expected)| actual != expected);
+        assert_eq!(mismatch, None, "vertical={vertical}");
+        assert_eq!(shape.path, stored);
     }
-    assert_eq!(horizontal.path, stored);
-    horizontal.path = Path::new(vec![Subpath::polyline(&[(quantize(20.001, 100.0), 10.0), (quantize(20.001, 100.0), 54.0)])]);
-    horizontal.use_aligned_rendering = false;
-    let legacy = CompiledShape::with_frames(&horizontal, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip);
-    horizontal.use_aligned_rendering = true;
-    assert_ne!(CompiledShape::with_frames(&horizontal, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip), legacy);
 }
 
 /// Adjacent-row sampling must not overflow when hostile coordinates round to an integer limit.
