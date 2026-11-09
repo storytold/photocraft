@@ -107,7 +107,10 @@ pub(super) fn convert_source(src: &Surface, fmt: PixelFormat, r: Rect) -> Surfac
     if FULL_CONVERSION.with(std::cell::Cell::get) {
         return src.convert(fmt);
     }
-    src.convert_region(fmt, r)
+    let out = src.convert_region(fmt, r);
+    #[cfg(test)]
+    CONVERTED_TILES.with(|c| c.set(c.get() + out.tile_count()));
+    out
 }
 
 #[cfg(test)]
@@ -115,6 +118,9 @@ thread_local! {
     /// Tests set this to convert history sources whole, as before #11594: the oracle the
     /// region-limited conversion must match bit for bit.
     pub(super) static FULL_CONVERSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The tiles the region-limited conversion has produced on this thread: tests bound a
+    /// command's conversion work with it.
+    pub(super) static CONVERTED_TILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {

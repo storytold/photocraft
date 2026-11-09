@@ -2543,7 +2543,17 @@ fn history_after_mode_change(src_depth: u64, change: &str) -> Session {
     let mut s = session(600, 300, src_depth, "rgb");
     paint_layer(&mut s, texture);
     s.execute(change, json!({})).unwrap();
+    // Then a flat colour over it, so a stroke has the converted texture to bring back: a stroke
+    // that painted nothing would otherwise still match the oracle.
+    paint_layer(&mut s, |_, _| [0.15, 0.2, 0.7, 1.0]);
     s
+}
+
+/// `f`'s result and the tiles the region-limited conversion produced while it ran.
+fn converted_tiles<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    super::heal::CONVERTED_TILES.with(|c| c.set(0));
+    let r = f();
+    (r, super::heal::CONVERTED_TILES.with(std::cell::Cell::get))
 }
 
 /// Run `f` with history sources converted whole, as before #11594 (the oracle).
@@ -2564,12 +2574,14 @@ fn first_difference(a: &[f32], b: &[f32]) -> Option<usize> {
     a.iter().zip(b).position(|(x, y)| x.to_bits() != y.to_bits())
 }
 
-const HISTORY_STROKES: [&[[f64; 2]]; 5] = [
-    &[[100.0, 100.0], [130.0, 110.0]],                // inside one tile
-    &[[240.0, 250.0], [270.0, 262.0]],                // across a tile seam
-    &[[0.0, 0.0], [0.0, 40.0]],                       // on the canvas edge
-    &[[-12.0, 150.0], [20.0, 150.0], [590.0, 299.0]], // partly off the canvas
-    &[[-200.0, -200.0], [-150.0, -190.0]],            // wholly off it
+/// Each stroke with the most source tiles (of the canvas's 3 × 2) it may convert: those its box
+/// touches.
+const HISTORY_STROKES: [(&[[f64; 2]], usize); 5] = [
+    (&[[100.0, 100.0], [130.0, 110.0]], 1),                // inside one tile
+    (&[[240.0, 250.0], [270.0, 262.0]], 4),                // across a tile seam
+    (&[[0.0, 0.0], [0.0, 40.0]], 1),                       // on the canvas edge
+    (&[[-12.0, 150.0], [20.0, 150.0], [590.0, 299.0]], 6), // partly off the canvas
+    (&[[-200.0, -200.0], [-150.0, -190.0]], 0),            // wholly off it
 ];
 
 #[test]
@@ -2584,16 +2596,20 @@ fn history_brush_converts_only_the_stroke_region_and_paints_as_a_full_conversion
     cases.push((8, "image.mode.grayscale".into()));
     cases.push((16, "image.mode.grayscale".into()));
     for (src, change) in &cases {
-        for pts in HISTORY_STROKES {
+        let flat = active_pixels(&history_after_mode_change(*src, change));
+        for (pts, most_tiles) in HISTORY_STROKES {
             let p = json!({"points": pts, "size": 17, "hardness": 60, "opacity": 80, "state": 1});
-            let run = || {
-                let mut s = history_after_mode_change(*src, change);
+            let mut s = history_after_mode_change(*src, change);
+            let run = |s: &mut Session| {
                 s.execute("paint.historyBrush", p.clone()).unwrap();
-                active_pixels(&s)
+                active_pixels(s)
             };
-            let want = with_full_conversion(run);
-            let got = run();
+            let want = with_full_conversion(|| run(&mut history_after_mode_change(*src, change)));
+            let (got, tiles) = converted_tiles(|| run(&mut s));
             assert!(first_difference(&got, &want).is_none(), "{src}-bit source, {change}, stroke {pts:?}: differs from a full conversion");
+            assert!(tiles <= most_tiles, "{src}-bit source, {change}, stroke {pts:?}: converted {tiles} tiles, at most {most_tiles}");
+            // On the canvas the stroke brings the texture back over the flat colour; off it, nothing.
+            assert_eq!(first_difference(&got, &flat).is_some(), most_tiles > 0, "{src}-bit source, {change}, stroke {pts:?}: restored nothing");
         }
         // No points: an error, not a panic, and nothing painted.
         let mut s = history_after_mode_change(*src, change);
@@ -2625,6 +2641,8 @@ fn a_live_history_stroke_from_another_format_converts_as_it_grows() {
         let want = with_full_conversion(run);
         let got = run();
         assert!(first_difference(&got, &want).is_none(), "{src}-bit source, {change}: live stroke differs from a full conversion");
+        let flat = active_pixels(&history_after_mode_change(src, change));
+        assert!(first_difference(&got, &flat).is_some(), "{src}-bit source, {change}: the live stroke restored nothing");
         // And the committed live stroke is what the command paints without one.
         let mut fresh = history_after_mode_change(src, change);
         fresh.execute("paint.historyBrush", params(&all)).unwrap();
@@ -2648,14 +2666,14 @@ fn art_history_brush_from_another_format_paints_as_a_full_conversion() {
             let p = json!({"points": pts, "size": 12, "area": 30, "tolerance": 0, "state": 1});
             let run = || {
                 let mut s = history_after_mode_change(*src, change);
-                s.execute("paint.stroke", json!({"points": [[0, 120], [600, 120]], "size": 60, "hardness": 1.0, "color": "#2040ff"})).unwrap();
                 let r = s.execute("paint.artHistoryBrush", p.clone()).unwrap();
                 (r, active_pixels(&s))
             };
             let (want_r, want) = with_full_conversion(run);
-            let (got_r, got) = run();
+            let ((got_r, got), tiles) = converted_tiles(run);
             assert_eq!(got_r, want_r, "{src}-bit source, {change}, {pts:?}");
             assert!(first_difference(&got, &want).is_none(), "{src}-bit source, {change}, {pts:?}: differs from a full conversion");
+            assert!(tiles < 6, "{src}-bit source, {change}, {pts:?}: converted {tiles} tiles, the whole source");
         }
     }
 }
