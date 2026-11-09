@@ -74,13 +74,9 @@ pub(crate) fn step_key(s: &Session, what: &str) -> String {
 /// area, the pixels, and the selection coverage per pixel; results are blended back by coverage,
 /// and transparency stays locked when the layer locks it. When `p` targets an alpha channel, the
 /// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
-/// grayscale surface is rewritten instead, as the core filters do (#935).
-fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
-    map_pixels_in(s, label, p, false, f)
-}
-
-/// [`map_pixels`], or with `whole` the whole canvas: `f` still gets the selection coverage, and
-/// every pixel takes its result in full.
+/// grayscale surface is rewritten instead, as the core filters do (#935). With `whole` the whole
+/// canvas is rewritten: `f` still gets the selection coverage, and every pixel takes its result
+/// in full.
 fn map_pixels_in(s: &mut Session, label: &str, p: &Value, whole: bool, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
     let id = layer_param(s, p)?;
     let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
@@ -275,27 +271,6 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
-/// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
-fn average(s: &mut Session, p: &Value) -> Result<Value> {
-    map_pixels(s, "Average", p, |_, px, cover| {
-        let (mut sum, mut wsum, mut asum, mut n) = ([0f64; 3], 0f64, 0f64, 0f64);
-        for (p, &k) in px.iter().zip(cover) {
-            let w = (p[3] * k) as f64;
-            for c in 0..3 {
-                sum[c] += p[c] as f64 * w;
-            }
-            wsum += w;
-            asum += (p[3] * k) as f64;
-            n += k as f64;
-        }
-        if wsum <= 0.0 {
-            return;
-        }
-        let avg = [(sum[0] / wsum) as f32, (sum[1] / wsum) as f32, (sum[2] / wsum) as f32, (asum / n.max(1e-9)) as f32];
-        px.fill(avg);
-    })
-}
-
 // ---------- transform presets ----------
 
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
@@ -402,7 +377,6 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     let key = step_key(s, "pasteInto");
     params["coalesce"] = json!(key);
     params["target"] = json!("pixels");
-    let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let r = s.execute("edit.paste", params)?;
     let id = layer_param(s, &Value::Null)?;
     s.execute("layer.layerMask.revealAll", json!({"layer": id.0, "coalesce": key}))?;
@@ -413,9 +387,9 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
         Ok(())
     });
     s.coalesce_request = None;
+    // Three revisions: `Session::dispatch` reports what the whole command changed, so only where
+    // the masked paste draws is recomposited (#2901).
     r2?;
-    // Only where the masked paste draws needs recompositing (#2901).
-    crate::layer_multi_cmds::note_insert(s, &before);
     Ok(r)
 }
 
@@ -1119,7 +1093,6 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             show_only
         ),
-        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, average),
     ]
 }
 

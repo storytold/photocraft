@@ -861,7 +861,8 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
         mode: parse(p, cmd, "mode")?.unwrap_or(ReplaceMode::Color),
         sampling: parse(p, cmd, "sampling")?.unwrap_or(Sampling::Continuous),
         limits: parse(p, cmd, "limits")?.unwrap_or(Limits::Contiguous),
-        tolerance: pct(p, "tolerance", 30.0),
+        // 1..100 %, as the reference's field takes it: 0 and below run as 1 (#11930).
+        tolerance: pct(p, "tolerance", 30.0).max(0.01),
         anti_alias: flag(p, "antiAlias", true),
         color: brush.color,
         background: s.tools.background,
@@ -1361,7 +1362,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.colorReplacement",
             "Color Replacement Tool",
-            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
+            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":1..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
             crate::commands::has_paintable,
             color_replacement,
             true
