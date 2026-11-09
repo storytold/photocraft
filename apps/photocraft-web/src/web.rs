@@ -16,6 +16,7 @@ use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Ser
 use wasm_bindgen::JsCast as _;
 
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+type PlaceInbox = photocraft_ui_egui::PlaceInbox;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl) and swatches (.aco, .act, .ase), which go to the preset libraries.
@@ -26,6 +27,8 @@ const OPEN_EXTS: &[&str] = &[
     "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
+/// Set once the module has trapped: the page is dead, so nothing is left to protect.
+static STOPPED: AtomicBool = AtomicBool::new(false);
 const CANVAS_ID: &str = "photocraft_canvas";
 
 /// Fonts the host serves next to the page (`photocraft_ui_egui::served_fonts`): craft-fonts' manifest
@@ -58,6 +61,10 @@ pub fn start() {
         };
         let q = query();
         let force_cpu = q.contains("cpu");
+        // `?free-mb=N`: the memory gates and the low-memory warning see only N MiB (diagnostics).
+        if let Some(mb) = crate::diagnostics::free_mb(&q) {
+            photocraft_raster::headroom::simulate_available(Some(crate::diagnostics::free_bytes(mb)));
+        }
         let mut options = eframe::WebOptions::default();
         photocraft_ui_egui::gpu_canvas::use_adapter_limits(&mut options.wgpu_options.wgpu_setup);
         if q.contains("webgl")
@@ -76,7 +83,13 @@ pub fn start() {
             }
         };
         let pen_target = canvas.clone();
-        let result = eframe::WebRunner::new()
+        let runner = eframe::WebRunner::new();
+        // After the runner's own panic handler, so the message is kept and the runner's handler
+        // still runs (a panic aborts the module).
+        keep_panic_message();
+        // Before the app is built: a trap while building it shows the stopped message too.
+        listen_for_trap();
+        let result = runner
             .start(
                 canvas,
                 options,
@@ -84,7 +97,7 @@ pub fn start() {
                     PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
                     PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
                     let inbox: Inbox = Arc::default();
-                    let place_inbox: Inbox = Arc::default();
+                    let place_inbox: PlaceInbox = Arc::default();
                     let admission = Admission::default();
                     let dropped = Arc::default();
                     let served: Served = Arc::default();
@@ -198,11 +211,15 @@ fn drag_pos_service(canvas: web_sys::HtmlCanvasElement, pos: DragPos) -> photocr
 
 /// Closing or reloading the tab while a document has unsaved changes asks first, as closing the
 /// desktop window does: the browser shows its own "Leave site?" prompt (#1380). `unsaved` is
-/// refreshed every frame by [`WebShell`].
+/// refreshed every frame by [`WebShell`]. Once the module has stopped ([`STOPPED`]) the prompt is
+/// skipped: the document can't be saved any more, and Reload is the only way on.
 fn guard_unload(unsaved: Arc<AtomicBool>) {
     use wasm_bindgen::closure::Closure;
     let Some(window) = web_sys::window() else { return };
     let cb = Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
+        if STOPPED.load(Ordering::Relaxed) {
+            return;
+        }
         if unsaved.load(Ordering::Relaxed) {
             e.prevent_default();
             // Older browsers show the prompt only when a return value is set.
@@ -211,6 +228,67 @@ fn guard_unload(unsaved: Arc<AtomicBool>) {
     });
     if window.add_event_listener_with_callback("beforeunload", cb.as_ref().unchecked_ref()).is_ok() {
         cb.forget();
+    }
+}
+
+/// Keeps the message of a panic, then calls the handler that was installed before (the web
+/// runner's, which logs it). A panic aborts the module, so the trap that follows has no message of
+/// its own; this is what lets the stopped page tell an internal error from running out of memory.
+fn keep_panic_message() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        crate::diagnostics::record_panic(&info.to_string());
+        previous(info);
+    }));
+}
+
+/// Shows the page's static `#photocraft_stopped` message when the module traps. The page learns of
+/// a trap as an uncaught `WebAssembly.RuntimeError` (the `error` event) or, inside a spawned
+/// future, an unhandled rejection. The module may be mid-call and its runner still borrowed, so
+/// the handler touches no app state: it sets [`STOPPED`] and the element, nothing more.
+fn listen_for_trap() {
+    use wasm_bindgen::closure::Closure;
+    let Some(window) = web_sys::window() else { return };
+    let on_error = Closure::<dyn FnMut(web_sys::ErrorEvent)>::new(move |e: web_sys::ErrorEvent| {
+        let error = e.error();
+        let (name, message) = error_parts(&error, &e.message());
+        if crate::diagnostics::is_trap(&name, &message) {
+            show_stopped(&message);
+        }
+    });
+    if window.add_event_listener_with_callback("error", on_error.as_ref().unchecked_ref()).is_ok() {
+        on_error.forget();
+    }
+    let on_rejection = Closure::<dyn FnMut(web_sys::PromiseRejectionEvent)>::new(move |e: web_sys::PromiseRejectionEvent| {
+        let (name, message) = error_parts(&e.reason(), "");
+        if crate::diagnostics::is_trap(&name, &message) {
+            show_stopped(&message);
+        }
+    });
+    if window.add_event_listener_with_callback("unhandledrejection", on_rejection.as_ref().unchecked_ref()).is_ok() {
+        on_rejection.forget();
+    }
+}
+
+/// The name and message of a thrown value; `fallback` is the event's own message when the value
+/// is not an `Error`.
+fn error_parts(value: &wasm_bindgen::JsValue, fallback: &str) -> (String, String) {
+    match value.dyn_ref::<js_sys::Error>() {
+        Some(error) => (String::from(error.name()), String::from(error.message())),
+        None => (String::new(), value.as_string().unwrap_or_else(|| fallback.to_owned())),
+    }
+}
+
+/// Reveals `#photocraft_stopped` with the cause. Does as little as possible.
+fn show_stopped(trap_message: &str) {
+    STOPPED.store(true, Ordering::Relaxed);
+    let detail = crate::diagnostics::detail(crate::diagnostics::take_panic().as_deref(), trap_message);
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
+    if let Some(el) = document.get_element_by_id("photocraft_stopped_detail") {
+        el.set_text_content(Some(&detail));
+    }
+    if let Some(el) = document.get_element_by_id("photocraft_stopped") {
+        let _ = el.remove_attribute("hidden");
     }
 }
 
@@ -280,13 +358,14 @@ async fn fetch_bytes(url: &str, integrity: Option<&str>) -> Result<Vec<u8>, Stri
 
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously,
 /// so the app's own drop path can't handle them) and feed them through the inboxes.
-type DroppedDelivery = Result<RoutedDelivery, String>;
+type DroppedDelivery = Result<(Option<photocraft_doc::DocId>, RoutedDelivery), String>;
 
 struct WebShell {
     app: PhotocraftApp,
     /// Dropped files to open as documents.
     inbox: Inbox,
-    place_inbox: Inbox,
+    /// Dropped files to place on the active document's canvas.
+    place_inbox: PlaceInbox,
     admission: Admission,
     dropped: Arc<Mutex<Option<DroppedDelivery>>>,
     /// Admission lease for bytes still queued in `app.drop_places`.
@@ -376,12 +455,14 @@ impl eframe::App for WebShell {
             let names: Vec<_> = sources.iter().map(Source::name).collect();
             match self.admission.admit(sources) {
                 Ok(batch) => {
-                    // Capture placement at drop time, before asynchronous reads move the pointer.
+                    // Capture placement and active document at drop time, before asynchronous reads move the pointer or tab.
                     let places = self.app.dropped_on_canvas(ctx, &names);
+                    let target_doc = self.app.session.active().map(|st| st.doc.id);
                     let arrived = self.dropped.clone();
                     let ctx = ctx.clone();
                     wasm_bindgen_futures::spawn_local(async move {
-                        *arrived.lock().unwrap_or_else(|e| e.into_inner()) = Some(batch.read().await.and_then(|delivery| delivery.route(&places)));
+                        *arrived.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(batch.read().await.and_then(|delivery| delivery.route(&places)).map(|routed| (target_doc, routed)));
                         ctx.request_repaint();
                     });
                 }
@@ -393,9 +474,11 @@ impl eframe::App for WebShell {
         }
         let arrived = self.dropped.lock().unwrap_or_else(|e| e.into_inner()).take();
         match arrived {
-            Some(Ok(RoutedDelivery { open, place, lease })) => {
+            Some(Ok((target_doc, RoutedDelivery { open, place, lease }))) => {
                 self.inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(open);
-                self.place_inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(place);
+                if let Some(doc) = target_doc {
+                    self.place_inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(place.into_iter().map(|(name, bytes)| (doc, name, bytes)));
+                }
                 self.placement.store(lease);
             }
             Some(Err(error)) => {
@@ -475,7 +558,7 @@ async fn read_browser_file(file: &web_sys::File) -> Result<Vec<u8>, String> {
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
-fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::CursorPosFn, admission: Admission) -> Services {
+fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn, admission: Admission) -> Services {
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
@@ -538,6 +621,9 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
         save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
+        load_gpu_memo: None,
+        save_gpu_memo: None,
+        shader_compiler: None,
         ..Default::default()
     }
 }
