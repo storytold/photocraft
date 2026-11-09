@@ -9,7 +9,7 @@
 //! another) and a full-window workspace (Camera Raw, Liquify, the command palette's scrim) just
 //! go, as before.
 
-use egui::epaint::ClippedShape;
+use egui::epaint::{ClippedShape, TextureManager};
 use egui::{Context, Id, LayerId, Order, Shape, TextureId};
 
 /// A closed window's last frame, fading out.
@@ -40,7 +40,7 @@ struct State {
 }
 
 fn state_id() -> Id {
-    Id::new("pc-fade-out")
+    Id::unique("pc-fade-out")
 }
 
 /// A window this much of the screen or more is a workspace, not a dialog or menu.
@@ -53,18 +53,34 @@ pub fn finish_frame(ctx: &Context) {
     if ctx.will_discard() {
         return;
     }
-    let mut st: State = ctx.data_mut(|d| d.remove_temp(state_id())).unwrap_or_default();
     let time = ctx.global_style().animation_time;
+    if time <= 0.0 {
+        // Animations off: nothing fades, so no window is snapshotted (and one still fading stops).
+        ctx.data_mut(|d| d.remove_temp::<State>(state_id()));
+        return;
+    }
+    let mut st: State = ctx.data_mut(|d| d.remove_temp(state_id())).unwrap_or_default();
     let now = ctx.input(|i| i.time);
     let screen = ctx.content_rect().area().max(1.0);
     let mut layers: Vec<LayerId> = ctx.memory(|m| m.areas().visible_layer_ids()).into_iter().filter(|l| l.order == Order::Foreground).collect();
     layers.sort_by_key(|l| l.id.value());
+    let textures = ctx.tex_manager();
     let mut drawn = Vec::new();
     for layer in layers {
         let workspace = ctx.memory(|m| m.area_rect(layer.id)).is_some_and(|r| r.area() >= WORKSPACE * screen);
-        let shapes: Vec<ClippedShape> =
-            if workspace { Vec::new() } else { ctx.graphics(|g| g.get(layer).map(|list| list.all_entries().cloned().collect()).unwrap_or_default()) };
-        if workspace || !shapes.is_empty() {
+        // Only what a ghost could paint is kept: no GPU callbacks (nor the resources they hold).
+        let (any, shapes): (bool, Vec<ClippedShape>) = if workspace {
+            (true, Vec::new())
+        } else {
+            let textures = textures.read();
+            ctx.graphics(|g| {
+                g.get(layer).map_or((false, Vec::new()), |list| {
+                    let mut all = list.all_entries().peekable();
+                    (all.peek().is_some(), all.filter(|c| paintable(&textures, c)).cloned().collect())
+                })
+            })
+        };
+        if any {
             let frames = st.shown.iter().find(|s| s.layer == layer).map_or(1, |s| s.frames.saturating_add(1));
             drawn.push(Shown { layer, shapes, frames, at: now });
         }
@@ -73,7 +89,7 @@ pub fn finish_frame(ctx: &Context) {
     st.ghosts.retain(|g| !drawn.iter().any(|s| s.layer == g.from));
     let replaced = drawn.iter().any(|s| !st.shown.iter().any(|p| p.layer == s.layer));
     let gone = std::mem::take(&mut st.shown).into_iter().filter(|p| !drawn.iter().any(|s| s.layer == p.layer));
-    if time > 0.0 && !replaced {
+    if !replaced {
         st.ghosts.extend(gone.filter(|p| p.frames >= 2 && !p.shapes.is_empty()).map(|p| Ghost { from: p.layer, shapes: p.shapes, start: p.at }));
     }
     st.shown = drawn;
@@ -94,15 +110,25 @@ pub fn finish_frame(ctx: &Context) {
 fn paint(ctx: &Context, g: &Ghost, opacity: f32) {
     let layer = LayerId::new(Order::Foreground, state_id().with(g.from.id));
     let textures = ctx.tex_manager();
-    let alive = |id: TextureId| matches!(id, TextureId::Managed(_)) && textures.read().meta(id).is_some();
-    for c in &g.shapes {
-        if matches!(c.shape, Shape::Callback(_)) || !alive(c.shape.texture_id()) {
-            continue;
-        }
+    let shapes: Vec<&ClippedShape> = {
+        let textures = textures.read();
+        g.shapes.iter().filter(|c| paintable(&textures, c)).collect()
+    };
+    for c in shapes {
         let mut painter = ctx.layer_painter(layer).with_clip_rect(c.clip_rect);
         painter.set_opacity(opacity);
         painter.add(c.shape.clone());
     }
+}
+
+/// Whether a ghost can paint a shape: not a custom GPU callback, and its texture is one egui
+/// still manages (a user texture, or one freed with the window, would be stale).
+fn paintable(textures: &TextureManager, c: &ClippedShape) -> bool {
+    if matches!(c.shape, Shape::Callback(_)) {
+        return false;
+    }
+    let id = c.shape.texture_id();
+    matches!(id, TextureId::Managed(_)) && textures.meta(id).is_some()
 }
 
 #[cfg(test)]

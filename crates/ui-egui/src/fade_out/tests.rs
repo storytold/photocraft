@@ -1,17 +1,29 @@
-use egui::{Area, Pos2, pos2, vec2};
+use std::sync::Arc;
+
+use egui::{Area, Color32, Pos2, Rect, TextureHandle, pos2, vec2};
 use egui_kittest::Harness;
 
 use super::*;
 
-/// What the test frame draws: a big button under everything, a small foreground window (a menu
-/// or dialog), another one, and a full-window workspace.
+/// What the test frame draws: a big button under everything, small foreground windows (menus or
+/// dialogs), a full-window workspace, and a window with GPU content (a custom callback, a user
+/// texture and a texture of its own).
 #[derive(Default)]
 struct Scene {
     open: bool,
     other: bool,
+    third: bool,
     workspace: bool,
+    gpu: bool,
+    /// The GPU window's texture: dropped (freed) when it closes.
+    texture: Option<TextureHandle>,
+    /// What the GPU window's callback holds: a ghost must not keep it alive.
+    resource: Arc<()>,
     clicks: u32,
 }
+
+/// A user texture (one the renderer owns, like the GPU canvas).
+const USER_TEXTURE: TextureId = TextureId::User(7);
 
 const AT: Pos2 = pos2(40.0, 40.0);
 
@@ -24,7 +36,7 @@ fn harness(animation_time: f32) -> Harness<'static, Scene> {
                 s.clicks += 1;
             }
             let window = |id: &str, at: Pos2, text: &str, size: Option<egui::Vec2>| {
-                Area::new(Id::new(id)).order(Order::Foreground).fixed_pos(at).show(&ctx, |ui| {
+                Area::new(Id::unique(id)).order(Order::Foreground).fixed_pos(at).show(&ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         if let Some(size) = size {
                             ui.set_min_size(size);
@@ -39,8 +51,25 @@ fn harness(animation_time: f32) -> Harness<'static, Scene> {
             if s.other {
                 window("other", pos2(200.0, 40.0), "Other", None);
             }
+            if s.third {
+                window("third", pos2(300.0, 40.0), "Third", None);
+            }
             if s.workspace {
                 window("workspace", Pos2::ZERO, "Workspace", Some(vec2(400.0, 300.0)));
+            }
+            if s.gpu {
+                let texture = s.texture.get_or_insert_with(|| ctx.load_texture("ghost", egui::ColorImage::filled([2, 2], Color32::RED), Default::default())).id();
+                let resource = Arc::clone(&s.resource);
+                Area::new(Id::unique("gpu")).order(Order::Foreground).fixed_pos(pos2(40.0, 150.0)).show(&ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label("Gpu text");
+                        let (rect, _) = ui.allocate_exact_size(vec2(60.0, 20.0), egui::Sense::hover());
+                        let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+                        ui.painter().add(Shape::Callback(egui::PaintCallback { rect, callback: resource }));
+                        ui.painter().image(USER_TEXTURE, rect, uv, Color32::WHITE);
+                        ui.painter().image(texture, rect, uv, Color32::WHITE);
+                    });
+                });
             }
             finish_frame(&ctx);
         },
@@ -132,4 +161,75 @@ fn reopening_a_fading_window_stops_the_fade() {
     h.step();
     assert_eq!(ghosts(&h), 0);
     assert_eq!(painted(&h, "Ghost me").len(), 1, "only the window itself");
+}
+
+#[test]
+fn with_animations_off_no_window_is_snapshotted() {
+    let mut h = harness(0.0);
+    h.state_mut().open = true;
+    h.run_steps(5);
+    assert!(h.ctx.data(|d| d.get_temp::<State>(state_id())).is_none(), "no per-frame copy of an open window's shapes");
+}
+
+/// Moving along a menu bar or down a chain of submenus: each window replaces the last, and none
+/// leaves a trail, in that frame or later.
+#[test]
+fn a_chain_of_windows_replacing_each_other_leaves_no_trail() {
+    let mut h = harness(0.2);
+    h.state_mut().open = true;
+    h.run_steps(30);
+    for (from, to) in [(0, 1), (1, 2), (2, 0), (0, 1)] {
+        let s = h.state_mut();
+        for (i, on) in [&mut s.open, &mut s.other, &mut s.third].into_iter().enumerate() {
+            *on = i == to;
+        }
+        // A new window shows after egui's sizing pass; the one it replaced never paints again.
+        for _ in 0..30 {
+            h.step();
+            for (i, text) in ["Ghost me", "Other", "Third"].into_iter().enumerate() {
+                assert!(i == to || painted(&h, text).is_empty(), "{text} trails after {from} -> {to}");
+            }
+            assert_eq!(ghosts(&h), 0, "after {from} -> {to}");
+        }
+        assert_eq!(painted(&h, ["Ghost me", "Other", "Third"][to]).len(), 1);
+    }
+}
+
+/// A dialog that opened from another (Image Size's Resample options, Save As' format options) closes
+/// as its parent comes back in the same frame: the parent is just there, no trail of the child.
+#[test]
+fn a_dialog_returning_to_its_parent_leaves_no_trail() {
+    let mut h = harness(0.2);
+    h.state_mut().other = true;
+    h.run_steps(30);
+    h.state_mut().other = false;
+    h.state_mut().open = true;
+    for _ in 0..30 {
+        h.step();
+        assert!(painted(&h, "Other").is_empty());
+        assert_eq!(ghosts(&h), 0);
+    }
+    assert_eq!(painted(&h, "Ghost me").len(), 1);
+}
+
+/// A closed window's ghost paints its own text and frame but none of its GPU content: no custom
+/// callback (whose resources may be gone), no user texture, and no texture freed with the window.
+#[test]
+fn a_ghost_paints_no_stale_textures_or_callbacks() {
+    let mut h = harness(0.2);
+    h.state_mut().gpu = true;
+    h.run_steps(30);
+    assert!(Arc::strong_count(&h.state().resource) > 1, "the open window's callback holds it");
+    let freed = h.state().texture.as_ref().map(TextureHandle::id).expect("the window made its texture");
+    h.state_mut().gpu = false;
+    h.state_mut().texture = None;
+    h.step();
+    assert_eq!(ghosts(&h), 1);
+    assert_eq!(painted(&h, "Gpu text").len(), 1, "the ghost fades its text");
+    for c in &h.output().shapes {
+        assert!(!matches!(c.shape, Shape::Callback(_)), "no callback painted");
+        let id = c.shape.texture_id();
+        assert!(id != USER_TEXTURE && id != freed, "no stale texture painted: {id:?}");
+    }
+    assert_eq!(Arc::strong_count(&h.state().resource), 1, "the ghost keeps no callback alive");
 }
