@@ -201,7 +201,7 @@ fn native_pixel_cells(
     }
     Ok(NativeMapping {
         structure: Some(NativeStructure::Composite { branches }),
-        notes: vec!["Source rectangular grid sizes and signed offsets become editable framed native Average cells, with native diamond/ellipse/rectangle vector masks sized by the two coverage ratios and actual CMS-converted source background paint confined to uncovered geometry. Cell alpha is preserved rather than composited over an opaque underlay. Full stored cell sizes are accepted within bounded cell/cache work; partial edge cells average their visible native frame. Native alpha-weighted means and vector antialiasing replace source premultiplied accumulation and hard-edge coverage rules. No source pixel evaluator persists".into()],
+        notes: vec!["Source rectangular grid sizes and signed offsets become editable framed native Average cells, with native diamond/ellipse/rectangle vector masks sized by the two coverage ratios and actual CMS-converted source background paint confined to uncovered geometry. Cell alpha is preserved rather than composited over an opaque underlay. Full stored cell sizes are accepted within bounded cell/cache work; partial edge cells average their visible native frame. Native straight-color means, preserved per-pixel alpha and vector antialiasing replace source premultiplied accumulation and hard-edge coverage rules. No source pixel evaluator persists".into()],
         ..Default::default()
     })
 }

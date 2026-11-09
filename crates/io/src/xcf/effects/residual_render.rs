@@ -158,7 +158,7 @@ fn water_cells(size: i32, smooth: f64, regularity: i32, fill: i32, c: &MappingCo
     Ok(composite(
         branches,
         format!(
-            "Large source water size {size} becomes at most 64 native rectangular cells with shared jittered boundaries; regularization {regularity} controls native boundary regularity. Fill {fill} uses either framed native Gaussian(smoothness {smooth}) then native alpha-weighted Average, or deterministic random 1x1 samples expanded by ordinary editable affine placements. Native rectangular cells replace watershed regions and native randomness replaces the source sequence. For random fill, source smoothing remains a disclosed sampling difference because the point frame has no neighboring pixels; no source prefilter evaluator persists. Regional native mean alpha or selected-point alpha, vector-mask antialiasing and native transparent-source behavior apply"
+            "Large source water size {size} becomes at most 64 native rectangular cells with shared jittered boundaries; regularization {regularity} controls native boundary regularity. Fill {fill} uses either framed native Gaussian(smoothness {smooth}) then native straight-color Average with preserved alpha, or deterministic random 1x1 samples expanded by ordinary editable affine placements. Native rectangular cells replace watershed regions and native randomness replaces the source sequence. For random fill, source smoothing remains a disclosed sampling difference because the point frame has no neighboring pixels; no source prefilter evaluator persists. Original per-pixel alpha for averaged cells or selected-point alpha, vector-mask antialiasing and native transparent-source behavior apply"
         ),
     ))
 }
