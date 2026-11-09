@@ -78,6 +78,12 @@ fn frame_convert_dialog(app: &mut PhotocraftApp, id: &str) -> Result<Value, Stri
 fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if let Some(tool) = crate::tool_shortcuts::tool(id) {
         crate::tool_memory::select(app, tool);
+        // A first pick of the Pencil via shortcut must start from `fresh_brush(Tool::Pencil, ...)`
+        // (#12200) rather than the outgoing Brush tip, whereas other tools inherit the current
+        // brush tip on first pick; sync here so an immediate `paint.pencil` uses the 1 px tip.
+        if tool == crate::state::Tool::Pencil {
+            crate::paint_mouse::sync_tool_brush(app);
+        }
         return Some(Ok(json!({"tool": tool})));
     }
     if id == "layer.frame.convert" && params.as_object().is_none_or(|o| o.is_empty()) {

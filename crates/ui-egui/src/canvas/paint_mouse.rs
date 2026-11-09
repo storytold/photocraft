@@ -43,7 +43,10 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
         // The Background Eraser and the Healing Brush start with their own measured tips instead,
         // as the whole brush Reset Tool gives them (#11911, #12099).
+        // The Pencil resets its tip to its own 1 px hard round (#12200) regardless of the Brush,
+        // while preserving `current.opacity`.
         None if matches!(tool, Tool::BackgroundEraser | Tool::Healing) => fresh_brush(tool, &current),
+        None if tool == Tool::Pencil => BrushSettings { opacity: current.opacity, ..fresh_brush(tool, &current) },
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
             BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, ..current }
@@ -77,17 +80,22 @@ const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 /// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing.
 const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
+/// The Pencil tool's starting and Reset Tool tip, as the reference measures it (#12200): size,
+/// hardness and spacing of a 1 px hard round at 25 % spacing.
+const PENCIL_TOOL_TIP: (f32, f32, f32) = (1.0, 1.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`]; the other tools keep the default tip.
+/// [`HEALING_BRUSH_TIP`], and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
+/// default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
         Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
         Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
+        Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
         _ => {}
     }
     session_fields(current, &brush)
@@ -541,3 +549,7 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../pencil_reset_defaults_tests.rs"]
+mod pencil_reset_defaults_tests;
