@@ -116,9 +116,10 @@ fn a_groups_layers_indent_past_the_group() {
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     let child = s.execute("layer.new.layer", json!({"name": "Child"})).unwrap()["layer"].as_u64().unwrap();
     let group = s.execute("layer.groupLayers", json!({"name": "Group"})).unwrap()["layer"].as_u64().unwrap();
+    // Top goes above the closed group (an open one would take it inside, as in Photoshop).
+    let top = s.execute("layer.new.layer", json!({"name": "Top"})).unwrap()["layer"].as_u64().unwrap();
     // Group Layers creates the group collapsed; open it so the panel lists its layers.
     s.execute("layer.setExpanded", json!({"layer": group, "expanded": true})).unwrap();
-    let top = s.execute("layer.new.layer", json!({"name": "Top"})).unwrap()["layer"].as_u64().unwrap();
     let h = harness(s, 1.0, "promedium", 290.0);
     let rows = recorded(&h.ctx);
     let left = |id: u64| rows.iter().find(|r| r.layer == id).and_then(|r| r.name).map(|n| n.left()).unwrap_or_else(|| panic!("layer {id} drawn"));
@@ -246,6 +247,24 @@ fn collapse_all_groups_from_the_panel_menu_and_it_is_saved() {
         let mut s = photocraft_engine::Session::new();
         s.add_document(back, None);
         assert!(groups_open(&s).iter().all(|o| !o), "{name}: groups stay closed");
+    }
+}
+
+/// Photoshop's panel menu has New Group… and New Group from Layers… just above Collapse All
+/// Groups; both open the New Group dialog.
+#[test]
+fn new_group_items_in_the_panel_menu_open_the_dialog() {
+    for (label, command) in [("New Group…", "layer.new.group"), ("New Group from Layers…", "layer.new.groupFromLayers")] {
+        let mut h = harness(busy(), 1.0, "promedium", 290.0);
+        let group = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers").expect("layers group");
+        let menu = h.query_all_by_label("Panel menu").map(|n| n.rect()).find(|r| group.contains(r.center())).expect("Layers panel menu");
+        click(&mut h, menu.center());
+        let item = h.get_by_label(label).rect();
+        assert!(item.top() < h.get_by_label("Collapse All Groups").rect().top(), "{label} comes before Collapse All Groups");
+        click(&mut h, item.center());
+        let fields = h.state().ui.dialogs.last().map(|d| d.fields.clone()).expect("the New Group dialog opened");
+        assert!(crate::new_group_ui::owns(&fields));
+        assert_eq!(fields["__command"], command);
     }
 }
 
@@ -722,4 +741,91 @@ fn a_hidden_layers_eye_box_paints_nothing() {
         assert!(in_eye_box(shown) > 0, "{theme}: a visible layer paints its eye");
         assert_eq!(in_eye_box(hidden), 0, "{theme}: a hidden layer's eye box is left empty");
     }
+}
+
+/// #10218: an artboard's row is set apart from layers and groups, as in Photoshop: shorter, with no
+/// thumbnail (a board isn't a folder), while a plain group keeps its folder thumbnail.
+#[test]
+fn artboard_rows_have_no_thumbnail_and_a_shorter_row() {
+    // A board holding a layer, and a plain group beside it; returns their ids.
+    let make = || {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        let layer = s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+        let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.new.layer", json!({"name": "Loose"})).unwrap();
+        let group = s.execute("layer.groupLayers", json!({"name": "Folder"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setExpanded", json!({"all": true, "expanded": true})).unwrap();
+        (s, board, layer, group)
+    };
+    for theme in ["pro", "studio"] {
+        let (s, board, layer, group) = make();
+        let h = harness(s, 1.0, theme, 320.0);
+        let rows = recorded(&h.ctx);
+        let row = |id: u64| rows.iter().find(|r| r.layer == id).unwrap_or_else(|| panic!("{theme}: row for {id}"));
+        let (b, l, g) = (row(board), row(layer), row(group));
+        assert!(b.thumbnail.is_none(), "{theme}: the artboard has no thumbnail");
+        assert!(g.thumbnail.is_some(), "{theme}: a plain group keeps its folder thumbnail");
+        assert!(l.thumbnail.is_some(), "{theme}: a layer keeps its thumbnail");
+        assert!(b.row.height() < l.row.height(), "{theme}: the artboard row is shorter ({} vs {})", b.row.height(), l.row.height());
+        assert!(b.name.is_some(), "{theme}: the board's name is shown");
+    }
+}
+
+/// A board with a mask keeps its usual row, thumbnail and all, so the mask thumbnail and
+/// everything the board's thumbnail does on a masked layer still work there (#10218).
+#[test]
+fn a_masked_artboard_row_keeps_its_thumbnail_and_mask_thumbnail() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let layer = s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+    let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": board})).unwrap();
+    let h = harness(s, 1.0, "pro", 320.0);
+    let rows = recorded(&h.ctx);
+    let row = |id: u64| rows.iter().find(|r| r.layer == id).unwrap_or_else(|| panic!("row for {id}"));
+    let (b, l) = (row(board), row(layer));
+    assert!(b.thumbnail.is_some(), "a masked board keeps its thumbnail");
+    let (thumbs, chains) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("the board's mask thumbnail is drawn");
+    let mask = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a pixel mask thumbnail").1;
+    assert!(b.row.contains_rect(mask), "the mask thumbnail sits in the board's row");
+    assert_eq!(b.row.height(), l.row.height(), "a layer's height");
+    // The triangle's widget is its whole hit area; the chain sits clear of it.
+    let hit = h.get_by_label("Collapse group Board").rect();
+    let chain = chains.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a mask chain").1;
+    assert!(chain.left() >= hit.right(), "the chain ({chain:?}) is clear of the triangle's hit area ({hit:?})");
+}
+
+/// On a masked board, as on any masked layer: ⌥-clicking the mask thumbnail shows the mask, and
+/// clicking the board's thumbnail ends the mask view and targets the board.
+#[test]
+fn a_masked_artboards_thumbnail_retargets_it_and_ends_the_mask_view() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+    let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": board})).unwrap();
+    s.execute("layer.select", json!({"layer": board})).unwrap();
+    let mut h = harness(s, 1.0, "pro", 320.0);
+    let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("mask thumbnail drawn");
+    let mask = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1;
+    let viewing = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().and_then(photocraft_engine::mask_view_cmds::current).is_some();
+    // ⌥-click the mask thumbnail: the mask is shown.
+    h.hover_at(mask.center());
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: mask.center(), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: mask.center(), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+    assert!(viewing(&h), "⌥-click shows the mask");
+    let thumb = recorded(&h.ctx).iter().find(|r| r.layer == board).and_then(|r| r.thumbnail).expect("the board's thumbnail");
+    click(&mut h, thumb.center());
+    assert!(!h.state().ui.mask_target, "the board is targeted again");
+    assert!(!viewing(&h), "and the mask view ends");
 }

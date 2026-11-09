@@ -155,22 +155,37 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     if !p.iter().all(|n| n.is_finite()) {
         return true;
     }
+    if tool == Tool::FreeformPen && matches!(ev, ToolEvent::Down { .. }) && !active(app) && crate::vector_ui::freeform_locked_shape(app) {
+        app.ui.status = tl!("Locked").into();
+        app.ui.status_error = true;
+        return true;
+    }
     modifiers(app, mods);
+    // A fitted path whose commit failed remains the user's draft. Starting another trace
+    // must neither retry it automatically nor replace it on the next release. Releasing Alt
+    // in this press may itself have finished the previous trace into that failed draft.
+    if tool == Tool::FreeformPen && matches!(ev, ToolEvent::Down { .. }) && !active(app) && app.ui.pen.is_some() {
+        return true;
+    }
     match ev {
         ToolEvent::Down { .. } => {
             if active(app) {
                 // A click on the first point, or on the last one again, closes the outline. Aiming
-                // at the first point is a grab; clicking the last one again is the same click
-                // repeated, so it has only to allow for a pixel of hand jitter. Sharing the grab
-                // radius made every segment shorter than it impossible to draw, because the click
-                // meant to place the next vertex closed the outline instead (#7629).
-                let zoom = app.point_zoom().max(0.01) as f64;
-                let near = |q: [f64; 2], reach: f64| (q[0] - p[0]).hypot(q[1] - p[1]) < reach / zoom;
-                let again = |d: &Drag| d.points.last().is_some_and(|l| near([l[0], l[1]], SAME_POINT));
-                let close = app.drag.as_ref().is_some_and(|d| d.points.len() >= 3 && (near(d.start, 8.0) || again(d)));
+                // at the first point is a grab, with a reach scaled to the size of the whole outline
+                // (`canvas::polygon_close_reach`, #6578); clicking the last one again is the same
+                // click repeated, so it has only to allow for a pixel of hand jitter. Sharing the
+                // grab radius made every segment shorter than it impossible to draw, because the
+                // click meant to place the next vertex closed the outline instead (#7629).
+                let point_zoom = app.point_zoom();
+                let zoom = point_zoom.max(0.01) as f64;
+                let start_reach = |d: &Drag| crate::canvas::polygon_close_reach(d.points.iter().map(|q| [q[0], q[1]]), point_zoom);
+                let near = |q: [f64; 2], reach: f64| (q[0] - p[0]).hypot(q[1] - p[1]) < reach;
+                let at_start = |d: &Drag| near(d.start, start_reach(d));
+                let again = |d: &Drag| d.points.last().is_some_and(|l| near([l[0], l[1]], SAME_POINT / zoom));
+                let close = app.drag.as_ref().is_some_and(|d| d.points.len() >= 3 && (at_start(d) || again(d)));
                 if close {
                     // A path closes on its start point (a selection outline always closes).
-                    if let Some(d) = app.drag.as_mut().filter(|d| d.tool == Tool::FreeformPen && near(d.start, 8.0)) {
+                    if let Some(d) = app.drag.as_mut().filter(|d| d.tool == Tool::FreeformPen && at_start(d)) {
                         let (start, n) = (d.start, d.points.len());
                         append(d, start);
                         if let Some(lasso) = d.lasso.as_mut().filter(|_| d.points.len() > n) {
@@ -200,6 +215,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 let polygonal = mods.alt && nothing_selected;
                 let intent = if polygonal { Modifiers { alt: false, ..mods } } else { mods };
                 let mut d = Drag::new(tool, p, vec![[p[0], p[1], 1.0]], intent, false);
+                if tool == Tool::FreeformPen {
+                    d.capture_vector_owners(app);
+                }
                 let document = app.session.active().map(|st| st.doc.id);
                 d.lasso = Some(Lasso { cursor: p, down: true, polygonal, document, straight: Vec::new() });
                 app.drag = Some(d);

@@ -2,7 +2,10 @@ use super::params::{
     f64p, fill_json, layer_id, live_from_params, live_json, nums, op_from, parse_fill, parse_path, parse_stroke, path_json, radii, stroke_json,
 };
 use super::vector_mask::with;
-use super::*;
+use super::{
+    Affine, Color, Document, EngineError, Fill, FillRule, Layer, LayerContent, LayerId, LiveShape, Path, PathOp, Point, Result, SHAPE_BLOCKS, Session,
+    ShapeLayer, Value, bad, json, sel, vector,
+};
 
 fn active_shape(s: &Session) -> std::result::Result<&ShapeLayer, String> {
     let d = s.active().ok_or("no document open")?;
@@ -77,7 +80,7 @@ fn live_kind(l: &LiveShape) -> &'static str {
         LiveShape::Ellipse { .. } => "ellipse",
         LiveShape::Polygon { star_ratio, .. } if *star_ratio < 1.0 => "star",
         LiveShape::Polygon { .. } => "polygon",
-        LiveShape::Line { .. } => "line",
+        LiveShape::Line { .. } | LiveShape::ArrowLine { .. } => "line",
     }
 }
 
@@ -104,6 +107,14 @@ pub fn preview_shape_stroke(doc: &Document, id: LayerId, params: &Value) -> Resu
 /// masks, recursing into groups. For the Move tool / `layer.move`.
 pub fn translate_vectors(doc: &Document, l: &mut Layer, dx: f64, dy: f64) {
     let a = Affine::translate(dx, dy);
+    if let Some(f) = &mut l.frame {
+        f.transform = a.mul(&f.transform);
+        // Past `Frame::valid`'s bounds it would no longer load; the vector mask, moved below,
+        // keeps the clip as a plain masked group.
+        if !f.valid() {
+            l.frame = None;
+        }
+    }
     if let Some(vm) = l.vector_mask.as_mut()
         && vm.linked
     {
@@ -145,12 +156,61 @@ pub(crate) fn shift_shape(doc: &Document, sh: &mut ShapeLayer, dx: f64, dy: f64)
     }
 }
 
+/// Returns arrow-local scales when the transformed axes remain perpendicular.
+fn arrow_axis_scales(a: &Affine, from: [f64; 2], to: [f64; 2]) -> Option<(f64, f64)> {
+    let [m0, m1, m2, m3, _, _] = a.m;
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    let old_length = dx.hypot(dy);
+    if !old_length.is_finite() || old_length <= 1e-12 {
+        return None;
+    }
+    let (ux, uy) = (dx / old_length, dy / old_length);
+    let (ax, ay) = (m0 * ux + m2 * uy, m1 * ux + m3 * uy);
+    let (px, py) = (-m0 * uy + m2 * ux, -m1 * uy + m3 * ux);
+    let axial = ax.hypot(ay);
+    let perpendicular = px.hypot(py);
+    if !axial.is_finite() || !perpendicular.is_finite() || axial <= 1e-12 || perpendicular <= 1e-12 {
+        return None;
+    }
+    let dot = ax * px + ay * py;
+    (dot.abs() <= 1e-10 * axial * perpendicular).then_some((axial, perpendicular))
+}
+
 /// Applies an affine transform to a shape's path, keeping the live shape when the transform
 /// is a translation plus axis-aligned scale (otherwise the shape stops being parametric).
 pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
+    // Check original arrow dimensions before transforming the path.
+    // Parameters already clamped by arrow_line cannot faithfully
+    // regenerate the transformed geometry.
+    if let Some(LiveShape::ArrowLine { from, to, weight, start, end, width, length, .. }) = sh.live.as_ref()
+        && (*start || *end)
+    {
+        let original_length = (to[0] - from[0]).hypot(to[1] - from[1]);
+
+        if !weight.is_finite()
+            || *weight < 0.1
+            || !width.is_finite()
+            || *width < 1.0
+            || !length.is_finite()
+            || *length < 1.0
+            || !original_length.is_finite()
+            || original_length < 1.0
+        {
+            sh.live = None;
+        }
+    }
+
     sh.path = sh.path.transform(a);
     let [m0, m1, m2, m3, tx, ty] = a.m;
     let axis_aligned = m1.abs() < 1e-12 && m2.abs() < 1e-12 && m0 > 0.0 && m3 > 0.0;
+    // The path has already received the exact affine transform. Drop live arrow
+    // parameters if later edits would regenerate a different, unskewed head.
+    if let Some(LiveShape::ArrowLine { from, to, .. }) = sh.live.as_ref()
+        && (to[0] - from[0]).hypot(to[1] - from[1]) > 1e-12
+        && arrow_axis_scales(a, *from, *to).is_none()
+    {
+        sh.live = None;
+    }
     sh.live = match (sh.live.take(), axis_aligned) {
         (Some(l), true) => {
             let r = |r: [f64; 4]| [r[0] * m0 + tx, r[1] * m3 + ty, r[2] * m0, r[3] * m3];
@@ -163,6 +223,22 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                 LiveShape::Ellipse { rect } => LiveShape::Ellipse { rect: r(rect) },
                 LiveShape::Polygon { rect, sides, star_ratio, corner_radius } => {
                     LiveShape::Polygon { rect: r(rect), sides, star_ratio, corner_radius: corner_radius * m0.min(m3) }
+                }
+                LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity } => {
+                    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+                    let old_len = dx.hypot(dy);
+                    let new_len = (dx * m0).hypot(dy * m3);
+                    let perpendicular_scale = if old_len > 0.0 && new_len > 0.0 { m0 * m3 * old_len / new_len } else { m0.min(m3) };
+                    LiveShape::ArrowLine {
+                        from: pt(from),
+                        to: pt(to),
+                        weight: weight * perpendicular_scale,
+                        start,
+                        end,
+                        width: width * perpendicular_scale,
+                        length: length * if old_len > 0.0 { new_len / old_len } else { m0.min(m3) },
+                        concavity,
+                    }
                 }
                 LiveShape::Line { from, to, weight } => {
                     // Live-shape edits regenerate the line's filled bar from its parameters.
@@ -192,11 +268,61 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                 }
                 LiveShape::Ellipse { rect } => Some(LiveShape::Ellipse { rect: r(rect) }),
                 LiveShape::Line { from, to, weight } => Some(LiveShape::Line { from: pt(from), to: pt(to), weight: weight * k }),
+                LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity } => {
+                    // Flips and quarter-turns can have different axial and perpendicular
+                    // scales; using the smaller axis for both loses arrowhead length.
+                    let (axial_scale, perpendicular_scale) = arrow_axis_scales(a, from, to).unwrap_or((k, k));
+                    Some(LiveShape::ArrowLine {
+                        from: pt(from),
+                        to: pt(to),
+                        weight: weight * perpendicular_scale,
+                        start,
+                        end,
+                        width: width * perpendicular_scale,
+                        length: length * axial_scale,
+                        concavity,
+                    })
+                }
                 _ => None,
             }
         }
+        // Arbitrary rotations and other orthogonal-axis affine transforms also
+        // preserve arrow geometry and should keep their editable live parameters.
+        (Some(LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity }), false) => {
+            arrow_axis_scales(a, from, to).map(|(axial_scale, perpendicular_scale)| {
+                let pt = |p: [f64; 2]| [m0 * p[0] + m2 * p[1] + tx, m1 * p[0] + m3 * p[1] + ty];
+                LiveShape::ArrowLine {
+                    from: pt(from),
+                    to: pt(to),
+                    weight: weight * perpendicular_scale,
+                    start,
+                    end,
+                    width: width * perpendicular_scale,
+                    length: length * axial_scale,
+                    concavity,
+                }
+            })
+        }
         _ => None,
     };
+    // Keep the exact transformed outline. Remove live arrow parameters
+    // when minimum-size constraints would alter its regenerated geometry.
+    if let Some(LiveShape::ArrowLine { from, to, weight, start, end, width, length, .. }) = sh.live.as_ref()
+        && (*start || *end)
+    {
+        let line_length = (to[0] - from[0]).hypot(to[1] - from[1]);
+        if !weight.is_finite()
+            || *weight < 0.1
+            || !width.is_finite()
+            || *width < 1.0
+            || !length.is_finite()
+            || *length < 1.0
+            || !line_length.is_finite()
+            || line_length < 1.0
+        {
+            sh.live = None;
+        }
+    }
     sh.psd_raw = None;
 }
 
@@ -306,16 +432,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         let l = live_from_params(CMD, kind, p, None)?;
         (vector::shapes::live_path(&l), Some(l))
     };
-    let fg = s.tools.foreground;
-    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
-    let fill = match p.get("fill") {
-        Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
-        None => Some(Fill::Solid(fgc)),
-    };
-    let stroke = match p.get("stroke") {
-        Some(v) => parse_stroke(v, None, fgc).map_err(|e| bad(CMD, e))?,
-        None => None,
-    };
+    let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
@@ -338,7 +455,73 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
-        let id = doc.insert_above(*active, Layer::new(name, LayerContent::Shape(sh)));
+        let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Shape(sh)), crate::layer_place::Place::AutoEditable);
+        *active = Some(id);
+        Ok(id)
+    })?;
+    shape_info(s, id)
+}
+
+/// A new shape layer's `fill` (default the foreground colour) and `stroke` (default none).
+fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, Option<photocraft_doc::ShapeStroke>)> {
+    let fg = s.tools.foreground;
+    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    let fill = match p.get("fill") {
+        Some(v) => parse_fill(v).map_err(|e| bad(cmd, e))?,
+        None => Some(Fill::Solid(fgc)),
+    };
+    let stroke = match p.get("stroke") {
+        Some(v) => parse_stroke(v, None, fgc).map_err(|e| bad(cmd, e))?,
+        None => None,
+    };
+    Ok((fill, stroke))
+}
+
+/// The Pen options bar's Make: Shape: a new shape layer, as one History step, from the work path
+/// or a saved path (`name`), or from an inline `path` (a Pen path still being drawn). The Work
+/// Path becomes the shape's path, so it is gone afterwards; a saved path stays. An inline `path`
+/// leaves the document's paths alone unless `consumeWorkPath` says it was drawn into the Work
+/// Path. Unlike the other path commands, `"work"` never falls back to the active layer's path:
+/// that would duplicate the selected shape or vector mask.
+pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.toShape";
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) => Some(n.as_str()),
+        Some(_) => return Err(bad(CMD, "`name` must be a path name: \"work\", \"layer\" or a saved path's name")),
+    };
+    let consume_flag = match p.get("consumeWorkPath") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(CMD, "`consumeWorkPath` must be true or false")),
+    };
+    let (path, consume_work) = match p.get("path").filter(|v| !v.is_null()) {
+        Some(_) if name.is_some() => return Err(bad(CMD, "give `name` or `path`, not both")),
+        Some(v) => (parse_path(v).map_err(|e| bad(CMD, e))?, consume_flag),
+        None if super::is_work(name) => {
+            let d = s.active().ok_or(EngineError::NoDocument)?;
+            (d.doc.work_path.clone().ok_or_else(|| bad(CMD, "there is no Work Path"))?, true)
+        }
+        None => (super::resolve_path(s, name)?, false),
+    };
+    if !path.subpaths.iter().any(|sp| sp.knots.len() >= 2) {
+        return Err(bad(CMD, "the path has no segment to make a shape from"));
+    }
+    let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
+    vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+    let layer_name = match p.get("layerName") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) if !n.trim().is_empty() => Some(n.clone()),
+        Some(_) => return Err(bad(CMD, "`layerName` must be a name that isn't empty")),
+    };
+    let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
+    let id = s.edit("New Shape Layer", |doc, active| {
+        refresh_shape(doc, &mut sh);
+        let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));
+        let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Shape(sh)), crate::layer_place::Place::AutoEditable);
+        if consume_work {
+            doc.work_path = None;
+        }
         *active = Some(id);
         Ok(id)
     })?;
@@ -357,7 +540,23 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
             sh.live = None;
             sh.psd_raw = None;
         }
-        let geom_keys = ["kind", "rect", "radii", "radius", "sides", "starRatio", "cornerRadius", "from", "to", "weight"];
+        let geom_keys = [
+            "kind",
+            "rect",
+            "radii",
+            "radius",
+            "sides",
+            "starRatio",
+            "cornerRadius",
+            "from",
+            "to",
+            "weight",
+            "arrowStart",
+            "arrowEnd",
+            "arrowWidth",
+            "arrowLength",
+            "arrowConcavity",
+        ];
         if geom_keys.iter().any(|k| p.get(*k).is_some()) {
             let kind = p.get("kind").and_then(Value::as_str).map(str::to_string).or_else(|| sh.live.as_ref().map(|l| live_kind(l).to_string()));
             let kind = kind.ok_or_else(|| bad(CMD, "this shape has no live-shape parameters; pass `kind` or `path`"))?;
@@ -440,13 +639,27 @@ pub(super) fn merge_components(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Bakes `sh`'s path operations into plain combined outlines, traced from the exact coverage.
 fn bake_components(sh: &mut ShapeLayer, tol: f64) -> Result<()> {
+    sh.path = bake_path(&sh.path, tol)?;
+    sh.live = None;
+    sh.psd_raw = None;
+    Ok(())
+}
+
+/// `path` with its path operations baked into plain combined outlines, traced from the exact
+/// coverage within `tol` px (Merge Shape Components). An empty area gives an empty path; an
+/// inverted path (a vector mask's) stays inverted around the merged area. An open subpath is
+/// refused: tracing its fill would close it, or drop a straight one or a lone anchor (a dot under
+/// a round or square cap), losing the stroked geometry.
+pub(crate) fn bake_path(path: &Path, tol: f64) -> Result<Path> {
+    if path.subpaths.iter().any(|sp| !sp.closed && !sp.knots.is_empty()) {
+        return Err(EngineError::Other("Merge Shape Components needs closed paths: close or delete the open subpaths first".into()));
+    }
     // Trace at 4× resolution so the fitted outline follows the anti-aliased edge closely.
     const K: f64 = 4.0;
-    let up = sh.path.transform(&Affine::scale(K));
+    let up = Path { inverted: false, ..path.transform(&Affine::scale(K)) };
     let r = vector::fill_rasterizer(&up, vector::DEFAULT_TOLERANCE);
     let Some(b) = r.pixel_bounds() else {
-        sh.path.subpaths.clear();
-        return Ok(());
+        return Ok(Path { subpaths: Vec::new(), ..path.clone() });
     };
     let b = b.inflate(2);
     if u64::from(b.width()) * u64::from(b.height()) > 400_000_000 {
@@ -454,10 +667,7 @@ fn bake_components(sh: &mut ShapeLayer, tol: f64) -> Result<()> {
     }
     let cov = r.render(b);
     let traced = vector::trace::trace_mask(&cov, b, 0.0, tol * K);
-    sh.path = traced.transform(&Affine::scale(1.0 / K));
-    sh.live = None;
-    sh.psd_raw = None;
-    Ok(())
+    Ok(Path { inverted: path.inverted, ..traced.transform(&Affine::scale(1.0 / K)) })
 }
 
 /// The shape layers Layer › Combine Shapes merges into one: with none of the `narrow` params
@@ -557,4 +767,139 @@ pub(super) fn selection_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     shape_create(s, &q)
+}
+
+#[cfg(test)]
+mod arrow_affine_regression_tests {
+    use super::*;
+
+    #[test]
+    fn forty_five_degree_rotation_retains_live_arrow_and_geometry() {
+        let live =
+            LiveShape::ArrowLine { from: [0.0, 0.0], to: [100.0, 0.0], weight: 8.0, start: false, end: true, width: 31.0, length: 31.0, concavity: 50.0 };
+        let mut sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), ..ShapeLayer::default() };
+        let mut a = Affine::translate(0.0, 0.0);
+        let c = std::f64::consts::FRAC_PI_4.cos();
+        let s = std::f64::consts::FRAC_PI_4.sin();
+        a.m = [c, s, -s, c, 0.0, 0.0];
+        transform_shape(&mut sh, &a);
+        let Some(LiveShape::ArrowLine { width, length, .. }) = sh.live.as_ref() else {
+            panic!("Arrow must remain parametrically editable after 45-degree rotation");
+        };
+        assert!((*width - 31.0).abs() < 1e-9);
+        assert!((*length - 31.0).abs() < 1e-9);
+        let rebuilt = vector::shapes::live_path(sh.live.as_ref().unwrap());
+        assert_eq!(sh.path.subpaths.len(), rebuilt.subpaths.len());
+        for (existing, generated) in sh.path.subpaths.iter().zip(rebuilt.subpaths.iter()) {
+            assert_eq!(existing.knots.len(), generated.knots.len());
+            for (a, b) in existing.knots.iter().zip(generated.knots.iter()) {
+                assert!((a.anchor.x - b.anchor.x).abs() < 1e-8);
+                assert!((a.anchor.y - b.anchor.y).abs() < 1e-8);
+            }
+        }
+    }
+
+    #[test]
+    fn subpixel_scale_keeps_transformed_path_but_drops_unreproducible_live_parameters() {
+        let live = LiveShape::ArrowLine { from: [0.0, 0.0], to: [100.0, 0.0], weight: 5.0, start: false, end: true, width: 31.0, length: 31.0, concavity: 0.0 };
+        let mut sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), ..ShapeLayer::default() };
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [0.01, 0.0, 0.0, 0.01, 0.0, 0.0];
+
+        let expected_path = sh.path.transform(&a);
+        transform_shape(&mut sh, &a);
+
+        assert_eq!(sh.path, expected_path);
+        assert!(sh.live.is_none());
+    }
+
+    #[test]
+    fn headless_arrow_survives_nonuniform_diagonal_scale() {
+        let live =
+            LiveShape::ArrowLine { from: [0.0, 0.0], to: [100.0, 100.0], weight: 5.0, start: false, end: false, width: 52.0, length: 50.0, concavity: 0.0 };
+
+        let mut sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), ..ShapeLayer::default() };
+
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [2.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+        let expected_path = sh.path.transform(&a);
+        transform_shape(&mut sh, &a);
+
+        assert_eq!(sh.path, expected_path);
+        assert!(sh.live.is_none());
+    }
+
+    #[test]
+    fn zero_length_headless_arrow_survives_scale() {
+        let live = LiveShape::ArrowLine { from: [0.0, 0.0], to: [0.0, 0.0], weight: 5.0, start: false, end: false, width: 52.0, length: 50.0, concavity: 0.0 };
+
+        let mut sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), ..ShapeLayer::default() };
+
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [2.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+        let expected_path = sh.path.transform(&a);
+        transform_shape(&mut sh, &a);
+
+        assert_eq!(sh.path, expected_path);
+        assert!(matches!(sh.live, Some(LiveShape::ArrowLine { start: false, end: false, .. })));
+    }
+
+    #[test]
+    fn headless_short_arrow_remains_editable_after_scaling() {
+        let live = LiveShape::ArrowLine { from: [0.0, 0.0], to: [0.5, 0.0], weight: 0.05, start: false, end: false, width: 31.0, length: 31.0, concavity: 0.0 };
+        let mut sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), ..ShapeLayer::default() };
+
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [0.5, 0.0, 0.0, 0.5, 0.0, 0.0];
+
+        let expected = sh.path.transform(&a);
+        transform_shape(&mut sh, &a);
+
+        assert_eq!(sh.path, expected);
+        assert!(matches!(sh.live, Some(LiveShape::ArrowLine { start: false, end: false, .. })));
+    }
+
+    #[test]
+    fn scale_above_minimum_still_keeps_live_arrow_editable() {
+        let live = LiveShape::ArrowLine { from: [0.0, 0.0], to: [100.0, 0.0], weight: 5.0, start: false, end: true, width: 31.0, length: 31.0, concavity: 0.0 };
+        let mut sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), ..ShapeLayer::default() };
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [0.5, 0.0, 0.0, 0.5, 0.0, 0.0];
+
+        transform_shape(&mut sh, &a);
+
+        let Some(LiveShape::ArrowLine { width, length, .. }) = sh.live else {
+            panic!("Ordinary scaling must preserve editable arrow parameters");
+        };
+
+        assert!((width - 15.5).abs() < 1e-9);
+        assert!((length - 15.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reflected_horizontal_arrow_uses_axial_scale_for_head_length() {
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [-2.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let (axial, perpendicular) = arrow_axis_scales(&a, [0.0, 0.0], [100.0, 0.0]).unwrap();
+        assert!((axial - 2.0).abs() < 1e-10);
+        assert!((perpendicular - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn anisotropic_diagonal_arrow_cannot_remain_parametric() {
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [2.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        assert!(arrow_axis_scales(&a, [0.0, 0.0], [100.0, 100.0]).is_none());
+    }
+
+    #[test]
+    fn uniform_scale_preserves_diagonal_arrow_axes() {
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [2.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+        let (axial, perpendicular) = arrow_axis_scales(&a, [0.0, 0.0], [100.0, 100.0]).unwrap();
+        assert!((axial - 2.0).abs() < 1e-10);
+        assert!((perpendicular - 2.0).abs() < 1e-10);
+    }
 }
