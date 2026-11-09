@@ -63,6 +63,51 @@ fn save_as_to_a_jpeg_asks_for_jpeg_options() {
     assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some("p.jpg"));
 }
 
+/// The first keystrokes change Quality without a click, and Enter writes that choice.
+#[test]
+fn jpeg_quality_arrows_and_enter_save() {
+    for (start, key, expected) in [(10, Key::ArrowUp, [11, 12]), (12, Key::ArrowUp, [12, 12]), (2, Key::ArrowDown, [1, 0]), (0, Key::ArrowDown, [0, 0])] {
+        let (mut h, writes) = jpeg_app("unused.jpg");
+        h.state_mut().session.prefs.edit(|p| {
+            p.dialogs.insert("file.jpegOptions".into(), json!({"quality": start}));
+        });
+        h.state_mut().save_as(Some("p.jpg".into())).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("JPEG Options").is_some());
+        assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(start));
+        for quality in expected {
+            h.key_press(key);
+            h.run_steps(2);
+            assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(quality));
+        }
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert_eq!(writes.borrow().as_slice(), &[("p.jpg".to_string(), asked(pct(expected[1]), JpegFormat::Baseline))]);
+        assert!(h.state().jpeg_options.is_none());
+    }
+}
+
+/// Focus belongs to the dialog controls the user tabs to, and resets on the next opening.
+#[test]
+fn jpeg_quality_focus_returns_only_when_reopened() {
+    let (mut h, _) = jpeg_app("unused.jpg");
+    h.state_mut().save_as(Some("p.jpg".into())).unwrap();
+    h.run_steps(2);
+    let quality_focus = h.ctx.memory(|m| m.focused()).expect("Quality starts focused");
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert_ne!(h.ctx.memory(|m| m.focused()), Some(quality_focus));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().jpeg_options.is_none());
+
+    h.state_mut().save_as(Some("q.jpg".into())).unwrap();
+    h.run_steps(2);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(9));
+}
+
 /// Re-saving an opened JPEG starts at the file's own quality (`file_encoding`, as File › Save
 /// keeps it since #4032), not the Export preference's; left there, OK writes that quality exactly
 /// rather than its nearest step on the 0–12 scale (95 would come back as 92), and the recorded step
