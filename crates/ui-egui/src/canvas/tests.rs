@@ -3359,14 +3359,14 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let (_, key) = display_doc(&mut app, 0);
     assert_eq!(key, crate::transform_tool::preview_key(app.transform_preview.as_ref().unwrap().session));
     let dk = canvas_display(&app, &app.session.documents()[0].doc, None).1;
-    let opened = damage_since(&app, 0, (rev, dk), (rev, key), dk, None).expect("opening the box has a damage area");
+    let opened = damage_since(&app, 0, (rev, dk), (rev, key), dk, (rev, None)).expect("opening the box has a damage area");
     assert!(opened.contains(20, 20) && opened.contains(59, 49), "{opened:?}");
     assert!(opened.width() < 400 && opened.height() < 200, "not the whole canvas: {opened:?}");
-    let canceled = damage_since(&app, 0, (rev, key ^ dk), (rev, 0), dk, None).expect("canceling has one too");
+    let canceled = damage_since(&app, 0, (rev, key ^ dk), (rev, 0), dk, (rev, None)).expect("canceling has one too");
     assert_eq!(canceled, opened);
     // A commit (one revision later) adds what it changed; anything else redraws everything.
     let moved = photocraft_geom::Rect::new(100, 20, 140, 50);
-    let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, Some(moved)).expect("committing too");
+    let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, (rev, Some(moved))).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
-    assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, Some(moved)).is_none(), "a later revision isn't ours");
+    assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
 }

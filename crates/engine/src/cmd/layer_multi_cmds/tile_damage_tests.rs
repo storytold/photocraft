@@ -397,6 +397,26 @@ fn a_new_pattern_a_layer_refers_to_is_unbounded() {
     assert!(unchanged_outside(&plain, &more, Rect::EMPTY));
 }
 
+/// An appended pattern sharing its name with one a layer already resolves by id loses to that id
+/// match (`pattern::find` tries ids first), so the layer draws as before: bounded, not a whole
+/// redraw. A cross-document layer copy can bring such a pattern along.
+#[test]
+fn a_same_named_new_pattern_a_reference_still_resolves_past_is_bounded() {
+    let mut s = session(400, 300);
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Checkerboard"})).unwrap();
+    let mut with = (*doc(&s)).clone();
+    with.layers.iter_mut().for_each(|l| l.fill_cache = None);
+    let refers_by_id = with.layers.iter().any(|l| matches!(&l.content, LayerContent::Fill(photocraft_doc::Fill::Pattern { id, .. }) if !id.is_empty()));
+    assert!(refers_by_id, "the fill layer refers to its pattern by id");
+    let mut twin = with.patterns[0].clone();
+    twin.id = "another-id".into();
+    twin.surface.fill_rect(Rect::new(0, 0, twin.width as i32, twin.height as i32), &[1.0, 0.0, 1.0, 1.0]);
+    let mut more = with.clone();
+    more.patterns.push(twin);
+    assert_eq!(step_damage(&with, &more), Some(Rect::EMPTY));
+    assert!(unchanged_outside(&with, &more, Rect::EMPTY));
+}
+
 #[test]
 fn a_failed_compound_reports_no_change() {
     let mut s = session(600, 400);

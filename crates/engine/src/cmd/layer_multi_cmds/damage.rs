@@ -273,24 +273,23 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
 /// Whether `a`'s and `b`'s pattern libraries composite the same. Layers draw a pattern only
 /// through a reference that `photocraft_doc::pattern::find` resolves (fill and shape layers,
 /// Pattern Overlay, pattern strokes and glows, Bevel textures), so patterns appended after an
-/// unchanged prefix change nothing unless some reference could resolve to one of them: by id,
-/// stored name, or display name (any match counts, which is conservative). Pattern Stamp copies
-/// its pattern into the document this way on first use; the pixels it paints are a raster
-/// change, diffed by tile like any other.
+/// unchanged prefix change nothing unless some reference now resolves differently: to an
+/// appended pattern where it resolved to an earlier one or to none. A same-named addition that
+/// loses to an existing id match changes nothing. Pattern Stamp copies its pattern into the
+/// document this way on first use; the pixels it paints are a raster change, diffed by tile like
+/// any other.
 fn patterns_pixels_equal(a: &Document, b: &Document) -> bool {
     use photocraft_doc::effects::{Effect, FxPaint};
-    use photocraft_doc::{Fill, pattern::display_name};
+    use photocraft_doc::{Fill, Pattern, pattern::find};
     if a.patterns == b.patterns {
         return true;
     }
-    let Some(added) = b.patterns.strip_prefix(a.patterns.as_slice()).filter(|_| a.patterns.len() < b.patterns.len()) else {
+    if a.patterns.len() >= b.patterns.len() || !b.patterns.starts_with(a.patterns.as_slice()) {
         return false;
-    };
-    let hits = |id: &str, name: &str| {
-        added
-            .iter()
-            .any(|q| (!id.is_empty() && q.id == id) || (!name.is_empty() && (q.name == name || q.display_name().eq_ignore_ascii_case(display_name(name)))))
-    };
+    }
+    // The index a reference resolves to; the prefix is equal, so equal indices mean equal patterns.
+    let at = |ps: &[Pattern], id: &str, name: &str| find(ps, id, name).and_then(|p| ps.iter().position(|q| std::ptr::eq(q, p)));
+    let hits = |id: &str, name: &str| at(&a.patterns, id, name) != at(&b.patterns, id, name);
     let fill = |f: &Fill| matches!(f, Fill::Pattern { id, name, .. } if hits(id, name));
     let paint = |p: &FxPaint| matches!(p, FxPaint::Pattern { id, name, .. } if hits(id, name));
     // Past a nesting depth no real document reaches, assume a reference (unequal), as
