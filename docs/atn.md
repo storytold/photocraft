@@ -994,7 +994,7 @@ the recorded steps back from the saved Actions panel. Ranges come from the dialo
 |---|---|---|
 | Custom (`Cstm`) | `Scl ` long 1..9999, `Ofst` long -9999..9999, `Mtrx` list of 25 longs -999..999 | Without the dialog the step needs all 25 cells, or the application fails. |
 | Fibers (`Fbrs`) | `Vrnc` long 1..64, `Strg` long 1..64, `RndS` long (seed) | |
-| Displace (`Dspl`) | `HrzS`, `VrtS` long -999..999; `DspM` (`StrF` stretch to fit, or tile); `UndA` (`RptE` repeat edge pixels, or wrap around); `DspF` alias: path of the displacement map (.psd) | The map file is chosen after OK. |
+| Displace (recorded `displace`) | `HrzS` and `VrtS` long -999..999, `DspM.StrF` (stretch to fit), `UndA.RptE` (repeat edge pixels), and `DspF` as `Pth ` | A later Windows recording measured the `txtu` path to the PSD map chosen after OK. |
 | Color Lookup (`colorLookup`) | `lookupType` (`colorLookupType`: `3DLUT`, abstract, device link); `Nm  ` text: the file's path; `Dthr` bool; `profile` raw data (ICC); `LUTFormat` (`LUTFormatType`, e.g. `LUTFormatLOOK`); `LUT3DFileData` raw data: the LUT file itself; `LUT3DFileName` text | The LUT travels inside the step. |
 | Shape Blur (`shapeBlur`) | `Rds ` pixels 5..1000; `customShape` object (`Nm  ` text, `Idnt` text: the shape's id); `keyOriginType` long (9) | |
 | Lighting Effects (`lightFilterLightingEffects`) | `k3DLights` list of lights (`Nm  `, colour `Rd  `/`Grn `/`Bl  ` 0..1, `hots`, `FlOf`, `shdw`, attenuation keys, `Type`, `ison`, `key3DMatrix` raw + floats, `X   `/`Y   `/`Z   `, target `tarx`/`tary`/`tarz`, `key3DPosition`), `key3DCurrentCameraPosition`, `Glos`, `Mtrl`, `Exps`, `AmbB`, `AmbC` RGB, `BmpA`, `BmpC` (texture channel by name, localised: "Ohne" = none), `Wdth`, `Hght` | A dialog-less run returns nothing; only a recording shows the keys. |
@@ -1852,7 +1852,7 @@ Nested values as recorded (defaults):
 
 ### Group C: The Distort filters (Pinch, Polar Coordinates, Shear, Spherize, Twirl, Wave, ZigZag)
 
-The seven Distort events below map to PhotoCraft's `filter.distort.*` commands for their documented supported forms, including complete Shear curves. Displace needs a displacement map file and is listed separately at the end.
+The Distort events below map to PhotoCraft's `filter.distort.*` commands for their documented supported forms, including complete Shear curves and the recorded Windows Displace form.
 
 #### Pinch
 
@@ -1959,7 +1959,11 @@ Nested values as recorded (defaults):
 
 #### Displace
 
-Displace reads a displacement map from a file chosen in a dialog; record one step and add its keys (file path form) before implementing.
+The TEXT event `displace` with descriptor class `null` maps to `filter.distort.displace`.
+
+The measured Windows recording uses `HrzS` and `VrtS` (32-bit integers, −999 to 999), `DspM.StrF` (stretch to fit), `UndA.RptE` (repeat edge pixels), and `DspF` (`Pth `, a `txtu` header with little-endian length and a NUL-terminated UTF-16LE path). Import preserves the map path as text. Playback opens the map through the native Displace command.
+
+Alias paths, other enum values, and malformed or incomplete descriptors stay as kept Photoshop steps. So does a map path a document may not name (a network share, a device, a URL or a relative path): playing a shared action file never opens it. Export supports the measured path and settings for a pixel target.
 
 ### Group D: The Stylize and Pixelate filters
 
