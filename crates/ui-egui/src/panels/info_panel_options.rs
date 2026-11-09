@@ -1,12 +1,9 @@
 //! The Info panel's options (its panel menu › Panel Options…): which colour readouts the panel
 //! shows.
 //!
-//! Photoshop's Panel Options offer two readout slots, each set to one mode. Here every readout
-//! is a checkbox and any number can be on at once, so a separator can watch Actual Color,
-//! Grayscale and every spot channel's ink together. The Spot Channels and Alpha Channels
-//! readouts list every extra channel at the pointer at the same time; Photoshop shows a spot
-//! channel's value only while that channel is targeted on its own. The options are kept between
-//! launches, apart from the saved workspace.
+//! As in Photoshop, the dialog has two group boxes, First Color Readout and Second Color
+//! Readout, each with one Mode dropdown; the panel shows the first readout on the left and the
+//! second on the right. The options are kept between launches, apart from the saved workspace.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +12,7 @@ use crate::PhotocraftApp;
 /// Where the options are kept between launches (`prefs.dialogs`).
 const OPTIONS_PREF: &str = "infoPanel";
 
-/// A readout of the Info panel: Photoshop's Color Readout modes, then the extra channels.
+/// A Color Readout mode of the Info panel (Photoshop's Panel Options › Mode).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Readout {
@@ -23,6 +20,8 @@ pub enum Readout {
     /// channel of a Multichannel document. Lab is reconstructed from the RGB composite and
     /// cannot recover out-of-gamut native Lab values clipped by RGB compositing.
     ActualColor,
+    /// The sample in View › Proof Setup's profile, in that profile's channels.
+    ProofColor,
     /// K %: `100 − Rec.601 luma` of the RGB values, as Photoshop reads it.
     Grayscale,
     Rgb,
@@ -32,22 +31,17 @@ pub enum Readout {
     Hsl,
     Cmyk,
     Lab,
-    /// The CMYK percentages added up (Photoshop's Total Ink: the process plates).
+    /// The CMYK percentages added up (`Σ:`).
     TotalInk,
-    /// Every spot channel's ink % added up: the separations total.
-    TotalSpotInk,
-    /// The composite's alpha under the pointer, as Photoshop's Opacity readout.
+    /// The composite's alpha under the pointer (`Op:`).
     Opacity,
-    /// Every spot channel's ink %, all at once.
-    SpotChannels,
-    /// Every alpha channel's masked %, white = 0 %.
-    AlphaChannels,
 }
 
 impl Readout {
-    /// Every readout in menu order: Photoshop's modes, then the channel readouts.
-    pub const ALL: [Readout; 13] = [
+    /// Every mode in the Mode dropdown's order.
+    pub const ALL: [Readout; 11] = [
         Readout::ActualColor,
+        Readout::ProofColor,
         Readout::Grayscale,
         Readout::Rgb,
         Readout::Web,
@@ -56,16 +50,14 @@ impl Readout {
         Readout::Cmyk,
         Readout::Lab,
         Readout::TotalInk,
-        Readout::TotalSpotInk,
         Readout::Opacity,
-        Readout::SpotChannels,
-        Readout::AlphaChannels,
     ];
 
-    /// The dialog label (Photoshop's names).
+    /// The dropdown label (Photoshop's names).
     pub fn label(self) -> &'static str {
         match self {
             Readout::ActualColor => "Actual Color",
+            Readout::ProofColor => "Proof Color",
             Readout::Grayscale => "Grayscale",
             Readout::Rgb => "RGB Color",
             Readout::Web => "Web Color",
@@ -74,11 +66,14 @@ impl Readout {
             Readout::Cmyk => "CMYK Color",
             Readout::Lab => "Lab Color",
             Readout::TotalInk => "Total Ink",
-            Readout::TotalSpotInk => "Total Spot Ink",
-            Readout::Opacity => "Composite opacity",
-            Readout::SpotChannels => "Spot Channels",
-            Readout::AlphaChannels => "Alpha Channels",
+            Readout::Opacity => "Opacity",
         }
+    }
+
+    /// Whether the Mode dropdown draws a separator above this mode: Actual Color, Proof Color |
+    /// Grayscale … Lab Color | Total Ink, Opacity.
+    fn starts_group(self) -> bool {
+        matches!(self, Readout::Grayscale | Readout::TotalInk)
     }
 }
 
@@ -86,43 +81,29 @@ impl Readout {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct InfoPanelState {
-    /// The readouts shown. Any order and duplicates are accepted (`ui.set`); the panel shows them
-    /// in [`Readout::ALL`] order, each once.
-    pub readouts: Vec<Readout>,
+    /// First Color Readout: the left readout.
+    pub first: Readout,
+    /// Second Color Readout: the right readout.
+    pub second: Readout,
 }
 
 impl Default for InfoPanelState {
-    /// Photoshop's defaults: Actual Color and CMYK.
+    /// Photoshop's defaults: Actual Color and CMYK Color.
     fn default() -> Self {
-        Self { readouts: vec![Readout::ActualColor, Readout::Cmyk] }
+        Self { first: Readout::ActualColor, second: Readout::Cmyk }
     }
 }
 
 impl InfoPanelState {
-    /// Report whether a readout is selected, independent of duplicate or unsorted persisted entries.
-    pub fn shows(&self, r: Readout) -> bool {
-        self.readouts.contains(&r)
-    }
-
-    /// The readouts shown, in menu order, each once.
-    pub fn shown(&self) -> Vec<Readout> {
-        Readout::ALL.iter().copied().filter(|r| self.shows(*r)).collect()
-    }
-
-    /// Remove every occurrence when disabling, or enable once in the canonical menu order.
-    pub fn toggle(&mut self, r: Readout) {
-        if self.shows(r) {
-            self.readouts.retain(|x| *x != r);
-        } else {
-            self.readouts.push(r);
-            self.readouts = self.shown();
-        }
+    /// The two readouts, first then second (the same mode twice shows twice, as in Photoshop).
+    pub fn shown(&self) -> [Readout; 2] {
+        [self.first, self.second]
     }
 }
 
 /// Sets the options and saves them with the preferences.
 pub fn set_options(app: &mut PhotocraftApp, state: InfoPanelState) {
-    app.ui.info_panel = InfoPanelState { readouts: state.shown() };
+    app.ui.info_panel = state;
     persist_options(app);
 }
 
@@ -140,7 +121,7 @@ pub fn restore_options(app: &mut PhotocraftApp) {
     if let Some(v) = app.session.prefs().dialogs.get(OPTIONS_PREF)
         && let Ok(state) = serde_json::from_value::<InfoPanelState>(v.clone())
     {
-        app.ui.info_panel = InfoPanelState { readouts: state.shown() };
+        app.ui.info_panel = state;
     }
 }
 
@@ -152,29 +133,25 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The checkboxes of the Panel Options dialog, Photoshop's readouts in two columns and the
-/// channel readouts below.
-fn options_body(ui: &mut egui::Ui, opts: &mut InfoPanelState) {
-    ui.label(tl!("Readouts"));
-    ui.add_space(4.0);
-    let (color, channels): (Vec<Readout>, Vec<Readout>) =
-        Readout::ALL.iter().copied().partition(|r| !matches!(r, Readout::SpotChannels | Readout::AlphaChannels));
-    let half = color.len().div_ceil(2);
-    ui.columns(2, |cols| {
-        for (i, r) in color.iter().enumerate() {
-            let mut on = opts.shows(*r);
-            if cols[i / half].checkbox(&mut on, tl!(r.label())).changed() {
-                opts.toggle(*r);
-            }
-        }
+/// One Color Readout group box: its title, then Mode: and the dropdown.
+fn readout_group(ui: &mut egui::Ui, id: &str, title: &str, mode: &mut Readout) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    crate::widgets::section_label(ui, title);
+    egui::Frame::new().stroke(egui::Stroke::new(1.0, t.field_border)).inner_margin(8).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.label(tl!("Mode:"));
+            let options: Vec<(Readout, &str)> = Readout::ALL.iter().map(|r| (*r, r.label())).collect();
+            crate::widgets::dropdown_wheel_grouped(ui, id, tl!(title), mode, &options, 150.0, |r| r.starts_group());
+        });
     });
+}
+
+/// The body of the Panel Options dialog: the First and Second Color Readout group boxes.
+fn options_body(ui: &mut egui::Ui, opts: &mut InfoPanelState) {
+    readout_group(ui, "info-first-readout", "First Color Readout", &mut opts.first);
     ui.add_space(8.0);
-    for r in channels {
-        let mut on = opts.shows(r);
-        if ui.checkbox(&mut on, tl!(r.label())).changed() {
-            opts.toggle(r);
-        }
-    }
+    readout_group(ui, "info-second-readout", "Second Color Readout", &mut opts.second);
 }
 
 /// Show the pending Info panel Panel Options dialog as a modal; OK applies and saves the
@@ -184,7 +161,7 @@ pub fn show_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut confirmed = false;
     let mut cancelled = ctx.input_mut(|i| i.consume_key(i.modifiers, egui::Key::Escape));
     egui::Modal::new(egui::Id::unique("info-panel-options-modal")).show(ctx, |ui| {
-        ui.set_width(420.0);
+        ui.set_width(380.0);
         ui.horizontal(|ui| {
             ui.heading(tl!("Info Panel Options"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -196,7 +173,7 @@ pub fn show_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.separator();
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.set_width(300.0);
+                ui.set_width(260.0);
                 options_body(ui, &mut opts);
             });
             ui.add_space(10.0);
@@ -229,12 +206,12 @@ mod tests {
     /// The defaults are Photoshop's; old or malformed saved options keep them.
     #[test]
     fn defaults_and_bad_saved_options() {
-        assert_eq!(InfoPanelState::default().shown(), vec![Readout::ActualColor, Readout::Cmyk]);
+        assert_eq!(InfoPanelState::default().shown(), [Readout::ActualColor, Readout::Cmyk]);
         let mut value = serde_json::to_value(crate::state::UiState::default()).unwrap();
         value.as_object_mut().unwrap().remove("info_panel");
         let restored: crate::state::UiState = serde_json::from_value(value).unwrap();
         assert_eq!(restored.info_panel, InfoPanelState::default());
-        for value in [json!({}), json!({"readouts": "gray"}), json!({"readouts": ["bogus"]}), json!(null), json!(7)] {
+        for value in [json!({}), json!({"first": "gray"}), json!({"second": "spotChannels"}), json!({"readouts": ["grayscale"]}), json!(null), json!(7)] {
             let mut session = photocraft_engine::Session::new();
             session.prefs.edit(|p| {
                 p.dialogs.insert(OPTIONS_PREF.into(), value);
@@ -244,19 +221,19 @@ mod tests {
         }
     }
 
-    /// Toggling keeps menu order and drops duplicates; a `ui.set` list in any order reads back
-    /// normalised.
+    /// The Mode list is Photoshop's, in its order, with separators after Proof Color and Lab
+    /// Color; the ids are camelCase.
     #[test]
-    fn readouts_keep_menu_order_once_each() {
-        let mut s = InfoPanelState::default();
-        s.toggle(Readout::SpotChannels);
-        s.toggle(Readout::Grayscale);
-        assert_eq!(s.shown(), vec![Readout::ActualColor, Readout::Grayscale, Readout::Cmyk, Readout::SpotChannels]);
-        s.toggle(Readout::ActualColor);
-        assert!(!s.shows(Readout::ActualColor));
-        let loose = InfoPanelState { readouts: vec![Readout::Lab, Readout::Rgb, Readout::Lab] };
-        assert_eq!(loose.shown(), vec![Readout::Rgb, Readout::Lab]);
-        assert_eq!(serde_json::to_value(&loose).unwrap(), json!({"readouts": ["lab", "rgb", "lab"]}), "camelCase ids");
+    fn mode_list_matches_the_reference_application() {
+        let labels: Vec<&str> = Readout::ALL.iter().map(|r| r.label()).collect();
+        assert_eq!(
+            labels,
+            ["Actual Color", "Proof Color", "Grayscale", "RGB Color", "Web Color", "HSB Color", "HSL Color", "CMYK Color", "Lab Color", "Total Ink", "Opacity"]
+        );
+        let groups: Vec<Readout> = Readout::ALL.iter().copied().filter(|r| r.starts_group()).collect();
+        assert_eq!(groups, [Readout::Grayscale, Readout::TotalInk]);
+        let s = InfoPanelState { first: Readout::ProofColor, second: Readout::TotalInk };
+        assert_eq!(serde_json::to_value(&s).unwrap(), json!({"first": "proofColor", "second": "totalInk"}));
     }
 
     /// The options survive the preferences and a new shell, with workspace saving off; the open
@@ -265,20 +242,21 @@ mod tests {
     fn options_survive_restart_independently_of_workspace() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = false);
-        for readouts in [vec![Readout::Grayscale, Readout::SpotChannels], vec![], Readout::ALL.to_vec()] {
-            set_options(&mut app, InfoPanelState { readouts: readouts.clone() });
+        for (first, second) in [(Readout::Grayscale, Readout::Opacity), (Readout::ProofColor, Readout::ProofColor), (Readout::TotalInk, Readout::Lab)] {
+            set_options(&mut app, InfoPanelState { first, second });
             let mut session = photocraft_engine::Session::new();
             session.load_prefs_json(&app.session.prefs_to_json()).unwrap();
             let restored = PhotocraftApp::new(session, Default::default());
-            assert_eq!(restored.ui.info_panel.readouts, readouts);
+            assert_eq!(restored.ui.info_panel.shown(), [first, second]);
         }
         app.ui.info_panel_dialog = Some(InfoPanelState::default());
         let json = serde_json::to_value(&app.ui).unwrap();
         assert!(json.get("info_panel_dialog").is_none(), "transient");
     }
 
-    /// Panel Options… in the panel menu opens the dialog; its checkboxes edit a copy that OK
-    /// applies and saves, and Cancel or Escape drops.
+    /// Panel Options… in the panel menu opens the dialog: two group boxes, First and Second
+    /// Color Readout, each with a Mode dropdown and no checkboxes; OK applies and saves the
+    /// edited copy, Cancel or Escape drops it.
     #[test]
     fn panel_options_dialog_applies_on_ok_and_drops_on_cancel() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -289,29 +267,32 @@ mod tests {
         assert_eq!(h.state().ui.info_panel_dialog, Some(InfoPanelState::default()), "the menu opens the dialog");
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         let mut h = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui_state(|ui, app: &mut PhotocraftApp| show_dialog(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
         h.run_steps(2);
         assert!(h.query_by_label("Info Panel Options").is_none(), "no dialog until asked");
         h.state_mut().ui.info_panel_dialog = Some(h.state().ui.info_panel.clone());
         h.run_steps(2);
-        for r in Readout::ALL {
-            assert!(h.query_by_label(r.label()).is_some(), "{} checkbox", r.label());
+        for group in ["First Color Readout", "Second Color Readout"] {
+            assert!(h.query_all_by_label(group).next().is_some(), "{group} group box");
         }
-        h.get_by_label("Spot Channels").click();
+        assert_eq!(h.query_all_by_label("Mode:").count(), 2, "one Mode dropdown per group");
+        let values: Vec<String> = h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|v| v.to_string())).collect();
+        assert_eq!(values, ["Actual Color", "CMYK Color"], "the dropdowns show the current modes");
+        assert!(h.query_all_by_role(egui::accesskit::Role::CheckBox).next().is_none(), "no checkboxes");
+        let draft = InfoPanelState { first: Readout::ProofColor, second: Readout::Opacity };
+        h.state_mut().ui.info_panel_dialog = Some(draft.clone());
         h.run_steps(2);
-        assert_eq!(h.state().ui.info_panel.readouts, vec![Readout::ActualColor, Readout::Cmyk], "nothing applied before OK");
+        assert_eq!(h.state().ui.info_panel, InfoPanelState::default(), "nothing applied before OK");
         h.get_by_label("Cancel").click();
         h.run_steps(2);
-        assert!(h.state().ui.info_panel_dialog.is_none() && !h.state().ui.info_panel.shows(Readout::SpotChannels), "Cancel drops the change");
-        h.state_mut().ui.info_panel_dialog = Some(h.state().ui.info_panel.clone());
+        assert!(h.state().ui.info_panel_dialog.is_none() && h.state().ui.info_panel == InfoPanelState::default(), "Cancel drops the change");
+        h.state_mut().ui.info_panel_dialog = Some(draft.clone());
         h.run_steps(2);
-        h.get_by_label("Spot Channels").click();
-        h.get_by_label("Actual Color").click();
-        h.run_steps(1);
         h.get_by_label("OK").click();
         h.run_steps(2);
         assert!(h.state().ui.info_panel_dialog.is_none());
-        assert_eq!(h.state().ui.info_panel.readouts, vec![Readout::Cmyk, Readout::SpotChannels], "OK applies");
-        assert_eq!(h.state().session.prefs().dialogs.get("infoPanel").unwrap()["readouts"], json!(["cmyk", "spotChannels"]), "and saves");
+        assert_eq!(h.state().ui.info_panel, draft, "OK applies");
+        assert_eq!(h.state().session.prefs().dialogs.get("infoPanel").unwrap(), &json!({"first": "proofColor", "second": "opacity"}), "and saves");
         h.state_mut().ui.info_panel_dialog = Some(h.state().ui.info_panel.clone());
         h.run_steps(1);
         h.key_press(egui::Key::Escape);
@@ -330,7 +311,6 @@ mod tests {
         let revision = app.session.active().unwrap().revision;
         let journal = app.session.journal.len();
         let saved = app.session.prefs_to_json();
-        app.ui.info_panel_dialog = Some(app.ui.info_panel.clone());
         let mut h = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 crate::shortcuts::handle(app, ui.ctx());
@@ -338,9 +318,11 @@ mod tests {
             },
             app,
         );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.state_mut().ui.info_panel_dialog = Some(h.state().ui.info_panel.clone());
         h.run_steps(2);
-        // A focused checkbox must not let menu shortcuts act on the document behind it.
-        h.get_by_label("Composite opacity").click();
+        // A draft change in the open dialog must not let menu shortcuts act on the document behind it.
+        h.state_mut().ui.info_panel_dialog = Some(InfoPanelState { first: Readout::Opacity, second: Readout::Cmyk });
         h.run_steps(2);
         for (key, modifiers) in [
             (egui::Key::Z, egui::Modifiers::COMMAND),
@@ -365,7 +347,7 @@ mod tests {
         assert_eq!(h.state_mut().run("document.inspect", json!({})).unwrap(), before, "Escape must not deselect");
         assert_eq!(h.state().session.active().unwrap().revision, revision);
         assert_eq!(h.state().session.journal.len(), journal);
-        assert_eq!(h.state().session.prefs_to_json(), saved, "the draft checkbox was cancelled");
+        assert_eq!(h.state().session.prefs_to_json(), saved, "the draft mode was cancelled");
         // Positive controls: normal document Escape and Undo still work after closing.
         h.key_press(egui::Key::Escape);
         h.run_steps(2);

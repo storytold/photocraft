@@ -4223,12 +4223,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer open.	Jeden z wybranych dokumentów nie jest już otwarty.
 	A picked document is no longer a grayscale document of the same size.	Jeden z wybranych dokumentów nie jest już dokumentem w skali szarości o tym samym rozmiarze.
 	HSL Color	Kolor HSL
-	Spot Channels	Kanały kolorów dodatkowych
-	Alpha Channels	Kanały alfa
 	Info Panel Options	Opcje panelu Informacje
-	Readouts	Odczyty
-	Total Spot Ink	Całkowite pokrycie farbami dodatkowymi
-	Composite opacity	Krycie kompozycji
+	Proof Color	Kolor próbny
 	Netscape Gray	Szarość Netscape
 # Move tool options bar (#11381)
 	Align top edges	Wyrównaj górne krawędzie

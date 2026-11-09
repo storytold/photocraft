@@ -4353,12 +4353,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	HSB Color	Barvy HSB
 	HSL Color	Barvy HSL
 	Total Ink	Celkové krytí barvou
-	Spot Channels	Kanály přímých barev
-	Alpha Channels	Alfa kanály
 	Info Panel Options	Možnosti panelu Informace
-	Readouts	Odečty
-	Total Spot Ink	Celkové krytí přímými barvami
-	Composite opacity	Krytí kompozice
+	Proof Color	Kontrolní barva
+	First Color Readout	První údaj barvy
+	Second Color Readout	Druhý údaj barvy
 	Netscape Gray	Šedá Netscape
 # Move tool options bar (#11381)
 	Align top edges	Zarovnat horní okraje

@@ -682,13 +682,11 @@ cameraRaw	Yellow	पीला
 	HSL Color	HSL रंग
 	Total Ink	कुल स्याही
 	Opacity	अपारदर्शिता
-	Spot Channels	स्पॉट चैनल
-	Alpha Channels	अल्फ़ा चैनल
 	Info Panel Options	जानकारी पैनल विकल्प
-	Readouts	रीडआउट
+	Proof Color	प्रूफ़ रंग
+	First Color Readout	पहला रंग रीडआउट
+	Second Color Readout	दूसरा रंग रीडआउट
 	Panel Options…	पैनल विकल्प…
-	Total Spot Ink	कुल स्पॉट स्याही
-	Composite opacity	संयुक्त अपारदर्शिता
 	Netscape Gray	Netscape धूसर
 # Move tool options bar (#11381)
 	Align top edges	ऊपरी किनारे संरेखित करें

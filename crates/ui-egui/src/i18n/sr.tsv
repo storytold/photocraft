@@ -4669,12 +4669,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer open.	Jedan izabrani dokument više nije otvoren.
 	A picked document is no longer a grayscale document of the same size.	Jedan izabrani dokument više nije dokument u nijansama sive iste veličine.
 	HSL Color	HSL boja
-	Spot Channels	Kanali spot boja
-	Alpha Channels	Alfa kanali
 	Info Panel Options	Opcije panela Informacije
-	Readouts	Očitavanja
-	Total Spot Ink	Ukupno spot mastilo
-	Composite opacity	Непрозирност композиције
+	Proof Color	Boja probe
 	Netscape Gray	Netscape siva
 # Move tool options bar (#11381)
 	Align top edges	Poravnaj gornje ivice

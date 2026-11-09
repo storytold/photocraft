@@ -4336,12 +4336,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer open.	Seçilen belgelerden biri artık açık değil.
 	A picked document is no longer a grayscale document of the same size.	Seçilen belgelerden biri artık aynı boyutta gri tonlamalı bir belge değil.
 	HSL Color	HSL Renk
-	Spot Channels	Spot Kanallar
-	Alpha Channels	Alfa Kanallar
 	Info Panel Options	Bilgi Paneli Seçenekleri
-	Readouts	Okumalar
-	Total Spot Ink	Toplam Spot Mürekkep
-	Composite opacity	Birleşik opaklık
+	Proof Color	Prova Rengi
 	Netscape Gray	Netscape Grisi
 # Move tool options bar (#11381)
 	Align top edges	Üst kenarları hizala

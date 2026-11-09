@@ -215,16 +215,14 @@ fn cached_readouts_refresh_after_reopening() {
     let _gpu = directory.as_ref().map(|_| photocraft_testkit::gpu_lock());
     let doc = document(ColorMode::Rgb, SampleType::U8);
     let mut app = app(doc.clone());
-    app.ui.info_panel.readouts = vec![Readout::Rgb, Readout::Opacity, Readout::SpotChannels, Readout::AlphaChannels];
+    app.ui.info_panel = crate::info_panel_options::InfoPanelState { first: Readout::Rgb, second: Readout::Opacity };
     app.hover_doc = Some([0.5, 0.5]);
     let builder = Harness::builder().with_size(vec2(340.0, 320.0)).with_pixels_per_point(2.0);
     let builder = if directory.is_some() { builder.wgpu() } else { builder };
     let mut h = builder.build_ui_state(|ui, app| info_panel(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(3);
-    assert_row(&h, "Composite opacity:", "0%");
-    assert_row(&h, "Ink:", "0%");
-    assert_row(&h, "Alpha:", "100%");
+    assert_row(&h, "Op:", "0%");
     if let Some(dir) = &directory {
         h.render().unwrap().save(dir.join("initial.png")).unwrap();
     }
@@ -233,8 +231,22 @@ fn cached_readouts_refresh_after_reopening() {
     if let Some(dir) = &directory {
         h.render().unwrap().save(dir.join("reopened.png")).unwrap();
     }
-    assert_row(&h, "Composite opacity:", "100%");
-    assert_row(&h, "Ink:", "100%");
-    assert_row(&h, "Alpha:", "0%");
+    assert_row(&h, "Op:", "100%");
     assert_row(&h, "R:", "0");
+}
+
+/// A new View › Proof Setup adds no revision, yet the points' Proof Color must follow it.
+#[test]
+fn sampler_cache_follows_the_proof_setup() {
+    let mut app = app(document(ColorMode::Rgb, SampleType::U8));
+    app.run("view.colorSamplers.add", json!({"x": 2, "y": 0})).unwrap();
+    let points = sampler_readouts(&mut app);
+    assert_eq!(points[0]["proof"]["space"], "cmyk");
+    let revision = app.session.active().unwrap().revision;
+    app.run("view.proofSetup", json!({"profile": "srgb"})).unwrap();
+    assert_eq!(app.session.active().unwrap().revision, revision, "no new revision");
+    let refreshed = sampler_readouts(&mut app);
+    assert!(!Arc::ptr_eq(&points, &refreshed), "recomposited");
+    assert_eq!(refreshed[0]["proof"], json!({"space": "rgb", "values": [255, 255, 255]}));
+    assert!(Arc::ptr_eq(&refreshed, &sampler_readouts(&mut app)), "and cached again");
 }

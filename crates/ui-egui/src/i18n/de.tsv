@@ -3648,12 +3648,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	HSB Color	HSB-Farbe
 	HSL Color	HSL-Farbe
 	Total Ink	Gesamtfarbauftrag
-	Spot Channels	Schmuckfarbenkanäle
-	Alpha Channels	Alphakanäle
 	Info Panel Options	Optionen des Informationenbedienfelds
-	Readouts	Messwerte
-	Total Spot Ink	Gesamtauftrag Schmuckfarben
-	Composite opacity	Deckkraft des Gesamtbilds
+	Proof Color	Proof-Farbe
+	First Color Readout	Erste Farbanzeige
+	Second Color Readout	Zweite Farbanzeige
 	Netscape Gray	Netscape-Grau
 # Move tool options bar (#11381)
 	Align top edges	Obere Kanten ausrichten

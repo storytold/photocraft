@@ -4316,12 +4316,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer open.	Один із вибраних документів більше не відкрито.
 	A picked document is no longer a grayscale document of the same size.	Один із вибраних документів більше не є документом у градаціях сірого того самого розміру.
 	HSL Color	Колір HSL
-	Spot Channels	Канали плашкових кольорів
-	Alpha Channels	Альфа-канали
 	Info Panel Options	Параметри панелі «Інформація»
-	Readouts	Показники
-	Total Spot Ink	Загальна кількість плашкових фарб
-	Composite opacity	Непрозорість композиції
+	Proof Color	Колір проби
 	Netscape Gray	Сірий Netscape
 # Move tool options bar (#11381)
 	Align top edges	Вирівняти верхні краї

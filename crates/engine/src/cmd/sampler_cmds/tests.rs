@@ -402,8 +402,6 @@ fn channel_readouts_read_ink_and_masked_percent() {
     );
     let outside = channel_readouts(doc, 50, 50);
     assert_eq!(outside.iter().map(|c| c.percent).collect::<Vec<_>>(), vec![0, 100]);
-    assert_eq!(total_spot_ink(&inside), 100, "spot inks only, the alpha channel left out");
-    assert_eq!(total_spot_ink(&outside), 0);
     assert!(channel_readouts(doc, -1, 5).is_empty());
     assert!(channel_readouts(doc, 5, 80).is_empty());
     assert!(channel_readouts(&session().active().unwrap().doc, 5, 5).is_empty(), "no extra channels");
@@ -447,7 +445,8 @@ fn list_reports_every_readout_and_the_channels() {
     assert_eq!(p[0]["lab"][0], 54);
     assert_eq!(p[0]["channels"], json!([{"name": "Ink Red", "spot": true, "percent": 100}]));
     assert_eq!(p[1]["channels"][0]["percent"], 0);
-    assert_eq!((p[0]["totalSpotInk"].as_i64(), p[1]["totalSpotInk"].as_i64()), (Some(100), Some(0)), "Total Spot Ink per point");
+    assert_eq!(p[0]["proof"]["space"], "cmyk", "Proof Color in the default Working CMYK proof");
+    assert!(p[0].get("totalSpotInk").is_none(), "no readout the reference application lacks");
 }
 
 /// Lab goes through the document's profile: the same red reads more saturated (a larger a*) in
@@ -470,11 +469,29 @@ fn lab_readout_follows_the_document_profile() {
     assert_eq!(points(&mut s)[0]["lab"], json!([100, 0, 0]), "points read the same way");
 }
 
-/// The public helper also accepts constructed/read-back readings: large totals must not panic.
+/// Proof Color reads the sample in View › Proof Setup's profile: CMYK % for the default Working
+/// CMYK proof (the same plates the CMYK readout gives with that profile), RGB 0–255 for an RGB
+/// proof, and the sampler points follow a change of the setup.
 #[test]
-fn total_spot_ink_never_overflows() {
-    let channel = |spot, percent| ChannelReadout { name: "Synthetic".into(), spot, percent };
-    assert_eq!(total_spot_ink(&[channel(true, 100), channel(false, 100), channel(true, 75)]), 175);
-    assert_eq!(total_spot_ink(&[]), 0);
-    assert_eq!(total_spot_ink(&[channel(true, i32::MAX), channel(false, i32::MAX), channel(true, 1)]), i32::MAX);
+fn proof_color_follows_the_proof_setup() {
+    let mut s = session();
+    let doc = &s.active().unwrap().doc;
+    let red = proof_readout(&s.color, doc, [1.0, 0.0, 0.0]).unwrap();
+    assert_eq!(red.space, ProofSpace::Cmyk);
+    assert_eq!(red.values.len(), 4);
+    let cmyk = readouts(doc, [1.0, 0.0, 0.0, 1.0]).cmyk;
+    for (p, c) in red.values.iter().zip(cmyk) {
+        assert!((p - c).abs() <= 2, "proof {:?} ≈ CMYK readout {cmyk:?}", red.values);
+    }
+    let d = crate::color_cmds::ProofSetup::default();
+    assert_eq!(proof_key(&s.color, doc), (d.profile.content_hash(), d.intent, d.bpc), "the default is ProofSetup's");
+    let white = proof_readout(&s.color, doc, [1.0, 1.0, 1.0]).unwrap();
+    assert_eq!(white.values, vec![0, 0, 0, 0], "paper white is no ink");
+    assert!(proof_readout(&s.color, doc, [f32::NAN, 2.0, -1.0]).is_some(), "NaN and out-of-range samples are clamped");
+    s.execute("view.colorSamplers.add", json!({"x": 1, "y": 1})).unwrap();
+    s.execute("view.proofSetup", json!({"profile": "srgb"})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let rgb = proof_readout(&s.color, doc, [1.0, 0.0, 0.0]).unwrap();
+    assert_eq!((rgb.space, rgb.values), (ProofSpace::Rgb, vec![255, 0, 0]), "an sRGB proof of an sRGB document");
+    assert_eq!(points(&mut s)[0]["proof"]["space"], "rgb", "points read the current setup");
 }

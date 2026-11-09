@@ -4307,12 +4307,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer open.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον ανοιχτό.
 	A picked document is no longer a grayscale document of the same size.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον έγγραφο σε κλίμακα του γκρι ίδιου μεγέθους.
 	HSL Color	Χρώμα HSL
-	Spot Channels	Κανάλια πλακάτων χρωμάτων
-	Alpha Channels	Κανάλια άλφα
 	Info Panel Options	Επιλογές πίνακα πληροφοριών
-	Readouts	Ενδείξεις
-	Total Spot Ink	Συνολική κάλυψη πλακάτων μελανιών
-	Composite opacity	Αδιαφάνεια σύνθεσης
+	Proof Color	Χρώμα δοκιμίου
 	Netscape Gray	Γκρι Netscape
 # Move tool options bar (#11381)
 	Align top edges	Στοίχιση πάνω άκρων

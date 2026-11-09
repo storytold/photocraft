@@ -3606,11 +3606,10 @@ curves	Smooth	تنعيم
 	HSB Color	ألوان HSB
 	HSL Color	ألوان HSL
 	Total Ink	إجمالي الحبر
-	Spot Channels	القنوات الموضعية
-	Alpha Channels	قنوات ألفا
 	Info Panel Options	خيارات لوحة المعلومات
-	Readouts	القراءات
-	Total Spot Ink	إجمالي الحبر الموضعي
+	Proof Color	لون التجربة
+	First Color Readout	قراءة اللون الأولى
+	Second Color Readout	قراءة اللون الثانية
 	Netscape Gray	رمادي Netscape
 # Move tool options bar (#11381)
 	Align top edges	محاذاة الحواف العلوية

@@ -3628,12 +3628,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
 	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.
 	HSL Color	Warna HSL
-	Spot Channels	Channel Spot
-	Alpha Channels	Channel Alfa
 	Info Panel Options	Opsi Panel Info
-	Readouts	Pembacaan
-	Total Spot Ink	Total Tinta Spot
-	Composite opacity	Opasitas komposit
+	Proof Color	Warna Proof
 	Netscape Gray	Abu-abu Netscape
 # Move tool options bar (#11381)
 	Align top edges	Ratakan tepi atas

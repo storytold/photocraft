@@ -4186,12 +4186,10 @@ shape	Appearance	화면 모양
 	HSB Color	HSB 색상
 	HSL Color	HSL 색상
 	Total Ink	총 잉크
-	Spot Channels	별색 채널
-	Alpha Channels	알파 채널
 	Info Panel Options	정보 패널 옵션
-	Readouts	판독값
-	Total Spot Ink	총 별색 잉크
-	Composite opacity	합성 불투명도
+	Proof Color	교정 색상
+	First Color Readout	첫 번째 색상 판독값
+	Second Color Readout	두 번째 색상 판독값
 # Move tool options bar (#11381)
 	Align top edges	위쪽 가장자리 정렬
 	Align vertical centers	세로 중심 정렬

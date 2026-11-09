@@ -4512,12 +4512,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
 	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
 	HSL Color	HSL-szín
-	Spot Channels	Direktszín-csatornák
-	Alpha Channels	Alfa-csatornák
 	Info Panel Options	Információ panel beállításai
-	Readouts	Kijelzések
-	Total Spot Ink	Teljes direktszín-mennyiség
-	Composite opacity	Kompozit fedettség
+	Proof Color	Próbanyomat színe
 	Netscape Gray	Netscape-szürke
 # Move tool options bar (#11381)
 	Align top edges	Felső szélek igazítása

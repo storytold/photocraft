@@ -4359,12 +4359,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer open.	Een gekozen document is niet meer geopend.
 	A picked document is no longer a grayscale document of the same size.	Een gekozen document is geen grijswaardendocument van hetzelfde formaat meer.
 	HSL Color	HSL-kleur
-	Spot Channels	Steunkleurkanalen
-	Alpha Channels	Alfakanalen
 	Info Panel Options	Opties van het deelvenster Info
-	Readouts	Uitlezingen
-	Total Spot Ink	Totale steunkleurinkt
-	Composite opacity	Samengestelde dekking
+	Proof Color	Proefkleur
 	Netscape Gray	Netscape-grijs
 # Move tool options bar (#11381)
 	Align top edges	Bovenranden uitlijnen

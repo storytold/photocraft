@@ -4626,12 +4626,8 @@ shape	Appearance	Apparence
 	A picked document is no longer open.	Un des documents choisis n'est plus ouvert.
 	A picked document is no longer a grayscale document of the same size.	Un des documents choisis n'est plus un document en niveaux de gris de même taille.
 	HSL Color	Couleur HSL
-	Spot Channels	Couches de tons directs
-	Alpha Channels	Couches alpha
 	Info Panel Options	Options du panneau Informations
-	Readouts	Lectures
-	Total Spot Ink	Encrage total des tons directs
-	Composite opacity	Opacité composite
+	Proof Color	Couleur d'épreuve
 	Netscape Gray	Gris Netscape
 # Move tool options bar (#11381)
 	Align top edges	Aligner les bords supérieurs
