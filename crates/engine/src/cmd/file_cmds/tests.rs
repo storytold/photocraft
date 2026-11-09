@@ -734,6 +734,27 @@ fn batch_quiet_raw_applies_prior_settings_and_workflow_without_touching_inputs()
     assert!(s.batch_open_notices.is_none());
 }
 
+/// #9985: quiet RAW opening crops to the sidecar's crop, as the interactive open does.
+#[test]
+fn batch_quiet_raw_applies_the_sidecar_crop() {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    let dir = tmp("batch-quiet-raw-crop");
+    let path = join(&dir, "raw.dng");
+    let (w, h) = (24, 16);
+    let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
+    std::fs::write(&path, &bytes).unwrap();
+    let crop = photocraft_io::camera_raw_xmp::Crop { top: 0.25, left: 0.125, bottom: 0.75, right: 0.625 };
+    let xmp = photocraft_io::camera_raw_xmp::save_with_crop(&photocraft_algo::camera_raw::CameraRaw::default(), Some(crop));
+    std::fs::write(join(&dir, "raw.xmp"), &xmp).unwrap();
+    let mut s = Session::new();
+    let output = join(&dir, "out");
+    let p = json!({"input":[path],"output":output,"format":"psd","suppressOpenOptions":true,"suppressWarnings":true,"steps":[]});
+    let result = s.execute("file.automate.batch", p).unwrap();
+    assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+    let actual = photocraft_io::import("raw.psd", &std::fs::read(join(&output, "raw.psd")).unwrap()).unwrap().document;
+    assert_eq!((actual.size.width, actual.size.height), (12, 8), "the 24x16 frame cropped to x 3..15, y 4..12");
+}
+
 fn tmp(name: &str) -> String {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
