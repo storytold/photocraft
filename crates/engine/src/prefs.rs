@@ -428,9 +428,11 @@ const EXTRAS_WHEN_CMD_H_HIDES: &str = "Ctrl+Cmd+H";
 
 impl Interface {
     /// A command's default shortcut as these preferences have it: `default`, except that View ›
-    /// Extras gives ⌘H up to Hide PhotoCraft (`cmd_h_hides_app`).
+    /// Extras gives ⌘H up to Hide PhotoCraft (`cmd_h_hides_app`). Only on macOS: elsewhere the
+    /// field can still be set (`prefs.set`, a hand-edited file), but the moved key would read
+    /// Ctrl+Ctrl+H.
     pub fn default_shortcut<'a>(&self, id: &str, default: Option<&'a str>) -> Option<&'a str> {
-        if id == EXTRAS && self.cmd_h_hides_app { Some(EXTRAS_WHEN_CMD_H_HIDES) } else { default }
+        if id == EXTRAS && self.cmd_h_hides_app && cfg!(target_os = "macos") { Some(EXTRAS_WHEN_CMD_H_HIDES) } else { default }
     }
 }
 

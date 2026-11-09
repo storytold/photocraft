@@ -49,10 +49,20 @@ pub fn import_text(app: &mut PhotocraftApp, file_name: &str, text: &str) -> Resu
         Some(d) => d.id,
         None => crate::prefs_ui::open_shortcuts(app, 0),
     };
+    // The defaults in effect (⌘H Hides PhotoCraft moves Extras's), read before the dialog is
+    // borrowed: a key equal to the static default but not to this one stays an override.
+    let defaults: BTreeMap<&String, Option<String>> = plan
+        .set
+        .keys()
+        .map(|cmd| {
+            let default = crate::shortcuts::default_in_effect(app, cmd, crate::shortcuts::default_shortcut(cmd));
+            (cmd, default.and_then(|d| photocraft_engine::prefs::normalize_shortcut(&d)))
+        })
+        .collect();
     let f = &mut app.ui.dialog_mut(id).ok_or("the Keyboard Shortcuts dialog is gone")?.fields;
     let mut overrides: BTreeMap<String, String> = f.get("overrides").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     for (cmd, sc) in &plan.set {
-        let default = crate::shortcuts::default_shortcut(cmd).and_then(|d| photocraft_engine::prefs::normalize_shortcut(&d));
+        let default = defaults.get(cmd).cloned().flatten();
         if default.as_deref() == Some(sc.as_str()) {
             overrides.remove(cmd);
         } else {

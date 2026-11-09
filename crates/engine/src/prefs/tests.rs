@@ -419,6 +419,12 @@ fn cmd_h_hides_app_is_opt_in_and_moves_only_the_extras_default() {
 
     let mut p = Preferences::default();
     p.interface.cmd_h_hides_app = true;
+    if !cfg!(target_os = "macos") {
+        // Set anyway (`prefs.set`): off macOS Extras keeps ⌘H rather than reading Ctrl+Ctrl+H.
+        assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), Some("Cmd+H"));
+        assert_eq!(p.interface.default_shortcut("view.extras", Some("Cmd+H")), Some("Cmd+H"));
+        return;
+    }
     assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), Some("Ctrl+Cmd+H"));
     assert_eq!(p.interface.default_shortcut("view.extras", Some("Cmd+H")), Some("Ctrl+Cmd+H"));
     assert_eq!(p.shortcut("edit.undo", Some("Cmd+Z")), Some("Cmd+Z"), "other commands keep theirs");

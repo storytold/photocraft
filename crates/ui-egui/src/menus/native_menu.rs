@@ -816,6 +816,8 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     crate::guide_select::selected(app).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);
     s.prefs().interface.language.hash(&mut h);
+    // ⌘H Hides PhotoCraft moves Hide and View › Extras; `prefs.set` can change it with no input.
+    s.prefs().interface.cmd_h_hides_app.hash(&mut h);
     h.finish()
 }
 

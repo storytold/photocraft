@@ -77,6 +77,11 @@ fn cmd_h_hides_photocraft_and_extras_moves() {
     let mut a = app(true);
     a.session.edit_prefs(|p| p.interface.cmd_h_hides_app = true);
     let l = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
+    if !cfg!(target_os = "macos") {
+        // The preference only applies on macOS: set anyway, Extras keeps ⌘H.
+        assert_eq!(l.bar.find("view.extras").unwrap().shortcut.as_deref(), Some("Cmd+H"));
+        return;
+    }
     assert_eq!(l.bar.find(HIDE).unwrap().shortcut.as_deref(), Some("Cmd+H"));
     assert_eq!(l.bar.find("view.extras").unwrap().shortcut.as_deref(), Some("Ctrl+Cmd+H"));
     assert!(!l.clashes.iter().any(|c| c.shortcut == "Cmd+H"));
