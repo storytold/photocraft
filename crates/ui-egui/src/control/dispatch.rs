@@ -1342,11 +1342,11 @@ fn parse_pointer_event(i: usize, e: &Value) -> std::result::Result<PointerSample
 
 /// Whether a modal tool, picker or context menu took the event instead of the canvas.
 fn pointer_event_intercepted(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
-    let took = pointer_eyedropper_took(app, ctx, g, s) || color_range_took(app, g, s) || (g.secondary && secondary_menu_took(app, ctx, g, s));
+    let took = pointer_eyedropper_took(app, ctx, g, s) || color_range_took(app, g, s);
     if took && matches!(s.ev, ToolEvent::Up { .. }) && !g.secondary && !g.middle {
         release_taken_drag(app, g);
     }
-    took
+    took || preview_locator_took(app, g, s) || (g.secondary && secondary_menu_took(app, ctx, g, s))
 }
 
 /// A sampler (Color Picker, Curves/Levels or Properties eyedroppers, Curves ⌘-click, Color
@@ -1358,6 +1358,28 @@ fn release_taken_drag(app: &mut PhotocraftApp, g: &PointerGesture) {
     if let Some([x, y]) = app.drag.as_ref().map(|d| d.points.last().map_or(d.start, |p| [p[0], p[1]])) {
         tool_event(app, ToolEvent::Up { x, y }, g.mods);
     }
+}
+
+/// A filter dialog with a preview window on top: the image is its locator, as for the mouse
+/// (#9648). A press with the primary button centres the window there; every other event
+/// is consumed too, so nothing reaches the tool under the dialog, except the moves and release of
+/// a tool gesture begun before the dialog opened, which finish it along the path they draw. A Crop
+/// frame or Straighten drag is one too, though the Crop tool keeps it apart from `app.drag`. While
+/// one is open, a second primary press (no mouse can make one) is dropped: it neither centres the
+/// window nor reaches the tool, so no locator press splits the gesture's moves and release.
+fn preview_locator_took(app: &mut PhotocraftApp, g: &PointerGesture, s: &PointerSample) -> bool {
+    if crate::filter_preview_ui::locator(app).is_none() {
+        return false;
+    }
+    let down = matches!(s.ev, ToolEvent::Down { .. });
+    let tool_gesture = app.drag.is_some() || app.crop.drag.is_some() || app.crop.straighten.line.is_some();
+    if !g.secondary && !g.middle && tool_gesture {
+        return down;
+    }
+    if down && !g.secondary && !g.middle && !g.space {
+        crate::filter_preview_ui::center_at(app, s.x, s.y);
+    }
+    true
 }
 
 fn pointer_eyedropper_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {

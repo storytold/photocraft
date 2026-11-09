@@ -4,8 +4,9 @@
 //!
 //! Like Photoshop, both turn a Background layer into a normal layer ("Layer 0") first, since the
 //! Background can't hold transparency. The Magic Eraser paints the background colour on other
-//! layers with locked transparency; the Background Eraser refuses them. Both respect the selection,
-//! work in the layer's own colour model and depth, and are one undo step per click / stroke.
+//! layers with locked transparency; the Background Eraser erases them to transparency and leaves
+//! the lock on. Both respect the selection, work in the layer's own colour model and depth, and are
+//! one undo step per click / stroke.
 
 use photocraft_algo::selection as sel;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
@@ -148,11 +149,10 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
     let id = active_pixel_layer(s, p, CMD)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    // Lock transparent pixels is no refusal: the reference application erases to transparency
+    // anyway and leaves the lock on.
     if let Some(e) = pixels_locked(&d.doc, l) {
         return Err(e);
-    }
-    if d.doc.effective_locks(id).transparency && !d.doc.is_background(id) && crate::color_channels::target(s, p)?.is_none() {
-        return Err(EngineError::Other(format!("Could not use the Background Eraser because the transparency of layer \"{}\" is locked", l.name)));
     }
     Ok((Stroke { brush, points: pts }, bs, id))
 }
@@ -234,19 +234,27 @@ pub fn live_background_eraser(s: &Session, p: &Value) -> Result<crate::retouch_c
     if colors.is_none() {
         crate::extra_cmds::background_to_layer(&mut doc, id);
     }
-    let stroke = background_eraser_stroke(&stroke);
+    let mut stroke = background_eraser_stroke(&stroke);
+    // The commit mixes back without the transparency lock (a locked layer is erased too, and a
+    // channel target leaves alpha alone), so the preview does as well; the points go in once the
+    // lock is off.
+    let points = std::mem::take(&mut stroke.points);
     if let Some(colors) = colors {
-        return crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({"target":colors.params()}), stroke, Some(id), 0, |pre| {
+        let mut live = crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({"target":colors.params()}), stroke, Some(id), 0, |pre| {
             selected_background_effect(pre, &bs, colors, bg)
         })?
-        .with_tail_preview();
+        .unlocked();
+        live.push(&points)?;
+        return live.with_tail_preview();
     }
-    crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({}), stroke, Some(id), 0, |pre| match background_eraser_effect(pre, &bs) {
+    let mut live = crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({}), stroke, Some(id), 0, |pre| match background_eraser_effect(pre, &bs) {
         Some(effect) => Box::new(effect),
         // No alpha: the commit erases nothing either.
         None => Box::new(|_: &mut photocraft_paint::retouch::Region, _: &photocraft_paint::retouch::Footprint| {}),
     })?
-    .with_tail_preview()
+    .unlocked();
+    live.push(&points)?;
+    live.with_tail_preview()
 }
 
 /// Eraser-group command specs.
@@ -277,3 +285,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "background_eraser_transparency_lock_tests.rs"]
+mod transparency_lock_tests;
