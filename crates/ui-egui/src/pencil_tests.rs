@@ -106,24 +106,116 @@ fn shift_clicked_one_pixel_line_uses_the_clicked_pixels_not_subpixel_positions()
     let fractions = [("TL", (0.05, 0.05)), ("TR", (0.95, 0.05)), ("BL", (0.05, 0.95)), ("BR", (0.95, 0.95)), ("C", (0.5, 0.5))];
     let starts = [&fractions[0], &fractions[1], &fractions[2], &fractions[3]];
 
-    for (start_name, start_fraction) in starts {
-        for (end_name, end_fraction) in fractions {
-            let paint = |raw: bool| {
-                let mut app = app();
-                app.run("tools.setBrush", json!({"brush": {"size": 1.0, "hardness": 1.0}})).unwrap();
-                let at = |origin: f64, fraction: f64| origin + if raw { fraction } else { 0.5 };
-                let start = (at(10.0, start_fraction.0), at(10.0, start_fraction.1));
-                let end = (at(60.0, end_fraction.0), at(45.0, end_fraction.1));
-                for (point, mods) in [(start, Modifiers::NONE), (end, Modifiers::SHIFT)] {
-                    tool_event(&mut app, ToolEvent::Down { x: point.0, y: point.1, pressure: 1.0 }, mods);
-                    tool_event(&mut app, ToolEvent::Up { x: point.0, y: point.1 }, mods);
-                }
-                (0..80).flat_map(|y| (0..120).map(move |x| (x, y))).filter(|&(x, y)| rgba(&app, x, y)[3] > 0.0).collect::<Vec<_>>()
-            };
+    // #10836: at high zoom a release inside the clicked pixel can exceed the Shift-drag
+    // lock distance. With smoothing, that extra segment changes the end of the line.
+    for zoom in [1.0, 8.0, 54.764] {
+        for smoothing in [0.0, 0.1] {
+            for (start_name, start_fraction) in starts {
+                for (end_name, end_fraction) in fractions {
+                    let paint = |raw: bool| {
+                        let mut app = app();
+                        app.ui.views[0].zoom = zoom;
+                        app.run("tools.setBrush", json!({"brush": {"size": 1.0, "hardness": 1.0, "smoothing": {"amount": smoothing}}})).unwrap();
+                        let at = |origin: f64, fraction: f64| origin + if raw { fraction } else { 0.5 };
+                        let start = (at(10.0, start_fraction.0), at(10.0, start_fraction.1));
+                        let end = (at(60.0, end_fraction.0), at(45.0, end_fraction.1));
+                        for (point, mods) in [(start, Modifiers::NONE), (end, Modifiers::SHIFT)] {
+                            tool_event(&mut app, ToolEvent::Down { x: point.0, y: point.1, pressure: 1.0 }, mods);
+                            tool_event(&mut app, ToolEvent::Up { x: point.0, y: point.1 }, mods);
+                        }
+                        let surface = layer(&app).surface().unwrap().clone();
+                        (0..80).flat_map(|y| (0..120).map(move |x| (x, y))).filter(|&(x, y)| surface.rgba(x, y)[3] > 0.0).collect::<Vec<_>>()
+                    };
 
-            assert_eq!(paint(true), paint(false), "{start_name}->{end_name}");
+                    assert_eq!(paint(true), paint(false), "{start_name}->{end_name}, zoom {zoom}, smoothing {smoothing}");
+                }
+            }
         }
     }
+}
+
+#[test]
+fn aliased_shift_click_chains_ignore_motion_inside_the_clicked_cell() {
+    for tool in [Tool::Pencil, Tool::Eraser] {
+        for size in [1.0, 2.0] {
+            for zoom in [8.0, 54.764] {
+                let paint = |raw: bool| {
+                    let mut app = app();
+                    if tool == Tool::Eraser {
+                        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+                        app.ui.tool = tool;
+                        crate::paint_mouse::sync_tool_brush(&mut app);
+                        app.ui.tool_options.eraser_mode = "pencil".into();
+                    }
+                    app.ui.views[0].zoom = zoom;
+                    app.run("tools.setBrush", json!({"brush": {"size": size, "smoothing": {"amount": 0.1}}})).unwrap();
+                    let history = app.session.active().unwrap().history.past_len();
+                    for (i, (x, y)) in [(10.05, 10.95), (60.95, 45.05), (35.05, 65.95), (20.95, 15.05)].into_iter().enumerate() {
+                        let (sx, sy) = photocraft_engine::paint::grid_center(x, y, size);
+                        let (x, y) = if raw { (x, y) } else { (f64::from(sx), f64::from(sy)) };
+                        let mods = if i == 0 { Modifiers::NONE } else { Modifiers::SHIFT };
+                        tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
+                        tool_event(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, mods);
+                        // Releasing Shift before the button must still finish the same click.
+                        tool_event(&mut app, ToolEvent::Up { x, y }, Modifiers::NONE);
+                        if i > 0 {
+                            let (_, p) = last(&app);
+                            assert_eq!(p["points"].as_array().unwrap().len(), 2, "{tool:?}, {size}px, zoom {zoom}: {p}");
+                            assert_eq!(p["points"][1], json!([sx, sy, 1.0]));
+                        }
+                        assert_eq!(app.session.active().unwrap().history.past_len(), history + i + 1);
+                    }
+                    let before = layer(&app).surface().unwrap().clone();
+                    app.run("edit.undo", json!({})).unwrap();
+                    app.run("edit.redo", json!({})).unwrap();
+                    let after = layer(&app).surface().unwrap().clone();
+                    for y in 0..80 {
+                        for x in 0..120 {
+                            assert_eq!(before.rgba(x, y), after.rgba(x, y), "Undo/Redo at ({x},{y})");
+                        }
+                    }
+                    after
+                };
+                let (actual, expected) = (paint(true), paint(false));
+                for y in 0..80 {
+                    for x in 0..120 {
+                        assert_eq!(actual.rgba(x, y), expected.rgba(x, y), "{tool:?}, {size}px, zoom {zoom}, ({x},{y})");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn aliased_freehand_releases_keep_their_subpixel_path() {
+    for zoom in [1.0, 54.764] {
+        let mut app = app();
+        app.ui.views[0].zoom = zoom;
+        app.run("tools.setBrush", json!({"brush": {"size": 1.0}})).unwrap();
+        tool_event(&mut app, ToolEvent::Down { x: 10.05, y: 10.95, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 20.2, y: 14.7, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 25.8, y: 17.1 }, Modifiers::NONE);
+        let (_, p) = last(&app);
+        assert_eq!(p["points"], json!([[10.5, 10.5, 1.0], [20.2, 14.7, 1.0], [25.8, 17.1, 1.0]]));
+    }
+}
+
+#[test]
+fn a_shift_clicked_pencil_can_continue_as_a_freehand_drag() {
+    let mut app = app();
+    app.ui.views[0].zoom = 8.0;
+    app.run("tools.setBrush", json!({"brush": {"size": 1.0}})).unwrap();
+    drag(&mut app, &[(1.5, 10.5)], Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Down { x: 10.05, y: 10.05, pressure: 1.0 }, Modifiers::SHIFT);
+    tool_event(&mut app, ToolEvent::Move { x: 20.5, y: 10.95, pressure: 1.0 }, Modifiers::SHIFT);
+    tool_event(&mut app, ToolEvent::Move { x: 20.95, y: 10.95, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 30.05, y: 20.95, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 30.05, y: 20.95 }, Modifiers::NONE);
+    let (_, p) = last(&app);
+    assert_eq!(p["points"], json!([[1.5, 10.5, 1.0], [10.5, 10.5, 1.0], [20.5, 10.5, 1.0], [20.95, 10.95, 1.0], [30.05, 20.95, 1.0]]));
+    assert_eq!(rgba(&app, 26, 16)[3], 1.0);
+    assert_eq!(rgba(&app, 25, 16)[3], 0.0);
 }
 
 #[test]
