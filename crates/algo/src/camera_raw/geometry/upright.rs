@@ -423,7 +423,9 @@ pub fn guided(guides: &[[[f32; 2]; 2]], w: f64, h: f64) -> Option<[f64; 9]> {
         (None, None) => None,
         (Some(v), None) => vertical_fix(&v, w, h, MAX_KEYSTONE, GUIDED_MAX_ROLL_DEG),
         (None, Some(v)) => horizontal_fix(&v, w, h, MAX_KEYSTONE, GUIDED_MAX_ROLL_DEG),
-        (Some(a), Some(b)) => full_fix(Some(&a), Some(&b), w, h, MAX_KEYSTONE, 1.0, GUIDED_MAX_ROLL_DEG),
+        // Verticals that give no usable correction leave the horizontal guides to do theirs.
+        (Some(a), Some(b)) => full_fix(Some(&a), Some(&b), w, h, MAX_KEYSTONE, 1.0, GUIDED_MAX_ROLL_DEG)
+            .or_else(|| horizontal_fix(&b, w, h, MAX_KEYSTONE, GUIDED_MAX_ROLL_DEG)),
     }
 }
 

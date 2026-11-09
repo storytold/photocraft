@@ -445,7 +445,16 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool
         // Develop only the mask's box (plus a margin for the spatial stages' reach).
         let Some((x0, y0, x1, y1)) = bounds(&cov, w, h) else { continue };
         let pad = (w.max(h) / 16).max(8);
-        let (x0, y0, x1, y1) = (x0.saturating_sub(pad), y0.saturating_sub(pad), (x1 + pad).min(w), (y1 + pad).min(h));
+        let (mut x0, mut y0, mut x1, mut y1) = (x0.saturating_sub(pad), y0.saturating_sub(pad), (x1 + pad).min(w), (y1 + pad).min(h));
+        // The spatial stages size their radii from the long side of what they develop: spanning
+        // the image's long side keeps them those of the whole image, whatever the mask's extent.
+        if local.texture != 0.0 || local.clarity != 0.0 || local.highlights != 0.0 || local.shadows != 0.0 || local.dehaze != 0.0 {
+            if w >= h {
+                (x0, x1) = (0, w);
+            } else {
+                (y0, y1) = (0, h);
+            }
+        }
         let bw = x1 - x0;
         let mut dev: Vec<[f32; 4]> = Vec::with_capacity(bw * (y1 - y0));
         for y in y0..y1 {

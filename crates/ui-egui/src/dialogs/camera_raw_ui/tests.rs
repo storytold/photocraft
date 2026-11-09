@@ -1497,3 +1497,29 @@ fn geometry_previews_the_canvas_blocks_of_the_proxy() {
     // The canvas is the whole proxy: nothing to frame.
     assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(0, 0, 64, 48), 1, 64, 48), None);
 }
+
+/// What Geometry uncovers shows white on the Background, as the filter makes it there, and
+/// transparent on a pixel layer.
+#[test]
+fn geometry_preview_keeps_the_background_opaque() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "black"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    let (corner, middle) = (d.processed[0], d.processed[d.ph / 2 * d.pw + d.pw / 2]);
+    assert!(corner[3] > 0.99 && corner[..3].iter().all(|v| *v > 0.99), "{corner:?}");
+    assert!(middle[0] < 0.01, "{middle:?}");
+    // A pixel layer: the corner turns transparent.
+    let (mut app, ctx) = (PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()), egui::Context::default());
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    assert!(d.processed[0][3] < 0.01, "{:?}", d.processed[0]);
+}

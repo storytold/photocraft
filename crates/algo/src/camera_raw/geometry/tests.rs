@@ -355,6 +355,43 @@ fn warp_keeps_colour_at_opaque_edges() {
 }
 
 #[test]
+fn warp_does_not_spread_the_colour_of_transparent_pixels() {
+    // A transparent column holding NaN colour (a float layer may store anything there).
+    let (w, h) = (40, 30);
+    let mut px = image(w, h, |_, _| 0.5);
+    for y in 0..h {
+        px[y * w + 20] = [f32::NAN, f32::NAN, f32::NAN, 0.0];
+    }
+    warp(&mut px, w, h, &manual(&t(|t| t.x = 0.3), w as f64, h as f64), true);
+    for (i, q) in px.iter().enumerate() {
+        assert!(q.iter().all(|v| v.is_finite()), "pixel {i}: {q:?}");
+    }
+}
+
+#[test]
+fn guided_levels_horizontals_when_the_verticals_give_no_correction() {
+    // Two vertical-ish guides crossing at the centre's height: their vanishing point lies to the
+    // side, which no vertical correction can send straight down. The horizontal guide still counts.
+    let (w, h) = (1000.0, 800.0);
+    let (a, b) = ([[0.1f32, 0.2], [0.3, 0.8]], [[0.1f32, 0.8], [0.3, 0.2]]);
+    let hz = [[0.1f32, 0.45], [0.9, 0.55]];
+    let u = guided(&[a, b, hz], w, h).expect("the horizontal guide is levelled");
+    assert!(guide_angle(&u, hz, w, h, false) < 0.05, "{}°", guide_angle(&u, hz, w, h, false));
+}
+
+#[test]
+fn guided_without_guides_is_neutral() {
+    // Nothing to correct yet: the canvas-only framing and the transparency-lock refusal that
+    // come with a real correction must not apply.
+    let mut p = CameraRaw { perspective_upright: "guided".into(), ..CameraRaw::default() };
+    assert!(neutral(&p) && p.is_identity());
+    p.upright_guides = vec![[[0.48, 0.1], [0.52, 0.9]]];
+    assert!(!neutral(&p));
+    // An analysing mode may find lines in the pixels: not neutral before it looks.
+    assert!(!neutral(&CameraRaw { perspective_upright: "vertical".into(), ..CameraRaw::default() }));
+}
+
+#[test]
 fn vanishing_point_needs_support() {
     assert!(vanishing_point(&[], 100.0).is_none());
     let one = [Segment { a: [0.0, 0.0], b: [0.0, 10.0] }];

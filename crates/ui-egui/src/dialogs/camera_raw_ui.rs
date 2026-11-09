@@ -80,6 +80,9 @@ pub struct CameraRawDialog {
     full_h: usize,
     /// The canvas's part of the proxy when the layer reaches past it ([`convert::canvas_in_proxy`]).
     canvas_frame: Option<[usize; 4]>,
+    /// The layer has no transparency to show (no alpha, or the Background): what Geometry
+    /// uncovers turns white, as the filter makes it.
+    opaque: bool,
     preview_ppp: f32,
     pub(crate) detail: crate::camera_raw_detail_ui::DetailPreview,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
@@ -210,6 +213,7 @@ impl CameraRawDialog {
             size: (self.pw, self.ph),
             full_w: self.full_w,
             canvas_frame: self.canvas_frame,
+            opaque: self.opaque,
             display: self.display.clone(),
             gpu: self.gpu.clone(),
             source_key: self.source_key,

@@ -193,16 +193,28 @@ fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
 /// error first, and this keeps the preview and Smart Filter paths from overflowing. A stage
 /// that can't get its memory is skipped; [`try_camera_raw_surface`] reports it instead.
 pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface {
-    develop_surface(surf, area, p, false).unwrap_or_else(|_| surf.clone())
+    camera_raw_surface_on(surf, area, p, false)
+}
+
+/// [`camera_raw_surface`] for a layer that must stay opaque when `opaque` (the Background, which
+/// may still store an alpha channel): what Geometry uncovers turns white there, as it does on a
+/// surface without alpha.
+pub fn camera_raw_surface_on(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool) -> Surface {
+    develop_surface(surf, area, p, opaque, false).unwrap_or_else(|_| surf.clone())
 }
 
 /// [`camera_raw_surface`], failing when a develop stage can't get the memory it needs, so the
 /// command doesn't commit an incomplete result.
 pub fn try_camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> std::result::Result<Surface, String> {
-    develop_surface(surf, area, p, true)
+    try_camera_raw_surface_on(surf, area, p, false)
 }
 
-fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, strict: bool) -> std::result::Result<Surface, String> {
+/// [`camera_raw_surface_on`], failing as [`try_camera_raw_surface`] does.
+pub fn try_camera_raw_surface_on(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool) -> std::result::Result<Surface, String> {
+    develop_surface(surf, area, p, opaque, true)
+}
+
+fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool, strict: bool) -> std::result::Result<Surface, String> {
     // Geometry turns the image about its centre: the canvas's, not that of content past its edge.
     let geometry = !p.geometry_neutral();
     let area = if geometry { area } else { area.intersect(&surf.content_bounds().union(&area)) };
@@ -223,7 +235,7 @@ fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, strict: bool) -> s
     let orig = surf.read_region(area);
     let mut data = vec![0.0f32; w * h * n];
     for (i, (q, o)) in px.iter().zip(data.chunks_exact_mut(n)).enumerate() {
-        if geometry && !fmt.alpha {
+        if geometry && (opaque || !fmt.alpha) {
             // No transparency to leave: what the warp uncovers turns white.
             let a = q[3].clamp(0.0, 1.0);
             from_rgba_into(&fmt, [q[0] * a + 1.0 - a, q[1] * a + 1.0 - a, q[2] * a + 1.0 - a, 1.0], o);
@@ -487,22 +499,29 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Geometry moves alpha with the pixels (uncovered corners turn transparent), which a
     // transparency lock forbids, as it does for other filters that make transparency. A
-    // Background has no transparency to make: uncovered pixels turn white there instead.
+    // Background has no transparency to make: uncovered pixels turn white there instead, even
+    // when its surface stores an alpha channel. A Smart Object gets the filter as a Smart Filter,
+    // which makes transparency in its (transparent) cache just the same.
+    let mut background = false;
     if geometry {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let id = target(s, p)?;
-        if !d.doc.is_background(id)
+        background = d.doc.is_background(id);
+        if !background
             && d.doc.effective_locks(id).transparency
             && let Some(l) = d.doc.layer(id)
-            && let LayerContent::Raster(surf) = &l.content
-            && surf.format().alpha
+            && match &l.content {
+                LayerContent::Raster(surf) => surf.format().alpha,
+                LayerContent::Smart(_) => l.surface().is_none_or(|c| c.format().alpha),
+                _ => false,
+            }
         {
             return Err(EngineError::Other(format!("Could not complete your request because the transparency of layer \"{}\" is locked", l.name)));
         }
     }
     let t0 = Stopwatch::start();
     let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
-        try_camera_raw_surface(surf, if geometry { canvas } else { canvas.union(&surf.content_bounds()) }, &cr).map_err(|e| bad(RAW, e))
+        try_camera_raw_surface_on(surf, if geometry { canvas } else { canvas.union(&surf.content_bounds()) }, &cr, background).map_err(|e| bad(RAW, e))
     })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
@@ -558,7 +577,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "RAW Develop Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
-            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent, white on a layer without transparency such as the Background),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase"}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the result}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise"}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
+            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent, white on a layer without transparency such as the Background),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase":false,"auto":false (Auto Mask: only over colours like the one under the dab's centre)}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the result}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise","colorHue":0..360 deg,"colorSat":0..100 (the Color swatch),"moire":0..100,"defringe":0..100}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
             journal: true,
@@ -860,12 +879,12 @@ mod tests {
         b.execute(RAW, json!({"perspectiveRotate": 10})).unwrap();
         let d = b.active().unwrap();
         let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        // A Background stays opaque even when its surface stores alpha (as `file.new`'s does).
         let fmt = surf.format();
         if fmt.alpha {
-            assert!(surf.sample_channel(0, 0, fmt.channels() - 1) < 0.01);
-        } else {
-            assert!(surf.sample_channel(0, 0, 0) > 0.99);
+            assert!(surf.sample_channel(0, 0, fmt.channels() - 1) > 0.99, "the Background's corner turned transparent");
         }
+        assert!(surf.sample_channel(0, 0, 0) > 0.99, "the uncovered corner is white");
         assert!(surf.sample_channel(32, 24, 0) < 0.01, "the middle stays black");
         for bad in [
             json!({"perspectiveUpright": "sideways"}),
@@ -911,6 +930,19 @@ mod tests {
         assert_eq!(active_px(&s, 1, 1), corner);
         assert_eq!(s.active().unwrap().history.past_len(), steps);
         // Settings that keep alpha still apply.
+        s.execute(RAW, json!({"exposure": 0.5})).unwrap();
+    }
+
+    #[test]
+    fn camera_raw_geometry_respects_a_transparency_lock_on_a_smart_object() {
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("layer.lockLayers", json!({"transparency": true})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        let err = s.execute(RAW, json!({"perspectiveRotate": 5})).unwrap_err();
+        assert!(err.to_string().contains("transparency"), "{err}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        // Settings that keep alpha still go on as a Smart Filter.
         s.execute(RAW, json!({"exposure": 0.5})).unwrap();
     }
 

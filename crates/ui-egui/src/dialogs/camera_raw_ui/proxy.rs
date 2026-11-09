@@ -14,6 +14,9 @@ pub(super) struct ProxyJob {
     pub(super) full_w: usize,
     /// The canvas's blocks of the proxy, when it does not fill it: Geometry develops only them.
     pub(super) canvas_frame: Option<[usize; 4]>,
+    /// The layer has no transparency (no alpha, or the Background): what Geometry uncovers is
+    /// shown white, as the filter makes it.
+    pub(super) opaque: bool,
     pub(super) display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(super) gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
     pub(super) source_key: u64,
@@ -84,6 +87,9 @@ impl ProxyJob {
             }
         };
         let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
+        if self.opaque && !p.geometry_neutral() {
+            over_white(&mut px);
+        }
         if let Some(mask) = &self.selection {
             let blend = |(out, (original, coverage)): (&mut [f32; 4], (&[f32; 4], &f32))| {
                 for (out, original) in out.iter_mut().zip(original) {
@@ -104,5 +110,17 @@ impl ProxyJob {
         let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
         let image = CameraRawDialog::image(&px, pw, ph, &self.display);
         ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, develop_ms, backend }
+    }
+}
+
+/// Developed pixels as an opaque layer keeps them: what the warp left transparent turns white
+/// (`lens_cmds::camera_raw_surface_on` does the same when the filter is applied).
+pub(super) fn over_white(px: &mut [[f32; 4]]) {
+    for q in px.iter_mut() {
+        let a = if q[3].is_finite() { q[3].clamp(0.0, 1.0) } else { 1.0 };
+        for v in &mut q[..3] {
+            *v = *v * a + 1.0 - a;
+        }
+        q[3] = 1.0;
     }
 }

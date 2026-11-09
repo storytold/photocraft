@@ -179,6 +179,7 @@ pub(super) fn open_pixels(
         app.ui.camera_raw_scope.selected_region = false;
     }
     let float = surf.format().sample == photocraft_color::SampleType::F32;
+    let opaque = !surf.format().alpha || st.doc.is_background(layer);
     // Builds the GPU pass the first time any Camera Raw dialog opens.
     let gpu = crate::camera_raw_gpu::for_app(app);
     let mut d = CameraRawDialog {
@@ -213,8 +214,10 @@ pub(super) fn open_pixels(
                 Coverage::None => crate::camera_raw_detail_ui::Coverage::None,
             },
         )
-        .with_canvas(canvas),
+        .with_canvas(canvas)
+        .with_opaque(opaque),
         canvas_frame: canvas_in_proxy(canvas, area, k, pw, ph),
+        opaque,
         display,
         viewport: None,
         float,

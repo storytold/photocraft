@@ -191,6 +191,75 @@ fn a_tiny_dab_on_a_cell_corner_still_paints() {
 }
 
 #[test]
+fn a_tiny_dab_paints_above_the_brush_grid_too() {
+    // Wider than the brush grid: painted on the grid, then interpolated up. (0.5, 0.5) lands on
+    // a grid-cell corner.
+    let (w, h) = (2048, 1024);
+    let px = flat(w, h, |_, _| [0.5; 3]);
+    let dab = Dab { x: 0.5, y: 0.5, size: 0.0001, feather: 0.0, flow: 100.0, density: 100.0, erase: false, auto: false };
+    let v = render(&Shape::Brush { dabs: vec![dab] }, &px, w, h);
+    assert!(v.iter().copied().fold(0.0, f32::max) > 0.0, "a hard tiny dab");
+    // Soft and light: each dab adds only about 1e-5 at the cells it reaches.
+    let soft = Dab { feather: 100.0, flow: 20.0, ..dab };
+    let v = render(&Shape::Brush { dabs: vec![soft; 100] }, &px, w, h);
+    assert!(v.iter().copied().fold(0.0, f32::max) > 0.0, "soft tiny dabs");
+}
+
+#[test]
+fn low_flow_dabs_build_up() {
+    // Flow 2 % adds 0.02^2.75 ≈ 2e-5 a dab: small, but repeated strokes must still build up.
+    let (w, h) = (100, 100);
+    let px = flat(w, h, |_, _| [0.5; 3]);
+    let dab = Dab { x: 0.5, y: 0.5, size: 0.1, feather: 0.0, flow: 2.0, density: 100.0, erase: false, auto: false };
+    let v = render(&Shape::Brush { dabs: vec![dab; 2000] }, &px, w, h);
+    assert!(at(&v, w, 50, 50) > 0.02, "{}", at(&v, w, 50, 50));
+}
+
+#[test]
+fn local_detail_radii_follow_the_image_not_the_masks_extent() {
+    // Texture's radii come from the long side of what is developed. A second, distant component
+    // widens the mask's box; the pixels the first one covers must not change.
+    let (w, h) = (256, 64);
+    let px = flat(w, h, |x, y| [0.3 + 0.4 * ((x * 7 + y * 13) % 17) as f32 / 17.0; 3]);
+    let near = comp(Shape::Radial { center: [0.15, 0.5], radius: [0.06, 0.15], angle: 0.0, feather: 0.0 });
+    let far = comp(Shape::Radial { center: [0.9, 0.9], radius: [0.02, 0.02], angle: 0.0, feather: 0.0 });
+    let adjust = Local { texture: 80.0, ..Local::default() };
+    let run = |components: Vec<Component>| {
+        let mut out = px.clone();
+        let p = CameraRaw { masks: vec![Mask { components, adjust: adjust.clone(), ..Mask::default() }], ..CameraRaw::default() };
+        apply(&mut out, w, h, &p, false);
+        out
+    };
+    let (one, two) = (run(vec![near.clone()]), run(vec![near.clone(), far]));
+    assert!(one.iter().zip(&px).any(|(a, b)| a != b), "texture changed something");
+    for y in 30..34 {
+        for x in 34..42 {
+            let (a, b) = (one[y * w + x], two[y * w + x]);
+            assert!(a.iter().zip(&b).all(|(p, q)| (p - q).abs() < 1e-5), "({x}, {y}): {a:?} vs {b:?}");
+        }
+    }
+}
+
+#[test]
+fn segmentation_ignores_the_colour_of_transparent_pixels() {
+    // Same visible image, different colours stored under fully transparent pixels.
+    let (w, h) = (48, 36);
+    let subject = |x: usize, y: usize| (12..36).contains(&x) && (8..30).contains(&y);
+    let image = |hidden: [f32; 3]| -> Vec<[f32; 4]> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                if subject(x, y) { [0.9, 0.5, 0.2, 1.0] } else { [hidden[0], hidden[1], hidden[2], 0.0] }
+            })
+            .collect()
+    };
+    let (a, b) = (image([0.9, 0.5, 0.2]), image([0.05, 0.05, 0.05]));
+    for s in [Shape::Subject, Shape::Background] {
+        assert_eq!(render(&s, &a, w, h), render(&s, &b, w, h), "{s:?}");
+    }
+}
+
+#[test]
 fn validation_bounds_the_brushes_total_work() {
     let dab = Dab { x: 0.5, y: 0.5, size: MAX_DAB_SIZE, feather: 0.0, flow: 100.0, density: 100.0, erase: false, auto: false };
     let brush = || Component { op: Op::Add, invert: false, shape: Shape::Brush { dabs: vec![dab; MAX_DABS] } };

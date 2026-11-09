@@ -306,8 +306,15 @@ pub fn validate(p: &CameraRaw) -> Result<(), String> {
 }
 
 /// The settings' Geometry is neutral (no Upright, no Transform, no Constrain Crop effect).
+/// Guided with no guides yet corrects nothing, so it is neutral too (the analysing modes are
+/// not: whether they find lines depends on the pixels).
 pub fn neutral(p: &CameraRaw) -> bool {
-    matches!(Upright::parse(&p.perspective_upright), None | Some(Upright::Off)) && Transform::of(p).is_identity()
+    let upright = match Upright::parse(&p.perspective_upright) {
+        None | Some(Upright::Off) => true,
+        Some(Upright::Guided) => p.upright_guides.is_empty(),
+        Some(_) => false,
+    };
+    upright && Transform::of(p).is_identity()
 }
 
 /// The whole Geometry homography (centred source → result) for `p` on these pixels.
@@ -383,6 +390,11 @@ fn sample(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> [f32; 4] {
             let Some(q) = src.get(row + xx as usize) else { continue };
             let k = wx[i] * wy[j];
             let a = q[3];
+            // A transparent (or zero-weight) tap adds nothing, and its colour may be anything,
+            // NaN included: multiplied in, that would spread to the visible pixels around it.
+            if k == 0.0 || a.is_nan() || a <= 0.0 {
+                continue;
+            }
             o[0] += k * q[0] * a;
             o[1] += k * q[1] * a;
             o[2] += k * q[2] * a;

@@ -183,3 +183,40 @@ fn save_refuses_a_file_load_would_refuse() {
     let e = save(&p).unwrap_err();
     assert!(e.contains("too large"), "{e}");
 }
+
+/// One Paint correction holding `n` dabs of the largest radius.
+fn big_brush(n: usize) -> String {
+    let dabs: String = (0..n).map(|i| format!("<rdf:li>d {:.4} 0.5</rdf:li>", i as f32 / n as f32)).collect();
+    format!(
+        r#"<rdf:li><rdf:Description crs:What="Correction" crs:LocalExposure2012="0.25"><crs:CorrectionMasks><rdf:Seq><rdf:li><rdf:Description crs:What="Mask/Paint" crs:MaskValue="1" crs:Radius="{}" crs:Flow="1" crs:CenterWeight="1"><crs:Dabs><rdf:Seq>{dabs}</rdf:Seq></crs:Dabs></rdf:Description></rdf:li></rdf:Seq></crs:CorrectionMasks></rdf:Description></rdf:li>"#,
+        masks::MAX_DAB_SIZE
+    )
+}
+
+#[test]
+fn classic_masks_over_the_brush_budget_are_not_installed() {
+    // Each correction is within the per-brush caps; together they hold more than the develop
+    // may paint.
+    let one_full = big_brush(masks::MAX_DABS);
+    let xml = format!("<crs:PaintBasedCorrections><rdf:Seq>{one_full}{one_full}</rdf:Seq></crs:PaintBasedCorrections>");
+    let before = vec![one(Shape::Sky)];
+    let mut p = CameraRaw { masks: before.clone(), ..CameraRaw::default() };
+    let r = load(&mut p, wrap(&xml, "").as_bytes()).unwrap();
+    assert_eq!(p.masks, before, "the current masks stay");
+    assert!(r.ignored.contains(&"CorrectionMasks".to_string()), "{:?}", r.ignored);
+    assert!(p.validate().is_ok());
+    // One such correction fits.
+    let xml = format!("<crs:PaintBasedCorrections><rdf:Seq>{one_full}</rdf:Seq></crs:PaintBasedCorrections>");
+    load(&mut p, wrap(&xml, "").as_bytes()).unwrap();
+    assert!(matches!(&p.masks[..], [m] if matches!(&m.components[0].shape, Shape::Brush { dabs } if dabs.len() == masks::MAX_DABS)));
+}
+
+#[test]
+fn masks_stay_when_every_correction_is_rejected() {
+    let xml = r#"<crs:GradientBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:LocalExposure2012="0.25"><crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:MaskValue="1" crs:ZeroX="0.5" crs:ZeroY="0.2" crs:FullX="0.5" crs:FullY="0.8"/></rdf:Seq></crs:CorrectionMasks><crs:CorrectionRangeMask><rdf:Description crs:Version="2" crs:Type="1"/></crs:CorrectionRangeMask></rdf:Description></rdf:li></rdf:Seq></crs:GradientBasedCorrections>"#;
+    let before = vec![one(Shape::Sky)];
+    let mut p = CameraRaw { masks: before.clone(), ..CameraRaw::default() };
+    let r = load(&mut p, wrap(xml, "").as_bytes()).unwrap();
+    assert_eq!(p.masks, before);
+    assert!(r.ignored.contains(&"CorrectionRangeMask".to_string()), "{:?}", r.ignored);
+}

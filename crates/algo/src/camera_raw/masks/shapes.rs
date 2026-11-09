@@ -160,7 +160,18 @@ fn people(px: &[[f32; 4]], w: usize, h: usize, part: PeoplePart) -> Vec<f32> {
 /// Classical Select Subject / Select Sky over the image (or the subject inside `within`).
 fn ai(px: &[[f32; 4]], w: usize, h: usize, within: Option<Rect>, sky_mask: bool) -> Vec<f32> {
     let n = w * h;
-    let img = RgbImage { w, h, px: px[..n].iter().map(|q| [q[0], q[1], q[2]].map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 })).collect() };
+    // Seen over mid grey: a transparent pixel's stored colour is not part of the picture.
+    let img = RgbImage {
+        w,
+        h,
+        px: px[..n]
+            .iter()
+            .map(|q| {
+                let a = if q[3].is_finite() { q[3].clamp(0.0, 1.0) } else { 1.0 };
+                [q[0], q[1], q[2]].map(|c| (if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }) * a + 0.5 * (1.0 - a))
+            })
+            .collect(),
+    };
     let sampler = ImageSampler { img: &img, origin: (0, 0) };
     let canvas = within.unwrap_or_else(|| Rect::new(0, 0, w as i32, h as i32));
     let region = if sky_mask { sky::select_sky(&sampler, canvas, sky::SkyParams::default()) } else { subject::select_subject(&sampler, canvas) };
@@ -254,7 +265,9 @@ fn paint(out: &mut [f32], w: usize, h: usize, dabs: &[Dab], colours: Option<&[[f
                     profile *= (-dd / (0.12 * 0.12)).exp();
                 }
                 let a = flow * profile;
-                if a <= 1e-4 {
+                // Any positive amount counts: Flow 1–3 % adds only about 1e-5 a dab, and repeated
+                // dabs must still build up.
+                if a.is_nan() || a <= 0.0 {
                     continue;
                 }
                 let Some(v) = out.get_mut(y * w + x) else { continue };
