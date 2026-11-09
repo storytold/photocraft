@@ -280,10 +280,28 @@ pub fn adapter_report_line(app: &PhotocraftApp) -> String {
     without_home(&format!("adapter report: {}", lines.join("; ").replace(['\n', '\r'], " ")), home.as_deref())
 }
 
-/// `text` with each path inside `home` starting at `~` instead.
+/// `text` with each path inside `home` starting at `~` instead. `/` and `\` match each other, and
+/// a Windows-style home (a `\` or a drive letter) also matches in any ASCII case.
 fn without_home(text: &str, home: Option<&str>) -> String {
     let Some(home) = home.map(|h| h.trim_end_matches(['/', '\\'])).filter(|h| !h.is_empty()) else { return text.to_string() };
-    text.replace(&format!("{home}/"), "~/").replace(&format!("{home}\\"), "~\\")
+    let windows = home.contains('\\') || home.as_bytes().get(1) == Some(&b':');
+    let is_sep = |b: u8| b == b'/' || b == b'\\';
+    let same = |a: u8, b: u8| a == b || (is_sep(a) && is_sep(b)) || (windows && a.eq_ignore_ascii_case(&b));
+    let (t, h) = (text.as_bytes(), home.as_bytes());
+    let (mut out, mut kept, mut i) = (String::with_capacity(text.len()), 0, 0);
+    // Only ASCII bytes match loosely, so a match starts and ends on a char boundary.
+    while i + h.len() < t.len() {
+        if is_sep(t[i + h.len()]) && t[i..i + h.len()].iter().zip(h).all(|(&a, &b)| same(a, b)) {
+            out.push_str(&text[kept..i]);
+            out.push('~');
+            i += h.len();
+            kept = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&text[kept..]);
+    out
 }
 
 /// Log the adapter report once at `info`: at startup, once the window's adapter is known, and
@@ -599,6 +617,9 @@ mod tests {
         let reason = "cannot read profile `/home/ann/Profiles/Mine.icc`: not found; /home/annex/x.icc";
         assert_eq!(without_home(reason, Some("/home/ann/")), "cannot read profile `~/Profiles/Mine.icc`: not found; /home/annex/x.icc");
         assert_eq!(without_home(r"C:\Users\Ann\p.icc", Some(r"C:\Users\Ann")), r"~\p.icc");
+        assert_eq!(without_home("cannot read profile `C:/Users/Ann/p.icc`", Some(r"C:\Users\Ann")), "cannot read profile `~/p.icc`");
+        assert_eq!(without_home(r"c:\users\ann\p.icc; C:\Users\Annex\x.icc", Some(r"C:\Users\Ann")), r"~\p.icc; C:\Users\Annex\x.icc");
+        assert_eq!(without_home("/home/Ann/p.icc", Some("/home/ann")), "/home/Ann/p.icc", "a Unix home stays case-sensitive");
         assert_eq!(without_home(reason, Some("/")), reason, "a root home redacts nothing");
         assert_eq!(without_home(reason, None), reason);
     }
