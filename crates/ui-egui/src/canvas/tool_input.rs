@@ -109,6 +109,11 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
     Some((armed, mods))
 }
 
+/// The handlers a pointer event meets before the tool: dropping a floating piece the press won't
+/// drag, snapping, and the overlays and modifier gestures (Free Transform, sticky keys, brush
+/// resize, the ⌥ eyedropper, path and shape widgets…) that take the event for themselves. `None`:
+/// one of them handled it; otherwise the event as it came and as filtered (snapped, the Move
+/// tool's axis lock), and the modifiers with the sticky keys applied.
 fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, armed: bool) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
@@ -116,8 +121,9 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::move_box::pointer(app, raw) {
         return None;
     }
-    // A press anywhere but on the floating piece (or with ⇧ / ⌥, to draw) drops it first; the
-    // Move tool (⌘ with a painting tool too, `event_tool`) drags it from anywhere.
+    // A press that doesn't drag the floating piece drops it first: off it, with ⇧ / ⌥ to draw, or a
+    // plain selection-tool press on it, which moves the outline only (#11368). The Move tool (⌘
+    // with a painting tool too, `event_tool`) drags it from anywhere.
     if let ToolEvent::Down { x, y, .. } = raw
         && app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some())
         && !crate::move_ui::moves_selected_pixels_with(app, event_tool(app, mods))
@@ -223,6 +229,16 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     Some((raw, ev, mods))
 }
 
+/// Remember a Move-way pick that changed the active layer (with the engine's change count after it, so
+/// any later change invalidates the marker), so the Layers panel's
+/// reveal can honour Expand layer group on click (layer_reveal.rs).
+fn note_move_pick(app: &mut PhotocraftApp, active_before: Option<photocraft_doc::LayerId>) {
+    let active_after = app.session.active().and_then(|st| st.active_layer);
+    if active_after != active_before {
+        app.move_pick = active_after.map(|id| (id, app.session.active_layer_changes()));
+    }
+}
+
 fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
@@ -238,7 +254,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 return true;
             }
             if multiple_color_target(app) {
-                app.ui.status = "Move and transforms on several colour channels are not implemented yet".into();
+                app.ui.status = "Move and transforms on several color channels are not implemented yet".into();
                 return true;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
@@ -247,6 +263,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 let target = app.ui.tool_options.move_target.clone();
                 let mode = if mods.shift { "add" } else { "replace" };
                 let before = app.session.active().map(|st| st.selected_layers());
+                let active_before = app.session.active().and_then(|st| st.active_layer);
                 // A locked layer under the pointer (the Background) can't move. Photoshop draws
                 // the layer marquee instead of reporting the lock (#4058). Probe without
                 // selecting so a locked hit doesn't become the selection first.
@@ -263,6 +280,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                         // A click still selects the locked layer, as in Photoshop; a drag's
                         // marquee then replaces that selection on release.
                         let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
+                        note_move_pick(app, active_before);
                     }
                     crate::move_box::begin(app, [x, y], mods.shift);
                     return true;
@@ -274,6 +292,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                     crate::move_box::begin(app, [x, y], mods.shift);
                     return true;
                 }
+                note_move_pick(app, active_before);
                 // Snapping (and the drag's box) started before the pick: point it at what moves.
                 if app.session.active().map(|st| st.selected_layers()) != before {
                     crate::snap_ui::retarget_move(app, [x, y], mods);
@@ -340,6 +359,42 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
     true
 }
 
+/// A Mixer Brush press the engine refused: Indexed Color and Bitmap documents answer it with the
+/// reference's alert (#11958); anything else goes to the status bar, as before.
+fn mixer_press_failed(app: &mut PhotocraftApp, message: String) {
+    use photocraft_engine::brush_cmds::mixer_live::{BITMAP_REFUSAL, INDEXED_REFUSAL};
+    if message == INDEXED_REFUSAL || message == BITMAP_REFUSAL {
+        // One alert, even if more presses arrive while it is open (`ui.pointer` can send them).
+        let shown =
+            app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
+        if !shown {
+            let params = json!({ "message": message }).as_object().cloned().unwrap_or_default();
+            app.ui.open_dialog(crate::state::DialogKind::Error, params);
+        }
+    } else {
+        app.ui.status = message;
+        app.ui.status_error = true;
+    }
+}
+
+/// The Brush's chosen Clear paints as Normal on the Background, and its Mode then reads Normal
+/// (#11897): at the press of a Brush stroke on the Background's own pixels, Clear (chosen in the
+/// options bar, not a held `~`) is turned off, so the stroke is sent as Normal. A Background whose
+/// pixels are locked refuses the stroke, so Clear stays chosen there.
+fn clear_off_on_background(app: &mut PhotocraftApp, tool: Tool) {
+    let on_background = app.session.active().is_some_and(|st| {
+        st.active_layer.is_some_and(|id| {
+            st.doc.is_background(id) && {
+                let locks = st.doc.effective_locks(id);
+                !locks.pixels && !locks.all
+            }
+        })
+    });
+    if tool == Tool::Brush && app.ui.tool_options.brush_clear && !app.held_erase && on_background && paint_target(app) == serde_json::json!("pixels") {
+        app.ui.tool_options.brush_clear = false;
+    }
+}
+
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     if consumes_cancelled_vector_event(app, ev) {
@@ -380,9 +435,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
             let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
             // Painting on or moving a hidden layer is refused at the press, as in Photoshop (#571).
-            if !sets_source && let Some(why) = hidden_target(app, tool) {
-                app.ui.status = why.into();
-                app.ui.status_error = true;
+            if !sets_source && press_refused(app, tool) {
                 return;
             }
             if !sets_source && crate::rasterize_prompt::intercept(app, tool, x, y, pressure) {
@@ -505,6 +558,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 _ => {}
             }
             crate::paint_mouse::sync_tool_brush(app);
+            clear_off_on_background(app, tool);
             // Clear mode (`~` held, or chosen in the options bar) erases with the tool's own brush.
             let clear = crate::paint_mouse::clears(app, tool);
             let erase = std::mem::take(&mut app.secondary_erase) || tool == Tool::Eraser || clear;
@@ -527,6 +581,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
             drag.capture_selection_at_press(app);
+            drag.document = super::drag::DragDocument::capture(app);
             app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();
@@ -543,8 +598,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     && !LiveMixer::defers_to_release(&app.session, &p).is_ok_and(|deferred| deferred)
                 {
                     if let Err(e) = LiveMixer::begin(&app.session, &p) {
-                        app.ui.status = e.to_string();
-                        app.ui.status_error = true;
+                        mixer_press_failed(app, e.to_string());
                     }
                     app.drag = None;
                 }
@@ -660,6 +714,23 @@ fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     photocraft_engine::hidden_target::refusal(&app.session, cmd, &json!({}))
 }
 
+/// The press-time refusals: a hidden target layer (#571), and for the Brush a locked layer or a
+/// group's pixels. The Brush says why in an alert, as in Photoshop (#11898); the other tools say
+/// a hidden target in the status bar. True when the press is refused.
+fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    let hidden = hidden_target(app, tool);
+    if let Some(message) = crate::brush_refusal::alert(app, tool, hidden.is_some()) {
+        crate::brush_refusal::prompt(app, &message);
+        return true;
+    }
+    if let Some(why) = hidden {
+        app.ui.status = why.into();
+        app.ui.status_error = true;
+        return true;
+    }
+    false
+}
+
 /// Is document point `p` inside the active document's selection?
 fn inside_selection(app: &PhotocraftApp, p: [f64; 2]) -> bool {
     app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|sel| covers(sel, p))
@@ -673,12 +744,13 @@ fn covers(sel: &photocraft_raster::Surface, p: [f64; 2]) -> bool {
 }
 
 /// Does a press with `tool` at `p` drag the selection rather than draw a new one? `Some(true)`
-/// moves the floating piece (⌘ cuts one first, ⌘⌥ copies; a floating piece moves with a plain
-/// drag; the Polygonal Lasso and Magic Wand need ⌘, as a plain press there places or samples),
-/// `Some(false)` just the outline (no ⇧ / ⌥ and the options bar on New Selection, so a combining
-/// drag still draws). The Single Row / Single Column Marquee drag the outline too (#11392); a click
-/// without moving, inside the selection or on a floating piece (dropped first), still selects the
-/// line under the pointer (`finish_gesture`).
+/// moves the floating piece (⌘ cuts one first, ⌘⌥ copies; the Polygonal Lasso and Magic Wand need
+/// ⌘, as a plain press there places or samples), `Some(false)` just the outline (no ⇧ / ⌥ and the
+/// options bar on New Selection, so a combining drag still draws). A plain drag on a floating piece
+/// moves the outline too, as in Photoshop: the press drops the piece first (#11368). The Single Row
+/// / Single Column Marquee drag the outline too (#11392); a click without moving, inside the
+/// selection or on a floating piece (dropped first), still selects the line under the pointer
+/// (`finish_gesture`).
 pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<bool> {
     // Click-driven selection tools (a press places a point or samples): only ⌘ drags the
     // selection, and not while a polygon is being drawn.
@@ -690,11 +762,18 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     // ⌘ cuts, ⌘⌥ copies (`select.float`'s `copy`).
     let cut = mods.command && !mods.shift;
     if let Some(f) = app.session.active().and_then(photocraft_engine::float_cmds::floating) {
-        // A press on the piece's outline (where its ants are) drags it; one in the margin the cut
-        // left of the selection starts a new selection (#7538).
+        // A ⌘ press on the piece's outline (where its ants are) drags it; a plain one drags the
+        // outline, dropping the piece where it is first (`filter_event_before_tool`, #11368); one
+        // in the margin the cut left of the selection starts a new selection (#7538).
         let at = [p[0] - f64::from(f.offset.0), p[1] - f64::from(f.offset.1)];
         let on = f.parts.outline().map_or_else(|| inside_selection(app, at), |o| covers(o, at));
-        return (on && !mods.shift && (!mods.alt || mods.command) && (cut || !clicky)).then_some(true);
+        if !on {
+            return None;
+        }
+        if cut {
+            return Some(true);
+        }
+        return (!clicky && !mods.command && selection_mode(app, mods) == "replace").then_some(false);
     }
     if !inside_selection(app, p) {
         return None;
