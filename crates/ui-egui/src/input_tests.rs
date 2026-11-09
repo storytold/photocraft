@@ -37,9 +37,29 @@ fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
 /// Check the bitmap contract, not merely that some custom cursor reached the backend.
 fn assert_pipette(h: &Harness<'static, PhotocraftApp>) {
     let output = &h.output().platform_output;
-    if cfg!(target_arch = "wasm32") {
-        assert_eq!(output.cursor_icon, egui::CursorIcon::None, "web paints the pipette");
+    if cfg!(target_arch = "wasm32") || h.input().viewport_id != egui::ViewportId::ROOT {
+        assert_eq!(output.cursor_icon, egui::CursorIcon::None, "painted-only viewports hide the system cursor");
         assert!(output.cursor_image.is_none());
+        let textures = h.ctx.tex_manager();
+        let textures = textures.read();
+        let pipettes: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) => textures.meta(mesh.texture_id).filter(|meta| meta.name == "pc-pipette-icon").map(|meta| (mesh, meta)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pipettes.len(), 1, "the canvas sampling caller paints one pipette, not just a hidden OS cursor");
+        let (mesh, meta) = pipettes[0];
+        let scale = h.output().pixels_per_point.clamp(0.5, 8.0);
+        let hot = (24.5 * scale + 1.0).ceil();
+        assert_eq!(meta.size, [(2.0 * hot + 1.0) as usize; 2]);
+        let at = h.ctx.input_for(h.input().viewport_id, |i| i.pointer.hover_pos()).unwrap();
+        let expected = egui::Rect::from_min_size(at - egui::Vec2::splat((hot + 0.5) / scale), egui::Vec2::splat(meta.size[0] as f32 / scale));
+        assert!(mesh.calc_bounds().min.distance(expected.min) < 0.001, "the sampling tip follows the pointer");
+        assert!(mesh.calc_bounds().max.distance(expected.max) < 0.001, "the artwork keeps its logical size");
     } else {
         assert_eq!(output.cursor_icon, egui::CursorIcon::Crosshair, "visible fallback underneath the native pipette");
         let image = output.cursor_image.as_ref().expect("the pipette must reach the OS");
@@ -277,6 +297,25 @@ fn press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, pressed: bool) {
 fn picker_color(h: &Harness<'static, PhotocraftApp>) -> String {
     let d = h.state().ui.dialogs.last().unwrap();
     d.fields.get("color").and_then(serde_json::Value::as_str).unwrap().to_string()
+}
+
+/// Check artwork and hotspot through the real canvas picker, not just the cursor renderer.
+#[test]
+fn color_picker_paints_a_pipette_on_a_high_dpi_child_canvas() {
+    let mut h = harness();
+    let child = egui::ViewportId::from_hash_of("sampling-painted-pipette");
+    h.input_mut().viewport_id = child;
+    h.input_mut().viewports.entry(child).or_default().native_pixels_per_point = Some(6.0);
+    h.run_steps(4);
+    crate::color_picker_ui::open(h.state_mut(), "foreground");
+    h.run_steps(3);
+    h.hover_at(free_canvas(&h));
+    h.run_steps(1);
+    assert_pipette(&h);
+    h.hover_at(h.state().last_canvas_rect.center());
+    h.run_steps(1);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "dialog controls release the painted pipette");
+    assert!(h.output().platform_output.cursor_image.is_none());
 }
 
 /// The Color Picker's eyedropper, as in Photoshop: over the image the pointer is a pipette, and a

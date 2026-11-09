@@ -525,6 +525,37 @@ fn write_cursor_preview() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tool-cursor-preview.png");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, png).unwrap();
+    write_painted_pipette_preview();
+}
+
+/// The first row is 6x; the second uses a 64x display with the bounded 8x texture.
+fn write_painted_pipette_preview() {
+    let ctx = egui::Context::default();
+    let (width, height) = (1200_usize, 800_usize);
+    let mut rgba = vec![255; width * height * 4];
+    for (col, background) in [0_u8, 128, 255].into_iter().enumerate() {
+        for y in 0..height {
+            for x in col * 400..(col + 1) * 400 {
+                rgba[(y * width + x) * 4..(y * width + x) * 4 + 3].fill(background);
+            }
+        }
+        for (row, scale) in [6.0, 64.0].into_iter().enumerate() {
+            let image = cached_pipette(&ctx, scale, true).image.unwrap();
+            let side = usize::from(image.size[0]);
+            let x0 = col * 400 + 200 - usize::from(image.hotspot[0]);
+            let y0 = row * 400 + 200 - usize::from(image.hotspot[1]);
+            for (i, pixel) in image.rgba.as_chunks::<4>().0.iter().enumerate() {
+                let at = ((y0 + i / side) * width + x0 + i % side) * 4;
+                let alpha = f32::from(pixel[3]) / 255.0;
+                let value = (f32::from(pixel[0]) * alpha + f32::from(background) * (1.0 - alpha)).round() as u8;
+                rgba[at..at + 3].fill(value);
+            }
+        }
+    }
+    let image = photocraft_codecs::Image::from_u8(width as u32, height as u32, photocraft_codecs::ChannelLayout::Rgba, rgba).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/painted-pipette-preview.png");
+    std::fs::write(path, png).unwrap();
 }
 
 /// Run explicitly to inspect the unified bucket bitmap at 1× and 2× against three backgrounds.
@@ -1239,7 +1270,9 @@ fn pipette_svg_accepts_a_preamble_and_reports_broken_styling_or_xml() {
 fn pipette_failed_bitmap_keeps_a_visible_fallback() {
     let ctx = egui::Context::default();
     let child = egui::ViewportId::from_hash_of("pipette-failed-child");
-    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-pipette-cache"), vec![CachedPipette { scale: 1.0, image: None, texture: None }]));
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::unique("photocraft-pipette-cache"), vec![CachedPipette { scale: 1.0, painted: true, image: None, texture: None }])
+    });
     let mut input = egui::RawInput { viewport_id: child, ..Default::default() };
     input.viewports.entry(child).or_default();
     let output = ctx.run_ui(input, |ui| {
@@ -1287,4 +1320,56 @@ fn pipette_painted_fallback_keeps_its_hotspot_and_reuses_textures_across_frames_
     assert_eq!(back, first, "alternating viewport densities retain both textures");
     assert!(!delta.set.iter().any(|(id, _)| *id == first));
     assert!(!delta.free.contains(&retina));
+}
+
+/// Painted viewports must keep the artwork even above every platform's native cursor limit.
+#[test]
+fn pipette_painted_fallback_survives_high_display_scales() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    let child = egui::ViewportId::from_hash_of("pipette-high-dpi-child");
+    for display_scale in [6.0, 64.0] {
+        let at = egui::pos2(100.0, 100.0);
+        let mut input = egui::RawInput { viewport_id: child, ..Default::default() };
+        input.viewports.entry(child).or_default().native_pixels_per_point = Some(display_scale);
+        let output = ctx.run_ui(input, |ui| {
+            let icon = pipette(ui.ctx(), at);
+            ui.ctx().set_cursor_icon(icon);
+        });
+        assert_eq!(output.platform_output.cursor_icon, CursorIcon::None, "{display_scale}x must paint the pipette");
+        assert!(output.platform_output.cursor_image.is_none());
+        let mut meshes = Vec::new();
+        for shape in &output.shapes {
+            collect_meshes(&shape.shape, &mut meshes);
+        }
+        assert_eq!(meshes.len(), 1, "the sampling cursor still has artwork at {display_scale}x");
+        let texture = meshes[0].0;
+        let upload = output.textures_delta.set.get(&texture).unwrap().first().unwrap();
+        let (side, hot, raster_scale) = if display_scale == 6.0 { (297, 148.0, 6.0) } else { (395, 197.0, 8.0) };
+        assert_eq!(upload.image.size(), [side; 2], "bounded texture even with excessive display scaling");
+        let expected = egui::Rect::from_min_size(at - Vec2::splat((hot + 0.5) / raster_scale), Vec2::splat(side as f32 / raster_scale));
+        assert!(meshes[0].1.min.distance(expected.min) < 0.001);
+        assert!(meshes[0].1.max.distance(expected.max) < 0.001);
+    }
+}
+
+/// The native cursor cap and the independent GPU cap must not leak through the shared cache.
+#[test]
+fn pipette_native_and_painted_limits_are_independent_and_bounded() {
+    let ctx = egui::Context::default();
+    for scale in [6.0, 64.0] {
+        let native = cached_pipette(&ctx, scale, false);
+        let painted = cached_pipette(&ctx, scale, true);
+        let image = painted.image.unwrap();
+        assert!(image.size.into_iter().all(|side| side <= 395));
+        assert!(painted.texture.is_some());
+        assert_eq!(native.image.is_some(), scale == 6.0 && MAX_SIDE >= 297);
+        assert_eq!(cached_pipette(&ctx, scale, false).image, native.image, "painted texture cannot bypass the native cap");
+        assert!(Arc::ptr_eq(&image.rgba, &cached_pipette(&ctx, scale, true).image.unwrap().rgba));
+    }
+    let capped = cached_pipette(&ctx, f32::MAX, true);
+    assert_eq!(capped.image.unwrap().size, [395; 2]);
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert!(cached_pipette(&ctx, scale, true).image.is_none());
+    }
 }

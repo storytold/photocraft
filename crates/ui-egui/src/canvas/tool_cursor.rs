@@ -57,11 +57,17 @@ struct Cached {
 #[derive(Clone)]
 struct CachedPipette {
     scale: f32,
+    painted: bool,
     image: Option<CustomCursorImage>,
     texture: Option<egui::TextureHandle>,
 }
 
 const PIPETTE_CACHE_CAPACITY: usize = 4;
+
+/// GPU textures are not subject to the OS cursor limit. Bound their density independently;
+/// beyond 8x the GPU scales the same artwork, keeping its logical size and hotspot intact.
+const PAINTED_PIPETTE_MAX_SCALE: f32 = 8.0;
+const PAINTED_PIPETTE_MAX_SIDE: u16 = 511;
 
 /// Pen variants retain at most one bitmap each; large brush bitmaps stay in the single-entry cache.
 #[derive(Clone, Default)]
@@ -420,11 +426,22 @@ fn cached_image(ctx: &egui::Context, shape: &Shape, scale: f32) -> Option<Custom
 /// Keep the bitmap and its optional GPU texture together, reusing both across viewport switches.
 /// `insert_temp` stores runtime data across frames, not just for the duration of one pass.
 fn cached_pipette(ctx: &egui::Context, scale: f32, painted: bool) -> CachedPipette {
+    let scale = if painted && scale.is_finite() && scale > 0.0 { scale.clamp(0.5, PAINTED_PIPETTE_MAX_SCALE) } else { scale };
     let id = egui::Id::unique("photocraft-pipette-cache");
     let mut entries = ctx.data(|d| d.get_temp::<Vec<CachedPipette>>(id)).unwrap_or_default();
-    let mut cached = entries.iter().find(|entry| entry.scale.to_bits() == scale.to_bits()).cloned().unwrap_or_else(|| CachedPipette {
+    // A rejected native bitmap must not poison a valid texture at the same density, nor may
+    // a cached GPU texture bypass the native size check when the pointer returns to the root.
+    let matches = |entry: &CachedPipette| entry.scale.to_bits() == scale.to_bits() && entry.painted == painted;
+    let mut cached = entries.iter().find(|entry| matches(entry)).cloned().unwrap_or_else(|| CachedPipette {
         scale,
-        image: rasterize(&Shape::Pipette, scale),
+        painted,
+        image: if painted {
+            extent(&Shape::Pipette)
+                .and_then(|extent| bitmap_dimensions(extent, scale, PAINTED_PIPETTE_MAX_SIDE))
+                .and_then(|(side, hot)| rasterize_pipette(scale, side, hot))
+        } else {
+            rasterize(&Shape::Pipette, scale)
+        },
         texture: None,
     });
     if painted
@@ -434,7 +451,7 @@ fn cached_pipette(ctx: &egui::Context, scale: f32, painted: bool) -> CachedPipet
         let pixels = egui::ColorImage::from_rgba_unmultiplied(image.size.map(usize::from), &image.rgba);
         cached.texture = Some(ctx.load_texture("pc-pipette-icon", pixels, egui::TextureOptions::LINEAR));
     }
-    entries.retain(|entry| entry.scale.to_bits() != scale.to_bits());
+    entries.retain(|entry| !matches(entry));
     if entries.len() >= PIPETTE_CACHE_CAPACITY {
         entries.remove(0);
     }
@@ -454,6 +471,8 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) -> bool {
         let (Some(image), Some(texture)) = (cached.image, cached.texture) else {
             return false;
         };
+        // Divide by the raster density, which is capped independently of the display density.
+        let scale = cached.scale;
         // Match the native hotspot's texel centre, not the top-left corner of its pixel cell.
         let hot = (vec2(f32::from(image.hotspot[0]), f32::from(image.hotspot[1])) + Vec2::splat(0.5)) / scale;
         let size = vec2(f32::from(image.size[0]), f32::from(image.size[1])) / scale;
@@ -672,20 +691,25 @@ fn ring_spans(dy: f32, r: f32, reach: f32) -> Option<[(f32, f32); 2]> {
     Some([(-xo, -xi), (xi, xo)])
 }
 
-/// Produce bounded straight-RGBA cursor pixels. Pipette SVGs bypass the distance-coverage loop.
-fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
-    if !scale.is_finite() || scale <= 0.0 {
+/// Odd bitmap dimensions keep the hotspot central; stroke and AA padding fit within the limit.
+fn bitmap_dimensions(extent: f32, scale: f32, max_side: u16) -> Option<(u16, u16)> {
+    if !scale.is_finite() || scale <= 0.0 || max_side < 3 {
         return None;
     }
-    let extent = extent(shape)?;
     // Odd dimensions put the hotspot on the centre pixel at every DPI. Include the outline
     // and its antialiasing fringe, then check before converting or allocating.
     let half = ((extent + 1.5) * scale + 1.0).ceil();
-    if !half.is_finite() || half > f32::from((MAX_SIDE - 1) / 2) {
+    if !half.is_finite() || half > f32::from((max_side - 1) / 2) {
         return None;
     }
     let hot = half as u16;
     let side = hot * 2 + 1;
+    Some((side, hot))
+}
+
+/// Produce bounded straight-RGBA cursor pixels. Pipette SVGs bypass the distance-coverage loop.
+fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
+    let (side, hot) = bitmap_dimensions(extent(shape)?, scale, MAX_SIDE)?;
     let bytes = usize::from(side).checked_mul(usize::from(side))?.checked_mul(4)?;
     if matches!(shape, Shape::Pipette) {
         return rasterize_pipette(scale, side, hot);
