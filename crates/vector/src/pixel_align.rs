@@ -456,32 +456,42 @@ pub(crate) fn aligned_edge_path(shape: &ShapeLayer) -> Option<Path> {
         if count < 2 {
             continue;
         }
+        let mut axes = vec![(false, false); count];
+        // A vertical tangent identifies a horizontal extremum, and conversely.
+        // Snap its normal coordinate, moving handles with the anchor; curve
+        // interiors keep area antialiasing instead of thresholding their chords.
+        for (index, knot) in source.iter().enumerate() {
+            let curved = knot.in_ctrl != knot.anchor || knot.out_ctrl != knot.anchor;
+            axes[index] = (
+                curved && same(knot.in_ctrl.x, knot.anchor.x) && same(knot.out_ctrl.x, knot.anchor.x),
+                curved && same(knot.in_ctrl.y, knot.anchor.y) && same(knot.out_ctrl.y, knot.anchor.y),
+            );
+        }
         let segments = if subpath.closed { count } else { count - 1 };
         for index in 0..segments {
             let next = (index + 1) % count;
             let a = source[index];
             let b = source[next];
-            // Curved segments retain their coverage and their control handles.
-            if a.out_ctrl != a.anchor || b.in_ctrl != b.anchor {
-                continue;
-            }
-            let vertical = same(a.anchor.x, b.anchor.x);
-            let horizontal = same(a.anchor.y, b.anchor.y);
+            let points = [a.anchor, a.out_ctrl, b.in_ctrl, b.anchor];
+            let vertical = points.iter().all(|point| same(point.x, a.anchor.x));
+            let horizontal = points.iter().all(|point| same(point.y, a.anchor.y));
             for knot in [index, next] {
-                let original = source[knot];
-                let target = &mut subpath.knots[knot];
-                if vertical && original.anchor.x.is_finite() {
-                    let delta = original.anchor.x.round() - original.anchor.x;
-                    target.anchor.x = original.anchor.x.round();
-                    target.in_ctrl.x = original.in_ctrl.x + delta;
-                    target.out_ctrl.x = original.out_ctrl.x + delta;
-                }
-                if horizontal && original.anchor.y.is_finite() {
-                    let delta = original.anchor.y.round() - original.anchor.y;
-                    target.anchor.y = original.anchor.y.round();
-                    target.in_ctrl.y = original.in_ctrl.y + delta;
-                    target.out_ctrl.y = original.out_ctrl.y + delta;
-                }
+                axes[knot].0 |= vertical;
+                axes[knot].1 |= horizontal;
+            }
+        }
+        for ((target, original), (vertical, horizontal)) in subpath.knots.iter_mut().zip(source).zip(axes) {
+            if vertical && original.anchor.x.is_finite() {
+                let delta = original.anchor.x.round() - original.anchor.x;
+                target.anchor.x = original.anchor.x.round();
+                target.in_ctrl.x = original.in_ctrl.x + delta;
+                target.out_ctrl.x = original.out_ctrl.x + delta;
+            }
+            if horizontal && original.anchor.y.is_finite() {
+                let delta = original.anchor.y.round() - original.anchor.y;
+                target.anchor.y = original.anchor.y.round();
+                target.in_ctrl.y = original.in_ctrl.y + delta;
+                target.out_ctrl.y = original.out_ctrl.y + delta;
             }
         }
     }

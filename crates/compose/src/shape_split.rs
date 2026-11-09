@@ -80,10 +80,12 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
         }
     }
     let fmt = PixelFormat::RGBA8.with_sample(depth);
-    // Removing the outline must not newly qualify a live Line/ArrowLine fill for
-    // a half-pixel shift: interior effects and clipped layers need the original placement.
-    let align_fill = photocraft_vector::pixel_aligned_line_fill_path(sh).is_some();
-    let fill_only = ShapeLayer { stroke: None, cache: None, use_aligned_rendering: align_fill, ..sh.clone() };
+    // Evaluate the special live-line shift before removing its outline. Then drop
+    // live metadata to avoid newly qualifying it, while retaining whole-shape
+    // alignment for rectangle, ellipse and custom-path fills.
+    let align_live_fill = photocraft_vector::pixel_aligned_line_fill_path(sh).is_some();
+    let live = if align_live_fill { sh.live.clone() } else { None };
+    let fill_only = ShapeLayer { live, stroke: None, cache: None, ..sh.clone() };
     let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
     let mut parts = (photocraft_vector::render_shape(&fill_only, fmt, canvas), photocraft_vector::render_shape(&stroke_only, fmt, canvas));
     if let Some(cache) = &sh.cache {
@@ -238,7 +240,7 @@ mod tests {
 
     /// Splitting must not make a live fill eligible by removing its visible outline.
     #[test]
-    fn pixel_align_split_live_fill_keeps_original_outline_eligibility() {
+    fn align_edges_split_live_fill_keeps_original_outline_eligibility() {
         let canvas = Rect::new(0, 0, 100, 100);
         for (vertical, transparent) in [(false, false), (true, false), (false, true), (true, true)] {
             let to = if vertical { [10.0, 70.0] } else { [70.0, 10.0] };
@@ -253,7 +255,13 @@ mod tests {
             };
             let path = sh.path.clone();
             let (fill, _) = split(&sh, canvas, SampleType::U8).unwrap();
-            let expected = ShapeLayer { stroke: None, use_aligned_rendering: transparent, ..sh.clone() };
+            let expected = ShapeLayer {
+                path: sh.path.transform(&photocraft_geom::Affine::translate(if vertical { 0.5 } else { 0.0 }, if vertical { 0.0 } else { 0.5 })),
+                live: None,
+                stroke: None,
+                use_aligned_rendering: false,
+                ..sh.clone()
+            };
             let expected = photocraft_vector::render_shape(&expected, PixelFormat::RGBA8, canvas);
             for y in 0..100 {
                 for x in 0..100 {
@@ -325,5 +333,66 @@ mod tests {
         }
         // Other tests share the cache, so only what this test can rely on: a purge frees bytes.
         assert!(purge_cache() > 0, "something to purge");
+    }
+}
+
+#[cfg(test)]
+mod align_edges_fill_tests {
+    use super::*;
+    use photocraft_doc::{Color, Fill, ShapeStroke};
+
+    #[test]
+    fn align_edges_split_preserves_fractional_rectangle_and_custom_fills() {
+        let canvas = Rect::new(0, 0, 48, 48);
+        for custom in [false, true] {
+            let mut shape = ShapeLayer {
+                path: photocraft_vector::shapes::rect(10.5, 10.5, 20.0, 20.0),
+                fill: Some(Fill::Solid(Color::BLACK)),
+                stroke: Some(ShapeStroke::default()),
+                ..Default::default()
+            };
+            if custom {
+                shape.path.subpaths.push(photocraft_doc::Subpath::polygon(&[(34.5, 10.5), (40.5, 10.5), (40.5, 30.5), (34.5, 30.5)]));
+            }
+            let stored = shape.path.clone();
+            for enabled in [false, true, false] {
+                shape.use_aligned_rendering = enabled;
+                let (fill, _) = split(&shape, canvas, SampleType::U8).unwrap();
+                let alpha = |x| photocraft_raster::to_rgba(&fill.format(), &fill.pixel(x, 20))[3];
+                if enabled {
+                    assert_eq!(alpha(10), 0.0);
+                    assert_eq!(alpha(30), 1.0);
+                    if custom {
+                        assert_eq!(alpha(34), 0.0);
+                        assert_eq!(alpha(40), 1.0);
+                    }
+                } else {
+                    assert!(alpha(10) > 0.0 && alpha(10) < 1.0);
+                    assert!(alpha(30) > 0.0 && alpha(30) < 1.0);
+                }
+                assert_eq!(shape.path, stored);
+            }
+        }
+    }
+
+    #[test]
+    fn align_edges_split_matches_unsplit_ellipse_fill() {
+        let canvas = Rect::new(0, 0, 64, 64);
+        let mut shape = ShapeLayer {
+            path: photocraft_vector::shapes::ellipse(10.5, 10.5, 40.0, 40.0),
+            fill: Some(Fill::Solid(Color::BLACK)),
+            stroke: Some(ShapeStroke::default()),
+            ..Default::default()
+        };
+        for enabled in [false, true] {
+            shape.use_aligned_rendering = enabled;
+            let (fill, _) = split(&shape, canvas, SampleType::U8).unwrap();
+            let expected = photocraft_vector::render_shape(&ShapeLayer { stroke: None, ..shape.clone() }, PixelFormat::RGBA8, canvas);
+            for y in 0..64 {
+                for x in 0..64 {
+                    assert_eq!(fill.pixel(x, y), expected.pixel(x, y));
+                }
+            }
+        }
     }
 }

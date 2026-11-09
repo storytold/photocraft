@@ -1652,3 +1652,22 @@ fn align_edges_fractional_fill_and_stroke_share_snapped_edges() {
         assert_eq!(CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip), legacy);
     }
 }
+
+#[test]
+fn align_edges_ellipse_extrema_snap_without_thresholding_curves() {
+    let mut shape =
+        ShapeLayer { path: shapes::ellipse(10.5, 10.5, 40.0, 40.0), fill: Some(Fill::Solid(Color::BLACK)), use_aligned_rendering: true, ..Default::default() };
+    let stored = shape.path.clone();
+    let path = super::pixel_align::aligned_edge_path(&shape).unwrap();
+    assert_eq!(path.control_bounds().unwrap(), (11.0, 11.0, 51.0, 51.0));
+    let clip = Rect::new(0, 0, 64, 64);
+    let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    assert!(aligned.iter().any(|pixel| pixel[3] > 0.0 && pixel[3] < 1.0));
+    for y in 20..40 {
+        assert_eq!(aligned[y * 64 + 10][3], 0.0);
+    }
+    shape.use_aligned_rendering = false;
+    let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    assert_ne!(aligned, legacy);
+    assert_eq!(shape.path, stored);
+}

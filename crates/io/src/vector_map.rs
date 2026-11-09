@@ -504,8 +504,15 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
 // Shape layers
 // ---------------------------------------------------------------------------
 
+/// Adobe's layer-level `sn2P` block is a four-byte, nonzero-is-true value.
+/// It is independent of the `vstk` descriptor's Stroke Adjust property.
+fn aligned_rendering(data: &[u8]) -> Option<bool> {
+    Some(u32::from_be_bytes(data.try_into().ok()?) != 0)
+}
+
 /// Fills the typed parts of a shape layer from its PSD blocks.
 pub fn shape_from_blocks(sh: &mut ShapeLayer, block: &dyn Fn(&[u8; 4]) -> Option<Vec<u8>>, w: u32, h: u32, dpi: f32) {
+    sh.use_aligned_rendering = block(b"sn2P").and_then(|data| aligned_rendering(&data)).unwrap_or(false);
     if let Some(d) = block(b"vsms").or_else(|| block(b"vmsk"))
         && let Some((p, _)) = path_from_vmsk(&d, w, h)
     {
@@ -536,6 +543,13 @@ fn has_fill_block(raw: &[([u8; 4], Vec<u8>)]) -> bool {
 /// blocks that still decode to the model are kept byte-identical.
 pub fn shape_blocks(sh: &ShapeLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>, w: u32, h: u32, dpi: f32) {
     let find = |raw: &Vec<([u8; 4], Vec<u8>)>, k: &[u8; 4]| raw.iter().position(|(key, _)| key == k);
+    // The layer's Align Edges setting, not the stroke's Stroke Adjust setting.
+    match find(raw, b"sn2P") {
+        Some(i) if aligned_rendering(&raw[i].1) == Some(sh.use_aligned_rendering) => {}
+        Some(i) => raw[i].1 = u32::from(sh.use_aligned_rendering).to_be_bytes().to_vec(),
+        None if sh.use_aligned_rendering => raw.push((*b"sn2P", 1u32.to_be_bytes().to_vec())),
+        None => {}
+    }
     // Path.
     let pos = find(raw, b"vsms").or_else(|| find(raw, b"vmsk"));
     let from_raw = |d: &[u8]| path_from_vmsk(d, w, h).map(|(p, _)| p);
@@ -815,6 +829,41 @@ mod align_edges_tests {
             shape_blocks(&shape, &mut raw, 100, 100, 72.0);
             let descriptor = parse_prefix_versioned(&raw.iter().find(|(key, _)| key == b"vstk").unwrap().1).unwrap();
             assert_eq!(bool_of(&descriptor, "strokeStyleStrokeAdjust"), adjust);
+        }
+    }
+    #[test]
+    fn align_edges_psd_layer_flag_roundtrips_without_a_stroke() {
+        for enabled in [false, true] {
+            let shape = ShapeLayer { use_aligned_rendering: enabled, ..Default::default() };
+            let mut raw = Vec::new();
+            shape_blocks(&shape, &mut raw, 64, 64, 72.0);
+            let mut imported = ShapeLayer { use_aligned_rendering: !enabled, ..Default::default() };
+            shape_from_blocks(&mut imported, &|key| raw.iter().find(|(k, _)| k == key).map(|(_, bytes)| bytes.clone()), 64, 64, 72.0);
+            assert_eq!(imported.use_aligned_rendering, enabled);
+            assert!(imported.stroke.is_none());
+            let unchanged = raw.clone();
+            shape_blocks(&imported, &mut raw, 64, 64, 72.0);
+            assert_eq!(raw, unchanged);
+            imported.use_aligned_rendering = !enabled;
+            shape_blocks(&imported, &mut raw, 64, 64, 72.0);
+            let data = &raw.iter().find(|(key, _)| key == b"sn2P").unwrap().1;
+            assert_eq!(data, &u32::from(!enabled).to_be_bytes());
+        }
+    }
+
+    #[test]
+    fn align_edges_psd_layer_flag_accepts_nonzero_and_rejects_truncated_data() {
+        for bytes in [vec![], vec![1], vec![0, 0, 1], vec![0, 0, 0, 1, 1]] {
+            assert_eq!(aligned_rendering(&bytes), None);
+        }
+        for value in [1u32, 2, u32::MAX] {
+            let data = value.to_be_bytes().to_vec();
+            let mut shape = ShapeLayer::default();
+            shape_from_blocks(&mut shape, &|key| (key == b"sn2P").then(|| data.clone()), 64, 64, 72.0);
+            assert!(shape.use_aligned_rendering);
+            let mut raw = vec![(*b"sn2P", data.clone())];
+            shape_blocks(&shape, &mut raw, 64, 64, 72.0);
+            assert_eq!(raw[0].1, data, "unchanged true values stay byte-identical");
         }
     }
 }

@@ -4955,3 +4955,29 @@ fn pixel_align_round2_effect_identity_tracks_alignment_provenance() {
     sh.psd_raw = Some(std::sync::Arc::new(Vec::new()));
     assert_ne!(framed, key(&layer));
 }
+
+/// Reference: a black no-stroke rectangle at 10.5..30.5 on white has a white
+/// column 10 and black column 30 with Align Edges enabled.
+#[test]
+fn align_edges_no_stroke_rectangle_matches_reference_columns() {
+    for enabled in [false, true] {
+        let mut doc = doc_white(48, 48);
+        let mut shape = photocraft_doc::ShapeLayer {
+            path: photocraft_vector::shapes::rect(10.5, 10.5, 20.0, 20.0),
+            fill: Some(Fill::Solid(Color::BLACK)),
+            use_aligned_rendering: enabled,
+            ..Default::default()
+        };
+        // The engine supplies vector rasterization to the compositor as the shape cache.
+        shape.cache = Some(photocraft_vector::render_shape(&shape, PixelFormat::RGBA8, Rect::new(0, 0, 48, 48)));
+        doc.layers.push(Layer::new("rectangle", LayerContent::Shape(shape)));
+        let (left, right) = (px(&doc, 10, 20), px(&doc, 30, 20));
+        if enabled {
+            assert_eq!(left, [1.0; 4]);
+            assert_eq!(right, [0.0, 0.0, 0.0, 1.0]);
+        } else {
+            assert!(left[0] > 0.0 && left[0] < 1.0);
+            assert!(right[0] > 0.0 && right[0] < 1.0);
+        }
+    }
+}
