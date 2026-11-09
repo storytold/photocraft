@@ -293,8 +293,10 @@ fn patterns_pixels_equal(a: &Document, b: &Document) -> bool {
     };
     let fill = |f: &Fill| matches!(f, Fill::Pattern { id, name, .. } if hits(id, name));
     let paint = |p: &FxPaint| matches!(p, FxPaint::Pattern { id, name, .. } if hits(id, name));
-    fn any_layer(layers: &[Layer], refers: &dyn Fn(&Layer) -> bool) -> bool {
-        layers.iter().any(|l| refers(l) || matches!(&l.content, LayerContent::Group(g) if any_layer(&g.children, refers)))
+    // Past a nesting depth no real document reaches, assume a reference (unequal), as
+    // `pixels_equal_with` does.
+    fn any_layer(layers: &[Layer], depth: usize, refers: &dyn Fn(&Layer) -> bool) -> bool {
+        depth >= 256 || layers.iter().any(|l| refers(l) || matches!(&l.content, LayerContent::Group(g) if any_layer(&g.children, depth + 1, refers)))
     }
     let refers = |l: &Layer| {
         let effect = l.effects.items.iter().any(|e| match e {
@@ -312,7 +314,7 @@ fn patterns_pixels_equal(a: &Document, b: &Document) -> bool {
                 LayerContent::Raster(_) | LayerContent::Group(_) | LayerContent::Adjustment(_) | LayerContent::Text(_) | LayerContent::Smart(_) => false,
             }
     };
-    !any_layer(&b.layers, &refers)
+    !any_layer(&b.layers, 0, &refers)
 }
 
 /// Whether `a` and `b` composite to the same pixels: they differ at most in fields the

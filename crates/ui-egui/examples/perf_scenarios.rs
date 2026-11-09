@@ -1640,8 +1640,8 @@ fn redraw_area_scenarios(b: &mut Bench, sz: &Sizes) {
 
 /// #9329 PR C: the whole app (kittest harness, CPU canvas) with a 24 MP photo. Each sample runs
 /// Paste Into a 5 % selection (untimed, after a frame that shows the selection), then times the
-/// next frame. Paste Into is a compound command (several revisions), so the frame's refresh goes
-/// through the real `damage_since` path.
+/// next frame, then undoes the paste (untimed). Paste Into is a compound command (several
+/// revisions), so the frame's refresh goes through the real `damage_since` path.
 fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     // 0.224² ≈ 5 % of the canvas.
     let sel = json!({"x": w / 2, "y": h / 2, "width": w * 224 / 1000, "height": h * 224 / 1000});
@@ -1666,6 +1666,8 @@ fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     b.px.borrow_mut().clear();
     let mut samples = Vec::new();
     let run = (|| -> Res<()> {
+        let layers = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.doc.layers.len());
+        let base_layers = layers(&harness);
         for i in 0..=b.reps.max(1) {
             let rev = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.revision);
             // Untimed: Paste Into turns the selection into the pasted layer's
@@ -1690,6 +1692,13 @@ fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
             let px = harness.state().perf.last_refresh_px;
             if px == 0 {
                 return Err("path check: the frame after Paste Into recorded no refresh".into());
+            }
+            // Untimed: undo the paste (one history step), so every sample pastes onto the same
+            // document rather than onto the layers earlier samples pasted. The next sample's
+            // selection frame shows the undone document before its timer.
+            harness.state_mut().run("edit.undo", json!({}))?;
+            if layers(&harness) != base_layers {
+                return Err("path check: undoing Paste Into did not restore the layer stack".into());
             }
             // Sample 0 is the warm-up.
             if i > 0 {
