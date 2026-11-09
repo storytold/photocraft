@@ -589,13 +589,16 @@ closer zooms from the whole frame, so highlights the default develop clipped com
 exposure in the preview as they do on Open. Until Open a raw in the dialog (or in its filmstrip)
 is not a document: no tab, nothing on the canvas, no History; the open documents and the
 active one stay as they were. Open makes a document of each raw it opens (its result's
-`document` is that tab); Cancel and Done make none. `app.open` and other automation
+`document` is that tab, after the Open Document scripts; `null` if one closed it); Cancel and Done
+make none. The exception is a raw opened with File › Open as Smart Object: it is reviewed as the
+smart-object document it already is (active behind the dialog), and Cancel and Done close it. `app.open` and other automation
 opens never show the dialog. The preference `rawDefaults.openInCameraRaw` (default `true`) turns
 it off; `rawDefaults.demosaic` (`ahd` by default, `mhc`, `bilinear`; Preferences › Camera Raw)
 is the method the app's raw opens develop with (interactive opens, `app.open` and Place).
 
 **Several raws.** Raws opened together share the dialog, in a filmstrip on its left, each with
-its own settings; Open develops every one and Cancel closes every one. Several can be selected as
+its own settings; Open develops the selected ones (below) and lets the others go, with their
+unsaved settings, as Cancel lets every one go. Several can be selected as
 in Camera Raw's filmstrip: a click selects one raw and shows it, Shift-click selects the range
 from the raw last clicked without Shift, ⌘-click (Ctrl on Windows and Linux) adds a raw and shows
 it or takes it out (another selected raw is shown when the shown one is taken out; the last one

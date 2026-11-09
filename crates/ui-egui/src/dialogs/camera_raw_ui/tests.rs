@@ -1773,7 +1773,7 @@ fn a_raw_whose_background_develop_is_cancelled_is_not_lost() {
     app.background_jobs = true;
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     let job = photocraft_engine::jobs::JobId(r["job"].as_u64().expect("a background develop"));
-    app.session.cancel_job(job);
+    let cancelled = app.session.cancel_job(job);
     for _ in 0..3000 {
         crate::jobs_ui::tick(&mut app, &ctx);
         if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
@@ -1788,7 +1788,10 @@ fn a_raw_whose_background_develop_is_cancelled_is_not_lost() {
             assert!(app.session.documents().is_empty());
             assert_eq!(held.kept.as_ref().map(|(p, _)| p.exposure), Some(1.0));
         }
-        None => assert_eq!(app.session.documents().len(), 1, "the raw is neither open nor waiting"),
+        None => {
+            assert!(!cancelled, "a cancelled develop must bring the raw back to the filmstrip");
+            assert_eq!(app.session.documents().len(), 1, "the raw is neither open nor waiting");
+        }
     }
 }
 
@@ -1843,9 +1846,7 @@ fn a_raw_whose_camera_raw_step_is_cancelled_goes_back_with_its_settings() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}}})).unwrap().unwrap();
     app.background_jobs = true;
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
-    if let Some(job) = r["filter"]["job"].as_u64() {
-        app.session.cancel_job(photocraft_engine::jobs::JobId(job));
-    }
+    let cancelled = r["filter"]["job"].as_u64().is_some_and(|job| app.session.cancel_job(photocraft_engine::jobs::JobId(job)));
     for _ in 0..3000 {
         crate::jobs_ui::tick(&mut app, &ctx);
         if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
@@ -1859,7 +1860,11 @@ fn a_raw_whose_camera_raw_step_is_cancelled_goes_back_with_its_settings() {
             assert_eq!(session_state(&app).0, before.0, "the admitted document closed again");
             assert_eq!(held.kept.as_ref().map(|(p, _)| p.contrast), Some(40.0));
         }
-        None => assert_eq!(app.session.documents().len(), 2, "opened with its step"),
+        None => {
+            assert!(!cancelled, "a cancelled step must bring the raw back to the filmstrip");
+            assert_eq!(app.session.documents().len(), 2, "opened");
+            assert!(app.session.documents()[1].history.past_len() > 0, "opened with its Contrast step");
+        }
     }
 }
 

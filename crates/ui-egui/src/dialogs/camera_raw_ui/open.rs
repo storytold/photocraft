@@ -451,11 +451,13 @@ fn after_admit(app: &mut PhotocraftApp, raw: &RawOpen) {
 
 /// A held raw's open has finished (its Camera Raw step and conversions applied, marked
 /// unmodified): the "Open Document" script events fire, on the developed document. A raw opened
-/// without the dialog had them when it opened.
-fn opened_event(app: &mut PhotocraftApp, raw: &RawOpen, index: usize) {
+/// without the dialog had them when it opened. Returns the document's tab index afterwards
+/// (`None` when a script closed it): the scripts may move tabs.
+fn opened_event(app: &mut PhotocraftApp, raw: &RawOpen, index: usize) -> Option<usize> {
     if raw.held.is_none() {
-        return;
+        return Some(index);
     }
+    let opened = app.session.documents().get(index).map(|st| st.doc.id);
     // The active document, by identity: the scripts may close or move tabs.
     let active = app.session.active().map(|st| st.doc.id);
     app.session.set_active(index);
@@ -464,6 +466,7 @@ fn opened_event(app: &mut PhotocraftApp, raw: &RawOpen, index: usize) {
         app.session.set_active(i);
     }
     app.sync_views();
+    opened.and_then(|id| document_index(app, id))
 }
 
 /// Opens a held raw as its default develop, with no settings and no sidecar written: what a raw
@@ -599,7 +602,8 @@ fn finish_open_raw(
         crate::notices::error(app, format!("{}: {e}", raw.name));
     }
     mark_unmodified(app, index);
-    opened_event(app, raw, index);
+    // The reply names the tab the document has after its "Open Document" scripts.
+    result["document"] = json!(opened_event(app, raw, index));
     Ok(result)
 }
 
