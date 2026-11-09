@@ -667,7 +667,7 @@ fn a_large_placed_transform_prepares_without_capturing_the_selected_channels() {
         let (placed, eyes) = (st.active_layer.unwrap(), st.channel_view.clone());
         app.background_jobs = true;
         let ctx = egui::Context::default();
-        ctx.begin_pass(egui::RawInput { max_texture_side: Some(64), ..Default::default() });
+        ctx.begin_pass(egui::RawInput { max_texture_side: Some(1024), ..Default::default() });
         begin_placed(&mut app, &ctx).unwrap();
         let job = app.transform_preparing.as_ref().expect("the large layer prepares on a worker").job;
         assert!(app.ui.transform.is_none());
