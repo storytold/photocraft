@@ -53,27 +53,46 @@ pub fn upscale_surface_in_canvas(s: &Surface, scale: PixelArtScale, canvas: Rect
     }
 }
 
-/// The most memory [`upscale_surface_in_canvas`] holds at once for a `w` x `h` source of
-/// `bytes_per_pixel` and `channels`, beyond the source itself: the result, Scale4x's 2x
+/// The most memory [`upscale_surface_in_canvas`] holds at once for a source whose pixels fill
+/// `src`, of `bytes_per_pixel` and `channels`, beyond the source itself: the result, Scale4x's 2x
 /// intermediate (alive while the second pass writes the result), and one pass's `f32` band
-/// buffers. Saturates instead of overflowing.
-pub fn peak_bytes(scale: PixelArtScale, w: u32, h: u32, bytes_per_pixel: usize, channels: usize) -> u64 {
-    let n = u64::from(scale.factor());
-    let px = |k: u64| u64::from(w).saturating_mul(k).saturating_mul(u64::from(h).saturating_mul(k));
+/// buffers. Surfaces are counted by the whole tiles their scaled pixels touch, since a thin or
+/// unaligned box still allocates full tiles. Saturates instead of overflowing.
+pub fn peak_bytes(scale: PixelArtScale, src: Rect, bytes_per_pixel: usize, channels: usize) -> u64 {
+    if src.is_empty() {
+        return 0;
+    }
+    let n = scale.factor();
     let surfaces = match scale {
-        PixelArtScale::Scale4x => px(4).saturating_add(px(2)),
-        _ => px(n),
+        PixelArtScale::Scale4x => tiled_px(src, 4).saturating_add(tiled_px(src, 2)),
+        _ => tiled_px(src, n),
     }
     .saturating_mul(bytes_per_pixel as u64);
-    // One band reads a row of the widest pass (with its margin) and writes its rows, never less
-    // than one source row and otherwise capped at READ_BUDGET samples.
+    // One band reads its rows of the widest pass plus a one-pixel margin on every side (so two
+    // halo rows beyond the band) and writes its output rows. The band holds at least one source
+    // row and is otherwise sized to READ_BUDGET samples before the halo rows are added.
     let (src_w, pn) = match scale {
-        PixelArtScale::Scale4x => (u64::from(w).saturating_mul(2), 2),
-        _ => (u64::from(w), n),
+        PixelArtScale::Scale4x => (u64::from(src.width()).saturating_mul(2), 2),
+        _ => (u64::from(src.width()), u64::from(n)),
     };
-    let row = src_w.saturating_add(2).saturating_add(src_w.saturating_mul(pn * pn)).saturating_mul(channels.max(1) as u64);
-    let band = row.max(READ_BUDGET as u64).saturating_mul(std::mem::size_of::<f32>() as u64);
+    let ch = channels.max(1) as u64;
+    let read_w = src_w.saturating_add(2);
+    let row = read_w.saturating_add(src_w.saturating_mul(pn * pn)).saturating_mul(ch);
+    let halo = read_w.saturating_mul(2).saturating_mul(ch);
+    let band = row.max(READ_BUDGET as u64).saturating_add(halo).saturating_mul(std::mem::size_of::<f32>() as u64);
     surfaces.saturating_add(band)
+}
+
+/// Pixels in the whole tiles that `src` scaled by `n` touches.
+fn tiled_px(src: Rect, n: u32) -> u64 {
+    let t = i64::from(photocraft_geom::TILE_SIZE);
+    let n = i64::from(n);
+    let tiles = |lo: i32, hi: i32| {
+        let (lo, hi) = (i64::from(lo) * n, i64::from(hi) * n);
+        (hi - 1).div_euclid(t) - lo.div_euclid(t) + 1
+    };
+    let side = |lo, hi| (tiles(lo, hi) as u64).saturating_mul(t as u64);
+    side(src.x0, src.x1).saturating_mul(side(src.y0, src.y1))
 }
 
 /// `r` scaled by `n` about the origin, saturating at the `i32` range.
@@ -181,6 +200,7 @@ impl Band<'_> {
 mod tests {
     use super::*;
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_geom::TILE_SIZE;
 
     const K: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
     const W: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -303,15 +323,27 @@ mod tests {
 
     #[test]
     fn peak_bytes_counts_the_result_the_scale4x_intermediate_and_the_bands() {
-        let band = READ_BUDGET as u64 * 4;
-        assert_eq!(peak_bytes(PixelArtScale::Scale2x, 10, 10, 4, 4), 400 * 4 + band);
-        assert_eq!(peak_bytes(PixelArtScale::Scale3x, 10, 10, 4, 4), 900 * 4 + band);
-        // Scale4x keeps the 2x image (a quarter of the result) while it writes the result.
-        assert_eq!(peak_bytes(PixelArtScale::Scale4x, 10, 10, 4, 4), (1600 + 400) * 4 + band);
-        // A row wider than the budget is still read whole.
-        let wide = 1 << 22;
-        assert_eq!(peak_bytes(PixelArtScale::Scale2x, wide, 1, 1, 1) - 4 * u64::from(wide), (u64::from(wide) * 5 + 2) * 4);
-        assert_eq!(peak_bytes(PixelArtScale::Scale4x, u32::MAX, u32::MAX, 16, 5), u64::MAX);
+        let tile = (TILE_SIZE * TILE_SIZE) as u64;
+        let band = (READ_BUDGET as u64 + 2 * 12 * 4) * 4;
+        let small = Rect::new(0, 0, 10, 10);
+        // A 10 x 10 source scales into one tile at every factor.
+        assert_eq!(peak_bytes(PixelArtScale::Scale2x, small, 4, 4), tile * 4 + band);
+        assert_eq!(peak_bytes(PixelArtScale::Scale3x, small, 4, 4), tile * 4 + band);
+        // Scale4x keeps the 2x image while it writes the result; its band is twice as wide.
+        let band4 = (READ_BUDGET as u64 + 2 * 22 * 4) * 4;
+        assert_eq!(peak_bytes(PixelArtScale::Scale4x, small, 4, 4), 2 * tile * 4 + band4);
+        // Straddling a tile boundary touches the tiles on both sides.
+        let t = TILE_SIZE / 2;
+        assert_eq!(peak_bytes(PixelArtScale::Scale2x, Rect::new(t - 1, t - 1, t + 1, t + 1), 4, 4), 4 * tile * 4 + (READ_BUDGET as u64 + 2 * 4 * 4) * 4);
+        assert_eq!(peak_bytes(PixelArtScale::Scale2x, Rect::new(-1, -1, 0, 0), 4, 4), tile * 4 + (READ_BUDGET as u64 + 2 * 3 * 4) * 4);
+        // A row wider than the budget is still read whole, with its two halo rows, and a one-row
+        // surface still fills a whole tile row.
+        let wide = 1u64 << 22;
+        let thin = peak_bytes(PixelArtScale::Scale2x, Rect::new(0, 0, wide as i32, 1), 1, 1);
+        let result = wide * 2 * TILE_SIZE as u64;
+        assert_eq!(thin - result, ((wide + 2) * 3 + wide * 4) * 4);
+        assert_eq!(peak_bytes(PixelArtScale::Scale4x, Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), 16, 5), u64::MAX);
+        assert_eq!(peak_bytes(PixelArtScale::Scale2x, Rect::new(0, 0, 0, 0), 4, 4), 0);
     }
 
     #[test]

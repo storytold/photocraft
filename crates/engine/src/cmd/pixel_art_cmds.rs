@@ -51,8 +51,9 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
 
 /// Refuses, before anything is allocated, an upscale whose working memory would pass the resample
 /// budget: the result alone may fit it while Scale4x's 2x intermediate and the band buffers don't.
-fn check_peak(scale: PixelArtScale, ow: u32, oh: u32, bytes_per_pixel: usize, channels: usize) -> Result<()> {
-    let peak = peak_bytes(scale, ow, oh, bytes_per_pixel, channels);
+fn check_peak(scale: PixelArtScale, src: Rect, bytes_per_pixel: usize, channels: usize) -> Result<()> {
+    let peak = peak_bytes(scale, src, bytes_per_pixel, channels);
+    let (ow, oh) = (src.width(), src.height());
     let max = crate::image_cmds::MAX_RESAMPLE_BYTES;
     if peak <= max {
         return Ok(());
@@ -73,7 +74,7 @@ fn check_surface(scale: PixelArtScale, surf: &Surface) -> Result<()> {
     if ![r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.checked_mul(n as i32).is_some()) {
         return Err(bad(format!("upscaling {n}x would push some pixels outside the 32-bit coordinate range")));
     }
-    check_peak(scale, r.width(), r.height(), surf.format().bytes_per_pixel(), surf.channels())
+    check_peak(scale, r, surf.format().bytes_per_pixel(), surf.channels())
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
@@ -88,7 +89,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let (nw, nh) = (nw as u32, nh as u32);
     crate::image_cmds::check_resample_budget(ID, &d.doc, nw, nh, "")?;
     let f = d.doc.pixel_format();
-    check_peak(scale, ow, oh, f.bytes_per_pixel(), f.channels())?;
+    check_peak(scale, Rect::new(0, 0, ow as i32, oh as i32), f.bytes_per_pixel(), f.channels())?;
     let k = f64::from(n);
     s.set_sampler_map(photocraft_geom::Affine { m: [k, 0.0, 0.0, k, 0.0, 0.0] });
     s.edit("Pixel Art Upscale", |doc, _| {
@@ -248,11 +249,11 @@ mod tests {
         // 32-bit RGBA: 16 bytes a pixel. A square whose 4x result is just under the budget.
         let side = ((max / 16) as f64).sqrt() as u32 / 4 - 1;
         assert!(u64::from(side * 4).pow(2) * 16 <= max, "the result alone fits");
-        let e = check_peak(PixelArtScale::Scale4x, side, side, 16, 4).unwrap_err().to_string();
+        let e = check_peak(PixelArtScale::Scale4x, Rect::new(0, 0, side as i32, side as i32), 16, 4).unwrap_err().to_string();
         assert!(e.contains("working memory"), "{e}");
         // Scale2x of the same source is a quarter of the size: well within.
-        assert!(check_peak(PixelArtScale::Scale2x, side, side, 16, 4).is_ok());
-        assert!(check_peak(PixelArtScale::Scale4x, u32::MAX, u32::MAX, 16, 5).is_err());
+        assert!(check_peak(PixelArtScale::Scale2x, Rect::new(0, 0, side as i32, side as i32), 16, 4).is_ok());
+        assert!(check_peak(PixelArtScale::Scale4x, Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), 16, 5).is_err());
     }
 
     /// Two pixels far apart on a small canvas: the canvas fits the budget, but the box the layer
