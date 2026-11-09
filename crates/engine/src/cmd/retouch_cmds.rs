@@ -400,3 +400,6 @@ mod tests;
 
 #[cfg(test)]
 mod patch_history_names_tests;
+
+#[cfg(test)]
+mod remove_history_name_tests;
