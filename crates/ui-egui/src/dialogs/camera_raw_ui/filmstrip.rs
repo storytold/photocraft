@@ -283,7 +283,7 @@ pub(super) fn done(app: &mut PhotocraftApp) -> Value {
         return json!({"done": false, "saved": saved});
     }
     app.ui.status = if !saved.is_empty() {
-        crate::i18n::fmt(tl!("Saved Camera Raw settings to {file}"), &[("file", &saved.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))])
+        crate::i18n::fmt(tl!("Saved RAW Develop settings to {file}"), &[("file", &saved.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))])
     } else if stored.iter().all(|s| *s == Stored::Defaults) {
         tl!("Nothing to save: these raws are at their default settings").to_string()
     } else {
@@ -379,7 +379,7 @@ pub(super) fn click(app: &mut PhotocraftApp, ctx: &egui::Context, i: usize, shif
 /// The control channel's filmstrip request: `{"click": index, "shift": bool, "command": bool}`
 /// clicks a raw as the pointer would, `{"selectAll": true}` is ⌘A.
 pub(super) fn request(app: &mut PhotocraftApp, ctx: &egui::Context, film: &Value) -> Result<(), String> {
-    let fields = film.as_object().ok_or("Camera Raw filmstrip must be an object")?;
+    let fields = film.as_object().ok_or("RAW Develop filmstrip must be an object")?;
     if shown_index(app).is_none() {
         return Err("the filmstrip is for raws being opened".into());
     }
@@ -387,15 +387,15 @@ pub(super) fn request(app: &mut PhotocraftApp, ctx: &egui::Context, film: &Value
         match key.as_str() {
             "click" => {}
             "shift" | "command" | "selectAll" if value.is_boolean() => {}
-            "shift" | "command" | "selectAll" => return Err(format!("Camera Raw filmstrip {key} must be a boolean")),
-            _ => return Err(format!("unknown Camera Raw filmstrip property {key}")),
+            "shift" | "command" | "selectAll" => return Err(format!("RAW Develop filmstrip {key} must be a boolean")),
+            _ => return Err(format!("unknown RAW Develop filmstrip property {key}")),
         }
     }
     let flag = |k: &str| film.get(k).and_then(Value::as_bool) == Some(true);
     // Once the request is known to be good, an edit not yet synced goes to the raws selected when
     // it was made, not to the new selection.
     match (film.get("click"), flag("selectAll")) {
-        (Some(_), true) => Err("Camera Raw filmstrip takes click or selectAll, not both".into()),
+        (Some(_), true) => Err("RAW Develop filmstrip takes click or selectAll, not both".into()),
         (None, true) => {
             sync_selected(app);
             select_all(app);
@@ -410,7 +410,7 @@ pub(super) fn request(app: &mut PhotocraftApp, ctx: &egui::Context, film: &Value
             sync_selected(app);
             click(app, ctx, i, flag("shift"), flag("command"))
         }
-        (None, false) => Err("Camera Raw filmstrip needs click or selectAll".into()),
+        (None, false) => Err("RAW Develop filmstrip needs click or selectAll".into()),
     }
 }
 
@@ -645,7 +645,7 @@ fn spawn_thumb(job: ThumbJob) -> ThumbRedraw {
         let (worker_job, worker_tx) = (job.clone(), tx.clone());
         if let Err(e) = std::thread::Builder::new().name("camera-raw-thumbnail".into()).spawn(move || draw(worker_job, worker_tx)) {
             // No thread to spare: drawn here rather than left out of date.
-            log::warn!("no thread for a Camera Raw thumbnail, drawing it here: {e}");
+            log::warn!("no thread for a RAW Develop thumbnail, drawing it here: {e}");
             draw(job, tx);
         }
     }

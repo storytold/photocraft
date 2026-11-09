@@ -9,7 +9,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return None;
     }
     let Some(fields) = params.as_object() else {
-        return Some(Err("Camera Raw params must be an object".into()));
+        return Some(Err("RAW Develop params must be an object".into()));
     };
     if fields.is_empty() {
         return Some(open(app, ctx).map(|_| super::describe(app).unwrap_or(Value::Null)));
@@ -28,26 +28,26 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     }
     let ui = params.get("ui")?;
     let Some(fields) = ui.as_object() else {
-        return Some(Err("Camera Raw ui must be an object".into()));
+        return Some(Err("RAW Develop ui must be an object".into()));
     };
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" | "filmstrip" => {}
             "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" if value.is_boolean() => {}
             "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" => {
-                return Some(Err(format!("Camera Raw {key} must be a boolean")));
+                return Some(Err(format!("RAW Develop {key} must be a boolean")));
             }
-            _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
+            _ => return Some(Err(format!("unknown RAW Develop ui property {key}"))),
         }
     }
     let ends = ["commit", "cancel", "done"].into_iter().filter(|k| ui.get(*k).and_then(Value::as_bool) == Some(true)).count();
     if ends > 1 {
-        return Some(Err("Camera Raw takes one of commit, cancel and done".into()));
+        return Some(Err("RAW Develop takes one of commit, cancel and done".into()));
     }
     for (key, run) in [("saveSettings", save_settings as fn(&mut PhotocraftApp) -> Result<Value, String>), ("loadSettings", load_settings)] {
         if ui.get(key).and_then(Value::as_bool) == Some(true) {
             if fields.len() > 1 {
-                return Some(Err(format!("Camera Raw {key} must be sent on its own")));
+                return Some(Err(format!("RAW Develop {key} must be sent on its own")));
             }
             return Some(run(app));
         }
@@ -55,7 +55,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     // A filmstrip click may show another raw (a new dialog), so it comes on its own.
     if let Some(film) = ui.get("filmstrip") {
         if fields.len() > 1 {
-            return Some(Err("Camera Raw filmstrip must be sent on its own".into()));
+            return Some(Err("RAW Develop filmstrip must be sent on its own".into()));
         }
         return Some(super::filmstrip::request(app, ctx, film).map(|()| super::describe(app).unwrap_or(Value::Null)));
     }
@@ -77,19 +77,19 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
 /// `base` with the `set` request's settings, validated against `original`.
 fn apply_set(base: &CameraRaw, set: &Value, original: &CameraRaw) -> Result<CameraRaw, String> {
     if !set.is_object() {
-        return Err("bad Camera Raw settings: expected an object".into());
+        return Err("bad RAW Develop settings: expected an object".into());
     }
     let mut cur = serde_json::to_value(base).unwrap_or(json!({}));
     if let (Value::Object(c), Value::Object(s)) = (&mut cur, set) {
         for (k, v) in s {
             if !c.contains_key(k) {
-                return Err(format!("unknown Camera Raw setting {k}"));
+                return Err(format!("unknown RAW Develop setting {k}"));
             }
             c.insert(k.clone(), v.clone());
         }
     }
-    let next = serde_json::from_value::<CameraRaw>(cur).map_err(|e| format!("bad Camera Raw settings: {e}"))?;
-    next.validate_changes(original).map_err(|e| format!("bad Camera Raw settings: {e}"))?;
+    let next = serde_json::from_value::<CameraRaw>(cur).map_err(|e| format!("bad RAW Develop settings: {e}"))?;
+    next.validate_changes(original).map_err(|e| format!("bad RAW Develop settings: {e}"))?;
     Ok(next)
 }
 

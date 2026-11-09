@@ -648,9 +648,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Color")).clicked() {
                 crate::color_picker_ui::open_for_target(app, "noteColor", &crate::color_picker_ui::title_for(tl!("Color")), rgb);
             }
+            // Clear All asks first (#11791); `notes.delete {"all": true}` itself never does.
             if ui.add_enabled_ui(!doc.notes.is_empty(), |ui| crate::widgets::secondary_button(ui, tl!("Clear All"), 0.0)).inner.clicked() {
-                let _ = app.run("notes.delete", json!({"all": true}));
-                app.ui.analysis.note_selected = None;
+                ask_clear_notes(app);
             }
             if crate::icons::button(ui, "message-square", 22.0, app.ui.analysis.notes, tl!("Show or hide the Notes panel")).clicked() {
                 app.ui.analysis.notes = !app.ui.analysis.notes;
@@ -1058,6 +1058,45 @@ mod sampler_drag_tests;
 
 /// Marks the "Delete this note?" alert (#11788).
 const DELETE_NOTE_MARK: &str = "__deleteNote";
+
+/// Marks the "Are you sure you want to delete all notes?" alert (#11791).
+const CLEAR_NOTES_MARK: &str = "__clearAllNotes";
+
+/// The Note tool's Clear All: Photoshop's alert, OK / Cancel (#11791). OK deletes every note in one
+/// "Delete all Notes" step; Cancel (or Escape) changes nothing.
+pub fn ask_clear_notes(app: &mut PhotocraftApp) {
+    let Some(doc) = app.session.active().filter(|s| !s.doc.notes.is_empty()).map(|s| s.doc.id.0) else { return };
+    if app.ui.dialogs.iter().any(|d| owns_clear_notes(&d.fields)) {
+        return;
+    }
+    let mut f = Map::new();
+    f.insert(CLEAR_NOTES_MARK.into(), json!(true));
+    f.insert("__command".into(), json!("notes.delete"));
+    f.insert("__label".into(), json!(tl!("Clear All")));
+    f.insert("document".into(), json!(doc));
+    app.ui.open_dialog(crate::state::DialogKind::Command, f);
+}
+
+pub fn owns_clear_notes(fields: &Map<String, Value>) -> bool {
+    fields.contains_key(CLEAR_NOTES_MARK)
+}
+
+pub fn clear_notes_body(ui: &mut egui::Ui) {
+    ui.label(tl!("Are you sure you want to delete all notes?"));
+}
+
+/// OK: every note goes in one step, nothing stays selected, and the options bar shows the tool
+/// defaults again (a selected note had put its author and colour there).
+pub fn confirm_clear_notes(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    if app.session.active().map(|s| s.doc.id.0) != fields.get("document").and_then(Value::as_u64) {
+        return Err(tl!("The document changed. Please choose Clear All again.").into());
+    }
+    let result = app.run("notes.delete", json!({"all": true}))?;
+    let defaults = AnalysisUi::default();
+    let a = &mut app.ui.analysis;
+    (a.note_selected, a.note_author, a.note_color) = (None, defaults.note_author, defaults.note_color);
+    Ok(result)
+}
 /// Its "Don't show again", kept with the other dialog preferences.
 const DELETE_NOTE_PREF: &str = "notes.delete.confirmation";
 
@@ -1163,3 +1202,7 @@ mod note_delete_key_tests;
 #[cfg(test)]
 #[path = "analysis_ruler_shift_tests.rs"]
 mod analysis_ruler_shift_tests;
+
+#[cfg(test)]
+#[path = "note_clear_all_tests.rs"]
+mod note_clear_all_tests;

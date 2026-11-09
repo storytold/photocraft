@@ -55,6 +55,10 @@ pub struct CanvasToolMenu {
     /// becomes active, the index may name a different sampler, so the menu closes and Delete greys.
     #[serde(default)]
     pub sampler_at: Option<(usize, [f64; 2])>,
+    /// The Eyedropper's menu (#11747): the composite colour under the right-click, averaged with
+    /// the Sample Size, which its Copy Color rows put on the clipboard. `None` over transparency.
+    #[serde(default)]
+    pub color: Option<[f32; 3]>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -314,6 +318,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         crop: Some(users),
         sampler: None,
         sampler_at: None,
+        color: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -430,6 +435,43 @@ pub const NO_SELECTION_MENU: &[Row] = &[
     Some(("Load Selection…", "select.loadSelection")),
 ];
 
+/// The Eyedropper's copy rows (#11747).
+pub const EYEDROPPER_COPY_HTML: &str = "canvasMenu.eyedropper.copyHtml";
+pub const EYEDROPPER_COPY_HEX: &str = "canvasMenu.eyedropper.copyHex";
+
+/// The Eyedropper's canvas menu, in the reference application's order (#11747): the Sample Sizes
+/// (the current one checked), then the two Copy Color rows for the colour under the pointer.
+pub const EYEDROPPER_MENU: &[Row] = &[
+    Some(("Point Sample", "canvasMenu.eyedropper.size.1")),
+    Some(("3 by 3 Average", "canvasMenu.eyedropper.size.3")),
+    Some(("5 by 5 Average", "canvasMenu.eyedropper.size.5")),
+    Some(("11 by 11 Average", "canvasMenu.eyedropper.size.11")),
+    Some(("31 by 31 Average", "canvasMenu.eyedropper.size.31")),
+    Some(("51 by 51 Average", "canvasMenu.eyedropper.size.51")),
+    Some(("101 by 101 Average", "canvasMenu.eyedropper.size.101")),
+    None,
+    Some(("Copy Color as HTML", EYEDROPPER_COPY_HTML)),
+    Some(("Copy Color's Hex Code", EYEDROPPER_COPY_HEX)),
+];
+
+/// The Sample Size an Eyedropper menu row sets.
+fn eyedropper_size(command: &str) -> Option<u32> {
+    command.strip_prefix("canvasMenu.eyedropper.size.")?.parse().ok()
+}
+
+/// Is `menu` the Eyedropper's own menu (not the pasteboard, guide, transform or crop menu it can
+/// also open)?
+fn is_eyedropper(menu: &CanvasToolMenu) -> bool {
+    menu.tool == Tool::Eyedropper
+        && menu.crop.is_none()
+        && !menu.guide
+        && !menu.pasteboard
+        && !menu.transform
+        && menu.anchor.is_none()
+        && !menu.text
+        && !menu.type_layer
+}
+
 /// Photoshop's Pen context menu order. Rows whose operation is not applicable to the current
 /// path or layer stay visible and disabled.
 pub const PEN_MENU: &[Row] = &[
@@ -524,6 +566,8 @@ pub fn applies(tool: Tool) -> bool {
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
             | Tool::ColorSampler
+            // Sample Size and Copy Color (#11747).
+            | Tool::Eyedropper
     ) || path_menu(tool)
 }
 
@@ -575,6 +619,8 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         PEN_MENU
     } else if sampler_menu(menu) {
         SAMPLER_MENU
+    } else if menu.tool == Tool::Eyedropper {
+        EYEDROPPER_MENU
     } else {
         selection_rows(menu.has_selection)
     }
@@ -600,6 +646,9 @@ pub(crate) fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: 
     }
     if menu.text || menu.type_layer {
         return type_checked(app, command);
+    }
+    if is_eyedropper(menu) {
+        return eyedropper_size(command) == Some(app.ui.tool_options.eyedropper_size);
     }
     menu.transform
         && matches!(command, "edit.freeTransform" | "edit.transform.rotate" | "edit.transform.skew" | "edit.transform.distort" | "edit.transform.perspective")
@@ -716,6 +765,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -799,6 +849,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -832,6 +883,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -865,6 +917,9 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     }
     if menu.pasteboard {
         return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command);
+    }
+    if is_eyedropper(menu) {
+        return eyedropper_size(command).is_some() || (matches!(command, EYEDROPPER_COPY_HTML | EYEDROPPER_COPY_HEX) && menu.color.is_some());
     }
     // Warp needs a layer, selection or path box: a lone mask or channel keeps the plain box.
     if menu.transform && command == "edit.transform.warp" {
@@ -950,6 +1005,9 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
     let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
     let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
+    // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
+    // Size, whatever its Sample setting (#11747). Picking a row later copies this colour.
+    let color = if tool == Tool::Eyedropper && !text && !type_layer { doc.and_then(|d| crate::canvas::composite_color(app, d[0], d[1])) } else { None };
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
         tool,
@@ -966,6 +1024,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         crop: None,
         sampler,
         sampler_at,
+        color,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -995,6 +1054,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1054,6 +1114,8 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     } else if sampler_menu(&menu) {
         let (id, params) = engine_call(app, &menu, command);
         app.run(&id, params).map(|_| ())
+    } else if is_eyedropper(&menu) {
+        choose_eyedropper(app, ctx, &menu, command)
     } else if command == "select.toWorkPath" {
         // Photoshop's Make Work Path… asks for the tolerance first.
         spec_dialog(app, command, "Make Work Path", r##"{"tolerance":0.5..10=2}"##, serde_json::Map::new());
@@ -1065,6 +1127,20 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+/// An Eyedropper row (#11747): a size sets the Sample Size (shared with the options bar); a Copy
+/// Color row puts the colour read at the right-click on the clipboard, as the Color panel's menu
+/// does. Neither touches the foreground colour or the history.
+fn choose_eyedropper(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    if let Some(size) = eyedropper_size(command) {
+        app.ui.tool_options.eyedropper_size = size;
+        return Ok(());
+    }
+    let rgb = menu.color.ok_or("No colour under the pointer")?;
+    let text = if command == EYEDROPPER_COPY_HTML { crate::color_panel_ui::html_color(rgb) } else { crate::color_panel_ui::hex_code(rgb) };
+    ctx.copy_text(text);
+    Ok(())
 }
 
 /// A spelling row: replace the word under the pointer (the caret lands after the replacement), or
@@ -1312,7 +1388,23 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         choose(app, ctx, &command);
     } else if crate::canvas_popup::outside_pressed(ctx, id, area.response.rect) {
         app.ui.canvas_tool_menu = None;
+        // A fast click can press and release in one frame: the canvas input above already
+        // suppressed its action through the open-menu hit test, and the deferred release clear
+        // (in `canvas_view`, below the click handling) would never fire after this frame. Don't
+        // arm the flag then, or it would eat the next ordinary click (CodeRabbit, #9841).
+        app.ui.canvas_tool_menu_dismissed = !ctx.input(|i| i.pointer.any_released());
     }
+}
+
+/// Returns the menu rect if the canvas tool menu is currently open, for hit-testing
+/// outside-click dismissal in the click handler.
+pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rect> {
+    let menu = app.ui.canvas_tool_menu.as_ref()?;
+    let id = menu_id();
+    let screen = ctx.content_rect();
+    let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(210.0, 140.0), |r| r.size());
+    let pos = egui::pos2(menu.pos[0].min(screen.right() - size.x).max(screen.left()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top()));
+    Some(egui::Rect::from_min_size(pos, size))
 }
 
 #[cfg(test)]
