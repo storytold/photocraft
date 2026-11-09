@@ -300,7 +300,7 @@ mod tests {
             ..ShapeLayer::default()
         };
         for imported in [false, true, false] {
-            sh.psd_raw = imported.then(|| std::sync::Arc::new(Vec::new()));
+            sh.psd_coordinate_frame = imported.then_some([64, 64]);
             let (_, stroke) = split(&sh, canvas, SampleType::U8).expect("stroked shape");
             let alpha = photocraft_raster::to_rgba(&stroke.format(), &stroke.pixel(31, 26))[3];
             if imported {
