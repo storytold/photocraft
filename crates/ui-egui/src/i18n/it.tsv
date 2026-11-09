@@ -49,7 +49,7 @@
 
 
 
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 # Strings added on main after this catalog was written (2026-10).
 
@@ -93,7 +93,7 @@
 # Counted status messages and labels (#3454; adapted from PR #3821)
 # View › Guides › New Guide… › Color
 
-# Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs) that the
+# Dynamic labels (filter and adjustment parameters, RAW Develop, panels, dialogs) that the
 # other catalogs already translate
 
 # Path, channel, layer style, status and System Info labels the Czech catalog added
@@ -111,7 +111,7 @@
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 # Bevel & Emboss Technique.
 
-# Color management, Liquify, glyph group, warp and Camera Raw labels the Serbian, Vietnamese and Japanese catalogs added
+# Color management, Liquify, glyph group, warp and RAW Develop labels the Serbian, Vietnamese and Japanese catalogs added
 # Shortcut commands, find and replace, profile prompts and metadata labels the German, Hungarian and Serbian catalogs added
 # View › Guides › right-click a guide
 
@@ -342,7 +342,7 @@
 	Plugins…	Plug-in…
 	Type…	Testo…
 	Enhanced Controls…	Controlli avanzati…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Predefiniti RAW…
 	Raw Defaults…	Predefiniti Raw…
 	Integrations…	Integrazioni…
 	AI Integrations…	Integrazioni IA…
@@ -431,8 +431,8 @@
 	Artboard…	Tavola da disegno…
 	Artboard from Group…	Tavola da gruppo…
 	Artboard from Layers…	Tavola da livelli…
-	Layer via Copy	Livello tramite copia
-	Layer via Cut	Livello tramite taglia
+	Layer Via Copy	Livello tramite copia
+	Layer Via Cut	Livello tramite taglia
 	Layer From Background…	Livello dallo sfondo…
 	Layer from Background…	Livello dallo sfondo…
 	Background from Layer	Sfondo da livello
@@ -674,7 +674,7 @@
 	Last Filter	Ultimo filtro
 	Filter Gallery…	Galleria filtri…
 	Adaptive Wide Angle…	Grandangolo adattivo…
-	Camera Raw Filter…	Filtro Camera Raw…
+	RAW Develop Filter…	Filtro Sviluppo RAW…
 	Liquify…	Fluidifica…
 	Vanishing Point…	Punto di fuga…
 	Blur	Sfocatura
@@ -1026,8 +1026,8 @@
 	Load Settings…	Carica impostazioni…
 	Save these settings as a Camera Raw .xmp file	Salva queste impostazioni come file .xmp di Camera Raw
 	Load settings from a Camera Raw .xmp file	Carica le impostazioni da un file .xmp di Camera Raw
-	Loaded Camera Raw settings from {file}	Impostazioni Camera Raw caricate da {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Impostazioni Camera Raw caricate da {file} ({n} non supportate)
+	Loaded RAW Develop settings from {file}	Impostazioni Sviluppo RAW caricate da {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Impostazioni Sviluppo RAW caricate da {file} ({n} non supportate)
 	Begin recording	Inizia registrazione
 	Bend:	Curvatura:
 	Bicubic	Bicubica
@@ -1055,7 +1055,7 @@
 	Brush Reconstruct Options	Opzioni ricostruzione pennello
 	Brush Tool Options	Opzioni strumento Pennello
 	Cache Level:	Livello cache:
-	Camera Raw isn't open	Camera Raw non è aperto
+	RAW Develop isn't open	Sviluppo RAW non è aperto
 	Cancel	Annulla
 	Reset	Ripristina
 	Cancel (Esc)	Annulla (Esc)
@@ -2029,7 +2029,7 @@
 	Brush preview color	Colore anteprima pennello
 	Cache levels	Livelli cache
 	Cache tile size	Dimensione tile cache
-	Camera Raw Defaults	Predefiniti Camera Raw
+	RAW Defaults	Predefiniti RAW
 	Canvas border	Bordo quadro
 	Show canvas dots	Mostra punti del quadro
 	Clip thumbnails to layer bounds	Ritaglia le miniature ai limiti del livello
@@ -2117,7 +2117,6 @@
 	Never	Mai
 	Normal tip	Punta normale
 	Open as smart object	Apri come oggetto avanzato
-	Open in camera raw	Apri in Camera Raw
 	Open documents as tabs	Apri documenti come schede
 	Overscroll	Overscroll
 	Performance	Prestazioni
@@ -2481,8 +2480,8 @@
 	Tone Histogram	Istogramma tonale
 	Show Selected Region	Mostra regione selezionata
 cameraRaw	Light	Luce
-	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Filtro Sviluppo RAW ({layer})
+	RAW Develop ({name})	Sviluppo RAW ({name})
 cameraRaw	Lights	Toni chiari
 cameraRaw	Darks	Toni scuri
 cameraRaw	Red	Rossi
@@ -3062,8 +3061,6 @@ curves	Smooth	Leviga
 	Roman Hanging Punctuation	Punteggiatura latina sospesa
 	Avoid Widows/Orphans	Evita righe vedove/orfane
 	Compose	Composizione
-	Adobe Single-line Composer	Compositore riga singola Adobe
-	Adobe Every-line Composer	Compositore ogni riga Adobe
 	Word Spacing	Spaziatura parole
 	Letter Spacing	Spaziatura lettere
 	Glyph Scaling	Ridimensionamento glifi
@@ -3260,7 +3257,6 @@ curves	Smooth	Leviga
 	Intersect with	Interseca con
 	Capture Comp	Acquisisci composizione
 	No Layer Comps	Nessuna composizione livelli
-	Adobe PDF Presets…	Predefiniti Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Anteprime tecnologiche…
 	Add a mask  (from the selection; ⌥ inverts)	Aggiungi una maschera (dalla selezione; ⌥ inverte)
@@ -3900,8 +3896,8 @@ layerLabel	No Color	Nessun colore
 	Border	Bordo
 	Box Blur	Sfocatura casella
 	Calculations	Calcoli
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Filtro Camera Raw
+	RAW Develop	Sviluppo RAW
+	RAW Develop Filter	Filtro Sviluppo RAW
 	Channel1	Canale 1
 	Channel2	Canale 2
 	Channel3	Canale 3
@@ -4171,7 +4167,7 @@ layerLabel	No Color	Nessun colore
 	Scroll menu down	Scorri il menu in basso
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Per procedere il livello di testo deve essere rasterizzato. Il testo non sarà più modificabile. Rasterizzare il testo?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Per procedere il livello forma deve essere rasterizzato. Non sarà più modificabile come forma. Rasterizzare la forma?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Per procedere l'oggetto avanzato deve essere rasterizzato. Il contenuto non sarà più modificabile. Rasterizzare l'oggetto avanzato?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Per procedere l'oggetto avanzato deve essere rasterizzato. Il contenuto non sarà più modificabile. Rasterizzare l'oggetto avanzato?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Per procedere il livello di riempimento deve essere rasterizzato. Il riempimento non sarà più modificabile. Rasterizzare il livello?
 	This layer must be rasterized before proceeding.	Per procedere il livello deve essere rasterizzato.
 	Color Picker (Background Color)	Selettore colore (colore sfondo)
@@ -4344,7 +4340,6 @@ navigator	Zoom	Zoom
 	Do not append "copy" to filename when saving a copy	Non aggiungere "copy" al nome del file quando si salva una copia
 	Save Full-Size Composite in .pcraft Files	Salva l'immagine composita a dimensione piena nei file .pcraft
 	Adobe-rgb-compat	Adobe RGB (compatibile)
-	All shortcuts reset to Photoshop defaults.	Tutte le scorciatoie ripristinate ai predefiniti di Photoshop.
 	Arc Lower	Arco inferiore
 	Arc Upper	Arco superiore
 	Arrows	Frecce
@@ -4361,7 +4356,6 @@ navigator	Zoom	Zoom
 	Convert	Converti
 	Currency	Valute
 	Cyrillic	Cirillico
-	Default Photoshop Size	Dimensione predefinita di Photoshop
 	Display-p3	Display P3
 	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Trascina un riquadro ritaglio · trascina dentro per spostare · bordi ridimensionano ({ratio} proporzione, {centre} centro) · Spazio sposta durante disegno · {commit} conferma · Esc annulla
 	Drag: draw freehand · Release on the start point: close	Trascina: disegna a mano libera · Rilascia sul punto iniziale: chiudi
@@ -4620,8 +4614,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Barra scala di grigio
 	Current Colors	Colori correnti
 	Make Ramp Web Safe	Limita la barra ai colori web
+	Scroll All Windows	Scorri tutte le finestre
 	The path was kept as the Work Path	Il tracciato è stato conservato come tracciato di lavoro
 	The path was discarded	Il tracciato è stato scartato
+# Art History Brush (#213).
 	Art History Brush Tool	Strumento Pennello storia artistica
 	Tight Short	Corto stretto
 	Tight Medium	Medio stretto
@@ -4706,6 +4702,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Scegli un documento diverso per ogni canale.
 	A picked document is no longer open.	Uno dei documenti scelti non è più aperto.
 	A picked document is no longer a grayscale document of the same size.	Uno dei documenti scelti non è più un documento in scala di grigio delle stesse dimensioni.
+	Netscape Gray	Grigio Netscape
 # Move tool options bar (#11381)
 	Align top edges	Allinea i bordi superiori
 	Align vertical centers	Allinea i centri verticali
@@ -4715,7 +4712,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostra i limiti del livello al passaggio del mouse
 	Expand layer group on click	Espandi il gruppo di livelli al clic
 	Show hover bounds from Layers	Mostra i limiti al passaggio dal pannello Livelli
-	Saved Camera Raw settings to {file}	Impostazioni Camera Raw salvate in {file}
+	Saved RAW Develop settings to {file}	Impostazioni Sviluppo RAW salvate in {file}
 	Save the settings to each raw's sidecar without opening it	Salva le impostazioni nel file sidecar di ogni raw senza aprirlo
 	No settings saved: these raws can't keep a sidecar here	Nulla salvato: questi raw non possono avere un file sidecar qui
 	Some settings could not be saved; the raws stay open	Alcune impostazioni non sono state salvate; i raw restano aperti
@@ -4727,3 +4724,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ridimensiona quadro automaticamente
 	Keep Relative Position During Layer Reordering	Mantieni la posizione relativa durante il riordino dei livelli
 	Shrinkwrap Canvas on Save	Riduci il quadro al contenuto al salvataggio
+	Move Toolbar to the Right	Sposta la barra degli strumenti a destra
+	Move Toolbar to the Left	Sposta la barra degli strumenti a sinistra

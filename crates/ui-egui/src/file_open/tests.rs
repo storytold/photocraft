@@ -1694,3 +1694,43 @@ fn queued_drop_waits_for_an_external_document_job() {
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
     assert!(app.drop_places.is_empty());
 }
+
+/// File › Open as Smart Object… (#11678) asks with File › Open's dialog and opens each chosen
+/// file as its own untitled document holding one embedded smart object.
+#[test]
+fn open_as_smart_object_dialog_opens_one_document_per_selected_file() {
+    let (dir, paths) = files("open-as-so", &["one.png", "two.png", "bad.png"], &png_bytes(8, 6));
+    std::fs::write(&paths[2], b"not an image").unwrap();
+    let (mut app, _) = app_with(vec![Some(FileDialogAnswer::Paths(paths.clone()))]);
+
+    menus::invoke(&mut app, &egui::Context::default(), "file.openAsSmartObject", json!({})).unwrap();
+    assert!(app.file_dialog_open(), "the menu item asks for files first");
+    answer(&mut app);
+
+    assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
+    assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// File > Open as Smart Object... runs each file as a tracked background job like File > Open
+/// does: a tab per file, the documents landing in name order, untitled, failures reported.
+#[test]
+fn open_as_smart_object_opens_in_the_background_in_name_order() {
+    let ctx = egui::Context::default();
+    let (dir, paths) = files("open-as-so-bg", &["two.png", "one.png", "bad.png"], &png_bytes(8, 6));
+    std::fs::write(&paths[2], b"not an image").unwrap();
+    let (mut app, _) = app_with(vec![Some(FileDialogAnswer::Paths(paths.clone()))]);
+    app.background_jobs = true;
+
+    menus::invoke(&mut app, &ctx, "file.openAsSmartObject", json!({})).unwrap();
+    answer(&mut app);
+    assert_eq!(app.jobs.opens.len(), 3, "a tab for each file while it opens");
+    assert!(app.session.documents().is_empty(), "nothing is on the UI thread's critical path");
+
+    tick_until(&mut app, &ctx, |app| app.jobs.opens.is_empty());
+    assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
+    assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
+    let _ = std::fs::remove_dir_all(&dir);
+}
