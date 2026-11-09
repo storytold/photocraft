@@ -385,6 +385,41 @@ fn readouts_match_photoshops_info_panel() {
     assert_eq!(serde_json::to_value(&red).unwrap()["totalInk"], red.total_ink, "camelCase JSON");
 }
 
+/// Reassigning an RGB profile preserves the encoded gray but changes its ink. Both the
+/// shared readout and the pinned sampler must convert through the sample's source profile.
+#[test]
+fn cmyk_readouts_respect_the_composite_profile() {
+    use photocraft_cms::{Builtin, TransformOptions, cached};
+
+    let mut s = session();
+    s.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 5, "y": 6})).unwrap();
+    let gray = 128.0 / 255.0;
+    let [srgb_ink, linear_ink] = [("srgb", Builtin::Srgb), ("linear-srgb", Builtin::LinearSrgb)].map(|(id, profile)| {
+        s.execute("edit.assignProfile", json!({"profile": id})).unwrap();
+        let mut plates = [0.0; 4];
+        let transform = cached(profile.profile(), Builtin::CoatedCmyk.profile(), TransformOptions::default()).unwrap();
+        transform.eval_fast(&[gray; 3], &mut plates);
+        let expected = plates.map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as i32);
+        let total = expected.iter().sum::<i32>();
+        if id == "srgb" {
+            assert_eq!(expected, device_cmyk(gray, gray, gray), "the existing sRGB conversion is unchanged");
+        }
+
+        let readout = readouts(&s.active().unwrap().doc, [gray, gray, gray, 1.0]);
+        assert_eq!(readout.cmyk, expected, "{id} plates");
+        assert_eq!(readout.total_ink, total, "{id} total ink");
+        let point = &points(&mut s)[0];
+        assert_eq!(point["rgb"], json!([128, 128, 128]), "{id} keeps the same encoded pixel");
+        assert_eq!(point["opacity"], 100);
+        assert_eq!(point["cmyk"], json!(expected), "{id} sampler plates");
+        assert_eq!(point["totalInk"], total, "{id} sampler total ink");
+        total
+    });
+    assert_ne!(srgb_ink, linear_ink, "identical encoded gray has different ink in these profiles");
+}
+
 /// Spot channels read their ink (1 = solid), alpha channels their masked share (white = 0 %), as
 /// Photoshop reads a channel targeted alone; off the canvas there is nothing to read.
 #[test]

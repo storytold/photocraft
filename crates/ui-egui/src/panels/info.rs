@@ -182,8 +182,8 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let rgba = pos.and_then(|p| pointer_sample(app, p));
     // The readouts of the sample, through the same conversions as the Color Sampler points
-    // (`sampler_cmds::readouts`: colour-managed CMYK as the Color Picker, #8101; Grayscale and
-    // Opacity as Photoshop reads them), and the extra channels under the pointer.
+    // (`sampler_cmds::readouts`), including CMYK for the document's RGB profile, and the extra
+    // channels under the pointer.
     let pointer = rgba.and_then(|c| app.session.active().map(|s| photocraft_engine::sampler_cmds::readouts(&s.doc, c)));
     // Proof Color through the document's Proof Setup, only while a readout shows it.
     let pointer_proof = rgba

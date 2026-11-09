@@ -26,10 +26,9 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
-/// Colour-managed CMYK, in percent, as the Info panel shows it: the same conversion the Color
-/// Picker uses (`photocraft_color::convert::rgb_to_cmyk`: the CMYK profile active on this thread,
-/// else the built-in coated CMYK), so both panels agree (#8101). 32-bit samples can lie outside
-/// 0..1, so each channel is clamped first (NaN reads as 0), like the RGB readout.
+/// Convert sRGB to CMYK percentages using the same conversion as the Color Picker (#8101).
+/// The destination is the active thread's CMYK profile or the built-in coated CMYK. Values
+/// outside 0..1 are clamped and NaN reads as 0, so 32-bit samples remain in range.
 pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
     let unit = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
     photocraft_color::convert::rgb_to_cmyk([unit(r), unit(g), unit(b)]).map(|v| (unit(v) * 100.0).round() as i32)
@@ -65,15 +64,27 @@ pub struct Readouts {
 }
 
 /// The readouts of straight-alpha `rgba` (0..1; 32-bit samples outside that are clamped, NaN
-/// reads as 0) in `doc`, whose CMYK profile the CMYK and Total Ink readouts use.
-/// Lab is derived from this RGB composite, not the original Lab channels: native out-of-gamut
-/// Lab values already clipped during RGB compositing cannot be recovered here.
+/// reads as 0) in `doc`. CMYK and Total Ink honor the source profile of RGB documents and
+/// the destination profile of CMYK documents. Lab uses the RGB composite, so native Lab
+/// values clipped during RGB compositing cannot be recovered here.
 pub fn readouts(doc: &Document, rgba: [f32; 4]) -> Readouts {
     let unit = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
     let rgb = [unit(rgba[0]), unit(rgba[1]), unit(rgba[2])];
     let q = |v: f32| (v * 255.0).round() as i32;
     let pct = |v: f32| (v * 100.0).round() as i32;
-    let cmyk = photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgb[0], rgb[1], rgb[2]));
+    let src = crate::color_cmds::composite_profile(doc);
+    let cmyk = if crate::color_cmds::mode_space(doc.mode) == photocraft_cms::ColorSpace::Rgb
+        && !src.same_bytes(photocraft_cms::Builtin::Srgb.profile())
+        && let Ok(transform) = photocraft_cms::cached(&src, photocraft_cms::Builtin::CoatedCmyk.profile(), photocraft_cms::TransformOptions::default())
+    {
+        let mut plates = [0.0; 4];
+        transform.eval_fast(&rgb, &mut plates);
+        plates.map(|v| pct(unit(v)))
+    } else {
+        // Native CMYK documents composite to sRGB. Keep their own destination profile and the
+        // existing sRGB conversion, also the fallback if a custom source profile will not link.
+        photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgb[0], rgb[1], rgb[2]))
+    };
     let [h, s, b] = photocraft_color::convert::rgb_to_hsb_sextant(rgb);
     let hue = ((h * 60.0).round() as i32).rem_euclid(360);
     let (mx, mn) = (rgb[0].max(rgb[1]).max(rgb[2]), rgb[0].min(rgb[1]).min(rgb[2]));
@@ -85,19 +96,17 @@ pub fn readouts(doc: &Document, rgba: [f32; 4]) -> Readouts {
         gray: pct(1.0 - photocraft_color::convert::rgb_to_gray(rgb)),
         hsb: [hue, pct(s), pct(b)],
         hsl: [hue, pct(sl), pct(l)],
-        lab: lab(doc, rgb).map(|v| v.round() as i32),
+        lab: lab(&src, rgb).map(|v| v.round() as i32),
         web: format!("{:02x}{:02x}{:02x}", q(rgb[0]), q(rgb[1]), q(rgb[2])),
         total_ink: cmyk.iter().sum(),
         opacity: pct(unit(rgba[3])),
     }
 }
 
-/// CIE Lab (D50) of composite `rgb` through the document's profile (the compositor's output
-/// profile, so an Adobe RGB document's red is not read as sRGB red), the same transform Color
-/// Range uses; the sRGB maths only when no transform can be built.
-fn lab(doc: &Document, rgb: [f32; 3]) -> [f32; 3] {
-    let src = crate::color_cmds::composite_profile(doc);
-    match photocraft_cms::cached(&src, photocraft_cms::Builtin::LabD50.profile(), photocraft_cms::TransformOptions::default()) {
+/// CIE Lab (D50) through the compositor's output profile, using the same transform as Color
+/// Range. Fall back to sRGB maths if a transform cannot be built.
+fn lab(src: &photocraft_cms::Profile, rgb: [f32; 3]) -> [f32; 3] {
+    match photocraft_cms::cached(src, photocraft_cms::Builtin::LabD50.profile(), photocraft_cms::TransformOptions::default()) {
         Ok(t) => {
             let mut out = [0.0f32; 3];
             t.eval(&rgb, &mut out);
