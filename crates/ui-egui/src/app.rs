@@ -79,6 +79,7 @@ impl PhotocraftApp {
             last_stroke_end: None,
             brush_resize: None,
             quick_pick: false,
+            move_pick: None,
             brush_resize_armed: false,
             alt_sampling: false,
             mixer_sampling: false,
@@ -99,6 +100,7 @@ impl PhotocraftApp {
             fonts_ready: false,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             arrange_start: 0,
+            drawing_window: None,
             ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
@@ -127,11 +129,13 @@ impl PhotocraftApp {
             color_range: None,
             adjust_preview: None,
             live_adjust_preview: None,
+            levels_clipping: None,
             synthetic: Vec::new(),
             synthetic_batch: None,
             synthetic_reinject: false,
             synthetic_snapshot: None,
             automation_input: false,
+            programmatic_playback: false,
             run_depth: 0,
             paused_playbacks: Default::default(),
             channel_thumbs: None,
@@ -157,6 +161,8 @@ impl PhotocraftApp {
             clip_read_for_paste: false,
             smart_svg: Default::default(),
             transform_preview: None,
+            transform_area: None,
+            transform_preparing: None,
             move_mods: Default::default(),
             nudge_bundle: Default::default(),
             style_preview: None,
@@ -168,7 +174,7 @@ impl PhotocraftApp {
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
-            pending_raw_open: None,
+            raw_shelf: Vec::new(),
             raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
@@ -207,6 +213,8 @@ impl PhotocraftApp {
             held_memory_prompts: Default::default(),
             prompt_order: Default::default(),
             held_preset_import: None,
+            held_record_again: None,
+            held_insert_menu: None,
             allow_close: false,
             stylus: Default::default(),
             control_click: Default::default(),
@@ -223,7 +231,6 @@ impl PhotocraftApp {
         histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
-        notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         app
@@ -233,7 +240,7 @@ impl PhotocraftApp {
 impl eframe::App for PhotocraftApp {
     fn on_exit(&mut self) {
         if let Err(err) = tool_memory::save_on_exit(self) {
-            log::warn!("Preferences: could not save the final tool selection: {err}");
+            log::warn!("Preferences: could not save the final tool state: {err}");
         }
         // Release a pending screenshot's image budget and answer its control request; the
         // callback is inert afterwards (it holds only a weak slot).
