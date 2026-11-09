@@ -1,4 +1,4 @@
-//! Ordinary native Average: the existing alpha/selection-weighted RGBA mean.
+//! Bounded Average policies: Photoshop preserves coverage; native import keeps its existing weighted contract.
 pub use crate::coverage::Error;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface, from_rgba_into, to_rgba};
@@ -23,6 +23,14 @@ impl Mean {
         self.alpha += f64::from(p[3] * coverage);
         self.count += f64::from(coverage);
     }
+    /// Photoshop Average weights straight colors by selection, including hidden RGB, without changing coverage.
+    fn push_colour(&mut self, p: [f32; 4], coverage: f32) {
+        let weight = f64::from(coverage);
+        for (sum, value) in self.sum.iter_mut().zip(p) { *sum += f64::from(value) * weight; }
+        self.weight += weight;
+        self.count += weight;
+        self.alpha += f64::from(p[3]) * weight;
+    }
     /// Return the normalized mean only when positive alpha weight exists, keeping the native average-alpha policy.
     pub fn rgba(&self) -> Option<[f32; 4]> {
         (self.weight > 0.).then(|| {
@@ -43,6 +51,21 @@ fn check(ctl: &Interrupt) -> Result<(), Error> {
 /// Average a bounded native area using fallible row storage and publish only finite, uncancelled selection-mixed
 /// output.
 pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&Surface>, ctl: &Interrupt) -> Result<Surface, Error> {
+    apply_policy(surface, area, bounds, selection, ctl, false)
+}
+
+/// Photoshop Average edits straight colors with selection weights while preserving every native alpha sample.
+pub fn apply_preserving_alpha_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&Surface>, ctl: &Interrupt) -> Result<Surface, Error> {
+    apply_policy(surface, area, bounds, selection, ctl, true)
+}
+
+/// Preserve the upstream optional dispatcher contract while using bounded checked publication.
+pub(crate) fn apply(surface: &Surface, area: Rect, selection: Option<&Surface>, ctl: &Interrupt) -> Option<Surface> {
+    apply_preserving_alpha_with(surface, area, area, selection, ctl).ok()
+}
+
+/// Both averaging policies share finite-sample checks, output admission and cancellable row scratch.
+fn apply_policy(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&Surface>, ctl: &Interrupt, preserve_alpha: bool) -> Result<Surface, Error> {
     check(ctl)?;
     let area = area.intersect(&bounds);
     if area.is_empty() {
@@ -82,7 +105,7 @@ pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option
             if p.into_iter().any(|v| !v.is_finite()) || !k.is_finite() || !(0.0..=1.0).contains(&k) {
                 return Err(Error::NonFiniteSample);
             }
-            mean.push(p, k);
+            if preserve_alpha { mean.push_colour(p, k); } else { mean.push(p, k); }
         }
     }
     let Some(avg) = mean.rgba() else { return Ok(surface.clone()) };
@@ -98,9 +121,12 @@ pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option
             if k == 0. {
                 continue;
             }
+            let original_alpha = dst.last().copied();
             let p = to_rgba(&surface.format(), dst);
+            let mut target = avg;
+            if preserve_alpha { target[3] = p[3]; }
             let mut mixed = p;
-            if surface.format().alpha && p[3] != avg[3] {
+            if !preserve_alpha && surface.format().alpha && p[3] != avg[3] {
                 let before = f64::from(p[3]) * (1. - f64::from(k));
                 let after = f64::from(avg[3]) * f64::from(k);
                 let alpha = before + after;
@@ -117,7 +143,7 @@ pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option
                 }
                 continue;
             }
-            for (v, (a, b)) in mixed.iter_mut().zip(p.into_iter().zip(avg)) {
+            for (v, (a, b)) in mixed.iter_mut().zip(p.into_iter().zip(target)) {
                 *v = a + (b - a) * k;
                 if !v.is_finite() {
                     let precise = f64::from(a) + (f64::from(b) - f64::from(a)) * f64::from(k);
@@ -128,6 +154,7 @@ pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option
                 }
             }
             from_rgba_into(&surface.format(), mixed, dst);
+            if preserve_alpha && surface.format().alpha && let Some(alpha) = dst.last_mut() { *alpha = original_alpha.unwrap_or(p[3]); }
             if dst.iter().any(|v| !v.is_finite()) {
                 return Err(Error::NonFiniteSample);
             }
@@ -141,6 +168,16 @@ pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option
 
 /// Adapt raw native float images to checked Average, preserving bounded identity fallback on rejected work.
 pub(crate) fn run_image(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx) -> Vec<f32> {
+    run_image_policy(src, out, ctx, false)
+}
+
+/// The ordinary command's direct kernel shares the canvas-clipped mean and alpha-preserving policy.
+pub(crate) fn kernel(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx) -> Vec<f32> {
+    run_image_policy(src, out, ctx, true)
+}
+
+/// Raw native images remain bounded and retain identity fallback on rejected work.
+fn run_image_policy(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx, preserve_alpha: bool) -> Vec<f32> {
     let format = photocraft_color::PixelFormat::new(ctx.mode, photocraft_color::SampleType::F32, ctx.alpha);
     let valid = [src.rect, out].into_iter().all(|r| {
         r.width() <= 65536 && r.height() <= 65536 && (r.width() as usize).checked_mul(r.height() as usize).is_some_and(|n| n <= crate::coverage::MAX_PIXELS)
@@ -175,7 +212,7 @@ pub(crate) fn run_image(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx) 
         surface.try_write_region(src.rect, &src.data).map_err(|_| Error::Allocation)?;
         // Average the complete supplied image, even when only one output tile is
         // requested. Unpopulated canvas pixels are not part of this image.
-        apply_with(&surface, domain, domain, None, &Interrupt::NONE)?.try_read_region(out).map_err(|_| Error::Allocation)
+        apply_policy(&surface, domain, domain, None, &Interrupt::NONE, preserve_alpha)?.try_read_region(out).map_err(|_| Error::Allocation)
     };
     run().unwrap_or_else(|_| identity().unwrap_or_default())
 }
@@ -382,3 +419,7 @@ mod tests {
         assert_eq!(source, before);
     }
 }
+
+#[cfg(test)]
+#[path = "average/tests.rs"]
+mod upstream_tests;
