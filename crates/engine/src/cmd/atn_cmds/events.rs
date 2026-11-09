@@ -616,6 +616,9 @@ pub(super) const EVENTS: &[Event] = &[
     Event { code: "GEfc", name: "filterGallery", label: "Filter Gallery", ids: GALLERY_IDS, from: gallery_from, to: gallery_to },
     // What Photoshop needs in a written step (process version, the full settings set) is
     // unverified, so only an imported step saves back, as its recorded descriptor while unedited.
+    // The label is interchange data, not a display name: Save Actions writes it into the step's
+    // dictionary (convert.rs), so it stays Photoshop's wording and a loaded step round-trips. The
+    // menu item and window title come from `lens_cmds` and read "RAW Develop Filter".
     Event { code: "", name: "Adobe Camera Raw Filter", label: "Camera Raw Filter", ids: &[crate::lens_cmds::RAW], from: camera_raw_from, to: camera_raw_to },
     // Video, Other, Average and matting (#10607).
     Event {
@@ -893,6 +896,7 @@ pub(super) const EVENTS: &[Event] = &[
         name: "set",
         label: "Set",
         ids: &[
+            super::steps_measurement::SET_SCALE,
             "select.all",
             "select.deselect",
             "select.reselect",
@@ -910,6 +914,7 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.new.layerFromBackground",
             "layer.layerStyle.blendingOptions",
             "layer.smartFilter.blendingOptions",
+            "path.set",
         ],
         from: set_from,
         to: set_to,
@@ -1198,6 +1203,15 @@ pub(super) const EVENTS: &[Event] = &[
         ids: &["file.automate.batch"],
         from: super::steps_batch::batch_from,
         to: super::steps_batch::batch_to,
+    },
+    // Create Droplet (#10710): Photoshop has no string ID for it.
+    Event {
+        code: "CrtD",
+        name: "CrtD",
+        label: "Create Droplet",
+        ids: &["file.automate.createDroplet"],
+        from: super::steps_droplet::droplet_from,
+        to: super::steps_droplet::droplet_to,
     },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },

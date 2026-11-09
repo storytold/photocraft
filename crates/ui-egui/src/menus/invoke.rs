@@ -86,6 +86,14 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if id == "help.checkForUpdates" {
         return Some(crate::updates_ui::check(app, ctx, params.clone()));
     }
+    // Layer › Copy CSS: the engine writes the CSS, the clipboard is the shell's (#9372).
+    if id == photocraft_engine::layer_css_cmds::ID {
+        return Some(app.run(id, params.clone()).inspect(|r| {
+            if let Some(css) = r.get("css").and_then(Value::as_str) {
+                ctx.copy_text(css.to_string());
+            }
+        }));
+    }
     if id == "ui.symmetryTransform" {
         return Some(crate::symmetry_ui::begin(app).map(|_| Value::Null));
     }
@@ -457,6 +465,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let dialog = crate::channel_options_ui::open_new_spot(app).ok_or("no document is open")?;
             Ok(json!({"dialog": dialog}))
         }
+        // Select › Find Layers: the Layers panel's Name filter (#10884).
+        "select.findLayers" => crate::layer_filter_ui::find::invoke(app, ctx, params),
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
         "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog": crate::color_range_ui::open(app)})),
