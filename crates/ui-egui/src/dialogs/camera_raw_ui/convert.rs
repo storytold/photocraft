@@ -245,6 +245,8 @@ pub(super) fn open_pixels(
         main_focused: false,
     };
     d.render(ctx);
+    // Masking's selection and tool belong to the previous dialog's image.
+    super::masks_panel::reset_for_new_dialog(ctx);
     app.camera_raw = Some(d);
     Ok(())
 }

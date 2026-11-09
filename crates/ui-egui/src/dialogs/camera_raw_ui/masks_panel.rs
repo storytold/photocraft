@@ -63,6 +63,9 @@ pub(crate) struct MaskUi {
     pub(crate) erase: bool,
     pub(crate) overlay: bool,
     pub(crate) overlay_mode: Overlay,
+    /// `selected: null` came from the control channel: the panel does not select the first
+    /// mask again until the tool reopens or a mask is chosen.
+    deselected: bool,
     /// The mask whose name is being edited.
     renaming: Option<usize>,
     drag: Option<Drag>,
@@ -83,6 +86,7 @@ impl Default for MaskUi {
             erase: false,
             overlay: true,
             overlay_mode: Overlay::Color,
+            deselected: false,
             renaming: None,
             drag: None,
             pending_op: None,
@@ -101,6 +105,33 @@ pub(crate) fn load(ctx: &egui::Context) -> MaskUi {
 
 pub(crate) fn store(ctx: &egui::Context, s: MaskUi) {
     ctx.data_mut(|d| d.insert_temp(id(), s));
+}
+
+/// A new dialog (another image, or the next raw of the filmstrip) starts in Edit with nothing
+/// selected; only the brush and overlay choices carry over, as Camera Raw keeps them per session.
+pub(crate) fn reset_for_new_dialog(ctx: &egui::Context) {
+    let old = load(ctx);
+    store(ctx, MaskUi { brush: old.brush, erase: old.erase, overlay: old.overlay, overlay_mode: old.overlay_mode, ..MaskUi::default() });
+}
+
+/// Drops a selection (mask or component) the settings `p` no longer have, so a reply never names
+/// a mask that is gone (after an undo, or a `set` that removes masks).
+pub(crate) fn reconcile(ctx: &egui::Context, p: &CameraRaw) {
+    let mut s = load(ctx);
+    let before = (s.selected, s.component);
+    if s.selected.is_some_and(|i| i >= p.masks.len()) {
+        s.selected = None;
+    }
+    let n = s.selected.and_then(|i| p.masks.get(i)).map_or(0, |m| m.components.len());
+    if s.component.is_some_and(|j| j >= n) {
+        s.component = None;
+    }
+    if (s.selected, s.component) != before {
+        s.pending_op = None;
+        s.drag = None;
+        s.overlay_tex = None;
+        store(ctx, s);
+    }
 }
 
 fn trc(s: &str) -> &str {
@@ -154,6 +185,7 @@ pub(crate) fn control(ctx: &egui::Context, p: &CameraRaw, v: &Value) -> Result<(
             return Err(format!("masks.selected: there are {} masks", p.masks.len()));
         }
         s.selected = i;
+        s.deselected = i.is_none();
         s.component = None;
         s.pending_op = None;
     }
@@ -167,7 +199,14 @@ pub(crate) fn control(ctx: &egui::Context, p: &CameraRaw, v: &Value) -> Result<(
     }
     for (k, val) in obj {
         match k.as_str() {
-            "open" => s.open = val.as_bool().ok_or("masks.open: expected true or false")?,
+            "open" => {
+                let open = val.as_bool().ok_or("masks.open: expected true or false")?;
+                // Opening the tool selects the first mask again, unless this request chooses.
+                if open && !s.open && !obj.contains_key("selected") {
+                    s.deselected = false;
+                }
+                s.open = open;
+            }
             "overlay" => s.overlay = val.as_bool().ok_or("masks.overlay: expected true or false")?,
             "selected" | "component" => {}
             "tool" => {
@@ -207,10 +246,12 @@ pub(crate) fn is_open(ctx: &egui::Context) -> bool {
 }
 
 /// Whether a drag on the preview draws (so the preview's Zoom tool must not take the click).
-/// `p`: the settings the preview shows; `before`: Before (Y) shows, which has no guides.
+/// `p`: the settings the preview shows; `before`: Before (Y) shows, which has no guides and takes
+/// no mask edits (its pixels are not where the masks apply). The guide tool is governed by its own
+/// test only: with Guided Upright unavailable it leaves the drag to the zoom tool.
 pub(crate) fn captures_pointer(ctx: &egui::Context, p: &CameraRaw, before: bool) -> bool {
     let s = load(ctx);
-    (s.open && s.tool != DrawTool::None && s.selected.is_some_and(|i| i < p.masks.len()))
+    (!before && s.open && !matches!(s.tool, DrawTool::None | DrawTool::Guide) && s.selected.is_some_and(|i| i < p.masks.len()))
         || (!before && s.tool == DrawTool::Guide && Upright::parse(&p.perspective_upright) == Some(Upright::Guided))
 }
 
@@ -221,6 +262,9 @@ pub(crate) fn strip_button(ui: &mut egui::Ui) {
     let key = ui.input(|i| i.modifiers.shift && i.key_pressed(egui::Key::W));
     if r.clicked() || key {
         s.open = !s.open;
+        if s.open {
+            s.deselected = false;
+        }
         if !s.open && s.tool != DrawTool::Guide {
             s.tool = DrawTool::None;
         }
@@ -287,6 +331,7 @@ pub(crate) fn create(p: &mut CameraRaw, s: &mut MaskUi, kind: &str, op: Option<O
         }
     };
     s.selected = Some(target);
+    s.deselected = false;
     s.tool = tool;
     s.pending_op = None;
     let Some(m) = p.masks.get_mut(target) else { return };
@@ -318,16 +363,21 @@ fn op_label(op: Op) -> &'static str {
     }
 }
 
+/// Opening the tool on existing masks selects the first, as Camera Raw does; a mask that is gone
+/// gives way to the first too. An explicit `selected: null` stays deselected.
+fn auto_select(s: &mut MaskUi, masks: usize) {
+    if s.selected.map_or(!s.deselected, |i| i >= masks) {
+        s.selected = (masks > 0).then_some(0);
+        s.component = None;
+    }
+}
+
 /// The Masks panel (the right column while the Masking tool is open).
 pub(crate) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut bool) {
     let mut s = load(ui.ctx());
     let p = &mut d.params;
     let before = p.masks.clone();
-    // Opening the tool on existing masks selects the first, as Camera Raw does.
-    if s.selected.is_none_or(|i| i >= p.masks.len()) {
-        s.selected = (!p.masks.is_empty()).then_some(0);
-        s.component = None;
-    }
+    auto_select(&mut s, p.masks.len());
     ui.add_space(6.0);
     widgets::section_label(ui, trc("Create New Mask"));
     ui.add_space(4.0);
@@ -364,6 +414,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut bool
                         s.renaming = Some(i);
                     } else if r.clicked() {
                         s.selected = Some(i);
+                        s.deselected = false;
                         s.component = None;
                         s.pending_op = None;
                     }
@@ -611,33 +662,54 @@ fn ellipse(painter: &egui::Painter, r: ERect, center: [f32; 2], radius: [f32; 2]
     painter.add(egui::Shape::line(pts, stroke));
 }
 
+/// The part of the preview image `r` Guided Upright's guides are relative to, and its size in
+/// proxy pixels: the canvas, when the layer extends past it (Geometry develops and warps the
+/// canvas only, see `ProxyJob::run`), else the whole image.
+fn guide_frame(canvas_frame: Option<[usize; 4]>, pw: usize, ph: usize, r: ERect) -> (ERect, usize, usize) {
+    let (pw, ph) = (pw.max(1), ph.max(1));
+    match canvas_frame {
+        Some([x0, y0, x1, y1]) if x0 < x1 && y0 < y1 && x1 <= pw && y1 <= ph => {
+            let at = |x: usize, y: usize| pos2(r.min.x + r.width() * x as f32 / pw as f32, r.min.y + r.height() * y as f32 / ph as f32);
+            (ERect::from_min_max(at(x0, y0), at(x1, y1)), x1 - x0, y1 - y0)
+        }
+        _ => (r, pw, ph),
+    }
+}
+
 /// Draws the selected mask's overlay, pins and guides over the preview image `r`, and turns drags
 /// on `response` into mask edits. Call after painting the image. While `panning` (Space or a
-/// middle drag) they are drawn but the drag edits nothing.
-pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &Response, panning: bool) {
+/// middle drag) they are drawn but the drag edits nothing. Only a press inside `after` (the part
+/// of the preview showing the After image: not Split's Before half) starts an edit, and Before
+/// (Y) takes none: its pixels are not where the masks apply once Geometry moves them.
+pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &Response, panning: bool, after: ERect) {
     let ctx = ui.ctx().clone();
     let mut s = load(&ctx);
     let painter = ui.painter().clone();
     let t = Tokens::get(&ctx);
-    let (pw, ph) = (d.pw, d.ph);
     let before = d.params.clone();
     if panning {
         s.drag = None;
     }
+    // A drag that started on the After image keeps going wherever the pointer goes.
+    let at = response.interact_pointer_pos().or(response.hover_pos());
+    let origin = ctx.input(|i| i.pointer.press_origin()).or(at);
+    let starts = response.drag_started_by(egui::PointerButton::Primary) || response.clicked();
+    let edits = !panning && (!starts || origin.is_some_and(|p| after.contains(p)));
     // Guided Upright: guides drawn in result coordinates, stored in source coordinates. Through
     // the geometry the preview shows: none while Before shows or the Geometry panel is hidden.
     let shown = d.effective_params();
     if !d.show_before && Upright::parse(&shown.perspective_upright) == Some(Upright::Guided) {
-        let maps = guide_maps(&shown, pw.max(1), ph.max(1));
+        let (gr, gw, gh) = guide_frame(d.canvas_frame, d.pw, d.ph, r);
+        let maps = guide_maps(&shown, gw, gh);
         if let Some((fwd, _)) = maps {
             for g in &shown.upright_guides {
-                if let (Some(a), Some(b)) = (map(&fwd, g[0], pw as f64, ph as f64), map(&fwd, g[1], pw as f64, ph as f64)) {
-                    painter.line_segment([screen(r, a), screen(r, b)], Stroke::new(2.0, Color32::from_rgb(255, 200, 0)));
+                if let (Some(a), Some(b)) = (map(&fwd, g[0], gw as f64, gh as f64), map(&fwd, g[1], gw as f64, gh as f64)) {
+                    painter.line_segment([screen(gr, a), screen(gr, b)], Stroke::new(2.0, Color32::from_rgb(255, 200, 0)));
                 }
             }
         }
-        if s.tool == DrawTool::Guide && !panning {
-            guide_drag(&mut s, d, r, response, &painter, maps.map(|m| m.1));
+        if s.tool == DrawTool::Guide && edits {
+            guide_drag(&mut s, d, (gr, gw, gh), response, &painter, maps.map(|m| m.1));
         }
     }
     if s.open
@@ -646,7 +718,7 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
         overlay(&ctx, &mut s, d, i, r, &painter);
         pins(&painter, &d.params.masks[i], s.component, r, t.accent);
         // The guide tool's drag belongs to `guide_drag` above.
-        if s.tool != DrawTool::Guide && !panning {
+        if s.tool != DrawTool::Guide && edits && !d.show_before {
             mask_drag(&mut s, d, i, r, response, &painter);
         }
     }
@@ -807,71 +879,11 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
             _ => None,
         };
     } else if response.dragged_by(egui::PointerButton::Primary) {
-        match s.drag {
-            Some(Drag::Brush(last)) => {
-                let step = (s.brush.size * 0.25).max(0.002);
-                let (dx, dy) = (u[0] - last[0], u[1] - last[1]);
-                let dist = (dx * r.width()).hypot(dy * r.height()) / long;
-                if dist >= step
-                    && let Some(j) = s.component
-                {
-                    let n = ((dist / step) as usize).clamp(1, 64);
-                    for k in 1..=n {
-                        let f = k as f32 / n as f32;
-                        dab(m, j, [last[0] + dx * f, last[1] + dy * f], &s.brush, s.erase || alt);
-                    }
-                    s.drag = Some(Drag::Brush(u));
-                }
-            }
-            Some(Drag::NewLinear(j, start)) => {
-                if let Some(Component { shape: Shape::Linear { zero, full }, .. }) = m.components.get_mut(j) {
-                    *full = start;
-                    *zero = u;
-                }
-            }
-            Some(Drag::LinearPin(j, which)) => {
-                if let Some(Component { shape: Shape::Linear { zero, full }, .. }) = m.components.get_mut(j) {
-                    match which {
-                        0 => *full = u,
-                        _ => *zero = u,
-                    }
-                }
-            }
-            Some(Drag::NewRadial(j, start)) => {
-                if let Some(Component { shape: Shape::Radial { center, radius, .. }, .. }) = m.components.get_mut(j) {
-                    *center = start;
-                    *radius = [(u[0] - start[0]).abs().max(0.005), (u[1] - start[1]).abs().max(0.005)];
-                }
-            }
-            Some(Drag::RadialMove(j)) => {
-                if let Some(Component { shape: Shape::Radial { center, .. }, .. }) = m.components.get_mut(j) {
-                    *center = u;
-                }
-            }
-            Some(Drag::RadialEdge(j, rotate)) => {
-                if let Some(Component { shape: Shape::Radial { center, radius, angle, .. }, .. }) = m.components.get_mut(j) {
-                    let c = screen(r, *center);
-                    let (dx, dy) = (p.x - c.x, p.y - c.y);
-                    if rotate {
-                        *angle = dy.atan2(dx).to_degrees();
-                    } else {
-                        // The pointer's offset in the ellipse's own axes sets the nearer half axis.
-                        let (sn, cs) = angle.to_radians().sin_cos();
-                        let (lx, ly) = ((dx * cs + dy * sn) / r.width().max(1.0), (-dx * sn + dy * cs) / r.height().max(1.0));
-                        if lx.abs() / radius[0].max(1e-3) >= ly.abs() / radius[1].max(1e-3) {
-                            radius[0] = lx.abs().max(0.005);
-                        } else {
-                            radius[1] = ly.abs().max(0.005);
-                        }
-                    }
-                }
-            }
-            Some(Drag::Objects(start)) => {
-                painter.rect_stroke(ERect::from_two_pos(screen(r, start), p), 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
-            }
-            _ => {}
-        }
+        drag_to(s, m, r, p, u, alt, painter);
     } else if response.drag_stopped_by(egui::PointerButton::Primary) {
+        // The pointer can move on the release frame: the stroke, pin or outline ends where it
+        // was let go.
+        drag_to(s, m, r, p, u, alt, painter);
         if let Some(Drag::Objects(start)) = s.drag
             && (u[0] - start[0]).abs() > 0.01
             && (u[1] - start[1]).abs() > 0.01
@@ -890,26 +902,102 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
         if let Some(j) = brush_target(m, s) {
             dab(m, j, u, &s.brush, s.erase || alt);
         }
-    } else if response.clicked() && s.tool == DrawTool::ColorPick {
+    } else if response.clicked() && s.tool == DrawTool::ColorPick && r.contains(p) {
+        // Only on the image: past its edge (a preview smaller than the view) there is no pixel.
         let (w, h) = (d.pw, d.ph);
         let src: &[[f32; 4]] = if d.processed.len() >= w * h { &d.processed } else { &d.proxy };
-        let (x, y) = ((u[0] * w as f32) as usize, (u[1] * h as f32) as usize);
-        if let Some(q) = (x < w && y < h).then(|| src.get(y * w + x)).flatten().copied() {
-            let sample = [q[0], q[1], q[2]].map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
-            let shift = ctx.input(|x| x.modifiers.shift);
-            let existing = s.component.filter(|j| matches!(m.components.get(*j).map(|c| &c.shape), Some(Shape::Color { .. })));
-            if let Some(Component { shape: Shape::Color { samples, .. }, .. }) = existing.and_then(|j| m.components.get_mut(j)) {
-                // Shift-click adds a sample (up to five), a plain click starts over.
-                if !shift {
-                    *samples = vec![sample];
-                } else if samples.len() < masks::MAX_SAMPLES {
-                    samples.push(sample);
+        color_pick(s, m, (src, w, h), u, ctx.input(|x| x.modifiers.shift));
+    }
+}
+
+/// A Color Range click at `u`: a plain click starts the samples over, Shift adds one (up to five).
+fn color_pick(s: &mut MaskUi, m: &mut Mask, (src, w, h): (&[[f32; 4]], usize, usize), u: [f32; 2], shift: bool) {
+    if !(0.0..=1.0).contains(&u[0]) || !(0.0..=1.0).contains(&u[1]) {
+        return;
+    }
+    let (x, y) = ((u[0] * w as f32) as usize, (u[1] * h as f32) as usize);
+    let (x, y) = (x.min(w.saturating_sub(1)), y.min(h.saturating_sub(1)));
+    let Some(q) = (x < w && y < h).then(|| src.get(y * w + x)).flatten().copied() else { return };
+    let sample = [q[0], q[1], q[2]].map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
+    let existing = s.component.filter(|j| matches!(m.components.get(*j).map(|c| &c.shape), Some(Shape::Color { .. })));
+    if let Some(Component { shape: Shape::Color { samples, .. }, .. }) = existing.and_then(|j| m.components.get_mut(j)) {
+        if !shift {
+            *samples = vec![sample];
+        } else if samples.len() < masks::MAX_SAMPLES {
+            samples.push(sample);
+        }
+    } else if m.components.len() < masks::MAX_COMPONENTS {
+        m.components.push(Component { op: take_op(s), invert: false, shape: Shape::Color { samples: vec![sample], amount: 50.0 } });
+        s.component = Some(m.components.len() - 1);
+    }
+}
+
+/// Moves the drag in progress to the pointer `p` (`u` on the image `r`).
+fn drag_to(s: &mut MaskUi, m: &mut Mask, r: ERect, p: Pos2, u: [f32; 2], alt: bool, painter: &egui::Painter) {
+    let long = r.width().max(r.height()).max(1.0);
+    match s.drag {
+        Some(Drag::Brush(last)) => {
+            let step = (s.brush.size * 0.25).max(0.002);
+            let (dx, dy) = (u[0] - last[0], u[1] - last[1]);
+            let dist = (dx * r.width()).hypot(dy * r.height()) / long;
+            if dist >= step
+                && let Some(j) = s.component
+            {
+                let n = ((dist / step) as usize).clamp(1, 64);
+                for k in 1..=n {
+                    let f = k as f32 / n as f32;
+                    dab(m, j, [last[0] + dx * f, last[1] + dy * f], &s.brush, s.erase || alt);
                 }
-            } else if m.components.len() < masks::MAX_COMPONENTS {
-                m.components.push(Component { op: take_op(s), invert: false, shape: Shape::Color { samples: vec![sample], amount: 50.0 } });
-                s.component = Some(m.components.len() - 1);
+                s.drag = Some(Drag::Brush(u));
             }
         }
+        Some(Drag::NewLinear(j, start)) => {
+            if let Some(Component { shape: Shape::Linear { zero, full }, .. }) = m.components.get_mut(j) {
+                *full = start;
+                *zero = u;
+            }
+        }
+        Some(Drag::LinearPin(j, which)) => {
+            if let Some(Component { shape: Shape::Linear { zero, full }, .. }) = m.components.get_mut(j) {
+                match which {
+                    0 => *full = u,
+                    _ => *zero = u,
+                }
+            }
+        }
+        Some(Drag::NewRadial(j, start)) => {
+            if let Some(Component { shape: Shape::Radial { center, radius, .. }, .. }) = m.components.get_mut(j) {
+                *center = start;
+                *radius = [(u[0] - start[0]).abs().max(0.005), (u[1] - start[1]).abs().max(0.005)];
+            }
+        }
+        Some(Drag::RadialMove(j)) => {
+            if let Some(Component { shape: Shape::Radial { center, .. }, .. }) = m.components.get_mut(j) {
+                *center = u;
+            }
+        }
+        Some(Drag::RadialEdge(j, rotate)) => {
+            if let Some(Component { shape: Shape::Radial { center, radius, angle, .. }, .. }) = m.components.get_mut(j) {
+                let c = screen(r, *center);
+                let (dx, dy) = (p.x - c.x, p.y - c.y);
+                if rotate {
+                    *angle = dy.atan2(dx).to_degrees();
+                } else {
+                    // The pointer's offset in the ellipse's own axes sets the nearer half axis.
+                    let (sn, cs) = angle.to_radians().sin_cos();
+                    let (lx, ly) = ((dx * cs + dy * sn) / r.width().max(1.0), (-dx * sn + dy * cs) / r.height().max(1.0));
+                    if lx.abs() / radius[0].max(1e-3) >= ly.abs() / radius[1].max(1e-3) {
+                        radius[0] = lx.abs().max(0.005);
+                    } else {
+                        radius[1] = ly.abs().max(0.005);
+                    }
+                }
+            }
+        }
+        Some(Drag::Objects(start)) => {
+            painter.rect_stroke(ERect::from_two_pos(screen(r, start), p), 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
+        }
+        _ => {}
     }
 }
 
@@ -939,7 +1027,9 @@ fn dab(m: &mut Mask, j: usize, u: [f32; 2], brush: &Dab, erase: bool) {
     }
 }
 
-fn guide_drag(s: &mut MaskUi, d: &mut CameraRawDialog, r: ERect, response: &Response, painter: &egui::Painter, inv: Option<[f64; 9]>) {
+/// `frame`: the guides' rectangle on screen and its size in proxy pixels ([`guide_frame`]).
+fn guide_drag(s: &mut MaskUi, d: &mut CameraRawDialog, frame: (ERect, usize, usize), response: &Response, painter: &egui::Painter, inv: Option<[f64; 9]>) {
+    let (r, fw, fh) = frame;
     let Some(p) = response.interact_pointer_pos().or(response.hover_pos()) else { return };
     let u = norm(r, p);
     if response.drag_started_by(egui::PointerButton::Primary) {
@@ -949,7 +1039,7 @@ fn guide_drag(s: &mut MaskUi, d: &mut CameraRawDialog, r: ERect, response: &Resp
             painter.line_segment([screen(r, start), p], Stroke::new(2.0, Color32::from_rgb(255, 200, 0)));
         } else if response.drag_stopped_by(egui::PointerButton::Primary) {
             s.drag = None;
-            let (w, h) = (d.pw as f64, d.ph as f64);
+            let (w, h) = (fw as f64, fh as f64);
             if let Some(inv) = inv
                 && let (Some(a), Some(b)) = (map(&inv, start, w, h), map(&inv, u, w, h))
             {
@@ -1133,5 +1223,82 @@ mod tests {
         let a = map(&fwd, [0.4, 0.3], 300.0, 200.0).expect("maps");
         let b = map(&inv, a, 300.0, 200.0).expect("maps back");
         assert!((b[0] - 0.4).abs() < 1e-4 && (b[1] - 0.3).abs() < 1e-4);
+    }
+
+    /// The guide tool with Masking open and a mask selected: it captures the drag only where
+    /// Guided Upright can take a guide, so Before or a hidden Geometry leave it to the zoom tool.
+    /// Before takes no mask edits either.
+    #[test]
+    fn the_guide_tool_is_not_a_mask_tool() {
+        let ctx = egui::Context::default();
+        let p = CameraRaw { masks: vec![Mask::default()], ..CameraRaw::default() };
+        control(&ctx, &p, &json!({"open": true, "selected": 0, "tool": "guides"})).unwrap();
+        assert!(!captures_pointer(&ctx, &p, false), "no Guided Upright: nothing to draw");
+        let guided = CameraRaw { perspective_upright: "guided".into(), ..p.clone() };
+        assert!(captures_pointer(&ctx, &guided, false));
+        assert!(!captures_pointer(&ctx, &guided, true), "Before shows no guides");
+        control(&ctx, &p, &json!({"tool": "brush"})).unwrap();
+        assert!(captures_pointer(&ctx, &p, false));
+        assert!(!captures_pointer(&ctx, &p, true), "Before takes no mask edits");
+    }
+
+    /// `selected: null` stays deselected while the panel draws; reopening the tool selects the
+    /// first mask again, and a selection past the masks falls back to the first.
+    #[test]
+    fn an_explicit_deselection_is_kept() {
+        let ctx = egui::Context::default();
+        let p = CameraRaw { masks: vec![Mask::default(), Mask::default()], ..CameraRaw::default() };
+        control(&ctx, &p, &json!({"open": true})).unwrap();
+        let mut s = load(&ctx);
+        auto_select(&mut s, 2);
+        assert_eq!(s.selected, Some(0), "opening selects the first");
+        store(&ctx, s);
+        control(&ctx, &p, &json!({"selected": null})).unwrap();
+        let mut s = load(&ctx);
+        auto_select(&mut s, 2);
+        assert_eq!(s.selected, None, "deselected on purpose");
+        store(&ctx, s);
+        control(&ctx, &p, &json!({"open": false})).unwrap();
+        control(&ctx, &p, &json!({"open": true})).unwrap();
+        let mut s = load(&ctx);
+        auto_select(&mut s, 2);
+        assert_eq!(s.selected, Some(0), "reopened");
+        s.selected = Some(5);
+        auto_select(&mut s, 2);
+        assert_eq!(s.selected, Some(0), "a mask that is gone");
+    }
+
+    /// A selection the settings no longer have is dropped; a new dialog starts unselected and
+    /// closed, keeping the brush.
+    #[test]
+    fn the_selection_follows_the_settings_and_each_dialog_starts_afresh() {
+        let ctx = egui::Context::default();
+        let three = CameraRaw { masks: vec![Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Sky }], ..Mask::default() }; 3], ..CameraRaw::default() };
+        control(&ctx, &three, &json!({"open": true, "selected": 2, "component": 0, "brush": {"size": 0.1}})).unwrap();
+        reconcile(&ctx, &three);
+        assert_eq!((load(&ctx).selected, load(&ctx).component), (Some(2), Some(0)), "still there");
+        let one = CameraRaw { masks: three.masks[..1].to_vec(), ..CameraRaw::default() };
+        reconcile(&ctx, &one);
+        assert_eq!((load(&ctx).selected, load(&ctx).component), (None, None));
+        control(&ctx, &three, &json!({"selected": 0, "component": 0})).unwrap();
+        reconcile(&ctx, &CameraRaw { masks: vec![Mask::default()], ..CameraRaw::default() });
+        assert_eq!((load(&ctx).selected, load(&ctx).component), (Some(0), None), "the component is gone");
+        control(&ctx, &three, &json!({"selected": 2})).unwrap();
+        reset_for_new_dialog(&ctx);
+        let d = describe(&ctx);
+        assert_eq!((d["open"].clone(), d["selected"].clone(), d["tool"].clone()), (json!(false), Value::Null, json!("none")));
+        assert!((load(&ctx).brush.size - 0.1).abs() < 1e-6, "the brush carries over");
+    }
+
+    /// Guides are relative to the canvas when the layer extends past it (Geometry warps the
+    /// canvas only), else to the whole preview.
+    #[test]
+    fn guides_are_relative_to_the_canvas() {
+        let r = ERect::from_min_size(pos2(10.0, 20.0), egui::vec2(280.0, 160.0));
+        let (gr, w, h) = guide_frame(Some([7, 0, 28, 16]), 28, 16, r);
+        assert_eq!((w, h), (21, 16));
+        assert_eq!(gr, ERect::from_min_max(pos2(80.0, 20.0), pos2(290.0, 180.0)));
+        assert_eq!(guide_frame(None, 28, 16, r), (r, 28, 16));
+        assert_eq!(guide_frame(Some([0, 0, 40, 16]), 28, 16, r), (r, 28, 16), "a frame past the proxy is ignored");
     }
 }

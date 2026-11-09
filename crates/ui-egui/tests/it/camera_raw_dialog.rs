@@ -117,10 +117,13 @@ fn a_space_drag_pans_without_painting() {
     brush(&mut h);
     menu(&mut h, json!({"view":{"zoom":2.0}}));
     let at = rectangle(&h, "viewportRect").center();
+    let image = rectangle(&h, "previewRect");
     key(&mut h, Key::Space, true);
     drag(&mut h, at, at + vec2(80.0, 40.0));
     key(&mut h, Key::Space, false);
     assert_eq!(dabs(&h), 0);
+    let moved = rectangle(&h, "previewRect").min - image.min;
+    assert!(moved.x > 40.0 && moved.y > 20.0, "the preview panned: {moved:?}");
 }
 
 /// With the Masks panel open and a mask selected, the guide tool still adds Guided Upright guides.
@@ -137,4 +140,90 @@ fn the_guide_tool_draws_guides_with_the_masks_panel_open() {
     let image = rectangle(&h, "previewRect");
     drag(&mut h, image.lerp_inside(vec2(0.7, 0.2)), image.lerp_inside(vec2(0.68, 0.8)));
     assert_eq!(inspect(&h)["params"]["uprightGuides"].as_array().map(Vec::len), Some(2));
+}
+
+/// The components of the first mask.
+fn components(h: &Harness<'_, PhotocraftApp>) -> Vec<Value> {
+    inspect(h)["params"]["masks"][0]["components"].as_array().cloned().unwrap_or_default()
+}
+fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
+    press(h, at, true);
+    press(h, at, false);
+}
+
+/// Before (Y) shows the image without Geometry, where the masks do not apply: the brush paints
+/// nothing there, and paints again on After.
+#[test]
+fn the_before_view_takes_no_mask_edits() {
+    let mut h = fixture();
+    brush(&mut h);
+    menu(&mut h, json!({"before":true}));
+    let at = rectangle(&h, "previewRect").center();
+    click(&mut h, at);
+    assert_eq!(dabs(&h), 0);
+    menu(&mut h, json!({"before":false}));
+    click(&mut h, at);
+    assert_eq!(dabs(&h), 1);
+}
+
+/// Split view: Before covers the left half, so only the After half takes the brush.
+#[test]
+fn split_view_edits_only_the_after_half() {
+    let mut h = fixture();
+    brush(&mut h);
+    menu(&mut h, json!({"compare":"split"}));
+    let image = rectangle(&h, "previewRect");
+    click(&mut h, image.lerp_inside(vec2(0.25, 0.5)));
+    assert_eq!(dabs(&h), 0, "Before half");
+    click(&mut h, image.lerp_inside(vec2(0.75, 0.5)));
+    assert_eq!(dabs(&h), 1, "After half");
+}
+
+/// A Color Range click beside the image (the preview smaller than the view) samples nothing.
+#[test]
+fn color_range_clicks_beside_the_image_do_nothing() {
+    let mut h = fixture();
+    menu(&mut h, json!({"set":{"masks":[{"name":"Mask 1","components":[]}]},"masks":{"open":true,"selected":0,"tool":"colorPick"}}));
+    let (image, view) = (rectangle(&h, "previewRect"), rectangle(&h, "viewportRect"));
+    let beside = if image.left() - view.left() > 4.0 { pos2(view.left() + 2.0, image.center().y) } else { pos2(image.center().x, view.top() + 2.0) };
+    assert!(view.contains(beside) && !image.contains(beside), "{image:?} in {view:?}");
+    click(&mut h, beside);
+    assert!(components(&h).is_empty(), "{:?}", components(&h));
+    click(&mut h, image.center());
+    assert_eq!(components(&h).len(), 1);
+}
+
+/// When the pointer moves on the release frame, the gradient ends where it was let go.
+#[test]
+fn a_gradient_ends_where_it_is_released() {
+    let mut h = fixture();
+    menu(&mut h, json!({"set":{"masks":[{"name":"Mask 1","components":[]}]},"masks":{"open":true,"selected":0,"tool":"linear"}}));
+    let image = rectangle(&h, "previewRect");
+    let (start, mid, end) = (image.lerp_inside(vec2(0.3, 0.3)), image.lerp_inside(vec2(0.5, 0.5)), image.lerp_inside(vec2(0.7, 0.6)));
+    press(&mut h, start, true);
+    for n in 1..=4 {
+        h.event(Event::PointerMoved(start + (mid - start) * n as f32 / 4.0));
+        h.run_steps(2);
+    }
+    // Released at `end` without a move event before it.
+    press(&mut h, end, false);
+    let c = components(&h);
+    let zero = c[0]["zero"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect::<Vec<_>>();
+    assert!((zero[0] - 0.7).abs() < 0.01 && (zero[1] - 0.6).abs() < 0.01, "{c:?}");
+}
+
+/// A keyboard edit (an arrow on a focused value box) is its own undo step.
+#[test]
+fn a_keyboard_edit_is_one_undo_step() {
+    let mut h = fixture();
+    menu(&mut h, json!({"panels":{"open":["light"]}}));
+    let field = h.query_by_role_and_label(Role::SpinButton, "Exposure").or_else(|| h.query_by_role_and_label(Role::TextInput, "Exposure")).unwrap().rect();
+    click(&mut h, field.center());
+    key(&mut h, Key::ArrowUp, true);
+    key(&mut h, Key::ArrowUp, false);
+    let exposure = || inspect(&h)["params"]["exposure"].as_f64().unwrap();
+    let edited = exposure();
+    assert!(edited > 0.0, "the arrow stepped Exposure");
+    menu(&mut h, json!({"undo":true}));
+    assert_eq!(inspect(&h)["params"]["exposure"].as_f64(), Some(0.0), "undone");
 }

@@ -173,6 +173,8 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("redo").and_then(Value::as_bool) == Some(true) {
         redo_edit(d);
     }
+    // The reply describes the masks the settings end with (after an undo, say).
+    super::masks_panel::reconcile(ctx, &d.params);
     if d.dirty {
         d.render(ctx);
     }

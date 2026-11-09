@@ -134,10 +134,11 @@ fn existing_sidecar_is_ours(_: &str) -> Option<bool> {
     None
 }
 
-/// Save Settings…: the dialog's settings as a Camera Raw `.xmp` settings file.
+/// Save Settings…: the settings the preview shows (without the panels hidden by their eye
+/// button) as a Camera Raw `.xmp` settings file.
 pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
     let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
-    let bytes = photocraft_io::camera_raw_xmp::save(&d.params)?.into_bytes();
+    let bytes = photocraft_io::camera_raw_xmp::save(&d.effective_params())?.into_bytes();
     app.pick_save("RAW Develop Settings.xmp", move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;

@@ -70,6 +70,15 @@ impl Compare {
         }
     }
 
+    /// The part of the preview `view` showing the After image the tools edit: `after_view` (the
+    /// right half side by side), less Split's Before half.
+    pub(super) fn after_area(self, view: egui::Rect, after_view: egui::Rect) -> egui::Rect {
+        match self {
+            Compare::Split => egui::Rect::from_min_max(egui::pos2(view.center().x, view.top()), view.max),
+            Compare::Single | Compare::SideBySide => after_view,
+        }
+    }
+
     /// The next view, as Camera Raw's Before/After button cycles them.
     pub(super) fn next(self) -> Compare {
         match self {

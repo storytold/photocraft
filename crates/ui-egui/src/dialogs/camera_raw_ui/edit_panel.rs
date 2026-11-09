@@ -181,7 +181,7 @@ fn slider_more(
     // The track: the hit area is the row under the box.
     let hit = ERect::from_min_max(pos2(row.left(), field_rect.bottom()), row.max);
     let mut resp = ui.interact(hit, id, Sense::click_and_drag());
-    let f_of = |x: f32| ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
+    let f_of = |x: f32| knob_fraction(track, x);
     if let Some(p) = resp.interact_pointer_pos()
         && (resp.dragged() || resp.clicked())
     {
@@ -207,7 +207,7 @@ fn slider_more(
         _ => paint_gradient(painter, track, &tone_stops()),
     }
     let fraction = if hi > lo && v.is_finite() { ((*v - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
-    let x = track.left() + KNOB_W / 2.0 + fraction * (track.width() - KNOB_W);
+    let x = knob_x(track, fraction);
     let tip = track.top() - 3.0;
     let shoulder = tip + KNOB_W / 2.0 - 1.5;
     let base = tip + KNOB_H;
@@ -217,6 +217,18 @@ fn slider_more(
     painter.add(egui::Shape::convex_polygon(knob, t.text, Stroke::new(1.0, outline)));
     resp.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*v), label));
     resp.labelled_by(label_resp.id)
+}
+
+/// Where the knob's centre is for `fraction` (0 … 1): it travels inset by half its width, so it
+/// never sticks out of the track.
+pub(super) fn knob_x(track: ERect, fraction: f32) -> f32 {
+    track.left() + KNOB_W / 2.0 + fraction * (track.width() - KNOB_W).max(0.0)
+}
+
+/// The fraction (0 … 1) the pointer at `x` sets: the inverse of [`knob_x`], so a click on the
+/// knob where it stands changes nothing.
+pub(super) fn knob_fraction(track: ERect, x: f32) -> f32 {
+    ((x - track.left() - KNOB_W / 2.0) / (track.width() - KNOB_W).max(1.0)).clamp(0.0, 1.0)
 }
 
 pub(super) fn row(ui: &mut egui::Ui, dirty: &mut bool, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, grad: Option<&[Color32]>, reset: f32) {
@@ -611,11 +623,19 @@ fn parametric_curve(ui: &mut egui::Ui, p: &mut CameraRaw, backdrop: &[f32], dirt
     rect
 }
 
-/// Where split `k` may go: 5 % from its neighbours (and from the ends), low end first.
+/// Where split `k` may go: 5 % from its neighbours (and from the ends), low end first. When the
+/// neighbours are closer than that gap allows, anywhere between them, so the splits stay ordered
+/// (rounding them, as a PSD does, keeps that order too).
 pub(super) fn split_bounds(s: &[f32; 3], k: usize) -> (f32, f32) {
-    let lo = if k == 0 { 5.0 } else { s.get(k - 1).map_or(5.0, |v| v + 5.0) };
-    let hi = s.get(k + 1).map_or(95.0, |v| v - 5.0);
-    (lo.min(hi), hi.max(lo))
+    let prev = if k == 0 { None } else { s.get(k - 1).copied() };
+    let next = s.get(k + 1).copied();
+    let lo = prev.map_or(5.0, |v| v + 5.0);
+    let hi = next.map_or(95.0, |v| v - 5.0);
+    if lo <= hi {
+        return (lo, hi);
+    }
+    let (a, b) = (prev.unwrap_or(0.0), next.unwrap_or(100.0));
+    (a.min(b), b.max(a))
 }
 
 /// Split `k`'s default (double-click), kept between its neighbours so the handles stay ordered.
@@ -727,11 +747,11 @@ pub(super) fn header(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut boo
                 if ui.button(tl!("Reset to Open")).clicked() {
                     let mut p = d.original.clone();
                     p.pixel_scale = d.params.pixel_scale;
-                    d.params = p;
+                    reset_to(d, p);
                     *dirty = true;
                 }
                 if ui.button(tl!("Reset to Default")).clicked() {
-                    d.params = super::panels::defaults_for(&d.params);
+                    reset_to(d, super::panels::defaults_for(&d.params));
                     *dirty = true;
                 }
             });
@@ -745,6 +765,15 @@ pub(super) fn header(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut boo
     });
     ui.add_space(4.0);
     action
+}
+
+/// Reset to Open / Default: the curve editor's selected or dragged point does not carry over to
+/// a different curve.
+pub(super) fn reset_to(d: &mut CameraRawDialog, p: CameraRaw) {
+    if super::controls::curves_changed(&d.params, &p) {
+        d.curve_state = Default::default();
+    }
+    d.params = p;
 }
 
 /// The panels, in Camera Raw's order, inside the column's scroll area.

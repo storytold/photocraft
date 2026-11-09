@@ -48,6 +48,27 @@ pub(super) fn redo_edit(d: &mut CameraRawDialog) -> bool {
     true
 }
 
+/// The settings before this frame's keyboard input, when a key (an arrow on a focused slider, a
+/// typed value) may edit without the pointer: [`commit_key_edit`] makes that edit one undo step of
+/// its own. Pointer edits have their own origin (one drag, one step).
+fn key_edit_origin(d: &CameraRawDialog, ctx: &egui::Context, pointer: bool) -> Option<super::CameraRaw> {
+    let typed = !pointer
+        && d.edit_origin.is_none()
+        && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::Paste(_))));
+    typed.then(|| d.params.clone())
+}
+
+/// Records `origin` (from [`key_edit_origin`]) in the dialog's history when the keys changed it.
+fn commit_key_edit(d: &mut CameraRawDialog, origin: Option<super::CameraRaw>) {
+    if let Some(origin) = origin
+        && origin != d.params
+    {
+        let edited = std::mem::replace(&mut d.params, origin);
+        remember_edit(d);
+        d.params = edited;
+    }
+}
+
 fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
     let cmd_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
     if ctx.input_mut(|i| i.consume_key(cmd_shift, egui::Key::Z)) {
@@ -79,8 +100,8 @@ pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
         }
         Target::OpenRaw => {
             let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
-            let (params, original) = (d.effective_params(), d.original.clone());
-            super::filmstrip::open_all(app, &params, &raw, &original)?
+            let (params, original, panels) = (d.effective_params(), d.original.clone(), d.panels.clone());
+            super::filmstrip::open_all(app, &params, &raw, &original, &panels)?
         }
     };
     app.camera_raw = None;
@@ -231,6 +252,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if pointer && d.edit_origin.is_none() {
             d.edit_origin = Some(d.params.clone());
         }
+        let key_origin = key_edit_origin(d, ctx, pointer);
         if let Some(display) = &current_display
             && display.key != d.display.key
         {
@@ -310,7 +332,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &effective, detail_needed, &d.display);
             // Masks: the overlay, pins and Guided Upright's guides over the image (and over the
             // full-resolution detail), under Split's Before half; their drags edit the masks.
-            super::masks_panel::preview(&mut preview, d, r, &response, panning);
+            // Edits start only on the After image: Split's Before half covers the left of it.
+            super::masks_panel::preview(&mut preview, d, r, &response, panning, compare.after_area(view, after_view));
             if compare != Compare::Single
                 && let Some(before) = d.before_tex.as_ref()
             {
@@ -462,6 +485,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             remember_edit(d);
             d.params = edited;
         }
+        commit_key_edit(d, key_origin);
     });
     crate::camera_raw_scope_ui::persist(app, ctx);
     if let Some(i) = show_held

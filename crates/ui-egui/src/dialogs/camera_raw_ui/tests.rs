@@ -1515,6 +1515,13 @@ fn a_split_reset_stays_between_its_neighbours() {
     assert_eq!(reset_split(&[20.0, 50.0, 80.0], 1), 50.0);
     assert_eq!(reset_split(&[20.0, 30.0, 40.0], 2), 75.0);
     assert_eq!(split_bounds(&[20.0, 30.0, 40.0], 1), (25.0, 35.0));
+    // Neighbours closer than the 5-point gap: the split stays between them.
+    let packed = [20.0, 21.0, 22.0];
+    let r = reset_split(&packed, 1);
+    assert!((20.0..=22.0).contains(&r), "{r}");
+    assert_eq!(split_bounds(&packed, 1), (20.0, 22.0));
+    assert!(reset_split(&[3.0, 6.0, 90.0], 0) <= 6.0);
+    assert!(reset_split(&[10.0, 97.0, 99.0], 2) >= 97.0);
 }
 
 /// Camera Raw's decimal places: Exposure two, Radius and Rotate one, the -100 to 100 sliders none.
@@ -1713,4 +1720,124 @@ fn geometry_preview_mixes_the_selection_by_alpha() {
     let corner = d.processed[0];
     let want = [original[0], original[1], original[2], original[3] * 0.5];
     assert!(corner.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{corner:?} != {want:?}");
+}
+
+/// Reset to Open / Default to a different curve drops the curve editor's selected point; a reset
+/// that leaves the curves alone keeps it.
+#[test]
+fn a_reset_to_another_curve_drops_the_selected_point() {
+    let (mut app, _ctx) = grey_dialog();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.point_curve_red = vec![[0.0, 0.0], [128.0, 150.0], [255.0, 255.0]];
+    d.curve_state.selected = Some(1);
+    let same = d.params.clone();
+    super::edit_panel::reset_to(d, same);
+    assert_eq!(d.curve_state.selected, Some(1), "the same curves");
+    let open = d.original.clone();
+    super::edit_panel::reset_to(d, open);
+    assert_eq!(d.curve_state, Default::default());
+}
+
+/// The pointer maps onto the knob's travel (inset by half the knob): a click on the knob where it
+/// stands changes nothing, at the ends too.
+#[test]
+fn a_click_on_the_knob_keeps_its_value() {
+    use super::edit_panel::{knob_fraction, knob_x};
+    let track = ERect::from_min_size(pos2(100.0, 0.0), vec2(200.0, 4.0));
+    for f in [0.0, 0.02, 0.5, 0.97, 1.0] {
+        assert!((knob_fraction(track, knob_x(track, f)) - f).abs() < 1e-5, "{f}");
+    }
+    assert_eq!(knob_fraction(track, track.left()), 0.0);
+    assert_eq!(knob_fraction(track, track.right()), 1.0);
+}
+
+/// An undo in the request that added and selected a mask leaves no selection of a mask that is
+/// gone in the reply.
+#[test]
+fn the_reply_never_names_a_mask_an_undo_removed() {
+    let (mut app, ctx) = grey_dialog();
+    let m = json!({"name": "Mask 1", "components": [{"kind": "sky"}]});
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"masks": [m]}, "masks": {"selected": 0}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"masks": [m, m]}, "masks": {"selected": 1}, "undo": true}})).unwrap().unwrap();
+    assert_eq!(r["params"]["masks"].as_array().map(Vec::len), Some(1));
+    assert_eq!(r["masking"]["selected"], Value::Null, "{}", r["masking"]);
+}
+
+/// Each new dialog starts with Masking closed and nothing selected.
+#[test]
+fn a_new_dialog_starts_without_the_last_masking_state() {
+    let (mut app, ctx) = grey_dialog();
+    let m = json!({"name": "Mask 1", "components": [{"kind": "sky"}]});
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"masks": [m, m, m]}, "masks": {"open": true, "selected": 2}}})).unwrap().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5}}})).unwrap().unwrap();
+    assert_eq!((r["masking"]["open"].clone(), r["masking"]["selected"].clone()), (json!(false), Value::Null), "{}", r["masking"]);
+}
+
+/// Save Settings writes what the preview shows: a panel hidden by its eye button saves nothing.
+#[test]
+fn save_settings_leaves_out_hidden_panels() {
+    use crate::file_dialog::FileDialogAnswer;
+    let written: Written = Default::default();
+    let sink = written.clone();
+    let services = crate::Services {
+        file_dialog: Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo("/out/Look.xmp".into()))]).0),
+        write: Some(Box::new(move |p: &str, b: &[u8]| {
+            sink.lock().unwrap().push((p.to_string(), b.to_vec()));
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.75, "clarity": 10}, "panels": {"hidden": ["light"]}}})).unwrap().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"saveSettings": true}})).unwrap().unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    let w = written.lock().unwrap().clone();
+    assert_eq!(w.len(), 1);
+    let mut back = CameraRaw::default();
+    photocraft_io::camera_raw_xmp::load(&mut back, &w[0].1).unwrap();
+    assert_eq!((back.exposure, back.clarity), (0.0, 10.0));
+}
+
+/// Done saves what the preview shows for every raw of the filmstrip: a panel hidden on one raw
+/// stays hidden when another is shown (the panels are the dialog's), and saves nothing for either.
+#[test]
+fn done_leaves_out_hidden_panels_for_every_raw() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    let dir = std::env::temp_dir().join(format!("photocraft-hidden-done-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let written: Written = Default::default();
+    let sink = written.clone();
+    app.services.write = Some(Box::new(move |p: &str, b: &[u8]| {
+        sink.lock().unwrap().push((p.to_string(), b.to_vec()));
+        Ok(())
+    }));
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    let paths: Vec<String> = ["one.cr2", "two.cr2"].iter().map(|n| dir.join(n).to_string_lossy().into_owned()).collect();
+    for (held, path) in app.raw_shelf.iter_mut().zip(&paths) {
+        held.raw.path = Some(path.clone());
+    }
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 30, "clarity": 15}, "panels": {"hidden": ["light"]}}})).unwrap().unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+    assert!(app.camera_raw.as_ref().unwrap().panels.hidden.contains("light"), "the eye stays off");
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 20, "clarity": 5}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+    assert_eq!(r["done"], true, "{r}");
+    let w = written.lock().unwrap().clone();
+    assert_eq!(w.len(), 2, "{r}");
+    for (path, clarity) in [("one.xmp", 15.0), ("two.xmp", 5.0)] {
+        let (_, bytes) = w.iter().find(|(p, _)| p.ends_with(path)).unwrap();
+        let mut back = CameraRaw::default();
+        photocraft_io::camera_raw_xmp::load(&mut back, bytes).unwrap();
+        assert_eq!((back.contrast, back.clarity), (0.0, clarity), "{path}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
