@@ -231,10 +231,13 @@ fn straighten_layer_and_image() {
     assert_eq!(s.active().unwrap().history.past_len(), before + 1, "one history step");
     assert_eq!(d(&s).size.width, 80);
     assert!(d(&s).measurement.ruler.is_none());
-    // The Background: rotate the canvas and crop to the image.
+    // The Background used to rotate the canvas and crop it to the image; #12033 greys that state
+    // out, so the same crop now happens on a layer and only when it is asked for.
     let mut s = session(80, 60, 16);
     s.execute("image.analysis.rulerTool", json!({"start": [0, 0], "end": [40, 40]})).unwrap();
-    let r = s.execute("image.analysis.straightenLayer", json!({})).unwrap();
+    assert!(!s.is_enabled("image.analysis.straightenLayer"), "the Background is greyed out (#12033)");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let r = s.execute("image.analysis.straightenLayer", json!({"crop": true})).unwrap();
     assert_eq!(r["cropped"], true);
     assert_eq!(r["angle"].as_f64().unwrap().abs(), 45.0);
     let nd = d(&s);
@@ -551,4 +554,19 @@ fn iso_from_unix_matches_the_old_cycle_conversion_including_beyond_chrono() {
     assert_eq!(iso_from_unix(-10_000_000_000_000), "-314918-08-13T06:13:20Z");
     assert_eq!(iso_from_unix(i64::MAX), "292277026596-12-04T15:30:07Z");
     assert_eq!(iso_from_unix(i64::MIN), "-292277022657-01-27T08:29:52Z");
+}
+
+#[test]
+fn geometric_features_match_full_measurements_without_gray() {
+    let mask = [true, true, false, false, false, false, false, true, true];
+    let gray = [0.2; 9];
+    let full = measure_features(&mask, &gray, 3, 3, (4, 7), 255.0);
+    let geometric = measure_features_impl(&mask, None, 3, 3, (4, 7), 255.0);
+    assert_eq!(full.len(), 2);
+    for (a, b) in full.iter().zip(&geometric) {
+        assert_eq!(a.area, b.area);
+        assert_eq!(a.perimeter, b.perimeter);
+        assert_eq!(a.bounds, b.bounds);
+        assert!(b.histogram.is_empty());
+    }
 }

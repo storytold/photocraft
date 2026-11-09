@@ -271,9 +271,35 @@ fn edit_contents_is_available_only_for_smart_objects() {
     let ids: Vec<_> = entries(&layer(&s), false, false).into_iter().flatten().map(|e| e.1).collect();
     let edit = ids.iter().position(|id| *id == "layer.smartObjects.editContents").expect("Edit Contents entry");
     assert_eq!(
-        ids[edit + 1..edit + 5],
-        ["layer.smartObjects.replaceContents", "layer.smartObjects.relinkToFile", "layer.smartObjects.convertToLayers", "layer.rasterize.smartObject"]
+        ids[edit + 1..edit + 6],
+        [
+            "layer.smartObjects.resetTransform",
+            "layer.smartObjects.replaceContents",
+            "layer.smartObjects.relinkToFile",
+            "layer.smartObjects.convertToLayers",
+            "layer.rasterize.smartObject"
+        ],
+        "Reset Transform follows Edit Contents, as in the reference flyout"
     );
+}
+
+/// A type layer's menu offers Photoshop's outline conversions after Rasterize Type, and Convert
+/// to Shape from it turns the text into a shape layer.
+#[test]
+fn type_layer_menu_converts_to_shape() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("type.create", json!({"text": "Hi", "size": 24, "x": 8, "y": 32})).unwrap();
+    let layer = |s: &photocraft_engine::Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().clone()
+    };
+    let ids: Vec<_> = entries(&layer(&s), false, false).into_iter().flatten().map(|e| e.1).collect();
+    let r = ids.iter().position(|id| *id == "layer.rasterize.type").expect("Rasterize Type entry");
+    assert_eq!(ids[r + 1..r + 3], ["type.createWorkPath", "type.convertToShape"]);
+    assert!(!entries(&layer(&s), true, false).iter().flatten().any(|e| e.1 == "type.convertToShape"), "the selection menu keeps one Rasterize item");
+    s.execute("type.convertToShape", json!({})).unwrap();
+    assert!(matches!(layer(&s).content, LayerContent::Shape(_)));
 }
 
 /// Right-clicking inside a multi-layer selection offers one Rasterize item for the whole
@@ -289,12 +315,14 @@ fn multi_selection_menu_rasterizes_the_selection() {
     let smart = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
     let ids = |multi| entries(&smart, multi, false).into_iter().flatten().map(|e| e.1).collect::<Vec<_>>();
     assert!(ids(false).contains(&"layer.smartObjects.editContents"), "a single smart object keeps its items");
+    assert!(ids(false).contains(&"layer.smartObjects.resetTransform"), "and its Reset Transform");
     let multi = ids(true);
     assert!(multi.contains(&"layer.rasterize.layer"));
     for single in [
         "layer.rasterize.smartObject",
         "layer.rasterize.shape",
         "layer.smartObjects.editContents",
+        "layer.smartObjects.resetTransform",
         "layer.smartObjects.replaceContents",
         "layer.smartObjects.relinkToFile",
         "layer.smartObjects.convertToLayers",
@@ -394,7 +422,7 @@ fn multi_selection_menu_greys_what_acts_on_one_layer() {
         assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} works on one layer only");
     }
     for label in [
-        "Quick Export As PNG",
+        "Quick Export as PNG",
         "Export As…",
         "Add Layer Mask",
         "Duplicate Layers…",

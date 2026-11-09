@@ -473,6 +473,64 @@ fn equalize_spreads_values() {
     }
 }
 
+/// Equalize with a selection: by default only the selected pixels change, as Photoshop's
+/// Equalize Selected Area Only; `selectedAreaOnly: false` maps the layer within the canvas by the
+/// selected pixels' histogram, as its Equalize Entire Image Based On Selected Area.
+#[test]
+fn equalize_entire_image_based_on_the_selected_area() {
+    let setup = |depth: u32| {
+        let mut s = session(depth);
+        paint_square(&mut s, Rect::new(0, 0, 30, 15), [0.4, 0.4, 0.4, 1.0]);
+        paint_square(&mut s, Rect::new(0, 15, 30, 30), [0.5, 0.5, 0.5, 1.0]);
+        // Darker than anything selected: the selection's mapping sends it to black.
+        paint_square(&mut s, Rect::new(30, 0, 40, 30), [0.3, 0.3, 0.3, 1.0]);
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30})).unwrap();
+        s
+    };
+    for depth in [8, 16, 32] {
+        for params in [json!({}), json!({"selectedAreaOnly": true})] {
+            let mut s = setup(depth);
+            s.execute("image.adjustments.equalize", params.clone()).unwrap();
+            let inside = (pixel(&s, 1, 1)[0], pixel(&s, 1, 20)[0]);
+            assert!(inside.0 < 0.05 && inside.1 > 0.95, "{depth} {params}: inside {inside:?}");
+            let outside = [pixel(&s, 25, 1)[0], pixel(&s, 25, 20)[0], pixel(&s, 35, 1)[0]];
+            assert!(outside.iter().zip([0.4, 0.5, 0.3]).all(|(v, want)| (v - want).abs() < 0.01), "{depth} {params}: outside {outside:?}");
+        }
+        let mut s = setup(depth);
+        s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": false})).unwrap();
+        for (x, y, want_light) in [(1, 1, false), (1, 20, true), (25, 1, false), (25, 20, true), (35, 1, false), (35, 20, false)] {
+            let v = pixel(&s, x, y)[0];
+            assert!(if want_light { v > 0.95 } else { v < 0.05 }, "{depth}: ({x}, {y}) = {v}");
+        }
+        assert!(doc(&s).selection.is_some(), "{depth}: the selection stays");
+        s.undo();
+        let undone = [pixel(&s, 1, 1)[0], pixel(&s, 25, 20)[0], pixel(&s, 35, 1)[0]];
+        assert!(undone.iter().zip([0.4, 0.5, 0.3]).all(|(v, want)| (v - want).abs() < 0.01), "{depth}: one undo step {undone:?}");
+    }
+}
+
+/// Without a selection, `selectedAreaOnly: false` gives the same pixels as plain Equalize.
+#[test]
+fn equalize_entire_image_without_a_selection_is_plain_equalize() {
+    let run = |params: Value| {
+        let mut s = session(8);
+        paint_square(&mut s, Rect::new(0, 0, 40, 15), [0.4, 0.4, 0.4, 1.0]);
+        paint_square(&mut s, Rect::new(0, 15, 40, 30), [0.5, 0.5, 0.5, 1.0]);
+        s.execute("image.adjustments.equalize", params).unwrap();
+        active(&s).surface().unwrap().read_region(Rect::new(0, 0, 40, 30))
+    };
+    assert_eq!(run(json!({"selectedAreaOnly": false})), run(json!({})));
+}
+
+#[test]
+fn equalize_refuses_a_selected_area_only_that_is_not_a_boolean() {
+    for bad in [json!(null), json!("false"), json!(0), json!([true]), json!({})] {
+        let mut s = session(8);
+        let e = s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": bad})).unwrap_err().to_string();
+        assert!(e.contains("selectedAreaOnly"), "{bad}: {e}");
+    }
+}
+
 /// A selection masks Clouds but doesn't change their size: inside it they are the canvas's
 /// clouds, as when Clouds sized itself by the document (before it became a filter).
 #[test]
@@ -711,6 +769,41 @@ fn ungroup_restores_children_in_order() {
     assert_eq!(s.active().unwrap().active_layer, Some(a));
     assert!(doc(&s).layers.iter().all(|l| !l.is_group()));
     assert_eq!(doc(&s).layers.len(), 2);
+}
+
+#[test]
+fn ungroup_the_sole_empty_group_is_refused() {
+    // #11118: ungrouping the only root layer when it was an empty group emptied the document
+    // and cleared the active layer, while deleting a layer refuses to drop the last one.
+    let mut s = session(8);
+    let child = active(&s).id;
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let group = active(&s).id;
+    s.execute("layer.hideLayers", json!({ "layer": child.0 })).unwrap();
+    s.execute("layer.delete.hiddenLayers", json!({})).unwrap(); // the group is now empty
+    let bg = doc(&s).layers.iter().find(|l| !l.is_group()).unwrap().id;
+    s.execute("layer.hideLayers", json!({ "layer": bg.0 })).unwrap();
+    s.execute("layer.delete.hiddenLayers", json!({})).unwrap(); // the empty group is the sole layer
+    assert_eq!(doc(&s).layers.len(), 1);
+    assert!(doc(&s).layers[0].is_group());
+    let steps = s.active().unwrap().history.past_len();
+    assert!(s.execute("layer.ungroupLayers", json!({ "layer": group.0 })).is_err(), "ungrouping the sole empty group must be refused, not empty the document");
+    assert_eq!(doc(&s).layers.len(), 1, "the group is left in place");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "a refused edit records no history step");
+    assert_eq!(s.active().unwrap().active_layer, Some(group), "the group stays active");
+}
+
+#[test]
+fn ungroup_an_empty_group_next_to_other_layers_removes_it() {
+    // The control for the refusal above: an empty group that is not the only root layer still
+    // ungroups, and the group simply disappears.
+    let mut s = session(8);
+    let group = LayerId(s.execute("layer.new.group", json!({})).unwrap()["layer"].as_u64().unwrap());
+    assert!(doc(&s).layers.iter().any(|l| l.id == group));
+    s.execute("layer.ungroupLayers", json!({ "layer": group.0 })).unwrap();
+    assert!(doc(&s).layers.iter().all(|l| l.id != group), "the empty group is gone");
+    assert_eq!(doc(&s).layers.len(), 2, "nothing arrived in its place");
+    assert_eq!(s.active().unwrap().active_layer, doc(&s).top_layer(), "an active layer survives");
 }
 
 #[test]
