@@ -109,8 +109,10 @@ fn filled<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
 }
 
 /// Applies `model` at slider `v` (−100 … 100) to straight RGBA pixels (`w × h`, encoded with
-/// `enc`). Without the memory for its working planes (about 80 bytes a pixel for Texture) or
-/// for a blur's scratch row the pixels are left unchanged.
+/// `enc`). Without the memory for its working planes (about 80 bytes a pixel for Texture, a
+/// little more with transparency) or for a blur's scratch row the pixels are left unchanged.
+/// The blurs weight each pixel by its alpha, so the colour hidden under transparent pixels takes
+/// no part; a fully opaque image skips the weighting.
 pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
     let Some(k) = model.coefficients(v) else { return };
     let n = w.saturating_mul(h);
@@ -122,10 +124,19 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
     let from = |x: f32| if enc.0 > 0.0 { enc.encode(srgb_to_linear(x)) } else { x };
     // Planes: encoded luminance, then (Texture) each channel's colour (channel − luminance).
     let np = if model.colour { 4 } else { 1 };
-    let Some(planes_len) = n.checked_mul(np) else { return };
-    let (Some(mut planes), Some(mut knot), Some(mut lum), Some(mut mv), Some(mut blur)) =
-        (filled(planes_len, 0.0f32), filled(n, (0usize, 0.0f32)), filled(n, 0.0f32), filled(n, [0.0f32; 3]), filled(planes_len, 0.0f32))
-    else {
+    let cover = |q: &[f32; 4]| if q[3].is_finite() { q[3].clamp(0.0, 1.0) } else { 0.0 };
+    // With any transparency the blurs run on alpha-weighted planes plus the alpha itself.
+    let weighted = px.iter().any(|q| cover(q) < 1.0);
+    let nb = np + usize::from(weighted);
+    let (Some(planes_len), Some(blur_len)) = (n.checked_mul(np), n.checked_mul(nb)) else { return };
+    let (Some(mut planes), Some(mut knot), Some(mut lum), Some(mut mv), Some(mut blur), Some(mut src)) = (
+        filled(planes_len, 0.0f32),
+        filled(n, (0usize, 0.0f32)),
+        filled(n, 0.0f32),
+        filled(n, [0.0f32; 3]),
+        filled(blur_len, 0.0f32),
+        filled(if weighted { blur_len } else { 0 }, 0.0f32),
+    ) else {
         return;
     };
     for (i, q) in px.iter().enumerate() {
@@ -140,6 +151,13 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
             for c in 0..3 {
                 planes[i * np + 1 + c] = s[c] - sy;
             }
+        }
+        if weighted {
+            let a = cover(q);
+            for c in 0..np {
+                src[i * nb + c] = planes[i * np + c] * a;
+            }
+            src[i * nb + np] = a;
         }
         let f = (lstar(y) / 100.0).clamp(0.0, 1.0) * (KNOTS - 1) as f32;
         let j = (f as usize).min(KNOTS - 2);
@@ -164,17 +182,26 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
     }
     let ns = model.scales.len();
     for (si, s) in model.scales.iter().enumerate() {
-        blur.copy_from_slice(&planes);
+        blur.copy_from_slice(if weighted { &src } else { &planes });
         // Without the memory for the blur's scratch row, the pixels are left unchanged.
-        if try_gauss_blur_n(&mut blur, w, h, np, s * long).is_none() {
+        if try_gauss_blur_n(&mut blur, w, h, nb, s * long).is_none() {
             return;
         }
+        // Plane `c` blurred at pixel `i`: the weighted blur over the blurred alpha; where nothing
+        // visible is near, no detail.
+        let blurred = |i: usize, c: usize| -> f32 {
+            if !weighted {
+                return blur[i * nb + c];
+            }
+            let a = blur[i * nb + np];
+            if a > 1e-6 { blur[i * nb + c] / a } else { planes[i * np + c] }
+        };
         for (i, m) in mv.iter_mut().enumerate() {
-            let dl = term(1 + ps * si, i, planes[i * np] - blur[i * np]);
+            let dl = term(1 + ps * si, i, planes[i * np] - blurred(i, 0));
             for c in 0..3 {
                 m[c] += dl;
                 if model.colour {
-                    m[c] += term(1 + ps * ns + ps * si, i, planes[i * np + 1 + c] - blur[i * np + 1 + c]);
+                    m[c] += term(1 + ps * ns + ps * si, i, planes[i * np + 1 + c] - blurred(i, 1 + c));
                 }
             }
         }
@@ -237,6 +264,41 @@ mod tests {
                 assert!(q[..3].iter().all(|v| v.is_finite()), "pixel {i}: {q:?}");
             }
             assert!(bad[0][..3].iter().zip(&clean[0][..3]).all(|(a, b)| (a - b).abs() < 1e-6));
+        }
+    }
+
+    /// The colour hidden under fully transparent pixels doesn't reach the visible pixels next to
+    /// them; a fully opaque image develops exactly as without the alpha weighting.
+    #[test]
+    fn transparent_pixels_stay_out_of_the_blurs() {
+        let (w, h) = (48, 48);
+        let visible = |i: usize| i % w < 24;
+        for m in [&TEXTURE, &CLARITY] {
+            let hide = |hidden: [f32; 4]| -> Vec<[f32; 4]> { image(w, h).into_iter().enumerate().map(|(i, q)| if visible(i) { q } else { hidden }).collect() };
+            let (mut white, mut black) = (hide([1.0, 1.0, 1.0, 0.0]), hide([0.0, 0.0, 0.0, 0.0]));
+            apply(m, &mut white, w, h, 100.0, Encoding(0.0));
+            apply(m, &mut black, w, h, 100.0, Encoding(0.0));
+            for i in (0..w * h).filter(|i| visible(*i)) {
+                assert!(white[i][..3].iter().zip(&black[i][..3]).all(|(a, b)| (a - b).abs() < 1e-5), "pixel {i}: {:?} {:?}", white[i], black[i]);
+            }
+        }
+    }
+
+    /// A fully opaque image develops as before the alpha weighting: these pixels are what the
+    /// unweighted blurs gave (tolerance for platform maths libraries only).
+    #[test]
+    fn opaque_images_develop_as_before() {
+        let (w, h) = (48, 48);
+        let before: [[[f32; 3]; 5]; 2] = [
+            [[0.3492603, 0.39940542, 0.29940543], [0.46303654, 0.48386988, 0.3427373], [0.4463153, 0.3963153, 0.29834855], [0.5589523, 0.48395225, 0.34287918], [0.54581106, 0.3998331, 0.29983312]],
+            [[0.35134986, 0.40151656, 0.30118325], [0.45318657, 0.4737776, 0.33540592], [0.4706822, 0.41863444, 0.314539], [0.54839313, 0.4742055, 0.3357218], [0.5495149, 0.40278795, 0.30217522]],
+        ];
+        for ((m, v), want) in [(&TEXTURE, 70.0), (&CLARITY, -60.0)].into_iter().zip(before) {
+            let mut px = image(w, h);
+            apply(m, &mut px, w, h, v, Encoding(0.0));
+            for (i, b) in [0usize, 5 * w + 7, 24 * w + 24, 47 * w + 30, w * h - 1].into_iter().zip(want) {
+                assert!(px[i][..3].iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6), "pixel {i}: {:?} vs {b:?}", px[i]);
+            }
         }
     }
 
