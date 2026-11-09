@@ -553,6 +553,19 @@ fn a_stale_working_space_id_is_not_mistaken_for_a_profile_file() {
     assert_eq!(gray["profile"], default.description.as_str());
 }
 
+#[test]
+fn indexed_to_rgb_without_a_profile_keeps_its_own_profile_under_the_desktop_gate() {
+    // Indexed → RGB without `profile` keeps the document's profile and reads no working space,
+    // so a file-backed working RGB doesn't refuse it.
+    let mut session = photocraft_engine::Session::new();
+    session.color.settings.working_rgb = "/outside/rgb.icc".into();
+    session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
+    session.execute("image.mode.indexedColor", serde_json::json!({})).unwrap();
+    session.authorize = Some(authorize_desktop_engine_step);
+    session.execute("image.mode.rgb", serde_json::json!({})).unwrap();
+    assert_eq!(session.active().unwrap().doc.mode, photocraft_engine::doc::ColorMode::Rgb);
+}
+
 // Regression test for #3763: `edit.installedProfiles` scans the OS and user ICC folders but
 // takes no path parameter, so automation let it through until it was listed as ambient.
 #[test]
@@ -845,7 +858,9 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.info"
             | "path.addToSelection"
             | "path.subtractFromSelection"
+            | "path.intersectWithSelection"
             | "path.set"
+            | "actions.insertPath"
             | "path.transform"
             | "path.moveAnchors"
             | "path.moveHandle"
@@ -858,6 +873,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.clippingPath.set"
             | "path.rename"
             | "path.stroke"
+            | "path.toShape"
             | "type.attachToPath"
             | "type.fillPath"
             | "type.detachFromPath"
@@ -875,6 +891,8 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.combineShapes.excludeOverlappingShapes"
             | "layer.combineShapes.mergeShapeComponents"
             | "layer.new.frame"
+            // `"stepName":"Transform Path"` names the History step, not a host file.
+            | "edit.transform"
     ) || id.starts_with("layer.newFillLayer.")
         || id.starts_with("layer.newAdjustmentLayer.")
     {
