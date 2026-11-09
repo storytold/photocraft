@@ -101,6 +101,12 @@ pub fn field_gesture_running(ctx: &Context) -> bool {
     ctx.data(|d| d.get_temp::<Gesture>(gesture_id())).is_some_and(|g| matches!(g.owner, Owner::Field(_)) && now - g.last <= GESTURE_GAP)
 }
 
+/// Whether [`begin_frame`] handed wheel notches to the focused value field this frame: they step
+/// it as the arrow keys do, though the frame's scroll delta no longer shows them.
+pub(crate) fn focused_field_wheeled(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<Vec<Event>>(taken_id())).is_some_and(|e| !e.is_empty())
+}
+
 /// Record that value field `id` (whose slot is `field`, as given to [`notches`]) has keyboard
 /// focus this frame, so the wheel is its next frame.
 pub fn set_focused(ctx: &Context, id: Id, field: Id) {

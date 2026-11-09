@@ -331,8 +331,8 @@
 	Artboard…	工作區域…
 	Artboard from Group…	從群組建立工作區域…
 	Artboard from Layers…	從圖層建立工作區域…
-	Layer via Copy	拷貝的圖層
-	Layer via Cut	剪下的圖層
+	Layer Via Copy	拷貝的圖層
+	Layer Via Cut	剪下的圖層
 	Layer From Background…	從背景建立圖層…
 	Layer from Background…	從背景建立圖層…
 	Background from Layer	從圖層建立背景
@@ -4279,6 +4279,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Make Ramp Web Safe	讓色帶成為網頁安全色
 	Select and Mask was closed: its document is no longer the active one	已關閉「選取並遮住」：其文件已不是使用中的文件
 	Select and Mask was closed: another layer was selected	已關閉「選取並遮住」：已選取另一個圖層
+	Scroll All Windows	捲動所有視窗
+	The path was kept as the Work Path	路徑已保留為工作路徑
+	The path was discarded	路徑已捨棄
 # Art History Brush (#213).
 	Art History Brush	藝術歷史畫筆
 	Art History Brush Tool	藝術歷史畫筆工具
