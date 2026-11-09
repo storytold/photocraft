@@ -450,7 +450,9 @@ fn size_field(ui: &mut egui::Ui, display: &mut f32, unit: f32, label: &str) -> O
     use crate::widgets::POPUP_ARROW_W;
     let t = crate::theme::Tokens::get(ui.ctx());
     let (field, rect) = crate::widgets::value_field_with_trailing(ui, display, unit..=1296.0 * unit, label, 66.0 + POPUP_ARROW_W, POPUP_ARROW_W);
-    let id = field.id.with("presets");
+    // A fixed id, not the field's: the field's follows the controls before it, which change when
+    // the fonts finish loading (`fonts_ready`), and a new id would close an open list.
+    let id = ui.make_persistent_id("type-size-presets");
     let typed = field.on_hover_text(tl!("Set font size")).changed();
     let arrow_rect = egui::Rect::from_min_max(egui::pos2(rect.right() - POPUP_ARROW_W - 2.0, rect.top() + 2.0), rect.max - egui::vec2(2.0, 2.0));
     let arrow = ui.interact(arrow_rect, id, egui::Sense::click());

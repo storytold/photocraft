@@ -253,6 +253,35 @@ fn the_arrow_is_embedded_in_the_field() {
     assert!(digits.top() <= arrow.top() && arrow.bottom() <= digits.bottom(), "{arrow:?} leaves the field's height {digits:?}");
 }
 
+/// The bar draws one "Loading fonts…" placeholder until the fonts are ready, then the Font and
+/// Style menus, so the controls before the size field change while the app runs. A widget more
+/// in front of it stands in for that switch here.
+#[test]
+fn the_list_stays_open_when_the_controls_before_it_change() {
+    fn shifted() -> egui::Id {
+        egui::Id::unique("size-presets-shift")
+    }
+    fn shifting_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.data(|d| d.get_temp::<bool>(shifted())).unwrap_or(false) {
+                ui.label("Loading fonts…");
+            }
+            super::options_bar(app, ui);
+        });
+    }
+    let (app, _) = app_with_layer(17.0);
+    let mut h = harness(app, shifting_bar);
+    open(&mut h);
+    h.ctx.data_mut(|d| d.insert_temp(shifted(), true));
+    h.run();
+    assert!(h.query_by_label("72 pt").is_some(), "the list closed");
+    h.get_by_label("72 pt").scroll_to_me();
+    h.run();
+    h.get_by_label("72 pt").click();
+    h.run();
+    assert_eq!(h.state().ui.tool_options.type_size, 72.0);
+}
+
 /// A guard, so it passes without the change too: the current-value row is the options bar's.
 #[test]
 fn the_character_panel_list_keeps_no_current_value_row() {
