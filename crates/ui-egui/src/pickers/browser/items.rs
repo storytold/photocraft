@@ -5,7 +5,6 @@
 
 use egui::{Rect, vec2};
 
-use crate::pickers::browser::projection::{GroupView, ItemView};
 use crate::theme::Tokens;
 
 /// Return the visual grid coordinate for an item in row-major thumbnails or column-major wrapped lists.
@@ -35,22 +34,6 @@ pub(crate) fn list_layout_geometry(
     let columns = if wrap { (content_width / width.max(1.0)).floor().max(1.0) as usize } else { 1 };
     let rows = item_count.div_ceil(columns);
     (vec2(width, height), columns, rows)
-}
-
-pub(crate) fn group_matches_query(group: &GroupView, query: &str) -> bool {
-    !query.is_empty() && group.name.to_lowercase().contains(query)
-}
-
-pub(crate) fn item_matches_query(item: &ItemView, query: &str) -> bool {
-    !query.is_empty() && (item.name.to_lowercase().contains(query) || item.group_path.iter().any(|part| part.to_lowercase().contains(query)))
-}
-
-pub(crate) fn group_visible_for_query(query: &str, group_matches: bool, has_matching_items: bool) -> bool {
-    query.is_empty() || group_matches || has_matching_items
-}
-
-pub(crate) fn item_visible_for_query(item: &ItemView, query: &str, group_matches: bool) -> bool {
-    query.is_empty() || group_matches || item_matches_query(item, query)
 }
 
 /// Attach selection semantics for screen readers to a custom item renderer.

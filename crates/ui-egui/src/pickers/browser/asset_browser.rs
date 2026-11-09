@@ -24,10 +24,8 @@ use crate::pickers::browser::dragging_model::DropMoveIntent;
 use crate::pickers::browser::groups::{GROUP_HEADER_HEIGHT, group_open, nested_header as draw_nested_folder_header, row_indent};
 use crate::pickers::browser::hierarchy::HierarchyGroup;
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::browser::items::{
-    group_matches_query, group_visible_for_query, item_grid_position, item_info as asset_browser_item_info, item_matches_query, item_visible_for_query,
-    list_layout_geometry, list_row as asset_browser_list_row,
-};
+use crate::pickers::browser::inline_rename::{ItemRenameState, paint_group_name, paint_item_name};
+use crate::pickers::browser::items::{item_grid_position, item_info as asset_browser_item_info, list_layout_geometry, list_row as asset_browser_list_row};
 use crate::pickers::browser::path_identity_model::{ContainerId, PickerBrowserHierarchy, PickerId, PickerIdRegistry};
 use crate::pickers::browser::projection::{GroupRenderSegment, build_hierarchy_projection};
 pub(crate) use crate::pickers::browser::projection::{GroupView, ItemView};
@@ -148,6 +146,10 @@ pub(crate) enum BrowserAction {
     BeginInlineRenameItem(String, ItemView),
     /// Cancel the currently active inline card rename.
     CancelInlineRenameItem,
+    /// Begin editing a root or nested group label directly in its header.
+    BeginInlineRenameGroup { group: String, group_path: Vec<String> },
+    /// Cancel the currently active inline group rename.
+    CancelInlineRenameGroup,
     /// Open the shared group-rename dialog for a top-level group.
     BeginRenameGroup(String),
     /// Open the shared group-rename dialog for multiple top-level groups, one after another.
@@ -447,15 +449,14 @@ impl BrowserProjection {
         let mut visible_selection_order = Vec::new();
         let mut hidden_groups = BTreeSet::new();
         let mut hidden_folders = BTreeSet::<(String, Vec<String>)>::new();
+        let query_visible_groups = crate::pickers::search::groups_visible_for_query(groups, &parents, query);
         for segment in &render_segments {
             let Some(group) = groups.get(segment.group_index) else { continue };
-            let group_matches = group_matches_query(group, query);
-            let has_matching_items = group.items.iter().any(|item| item_matches_query(item, query));
             if segment.root_items {
                 for (group_index, item_index) in &segment.item_indices {
                     let Some(source_group) = groups.get(*group_index) else { continue };
                     let Some(item) = source_group.items.get(*item_index) else { continue };
-                    if item_visible_for_query(item, query, group_matches_query(source_group, query))
+                    if crate::pickers::search::item_visible_for_query(item, query, crate::pickers::search::group_matches_query(source_group, query))
                         && let Some(id) = item_node_for_identity(&source_group.name, &item.group_path, &item.key, &hierarchy_identities)
                     {
                         visible_selection_order.push(id);
@@ -463,7 +464,7 @@ impl BrowserProjection {
                 }
                 continue;
             }
-            if !group_visible_for_query(query, group_matches, has_matching_items) {
+            if !query_visible_groups.contains(&group.name) {
                 continue;
             }
             if segment.show_header {
@@ -498,7 +499,7 @@ impl BrowserProjection {
                 for (group_index, item_index) in &segment.item_indices {
                     if let Some(source_group) = groups.get(*group_index)
                         && let Some(item) =
-                            source_group.items.get(*item_index).filter(|item| item_visible_for_query(item, query, group_matches_query(source_group, query)))
+                            source_group.items.get(*item_index).filter(|item| crate::pickers::search::item_visible_for_query(item, query, crate::pickers::search::group_matches_query(source_group, query)))
                         && let Some(id) = item_node_for_identity(&source_group.name, &item.group_path, &item.key, &hierarchy_identities)
                     {
                         visible_selection_order.push(id);
@@ -726,6 +727,9 @@ fn draw_nested_folder_row(
     let (rect, response, disclosure, row_depth) = draw_nested_folder_header(ui, group, group_open, group_depth, parent_depth);
     let name = group.path.last().map(String::as_str).unwrap_or("");
     let Some(node_id) = folder_node_for_identity(&root_group.name, &group.path, hierarchy.hierarchy_identities) else { return };
+    if response.double_clicked() {
+        sink.emit(BrowserAction::BeginInlineRenameGroup { group: root_group.name.clone(), group_path: group.path.clone() });
+    }
     if capabilities.group_drag
         && let Some(ghost_rect) = browser_drag_ghost_rect(ui, panel, BrowserDragGhostSource::Group(node_id.clone()), response.dragged(), rect, browser_bounds)
     {
@@ -739,7 +743,7 @@ fn draw_nested_folder_row(
     }
     if capabilities.selection {
         let disclosure_clicked = asset_browser_selection_clicked(&disclosure);
-        let selected = asset_browser_selection_gesture(&response) && !disclosure_clicked;
+        let selected = asset_browser_selection_gesture(&response) && !disclosure_clicked && !response.double_clicked();
         let secondary = response.clicked_by(egui::PointerButton::Secondary)
             || ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary));
         apply_browser_node_selection(ui, selected, secondary, panel, &node_id, hierarchy.visible_selection_order, sink);
@@ -773,6 +777,10 @@ fn draw_nested_folder_row(
             });
         });
     }
+    if let Some(action) = paint_group_name(ui, rect, row_depth, panel, &root_group.name, &group.path, &mut sink.state.inline_group_renaming) {
+        sink.state.inline_group_renaming = None;
+        sink.emit(action);
+    }
 }
 
 /// Visibility bookkeeping for one ordered pass over the projected render segments.
@@ -781,6 +789,7 @@ struct SegmentVisibilityState<'a> {
     hidden_groups: &'a mut BTreeSet<String>,
     hidden_folders: &'a mut BTreeSet<(String, Vec<String>)>,
     expanded_groups: &'a mut BTreeSet<String>,
+    query_visible_groups: &'a BTreeSet<String>,
 }
 
 /// Apply the existing query, ancestor-collapse and folder-collapse rules to one render segment.
@@ -795,15 +804,13 @@ fn browser_segment_open(
     visibility: &mut SegmentVisibilityState<'_>,
 ) -> Option<bool> {
     let GroupRenderSegment { root_items, folder_path, item_indices, show_header, .. } = segment;
-    let group_matches = group_matches_query(group, query);
-    let has_matching_items = group.items.iter().any(|item| item_matches_query(item, query));
     let root_run_visible = *root_items
         && item_indices.iter().any(|(group_index, item_index)| {
             groups.get(*group_index).is_some_and(|source_group| {
-                source_group.items.get(*item_index).is_some_and(|item| item_visible_for_query(item, query, group_matches_query(source_group, query)))
+                source_group.items.get(*item_index).is_some_and(|item| crate::pickers::search::item_visible_for_query(item, query, crate::pickers::search::group_matches_query(source_group, query)))
             })
         });
-    if (*root_items && !root_run_visible) || (!*root_items && !group_visible_for_query(query, group_matches, has_matching_items)) {
+    if (*root_items && !root_run_visible) || (!*root_items && !visibility.query_visible_groups.contains(&group.name)) {
         return None;
     }
     if !*root_items && *show_header && parent_hidden {
@@ -865,7 +872,7 @@ fn paint_browser_item(
     display_mode: crate::pickers::state::PickerDisplayMode,
     painters: &mut Painters<'_, '_>,
     tokens: &Tokens,
-    inline_rename: &mut Option<crate::pickers::state::ItemRenameState>,
+    inline_rename: &mut Option<ItemRenameState>,
     panel: &str,
 ) -> Option<BrowserAction> {
     let response = &painted.response;
@@ -888,7 +895,7 @@ fn paint_browser_item(
                     && rename.group_path == painted.item.item.group_path
                     && rename.key == painted.item.item.key
             }) {
-                return paint_inline_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
+                return paint_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
             }
             crate::widgets::elided_label(&mut label_ui, name, label_rect.width());
         } else if painters.has_list_item() {
@@ -905,7 +912,7 @@ fn paint_browser_item(
                 ui.painter().rect_filled(label_rect, 0.0, if selected { tokens.accent_soft } else { tokens.card });
                 let mut label_ui = ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
                 label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
-                inline_action = paint_inline_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
+                inline_action = paint_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
                 true
             } else {
                 false
@@ -932,7 +939,7 @@ fn paint_browser_item(
                     && rename.group_path == painted.item.item.group_path
                     && rename.key == painted.item.item.key
             }) {
-                return paint_inline_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
+                return paint_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
             }
             label_ui.painter().text(pos2(label_rect.left(), rect.center().y), Align2::LEFT_CENTER, name, FontId::proportional(11.5), tokens.text);
         }
@@ -947,41 +954,6 @@ fn paint_browser_item(
             // and cannot overlap neighbours.
             egui::StrokeKind::Inside,
         );
-    }
-    None
-}
-
-fn paint_inline_item_name(
-    ui: &mut egui::Ui,
-    rename: &mut crate::pickers::state::ItemRenameState,
-    panel: &str,
-    group: &str,
-    item: &ItemView,
-) -> Option<BrowserAction> {
-    let edit_id = ui.make_persistent_id(("browser-inline-item-rename", panel, group, &item.group_path, &item.key));
-    let response = ui.add(
-        egui::TextEdit::singleline(&mut rename.text)
-            .id(edit_id)
-            .desired_width(ui.available_width())
-            .margin(egui::vec2(4.0, 2.0))
-            .cursor_at_end(true),
-    );
-    if !rename.focused {
-        response.request_focus();
-        rename.focused = true;
-    }
-    let escape = response.ctx.input(|input| input.key_pressed(egui::Key::Escape));
-    let enter = response.ctx.input(|input| input.key_pressed(egui::Key::Enter));
-    if escape {
-        return Some(BrowserAction::CancelInlineRenameItem);
-    }
-    if (enter || response.lost_focus()) && !rename.text.trim().is_empty() {
-        return Some(BrowserAction::RenameItem {
-            group: rename.group.clone(),
-            group_path: rename.group_path.clone(),
-            key: rename.key.clone(),
-            text: rename.text.trim().to_owned(),
-        });
     }
     None
 }
@@ -1109,7 +1081,7 @@ pub(crate) fn browser_with_root_sequence(
     let t = Tokens::get(ui.ctx());
     let panel = adapter.panel;
     let (picker_registry_id, mut picker_ids) = load_picker_id_registry(ui, panel);
-    let query = st.search.get(panel).map(|query| query.trim().to_lowercase()).unwrap_or_default();
+    let query = crate::pickers::search::query(st, panel);
     let groups = adapter.groups;
     #[cfg(test)]
     let fallback_projection_keys = ui_tests::test_projection_keys(groups);
@@ -1261,8 +1233,13 @@ pub(crate) fn browser_with_root_sequence(
             }
             let mut hidden_groups = BTreeSet::new();
             let mut hidden_folders = BTreeSet::<(String, Vec<String>)>::new();
-            let mut segment_visibility =
-                SegmentVisibilityState { hidden_groups: &mut hidden_groups, hidden_folders: &mut hidden_folders, expanded_groups: &mut expanded_groups };
+            let query_visible_groups = crate::pickers::search::groups_visible_for_query(groups, &projection.parents, &query);
+            let mut segment_visibility = SegmentVisibilityState {
+                hidden_groups: &mut hidden_groups,
+                hidden_folders: &mut hidden_folders,
+                expanded_groups: &mut expanded_groups,
+                query_visible_groups: &query_visible_groups,
+            };
             // Resolve hierarchy-on-card candidates across every visible group segment so a
             // group drag can show only one insertion line in the entire shared browser.
             for projected_segment in &projection.render_segments {
@@ -1290,6 +1267,9 @@ pub(crate) fn browser_with_root_sequence(
                         ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
                     }
                     let (header_rect, response) = draw_browser_group_header(ui, g, open, depth, &mut painters);
+                    if response.double_clicked() {
+                        sink.emit(BrowserAction::BeginInlineRenameGroup { group: g.name.clone(), group_path: Vec::new() });
+                    }
                     let header_hit_rect = inset_row_rect(header_rect, depth);
                     let disclosure_rect = Rect::from_min_max(
                         pos2(header_hit_rect.left(), header_hit_rect.top()),
@@ -1313,7 +1293,7 @@ pub(crate) fn browser_with_root_sequence(
                     }
                     if capabilities.selection {
                         let disclosure_clicked = asset_browser_selection_clicked(&disclosure);
-                        let selected = asset_browser_selection_gesture(&response) && !disclosure_clicked;
+                        let selected = asset_browser_selection_gesture(&response) && !disclosure_clicked && !response.double_clicked();
                         let secondary = response.clicked_by(egui::PointerButton::Secondary)
                             || ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary));
                         apply_browser_node_selection(
@@ -1360,6 +1340,10 @@ pub(crate) fn browser_with_root_sequence(
                         sink.select_node(panel, group_id, false);
                     }
                     drag_state.headers.push((gi, inset_row_rect(header_rect, depth), g.name.clone()));
+                    if let Some(action) = paint_group_name(ui, header_rect, depth, panel, &g.name, &[], &mut sink.state.inline_group_renaming) {
+                        sink.state.inline_group_renaming = None;
+                        sink.emit(action);
+                    }
                 }
                 // Keep each group's assets directly beneath its header. The previous separate
                 // content pass placed every swatch after every group header, so expanding a group
@@ -1380,7 +1364,7 @@ pub(crate) fn browser_with_root_sequence(
                             .filter_map(|(group_index, item_index)| {
                                 let source_group = groups.get(*group_index)?;
                                 let item = source_group.items.get(*item_index)?;
-                                item_visible_for_query(item, &query, group_matches_query(source_group, &query)).then_some(ItemRef {
+                                crate::pickers::search::item_visible_for_query(item, &query, crate::pickers::search::group_matches_query(source_group, &query)).then_some(ItemRef {
                                     group_index: *group_index,
                                     item_index: *item_index,
                                     group: source_group,

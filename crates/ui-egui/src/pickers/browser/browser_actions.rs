@@ -103,6 +103,25 @@ pub(crate) fn generic_with_state(
             state.item_rename_queue.clear();
             true
         }
+        BrowserAction::BeginInlineRenameGroup { group, group_path } => {
+            state.renaming = None;
+            state.group_renaming = None;
+            state.group_rename_queue.clear();
+            state.item_renaming = None;
+            state.item_rename_queue.clear();
+            state.inline_group_renaming = Some(crate::pickers::state::InlineGroupRenameState {
+                panel: panel.to_owned(),
+                group: group.clone(),
+                group_path: group_path.clone(),
+                text: group_path.last().cloned().unwrap_or_else(|| group.clone()),
+                focused: false,
+            });
+            true
+        }
+        BrowserAction::CancelInlineRenameGroup => {
+            state.inline_group_renaming = None;
+            true
+        }
         BrowserAction::BeginRenameGroup(group) => {
             state.item_renaming = None;
             state.item_rename_queue.clear();

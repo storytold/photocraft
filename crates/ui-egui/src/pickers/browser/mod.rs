@@ -12,6 +12,7 @@ pub(crate) mod hierarchy;
 pub(crate) mod hierarchy_model;
 pub(crate) mod hierarchy_utils;
 pub(crate) mod identity;
+pub(crate) mod inline_rename;
 pub(crate) mod items;
 pub(crate) mod panel_menu;
 pub(crate) mod path_identity_model;

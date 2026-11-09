@@ -7,5 +7,6 @@ pub(crate) mod panels;
 pub(crate) mod picker_panel_menu;
 pub(crate) mod preset_previews;
 pub(crate) mod recents_bar;
+pub(crate) mod search;
 pub(crate) mod shell;
 pub(crate) mod state;

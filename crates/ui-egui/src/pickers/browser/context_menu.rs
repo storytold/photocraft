@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemContextMenuArgs, ItemView};
 use crate::pickers::browser::identity::PickerNodeIdentity;
 use crate::pickers::browser::path_identity_model::{ContainerId, PickerBrowserHierarchy, PickerId};
-use crate::pickers::state::{ItemRenameState, PresetUi};
+use crate::pickers::browser::inline_rename::ItemRenameState;
+use crate::pickers::state::PresetUi;
 
 /// Attach a context menu, using a nested submenu when the browser is inside a compact picker menu.
 pub(crate) fn draw_context_menu_target(ui: &mut egui::Ui, response: egui::Response, compact: bool, draw_menu: impl FnOnce(&mut egui::Ui)) {

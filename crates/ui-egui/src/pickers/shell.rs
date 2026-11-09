@@ -43,10 +43,7 @@ pub(crate) struct CustomShellOptions<'a> {
 pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut BrowserAdapter<'_>, mut shell: ShellOptions<'_>) -> Vec<BrowserAction> {
     let panel = adapter.panel.to_string();
     shell_controls(ui, &mut shell);
-    if matches!(panel.as_str(), "gradients" | "swatches" | "patterns") && st.search_visible.get(&panel).copied().unwrap_or(true) {
-        let query = st.search.entry(panel.clone()).or_default();
-        ui.add(egui::TextEdit::singleline(query).desired_width(ui.available_width()).hint_text(tl!("Search")));
-    }
+    crate::pickers::search::show_search_bar(ui, st, &panel);
 
     let mut events = if st.recents_visible(&panel) {
         let recent_options = crate::pickers::recents_bar::Options::for_panel(&panel);

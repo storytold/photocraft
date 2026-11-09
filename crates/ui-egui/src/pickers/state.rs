@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use super::browser::data::HierarchyOrderEntry;
 use super::browser::data::PickerBrowserData;
+pub(crate) use super::browser::inline_rename::{InlineGroupRenameState, ItemRenameState};
 pub(crate) use super::browser::path_identity_model::MAX_GROUP_DEPTH;
 
 /// Shared asset-picker presentation. Dimensions include the two-pixel card border.
@@ -58,17 +59,6 @@ pub(crate) struct NestedGroupRenameState {
     pub(crate) group: String,
     pub(crate) group_path: Vec<String>,
     pub(crate) text: String,
-}
-
-/// Transient item rename target. Item keys are only unique inside their owning domain group.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct ItemRenameState {
-    pub(crate) panel: String,
-    pub(crate) group: String,
-    pub(crate) group_path: Vec<String>,
-    pub(crate) key: String,
-    pub(crate) text: String,
-    pub(crate) focused: bool,
 }
 
 /// Asset-neutral facts about the current multi-selection, derived by the shared browser.
@@ -168,6 +158,9 @@ pub struct PresetUi {
     /// Remaining targets for a sequential multi-item rename. The browser edits one target at a time.
     #[serde(skip)]
     pub(crate) item_rename_queue: Vec<ItemRenameState>,
+    /// Active inline group rename shared by root and nested group headers.
+    #[serde(skip)]
+    pub(crate) inline_group_renaming: Option<InlineGroupRenameState>,
 }
 
 /// Asset-neutral identity retained by the shared recent-items strip.

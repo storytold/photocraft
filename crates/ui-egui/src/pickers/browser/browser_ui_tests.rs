@@ -397,8 +397,32 @@ fn text_only_wraps_at_180px_by_default_and_can_be_unwrapped() {
 }
 
 #[test]
+fn searching_for_a_child_group_keeps_its_parent_hierarchy_visible() {
+    let groups = vec![
+        group("Group A", vec![item("parent-card", "Parent card", &[])]),
+        group("Group B", vec![item("child-card", "Child card", &[])]),
+        group("Unrelated", vec![item("other-card", "Other card", &[])]),
+    ];
+    let mut state = PresetUi::default();
+    state.search.insert(PANEL.to_owned(), "Group B".to_owned());
+    state.set_hierarchy_order(PANEL, "", vec![HierarchyOrderEntry::Group("Group A".into()), HierarchyOrderEntry::Group("Unrelated".into())]);
+    state.set_hierarchy_order(PANEL, "Group A", vec![HierarchyOrderEntry::Group("Group B".into()), HierarchyOrderEntry::Item("parent-card".into())]);
+    state.set_hierarchy_order(PANEL, "Group B", vec![HierarchyOrderEntry::Item("child-card".into())]);
+    state.set_hierarchy_order(PANEL, "Unrelated", vec![HierarchyOrderEntry::Item("other-card".into())]);
+
+    let harness = harness_with_state(groups, vec2(520.0, 520.0), state);
+
+    assert!(harness.query_by_label("Group A").is_some(), "the matching child must retain its parent header");
+    assert!(harness.query_by_label("Group B").is_some(), "the matching child group remains visible");
+    assert!(harness.query_by_label("Child card").is_some());
+    assert!(harness.query_by_label("Parent card").is_none(), "ancestor cards should not be included unless they independently match");
+    assert!(harness.query_by_label("Unrelated").is_none(), "unrelated groups should remain filtered out");
+}
+
+#[test]
 fn inline_rename_editor_replaces_the_label_in_all_list_modes() {
-    use crate::pickers::state::{ItemRenameState, PickerDisplayMode as Mode};
+    use crate::pickers::browser::inline_rename::ItemRenameState;
+    use crate::pickers::state::PickerDisplayMode as Mode;
 
     let groups = vec![group("A", vec![item("a1", "Original label", &[])])];
     for mode in [Mode::TextOnly, Mode::SmallList, Mode::LargeList] {
@@ -422,6 +446,63 @@ fn inline_rename_editor_replaces_the_label_in_all_list_modes() {
             "{mode:?} should replace the old label while editing"
         );
     }
+}
+
+#[test]
+fn double_clicking_a_group_starts_inline_rename_in_every_display_mode() {
+    use crate::pickers::browser::inline_rename::InlineGroupRenameState;
+    use crate::pickers::state::PickerDisplayMode as Mode;
+
+    let groups = vec![group("Group A", vec![item("a1", "Card", &[])])];
+    for mode in Mode::ALL {
+        let mut state = PresetUi::default();
+        state.display_modes.insert(PANEL.to_owned(), mode);
+        let mut h = harness_with_state(groups.clone(), vec2(520.0, 520.0), state);
+        let point = h.get_by_label("Group A").rect().center();
+        for _ in 0..2 {
+            h.event(Event::PointerMoved(point));
+            h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+        assert!(
+            matches!(h.state().1.as_slice(), [BrowserAction::BeginInlineRenameGroup { group, group_path }] if group == "Group A" && group_path.is_empty()),
+            "double-clicking a root group should begin inline rename in {mode:?}"
+        );
+
+        let mut editing = PresetUi::default();
+        editing.display_modes.insert(PANEL.to_owned(), mode);
+        editing.inline_group_renaming = Some(InlineGroupRenameState {
+            panel: PANEL.to_owned(),
+            group: "Group A".to_owned(),
+            group_path: Vec::new(),
+            text: "Editing group".to_owned(),
+            focused: false,
+        });
+        let rendered = harness_with_state(groups.clone(), vec2(520.0, 520.0), editing);
+        assert!(
+            rendered.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Editing group")),
+            "the inline group editor should render in {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn double_clicking_a_nested_group_targets_its_full_folder_path() {
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
+    let point = h.get_by_label("B").rect().center();
+    for _ in 0..2 {
+        h.event(Event::PointerMoved(point));
+        h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert!(matches!(
+        h.state().1.as_slice(),
+        [BrowserAction::BeginInlineRenameGroup { group, group_path }] if group == "A" && group_path == &["B".to_owned()]
+    ));
 }
 
 #[test]
@@ -2731,14 +2812,14 @@ pub(crate) fn filter_groups(groups: &[GroupView], query: &str) -> Vec<GroupView>
     groups
         .iter()
         .filter_map(|group| {
-            let group_matches = group_matches_query(group, &query);
+            let group_matches = crate::pickers::search::group_matches_query(group, &query);
             let items: Vec<ItemView> = group
                 .items
                 .iter()
-                .filter(|item| item_visible_for_query(item, &query, group_matches))
+                .filter(|item| crate::pickers::search::item_visible_for_query(item, &query, group_matches))
                 .map(|item| ItemView { key: item.key.clone(), name: item.name.clone(), group_path: item.group_path.clone() })
                 .collect();
-            group_visible_for_query(&query, group_matches, !items.is_empty()).then(|| GroupView { name: group.name.clone(), root_only: group.root_only, items })
+            (query.is_empty() || group_matches || !items.is_empty()).then(|| GroupView { name: group.name.clone(), root_only: group.root_only, items })
         })
         .collect()
 }

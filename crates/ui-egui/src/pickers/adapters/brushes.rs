@@ -740,6 +740,8 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
             BrowserAction::BeginRenameItems(_)
             | BrowserAction::BeginInlineRenameItem(_, _)
             | BrowserAction::CancelInlineRenameItem
+            | BrowserAction::BeginInlineRenameGroup { .. }
+            | BrowserAction::CancelInlineRenameGroup
             | BrowserAction::BeginRenameGroup(_)
             | BrowserAction::BeginRenameGroups(_) => None,
             BrowserAction::DeleteItem { group: _, group_path: _, key } => preset_by_identity(presets, &key).map(|preset| Action::DeleteOccurrence {

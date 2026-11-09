@@ -14,7 +14,8 @@ use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, P
 use crate::pickers::footer::FooterOptions;
 use crate::pickers::preset_previews::c32;
 use crate::pickers::shell::{ShellOptions, picker_shell};
-use crate::pickers::state::{HierarchyOrderEntry, ItemRenameState};
+use crate::pickers::browser::inline_rename::ItemRenameState;
+use crate::pickers::state::HierarchyOrderEntry;
 
 /// The engine's fallback owner for gradients created when the library has no groups. The shared
 /// hierarchy treats it as an invisible backing group while its cards live at the root.
