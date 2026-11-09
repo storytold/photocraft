@@ -142,6 +142,8 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
         return Err(bad(CMD, "`points` must be finite canvas coordinates"));
     }
     let brush = crate::brush_cmds::resolve_brush(s, p, CMD)?;
+    // The inks a colour was picked as, for a CMYK document (#12352).
+    let picked = |c: [f32; 4]| s.tools.picked_cmyk([c[0], c[1], c[2]]).map(|k| ([c[0], c[1], c[2]], k));
     let bs = BgEraseSettings {
         sampling: enum_param(p, CMD, "sampling", Sampling::Continuous, "continuous|once|backgroundSwatch")?,
         limits: enum_param(p, CMD, "limits", Limits::Contiguous, "discontiguous|contiguous|findEdges")?,
@@ -149,6 +151,8 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
         protect_foreground: flag(p, "protectForegroundColor", false),
         foreground: s.tools.foreground,
         background: s.tools.background,
+        foreground_cmyk: picked(s.tools.foreground),
+        background_cmyk: picked(s.tools.background),
     };
     let id = active_pixel_layer(s, p, CMD)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
