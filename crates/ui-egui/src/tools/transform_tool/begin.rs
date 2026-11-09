@@ -99,8 +99,9 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let whole = lifted.is_none();
     // A rotated, skewed or distorted smart object: the box opens on its placement (#3649), and the
     // preview's texels (its pixels as they are, over `rect`) move with the box from there.
-    let start = smart_start(&doc, layer, rect);
-    let frame = start.map_or(rect, frame_of);
+    let opened = smart_start(&doc, layer, rect);
+    let start = opened.map(|(q, _)| q);
+    let frame = opened.map_or(rect, |(_, f)| f);
     // Reading the moving pixels and compositing the layers over them is the heavy part: hundreds
     // of megapixels on a large canvas. Done on the UI thread, the window stopped answering for
     // long enough that a Wayland compositor dropped it, so a large layer prepares as a job
@@ -276,16 +277,30 @@ fn mark_made(app: &mut PhotocraftApp, made: MadeLayer) {
     }
 }
 
-/// Where Free Transform's box opens on smart object `layer`: its placement's corners when they
-/// aren't (to the pixel) the upright `rect` the box would open on anyway. Not with a selection,
-/// whose box is the selection's (#5297).
-fn smart_start(doc: &Document, layer: &photocraft_doc::Layer, rect: [f64; 4]) -> Option<[[f64; 2]; 4]> {
+/// Where Free Transform's box opens on smart object `layer`, and the frame it measures from: its
+/// placement's corners, unless they are (to the pixel) the upright `rect` the box would open on
+/// anyway at the contents' own size. The frame is the contents' own size, centred on the
+/// placement, so W and H read the placement's total scale against the original contents and a
+/// typed 100 % brings them back to it (as the reference does); a warped smart object's frame is
+/// its box at 100 % ([`frame_of`]). Not with a selection, whose box is the selection's (#5297).
+fn smart_start(doc: &Document, layer: &photocraft_doc::Layer, rect: [f64; 4]) -> Option<([[f64; 2]; 4], [f64; 4])> {
     if doc.selection.is_some() {
         return None;
     }
     let q = photocraft_engine::warp_cmds::smart_box(doc, layer)?;
+    Homography::quad_to_quad(q, q)?;
+    let warped = matches!(&layer.content, LayerContent::Smart(sm) if sm.warp.as_ref().is_some_and(|w| !w.is_identity()));
+    let size = photocraft_engine::warp_cmds::smart_contents_size(doc, layer).filter(|_| !warped);
+    let frame = match size {
+        Some([w, h]) => {
+            let (cx, cy) = (q.iter().map(|p| p[0]).sum::<f64>() / 4.0, q.iter().map(|p| p[1]).sum::<f64>() / 4.0);
+            [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0]
+        }
+        None => frame_of(q),
+    };
     let upright = q.iter().zip(corners(rect)).all(|(a, b)| (a[0] - b[0]).abs() <= 1.0 && (a[1] - b[1]).abs() <= 1.0);
-    (!upright && Homography::quad_to_quad(q, q).is_some()).then_some(q)
+    let full_size = q.iter().zip(corners(frame)).all(|(a, b)| (a[0] - b[0]).abs() <= 0.5 && (a[1] - b[1]).abs() <= 0.5);
+    (!(upright && full_size)).then_some((q, frame))
 }
 
 /// An upright frame for a box opening on quad `q`: as wide as its top edge and as tall as its

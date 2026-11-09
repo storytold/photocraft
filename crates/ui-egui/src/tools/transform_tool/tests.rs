@@ -4147,6 +4147,36 @@ fn near_quad(a: [[f64; 2]; 4], b: [[f64; 2]; 4], tol: f64) -> bool {
 /// #3649: Free Transform on a rotated smart object opens on its placement: the box is rotated,
 /// W and H read 100 % and the angle the earlier rotation. Enter untouched is no step; a move
 /// moves it and keeps the rotation, and the next box opens rotated again.
+/// W and H read a smart object's placement against its original contents, as the reference shows
+/// them: scaled 50 % with 30°, then 80 % with 10°, the box opens at 40 % and 40°; typing 100 %
+/// there brings the contents back to their own size (and keeps the angle). Scaled without a turn,
+/// the box opens on the placement too, at its scale.
+#[test]
+fn w_and_h_read_a_smart_objects_scale_against_its_contents() {
+    let ctx = egui::Context::default();
+    let mut app = placed_smart(json!({"scaleX": 50, "scaleY": 50, "rotate": 30}));
+    app.run("edit.transform", json!({"scaleX": 80, "scaleY": 80, "rotate": 10})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let t = app.ui.transform.as_ref().unwrap();
+    let (w, h, angle, _) = readout(t);
+    assert!((w - 40.0).abs() < 1e-6 && (h - 40.0).abs() < 1e-6, "W {w} H {h}");
+    assert!((angle - 40.0).abs() < 1e-6, "angle {angle}");
+    // Typing 100 % (linked) scales about the reference point back to the contents' own size.
+    super::options_bar::scale_about_pivot(&mut app, 100.0 / w, 100.0 / h);
+    let (w, h, angle, _) = readout(app.ui.transform.as_ref().unwrap());
+    assert!((w - 100.0).abs() < 1e-6 && (h - 100.0).abs() < 1e-6 && (angle - 40.0).abs() < 1e-6, "W {w} H {h} angle {angle}");
+    commit(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let q = smart_corners(&app);
+    let side = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    assert!((side(q[0], q[1]) - 40.0).abs() < 1e-6 && (side(q[1], q[2]) - 20.0).abs() < 1e-6, "the contents' own 40 × 20: {q:?}");
+    // Scaled only, upright: the box opens on the placement at 50 %.
+    let mut app = placed_smart(json!({"scaleX": 50, "scaleY": 50}));
+    begin(&mut app, &ctx).unwrap();
+    let (w, h, angle, _) = readout(app.ui.transform.as_ref().unwrap());
+    assert!((w - 50.0).abs() < 1e-6 && (h - 50.0).abs() < 1e-6 && angle.abs() < 1e-6, "W {w} H {h} angle {angle}");
+}
+
 #[test]
 fn free_transform_opens_on_a_rotated_smart_objects_placement() {
     let ctx = egui::Context::default();

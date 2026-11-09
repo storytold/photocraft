@@ -139,6 +139,14 @@ pub fn smart_box(doc: &Document, layer: &Layer) -> Option<[[f64; 2]; 4]> {
     corners.iter().flatten().all(|v| v.is_finite()).then_some(corners)
 }
 
+/// The size of a smart object's contents in their own pixels (what its placement scales from).
+pub fn smart_contents_size(doc: &Document, layer: &Layer) -> Option<[f64; 2]> {
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    let b = crate::smart_cmds::source_box(doc, sm)?;
+    let s = [b[2] - b[0], b[3] - b[1]];
+    (s[0] > 0.0 && s[1] > 0.0 && s.iter().all(|v| v.is_finite())).then_some(s)
+}
+
 /// Whether a smart object's placement only scales (positively) and moves: its warp is then exactly
 /// the same in document space, where Warp mode edits it (with the cylinder editor's handles,
 /// #4112); a rotated, skewed, flipped or distorted one is edited in its contents' space (#8927).
