@@ -1,54 +1,60 @@
-use super::{Document, Layer, LayerContent, LayerId, Rect, Session, VideoData};
+use photocraft_color::{PixelFormat, SampleType};
+use photocraft_compose::Ancestors;
 
-/// The document pixels an edit of the layers `ids` (moved, shown, hidden or restyled; contents
-/// otherwise as they were) can have changed from `before` to `after`, or `None` for anywhere.
-pub fn layers_damage(before: &Document, after: &Document, ids: &[LayerId]) -> Option<Rect> {
-    let mut out = Rect::EMPTY;
-    for d in [before, after] {
-        let canvas = d.bounds();
-        for id in ids {
-            // A layer gone from one side (never for a move) changes who knows what.
-            let (siblings, k, outer) = siblings_of(d, *id)?;
-            let b = photocraft_compose::change_bounds_in(siblings, k, outer, canvas)?;
-            if !b.is_empty() {
-                out = if out.is_empty() { b } else { out.union(&b) };
+use super::{Document, Layer, LayerContent, LayerId, Rect, VideoData};
+
+/// Calls `f` with the rect of every tile that differs between two surfaces of the same format and
+/// default pixel: a tile only one side has, or a different copy-on-write tile pointer at the same
+/// coordinate. A merge walk of the two sorted tile maps: pointer compares, no pixel reads. Both
+/// documents stay alive during the comparison, so tile addresses cannot be reused under it.
+/// `false` (and no calls) when the format or default pixel differs: every pixel may have changed.
+fn each_changed_tile(a: &photocraft_raster::Surface, b: &photocraft_raster::Surface, mut f: impl FnMut(Rect)) -> bool {
+    if a.format() != b.format() || a.default_bytes() != b.default_bytes() {
+        return false;
+    }
+    let (mut xs, mut ys) = (a.tiles().peekable(), b.tiles().peekable());
+    loop {
+        match (xs.peek(), ys.peek()) {
+            (None, None) => return true,
+            (Some((ca, ta)), Some((cb, tb))) if ca == cb => {
+                if !std::sync::Arc::ptr_eq(ta, tb) {
+                    f(ca.rect());
+                }
+                xs.next();
+                ys.next();
+            }
+            (Some((ca, _)), Some((cb, _))) if ca < cb => {
+                f(ca.rect());
+                xs.next();
+            }
+            (Some((ca, _)), None) => {
+                f(ca.rect());
+                xs.next();
+            }
+            (_, Some((cb, _))) => {
+                f(cb.rect());
+                ys.next();
             }
         }
     }
-    Some(out)
 }
 
-/// The sibling list holding layer `id` in `doc` (bottom→top), its index there, and the list
-/// holding its parent group with the group's index (`None` at the top level).
-type Siblings<'d> = (&'d [Layer], usize, Option<(&'d [Layer], usize)>);
-
-fn siblings_of(doc: &Document, id: LayerId) -> Option<Siblings<'_>> {
-    let path = doc.path_of(id)?;
-    let (&k, parent) = path.split_last()?;
-    let Some((&g, grand)) = parent.split_last() else { return Some((doc.layers.as_slice(), k, None)) };
-    let outer = if grand.is_empty() { doc.layers.as_slice() } else { doc.layer_at(grand)?.children()? };
-    Some((outer.get(g)?.children()?, k, Some((outer, g))))
+/// The pixels that differ between two surfaces, to tile precision: the bounding box of the tiles
+/// [`each_changed_tile`] finds (empty when the pixels are identical), or `None` when the format
+/// or default pixel differs.
+fn surface_damage(a: &photocraft_raster::Surface, b: &photocraft_raster::Surface) -> Option<Rect> {
+    let mut out = Rect::EMPTY;
+    each_changed_tile(a, b, |r| out = out.union(&r)).then_some(out)
 }
 
-/// Report [`layers_damage`] as the active document's last change, so the canvas recomposites
-/// only that (grown by the effect reach around it) instead of everything.
-pub(crate) fn note_damage(s: &mut Session, before: &Document, ids: &[LayerId]) {
-    let Some(st) = s.active_mut() else { return };
-    if before.size != st.doc.size {
-        return;
-    }
-    st.last_damage = layers_damage(before, &st.doc, ids);
-}
-
-/// Whether two surfaces hold identical pixels: same format and default pixel, and the same
-/// copy-on-write tile pointers at the same coordinates. Both documents stay alive during the
-/// comparison, so tile addresses cannot be reused under it.
+/// Whether two surfaces hold identical pixels (see [`surface_damage`]).
 fn surfaces_equal(a: &photocraft_raster::Surface, b: &photocraft_raster::Surface) -> bool {
-    a.format() == b.format()
-        && a.default_pixel() == b.default_pixel()
-        && a.tile_count() == b.tile_count()
-        && a.tiles().zip(b.tiles()).all(|((ca, ta), (cb, tb))| ca == cb && std::sync::Arc::ptr_eq(ta, tb))
+    surface_damage(a, b) == Some(Rect::EMPTY)
 }
+
+/// How [`layer_pixels_cmp`] compares a pair of surfaces a layer draws from, given the feather (in
+/// pixels) the compositor blurs it by: `true` when the pair counts as equal for the caller.
+type SurfaceCmp<'f> = &'f mut dyn FnMut(&photocraft_raster::Surface, &photocraft_raster::Surface, f32) -> bool;
 
 /// Byte blobs kept in `Arc`s (PSD raw blocks, embedded smart-object sources): pointer-identical
 /// or content-equal (they are small compared to pixels, and undo steps rarely re-parse them).
@@ -64,18 +70,18 @@ fn blobs_equal(a: &Option<std::sync::Arc<Vec<u8>>>, b: &Option<std::sync::Arc<Ve
     }
 }
 
-/// Layer masks (also the smart-filter mask): scalars plus tile-pointer surface identity.
-fn masks_equal(a: &Option<photocraft_doc::LayerMask>, b: &Option<photocraft_doc::LayerMask>) -> bool {
+/// Layer masks (also the smart-filter mask): scalars plus the surface, compared by `surf`.
+fn masks_cmp(a: &Option<photocraft_doc::LayerMask>, b: &Option<photocraft_doc::LayerMask>, surf: SurfaceCmp) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(x), Some(y)) => {
-            x.enabled == y.enabled && x.linked == y.linked && x.density == y.density && x.feather == y.feather && surfaces_equal(&x.surface, &y.surface)
+            x.enabled == y.enabled && x.linked == y.linked && x.density == y.density && x.feather == y.feather && surf(&x.surface, &y.surface, x.feather)
         }
         _ => false,
     }
 }
 
-fn texts_equal(a: &photocraft_doc::TextLayer, b: &photocraft_doc::TextLayer) -> bool {
+fn texts_cmp(a: &photocraft_doc::TextLayer, b: &photocraft_doc::TextLayer, surf: SurfaceCmp) -> bool {
     a.text == b.text
         && a.font_family == b.font_family
         && a.size_pt == b.size_pt
@@ -87,15 +93,15 @@ fn texts_equal(a: &photocraft_doc::TextLayer, b: &photocraft_doc::TextLayer) -> 
         && a.orientation == b.orientation
         && a.antialias == b.antialias
         && a.warp == b.warp
+        && blobs_equal(&a.psd_raw, &b.psd_raw)
         && match (&a.cache, &b.cache) {
             (None, None) => true,
-            (Some(x), Some(y)) => surfaces_equal(x, y),
+            (Some(x), Some(y)) => surf(x, y, 0.0),
             _ => false,
         }
-        && blobs_equal(&a.psd_raw, &b.psd_raw)
 }
 
-fn smarts_equal(a: &photocraft_doc::SmartObject, b: &photocraft_doc::SmartObject) -> bool {
+fn smarts_cmp(a: &photocraft_doc::SmartObject, b: &photocraft_doc::SmartObject, surf: SurfaceCmp) -> bool {
     a.filters_enabled == b.filters_enabled
         && a.transform == b.transform
         && a.smart_filters == b.smart_filters
@@ -109,13 +115,14 @@ fn smarts_equal(a: &photocraft_doc::SmartObject, b: &photocraft_doc::SmartObject
             (photocraft_doc::SmartSource::Linked { path: x }, photocraft_doc::SmartSource::Linked { path: y }) => x == y,
             _ => false,
         }
+        && blobs_equal(&a.psd_raw, &b.psd_raw)
+        // The filter mask shapes the filtered result the cache holds: compared exactly.
+        && masks_cmp(&a.filter_mask, &b.filter_mask, &mut |x, y, _| surfaces_equal(x, y))
         && match (&a.cache, &b.cache) {
             (None, None) => true,
-            (Some(x), Some(y)) => surfaces_equal(x, y),
+            (Some(x), Some(y)) => surf(x, y, 0.0),
             _ => false,
         }
-        && blobs_equal(&a.psd_raw, &b.psd_raw)
-        && masks_equal(&a.filter_mask, &b.filter_mask)
 }
 
 /// Extra alpha/spot channels (the image itself in Multichannel mode).
@@ -132,6 +139,13 @@ fn alpha_channels_equal(a: &photocraft_doc::AlphaChannel, b: &photocraft_doc::Al
 /// (name, locks, label, `psd_blocks`, `psd_id`, link group, XMP — none of them composite; video
 /// bails out earlier in the walk).
 fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
+    layer_pixels_cmp(a, b, &mut |x, y, _| surfaces_equal(x, y))
+}
+
+/// [`layer_pixels_equal`] with the surfaces the layer draws from (its pixels, mask, type and
+/// smart-object caches, fill cache) compared by `surf`; everything else compares exactly, before
+/// any surface, so `surf` sees a pair only when every scalar the compositor reads is equal.
+fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
     let Layer {
         id,
         name: _,
@@ -143,6 +157,7 @@ fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
         clipped,
         mask,
         vector_mask,
+        frame,
         effects,
         label: _,
         content,
@@ -162,27 +177,39 @@ fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
         && *opacity == b.opacity
         && *fill_opacity == b.fill_opacity
         && *clipped == b.clipped
-        && masks_equal(mask, &b.mask)
         && *vector_mask == b.vector_mask
+        && *frame == b.frame
         && *effects == b.effects
         && *excluded_channels == b.excluded_channels
         && *blend_if == b.blend_if
         && *advanced == b.advanced
+        && match (fill_cache, &b.fill_cache) {
+            (None, None) => true,
+            (Some(x), Some(y)) => x.fill == y.fill,
+            _ => false,
+        }
         && match (content, &b.content) {
-            (LayerContent::Raster(x), LayerContent::Raster(y)) => surfaces_equal(x, y),
+            (LayerContent::Raster(_), LayerContent::Raster(_)) => true,
             // Children are walked separately; only the group's own clipping frame counts.
             (LayerContent::Group(x), LayerContent::Group(y)) => x.artboard == y.artboard,
             (LayerContent::Fill(x), LayerContent::Fill(y)) => x == y,
             (LayerContent::Adjustment(x), LayerContent::Adjustment(y)) => x == y,
-            (LayerContent::Text(x), LayerContent::Text(y)) => texts_equal(x, y),
+            (LayerContent::Text(x), LayerContent::Text(y)) => texts_cmp(x, y, &mut |_, _, _| true),
             (LayerContent::Shape(x), LayerContent::Shape(y)) => x == y,
-            (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_equal(x, y),
+            (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_cmp(x, y, &mut |_, _, _| true),
             _ => false,
         }
+        // Every scalar is equal: now the surfaces.
+        && masks_cmp(mask, &b.mask, surf)
+        && match (content, &b.content) {
+            (LayerContent::Raster(x), LayerContent::Raster(y)) => surf(x, y, 0.0),
+            (LayerContent::Text(x), LayerContent::Text(y)) => texts_cmp(x, y, surf),
+            (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_cmp(x, y, surf),
+            _ => true,
+        }
         && match (fill_cache, &b.fill_cache) {
-            (None, None) => true,
-            (Some(x), Some(y)) => x.fill == y.fill && surfaces_equal(&x.surface, &y.surface),
-            _ => false,
+            (Some(x), Some(y)) => surf(&x.surface, &y.surface, 0.0),
+            _ => true,
         }
 }
 
@@ -211,7 +238,8 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         clipping_path: _,
         quick_mask,
         quick_mask_unselected: _,
-        patterns,
+        // Compared by `patterns_pixels_equal`.
+        patterns: _,
         color_table,
         duotone,
         layer_comps: _,
@@ -238,9 +266,55 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
             (Some(x), Some(y)) => alpha_channels_equal(x, y),
             _ => false,
         }
-        && *patterns == b.patterns
+        && patterns_pixels_equal(a, b)
         && *color_table == b.color_table
         && *duotone == b.duotone
+}
+
+/// Whether `a`'s and `b`'s pattern libraries composite the same. Layers draw a pattern only
+/// through a reference that `photocraft_doc::pattern::find` resolves (fill and shape layers,
+/// Pattern Overlay, pattern strokes and glows, Bevel textures), so patterns appended after an
+/// unchanged prefix change nothing unless some reference now resolves differently: to an
+/// appended pattern where it resolved to an earlier one or to none. A same-named addition that
+/// loses to an existing id match changes nothing. Pattern Stamp copies its pattern into the
+/// document this way on first use; the pixels it paints are a raster change, diffed by tile like
+/// any other.
+fn patterns_pixels_equal(a: &Document, b: &Document) -> bool {
+    use photocraft_doc::effects::{Effect, FxPaint};
+    use photocraft_doc::{Fill, Pattern, pattern::find};
+    if a.patterns == b.patterns {
+        return true;
+    }
+    if a.patterns.len() >= b.patterns.len() || !b.patterns.starts_with(a.patterns.as_slice()) {
+        return false;
+    }
+    // The index a reference resolves to; the prefix is equal, so equal indices mean equal patterns.
+    let at = |ps: &[Pattern], id: &str, name: &str| find(ps, id, name).and_then(|p| ps.iter().position(|q| std::ptr::eq(q, p)));
+    let hits = |id: &str, name: &str| at(&a.patterns, id, name) != at(&b.patterns, id, name);
+    let fill = |f: &Fill| matches!(f, Fill::Pattern { id, name, .. } if hits(id, name));
+    let paint = |p: &FxPaint| matches!(p, FxPaint::Pattern { id, name, .. } if hits(id, name));
+    // Past a nesting depth no real document reaches, assume a reference (unequal), as
+    // `pixels_equal_with` does.
+    fn any_layer(layers: &[Layer], depth: usize, refers: &dyn Fn(&Layer) -> bool) -> bool {
+        depth >= 256 || layers.iter().any(|l| refers(l) || matches!(&l.content, LayerContent::Group(g) if any_layer(&g.children, depth + 1, refers)))
+    }
+    let refers = |l: &Layer| {
+        let effect = l.effects.items.iter().any(|e| match e {
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => paint(&g.paint),
+            Effect::Stroke(s) => paint(&s.paint),
+            Effect::PatternOverlay { id, name, .. } => hits(id, name),
+            Effect::BevelEmboss(b) => b.texture.as_ref().is_some_and(|t| hits(&t.id, &t.name)),
+            Effect::DropShadow(_) | Effect::InnerShadow(_) | Effect::ColorOverlay { .. } | Effect::GradientOverlay { .. } | Effect::Satin(_) => false,
+        });
+        effect
+            || match &l.content {
+                LayerContent::Fill(f) => fill(f),
+                LayerContent::Shape(s) => s.fill.as_ref().is_some_and(fill) || s.stroke.as_ref().is_some_and(|st| fill(&st.paint)),
+                // A smart object draws its cache; its own document holds its own patterns.
+                LayerContent::Raster(_) | LayerContent::Group(_) | LayerContent::Adjustment(_) | LayerContent::Text(_) | LayerContent::Smart(_) => false,
+            }
+    };
+    !any_layer(&b.layers, 0, &refers)
 }
 
 /// Whether `a` and `b` composite to the same pixels: they differ at most in fields the
@@ -358,32 +432,87 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
 /// [`one_sided_bounds`]); one that draws nothing ([`inert_at`]) changes nothing. `None`
 /// (composite everything) when the step touched anything the layer walk cannot bound:
 /// document-level fields the compositor reads (canvas size, mode, depth, profile, global light,
-/// patterns, channels, palettes), layer order and kind changes, layers added or removed that
-/// reach outside their own bounds, layer properties that do (clipping, excluded channels —
-/// what `layer.setProps` already reports as unbounded), and video layers. Inserting a copy of a
+/// patterns, channels, palettes), kind changes, reorders of clipped layers, layers added or
+/// removed that reach outside their own bounds, clipping or channel exclusion on a group, and
+/// video layers. A reorder damages the moved layers at both ends ([`moved_ids`]). Inserting a copy of a
 /// 12 MP layer used to recomposite every layer of the document (#2883, P8/P9 in
 /// `perf/budgets.toml`).
+///
+/// A layer whose only change is in the pixels of its surfaces (raster content, mask, type or
+/// smart-object cache, fill cache) damages only the tiles that changed ([`tile_damage`]), so
+/// undoing a brush dab on a full-canvas layer redraws the dab's tiles, not the canvas (#9329).
 pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
     if !doc_pixels_equal(a, b) {
         return None;
     }
-    /// The list holding a sibling list's parent group, and the group's index there.
-    type Outer<'d> = Option<(&'d [Layer], usize)>;
-    fn walk(xs: &[Layer], ys: &[Layer], (ox, oy): (Outer, Outer), a: &Document, b: &Document, out: &mut Rect) -> bool {
+    /// What the groups around a sibling list add to a change inside it: the summed reach of
+    /// their effects, and whether any lays effects out over its frame.
+    #[derive(Clone, Copy)]
+    struct Around {
+        reach: i32,
+        spans_frame: bool,
+    }
+    fn add(out: &mut Rect, r: Rect) {
+        if !r.is_empty() {
+            *out = if out.is_empty() { r } else { out.union(&r) };
+        }
+    }
+    fn walk<'d>(
+        xs: &'d [Layer],
+        ys: &'d [Layer],
+        (px, py): (&Ancestors<'d>, &Ancestors<'d>),
+        around: Around,
+        a: &Document,
+        b: &Document,
+        out: &mut Rect,
+    ) -> bool {
+        let depth = b.depth;
+        // The effects of the groups around reach past a change inside them (a parent's drop shadow).
+        let grow = |r: Rect, canvas: Rect| if r.is_empty() { r } else { r.inflate(around.reach).intersect(&canvas) };
+        // So bound a change within that reach of the canvas, not on it: a layer just off the
+        // canvas still moves a parent's shadow onto it (group effects are built past the canvas).
+        let near = |canvas: Rect| canvas.inflate(around.reach);
         // Pair the layers by id, stepping over layers only one side has: one that draws nothing
         // changes no pixels (a new empty layer or group, #1771), any other only where it draws.
-        let one_sided = |layers: &[Layer], k: usize, outer: Outer, canvas: Rect, out: &mut Rect| {
-            let Some(r) = one_sided_bounds(layers, k, outer, canvas) else { return false };
-            if !r.is_empty() {
-                *out = if out.is_empty() { r } else { out.union(&r) };
-            }
+        let one_sided = |layers: &[Layer], k: usize, path: &Ancestors, canvas: Rect, out: &mut Rect| {
+            let Some(r) = one_sided_bounds(layers, k, path, depth, near(canvas)) else { return false };
+            add(out, grow(r, canvas));
             true
         };
+        // A reorder: the layers that moved change pixels only where they draw (or, for an
+        // adjustment, reach) at each end, as hiding them there and showing them here would.
+        let Some(moved) = moved_ids(xs, ys) else { return false };
+        for &id in &moved {
+            let (Some(xk), Some(yk)) = (xs.iter().position(|l| l.id == id), ys.iter().position(|l| l.id == id)) else { return false };
+            let (x, y) = (&xs[xk], &ys[yk]);
+            // A clipped layer changes base when it moves, and a layer moving to or from below
+            // clipped layers changes theirs.
+            let clips = |ls: &[Layer], k: usize| ls[k].clipped || ls.get(k + 1).is_some_and(|above| above.clipped);
+            if clips(xs, xk) || clips(ys, yk) || !contained(x, 0) || !contained(y, 0) {
+                return false;
+            }
+            let (Some(bx), Some(by)) = (
+                photocraft_compose::change_bounds_in(xs, xk, px, depth, near(a.bounds())),
+                photocraft_compose::change_bounds_in(ys, yk, py, depth, near(b.bounds())),
+            ) else {
+                return false;
+            };
+            add(out, grow(bx, a.bounds()));
+            add(out, grow(by, b.bounds()));
+        }
         let (mut i, mut j) = (0, 0);
         loop {
             let (x, y) = match (xs.get(i), ys.get(j)) {
                 (None, None) => return true,
                 (Some(x), Some(y)) if x.id == y.id => (x, y),
+                (Some(x), _) if moved.contains(&x.id) => {
+                    i += 1;
+                    continue;
+                }
+                (_, Some(y)) if moved.contains(&y.id) => {
+                    j += 1;
+                    continue;
+                }
                 _ if inert_at(ys, j) => {
                     j += 1;
                     continue;
@@ -393,20 +522,20 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                     continue;
                 }
                 (_, Some(y)) if xs.iter().all(|x| x.id != y.id) => {
-                    if !one_sided(ys, j, oy, b.bounds(), out) {
+                    if !one_sided(ys, j, py, b.bounds(), out) {
                         return false;
                     }
                     j += 1;
                     continue;
                 }
                 (Some(x), _) if ys.iter().all(|y| y.id != x.id) => {
-                    if !one_sided(xs, i, ox, a.bounds(), out) {
+                    if !one_sided(xs, i, px, a.bounds(), out) {
                         return false;
                     }
                     i += 1;
                     continue;
                 }
-                // Both sides have the layer, in another order.
+                // Both sides have the layer, in another order (`moved_ids` pairs the rest).
                 _ => return false,
             };
             let (xk, yk) = (i, j);
@@ -415,24 +544,73 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
             if x.video.is_some() || y.video.is_some() {
                 return false;
             }
-            // Clipping and channel exclusion change how *other* layers render, outside this
-            // layer's own bounds; they have no bounded damage.
-            if x.clipped != y.clipped || x.excluded_channels != y.excluded_channels {
+            // Clipping and channel exclusion on a group change how it composites its children;
+            // they have no bounded damage. Channel exclusion on any other layer is per pixel where
+            // it draws, which its change bounds below cover.
+            if (x.clipped != y.clipped || x.excluded_channels != y.excluded_channels) && (x.children().is_some() || y.children().is_some()) {
                 return false;
             }
-            if !layer_pixels_equal(x, y) {
+            if x.clipped != y.clipped {
+                // The clipped layers directly above change base too (from this layer to the one
+                // beneath it, or back). A group base composites differently with clipped layers
+                // (a pass-through one holding an adjustment then renders isolated), so not that.
+                let base_is_group = |ls: &[Layer], k: usize| ls[..k].iter().rev().find(|l| !l.clipped).is_some_and(|l| l.children().is_some());
+                if base_is_group(xs, xk) || base_is_group(ys, yk) {
+                    return false;
+                }
+                for (ls, k, path, d) in [(xs, xk, px, a), (ys, yk, py, b)] {
+                    for c in (k + 1..ls.len()).take_while(|&c| ls[c].clipped) {
+                        let Some(r) = photocraft_compose::change_bounds_in(ls, c, path, depth, near(d.bounds())) else { return false };
+                        add(out, grow(r, d.bounds()));
+                    }
+                }
+            }
+            let tiles = tile_damage(x, y);
+            if tiles != Some(Rect::EMPTY) {
                 // Both sides' extents: a move changes pixels where it left and where it landed.
-                // A clipped adjustment reaches as far as its base (#6535).
-                let (Some(bx), Some(by)) =
-                    (photocraft_compose::change_bounds_in(xs, xk, ox, a.bounds()), photocraft_compose::change_bounds_in(ys, yk, oy, b.bounds()))
-                else {
+                // A clipped adjustment reaches as far as its base (#6535). Grown by what the
+                // groups around reach, as any change inside them (a parent's drop shadow).
+                let (Some(bx), Some(by)) = (
+                    photocraft_compose::change_bounds_in(xs, xk, px, depth, near(a.bounds())),
+                    photocraft_compose::change_bounds_in(ys, yk, py, depth, near(b.bounds())),
+                ) else {
                     return false;
                 };
-                *out = if out.is_empty() { bx.union(&by) } else { out.union(&bx).union(&by) };
+                let whole = grow(bx, a.bounds()).union(&grow(by, b.bounds()));
+                // Only pixels changed: the changed tiles, grown by what the groups around reach,
+                // never more than the whole extents. Effects laid out over a frame repaint it
+                // everywhere when it moves (#4053), so then the whole extents.
+                let frame_moved = around.spans_frame
+                    || (photocraft_compose::effects::spans_frame(y)
+                        && photocraft_compose::effects_frame(x, a.bounds()) != photocraft_compose::effects_frame(y, b.bounds()));
+                let d = match tiles {
+                    Some(t) if !frame_moved => t.inflate(around.reach).intersect(&whole).intersect(&b.bounds()),
+                    _ => whole,
+                };
+                *out = out.union(&d);
             }
             match (x.children(), y.children()) {
                 (Some(xc), Some(yc)) => {
-                    if !walk(xc, yc, (Some((xs, xk)), Some((ys, yk))), a, b, out) {
+                    // A change inside that moves the group's frame (a layer added, removed or
+                    // hidden at its edge) lays effects spanning that frame out again over the
+                    // whole group, beyond the change (#4053).
+                    let spans = photocraft_compose::effects::spans_frame;
+                    if (spans(x) || spans(y)) && photocraft_compose::effects_frame(x, a.bounds()) != photocraft_compose::effects_frame(y, b.bounds()) {
+                        let (Some(bx), Some(by)) = (
+                            photocraft_compose::change_bounds_in(xs, xk, px, depth, near(a.bounds())),
+                            photocraft_compose::change_bounds_in(ys, yk, py, depth, near(b.bounds())),
+                        ) else {
+                            return false;
+                        };
+                        add(out, grow(bx, a.bounds()));
+                        add(out, grow(by, b.bounds()));
+                    }
+                    let inner = Around {
+                        reach: around.reach.saturating_add(effects_reach(x).max(effects_reach(y))),
+                        spans_frame: around.spans_frame || photocraft_compose::effects::spans_frame(x) || photocraft_compose::effects::spans_frame(y),
+                    };
+                    let (qx, qy): (Vec<_>, Vec<_>) = (px.iter().copied().chain([(xs, xk)]).collect(), py.iter().copied().chain([(ys, yk)]).collect());
+                    if !walk(xc, yc, (&qx, &qy), inner, a, b, out) {
                         return false;
                     }
                 }
@@ -442,25 +620,148 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
         }
     }
     let mut out = Rect::EMPTY;
-    if walk(&a.layers, &b.layers, (None, None), a, b, &mut out) { Some(out) } else { None }
+    if walk(&a.layers, &b.layers, (&[], &[]), Around { reach: 0, spans_frame: false }, a, b, &mut out) { Some(out) } else { None }
+}
+
+/// The layers both sibling lists hold that changed places (`None` when the lists are too long to
+/// compare): those outside a longest common subsequence of the ids both sides have, so a bring
+/// forward moves one layer, not every layer it passes.
+fn moved_ids(xs: &[Layer], ys: &[Layer]) -> Option<Vec<LayerId>> {
+    use std::collections::HashSet;
+    if xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.id == y.id) {
+        return Some(Vec::new());
+    }
+    let in_y: HashSet<LayerId> = ys.iter().map(|l| l.id).collect();
+    let cx: Vec<LayerId> = xs.iter().map(|l| l.id).filter(|id| in_y.contains(id)).collect();
+    let in_x: HashSet<LayerId> = cx.iter().copied().collect();
+    let cy: Vec<LayerId> = ys.iter().map(|l| l.id).filter(|id| in_x.contains(id)).collect();
+    if cx == cy {
+        return Some(Vec::new());
+    }
+    let (n, m) = (cx.len(), cy.len());
+    // An O(n·m) table: past a few million cells, call it unbounded instead.
+    if n.saturating_mul(m) > 4_000_000 {
+        return None;
+    }
+    let w = m + 1;
+    let mut t = vec![0u32; (n + 1) * w];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            t[i * w + j] = if cx[i] == cy[j] { t[(i + 1) * w + j + 1] + 1 } else { t[(i + 1) * w + j].max(t[i * w + j + 1]) };
+        }
+    }
+    let (mut i, mut j, mut kept) = (0, 0, HashSet::new());
+    while i < n && j < m {
+        if cx[i] == cy[j] {
+            kept.insert(cx[i]);
+            i += 1;
+            j += 1;
+        } else if t[(i + 1) * w + j] >= t[i * w + j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    Some(cx.into_iter().filter(|id| !kept.contains(id)).collect())
+}
+
+/// How many tiles that differ between `before` and `after` (in the surfaces of layers both have)
+/// `hint` misses: a command's own damage rect that misses a changed tile is too narrow (#4053).
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn hint_misses(before: &Document, after: &Document, hint: Rect) -> usize {
+    let mut misses = 0;
+    for (_, _, y) in after.walk() {
+        let Some(x) = before.layer(y.id) else { continue };
+        layer_pixels_cmp(x, y, &mut |p, q, _| {
+            each_changed_tile(p, q, |t| misses += usize::from(t.intersect(&hint).is_empty()));
+            true
+        });
+    }
+    misses
+}
+
+/// `hint`, a command's own rect for pixels it changed in one of `doc`'s layers, grown as far as
+/// [`step_damage`] grows a change there ([`grow_in_layer`], then by the effects of the groups
+/// around the layer), for whichever layer that was: the hint doesn't say. A brush dab on a
+/// feathered mask changes a soft ring around the dab; cut to the bare dab, the ring stayed stale.
+/// Layers the compositor doesn't draw are skipped as it skips them (a hidden layer, a clipped
+/// layer over a hidden base, and everything inside a hidden group): a change there shows nowhere,
+/// and growing by a hidden layer's effects widened every dab elsewhere.
+pub(crate) fn grow_hint(doc: &Document, hint: Rect) -> Rect {
+    fn walk(layers: &[Layer], reach: i32, hint: Rect, out: &mut Rect) {
+        let mut base_visible = true;
+        for l in layers {
+            if !l.clipped {
+                base_visible = l.visible;
+            }
+            if !l.visible || !base_visible {
+                continue;
+            }
+            let feather = l.mask.as_ref().map_or(0.0, |m| m.feather);
+            *out = out.union(&grow_in_layer(l, hint, feather).inflate(reach));
+            if let Some(children) = l.children() {
+                walk(children, reach.saturating_add(effects_reach(l)), hint, out);
+            }
+        }
+    }
+    let mut out = hint;
+    if !hint.is_empty() {
+        walk(&doc.layers, 0, hint, &mut out);
+    }
+    out
+}
+
+/// How far layer `l`'s own effects carry a change to its pixels: 0 without effects.
+fn effects_reach(l: &Layer) -> i32 {
+    if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 }
+}
+
+/// `r`, changed pixels of a surface layer `l` draws from, grown as far as the change can show in
+/// `l`'s own render: by the `feather` (in pixels) the compositor blurs the surface by, then by
+/// `l`'s effects.
+fn grow_in_layer(l: &Layer, r: Rect, feather: f32) -> Rect {
+    let r = if feather > 0.0 { photocraft_vector::feather::grow(r, photocraft_vector::feather::feather_sigma(feather)) } else { r };
+    let margin = effects_reach(l);
+    if r.is_empty() || margin == 0 { r } else { r.inflate(margin) }
+}
+
+/// The pixels a change from layer `a` to layer `b` (the same layer on either side of a step) can
+/// have changed when only the pixels of its surfaces changed: the tiles that differ
+/// ([`surface_damage`]), grown as far as each shows in the layer's render ([`grow_in_layer`]).
+/// Empty when the layers render identically. `None` when anything else changed (a property, the
+/// content kind, a surface's format or default pixel): the caller then takes the layer's whole
+/// extents. Children of groups are not compared (the caller walks them).
+fn tile_damage(a: &Layer, b: &Layer) -> Option<Rect> {
+    let mut tiles = Rect::EMPTY;
+    let only_pixels = layer_pixels_cmp(a, b, &mut |x, y, feather| {
+        let Some(r) = surface_damage(x, y) else { return false };
+        // Effects are equal on both sides here (they are compared before any surface).
+        tiles = tiles.union(&grow_in_layer(b, r, feather));
+        true
+    });
+    only_pixels.then_some(tiles)
+}
+
+/// Neither `l` nor anything inside it is a video layer or excludes channels.
+fn contained(l: &Layer, depth: usize) -> bool {
+    depth < 256 && l.video.is_none() && l.excluded_channels == 0 && l.children().is_none_or(|c| c.iter().all(|c| contained(c, depth + 1)))
 }
 
 /// The pixels adding or removing `layers[k]` can change, when that is bounded: its change bounds
-/// (`photocraft_compose::change_bounds_in`: not for an unclipped adjustment, or a pass-through
-/// group holding one; a clipped adjustment's are its base's), provided it isn't the clipping base
+/// (`photocraft_compose::change_bounds_in`: an unclipped adjustment's cover the layers beneath it
+/// in its isolation scope; a clipped adjustment's are its base's), provided it isn't the clipping base
 /// of clipped layers above it (they would change base), and neither it nor anything inside it is
-/// a video layer or excludes channels (both reach outside the layer's bounds, see
-/// [`step_damage`]).
-fn one_sided_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect) -> Option<Rect> {
-    fn contained(l: &Layer, depth: usize) -> bool {
-        depth < 256 && l.video.is_none() && l.excluded_channels == 0 && l.children().is_none_or(|c| c.iter().all(|c| contained(c, depth + 1)))
-    }
+/// a video layer (it reaches outside the layer's bounds, see [`step_damage`]) or excludes
+/// channels. Channel exclusion is per pixel where the layer draws, so it doesn't actually reach
+/// further (`step_damage` bounds a property change of it that way); here it stays unbounded only
+/// to be conservative.
+fn one_sided_bounds(layers: &[Layer], k: usize, ancestors: &Ancestors, depth: photocraft_color::SampleType, canvas: Rect) -> Option<Rect> {
     let l = layers.get(k)?;
     let new_base = !l.clipped && layers.get(k + 1).is_some_and(|above| above.clipped);
     if new_base || !contained(l, 0) {
         return None;
     }
-    photocraft_compose::change_bounds_in(layers, k, outer, canvas)
+    photocraft_compose::change_bounds_in(layers, k, ancestors, depth, canvas)
 }
 
 /// Whether `layers[k]` draws nothing wherever it sits, so adding or removing it leaves the
@@ -485,33 +786,92 @@ fn inert_at(layers: &[Layer], k: usize) -> bool {
         && (l.clipped || layers.get(k + 1).is_none_or(|above| !above.clipped))
 }
 
-/// Report that adding layer `id` to the active document changed no pixels when it draws
-/// nothing ([`inert_at`]), so the canvas doesn't recomposite every layer for it (#1771). Looks
-/// only at the new layer and its neighbour, never at other layers' tiles.
-pub(crate) fn note_inert_insert(s: &mut Session, id: LayerId) {
-    let Some(st) = s.active_mut() else { return };
-    let Some(path) = st.doc.path_of(id) else { return };
-    let Some((&k, parent)) = path.split_last() else { return };
-    let siblings = if parent.is_empty() { Some(st.doc.layers.as_slice()) } else { st.doc.layer_at(parent).and_then(Layer::children) };
-    if siblings.is_some_and(|sib| inert_at(sib, k)) {
-        st.last_damage = Some(Rect::EMPTY);
-    }
+/// How much of the document (percent, rounded down) changed between `a` and `b`, when that is
+/// some but under 25 %: what [`step_damage`] finds, which a command that reported "redraw
+/// everything" (`None`) should have reported instead. `None` when nothing changed (a view-only
+/// change), when it's 25 % or more, or when `step_damage` can't bound it (a canvas-size change).
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn small_change_pct(a: &Document, b: &Document) -> Option<u64> {
+    let d = step_damage(a, b).filter(|d| !d.is_empty())?;
+    let doc = b.bounds();
+    let whole = u64::from(doc.width()) * u64::from(doc.height());
+    let changed = d.intersect(&doc);
+    let pct = u64::from(changed.width()) * u64::from(changed.height()) * 100 / whole.max(1);
+    (pct < 25).then_some(pct)
 }
 
-/// Report the pixels a command made of more than one edit changed since `before` ([`step_damage`]),
-/// so the canvas recomposites only where its new layers draw instead of the whole document.
-/// A single [`Session::edit`] already reports its own damage: don't call this after one (#5695).
-pub(crate) fn note_insert(s: &mut Session, before: &Document) {
-    let Some(st) = s.active_mut() else { return };
-    st.last_damage = step_damage(before, &st.doc);
-}
-
-/// Content bounds used by Align/Distribute: the layer's pixels (type and shape layers use their
-/// rendered pixels), or the union of a group's children. Fill and adjustment layers have none.
+/// Content bounds of a layer's pixels as stored (type and shape layers: their cached render), or
+/// the union of a group's children. Fill and adjustment layers have none. Cheap: Layers list,
+/// artboards, copy and slices call it for every layer.
 pub fn layer_bounds(l: &Layer) -> Option<Rect> {
     let r = match &l.content {
         LayerContent::Group(g) => g.children.iter().filter_map(layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b)),
         _ => l.surface().map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY),
     };
     (!r.is_empty()).then_some(r)
+}
+
+/// The bounds Align and Distribute move by, in a document of bounds `canvas`: [`layer_bounds`],
+/// except that a shape layer is measured over everything it draws, beyond the canvas too (its
+/// cache is clipped to the canvas, #8660), by rendering it again. Only those commands pay for that
+/// render, once per click; `canvas` is the frame a shape's gradients are laid out in, so an opacity
+/// stop measures as it renders, and `sample` is the document's sample type (see
+/// [`shape_pixel_bounds`]).
+pub(crate) fn align_bounds(l: &Layer, canvas: Rect, sample: SampleType) -> Option<Rect> {
+    let r = match &l.content {
+        LayerContent::Group(g) => g.children.iter().filter_map(|c| align_bounds(c, canvas, sample)).fold(Rect::EMPTY, |a, b| a.union(&b)),
+        LayerContent::Shape(sh) => shape_pixel_bounds(sh, canvas, sample).unwrap_or_else(|| {
+            let cached = l.surface().map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
+            // A fill that shows everywhere covers the canvas, rendered yet or not.
+            if cached.is_empty() && unbounded_fill(sh) { canvas } else { cached }
+        }),
+        _ => return layer_bounds(l),
+    };
+    (!r.is_empty()).then_some(r)
+}
+
+/// Whether the shape's fill shows everywhere (an inverted path, or below 100 % density), so it has
+/// no extent of its own.
+fn unbounded_fill(sh: &photocraft_doc::ShapeLayer) -> bool {
+    sh.fill.is_some() && (sh.path.inverted || (sh.density.is_finite() && sh.density < 1.0))
+}
+
+/// Largest area [`shape_pixel_bounds`] renders to find a shape's extent; beyond it the path and
+/// stroke bounds stand in.
+const SHAPE_BOUNDS_MAX_PX: u64 = 64 << 20;
+
+/// Pixels [`shape_pixel_bounds`] renders at a time.
+const SHAPE_BOUNDS_BAND_PX: u64 = 1 << 20;
+
+/// The pixels a shape layer draws, wherever they fall. Its cache is rendered clipped to the
+/// canvas, so a shape partly off the canvas measured from it looked smaller and Align moved it
+/// by the wrong amount, a little more on each click (#8660). The shape is rendered again over
+/// everything it can draw (its path, stroke and feather), unclipped, and measured from that. A fill
+/// that shows everywhere (an inverted path, or below 100 % density) has no extent of its own and
+/// keeps the canvas-clipped measure (`None`).
+pub(super) fn shape_pixel_bounds(sh: &photocraft_doc::ShapeLayer, canvas: Rect, sample: SampleType) -> Option<Rect> {
+    if unbounded_fill(sh) {
+        return None;
+    }
+    let reach = photocraft_compose::shape_bounds(sh)?.inflate(1);
+    if u64::from(reach.width()) * u64::from(reach.height()) > SHAPE_BOUNDS_MAX_PX {
+        return photocraft_compose::hard_shape_bounds(sh);
+    }
+    // Gradients lay out in the document's frame (as the cached render does); the feather and the
+    // clip cover the shape's whole reach, beyond the canvas too.
+    let shape = photocraft_vector::CompiledShape::with_frames(sh, photocraft_vector::DEFAULT_TOLERANCE, reach, canvas);
+    // Alpha at the document's own precision, as the document stores it: an 8-bit render drops the
+    // faint stroke of a 16-bit or float document (the opaque body then aligns by a different
+    // extent than the document draws), and a float one would find alpha an 8-bit document never
+    // stores. A band of rows at a time keeps the working copy a few MB however large the shape.
+    let format = PixelFormat::new(photocraft_color::ColorMode::Grayscale, sample, true);
+    let band_rows = i32::try_from((SHAPE_BOUNDS_BAND_PX / u64::from(reach.width().max(1))).max(1)).unwrap_or(i32::MAX);
+    let mut bounds = Rect::EMPTY;
+    let mut top = reach.y0;
+    while top < reach.y1 {
+        let bottom = top.saturating_add(band_rows).min(reach.y1);
+        bounds = bounds.union(&shape.render(format, Rect::new(reach.x0, top, reach.x1, bottom)).content_bounds());
+        top = bottom;
+    }
+    (!bounds.is_empty()).then_some(bounds)
 }

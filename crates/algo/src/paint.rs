@@ -231,7 +231,7 @@ pub fn bucket_region(
     // under zero alpha is meaningless.
     // The Magic Wand's own rule (`wand_region`'s, shared), so a pixel it left out for being a
     // different colour is never mistaken for a disconnected part of the seed's region.
-    let similar = |p: [u8; 4]| crate::selection::similar_to_seed(target, tol, p);
+    let similar = |p: [u8; 4]| crate::selection::similar_to_seed(target, tol, p, crate::selection::ColorDistance::LargestChannel);
     let dist = |p: [u8; 4]| -> i32 {
         if target[3] == 0 { i32::from(p[3]) } else { (0..4).map(|c| (i32::from(p[c]) - i32::from(target[c])).abs()).max().unwrap_or(0) }
     };
@@ -641,10 +641,10 @@ mod tests {
         for tol in [0.0, 7.9999, 8.0, -3.0, f32::NAN] {
             assert_eq!(crate::selection::tolerance_steps(tol), (tol + 1e-3).floor().max(0.0) as i32);
         }
-        assert!(crate::selection::similar_to_seed([10, 10, 10, 255], 8, [18, 2, 10, 255]));
-        assert!(!crate::selection::similar_to_seed([10, 10, 10, 255], 8, [19, 10, 10, 255]));
-        assert!(crate::selection::similar_to_seed([0, 0, 0, 0], 0, [9, 9, 9, 0]));
-        assert!(!crate::selection::similar_to_seed([0, 0, 0, 255], 0, [0, 0, 0, 254]));
+        assert!(crate::selection::similar_to_seed([10, 10, 10, 255], 8, [18, 2, 10, 255], crate::selection::ColorDistance::LargestChannel));
+        assert!(!crate::selection::similar_to_seed([10, 10, 10, 255], 8, [19, 10, 10, 255], crate::selection::ColorDistance::LargestChannel));
+        assert!(crate::selection::similar_to_seed([0, 0, 0, 0], 0, [9, 9, 9, 0], crate::selection::ColorDistance::LargestChannel));
+        assert!(!crate::selection::similar_to_seed([0, 0, 0, 255], 0, [0, 0, 0, 254], crate::selection::ColorDistance::LargestChannel));
     }
 
     /// Greyscale rows, three tall, from one brightness per column.

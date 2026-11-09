@@ -51,7 +51,8 @@ pub(crate) fn hover(app: &mut PhotocraftApp, layers: &[LayerId], mode: Option<Bl
         // Anywhere when any layer can change anything; else the union of their areas.
         let mut area: Option<Rect> = Some(Rect::EMPTY);
         for &id in layers {
-            area = match (area, photocraft_compose::change_bounds(st.doc.layer(id)?, st.doc.bounds())) {
+            st.doc.layer(id)?;
+            area = match (area, photocraft_compose::layer_change_bounds(&st.doc, id)) {
                 (Some(a), Some(b)) => Some(if a.is_empty() { b } else { a.union(&b) }),
                 _ => None,
             };
@@ -101,7 +102,7 @@ pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, 
 /// Limit an active preview to the view. Returning to the document restores the whole region.
 pub(crate) fn clip_damage(app: &mut PhotocraftApp, doc: DocId, revision: u64, key: u64, region: Rect, visible: Rect) -> Rect {
     let Some(p) = app.blend_preview.as_mut().filter(|p| p.doc == doc && p.revision == revision) else { return region };
-    if !p.shown.as_ref().is_some_and(|(shown, _)| *shown == key) {
+    if p.shown.as_ref().is_none_or(|(shown, _)| *shown != key) {
         p.covered = None;
         return region;
     }

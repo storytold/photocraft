@@ -1022,7 +1022,7 @@ fn patch_content_aware_copies_the_dragged_to_content_into_the_selection() {
             let (got, want) = (rgba(&s, x, y), texture(x, y));
             assert!((got[0] - want[0]).abs() <= tol(depth), "depth {depth}: untouched {x},{y}: {got:?}");
         }
-        assert_eq!(s.active().unwrap().history.undo_label(), Some("Patch (Content-Aware)"));
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Patch Selection"));
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(rgba(&s, 44, 24)[1], 0.0, "depth {depth}: undo brings the blemish back");
     }
@@ -1851,6 +1851,104 @@ fn live_dab_strokes_commit_their_pixels_and_they_are_the_commands() {
                 assert!(layer_pixels(&s) == want, "{cmd} at {depth}-bit, hardness {hardness}: the live pixels aren't the command's");
                 s.execute("edit.undo", json!({})).unwrap();
                 assert!(layer_pixels(&s) == before, "{cmd} {depth} {hardness}: undo restores the layer");
+                s.execute("edit.redo", json!({})).unwrap();
+                assert_eq!(layer_pixels(&s), want, "{cmd} {depth} {hardness}: redo restores the live commit");
+                s.execute("edit.undo", json!({})).unwrap();
+            }
+        }
+    }
+}
+
+/// Compare every displayed batch and the finishing dabs with the former StrokeRenderer path,
+/// including features whose coverage is unnecessary to sequential effects (dual tips/Wet Edges).
+#[test]
+fn live_dab_batches_match_the_accumulating_renderer() {
+    use photocraft_paint::{GrayTile, StrokeRenderer, TipShape};
+
+    for depth in DEPTHS {
+        let mut s = session(200, 90, depth, "rgb");
+        s.execute("layer.new.layer", json!({})).unwrap();
+        paint_layer(&mut s, |x, y| {
+            let mut c = texture(x, y);
+            c[3] = 0.25 + ((x + y) % 7) as f32 * 0.1;
+            c
+        });
+        let id = s.active().unwrap().active_layer.unwrap();
+        let pre = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
+        for case in ["soft", "hard", "sampled", "dynamics", "smoothing"] {
+            s.tools.brush = BrushSettings::default();
+            match case {
+                "sampled" => s.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(9, 7, |x, y| ((x * 3 + y) % 11) as f32 / 10.0)),
+                "dynamics" => {
+                    let b = &mut s.tools.brush;
+                    b.scattering.enabled = true;
+                    b.scattering.scatter.jitter = 0.5;
+                    b.scattering.count = 2;
+                    b.shape_dynamics.enabled = true;
+                    b.shape_dynamics.angle.jitter = 0.7;
+                    b.shape_dynamics.size.jitter = 0.3;
+                    b.dual_brush.enabled = true;
+                    b.dual_brush.size = 12.0;
+                    b.wet_edges = true;
+                    b.noise = true;
+                    b.texture.enabled = true;
+                    b.texture.each_tip = true;
+                    b.texture.pattern = photocraft_paint::Pattern::Tile(GrayTile::from_fn(3, 3, |x, y| (x + y) as f32 / 4.0));
+                }
+                "smoothing" => s.tools.brush.smoothing.amount = 0.65,
+                _ => {}
+            }
+            let points = [
+                StrokePoint::new(-5.0, 30.0, 0.3),
+                StrokePoint::new(70.0, 40.0, 1.0),
+                StrokePoint::new(150.0, 55.0, 0.6),
+                StrokePoint::new(60.0, 35.0, 0.8),
+                StrokePoint::new(61.0, 35.5, 0.2),
+            ];
+            for (cmd, extra) in dab_cases() {
+                let mut p = dab_opts(&[[-5.0, 30.0]], if case == "hard" { 100 } else { 0 }, &extra);
+                p["points"] = json!([[-5.0, 30.0, 0.3]]);
+                p["opacity"] = json!(57);
+                p["flow"] = json!(63);
+                let (stroke, _) = parse_brush(&s, &p, cmd).unwrap();
+                let (tool, _) = DabTool::parse(&s, cmd, &p, &stroke).unwrap();
+                let mut effect = tool.effect(pre.format(), stroke.brush.spacing);
+                let mut reference = StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
+                // A fixed region containing all dabs plus their read neighbourhoods.
+                let orig = Region::read(&pre, Rect::new(-128, -128, 384, 256));
+                let mut work = orig.clone();
+                let mut shown = pre.clone();
+                let mut done = 0;
+                let mut live = LiveDab::begin(&s, cmd, &p).unwrap();
+                let mut bounds = Rect::EMPTY;
+                let mut render_new = |reference: &StrokeRenderer| {
+                    let mut damage = Rect::EMPTY;
+                    for (i, dab) in reference.dabs().iter().enumerate().skip(done) {
+                        let fp = reference.ctx.footprint(dab, i);
+                        effect(&mut work, &fp);
+                        damage = damage.union(&fp.rect);
+                    }
+                    done = reference.dabs().len();
+                    if !damage.is_empty() {
+                        photocraft_paint::retouch::mix_back(&mut shown, &orig, &work, damage, stroke.brush.opacity, None, false);
+                    }
+                    bounds = bounds.union(&damage);
+                    (bounds, shown.read_region(bounds))
+                };
+                for (batch_index, batch) in std::iter::once(&points[..1]).chain(points[1..].chunks(2)).enumerate() {
+                    reference.push(batch);
+                    if batch_index > 0 {
+                        live.push(batch).unwrap();
+                    }
+                    let (bounds, expected) = render_new(&reference);
+                    let actual = live.doc.layer(id).unwrap().surface().unwrap();
+                    assert!(actual.read_region(bounds) == expected, "{cmd} {depth} {case} batch={batch_index}");
+                }
+                reference.finish();
+                let (bounds, expected) = render_new(&reference);
+                let commit = live.into_commit(&s).unwrap();
+                assert_eq!(commit.bounds, bounds, "{cmd} {depth} {case}: final damage");
+                assert!(commit.surface.read_region(bounds) == expected, "{cmd} {depth} {case}: finishing dabs");
             }
         }
     }
@@ -2432,5 +2530,194 @@ fn periodic_clone_interior_matches_ordinary_brush_masks_and_transparency() {
             let error = a.iter().zip(&b).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
             assert!(error <= tolerance, "depth={depth}, brush={brush}, max native-channel error={error}");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// View › Pattern Preview: Clone Stamp and Healing Brush wrap across the canvas edges (#8883)
+// ---------------------------------------------------------------------------------------------
+
+/// The canvas the Pattern Preview tests wrap around.
+const WRAP: (u32, u32) = (48, 36);
+
+/// `texture` repeated every canvas, so each copy of a pixel holds the same colour.
+fn tiled_texture(x: i32, y: i32) -> [f32; 4] {
+    texture(x.rem_euclid(WRAP.0 as i32), y.rem_euclid(WRAP.1 as i32))
+}
+
+/// A stroke from just inside the corner where the middle copy of a three-by-three tiling meets
+/// the next copies, out across both of its edges.
+fn corner_stroke(extra: &Value) -> Value {
+    let mut p = json!({"points": [[84, 64], [106, 79]], "size": 12, "hardness": 100});
+    for (k, v) in extra.as_object().unwrap() {
+        p[k] = v.clone();
+    }
+    p
+}
+
+/// The stroke tools that wrap, with their options. Both composite a paint image through the
+/// stroke's coverage (`periodic::Composite`), which matches the ordinary composite only within
+/// rounding.
+fn wrap_cases() -> [(&'static str, Value); 2] {
+    [("paint.healingBrush", json!({"offset": [-20, -14]})), ("paint.cloneStamp", json!({"offset": [-20, -14]}))]
+}
+
+/// The native-channel difference `periodic::Composite` may leave against the ordinary composite.
+fn composite_tolerance(depth: u64) -> f32 {
+    match depth {
+        8 => 1.1 / 255.0,
+        16 => 1.1 / 65535.0,
+        _ => 0.00001,
+    }
+}
+
+#[test]
+fn every_wrapping_stroke_paints_the_canvas_as_on_the_canvas_tiled_three_by_three() {
+    // A stroke with `"wrap": true` gives each pixel of the canvas what the same stroke gives the
+    // copy of that pixel it goes over, on a document holding the canvas tiled three by three.
+    let (w, h) = (WRAP.0 as usize, WRAP.1 as usize);
+    for depth in DEPTHS {
+        for (cmd, extra) in wrap_cases() {
+            let mut canvas = session(WRAP.0, WRAP.1, depth, "rgb");
+            paint_layer(&mut canvas, tiled_texture);
+            let mut tiled = session(3 * WRAP.0, 3 * WRAP.1, depth, "rgb");
+            paint_layer(&mut tiled, tiled_texture);
+            let (mut wrapped, plain) = (corner_stroke(&extra), corner_stroke(&extra));
+            wrapped["wrap"] = json!(true);
+            canvas.execute(cmd, wrapped).unwrap_or_else(|e| panic!("{cmd} at {depth}: {e}"));
+            let before = layer_pixels(&tiled);
+            tiled.execute(cmd, plain).unwrap();
+            let (got, want) = (layer_pixels(&canvas), layer_pixels(&tiled));
+            let n = got.len() / (w * h);
+            let at = |x: usize, y: usize| (y * 3 * w + x) * n..(y * 3 * w + x + 1) * n;
+            let tolerance = composite_tolerance(depth);
+            let (mut moved, mut edges) = (0, [false; 4]);
+            for y in 0..h {
+                for x in 0..w {
+                    let copies = (0..3).flat_map(|j| (0..3).map(move |i| (x + i * w, y + j * h)));
+                    let changed: Vec<_> = copies.filter(|&(u, v)| want[at(u, v)] != before[at(u, v)]).collect();
+                    let (pixel, expected) = match changed.as_slice() {
+                        [] => (&got[(y * w + x) * n..][..n], &before[at(x, y)]),
+                        [(u, v)] => (&got[(y * w + x) * n..][..n], &want[at(*u, *v)]),
+                        _ => panic!("{cmd}: ({x}, {y}) has two copies under the stroke"),
+                    };
+                    let error = pixel.iter().zip(expected).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                    assert!(error <= tolerance, "{cmd} {extra} at {depth}-bit: ({x}, {y}) is off by {error}");
+                    if !changed.is_empty() {
+                        moved += 1;
+                        edges[0] |= x < 8;
+                        edges[1] |= x >= w - 8;
+                        edges[2] |= y < 8;
+                        edges[3] |= y >= h - 8;
+                    }
+                }
+            }
+            assert!(moved > 150 && edges.iter().all(|&e| e), "{cmd} {extra} at {depth}-bit: the stroke crossed both edges ({moved} px, {edges:?})");
+        }
+    }
+}
+
+#[test]
+fn a_wrapped_stroke_inside_the_canvas_paints_as_an_ordinary_one() {
+    let p = json!({"points": [[130, 110], [150, 118], [168, 112]], "size": 14, "hardness": 60});
+    for depth in [8, 32] {
+        for (cmd, extra) in wrap_cases() {
+            let run = |wrap: bool| {
+                let mut s = session(300, 230, depth, "rgb");
+                paint_layer(&mut s, tiled_texture);
+                let mut q = p.clone();
+                for (k, v) in extra.as_object().unwrap() {
+                    q[k] = v.clone();
+                }
+                q["wrap"] = json!(wrap);
+                s.execute(cmd, q).unwrap();
+                layer_pixels(&s)
+            };
+            let (plain, wrapped) = (run(false), run(true));
+            let error = plain.iter().zip(&wrapped).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(error <= composite_tolerance(depth), "{cmd} {extra} at {depth}-bit: off by {error}");
+        }
+    }
+}
+
+#[test]
+fn a_wrapped_dab_bigger_than_the_canvas_stays_on_it() {
+    for (cmd, extra) in wrap_cases() {
+        let mut s = session(16, 12, 8, "rgb");
+        paint_layer(&mut s, tiled_texture);
+        let before = layer_pixels(&s);
+        let mut p = json!({"points": [[8, 6], [30, 20]], "size": 60, "hardness": 0, "wrap": true});
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        let r = s.execute(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        let d = r["damage"].as_array().map(|d| d.iter().filter_map(Value::as_i64).collect::<Vec<_>>()).unwrap_or_default();
+        assert!(matches!(d.as_slice(), [x, y, w, h] if *x >= 0 && *y >= 0 && x + w <= 16 && y + h <= 12), "{cmd}: damage {d:?} is on the canvas");
+        let st = s.active().unwrap();
+        let surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+        assert!([(-1, 5), (16, 5), (5, -1), (5, 12), (40, 30)].iter().all(|&(x, y)| surf.rgba(x, y)[3] == 0.0), "{cmd}: nothing lands off the canvas");
+        assert!(layer_pixels(&s) != before, "{cmd} {extra}: the stroke changed the canvas");
+    }
+}
+
+#[test]
+fn the_tools_the_reference_application_does_not_wrap_stop_at_the_canvas_edge() {
+    // Measured in the reference application: in Pattern Preview the Clone Stamp and Healing
+    // Brush carry a stroke on across the canvas edges, but Blur … Sponge, Color Replacement,
+    // Background Eraser, Pattern Stamp and History Brush warn that they don't wrap, and Spot
+    // Healing stops at the edge too. Their `wrap` stroke over the corner paints as the same
+    // stroke without it.
+    let points = [[36.0, 24.0], [58.0, 39.0]];
+    let cases = [
+        ("paint.blur", json!({"strength": 80})),
+        ("paint.sharpen", json!({"strength": 60})),
+        ("paint.smudge", json!({"strength": 70})),
+        ("paint.dodge", json!({"exposure": 60})),
+        ("paint.burn", json!({"exposure": 40})),
+        ("paint.sponge", json!({"mode": "saturate"})),
+        ("paint.colorReplacement", json!({"color": "#ff8000", "tolerance": 60})),
+        ("paint.backgroundEraser", json!({"tolerance": 40})),
+        ("paint.patternStamp", json!({"pattern": "Checkerboard"})),
+        ("paint.patternStamp", json!({"pattern": "Bricks", "impressionist": true, "seed": 7})),
+        ("paint.historyBrush", json!({"state": 1})),
+        ("paint.spotHealing", json!({"type": "contentAware"})),
+    ];
+    for (cmd, extra) in cases {
+        let run = |wrap: bool| {
+            let mut s = session(WRAP.0, WRAP.1, 8, "rgb");
+            paint_layer(&mut s, tiled_texture);
+            // Painted over since history state 1, so the History Brush has something to bring back.
+            paint_layer(&mut s, |x, y| tiled_texture(x + 7, y + 5));
+            let mut p = dab_opts(&points, 100, &extra);
+            p["size"] = json!(12);
+            p["wrap"] = json!(wrap);
+            let before = layer_pixels(&s);
+            s.execute(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+            (before, layer_pixels(&s))
+        };
+        let ((before, plain), (_, wrapped)) = (run(false), run(true));
+        assert!(plain != before, "{cmd} {extra}: the stroke paints inside the canvas");
+        assert!(wrapped == plain, "{cmd} {extra}: nothing comes back at the opposite edges");
+    }
+}
+
+#[test]
+fn live_history_and_pattern_strokes_stop_at_the_canvas_edge() {
+    // The History Brush and aligned Pattern Stamp previews stop at the edge as their commits do.
+    let points = [[36.0, 24.0], [58.0, 39.0]];
+    let pts: Vec<_> = points.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect();
+    for (cmd, extra) in [("paint.historyBrush", json!({"state": 1})), ("paint.patternStamp", json!({"pattern": "Checkerboard"}))] {
+        let bounds = |wrap: bool| {
+            let mut s = session(WRAP.0, WRAP.1, 8, "rgb");
+            paint_layer(&mut s, tiled_texture);
+            paint_layer(&mut s, |_, _| [0.15, 0.2, 0.7, 1.0]);
+            let mut p = dab_opts(&points[..1], 100, &extra);
+            p["size"] = json!(12);
+            p["wrap"] = json!(wrap);
+            let mut live = LiveRetouch::begin(&s, cmd, &p).unwrap();
+            live.push(&pts[1..]).unwrap();
+            live.bounds()
+        };
+        assert_eq!(bounds(true), bounds(false), "{cmd}: the live stroke stays where it was drawn");
     }
 }
