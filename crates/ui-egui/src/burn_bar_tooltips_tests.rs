@@ -314,7 +314,7 @@ fn tooltips_remain_reachable_in_narrow_bars_at_supported_scales() {
                         assert_eq!(h.state().ui.tool_options.exposure, 37.0, "Exposure remains editable at {scale}x");
                     }
                     Role::CheckBox => assert!(!h.state().ui.tool_options.protect_tones, "Protect Tones still toggles at {scale}x"),
-                    _ => unreachable!("the three shared Burn/Dodge controls"),
+                    _ => panic!("unexpected Burn/Dodge control role: {role:?}"),
                 }
             }
         }
