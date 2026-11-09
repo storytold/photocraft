@@ -198,11 +198,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // doesn't hide them.)
             let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !ui.input(|i| i.pointer.primary_down());
             let ctx = ui.ctx().clone();
-            let footer = (if t.pro { 8.0 } else { 14.0 })
-                + chips_height(t.pro, t.round_chips, t.round_chips && double)
-                + 8.0
-                + if double { bx } else { bx * 2.0 + 3.0 }
-                + 6.0;
+            let footer = (if t.pro { 8.0 } else { 14.0 }) + chips_height(t.pro, t.round_chips, double) + 8.0 + if double { bx } else { bx * 2.0 + 3.0 } + 6.0;
             // As tall as the tools, so the colour chips sit right under them (Photoshop); a column
             // taller than the window scrolls and keeps the chips at the bottom.
             egui::ScrollArea::vertical()
@@ -517,13 +513,19 @@ pub fn paint_toolbar_flyout_indicator(ui: &mut egui::Ui, tokens: &Tokens, resp: 
     ui.painter().add(egui::Shape::convex_polygon(tri, tokens.text_faint, Stroke::NONE));
 }
 
-/// Colour chips: chip size and the background chip's offset (points).
-fn chip_metrics(pro: bool) -> (f32, f32) {
-    if pro { (18.0, 10.0) } else { (21.0, 12.0) }
+/// Colour chips: chip size and the background chip's offset (points). Photoshop's two-column
+/// toolbar draws the chips a little bigger, about a third (#5664).
+pub(super) fn chip_metrics(pro: bool, double: bool) -> (f32, f32) {
+    match (pro, double) {
+        (true, false) => (18.0, 10.0),
+        (true, true) => (24.0, 13.0),
+        (false, false) => (21.0, 12.0),
+        (false, true) => (28.0, 16.0),
+    }
 }
 
 /// Height of the default-colours and swap icons over the chips.
-const CHIP_ICON: f32 = 13.0;
+pub(super) const CHIP_ICON: f32 = 13.0;
 
 /// Studio themes: round chip diameter and the background chip's vertical offset (points).
 pub(super) const STUDIO_CHIP: (f32, f32) = (30.0, 19.0);
@@ -534,15 +536,15 @@ const STUDIO_ROW: f32 = 15.0;
 /// Room above the stacked round chips so Default Colors, at their top-right, clears them.
 const STUDIO_TOP: f32 = 6.0;
 
-/// Height of the colour chips block.
-pub(super) fn chips_height(pro: bool, studio: bool, wide: bool) -> f32 {
-    if studio && wide {
+/// Height of the colour chips block, in one or two (`double`) tool columns.
+pub(super) fn chips_height(pro: bool, studio: bool, double: bool) -> f32 {
+    if studio && double {
         return STUDIO_CHIP.0 + STUDIO_ROW;
     }
     if studio {
         return STUDIO_TOP + STUDIO_CHIP.0 + STUDIO_CHIP.1 + STUDIO_ROW;
     }
-    let (chip, step) = chip_metrics(pro);
+    let (chip, step) = chip_metrics(pro, double);
     CHIP_ICON + 3.0 + chip + step
 }
 
@@ -553,12 +555,12 @@ pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_column
     let t = Tokens::get(ui.ctx());
     // Studio themes: round chips stacked vertically, the controls below them.
     let studio = t.round_chips;
-    let (chip, step) = if studio { STUDIO_CHIP } else { chip_metrics(t.pro) };
+    let (chip, step) = if studio { STUDIO_CHIP } else { chip_metrics(t.pro, two_columns) };
     // With two tool columns (a short window) the round chips lie side by side, which saves height.
     let wide = studio && two_columns;
     let group = if studio && !wide { chip } else { chip + step };
     let w = column.max(group);
-    let (rect, _) = ui.allocate_exact_size(vec2(w, chips_height(t.pro, studio, wide)), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(w, chips_height(t.pro, studio, two_columns)), Sense::hover());
     let left = (rect.left() + (w - group) / 2.0).round();
     let (fg, bg) = if wide {
         let fg = Rect::from_min_size(pos2(left, rect.top()), vec2(chip, chip));
