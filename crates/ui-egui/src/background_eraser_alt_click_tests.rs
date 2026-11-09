@@ -161,21 +161,23 @@ fn a_click_without_alt_still_erases() {
 /// While ⌥ is held the cursor is the Eyedropper's pipette (`pipette_cursor`), where the
 /// Background Eraser otherwise shows its own tip; Control+⌥ keeps the tip.
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn alt_shows_the_eyedropper_cursor() {
     let mut h = background_eraser();
     let p = screen(&h, 150.0, 50.0);
-    let pipette = |h: &mut Harness<'static, PhotocraftApp>, m: Modifiers| {
+    let cursor = |h: &mut Harness<'static, PhotocraftApp>, m: Modifiers| {
         mods(h, m);
         h.hover_at(p);
         h.run_steps(2);
-        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-icon-cursor"));
-        let shown = h.ctx.memory(|memory| memory.areas().visible_layer_ids().contains(&layer));
-        (shown, h.output().platform_output.cursor_icon)
+        let output = &h.output().platform_output;
+        (output.cursor_icon, output.cursor_image.clone())
     };
-    assert_eq!(pipette(&mut h, Modifiers::ALT), (true, egui::CursorIcon::None), "⌥: the pipette replaces the pointer");
-    assert!(!pipette(&mut h, Modifiers::NONE).0, "without ⌥: the eraser's own tip");
-    assert!(!pipette(&mut h, Modifiers::ALT | Modifiers::CTRL).0, "Control+⌥ is not the Eyedropper");
-    assert!(pipette(&mut h, Modifiers::ALT).0, "⌥ again: the pipette again");
+    let pipette = cursor(&mut h, Modifiers::ALT);
+    assert_eq!(pipette.0, egui::CursorIcon::Crosshair, "the native pipette has a visible OS fallback");
+    assert!(pipette.1.is_some(), "⌥ uses an OS pipette bitmap");
+    assert_ne!(cursor(&mut h, Modifiers::NONE), pipette, "without ⌥: the eraser's own tip");
+    assert_ne!(cursor(&mut h, Modifiers::ALT | Modifiers::CTRL), pipette, "Control+⌥ is not the Eyedropper");
+    assert_eq!(cursor(&mut h, Modifiers::ALT), pipette, "⌥ again: the same pipette bitmap");
 }
 
 /// Control+⌥-drag stays the brush-resize gesture: it samples nothing and erases nothing.
