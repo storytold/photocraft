@@ -94,9 +94,14 @@ const BAND_BYTES: usize = 32 << 20;
 /// layer in: each ends on a tile row boundary, so no tile is written by two bands, and holds
 /// about [`BAND_BYTES`] of `row_bytes`-byte rows.
 fn band_rows(top: i32, h: usize, row_bytes: usize) -> Vec<(usize, usize)> {
+    row_bands(top, h, band_height(row_bytes))
+}
+
+/// Rows in a band of a layer with `row_bytes`-byte interleaved rows: a positive multiple of
+/// `TILE_SIZE`. The memory budget charges a layer's working buffers for this many rows.
+pub(crate) fn band_height(row_bytes: usize) -> usize {
     let tile = TILE_SIZE as usize;
-    let rows = (BAND_BYTES / row_bytes.max(1)).max(tile) / tile * tile;
-    row_bands(top, h, rows)
+    (BAND_BYTES / row_bytes.max(1)).max(tile) / tile * tile
 }
 
 // `rows` is a positive multiple of TILE_SIZE. Mask decoding uses one tile row at a

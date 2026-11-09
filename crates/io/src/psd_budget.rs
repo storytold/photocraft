@@ -6,8 +6,8 @@
 
 use photocraft_geom::TILE_SIZE;
 use photocraft_psd::{
-    PsdFile,
-    layer::{CHANNEL_REAL_USER_MASK, CHANNEL_USER_MASK, Rect},
+    Compression, PsdFile,
+    layer::{CHANNEL_REAL_USER_MASK, CHANNEL_TRANSPARENCY, CHANNEL_USER_MASK, ChannelData, Rect},
 };
 
 use crate::IoError;
@@ -127,6 +127,12 @@ fn mul(a: u64, b: u64) -> Result<u64, IoError> {
     a.checked_mul(b).ok_or_else(overflow)
 }
 
+/// Whether decoding `channel` inflates its whole plane first: a ZIP stream can't be entered part
+/// way, while Raw and RLE channels are read a band of rows at a time.
+fn holds_whole_plane(channel: Option<&ChannelData>) -> bool {
+    matches!(channel.and_then(|c| c.compression), Some(Compression::Zip | Compression::ZipPrediction))
+}
+
 impl ImportBudget {
     fn retain(&mut self, bytes: u64) -> Result<(), IoError> {
         self.retained = self.retained.checked_add(bytes).ok_or_else(overflow)?;
@@ -164,9 +170,9 @@ impl ImportBudget {
 
 /// Computes the conservative preflight pixel memory and workspace estimate for `file`.
 ///
-/// No decoding here: even a compact ZIP stream must be refused before inflation. The sum
-/// deliberately counts full decoded planes for every compression method, plus their row
-/// buffers, interleave output and float conversion workspace.
+/// No decoding here: even a compact ZIP stream must be refused before inflation. Layers and masks
+/// are decoded into their tiles a band of rows at a time, so their workspace is one band's
+/// buffers plus the whole planes of any ZIP channels. The merged image is still decoded whole.
 pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
     let mut budget = ImportBudget::default();
     let h = &file.header;
@@ -183,9 +189,15 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
                 let (w, hh) = rec.rect.size()?;
                 let pixels = mul(w as u64, hh as u64)?;
                 budget.surface(rec.rect, cc + 1, sample)?;
-                // Whole ZIP planes + band planes + interleave + temporary float pixels.
-                // Counting a full layer for each band buffer also covers a single very wide row.
-                let workspace = mul(pixels, mul(cc + 1, sample * 3 + 4)?)?.checked_add(inflate_scratch(mul(pixels, sample)?, cc + 1)?).ok_or_else(overflow)?;
+                // One band's planes + interleave + temporary float pixels, as the importer's
+                // `band_rows` cuts them, even for a single very wide row.
+                let row_bytes = usize::try_from(mul(w as u64, mul(cc + 1, sample)?)?).unwrap_or(usize::MAX);
+                let band_rows = (super::psd_import::band_height(row_bytes) as u64).min(hh as u64);
+                let band = mul(mul(w as u64, band_rows)?, mul(cc + 1, sample * 3 + 4)?)?;
+                // The ZIP channels' planes are inflated side by side and live until the layer ends.
+                let plane = mul(pixels, sample)?;
+                let zipped = (0..cc as i16).chain([CHANNEL_TRANSPARENCY]).filter(|&id| holds_whole_plane(rec.channel(id))).count() as u64;
+                let workspace = band.checked_add(mul(plane, zipped)?).and_then(|b| b.checked_add(inflate_scratch(plane, cc + 1).ok()?)).ok_or_else(overflow)?;
                 // RLE row indexes live beside decoded planes.
                 budget.scratch(workspace.checked_add(mul(hh as u64 + 1, (cc + 1) * 8)?).ok_or_else(overflow)?);
             }
@@ -198,7 +210,10 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
                     budget.surface(rect, 1, sample)?;
                     // The layer's ZIP decoders have been dropped before record_mask runs.
                     let pixels = mul(w as u64, hh as u64)?;
-                    budget.scratch(mul(pixels, sample * 3 + 4)?.checked_add(inflate_scratch(mul(pixels, sample)?, 1)?).ok_or_else(overflow)?);
+                    let band = mul(mul(w as u64, (hh as u64).min(TILE_SIZE as u64))?, sample * 3 + 4)?;
+                    let plane = mul(pixels, sample)?;
+                    let whole = if holds_whole_plane(rec.channel(id)) { plane } else { 0 };
+                    budget.scratch(band.checked_add(whole).and_then(|b| b.checked_add(inflate_scratch(plane, 1).ok()?)).ok_or_else(overflow)?);
                 }
             }
         }

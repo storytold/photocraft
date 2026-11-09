@@ -81,6 +81,27 @@ fn user_mask_bounds_count_even_when_the_layer_is_small() {
 }
 
 #[test]
+fn a_layer_decoded_in_bands_is_not_charged_for_whole_layer_buffers() {
+    // #11465: a 7750x10963 8-bit layer was charged 2.4 GB of workspace the band decoder never uses.
+    let layer = |compression| {
+        let mut file = testgen::small(Version::Psd, compression);
+        let record = file.layers()[0].clone();
+        file.layer_info.as_mut().unwrap().layers = vec![record];
+        file.layers_mut()[0].rect = Rect::from_xywh(0, 0, 7750, 10963);
+        for channel in &mut file.layers_mut()[0].channels {
+            channel.compression = Some(compression);
+        }
+        super::estimate(&file).unwrap()
+    };
+    let rle = layer(Compression::Rle);
+    assert!(rle.workspace_bytes < 256 << 20, "{rle:?}");
+    assert!(rle.total_bytes < 1 << 30, "{rle:?}");
+    // A ZIP channel is inflated whole, so it still pays for its planes.
+    let zip = layer(Compression::Zip);
+    assert_eq!(zip.workspace_bytes, rle.workspace_bytes + 4 * 7750 * 10963, "{zip:?}");
+}
+
+#[test]
 fn merged_bitmap_and_multichannel_expansion_are_budgeted() {
     for (mode, depth) in [(ColorMode::Bitmap, 1), (ColorMode::Multichannel, 8), (ColorMode::Rgb, 32)] {
         let mut file = testgen::merged_only(Version::Psb, mode, depth, Compression::Zip, 2, 2);
@@ -331,7 +352,7 @@ fn preflight_rejection_and_approval_files_release_gate() {
 
     // Set RAM such that file falls in confirmation range
     let est = estimate(&file);
-    let snap_mid = crate::memory::MemorySnapshot { available_ram: Some(est * 2), swap_free: None, commit_headroom: None };
+    let snap_mid = crate::memory::MemorySnapshot { available_ram: Some(est / 2 * 3), swap_free: None, commit_headroom: None };
     crate::memory::with_mock_memory(snap_mid, || {
         assert!(!crate::psd_gate::is_holding_admission());
         let res = crate::import_with_options("mid.psd", &bytes, &crate::ImportOptions::default());
