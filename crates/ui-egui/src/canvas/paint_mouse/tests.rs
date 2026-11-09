@@ -5,6 +5,8 @@ use serde_json::json;
 use super::*;
 use crate::canvas::{ToolEvent, tool_event};
 
+mod right_click;
+
 fn harness(prefs: Option<&str>) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
@@ -563,6 +565,29 @@ fn the_brush_is_a_per_tool_option_that_presets_keep() {
     tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 5.0 }, Modifiers::NONE);
 }
 
+/// #10263: the Art History Brush starts at full opacity the first time it is picked, though it
+/// keeps the rest of the brush the old tool left (other tools still take its opacity).
+#[test]
+fn art_history_brush_starts_at_full_opacity() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.ui.tool = Tool::Brush;
+    sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush": {"size": 40, "opacity": 0.3}})).unwrap();
+    app.ui.tool = Tool::ArtHistoryBrush;
+    sync_tool_brush(&mut app);
+    assert_eq!(app.session.tools.brush.opacity, 1.0, "Art History starts at 100%");
+    assert_eq!(app.session.tools.brush.size, 40.0, "and inherits the size");
+    app.ui.tool = Tool::CloneStamp;
+    sync_tool_brush(&mut app);
+    assert_eq!(app.session.tools.brush.opacity, 1.0, "the Clone Stamp takes the Art History brush's opacity");
+    app.ui.tool = Tool::Brush;
+    sync_tool_brush(&mut app);
+    app.ui.tool = Tool::Eraser;
+    sync_tool_brush(&mut app);
+    assert_eq!(app.session.tools.brush.opacity, 0.3, "other tools still inherit opacity");
+}
+
 /// #218: Photoshop keeps a brush per painting tool, so the size, hardness, mode, opacity and
 /// dynamics of one tool never leak into another's, and each tool gets its own back.
 #[test]
@@ -851,4 +876,206 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
     // On a normal layer they are available again.
     h.state_mut().session.active_mut().unwrap().active_layer = Some(top);
     assert!(enabled(h.state(), Item::Behind) && enabled(h.state(), Item::Clear));
+}
+
+/// A right press at the canvas centre, a move of `by` and the release there, with `mods` held
+/// throughout; returns where the button went down.
+fn right_drag_by(h: &mut Harness<'static, PhotocraftApp>, by: egui::Vec2, mods: Modifiers) -> Pos2 {
+    let c = h.state().last_canvas_rect.center();
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.event(egui::Event::PointerMoved(c));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: PointerButton::Secondary, pressed: true, modifiers: mods });
+    h.run_steps(1);
+    for i in 1..=4 {
+        h.event(egui::Event::PointerMoved(c + by * (i as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: c + by, button: PointerButton::Secondary, pressed: false, modifiers: mods });
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    c
+}
+
+/// A high-DPI mouse moves a few pixels while its right button goes down, past egui's click
+/// distance: the right-click still opens the picker or the canvas menu, where the button went
+/// down (#10183). A right drag a gesture used (Alt+right brush resize, a right-erase stroke) opens
+/// nothing.
+#[test]
+fn a_right_click_that_moved_still_opens_its_menu() {
+    for by in [vec2(7.0, 3.0), vec2(14.0, -9.0)] {
+        let mut h = harness(None);
+        let at = right_drag_by(&mut h, by, Modifiers::NONE);
+        assert_eq!(h.state().ui.brush_picker, Some([at.x, at.y]), "moved {by:?}: the picker opens where the button went down");
+        assert!(strokes(&h).is_empty(), "and nothing paints");
+        // The canvas tool menu (Pen) and the layer menu (Move tool) read the same right-click.
+        let mut h = harness(None);
+        h.state_mut().ui.tool = Tool::Pen;
+        right_drag_by(&mut h, by, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_some(), "moved {by:?}: the Pen's menu opens");
+    }
+    // Alt+right drag resizes the brush: no picker after it.
+    let mut h = harness(None);
+    let size = h.state().session.tools.brush.size;
+    right_drag_by(&mut h, vec2(14.0, 0.0), Modifiers::ALT);
+    assert_ne!(h.state().session.tools.brush.size, size, "the drag resized the brush");
+    assert_eq!(h.state().ui.brush_picker, None, "a resize is no right-click");
+    // ... and the next plain right-click is one again.
+    right_drag_by(&mut h, vec2(8.0, 0.0), Modifiers::NONE);
+    assert!(h.state().ui.brush_picker.is_some());
+    // With right-erase on, a right drag erases and opens nothing.
+    let mut h = harness(Some("erase"));
+    right_drag_by(&mut h, vec2(14.0, 0.0), Modifiers::NONE);
+    assert_eq!(h.state().ui.brush_picker, None);
+    assert_eq!(h.state().ui.canvas_tool_menu, None);
+    // Released off the canvas: no click.
+    let mut h = harness(None);
+    let rect = h.state().last_canvas_rect;
+    right_drag_by(&mut h, vec2(rect.width(), 0.0), Modifiers::NONE);
+    assert_eq!(h.state().ui.brush_picker, None, "released outside the canvas");
+}
+
+/// The Hand tool pans with the left button, and the right one is its view menu, as in
+/// Photoshop: a right drag no longer pans and then opens the menu on release (#10183).
+#[test]
+fn a_right_drag_with_the_hand_opens_its_menu_without_panning() {
+    let mut h = harness(None);
+    h.state_mut().ui.tool = Tool::Hand;
+    h.state_mut().ui.views[0].zoom = 4.0;
+    h.run_steps(2);
+    let center = h.state().ui.views[0].center;
+    right_drag_by(&mut h, vec2(14.0, 7.0), Modifiers::NONE);
+    assert_eq!(h.state().ui.views[0].center, center, "a right drag does not pan");
+    let menu = h.state().ui.canvas_tool_menu.as_ref().map(|m| m.tool);
+    assert_eq!(menu, Some(Tool::Hand), "it opens the Hand's view menu");
+    // A left drag still pans, and opens no menu.
+    h.state_mut().ui.canvas_tool_menu = None;
+    drag(&mut h, PointerButton::Primary);
+    assert_ne!(h.state().ui.views[0].center, center, "a left drag pans");
+    assert!(h.state().ui.canvas_tool_menu.is_none());
+    // The middle button still pans with any tool.
+    h.state_mut().ui.tool = Tool::Brush;
+    let center = h.state().ui.views[0].center;
+    drag(&mut h, PointerButton::Middle);
+    assert_ne!(h.state().ui.views[0].center, center, "a middle drag pans");
+    assert!(strokes(&h).is_empty());
+}
+
+/// A right-click whose move past the click distance and release arrive in one frame (a slow
+/// frame): egui reports neither a click nor a drag stop, and the menu still opens (#10183).
+/// `split` puts the press in an earlier frame; otherwise press, move and release share one.
+/// The events go straight into the frame's input: `Harness::event` runs a frame per event.
+fn right_click_in_one_frame(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2, split: bool) {
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    let press = egui::Event::PointerButton { pos: from, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE };
+    let release =
+        [egui::Event::PointerMoved(to), egui::Event::PointerButton { pos: to, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }];
+    if split {
+        h.input_mut().events.push(press);
+        h.run_steps(1);
+        h.input_mut().events.extend(release);
+    } else {
+        h.input_mut().events.extend([press].into_iter().chain(release));
+    }
+    h.run_steps(2);
+}
+
+#[test]
+fn a_right_click_moved_and_released_in_one_frame_still_opens_its_menu() {
+    for split in [true, false] {
+        let mut h = harness(None);
+        let c = h.state().last_canvas_rect.center();
+        let at = c + vec2(14.0, 6.0);
+        right_click_in_one_frame(&mut h, c, at, split);
+        let picker = h.state().ui.brush_picker.map(|p| (p[0] - c.x).abs() < 0.5 && (p[1] - c.y).abs() < 0.5);
+        assert_eq!(picker, Some(true), "split {split}: the picker opens where the button went down");
+        assert!(strokes(&h).is_empty(), "and nothing paints");
+        // The canvas tool menu reads the same click.
+        let mut h = harness(None);
+        h.state_mut().ui.tool = Tool::Pen;
+        right_click_in_one_frame(&mut h, c, at, split);
+        assert!(h.state().ui.canvas_tool_menu.is_some(), "split {split}: the Pen's menu opens");
+        // Released outside the canvas: no click.
+        let mut h = harness(None);
+        let out = c + vec2(h.state().last_canvas_rect.width(), 0.0);
+        right_click_in_one_frame(&mut h, c, out, split);
+        assert_eq!(h.state().ui.brush_picker, None, "split {split}: released outside the canvas");
+        // Pressed outside the canvas, released over it: no click either.
+        let mut h = harness(None);
+        right_click_in_one_frame(&mut h, out, c, split);
+        assert_eq!(h.state().ui.brush_picker, None, "split {split}: pressed outside the canvas");
+    }
+    // A right-erase stroke that ends with a fast move and release opens nothing.
+    let mut h = harness(Some("erase"));
+    let c = h.state().last_canvas_rect.center();
+    h.event(egui::Event::PointerMoved(c));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for i in 1..=4 {
+        h.event(egui::Event::PointerMoved(c + vec2(10.0 * i as f32, 0.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerMoved(c + vec2(80.0, 0.0)));
+    h.event(egui::Event::PointerButton { pos: c + vec2(80.0, 0.0), button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().ui.brush_picker, None);
+    assert_eq!(h.state().ui.canvas_tool_menu, None);
+}
+
+/// #11897: Clear chosen on a pixel layer, then the Background activated: a Brush stroke there
+/// paints the foreground, and the Mode reads Normal afterwards.
+#[test]
+fn chosen_clear_paints_normally_on_the_background_and_the_mode_reads_normal() {
+    let mut h = harness(None);
+    h.state_mut().ui.tool_options.brush_clear = true;
+    let bg = h.state().session.active().unwrap().doc.background().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.run_steps(2);
+    let (a, b) = drag(&mut h, PointerButton::Primary);
+    assert!(!h.state().ui.tool_options.brush_clear, "the Mode reads Normal");
+    let last = strokes(&h).last().cloned().unwrap();
+    assert!(last.get("mode").is_none() && !last["erase"].as_bool().unwrap(), "{last}");
+    let app = h.state();
+    let v = app.ui.views[0].clone();
+    let d = ((a + (b - a) * 0.5) - app.last_canvas_rect.center()) / v.zoom;
+    let st = app.session.active().unwrap();
+    let px = st.doc.layer(bg).unwrap().surface().unwrap().rgba((d.x + v.center[0]) as i32, (d.y + v.center[1]) as i32);
+    assert!(px[2] > 0.9 && px[0] < 0.1, "the foreground blue, not the background colour: {px:?}");
+}
+
+/// #11897: a Background with Lock All refuses the stroke, so a chosen Clear stays chosen.
+#[test]
+fn chosen_clear_stays_on_a_locked_background() {
+    let mut h = harness(None);
+    h.state_mut().ui.tool_options.brush_clear = true;
+    let bg = h.state().session.active().unwrap().doc.background().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.state_mut().run("layer.lockLayers", json!({"all": true})).unwrap();
+    h.run_steps(2);
+    drag(&mut h, PointerButton::Primary);
+    assert!(h.state().ui.tool_options.brush_clear, "the Mode still reads Clear");
+}
+
+/// #11897: a held `~` on the Background keeps erasing to the background colour.
+#[test]
+fn held_tilde_on_the_background_paints_the_background_colour() {
+    let mut h = harness(None);
+    h.state_mut().run("tools.setColors", json!({"background": "#00ff00"})).unwrap();
+    let bg = h.state().session.active().unwrap().doc.background().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: egui::Key::Backtick, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    let (a, b) = drag(&mut h, PointerButton::Primary);
+    h.event(egui::Event::Key { key: egui::Key::Backtick, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert_eq!(strokes(&h).last().unwrap()["mode"], json!("clear"));
+    let app = h.state();
+    let v = app.ui.views[0].clone();
+    let d = ((a + (b - a) * 0.5) - app.last_canvas_rect.center()) / v.zoom;
+    let st = app.session.active().unwrap();
+    let px = st.doc.layer(bg).unwrap().surface().unwrap().rgba((d.x + v.center[0]) as i32, (d.y + v.center[1]) as i32);
+    assert!(px[1] > 0.9 && px[0] < 0.1 && px[2] < 0.1, "the background green, not the foreground blue: {px:?}");
 }
