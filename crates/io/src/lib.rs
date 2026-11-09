@@ -948,7 +948,6 @@ pub(crate) enum Route {
     GzippedXcf,
     Pdn,
     Raw,
-    Pdf,
     Svg,
     /// A `.psd`/`.psb`/`.psdt` with no raster signature.
     NamedPsd,
@@ -992,9 +991,6 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     if raw::is_raw(bytes) {
         return Route::Raw;
     }
-    if is_pdf_input(name, bytes) {
-        return Route::Pdf;
-    }
     if is_svg_input(name, bytes) {
         return Route::Svg;
     }
@@ -1037,10 +1033,6 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
         Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
         Route::Raw => raw::import_raw_demosaic(name, bytes, opts.demosaic),
-        Route::Pdf => {
-            let defaults = pdf_import_dialog::PdfOpenOptions::default();
-            pdf_import_dialog::import_pdf(name, bytes, opts.pdf.as_ref().unwrap_or(&defaults), ctl)
-        }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }
