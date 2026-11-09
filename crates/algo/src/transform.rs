@@ -549,7 +549,10 @@ fn warp(
                     }
                 }
                 let al = acc[a].clamp(0.0, 1.0);
-                if al <= 0.0 {
+                // Float noise (a pixel centre half a pixel past an edge on the grid gets a
+                // coverage of 1e-8, not 0) must not leave invisible colour behind in transparent
+                // pixels, where it would count as content.
+                if al <= 1e-6 {
                     continue;
                 }
                 any = true;

@@ -86,6 +86,25 @@ impl Depth {
     }
 }
 
+/// Clears the colour of every fully transparent pixel in `data` (interleaved pixels of `fmt`): the
+/// renders bleed the nearest visible colour into transparent source pixels, as the reference
+/// application filters them, and that colour must not stay behind under alpha 0, where it would
+/// count as the layer's content.
+pub(crate) fn clear_hidden(data: &mut [f32], fmt: &photocraft_color::PixelFormat) {
+    let n = fmt.channels();
+    if !fmt.alpha || n < 2 {
+        return;
+    }
+    for p in data.chunks_exact_mut(n) {
+        if let Some((al, colour)) = p.split_last_mut()
+            && *al <= 0.0
+        {
+            colour.fill(0.0);
+            *al = 0.0;
+        }
+    }
+}
+
 /// The pixels of `src` inside `bounds` (its contents' canvas; `src` has alpha), resized to
 /// `width` × `height` as the reference application draws a scaled smart object, placed with its
 /// top-left corner at `origin`. `None` for an empty size or one past [`MAX_SAMPLES`].
@@ -126,6 +145,7 @@ pub fn scale(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i32,
             *v /= unit;
         }
     });
+    crate::smart_scale::clear_hidden(&mut data, &fmt);
     out.write_region_par(Rect::new(origin.0, origin.1, origin.0 + width as i32, origin.1 + height as i32), &data);
     Some(out)
 }

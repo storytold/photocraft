@@ -292,6 +292,7 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
             *v /= unit;
         }
     });
+    crate::smart_scale::clear_hidden(&mut data, &fmt);
     surface.write_region_par(Rect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32), &data);
     Some(surface)
 }
@@ -332,6 +333,22 @@ mod tests {
         assert_eq!(r.at(0, 0, 0), 0.0);
         assert_eq!(r.at(1, 0, 0), 1.0);
         assert!(r.px.iter().all(|v| v.fract() == 0.0), "rounded to whole levels");
+    }
+
+    /// A rotated render leaves no colour under alpha 0: the bled colour of the transparent
+    /// surround is cleared, so the layer's content ends where it is visible.
+    #[test]
+    fn a_rotation_leaves_no_colour_in_transparent_pixels() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        s.fill_rect(Rect::new(0, 0, 40, 30), &[1.0, 0.0, 0.0, 1.0]);
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        let out = render(&s, Rect::new(0, 0, 40, 30), [cos, sin, -sin, cos, 20.0, 5.0]).expect("rendered");
+        let b = out.content_bounds();
+        let px = out.read_region(b);
+        let hidden = px.chunks(4).filter(|p| p[3] == 0.0 && p[..3].iter().any(|v| *v != 0.0)).count();
+        assert_eq!(hidden, 0, "colour under alpha 0");
+        assert!(px.chunks(4).any(|p| p[3] > 0.99), "the picture is drawn");
     }
 
     /// The probe source: 128 x 128, each row one grey from a 32-bit LCG (seed 777), opaque.

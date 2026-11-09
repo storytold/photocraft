@@ -422,3 +422,16 @@ fn edge_coverage_is_the_area_inside() {
         assert!((0.0..=1.0).contains(&c), "{d}: {c}");
     }
 }
+
+/// A layer scaled to 108 % from its left edge on the pixel grid leaves nothing in the pixels
+/// past its edges, colour included: the edge's coverage there is float noise (1e-8), which wrote
+/// colour under an alpha that stored as 0 and grew the layer's bounds by a pixel.
+#[test]
+fn a_scale_leaves_no_colour_past_an_edge_on_the_grid() {
+    let mut s = rgba();
+    s.fill_rect(Rect::new(10, 10, 110, 70), &[0.2, 0.4, 0.6, 1.0]);
+    let k = 1.08;
+    let h = Homography([k, 0.0, 10.0 - 10.0 * k, 0.0, k, 10.0 - 10.0 * k, 0.0, 0.0, 1.0]);
+    let out = warp_surface(&s, Rect::new(10, 10, 110, 70), &h, Interp::Bicubic).unwrap();
+    assert_eq!(out.content_bounds(), Rect::new(10, 10, 118, 75));
+}

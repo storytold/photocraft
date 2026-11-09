@@ -255,6 +255,7 @@ fn render_with(src: &Surface, bounds: Rect, h: [f64; 9], kernel: Option<(f64, f6
             *v /= unit;
         }
     });
+    crate::smart_scale::clear_hidden(&mut data, &fmt);
     let rect = Rect::new(i32::try_from(x0).ok()?, i32::try_from(y0).ok()?, i32::try_from(x0 + out.w as i64).ok()?, i32::try_from(y0 + out.h as i64).ok()?);
     surface.write_region_par(rect, &data);
     Some(surface)
@@ -412,7 +413,11 @@ fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9]) -> Option<Surface> {
     let mirrored = plan(&transposed(h), hgt, w);
     let (p, turned) = match (normal, mirrored) {
         (Some(n), Some(m)) => {
-            if m.area < n.area * (1.0 - 1e-9) { (m, true) } else { (n, false) }
+            if m.area < n.area * (1.0 - 1e-9) {
+                (m, true)
+            } else {
+                (n, false)
+            }
         }
         (Some(n), None) => (n, false),
         (None, Some(m)) => (m, true),
@@ -574,7 +579,17 @@ mod tests {
     #[test]
     fn a_cascade_loses_the_bottom_row_its_intermediate_buffer_cannot_hold() {
         use photocraft_color::{ColorMode, PixelFormat, SampleType};
-        let h = [0.5001371796382342, 0.024111162934328828, 101.48460242572091, -0.2210246357031403, 1.0279091153627808, 102.55647359375378, -0.003193430656934307, 0.0018248175182481743, 1.0];
+        let h = [
+            0.5001371796382342,
+            0.024111162934328828,
+            101.48460242572091,
+            -0.2210246357031403,
+            1.0279091153627808,
+            102.55647359375378,
+            -0.003193430656934307,
+            0.0018248175182481743,
+            1.0,
+        ];
         let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
         s.write_region(Rect::new(0, 0, 128, 128), &vec![1.0; 128 * 128 * 4]);
         let out = render(&s, Rect::new(0, 0, 128, 128), h).expect("a general quad");
@@ -586,7 +601,17 @@ mod tests {
 
     #[test]
     fn a_moved_two_way_perspective_matches_the_reference_byte_for_byte() {
-        let h = [2.4074074074099214, 0.49382716049342734, 107.53086419753102, 0.864197530867415, 2.037037037036821, 76.6666666666538, 0.005401234567917046, 0.0030864197530817293, 1.0];
+        let h = [
+            2.4074074074099214,
+            0.49382716049342734,
+            107.53086419753102,
+            0.864197530867415,
+            2.037037037036821,
+            76.6666666666538,
+            0.005401234567917046,
+            0.0030864197530817293,
+            1.0,
+        ];
         let out = render(&dots(), Rect::new(0, 0, 128, 128), h).expect("drawn");
         assert_eq!(grey_patch(&out, 184, 126), [[95, 93, 87], [89, 129, 143], [91, 137, 165]]);
         assert_eq!(grey_patch(&out, 196, 177), [[97, 92, 93], [94, 146, 139], [95, 121, 110]]);
@@ -597,7 +622,17 @@ mod tests {
     /// plain horizontal shear through the affine walk.
     #[test]
     fn a_turned_perspective_matches_the_reference_byte_for_byte() {
-        let h = [3.015369202285501, -0.34202014332565317, 124.07807401908897, 2.0570322987729495, 0.9396926207829912, 64.76132928581427, 0.009428879310300618, 0.0, 1.0];
+        let h = [
+            3.015369202285501,
+            -0.34202014332565317,
+            124.07807401908897,
+            2.0570322987729495,
+            0.9396926207829912,
+            64.76132928581427,
+            0.009428879310300618,
+            0.0,
+            1.0,
+        ];
         let out = render(&dots(), Rect::new(0, 0, 128, 128), h).expect("drawn");
         assert_eq!(grey_patch(&out, 186, 132), [[97, 96, 96], [103, 94, 89], [91, 189, 104]]);
         assert_eq!(grey_patch(&out, 188, 167), [[96, 95, 96], [106, 140, 120], [96, 91, 90]]);
