@@ -116,6 +116,8 @@ pub struct CameraRawDialog {
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
     preview_error: Option<(String, u64)>,
+    /// A failure of [`Self::render`] (on this thread) the dialog has not reported yet.
+    render_error: Option<String>,
     /// The GPU develop, when the app may use one.
     pub(crate) gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
     /// Names [`Self::proxy`] for the GPU pass's upload cache.
@@ -214,8 +216,11 @@ impl CameraRawDialog {
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
         // A render still running on the worker has older settings than this one.
         self.pending = None;
-        let frame = self.proxy_job().run();
-        self.publish(ctx, frame);
+        match self.proxy_job().run() {
+            Ok(frame) => self.publish(ctx, frame),
+            // The preview keeps its last frame; the dialog reports the failure.
+            Err(e) => self.render_error = Some(e),
+        }
         self.dirty = false;
     }
 
@@ -272,7 +277,8 @@ impl CameraRawDialog {
             let (tx, rx) = std::sync::mpsc::channel::<Result<ProxyFrame, String>>();
             let repaint = ctx.clone();
             let spawned = std::thread::Builder::new().name("camera-raw-proxy".into()).spawn(move || {
-                let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "Camera Raw preview failed".to_string());
+                let frame =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "Camera Raw preview failed".to_string()).and_then(|r| r);
                 // The dialog may have closed or rendered on its own meanwhile; then nobody listens.
                 if tx.send(frame).is_ok() {
                     repaint.request_repaint();

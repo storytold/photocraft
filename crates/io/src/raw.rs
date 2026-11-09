@@ -175,14 +175,17 @@ fn shrink_rgb(p: RawPixels, k: usize) -> RawPixels {
     let (w, h) = (p.width.div_ceil(k), p.height.div_ceil(k));
     let mut acc = vec![[0u64; 4]; w * h];
     let rows = p.rgb.as_chunks::<3>().0;
-    for y in 0..h * k {
-        let Some(row) = rows.get(y.min(p.height - 1) * p.width..(y.min(p.height - 1) + 1) * p.width) else { continue };
+    for y in 0..p.height {
+        let Some(row) = rows.get(y * p.width..(y + 1) * p.width) else { continue };
+        // The last row also stands in for the rows that fill the last row of blocks, counted
+        // once with their weight rather than revisited.
+        let weight = if y + 1 == p.height { (h * k - y) as u64 } else { 1 };
         for (x, px) in row.iter().enumerate() {
             if let Some(a) = acc.get_mut((y / k) * w + x / k) {
                 for c in 0..3 {
-                    a[c] += u64::from(px[c]);
+                    a[c] += u64::from(px[c]) * weight;
                 }
-                a[3] += 1;
+                a[3] += weight;
             }
         }
     }
@@ -468,6 +471,19 @@ fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Im
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shrink_rgb_weights_the_repeated_last_row() {
+        // 3×5 frame by 2: the last row of blocks takes row 4 twice; columns cut short.
+        let rgb = (0..15u16).flat_map(|i| [i * 100, i * 100, i * 100]).collect();
+        let s = shrink_rgb(RawPixels { width: 3, height: 5, rgb, white_balance: false }, 2);
+        assert_eq!((s.width, s.height), (2, 3));
+        let red: Vec<u16> = s.rgb.iter().step_by(3).copied().collect();
+        assert_eq!(red, vec![200, 350, 800, 950, 1250, 1400]);
+        // A factor far beyond the frame stays one block, with no per-row work.
+        let s = shrink_rgb(RawPixels { width: 1, height: 1, rgb: vec![7, 8, 9], white_balance: true }, 1 << 40);
+        assert_eq!((s.width, s.height, s.rgb), (1, 1, vec![7, 8, 9]));
+    }
 
     #[test]
     fn the_developed_note_says_which_demosaic_method_was_used() {

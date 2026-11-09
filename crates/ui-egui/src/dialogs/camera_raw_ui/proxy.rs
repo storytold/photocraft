@@ -34,7 +34,9 @@ pub(super) struct ProxyFrame {
 }
 
 impl ProxyJob {
-    pub(super) fn run(self) -> ProxyFrame {
+    /// `Err` when the raw's sensor data can't be developed with the settings: Open would fail the
+    /// same way, so the retone does not stand in for it.
+    pub(super) fn run(self) -> Result<ProxyFrame, String> {
         let t0 = crate::gpu_canvas::now_ms();
         let (pw, ph) = self.size;
         let mut p = self.params;
@@ -43,14 +45,17 @@ impl ProxyJob {
         // Open develops them from the whole frame: highlights the default develop clipped keep
         // their colour at a lower exposure. Without the sensor data it re-tones the proxy.
         // Otherwise the GPU reads the proxy as it is and uploads it once.
-        // If that develop fails, the retone is the fallback.
+        // A binned frame of another size (a canvas changed since) falls back to the retone.
         let develop_start = crate::gpu_canvas::now_ms();
         let raw_develop = self
             .raw_source
             .as_ref()
             .map(|raw| (raw, raw_tuning(&p, raw.demosaic), raw.demosaic))
             .filter(|(_, tuning, method)| *tuning != photocraft_io::raw::RawTuning { demosaic: *method, ..Default::default() });
-        let developed = raw_develop.as_ref().and_then(|(raw, tuning, _)| raw_proxy(raw, tuning, pw, ph));
+        let developed = match &raw_develop {
+            Some((raw, tuning, _)) => raw_proxy(raw, tuning, pw, ph)?,
+            None => None,
+        };
         let retoned = match developed {
             Some((px, white_balance)) => {
                 p = after_raw_stage(&p, white_balance);
@@ -97,6 +102,6 @@ impl ProxyJob {
         let histogram = RgbHistogram::from_rgba(&px);
         let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
         let image = CameraRawDialog::image(&px, pw, ph, &self.display);
-        ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, develop_ms, backend }
+        Ok(ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, develop_ms, backend })
     }
 }

@@ -114,7 +114,7 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
     held.kept = Some((d.params.clone(), d.original.clone()));
     held.raw.demosaic = raw.demosaic;
     // The preview may not have caught up with the last edit: the thumbnail shows what was kept.
-    let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().px);
+    let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().ok().map(|f| f.px)).flatten();
     let developed = frame.as_deref().unwrap_or(&d.processed);
     if !developed.is_empty() {
         let (px, w, h) = shrink(developed, d.pw, d.ph);
