@@ -57,7 +57,7 @@
 
 # Filters and adjustments dialogs
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 
 # Adjustments panel
 
@@ -116,7 +116,7 @@
 
 # Preference dialog: generated setting labels and dropdown choices
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 
 
@@ -494,7 +494,7 @@
 	Last Filter	Останній фільтр
 	Filter Gallery…	Галерея фільтрів…
 	Liquify…	Пластика…
-	Camera Raw Filter…	Фільтр Camera Raw…
+	RAW Develop Filter…	Фільтр Обробка RAW…
 	Adaptive Wide Angle…	Адаптивний широкий кут…
 	Lens Correction…	Корекція об'єктива…
 	Vanishing Point…	Точка сходження…
@@ -1026,8 +1026,8 @@
 	Luminance Smoothness	Плавність яскравості
 	Vignetting	Віньєтування
 	White Balance: As Shot	Баланс білого: як під час знімання
-	Camera Raw…	Camera Raw…
-	Camera Raw isn't open	Camera Raw не відкрито
+	RAW Defaults…	Типові параметри RAW…
+	RAW Develop isn't open	Обробка RAW не відкрито
 	Dehaze	Усунення серпанку
 	Texture	Текстура
 	Focal Length	Фокусна відстань
@@ -1283,8 +1283,6 @@
 	Roman Hanging Punctuation	Висяча латинська пунктуація
 	Avoid Widows/Orphans	Уникати висячих рядків
 	Compose	Компонування
-	Adobe Single-line Composer	Однорядковий компонувальник Adobe
-	Adobe Every-line Composer	Багаторядковий компонувальник Adobe
 	Justification	Вирівнювання по ширині
 	Word Spacing	Інтервал між словами
 	Letter Spacing	Інтервал між літерами
@@ -1842,8 +1840,8 @@
 	Load Settings…	Завантажити налаштування…
 	Save these settings as a Camera Raw .xmp file	Зберегти ці налаштування у файл Camera Raw .xmp
 	Load settings from a Camera Raw .xmp file	Завантажити налаштування з файлу Camera Raw .xmp
-	Loaded Camera Raw settings from {file}	Налаштування Camera Raw завантажено з {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Налаштування Camera Raw завантажено з {file} (не підтримується: {n})
+	Loaded RAW Develop settings from {file}	Налаштування Обробка RAW завантажено з {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Налаштування Обробка RAW завантажено з {file} (не підтримується: {n})
 	After (X)	Після (X)
 	Original	Оригінал
 	Current	Поточний
@@ -2409,7 +2407,7 @@
 	CPU (no GPU acceleration)	CPU (без прискорення GPU)
 	Cache levels	Рівні кешу
 	Cache tile size	Розмір плитки кешу
-	Camera Raw Defaults	Типові параметри Camera Raw
+	RAW Defaults	Типові параметри RAW
 	Canvas border	Межа полотна
 	Show canvas dots	Показувати крапки полотна
 	Clip thumbnails to layer bounds	Обрізати мініатюри до меж шару
@@ -2501,7 +2499,6 @@
 	Never	Ніколи
 	Normal tip	Звичайний кінчик
 	Open as smart object	Відкривати як смартоб'єкт
-	Open in camera raw	Відкривати в Camera Raw
 	Open documents as tabs	Відкривати документи у вкладках
 	OpenGL	OpenGL
 	Orange	Оранжевий
@@ -2639,8 +2636,8 @@
 	Tone Histogram	Тонова гістограма
 	Show Selected Region	Показувати вибрану область
 cameraRaw	Light	Світло
-	Camera Raw Filter ({layer})	Фільтр Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Фільтр Обробка RAW ({layer})
+	RAW Develop ({name})	Обробка RAW ({name})
 	Aqua	Аквамариновий
 cameraRaw	Amount	Величина
 cameraRaw	Blacks	Чорні тони
@@ -3365,7 +3362,7 @@ cameraRaw	Masking	Маскування
 	Color Settings	Налаштування кольору
 	Assign Profile	Призначити профіль
 	Convert to Profile	Перетворити на профіль
-	Camera Raw	Camera Raw
+	RAW Develop	Обробка RAW
 	Raw Defaults	Типові параметри Raw
 	AI Integrations	Інтеграції ШІ
 	Install Plug-in	Установити плагін
@@ -3412,7 +3409,7 @@ cameraRaw	Masking	Маскування
 	Border	Межа
 	Contract	Стиснути
 	Filter Gallery	Галерея фільтрів
-	Camera Raw Filter	Фільтр Camera Raw
+	RAW Develop Filter	Фільтр Обробка RAW
 	Liquify	Пластика
 	Vanishing Point	Точка сходження
 	Field Blur	Розмиття поля
@@ -3652,7 +3649,6 @@ cameraRaw	Masking	Маскування
 @id	filter.sharpen.sharpen	Підвищити різкість
 	Good	Добра
 	Best	Найкраща
-	Adobe PDF Presets…	Набори Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Попередній перегляд технологій…
 	Background from Layer	Фон із шару
@@ -4329,7 +4325,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Показувати межі шару під час наведення
 	Expand layer group on click	Розгортати групу шарів за клацанням
 	Show hover bounds from Layers	Показувати межі під час наведення з панелі «Шари»
-	Saved Camera Raw settings to {file}	Налаштування Camera Raw збережено в {file}
+	Saved RAW Develop settings to {file}	Налаштування Обробка RAW збережено в {file}
 	Save the settings to each raw's sidecar without opening it	Зберегти налаштування в супровідний файл кожного raw, не відкриваючи його
 	No settings saved: these raws can't keep a sidecar here	Нічого не збережено: ці raw тут не можуть мати супровідного файлу
 	Some settings could not be saved; the raws stay open	Не вдалося зберегти деякі налаштування; raw залишаються відкритими
@@ -4341,3 +4337,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Автоматично змінювати розмір полотна
 	Keep Relative Position During Layer Reordering	Зберігати відносне положення під час зміни порядку шарів
 	Shrinkwrap Canvas on Save	Зменшувати полотно до вмісту під час збереження
+	Move Toolbar to the Right	Перемістити панель інструментів праворуч
+	Move Toolbar to the Left	Перемістити панель інструментів ліворуч

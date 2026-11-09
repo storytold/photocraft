@@ -29,7 +29,7 @@
 # Spanish follows the tool wording used above (Herramienta X).
 # Command-id override: under Edit > Purge a bare "Deshacer" reads as an action, not the history.
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 # About ▸ Contributors / Models (credits)
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -54,7 +54,7 @@
 # Print dialog (#2697)
 # Counted status messages and labels (#3454; adapted from PR #3821)
 # View › Guides › New Guide… › Color
-# Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs) that the
+# Dynamic labels (filter and adjustment parameters, RAW Develop, panels, dialogs) that the
 # other catalogs already translate
 # Path, channel, layer style, status and System Info labels the Czech catalog added
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
@@ -296,7 +296,7 @@
 	Plugins…	Plugins…
 	Type…	Texto…
 	Enhanced Controls…	Controles mejorados…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Valores predeterminados de RAW…
 	Raw Defaults…	Valores predeterminados de Raw…
 	Integrations…	Integraciones…
 	AI Integrations…	Integraciones de IA…
@@ -629,7 +629,7 @@
 	Last Filter	Último filtro
 	Filter Gallery…	Galería de filtros…
 	Adaptive Wide Angle…	Gran angular adaptable…
-	Camera Raw Filter…	Filtro de Camera Raw…
+	RAW Develop Filter…	Filtro de Revelado RAW…
 	Liquify…	Licuar…
 	Vanishing Point…	Punto de fuga…
 	Blur	Desenfocar
@@ -983,8 +983,8 @@
 	Load Settings…	Cargar ajustes…
 	Save these settings as a Camera Raw .xmp file	Guardar estos ajustes como archivo .xmp de Camera Raw
 	Load settings from a Camera Raw .xmp file	Cargar ajustes desde un archivo .xmp de Camera Raw
-	Loaded Camera Raw settings from {file}	Ajustes de Camera Raw cargados desde {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Ajustes de Camera Raw cargados desde {file} ({n} no compatibles)
+	Loaded RAW Develop settings from {file}	Ajustes de Revelado RAW cargados desde {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Ajustes de Revelado RAW cargados desde {file} ({n} no compatibles)
 	Begin recording	Iniciar grabación
 	Bend:	Curvatura:
 	Bicubic	Bicúbica
@@ -1012,7 +1012,7 @@
 	Brush Reconstruct Options	Opciones de reconstrucción del pincel
 	Brush Tool Options	Opciones de la herramienta Pincel
 	Cache Level:	Nivel de caché:
-	Camera Raw isn't open	Camera Raw no está abierto
+	RAW Develop isn't open	Revelado RAW no está abierto
 	Cancel	Cancelar
 	Cancel (Esc)	Cancelar (Esc)
 	Manage submitted jobs in the system print queue	Gestionar los trabajos enviados en la cola de impresión del sistema
@@ -1984,7 +1984,7 @@
 	Brush preview color	Color de vista previa del pincel
 	Cache levels	Niveles de caché
 	Cache tile size	Tamaño de tesela de caché
-	Camera Raw Defaults	Valores predeterminados de Camera Raw
+	RAW Defaults	Valores predeterminados de RAW
 	Canvas border	Borde del lienzo
 	Show canvas dots	Mostrar puntos del lienzo
 	Clip thumbnails to layer bounds	Recortar miniaturas a los límites de la capa
@@ -2071,7 +2071,6 @@
 	Never	Nunca
 	Normal tip	Punta normal
 	Open as smart object	Abrir como objeto inteligente
-	Open in camera raw	Abrir en Camera Raw
 	Open documents as tabs	Abrir los documentos como pestañas
 	Overscroll	Sobredesplazamiento
 	Performance	Rendimiento
@@ -2432,8 +2431,8 @@
 	Tone Histogram	Histograma tonal
 	Show Selected Region	Mostrar región seleccionada
 cameraRaw	Light	Luz
-	Camera Raw Filter ({layer})	Filtro de Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Filtro de Revelado RAW ({layer})
+	RAW Develop ({name})	Revelado RAW ({name})
 cameraRaw	Lights	Claros
 cameraRaw	Darks	Oscuros
 cameraRaw	Red	Rojos
@@ -3030,8 +3029,6 @@ curves	Smooth	Suavizar
 	Roman Hanging Punctuation	Puntuación latina colgante
 	Avoid Widows/Orphans	Evitar líneas viudas y huérfanas
 	Compose	Componer
-	Adobe Single-line Composer	Compositor de línea única de Adobe
-	Adobe Every-line Composer	Compositor multilínea de Adobe
 	Word Spacing	Espacio entre palabras
 	Letter Spacing	Espacio entre caracteres
 	Glyph Scaling	Escala de glifos
@@ -3227,7 +3224,6 @@ curves	Smooth	Suavizar
 	Intersect with	Intersecar con
 	Capture Comp	Capturar composición
 	No Layer Comps	No hay composiciones de capas
-	Adobe PDF Presets…	Ajustes preestablecidos de Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Previsualizaciones de tecnología…
 	Add a mask  (from the selection; ⌥ inverts)	Añadir una máscara (a partir de la selección; ⌥ invierte)
@@ -3844,8 +3840,8 @@ layerLabel	No Color	Sin color
 	Border	Borde
 	Box Blur	Desenfoque de cuadro
 	Calculations	Cálculos
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Filtro de Camera Raw
+	RAW Develop	Revelado RAW
+	RAW Develop Filter	Filtro de Revelado RAW
 	Channel1	Canal 1
 	Channel2	Canal 2
 	Channel3	Canal 3
@@ -4518,7 +4514,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostrar límites de capa al pasar el puntero
 	Expand layer group on click	Expandir grupo de capas al hacer clic
 	Show hover bounds from Layers	Mostrar límites al pasar el puntero desde Capas
-	Saved Camera Raw settings to {file}	Ajustes de Camera Raw guardados en {file}
+	Saved RAW Develop settings to {file}	Ajustes de Revelado RAW guardados en {file}
 	Save the settings to each raw's sidecar without opening it	Guardar los ajustes en el archivo sidecar de cada raw sin abrirlo
 	No settings saved: these raws can't keep a sidecar here	No se guardó nada: estos raw no pueden tener un archivo sidecar aquí
 	Some settings could not be saved; the raws stay open	No se pudieron guardar algunos ajustes; los raw siguen abiertos
@@ -4530,3 +4526,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ajustar tamaño de lienzo automáticamente
 	Keep Relative Position During Layer Reordering	Mantener la posición relativa al reordenar capas
 	Shrinkwrap Canvas on Save	Reducir el lienzo al contenido al guardar
+	Move Toolbar to the Right	Mover la barra de herramientas a la derecha
+	Move Toolbar to the Left	Mover la barra de herramientas a la izquierda

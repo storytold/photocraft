@@ -323,7 +323,7 @@
 	Plugins…	플러그인…
 	Type…	문자…
 	Enhanced Controls…	고급 컨트롤…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	RAW 기본값…
 	Raw Defaults…	RAW 기본값…
 	Integrations…	연동…
 	AI Integrations…	AI 연동…
@@ -651,7 +651,7 @@
 	Last Filter	마지막 필터
 	Filter Gallery…	필터 갤러리…
 	Adaptive Wide Angle…	응용 광각…
-	Camera Raw Filter…	Camera Raw 필터…
+	RAW Develop Filter…	RAW 현상 필터…
 	Liquify…	픽셀 유동화…
 	Vanishing Point…	소실점…
 	Blur	흐림 효과
@@ -1011,8 +1011,8 @@
 	Load Settings…	설정 불러오기…
 	Save these settings as a Camera Raw .xmp file	이 설정을 Camera Raw .xmp 파일로 저장
 	Load settings from a Camera Raw .xmp file	Camera Raw .xmp 파일에서 설정 불러오기
-	Loaded Camera Raw settings from {file}	{file}에서 Camera Raw 설정을 불러왔습니다
-	Loaded Camera Raw settings from {file} ({n} not supported)	{file}에서 Camera Raw 설정을 불러왔습니다 (미지원 {n}개)
+	Loaded RAW Develop settings from {file}	{file}에서 RAW 현상 설정을 불러왔습니다
+	Loaded RAW Develop settings from {file} ({n} not supported)	{file}에서 RAW 현상 설정을 불러왔습니다 (미지원 {n}개)
 	Begin recording	기록 시작
 	Bend:	구부림:
 	Bicubic	쌍입방
@@ -1040,7 +1040,7 @@
 	Brush Reconstruct Options	브러시 재구성 옵션
 	Brush Tool Options	브러시 도구 옵션
 	Cache Level:	캐시 레벨:
-	Camera Raw isn't open	Camera Raw가 열려 있지 않습니다
+	RAW Develop isn't open	RAW 현상가 열려 있지 않습니다
 	Cancel	취소
 	Reset	재설정
 	Cancel (Esc)	취소 (Esc)
@@ -2014,7 +2014,7 @@
 	Brush preview color	브러시 미리 보기 색상
 	Cache levels	캐시 레벨
 	Cache tile size	캐시 타일 크기
-	Camera Raw Defaults	Camera Raw 기본값
+	RAW Defaults	RAW 기본값
 	Canvas border	캔버스 테두리
 	Show canvas dots	캔버스 점 표시
 	Clip thumbnails to layer bounds	썸네일을 레이어 경계로 자르기
@@ -2101,7 +2101,6 @@
 	Never	안 함
 	Normal tip	표준 브러시 끝
 	Open as smart object	스마트 오브젝트로 열기
-	Open in camera raw	Camera Raw에서 열기
 	Open documents as tabs	문서를 탭으로 열기
 	Overscroll	캔버스 밖으로 스크롤
 	Performance	성능
@@ -2391,8 +2390,8 @@
 	Tone Histogram	명도 히스토그램
 	Show Selected Region	선택한 영역 표시
 cameraRaw	Light	밝게
-	Camera Raw Filter ({layer})	Camera Raw 필터 ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	RAW 현상 필터 ({layer})
+	RAW Develop ({name})	RAW 현상 ({name})
 cameraRaw	Lights	밝은 중간 영역
 cameraRaw	Blending	혼합
 cameraRaw	Blacks	검정 계열
@@ -2734,7 +2733,7 @@ cameraRaw	Color	색상
 	Color Settings	색상 설정
 	Assign Profile	프로파일 지정
 	Convert to Profile	프로파일로 변환
-	Camera Raw	Camera Raw
+	RAW Develop	RAW 현상
 	Raw Defaults	RAW 기본값
 	AI Integrations	AI 연동
 	Install Plug-in	플러그인 설치
@@ -2787,7 +2786,7 @@ cameraRaw	Color	색상
 	Save Selection	선택 영역 저장
 	Filter Gallery	필터 갤러리
 	Adaptive Wide Angle	응용 광각
-	Camera Raw Filter	Camera Raw 필터
+	RAW Develop Filter	RAW 현상 필터
 	Liquify	픽셀 유동화
 	Vanishing Point	소실점
 	Field Blur	필드 흐림 효과
@@ -4191,7 +4190,7 @@ shape	Appearance	화면 모양
 	Show layer bounds on hover	마우스를 올리면 레이어 경계 표시
 	Expand layer group on click	클릭하면 레이어 그룹 펼치기
 	Show hover bounds from Layers	레이어 패널에서 마우스를 올릴 때 경계 표시
-	Saved Camera Raw settings to {file}	Camera Raw 설정을 {file}에 저장했습니다
+	Saved RAW Develop settings to {file}	RAW 현상 설정을 {file}에 저장했습니다
 	Save the settings to each raw's sidecar without opening it	각 Raw의 사이드카 파일에 설정을 저장하고 열지 않습니다
 	No settings saved: these raws can't keep a sidecar here	저장된 항목 없음: 이 Raw 파일은 여기에 사이드카 파일을 둘 수 없습니다
 	Some settings could not be saved; the raws stay open	일부 설정을 저장할 수 없습니다. Raw 파일은 열린 상태로 유지됩니다
@@ -4203,3 +4202,5 @@ shape	Appearance	화면 모양
 	Auto-size Canvas	캔버스 크기 자동 조정
 	Keep Relative Position During Layer Reordering	레이어 순서 변경 시 상대 위치 유지
 	Shrinkwrap Canvas on Save	저장 시 캔버스를 내용에 맞게 축소
+	Move Toolbar to the Right	도구 모음을 오른쪽으로 이동
+	Move Toolbar to the Left	도구 모음을 왼쪽으로 이동

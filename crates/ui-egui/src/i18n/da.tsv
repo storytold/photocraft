@@ -350,7 +350,7 @@
 	Last Filter	Seneste filter
 	Filter Gallery…	Filtergalleri…
 	Liquify…	Gør flydende…
-	Camera Raw Filter…	Camera Raw-filter…
+	RAW Develop Filter…	RAW-fremkaldelse-filter…
 	Adaptive Wide Angle…	Adaptiv vidvinkel…
 	Lens Correction…	Objektivkorrektion…
 	Vanishing Point…	Forsvindingspunkt…
@@ -875,7 +875,7 @@
 	Working Black Plate	Arbejdssortplade
 	Working Gray Plate	Arbejdsgråplade
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 	Basic	Grundlæggende
 	Detail	Detalje
 	HSL/Grayscale	HSL/Gråtoner
@@ -905,8 +905,8 @@
 	Luminance Smoothness	Luminansglathed
 	Vignetting	Vignettering
 	White Balance: As Shot	Hvidbalance: Som fotograferet
-	Camera Raw…	Camera Raw…
-	Camera Raw isn't open	Camera Raw er ikke åben
+	RAW Defaults…	RAW-standarder…
+	RAW Develop isn't open	RAW-fremkaldelse er ikke åben
 	Dehaze	Fjern dis
 	Texture	Tekstur
 	Focal Length	Brændvidde
@@ -1177,8 +1177,6 @@
 	Roman Hanging Punctuation	Romersk hængende tegnsætning
 	Avoid Widows/Orphans	Undgå enlige linjer
 	Compose	Komponér
-	Adobe Single-line Composer	Adobe-enkeltlinjeopsætter
-	Adobe Every-line Composer	Adobe-flerlinjeopsætter
 	Justification	Justering
 	Word Spacing	Ordafstand
 	Letter Spacing	Bogstavafstand
@@ -1760,8 +1758,8 @@
 	Load Settings…	Indlæs indstillinger…
 	Save these settings as a Camera Raw .xmp file	Gem disse indstillinger som en Camera Raw .xmp-fil
 	Load settings from a Camera Raw .xmp file	Indlæs indstillinger fra en Camera Raw .xmp-fil
-	Loaded Camera Raw settings from {file}	Indlæste Camera Raw-indstillinger fra {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Indlæste Camera Raw-indstillinger fra {file} ({n} understøttes ikke)
+	Loaded RAW Develop settings from {file}	Indlæste RAW-fremkaldelse-indstillinger fra {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Indlæste RAW-fremkaldelse-indstillinger fra {file} ({n} understøttes ikke)
 	After (X)	Efter (X)
 	Original	Original
 	Current	Aktuel
@@ -2348,7 +2346,7 @@
 	CPU (no GPU acceleration)	CPU (ingen GPU-acceleration)
 	Cache levels	Cacheniveauer
 	Cache tile size	Flisestørrelse for cache
-	Camera Raw Defaults	Camera Raw-standarder
+	RAW Defaults	RAW-standarder
 	Canvas border	Lærredskant
 	Show canvas dots	Vis lærredsprikker
 	Clip thumbnails to layer bounds	Klip miniaturer til laggrænser
@@ -2440,7 +2438,6 @@
 	Never	Aldrig
 	Normal tip	Normal spids
 	Open as smart object	Åbn som smartobjekt
-	Open in camera raw	Åbn i Camera Raw
 	Open documents as tabs	Åbn dokumenter som faner
 	OpenGL	OpenGL
 	Orange	Orange
@@ -2581,9 +2578,9 @@
 	Tone Histogram	Tonehistogram
 	Show Selected Region	Vis markeret område
 cameraRaw	Light	Lys
-# Camera Raw: contextual controls and window title
-	Camera Raw Filter ({layer})	Camera Raw-filter ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+# RAW Develop: contextual controls and window title
+	RAW Develop Filter ({layer})	RAW-fremkaldelse-filter ({layer})
+	RAW Develop ({name})	RAW-fremkaldelse ({name})
 	Aqua	Turkis
 cameraRaw	Amount	Mængde
 cameraRaw	Blacks	Sorte
@@ -3388,7 +3385,7 @@ curves	Smooth	Udjævn
 	{name} was changed by another app after it was opened or saved here.	{name} blev ændret af et andet program, efter at den blev åbnet eller gemt her.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Erstat den med dette dokument, eller annullér, og brug Filer › Gem som for at beholde begge.
 
-# Dynamic UI labels (fourth pass): filter and adjustment parameters, Camera Raw panels,
+# Dynamic UI labels (fourth pass): filter and adjustment parameters, RAW Develop panels,
 # lighting, History/Layers/paths/channels menus, metadata, System Info, status templates and
 # dialog text that other catalogs already carry. Written from the meaning of the English labels
 # in the ordinary Russian graphics-editor vocabulary; no proprietary resource consulted.
@@ -3414,13 +3411,11 @@ curves	Smooth	Udjævn
 	Adjustment Layers	Justeringslag
 	Adjustment Properties	Justeringsegenskaber
 	Adjustment layers have nothing to transform	Justeringslag har intet at transformere
-	Adobe PDF Presets…	Adobe PDF-forudindstillinger…
 	Adobe-rgb-compat	Adobe-rgb-kompat
 	Adwaita (Dark)	Adwaita (mørk)
 	Adwaita (Light)	Adwaita (lys)
 	After	Efter
 	Airbrush: keeps painting while the pointer rests.	Airbrush: bliver ved med at male, mens markøren hviler.
-	All shortcuts reset to Photoshop defaults.	Alle genveje er nulstillet til Photoshop-standarderne.
 	Altitude	Højde
 	Ambience	Ambiance
 	Ambient	Omgivende
@@ -3505,8 +3500,8 @@ curves	Smooth	Udjævn
 	Brush Type	Penseltype
 	Burlap	Sækkelærred
 	Calculations	Beregninger
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw-filter
+	RAW Develop	RAW-fremkaldelse
+	RAW Develop Filter	RAW-fremkaldelse-filter
 	Cancel transform	Annullér transformering
 	Candle Light	Stearinlys
 	Canvas Size	Lærredsstørrelse
@@ -3653,7 +3648,6 @@ curves	Smooth	Udjævn
 	Deep Yellow	Dyb gul
 	Default Foreground and Background Colors	Standard forgrunds- og baggrundsfarver
 	Default Leaves	Standardblade
-	Default Photoshop Size	Photoshop-standardstørrelse
 	Defaults	Standardindstillinger
 	Define Brush Preset	Definér penselforudindstilling
 	Define Custom Shape	Definér brugerdefineret form
@@ -4754,9 +4748,9 @@ shape	Appearance	Udseende
 @plural	{n} document|{n} documents	{n} dokument|{n} dokumenter
 @plural	{n} pixel|{n} pixels	{n} pixel|{n} pixels
 cameraRaw	Before (Y)	Før (Y)
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Camera Raw-filter ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw er ikke åben
+cameraRaw	RAW Develop ({name})	RAW-fremkaldelse ({name})
+cameraRaw	RAW Develop Filter ({layer})	RAW-fremkaldelse-filter ({layer})
+cameraRaw	RAW Develop isn't open	RAW-fremkaldelse er ikke åben
 cameraRaw	Cancel	Annullér
 cameraRaw	Canceled opening {name}	Annullerede åbning af {name}
 cameraRaw	Canceled {label}	Annullerede {label}
@@ -4768,7 +4762,7 @@ cameraRaw	Highlight Clipping Warning (O)	Advarsel om højlysklipning (O)
 cameraRaw	Highlight Priority	Højlysprioritet
 cameraRaw	Load Settings…	Indlæs indstillinger…
 cameraRaw	Load settings from a Camera Raw .xmp file	Indlæs indstillinger fra en Camera Raw .xmp-fil
-cameraRaw	Loaded Camera Raw settings from {file}	Indlæste Camera Raw-indstillinger fra {file}
+cameraRaw	Loaded RAW Develop settings from {file}	Indlæste RAW-fremkaldelse-indstillinger fra {file}
 cameraRaw	Noise Reduction	Støjreduktion
 cameraRaw	OK	OK
 cameraRaw	Open	Åbn
@@ -4831,3 +4825,8 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Auto-size Canvas	Tilpas lærredsstørrelse automatisk
 	Keep Relative Position During Layer Reordering	Bevar relativ placering ved omorganisering af lag
 	Shrinkwrap Canvas on Save	Beskær lærredet til indholdet ved lagring
+	Move Toolbar to the Right	Flyt værktøjslinjen til højre
+	Move Toolbar to the Left	Flyt værktøjslinjen til venstre
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	RAW-fremkaldelsesindstillinger gemt i {file}
