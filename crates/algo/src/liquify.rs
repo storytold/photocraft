@@ -172,7 +172,7 @@ const HELD_DAB_MS: f64 = 1000.0 / 30.0;
 
 /// Most elapsed time one live point counts for: after a stall (a slow frame, the app in the
 /// background) the brush catches up by this much at most instead of lurching.
-const MAX_LIVE_MS: f64 = 250.0;
+pub const MAX_LIVE_MS: f64 = 250.0;
 
 /// The displacement field plus the freeze mask, over `bounds` (document pixels).
 #[derive(Clone, Debug)]
