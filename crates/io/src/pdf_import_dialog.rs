@@ -195,6 +195,7 @@ pub struct PdfOpenOptions {
 
 /// Prints every option but the password (logs and error messages carry `{opts:?}`).
 impl std::fmt::Debug for PdfOpenOptions {
+    /// Format the PDF import settings for diagnostic output.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PdfOpenOptions")
             .field("page", &self.page)
@@ -215,6 +216,7 @@ impl std::fmt::Debug for PdfOpenOptions {
 }
 
 impl Default for PdfOpenOptions {
+    /// Create the default PDF import settings used when a dialog is first opened.
     fn default() -> Self {
         PdfOpenOptions {
             page: 1,
@@ -367,6 +369,7 @@ pub fn import_pdf(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Interru
     Ok(r)
 }
 
+/// Validate the selected PDF pages and import them into the requested document layout.
 fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
     if let Some(index) = opts.image {
         return import_image(name, bytes, index, opts.name.as_deref(), opts.password.as_deref(), ctl);
@@ -593,6 +596,7 @@ pub fn image_name(file: &str, chosen: Option<&str>, index: usize) -> String {
     format!("{stem}-{index}")
 }
 
+/// Extract a displayable document-name stem from the original PDF path.
 fn stem_of(file: &str) -> String {
     let name = file.rsplit(['/', '\\']).next().unwrap_or(file);
     name.rsplit_once('.').map_or(name.to_string(), |(s, _)| s.to_string())
@@ -682,6 +686,7 @@ pub fn image_thumbnail(bytes: &[u8], index: usize, max_side: u32, password: Opti
 
 // ------------------------------------------------------------------------------------- reading
 
+/// Parse a bounded PDF byte buffer, applying an optional user password.
 fn load(bytes: &[u8], password: Option<&str>) -> Result<Pdf, IoError> {
     if bytes.len() > MAX_PDF_BYTES {
         return Err(IoError::Pdf(format!("the PDF is larger than the {} MiB import limit", MAX_PDF_BYTES / (1024 * 1024))));
@@ -724,6 +729,7 @@ pub fn read_file(path: &std::path::Path) -> Result<Vec<u8>, IoError> {
     Ok(bytes)
 }
 
+/// Look up a one-based page number and return an error for an invalid selection.
 fn page_of<'a>(pdf: &'a Pdf, page: usize) -> Result<&'a Page<'a>, IoError> {
     let n = pdf.pages().len();
     if n == 0 {
@@ -737,19 +743,23 @@ fn norm(r: hayro::hayro_syntax::object::Rect) -> [f32; 4] {
     [r.x0.min(r.x1) as f32, r.y0.min(r.y1) as f32, r.x0.max(r.x1) as f32, r.y0.max(r.y1) as f32]
 }
 
+/// Intersect two page rectangles, retaining only their shared region.
 fn inter(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let (x0, y0) = (a[0].max(b[0]), a[1].max(b[1]));
     [x0, y0, a[2].min(b[2]).max(x0), a[3].min(b[3]).max(y0)]
 }
 
+/// Report whether a page rectangle has positive finite dimensions.
 fn has_area(b: [f32; 4]) -> bool {
     b[2] > b[0] && b[3] > b[1]
 }
 
+/// Convert the selected page bounds into the renderer's rectangle type.
 fn to_pt(b: [f32; 4]) -> PtRect {
     PtRect::new(f64::from(b[0]), f64::from(b[1]), f64::from(b[2]), f64::from(b[3]))
 }
 
+/// Read the page's inherited boxes, rotation, and displayed dimensions.
 fn page_info(p: &Page) -> PdfPage {
     // A page without a usable media box is treated as A4, as hayro renders it.
     let mut media = norm(p.media_box());
@@ -770,6 +780,7 @@ fn page_info(p: &Page) -> PdfPage {
     PdfPage { media, crop, bleed: get(b"BleedBox"), trim: get(b"TrimBox"), art: get(b"ArtBox"), rotation }
 }
 
+/// Prepare the PDF interpreter settings for page inspection and rendering.
 fn settings() -> InterpreterSettings {
     InterpreterSettings::default()
 }
@@ -860,18 +871,22 @@ fn image_fits(w: u32, h: u32) -> bool {
     w > 0 && h > 0 && w <= MAX_SIDE && h <= MAX_SIDE && u64::from(w) * u64::from(h) <= MAX_IMAGE_PIXELS
 }
 
+/// Describe a raster image that exceeds the configured pixel limits.
 fn image_error(what: &str, w: u32, h: u32) -> IoError {
     IoError::Pdf(format!("PDF: {what} of {w} × {h} px is past the {MAX_SIDE} px / {} MP limit, so the page can't be opened", MAX_IMAGE_PIXELS / 1_000_000))
 }
 
+/// Report that the aggregate PDF rendering budget was exceeded.
 fn total_error() -> IoError {
     IoError::Pdf(format!("PDF: the page's images decode to more than {} MP together, so it can't be opened", MAX_PAGE_IMAGE_PIXELS / 1_000_000))
 }
 
+/// Reject a PDF object whose required dimensions cannot be determined.
 fn no_size(what: &str) -> IoError {
     IoError::Pdf(format!("PDF: {what} doesn't declare its size, so its decoding can't be bounded; the page can't be opened"))
 }
 
+/// Describe a resource that cannot be safely bounded before decoding.
 fn unchecked(what: &str, codec: &str, why: &str) -> IoError {
     IoError::Pdf(format!("PDF: {what} is a {codec} image whose size can't be checked before decoding ({why}), so the page can't be opened"))
 }
@@ -905,6 +920,7 @@ enum Encoded {
 }
 
 impl Encoded {
+    /// Return the dimensions declared by a PDF raster resource.
     fn size(self) -> (u32, u32) {
         match self {
             Encoded::Jpx(j) => j.size,
@@ -923,6 +939,7 @@ impl Encoded {
         u64::from(w) * u64::from(h) * planes
     }
 
+    /// Describe the checked resource dimensions and format for diagnostics.
     fn describe(self) -> String {
         let (w, h) = self.size();
         match self {
@@ -1199,14 +1216,17 @@ fn jbig2_segment(d: &[u8], at: usize) -> Result<Jbig2Segment<'_>, &'static str> 
     Ok(Jbig2Segment { number, kind: flags & 0x3F, data, next: end })
 }
 
+/// Read a big-endian 16-bit value from the validated byte range.
 fn be16(d: &[u8], at: usize) -> Option<u16> {
     d.get(at..at + 2)?.try_into().ok().map(u16::from_be_bytes)
 }
 
+/// Read a big-endian 32-bit value from the validated byte range.
 fn be32(d: &[u8], at: usize) -> Option<u32> {
     d.get(at..at + 4)?.try_into().ok().map(u32::from_be_bytes)
 }
 
+/// Read a big-endian 64-bit value from the validated byte range.
 fn be64(d: &[u8], at: usize) -> Option<u64> {
     d.get(at..at + 8)?.try_into().ok().map(u64::from_be_bytes)
 }
@@ -1382,6 +1402,7 @@ struct Walk {
 }
 
 impl Walk {
+    /// Account for the current PDF resource in the bounded traversal.
     fn count(&mut self) -> Result<(), IoError> {
         self.seen += 1;
         if self.seen > MAX_XOBJECTS {
@@ -1440,6 +1461,7 @@ impl Walk {
         self.nested(stream.dict().get::<Dict<'_>>(b"Resources"), depth, parent)
     }
 
+    /// Inspect child PDF resources using the inherited resource scope.
     fn nested<'a>(&mut self, resources: Option<Dict<'a>>, depth: usize, parent: Resources<'a>) -> Result<(), IoError> {
         match resources {
             Some(r) => self.resources(Resources::from_scope(Some(r), parent), depth + 1),
@@ -1750,6 +1772,7 @@ struct Placed {
 }
 
 impl Marks {
+    /// Include another drawn shape in the inspected page bounds.
     fn mark(&mut self, r: PtRect) {
         let r = match self.clips.last() {
             Some(c) => r.intersect(*c),
@@ -1785,8 +1808,11 @@ fn marks(page: &Page, decode: Option<usize>) -> Marks {
 }
 
 impl<'a> Device<'a> for Marks {
+    /// Accept the interpreter's soft-mask state while collecting geometry.
     fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+    /// Accept the interpreter's blend-mode state while collecting geometry.
     fn set_blend_mode(&mut self, _: BlendMode) {}
+    /// Include a transformed fill or stroke path in the page bounds.
     fn draw_path(&mut self, path: &BezPath, transform: Affine, _: &Paint<'a>, draw_mode: &PathDrawMode) {
         let mut r = path.bounding_box();
         if let PathDrawMode::Stroke(s) = draw_mode {
@@ -1797,6 +1823,7 @@ impl<'a> Device<'a> for Marks {
         self.paths = self.paths.saturating_add(1);
     }
 
+    /// Add a clipping path to the current geometry-inspection stack.
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         let r = clip_path.path.bounding_box();
         let r = match self.clips.last() {
@@ -1806,14 +1833,17 @@ impl<'a> Device<'a> for Marks {
         self.clips.push(r);
     }
 
+    /// Enter a transparency group during bounds inspection.
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
 
+    /// Include the transformed glyph bounds in the page bounds.
     fn draw_glyph(&mut self, _: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {
         let b = PtRect::new(GLYPH_BOX[0], GLYPH_BOX[1], GLYPH_BOX[2], GLYPH_BOX[3]);
         self.mark((transform * glyph_transform).transform_rect_bbox(b));
         self.glyphs = self.glyphs.saturating_add(1);
     }
 
+    /// Include an image's transformed bounds in the page bounds.
     fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
         // The transform places the image's own pixel grid (top row first).
         let (w, h) = (f64::from(image.width()), f64::from(image.height()));
@@ -1839,10 +1869,12 @@ impl<'a> Device<'a> for Marks {
         }
     }
 
+    /// Restore the geometry-inspection state after leaving a clip.
     fn pop_clip_path(&mut self) {
         self.clips.pop();
     }
 
+    /// Leave the current transparency group during bounds inspection.
     fn pop_transparency_group(&mut self) {}
 }
 

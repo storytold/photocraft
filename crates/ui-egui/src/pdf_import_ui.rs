@@ -67,6 +67,7 @@ enum PdfResult {
     Thumb { images: bool, index: usize, size: String, result: Result<pdf_import::Thumbnail, String> },
 }
 
+/// Execute a PDF inspection or thumbnail task outside the UI-frame update.
 fn run_pdf_task(bytes: &Arc<Vec<u8>>, task: PdfTask) -> PdfResult {
     match task {
         PdfTask::Inspect(password) => {
@@ -100,6 +101,7 @@ struct PdfWorker {
 }
 
 impl PdfWorker {
+    /// Create a PDF inspection worker with its task and result channels.
     fn new(bytes: Arc<Vec<u8>>) -> Result<Self, String> {
         let (result_tx, result_rx) = mpsc::channel();
         #[cfg(target_arch = "wasm32")]
@@ -129,6 +131,7 @@ impl PdfWorker {
         }
     }
 
+    /// Queue a PDF inspection or thumbnail task for the active dialog.
     fn send(&self, task: PdfTask) -> Result<(), String> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -143,6 +146,7 @@ impl PdfWorker {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for PdfWorker {
+    /// Signal the PDF inspection worker to cancel when its dialog is removed.
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
@@ -281,12 +285,15 @@ fn defaults(f: &mut Map<String, Value>, app: &PhotocraftApp) {
     f.insert("pagesAsLayers".into(), json!(false));
 }
 
+/// Read a string-valued PDF dialog field with a fallback.
 fn s<'a>(f: &'a Map<String, Value>, k: &str, d: &'a str) -> &'a str {
     f.get(k).and_then(Value::as_str).unwrap_or(d)
 }
+/// Read a numeric PDF dialog field with a fallback.
 fn num(f: &Map<String, Value>, k: &str, d: f32) -> f32 {
     f.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)
 }
+/// Read a boolean PDF dialog field with a fallback.
 fn flag(f: &Map<String, Value>, k: &str, d: bool) -> bool {
     f.get(k).and_then(Value::as_bool).unwrap_or(d)
 }
@@ -299,6 +306,7 @@ fn picks(f: &Map<String, Value>, k: &str) -> Vec<usize> {
     v
 }
 
+/// Estimate the total raster size of the currently selected pages or images.
 fn selected_pixels(st: &PdfImport, f: &Map<String, Value>, selected: &[usize], images: bool) -> Option<u64> {
     let mut total = 0u64;
     if images {
@@ -608,6 +616,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     app.pdf_import.push(st);
 }
 
+/// Draw the password prompt for an encrypted PDF.
 fn password_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("The PDF is protected by a password.")).color(t.text));
     ui.add_space(6.0);
@@ -626,6 +635,7 @@ fn password_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, t: &Tokens) {
     }
 }
 
+/// Draw the PDF pages or images list and its thumbnail selections.
 fn left_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport, t: &Tokens, images: bool, size: &str) {
     ui.label(egui::RichText::new(tl!("Select:")).color(t.text_dim));
     ui.horizontal(|ui| {
@@ -759,6 +769,7 @@ fn left_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport
     });
 }
 
+/// Draw page options, output dimensions, and document-layout controls.
 fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport, t: &Tokens, images: bool) {
     group(ui, t, tl!("Open as"), |ui| {
         let as_layers = !images && flag(f, "pagesAsLayers", false);
@@ -946,6 +957,7 @@ fn group(ui: &mut egui::Ui, t: &Tokens, title: &str, content: impl FnOnce(&mut e
     });
 }
 
+/// Draw a selectable radio-style option in the import dialog.
 fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
     // One native radio widget covers the indicator and its label, with an explicit
     // accessible name and one hit target. The old split circle/label could leave

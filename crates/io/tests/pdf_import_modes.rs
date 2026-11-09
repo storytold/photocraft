@@ -8,6 +8,7 @@ use photocraft_io::{
 const PDF: &[u8] = include_bytes!("fixtures/pdf-three-pages.pdf");
 
 #[test]
+/// Verify that a multi-page PDF can produce separate layers in one document.
 fn selected_pdf_pages_are_distinct_layers_in_one_document() {
     for depth in [SampleType::U8, SampleType::U16] {
         for pages in [vec![1, 2, 3], vec![1, 3]] {
@@ -35,6 +36,7 @@ fn selected_pdf_pages_are_distinct_layers_in_one_document() {
 }
 
 #[test]
+/// Verify that individual imported pages preserve their dimensions and pixels.
 fn individual_pdf_pages_keep_their_dimensions_and_content() {
     for (page, width, height) in [(1, 72, 48), (2, 48, 72), (3, 96, 60)] {
         let opts = ImportOptions { pdf: Some(PdfOpenOptions { page, resolution: 72.0, crop: CropTo::MediaBox, ..Default::default() }), ..Default::default() };
@@ -80,6 +82,7 @@ fn one_image_pdf() -> Vec<u8> {
 }
 
 #[test]
+/// Verify that importing a PDF image cannot overwrite the original PDF by default.
 fn single_image_pdf_never_allows_direct_save_over_original() {
     let bytes = one_image_pdf();
     let options = ImportOptions { pdf: Some(PdfOpenOptions::default()), ..Default::default() };
@@ -90,6 +93,7 @@ fn single_image_pdf_never_allows_direct_save_over_original() {
 }
 
 #[test]
+/// Verify that invalid PDF page numbers fail with an error rather than panic.
 fn invalid_pdf_page_selection_returns_error_instead_of_panicking() {
     for page in [0, 4, usize::MAX] {
         let opts = ImportOptions { pdf: Some(PdfOpenOptions { page, ..Default::default() }), ..Default::default() };
@@ -102,6 +106,7 @@ fn invalid_pdf_page_selection_returns_error_instead_of_panicking() {
 }
 
 #[test]
+/// Verify that artboard imports preserve page identity and individual dimensions.
 fn pdf_pages_as_artboards_keep_page_identity_and_individual_sizes() {
     let opts = ImportOptions {
         pdf: Some(PdfOpenOptions { pages_as_artboards: Some(vec![1, 2, 3]), resolution: 72.0, crop: CropTo::MediaBox, ..Default::default() }),
@@ -134,6 +139,7 @@ fn pdf_pages_as_artboards_keep_page_identity_and_individual_sizes() {
 }
 
 #[test]
+/// Verify that artboard imports refuse empty or out-of-range page selections.
 fn pdf_artboards_reject_empty_and_invalid_page_selection() {
     for selected in [vec![], vec![0], vec![4], vec![1, usize::MAX], vec![2, 2]] {
         let opts = ImportOptions { pdf: Some(PdfOpenOptions { pages_as_artboards: Some(selected), ..Default::default() }), ..Default::default() };
@@ -142,6 +148,7 @@ fn pdf_artboards_reject_empty_and_invalid_page_selection() {
 }
 
 #[test]
+/// Verify that native page identifiers survive editable PSD save and reopen.
 fn pdf_page_identity_survives_editable_psd_save_and_reopen() {
     let opts = ImportOptions {
         pdf: Some(PdfOpenOptions { pages_as_artboards: Some(vec![3, 1, 2]), resolution: 72.0, crop: CropTo::MediaBox, ..Default::default() }),
@@ -164,6 +171,7 @@ fn pdf_page_identity_survives_editable_psd_save_and_reopen() {
 }
 
 #[test]
+/// Verify that PDF export writes one page for every imported artboard.
 fn multipage_pdf_import_exports_each_artboard_as_one_pdf_page() {
     let opts = ImportOptions {
         pdf: Some(PdfOpenOptions { pages_as_artboards: Some(vec![1, 2, 3]), resolution: 72.0, crop: CropTo::MediaBox, ..Default::default() }),

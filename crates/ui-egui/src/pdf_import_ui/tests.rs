@@ -4,10 +4,12 @@ use std::time::{Duration, Instant};
 
 const PDF: &[u8] = include_bytes!("../../../io/tests/fixtures/pdf-three-pages.pdf");
 
+/// Create a default test harness for the PhotoCraft PDF dialog.
 fn harness() -> Harness<'static, PhotocraftApp> {
     harness_at_size(vec2(1280.0, 800.0))
 }
 
+/// Create a PDF dialog harness with an explicit window size.
 fn harness_at_size(size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(size).with_max_steps(32).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -26,6 +28,7 @@ fn harness_at_size(size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
 }
 
 #[test]
+/// Verify that page-mode controls and confirmation fit inside a short window.
 fn pdf_dialog_modes_and_confirmation_fit_a_short_window() {
     let h = harness_at_size(vec2(960.0, 485.0));
     let screen = h.ctx.content_rect();
@@ -35,6 +38,7 @@ fn pdf_dialog_modes_and_confirmation_fit_a_short_window() {
     }
 }
 
+/// Advance UI frames until the requested PDF dialog condition becomes true.
 fn wait(h: &mut Harness<'_, PhotocraftApp>, ready: impl Fn(&PhotocraftApp) -> bool) {
     let until = Instant::now() + Duration::from_secs(30);
     while !ready(h.state()) {
@@ -45,10 +49,12 @@ fn wait(h: &mut Harness<'_, PhotocraftApp>, ready: impl Fn(&PhotocraftApp) -> bo
     h.run_steps(2);
 }
 
+/// Read the PDF import dialog fields from the current test harness.
 fn fields(h: &Harness<'_, PhotocraftApp>) -> Map<String, Value> {
     h.state().ui.dialogs.iter().find(|d| owns(&d.fields)).unwrap().fields.clone()
 }
 
+/// Confirm the current PDF dialog in the test harness.
 fn finish(h: &mut Harness<'_, PhotocraftApp>) {
     h.get_by_label("OK").click();
     h.run_steps(2);
@@ -64,6 +70,7 @@ fn finish(h: &mut Harness<'_, PhotocraftApp>) {
 }
 
 #[test]
+/// Verify that page and layer destinations retain the selected pages.
 fn pdf_dialog_two_modes_keep_selection_and_all_pages_become_layers() {
     let mut h = harness();
     assert_eq!(fields(&h)["pagesAsLayers"], false);
@@ -99,6 +106,7 @@ fn pdf_dialog_two_modes_keep_selection_and_all_pages_become_layers() {
 }
 
 #[test]
+/// Verify that individual-tab imports retain forward and reverse page order.
 fn pdf_dialog_separate_tabs_keep_page_order_and_reverse_order() {
     for (reverse, expected) in [(false, vec!["colors-1.pdf", "colors-2.pdf", "colors-3.pdf"]), (true, vec!["colors-3.pdf", "colors-2.pdf", "colors-1.pdf"])] {
         let mut h = harness();
@@ -114,6 +122,7 @@ fn pdf_dialog_separate_tabs_keep_page_order_and_reverse_order() {
 }
 
 #[test]
+/// Verify that page subsets and cancellation preserve the intended selection.
 fn pdf_dialog_subset_and_cancel_preserve_the_requested_page_set() {
     for as_layers in [true, false] {
         let mut h = harness();
@@ -145,6 +154,7 @@ fn pdf_dialog_subset_and_cancel_preserve_the_requested_page_set() {
 }
 
 #[test]
+/// Verify that editable PDF artboards are distinguished from ordinary layers.
 fn pdf_dialog_artboard_mode_recognizes_pages_without_confusing_them_with_layers() {
     let mut h = harness();
     h.get_by_label("Select All").click();
