@@ -4854,3 +4854,22 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Zoom current window to fill the screen	सध्याची विंडो स्क्रीन भरेपर्यंत झूम करा
 	Zoom current window to screen size	सध्याची विंडो स्क्रीनच्या आकारापर्यंत झूम करा
 	brush tool	ब्रश साधन
+	Allows rotation and scaling of selection	निवड फिरवणे आणि स्केल करणे शक्य करते
+	Bottom align text	मजकूर खाली संरेखित करा
+	Choose a remix mode	रीमिक्स मोड निवडा
+	Copy CSS	CSS कॉपी करा
+	Could not use the type tool because the layer is locked.	लेयर लॉक असल्यामुळे मजकूर साधन वापरता आले नाही.
+	Draws background color over foreground colors	अग्रभूमी रंगांवर पार्श्वभूमी रंग काढते
+	Enable to remix all layers	सर्व लेयर रीमिक्स करण्यासाठी सक्षम करा
+	No pixels are selected.	कोणतेही पिक्सेल निवडलेले नाहीत.
+	Open as Smart Object…	स्मार्ट ऑब्जेक्ट म्हणून उघडा…
+	Preparing Free Transform	मुक्त ट्रान्सफॉर्मची तयारी करत आहे
+	Scroll All Windows	सर्व विंडो स्क्रोल करा
+	Scroll all open document windows when using the hand tool	हात साधन वापरताना सर्व उघड्या दस्तऐवज विंडो स्क्रोल करा
+	Search and select fonts	फॉन्ट शोधा आणि निवडा
+	Set font size	फॉन्टचा आकार सेट करा
+	Set font style	फॉन्ट शैली सेट करा
+	Set text color	मजकुराचा रंग सेट करा
+	Set the brush angle	ब्रशचा कोन सेट करा
+	The preference could not be saved: {error}	प्राधान्य जतन करता आले नाही: {error}
+	Top align text	मजकूर वर संरेखित करा
