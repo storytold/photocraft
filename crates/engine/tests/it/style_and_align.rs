@@ -113,3 +113,32 @@ fn a_groups_pass_through_pastes_onto_a_pixel_layer_as_normal() {
     s.execute("layer.layerStyle.pasteLayerStyle", json!({"layer": g2})).unwrap();
     assert_eq!(layer(&s, g2).blend, photocraft_color::BlendMode::PassThrough);
 }
+
+#[test]
+fn paste_layer_style_copies_opacity() {
+    let mut s = Session::new();
+    let (a, b) = new_doc(&mut s, "rgb");
+    s.execute("layer.setProps", json!({"layer": a, "opacity": 0.95})).unwrap();
+    s.execute("layer.layerStyle.copyLayerStyle", json!({"layer": a})).unwrap();
+    s.execute("layer.layerStyle.pasteLayerStyle", json!({"layer": b})).unwrap();
+    assert_eq!(layer(&s, b).opacity, layer(&s, a).opacity, "the target takes the source's Opacity");
+    assert!((layer(&s, b).opacity - 0.95).abs() < 1e-6);
+    // One Undo gives the target its old Opacity back.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!((layer(&s, b).opacity - 1.0).abs() < 1e-6, "undo restores the old Opacity");
+}
+
+#[test]
+fn paste_layer_style_onto_several_layers_sets_each_opacity() {
+    let mut s = Session::new();
+    let (a, b) = new_doc(&mut s, "rgb");
+    let c = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setProps", json!({"layer": a, "opacity": 0.4})).unwrap();
+    s.execute("layer.layerStyle.copyLayerStyle", json!({"layer": a})).unwrap();
+    s.execute("layer.select", json!({"layer": b})).unwrap();
+    s.execute("layer.select", json!({"layer": c, "mode": "add"})).unwrap();
+    s.execute("layer.layerStyle.pasteLayerStyle", json!({})).unwrap();
+    for id in [b, c] {
+        assert!((layer(&s, id).opacity - 0.4).abs() < 1e-6, "layer {id}");
+    }
+}

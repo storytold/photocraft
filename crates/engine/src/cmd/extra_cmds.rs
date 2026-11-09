@@ -937,6 +937,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let style = crate::CopiedStyle {
                 effects: l.effects.clone(),
                 blend: l.blend,
+                opacity: l.opacity,
                 fill: l.fill_opacity,
                 advanced: l.advanced,
                 blend_if: l.blend_if.clone(),
@@ -1005,6 +1006,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         } else {
                             style.blend
                         };
+                        l.opacity = style.opacity;
                         l.fill_opacity = style.fill;
                         l.advanced = style.advanced;
                         l.blend_if = blend_if.clone();
