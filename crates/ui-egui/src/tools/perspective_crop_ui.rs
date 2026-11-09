@@ -8,8 +8,8 @@
 //!   wound like its box, which can't be committed;
 //! - ↵ (or ✓) commits: `image.perspectiveCrop` maps the quad onto an upright rectangle, the whole
 //!   document in one undo step. Its size comes from the options bar's W x H (and the resolution),
-//!   which are the Crop tool's fields (`crop_size`), or with them empty from the quad's mean side
-//!   lengths. Esc (or ⊘) cancels.
+//!   which are the Crop tool's fields (`crop_size`), or with them empty from the rectangle the
+//!   quad shows in perspective. Esc (or ⊘) cancels.
 //!
 //! A pending quad belongs to the document it was drawn on, like the Crop tool's frame.
 
@@ -674,9 +674,24 @@ mod tests {
         commit(&mut app);
         assert!(app.ui.perspective_crop.is_none());
         let size = app.session.active().unwrap().doc.size;
-        assert_eq!((size.width, size.height), (110, 86), "the quad's mean side lengths");
+        assert_eq!((size.width, size.height), (120, 92), "the quad's longest edges: no camera at the centre can see this rectangle");
 
         assert_eq!(ordered([[10.0, 90.0], [100.0, 5.0], [0.0, 0.0], [90.0, 100.0]]), [[0.0, 0.0], [100.0, 5.0], [90.0, 100.0], [10.0, 90.0]]);
+    }
+
+    /// ↵ with W and H empty gives the command's perspective size, not the quad's edges (#11798).
+    #[test]
+    fn commit_with_w_and_h_empty_takes_the_perspective_size() {
+        let doc = Document::with_background("p", Size::new(800, 500), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut s = photocraft_engine::Session::new();
+        s.add_document(doc, None);
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        app.ui.tool = Tool::PerspectiveCrop;
+        app.ui.perspective_crop = Some([[100.0, 50.0], [700.0, 80.0], [760.0, 450.0], [40.0, 420.0]]);
+        commit(&mut app);
+        assert!(app.ui.perspective_crop.is_none());
+        let size = app.session.active().unwrap().doc.size;
+        assert!(size.width.abs_diff(731) <= 1 && size.height.abs_diff(588) <= 1, "{} x {}", size.width, size.height);
     }
 
     /// Clicking ⇄ in the rendered options bar swaps W and H, although Perspective Crop never sets
