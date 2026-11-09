@@ -62,13 +62,12 @@ mod color_mixer;
 mod colour_lut;
 mod contrast;
 mod exposure;
-mod hsv_table;
-
 pub mod geometry;
-pub mod masks;
+mod hsv_table;
 mod local_detail;
 mod local_detail_tables;
 mod local_tone;
+pub mod masks;
 mod per_pixel;
 mod presence;
 mod white_balance;

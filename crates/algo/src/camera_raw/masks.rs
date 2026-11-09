@@ -87,7 +87,10 @@ pub enum Shape {
         dabs: Vec<Dab>,
     },
     /// Fully on at `full`, off at `zero` (0 … 1 image coordinates), smooth in between.
-    Linear { zero: [f32; 2], full: [f32; 2] },
+    Linear {
+        zero: [f32; 2],
+        full: [f32; 2],
+    },
     /// An ellipse: `center`, half axes `radius` (fractions of width and height), `angle` in
     /// degrees, `feather` 0 … 100; `inside: false` selects the outside (Camera Raw's Invert).
     Radial {
@@ -124,7 +127,9 @@ pub enum Shape {
         part: PeoplePart,
     },
     /// An object inside `rect` (`[x0, y0, x1, y1]`, 0 … 1).
-    Objects { rect: [f32; 4] },
+    Objects {
+        rect: [f32; 4],
+    },
 }
 
 fn fifty() -> f32 {
@@ -499,11 +504,7 @@ pub const WEIGHT_POWER: f32 = 1.2;
 fn mix(a: f32, b: f32, t: f32, enc: super::Encoding) -> f32 {
     let (la, lb) = (enc.decode(a), enc.decode(b));
     const FLOOR: f32 = 1e-4;
-    if la > FLOOR && lb > FLOOR && la.is_finite() && lb.is_finite() {
-        enc.encode((la.ln() + (lb.ln() - la.ln()) * t).exp())
-    } else {
-        a + (b - a) * t
-    }
+    if la > FLOOR && lb > FLOOR && la.is_finite() && lb.is_finite() { enc.encode((la.ln() + (lb.ln() - la.ln()) * t).exp()) } else { a + (b - a) * t }
 }
 
 /// The box `[x0, x1) × [y0, y1)` where `cov` is on, or `None` when it is off everywhere.

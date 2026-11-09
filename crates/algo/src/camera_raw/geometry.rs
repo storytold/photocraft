@@ -40,8 +40,8 @@ pub mod upright;
 /// Camera Raw's stretch along the keystone direction for Vertical / Horizontal 0, 5, …, 100
 /// (measured; the Vertical and Horizontal sliders share it, combined by their length).
 pub const STRETCH: [f64; 21] = [
-    1.0, 1.00099, 1.00244, 1.00523, 1.00988, 1.01733, 1.02748, 1.04102, 1.05864, 1.08134, 1.10780, 1.13991, 1.17730, 1.22035, 1.26904, 1.32364,
-    1.38394, 1.45026, 1.52138, 1.59853, 1.68087,
+    1.0, 1.00099, 1.00244, 1.00523, 1.00988, 1.01733, 1.02748, 1.04102, 1.05864, 1.08134, 1.10780, 1.13991, 1.17730, 1.22035, 1.26904, 1.32364, 1.38394,
+    1.45026, 1.52138, 1.59853, 1.68087,
 ];
 
 /// Most Upright guides Camera Raw accepts.
@@ -298,7 +298,8 @@ pub fn validate(p: &CameraRaw) -> Result<(), String> {
     if !p.upright_guides.iter().flatten().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
         return Err("upright guide points must be finite and in 0..=1".into());
     }
-    let sliders = [p.perspective_vertical, p.perspective_horizontal, p.perspective_rotate, p.perspective_aspect, p.perspective_scale, p.perspective_x, p.perspective_y];
+    let sliders =
+        [p.perspective_vertical, p.perspective_horizontal, p.perspective_rotate, p.perspective_aspect, p.perspective_scale, p.perspective_x, p.perspective_y];
     if !sliders.iter().all(|v| v.is_finite()) {
         return Err("Transform sliders must be finite".into());
     }
@@ -358,12 +359,7 @@ pub fn homography(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) -> [f64; 9
 fn cubic(t: f32) -> [f32; 4] {
     let t2 = t * t;
     let t3 = t2 * t;
-    [
-        -0.5 * t3 + t2 - 0.5 * t,
-        1.5 * t3 - 2.5 * t2 + 1.0,
-        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
-        0.5 * t3 - 0.5 * t2,
-    ]
+    [-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2]
 }
 
 /// Premultiplied RGBA at `(x, y)` (pixel-centre coordinates: pixel `i` spans `i … i+1`),

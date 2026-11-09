@@ -251,7 +251,8 @@ fn paint(out: &mut [f32], w: usize, h: usize, dabs: &[Dab], colours: Option<&[[f
         let x1 = ((cx + r).ceil().max(0.0) as usize).min(w);
         let y0 = ((cy - r).floor().max(0.0) as usize).min(h);
         let y1 = ((cy + r).ceil().max(0.0) as usize).min(h);
-        let centre = colours.filter(|_| d.auto).and_then(|c| c.get((cy as usize).min(h.saturating_sub(1)) * w + (cx as usize).min(w.saturating_sub(1)))).copied();
+        let centre =
+            colours.filter(|_| d.auto).and_then(|c| c.get((cy as usize).min(h.saturating_sub(1)) * w + (cx as usize).min(w.saturating_sub(1)))).copied();
         for y in y0..y1 {
             for x in x0..x1 {
                 let dist = (x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy);

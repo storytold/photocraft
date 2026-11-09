@@ -58,13 +58,16 @@ fn num(s: Option<&str>) -> Option<f32> {
 }
 
 fn crs<'a>(n: roxmltree::Node<'a, '_>, key: &str) -> Option<&'a str> {
-    n.attribute((CRS_NS, key)).or_else(|| n.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS) && c.tag_name().name() == key).and_then(|c| c.text()))
+    n.attribute((CRS_NS, key))
+        .or_else(|| n.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS) && c.tag_name().name() == key).and_then(|c| c.text()))
 }
 
 /// The `rdf:li` items of the `rdf:Seq` under `n`, each as the node carrying its properties
 /// (the `rdf:li` itself or its `rdf:Description`).
 fn items<'a, 'i>(n: roxmltree::Node<'a, 'i>) -> Vec<roxmltree::Node<'a, 'i>> {
-    let Some(seq) = n.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(RDF_NS) && c.tag_name().name() == "Seq") else { return Vec::new() };
+    let Some(seq) = n.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(RDF_NS) && c.tag_name().name() == "Seq") else {
+        return Vec::new();
+    };
     seq.children()
         .filter(|c| c.is_element() && c.tag_name().name() == "li")
         .map(|li| li.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(RDF_NS) && c.tag_name().name() == "Description").unwrap_or(li))

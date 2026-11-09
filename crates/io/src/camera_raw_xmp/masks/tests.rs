@@ -15,11 +15,19 @@ fn masks_round_trip_exactly_through_photocraft_attribute() {
         masks: vec![
             Mask {
                 name: "Sky & \"sea\" <1>".into(),
-                components: vec![comp(Shape::Sky), Component { op: Op::Subtract, invert: true, shape: Shape::Luminance { range: [10.0, 40.0], smoothness: 20.0 } }],
+                components: vec![
+                    comp(Shape::Sky),
+                    Component { op: Op::Subtract, invert: true, shape: Shape::Luminance { range: [10.0, 40.0], smoothness: 20.0 } },
+                ],
                 adjust: Local { exposure: -0.5, ..Local::default() },
                 ..Mask::default()
             },
-            Mask { components: vec![comp(Shape::Linear { zero: [0.5, 0.6], full: [0.5, 0.1] })], adjust: Local { dehaze: 30.0, ..Local::default() }, amount: 150.0, ..Mask::default() },
+            Mask {
+                components: vec![comp(Shape::Linear { zero: [0.5, 0.6], full: [0.5, 0.1] })],
+                adjust: Local { dehaze: 30.0, ..Local::default() },
+                amount: 150.0,
+                ..Mask::default()
+            },
         ],
         ..CameraRaw::default()
     };
@@ -177,7 +185,8 @@ fn settings_without_masks_clear_them_on_load() {
 #[test]
 fn save_refuses_a_file_load_would_refuse() {
     // Valid masks: 8 brushes of the most dabs, each dab its own run (sizes vary).
-    let dabs: Vec<Dab> = (0..masks::MAX_DABS).map(|i| Dab { y: (i / 100) as f32 / 40.0, ..dab((i % 100) as f32 / 100.0, 0.01 + (i % 7) as f32 * 0.001) }).collect();
+    let dabs: Vec<Dab> =
+        (0..masks::MAX_DABS).map(|i| Dab { y: (i / 100) as f32 / 40.0, ..dab((i % 100) as f32 / 100.0, 0.01 + (i % 7) as f32 * 0.001) }).collect();
     let p = CameraRaw { masks: vec![one(Shape::Brush { dabs }); 8], ..CameraRaw::default() };
     assert!(p.validate().is_ok());
     let e = save(&p).unwrap_err();

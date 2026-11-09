@@ -138,10 +138,11 @@ impl DetailPreview {
             if cancel.load(Ordering::Relaxed) {
                 return;
             }
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| develop_framed(&source, raw_curve.as_deref().map(Vec::as_slice), area, canvas, opaque, &params, &coverage)))
-                    .map(|surface| (revision, surface))
-                    .map_err(|_| "RAW Develop detail preview failed; the proxy remains available".into());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                develop_framed(&source, raw_curve.as_deref().map(Vec::as_slice), area, canvas, opaque, &params, &coverage)
+            }))
+            .map(|surface| (revision, surface))
+            .map_err(|_| "RAW Develop detail preview failed; the proxy remains available".into());
             if !cancel.load(Ordering::Relaxed) {
                 let _ = tx.send(result);
                 ctx.request_repaint();
@@ -327,7 +328,15 @@ fn develop(source: &Surface, curve: Option<&[[f32; 2]]>, area: PixelRect, params
 /// [`develop`] where the document's `canvas` differs from `area`: with Geometry on, only the
 /// canvas is developed (warped about its centre), as the committed filter does
 /// (`lens_cmds::camera_raw_cmd`), so the preview shows what will be applied.
-fn develop_framed(source: &Surface, curve: Option<&[[f32; 2]]>, area: PixelRect, canvas: Option<PixelRect>, opaque: bool, params: &CameraRaw, coverage: &Coverage) -> Surface {
+fn develop_framed(
+    source: &Surface,
+    curve: Option<&[[f32; 2]]>,
+    area: PixelRect,
+    canvas: Option<PixelRect>,
+    opaque: bool,
+    params: &CameraRaw,
+    coverage: &Coverage,
+) -> Surface {
     let tone = photocraft_io::raw::Tone {
         shadows: params.shadows,
         highlights: params.highlights,
@@ -500,7 +509,10 @@ mod tests {
         assert_eq!(develop_framed(&source, None, area, Some(canvas), false, &params, &Coverage::None), committed);
         // Without Geometry the whole extent develops, as the command does then.
         let tone = CameraRaw { exposure: 0.5, ..Default::default() };
-        assert_eq!(develop_framed(&source, None, area, Some(canvas), false, &tone, &Coverage::None), photocraft_engine::lens_cmds::camera_raw_surface(&source, area, &tone));
+        assert_eq!(
+            develop_framed(&source, None, area, Some(canvas), false, &tone, &Coverage::None),
+            photocraft_engine::lens_cmds::camera_raw_surface(&source, area, &tone)
+        );
     }
 
     #[test]

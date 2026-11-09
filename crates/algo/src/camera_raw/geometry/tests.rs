@@ -1,5 +1,5 @@
-use super::upright::{self, guided, homography_from_segments, level_angle, vanishing_point};
 use super::lines::Segment;
+use super::upright::{self, guided, homography_from_segments, level_angle, vanishing_point};
 use super::*;
 
 fn pt(m: &[f64; 9], x: f64, y: f64) -> [f64; 2] {
@@ -24,13 +24,16 @@ fn grid(w: f64, h: f64) -> Vec<[f64; 2]> {
 }
 
 fn worst(a: &[f64; 9], b: &[f64; 9], w: f64, h: f64) -> f64 {
-    grid(w, h).iter().map(|p| {
-        let (x, y) = (pt(a, p[0], p[1]), pt(b, p[0], p[1]));
-        let d = (x[0] - y[0]).hypot(x[1] - y[1]);
-        // `f64::max` drops a NaN, which would let a broken matrix pass.
-        assert!(d.is_finite(), "non-finite distance at {p:?}");
-        d
-    }).fold(0.0, f64::max)
+    grid(w, h)
+        .iter()
+        .map(|p| {
+            let (x, y) = (pt(a, p[0], p[1]), pt(b, p[0], p[1]));
+            let d = (x[0] - y[0]).hypot(x[1] - y[1]);
+            // `f64::max` drops a NaN, which would let a broken matrix pass.
+            assert!(d.is_finite(), "non-finite distance at {p:?}");
+            d
+        })
+        .fold(0.0, f64::max)
 }
 
 fn t(f: impl FnOnce(&mut Transform)) -> Transform {
@@ -47,7 +50,13 @@ fn manual_sliders_match_photoshops_measured_homographies() {
         (t(|t| t.horizontal = -50.0), [1.1074, 0.00001, -0.00003, 0.00001, 1.00035, 0.00011, 0.25016, -0.00003]),
         (t(|t| t.rotate = 10.0), [0.98458, -0.17364, 0.0, 0.17359, 0.98503, 0.00012, -0.00003, -0.00006]),
         (t(|t| t.aspect = -100.0), [1.09521, 0.0, 0.00002, -0.00001, 0.91312, 0.00011, -0.00003, 0.00003]),
-        (t(|t| { t.vertical = 30.0; t.horizontal = 20.0 }), [1.01342, 0.02038, 0.00005, 0.02031, 1.03075, 0.00017, -0.1, -0.1501]),
+        (
+            t(|t| {
+                t.vertical = 30.0;
+                t.horizontal = 20.0
+            }),
+            [1.01342, 0.02038, 0.00005, 0.02031, 1.03075, 0.00017, -0.1, -0.1501],
+        ),
         (
             t(|t| {
                 t.vertical = -20.0;
@@ -234,7 +243,14 @@ fn plumb_and_level(u: &[f64; 9], m: &[f64; 9]) -> (f64, f64) {
 #[test]
 fn vertical_upright_undoes_a_tilted_camera() {
     let (w, h) = (1200.0, 800.0);
-    let tilted = manual(&t(|t| { t.vertical = -35.0; t.rotate = 4.0 }), w, h);
+    let tilted = manual(
+        &t(|t| {
+            t.vertical = -35.0;
+            t.rotate = 4.0
+        }),
+        w,
+        h,
+    );
     let u = homography_from_segments(&facade(&tilted), w, h, Upright::Vertical).expect("a correction");
     let (v, _) = plumb_and_level(&u, &tilted);
     assert!(v < 0.05, "verticals off by {v}°");
@@ -243,7 +259,15 @@ fn vertical_upright_undoes_a_tilted_camera() {
 #[test]
 fn full_upright_makes_verticals_plumb_and_horizontals_level() {
     let (w, h) = (1200.0, 800.0);
-    let tilted = manual(&t(|t| { t.vertical = 25.0; t.horizontal = -30.0; t.rotate = -2.0 }), w, h);
+    let tilted = manual(
+        &t(|t| {
+            t.vertical = 25.0;
+            t.horizontal = -30.0;
+            t.rotate = -2.0
+        }),
+        w,
+        h,
+    );
     let u = homography_from_segments(&facade(&tilted), w, h, Upright::Full).expect("a correction");
     let (v, hz) = plumb_and_level(&u, &tilted);
     assert!(v < 0.05 && hz < 0.05, "{v}° / {hz}°");
@@ -442,6 +466,7 @@ fn upright_debug() {
     let (Ok(path), Ok(w), Ok(h)) = (std::env::var("UPRIGHT_RAW"), std::env::var("UPRIGHT_W"), std::env::var("UPRIGHT_H")) else { return };
     let (w, h): (usize, usize) = (w.parse().unwrap(), h.parse().unwrap());
     let bytes = std::fs::read(path).unwrap();
-    let px: Vec<[f32; 4]> = bytes.as_chunks::<16>().0.iter().map(|c| std::array::from_fn(|k| f32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]]))).collect();
+    let px: Vec<[f32; 4]> =
+        bytes.as_chunks::<16>().0.iter().map(|c| std::array::from_fn(|k| f32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]]))).collect();
     upright::debug(&px, w, h);
 }

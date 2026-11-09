@@ -2,10 +2,12 @@ use super::shapes::render;
 use super::*;
 
 fn flat(w: usize, h: usize, f: impl Fn(usize, usize) -> [f32; 3]) -> Vec<[f32; 4]> {
-    (0..w * h).map(|i| {
-        let c = f(i % w, i / w);
-        [c[0], c[1], c[2], 1.0]
-    }).collect()
+    (0..w * h)
+        .map(|i| {
+            let c = f(i % w, i / w);
+            [c[0], c[1], c[2], 1.0]
+        })
+        .collect()
 }
 
 fn at(v: &[f32], w: usize, x: usize, y: usize) -> f32 {
@@ -33,7 +35,10 @@ fn radial_gradient_is_on_inside_and_off_outside() {
     let v = render(&Shape::Radial { center: [0.5, 0.5], radius: [0.3, 0.3], angle: 0.0, feather: 50.0 }, &px, w, h);
     assert!(at(&v, w, 50, 40) > 0.999);
     assert!(at(&v, w, 2, 2) < 1e-6);
-    let inv = Mask { components: vec![Component { invert: true, ..comp(Shape::Radial { center: [0.5, 0.5], radius: [0.3, 0.3], angle: 0.0, feather: 50.0 }) }], ..Mask::default() };
+    let inv = Mask {
+        components: vec![Component { invert: true, ..comp(Shape::Radial { center: [0.5, 0.5], radius: [0.3, 0.3], angle: 0.0, feather: 50.0 }) }],
+        ..Mask::default()
+    };
     let c = coverage(&inv, &px, w, h);
     assert!(at(&c, w, 50, 40) < 1e-6 && at(&c, w, 2, 2) > 0.999);
 }
@@ -119,8 +124,25 @@ fn local_exposure_brightens_only_under_the_mask() {
 #[test]
 fn ai_components_run_on_any_image() {
     let (w, h) = (48, 36);
-    let px = flat(w, h, |x, y| if (12..36).contains(&x) && (8..30).contains(&y) { [0.9, 0.5, 0.2] } else if y < 8 { [0.5, 0.7, 0.95] } else { [0.2, 0.25, 0.2] });
-    for s in [Shape::Subject, Shape::Sky, Shape::Background, Shape::People { part: PeoplePart::Person }, Shape::People { part: PeoplePart::Face }, Shape::People { part: PeoplePart::Skin }, Shape::Objects { rect: [0.2, 0.2, 0.8, 0.8] }, Shape::Objects { rect: [f32::NAN; 4] }] {
+    let px = flat(w, h, |x, y| {
+        if (12..36).contains(&x) && (8..30).contains(&y) {
+            [0.9, 0.5, 0.2]
+        } else if y < 8 {
+            [0.5, 0.7, 0.95]
+        } else {
+            [0.2, 0.25, 0.2]
+        }
+    });
+    for s in [
+        Shape::Subject,
+        Shape::Sky,
+        Shape::Background,
+        Shape::People { part: PeoplePart::Person },
+        Shape::People { part: PeoplePart::Face },
+        Shape::People { part: PeoplePart::Skin },
+        Shape::Objects { rect: [0.2, 0.2, 0.8, 0.8] },
+        Shape::Objects { rect: [f32::NAN; 4] },
+    ] {
         let v = render(&s, &px, w, h);
         assert_eq!(v.len(), w * h);
         assert!(v.iter().all(|x| x.is_finite() && (0.0..=1.0).contains(x)), "{s:?}");
