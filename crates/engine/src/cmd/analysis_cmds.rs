@@ -791,7 +791,8 @@ fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
     let active_bg = st.active_layer.and_then(|id| d.layer(id)).is_some_and(|l| d.is_background(l.id));
     let crop = p.get("crop").and_then(Value::as_bool).unwrap_or(active_bg || st.active_layer.is_none());
     let (w0, h0) = (f64::from(d.size.width), f64::from(d.size.height));
-    compound(s, "Straighten", |s| {
+    // Turning a layer is a Free Transform step in the reference; the crop path keeps its name (#11992).
+    compound(s, if crop { "Straighten" } else { "Free Transform" }, |s| {
         if crop {
             s.execute("image.rotation.arbitrary", json!({"angle": rot, "direction": "cw"}))?;
             let nd = doc(s)?;
@@ -800,11 +801,8 @@ fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
             let (cw, ch) = (cw.floor().clamp(1.0, nw), ch.floor().clamp(1.0, nh));
             s.execute("image.crop", json!({"x": ((nw - cw) / 2.0).round(), "y": ((nh - ch) / 2.0).round(), "width": cw, "height": ch}))?;
         } else {
-            let (cx, cy) = (w0 / 2.0, h0 / 2.0);
-            let (sn, cs) = rot.to_radians().sin_cos();
-            // Clockwise on screen (y down) about the canvas centre.
-            let m = [cs, sn, -sn, cs, cx - (cs * cx - sn * cy), cy - (sn * cx + cs * cy)];
-            s.execute("edit.transform", json!({"matrix": m}))?;
+            // Clockwise on screen about the centre of the layer's own frame (#11992).
+            s.execute("edit.transform", json!({"rotate": rot}))?;
         }
         // The ruler is cleared after straightening, as in Photoshop.
         set_quiet(s, |d| d.measurement.ruler = None)
@@ -1418,5 +1416,8 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "analysis_straighten_enabled_tests.rs"]
 mod analysis_straighten_enabled_tests;
+#[cfg(test)]
+#[path = "analysis_straighten_pivot_tests.rs"]
+mod analysis_straighten_pivot_tests;
 #[cfg(test)]
 mod tests;
