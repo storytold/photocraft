@@ -59,19 +59,22 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
 mod color_mixer;
-mod hsv_table;
-mod presence;
 mod colour_lut;
 mod contrast;
 mod exposure;
+mod hsv_table;
 mod local_detail;
 mod local_detail_tables;
 mod local_tone;
 mod per_pixel;
+mod presence;
 mod white_balance;
 mod whites_blacks;
 
-pub use per_pixel::{CURVE_LUT, FIX_GRID, Grade, Grain, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, TONE_STEPS, Vignette, VignetteStyle, WhitesBlacks, per_pixel, white_black_points};
+pub use per_pixel::{
+    CURVE_LUT, FIX_GRID, Grade, Grain, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, TONE_STEPS, Vignette, VignetteStyle, WhitesBlacks,
+    per_pixel, white_black_points,
+};
 pub use whites_blacks::{RowOn, TonePoints, Tones};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,

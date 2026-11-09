@@ -136,7 +136,8 @@ pub(crate) fn mixer(hue: &[f32; 8], sat: &[f32; 8], lum: &[f32; 8]) -> Option<Mi
         let base = (KINDS - 1 - kind) * NODES;
         for h in 0..HUES {
             // The kind's effective slider value at this hue.
-            let u: f32 = values.iter().zip(weights).map(|(v, w)| if v.is_finite() { v.clamp(-100.0, 100.0) * w.get(h).copied().unwrap_or(0.0) } else { 0.0 }).sum();
+            let u: f32 =
+                values.iter().zip(weights).map(|(v, w)| if v.is_finite() { v.clamp(-100.0, 100.0) * w.get(h).copied().unwrap_or(0.0) } else { 0.0 }).sum();
             for node in h * SATS * VALS..(h + 1) * SATS * VALS {
                 if let Some(o) = out.get_mut(base + node) {
                     *o = at_value(tables, u, node);
