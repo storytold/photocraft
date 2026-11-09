@@ -458,8 +458,8 @@
 	Layer from Background…	Lớp từ nền…
 	Layer Mask	Mặt nạ lớp
 	Layer Style	Kiểu lớp
-	Layer via Copy	Lớp bằng sao chép
-	Layer via Cut	Lớp bằng cắt
+	Layer Via Copy	Lớp bằng sao chép
+	Layer Via Cut	Lớp bằng cắt
 	Layer…	Lớp…
 	Left Edges	Cạnh trái
 	Levels…	Mức…
@@ -4018,8 +4018,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+	Scroll All Windows	Cuộn mọi cửa sổ
 	The path was kept as the Work Path	Đường dẫn được giữ lại làm Đường dẫn làm việc
 	The path was discarded	Đường dẫn đã bị loại bỏ
+# Art History Brush (#213).
 	Art History Brush	Cọ lịch sử nghệ thuật
 	Art History Brush Tool	Công cụ Cọ lịch sử nghệ thuật
 	Tight Short	Chặt ngắn
@@ -4111,6 +4113,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Chọn một tài liệu khác cho mỗi kênh.
 	A picked document is no longer open.	Một tài liệu đã chọn không còn mở.
 	A picked document is no longer a grayscale document of the same size.	Một tài liệu đã chọn không còn là tài liệu thang xám cùng kích thước.
+	Netscape Gray	Xám Netscape
 # Move tool options bar (#11381)
 	Align top edges	Căn các cạnh trên
 	Align vertical centers	Căn các tâm dọc

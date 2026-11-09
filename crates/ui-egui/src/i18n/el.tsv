@@ -1927,8 +1927,8 @@
 	Group…	Ομάδα…
 	Artboard…	Πίνακας σχεδίασης…
 	Artboard from Group…	Πίνακας σχεδίασης από ομάδα…
-	Layer via Copy	Επίπεδο μέσω αντιγραφής
-	Layer via Cut	Επίπεδο μέσω αποκοπής
+	Layer Via Copy	Επίπεδο μέσω αντιγραφής
+	Layer Via Cut	Επίπεδο μέσω αποκοπής
 	Layer From Background…	Επίπεδο από φόντο…
 	Layer from Background…	Επίπεδο από φόντο…
 	Background From Layer	Φόντο από επίπεδο
@@ -4207,8 +4207,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Διαβάθμιση του γκρι
 	Current Colors	Τρέχοντα χρώματα
 	Make Ramp Web Safe	Μόνο χρώματα ιστού στη διαβάθμιση
+	Scroll All Windows	Κύλιση όλων των παραθύρων
 	The path was kept as the Work Path	Η διαδρομή διατηρήθηκε ως διαδρομή εργασίας
 	The path was discarded	Η διαδρομή απορρίφθηκε
+# Art History Brush (#213).
 	Art History Brush Tool	Πινέλο ιστορικού τέχνης (Art History Brush Tool)
 	Tight Short	Σφιχτό κοντό
 	Tight Medium	Σφιχτό μεσαίο
@@ -4306,6 +4308,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Επιλέξτε διαφορετικό έγγραφο για κάθε κανάλι.
 	A picked document is no longer open.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον ανοιχτό.
 	A picked document is no longer a grayscale document of the same size.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον έγγραφο σε κλίμακα του γκρι ίδιου μεγέθους.
+	Netscape Gray	Γκρι Netscape
 # Move tool options bar (#11381)
 	Align top edges	Στοίχιση πάνω άκρων
 	Align vertical centers	Στοίχιση κατακόρυφων κέντρων

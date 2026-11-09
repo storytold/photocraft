@@ -316,3 +316,7 @@ sync_github_name = false
 real_name = "David Vanhoucke"
 [people.Kaedo17]
 sync_github_name = true
+
+[people.rmsff]
+real_name = "Serikov Roman"
+sync_github_name = false
