@@ -403,10 +403,21 @@ pub fn warp_patches_surface(
             let (tris, rank) = ordered_triangles(&verts, &m.pos, &m.quads, &fold);
             (verts, tris, rank)
         }
-        None => {
-            let leaves = tessellate(&at, cuts_u, cuts_v, sw, sh, facets);
-            cell_triangles(&at, &leaves, [x0, y0, sw, sh], &fold)
-        }
+        None => match quilt_mesh(&at, cuts_u, cuts_v).filter(|_| facets == Facets::Mesh) {
+            Some(m) => {
+                let verts: Vec<([f64; 2], [f64; 2])> = m.uv.iter().zip(&m.pos).map(|(p, &d)| (d, [x0 + sw * p[0], y0 + sh * p[1]])).collect();
+                let (tris, rank) = ordered_triangles(&verts, &m.pos, &m.quads, &fold);
+                // Under the cells, the slivers that close a T-junction's crack.
+                let fill = t_slivers(&m.uv, &m.quads);
+                let rank_of = |q: usize| rank.get(2 * q).copied().unwrap_or(0);
+                let (fill_tris, fill_rank): (Vec<[usize; 3]>, Vec<u32>) = fill.iter().map(|&(t, q)| (t, rank_of(q))).unzip();
+                (verts, fill_tris.into_iter().chain(tris).collect(), fill_rank.into_iter().chain(rank).collect())
+            }
+            None => {
+                let leaves = tessellate(&at, cuts_u, cuts_v, sw, sh, facets);
+                cell_triangles(&at, &leaves, [x0, y0, sw, sh], &fold)
+            }
+        },
     };
     let rank_of_tris = move || rank.clone();
     // The reference application draws a warp's border half a pixel out (see `Draw::fringe`).
@@ -419,6 +430,143 @@ pub fn warp_patches_surface(
         &Interrupt::NONE,
         Draw { single: sampling == Sampling::Single, fringe: true, stack: matches!(fold, Fold::Stack(_)).then_some(&rank_of_tris) },
     )
+}
+
+/// A mesh split into several patches (`cuts_u`/`cuts_v` inside `0..1`), cut patch by patch as
+/// the reference application cuts a quilt (see [`crate::warp_tess::quilt_patch_mesh`]), in the
+/// whole surface's normalised coordinates. `None` when a patch can't be evaluated.
+fn quilt_mesh(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64]) -> Option<crate::warp_tess::EnvelopeMesh> {
+    let (us, vs) = (cut_list(cuts_u), cut_list(cuts_v));
+    let mut all = crate::warp_tess::EnvelopeMesh { uv: Vec::new(), pos: Vec::new(), quads: Vec::new() };
+    for v in vs.windows(2) {
+        for u in us.windows(2) {
+            let (&[ua, ub], &[va, vb]) = (u, v) else { continue };
+            let sub = |s: f64, t: f64| at(ua + (ub - ua) * s, va + (vb - va) * t);
+            let m = crate::warp_tess::quilt_patch_mesh(&sub)?;
+            let base = all.uv.len();
+            all.uv.extend(m.uv.iter().map(|p| [ua + (ub - ua) * p[0], va + (vb - va) * p[1]]));
+            all.pos.extend(m.pos);
+            all.quads.extend(m.quads.iter().map(|q| q.map(|i| i + base)));
+        }
+    }
+    Some(stitch_patches(all, &us, &vs))
+}
+
+/// Triangles closing the cracks at T-junctions of `quads` (vertex indices into `uv`, normalised
+/// source positions): where points of smaller cells lie inside a cell's edge but stay on the
+/// surface (as the reference application leaves them), the gap between that straight edge and the
+/// points is fanned from the edge's first end. Each comes with the index of its quad.
+fn t_slivers(uv: &[[f64; 2]], quads: &[[usize; 4]]) -> Vec<([usize; 3], usize)> {
+    use std::collections::HashMap;
+    let q = |t: f64| (t * f64::from(1u32 << 30)).round() as i64;
+    // Points along each line of constant u (by v) and constant v (by u).
+    let mut on_u: HashMap<i64, Vec<(f64, usize)>> = HashMap::new();
+    let mut on_v: HashMap<i64, Vec<(f64, usize)>> = HashMap::new();
+    for (i, p) in uv.iter().enumerate() {
+        on_u.entry(q(p[0])).or_default().push((p[1], i));
+        on_v.entry(q(p[1])).or_default().push((p[0], i));
+    }
+    for l in on_u.values_mut().chain(on_v.values_mut()) {
+        l.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+    let mut out = Vec::new();
+    for (k, &[tl, tr, bl, br]) in quads.iter().enumerate() {
+        // Top and bottom edges run along u at constant v; left and right along v at constant u.
+        for (a, b, along_u) in [(tl, tr, true), (bl, br, true), (tl, bl, false), (tr, br, false)] {
+            let (Some(pa), Some(pb)) = (uv.get(a), uv.get(b)) else { continue };
+            let (line, from, to, lines) = if along_u { (q(pa[1]), pa[0], pb[0], &on_v) } else { (q(pa[0]), pa[1], pb[1], &on_u) };
+            let (lo, hi) = (from.min(to), from.max(to));
+            let Some(points) = lines.get(&line) else { continue };
+            let mut inside: Vec<usize> = points.iter().filter(|(t, _)| *t > lo + 1e-12 && *t < hi - 1e-12).map(|&(_, i)| i).collect();
+            if inside.is_empty() {
+                continue;
+            }
+            if from > to {
+                inside.reverse();
+            }
+            inside.push(b);
+            let mut prev = inside[0];
+            for &next in inside.iter().skip(1) {
+                out.push(([a, prev, next], k));
+                prev = next;
+            }
+        }
+    }
+    out
+}
+
+/// Joins the patches of a quilt: a point the patches share becomes one vertex, and a point on a
+/// patch border inside a neighbouring patch's longer edge is moved onto that straight edge, so no
+/// crack opens where the two sides were cut differently.
+fn stitch_patches(m: crate::warp_tess::EnvelopeMesh, us: &[f64], vs: &[f64]) -> crate::warp_tess::EnvelopeMesh {
+    use std::collections::HashMap;
+    let q = |t: f64| (t * f64::from(1u32 << 30)).round() as i64;
+    let mut index: HashMap<(i64, i64), usize> = HashMap::new();
+    let (mut uv, mut pos) = (Vec::new(), Vec::new());
+    let mut remap = Vec::with_capacity(m.uv.len());
+    for (p, &d) in m.uv.iter().zip(&m.pos) {
+        let id = *index.entry((q(p[0]), q(p[1]))).or_insert_with(|| {
+            uv.push(*p);
+            pos.push(d);
+            uv.len() - 1
+        });
+        remap.push(id);
+    }
+    let quads: Vec<[usize; 4]> = m.quads.iter().map(|c| c.map(|i| remap.get(i).copied().unwrap_or(0))).collect();
+    // Edges lying on a patch border: (axis of the line, line, from, to, from vertex, to vertex).
+    let inner = |cuts: &[f64]| -> Vec<i64> { cuts.iter().skip(1).take(cuts.len().saturating_sub(2)).map(|&c| q(c)).collect() };
+    let (lines_u, lines_v) = (inner(us), inner(vs));
+    let mut edges: Vec<(usize, i64, f64, f64, usize, usize)> = Vec::new();
+    for c in &quads {
+        let [tl, tr, bl, br] = *c;
+        for (a, b) in [(tl, bl), (tr, br)] {
+            if let (Some(pa), Some(pb)) = (uv.get(a), uv.get(b))
+                && q(pa[0]) == q(pb[0])
+                && lines_u.contains(&q(pa[0]))
+            {
+                edges.push((0, q(pa[0]), pa[1], pb[1], a, b));
+            }
+        }
+        for (a, b) in [(tl, tr), (bl, br)] {
+            if let (Some(pa), Some(pb)) = (uv.get(a), uv.get(b))
+                && q(pa[1]) == q(pb[1])
+                && lines_v.contains(&q(pa[1]))
+            {
+                edges.push((1, q(pa[1]), pa[0], pb[0], a, b));
+            }
+        }
+    }
+    // Longest edges first, so an edge's own ends are already where they belong.
+    edges.sort_by(|a, b| (b.3 - b.2).abs().total_cmp(&(a.3 - a.2).abs()));
+    // The points on each border line, with their place along it.
+    let mut on_line: HashMap<(usize, i64), Vec<(f64, usize)>> = HashMap::new();
+    for (k, p) in uv.iter().enumerate() {
+        if lines_u.contains(&q(p[0])) {
+            on_line.entry((0, q(p[0]))).or_default().push((p[1], k));
+        }
+        if lines_v.contains(&q(p[1])) {
+            on_line.entry((1, q(p[1]))).or_default().push((p[0], k));
+        }
+    }
+    let mut moved = vec![false; uv.len()];
+    for &(axis, line, from, to, a, b) in &edges {
+        let (lo, hi) = (from.min(to), from.max(to));
+        let Some(points) = on_line.get(&(axis, line)) else { continue };
+        for &(t, k) in points {
+            if t <= lo + 1e-12 || t >= hi - 1e-12 || moved.get(k).copied().unwrap_or(true) {
+                continue;
+            }
+            let (Some(&pa), Some(&pb)) = (pos.get(a), pos.get(b)) else { continue };
+            let s = (t - from) / (to - from);
+            if let Some(slot) = pos.get_mut(k) {
+                *slot = [pa[0] + (pb[0] - pa[0]) * s, pa[1] + (pb[1] - pa[1]) * s];
+            }
+            if let Some(m) = moved.get_mut(k) {
+                *m = true;
+            }
+        }
+    }
+    crate::warp_tess::EnvelopeMesh { uv, pos, quads }
 }
 
 /// The sorted, deduplicated cuts of `0..1` from `inner` (values outside or non-finite dropped).
@@ -2197,5 +2345,77 @@ mod tests {
         };
         let at = warp_mesh_gray_with(&m, &pull, Fold::IN_PLACE, Interp::Bilinear).read_region(Rect::new(85, 5, 86, 6))[0];
         assert!((at - 1.0).abs() < 1e-3, "the folded-back edge strip is on top: {at}");
+    }
+
+    /// A warp split into two patches, bent by two bumps: each patch is cut on its own (a flat
+    /// patch stays whole), and where a smaller cell's point lies inside a bigger cell's edge, the
+    /// gap between the edge and the point is filled, so no pixel inside the picture is left
+    /// transparent.
+    #[test]
+    fn a_split_warp_opens_no_crack() {
+        use photocraft_geom::warp::BezierMesh;
+        let bump = |u: f64, v: f64, cu: f64, cv: f64| (-((u - cu).powi(2) + (v - cv).powi(2)) / 0.03).exp();
+        let lumpy = |u: f64, v: f64| [16.0 * bump(u, v, 0.3, 0.7) - 9.0 * bump(u, v, 0.75, 0.3), 12.0 * bump(u, v, 0.6, 0.6) - 14.0 * bump(u, v, 0.2, 0.25)];
+        let line = [0.0, 1.0 / 6.0, 2.0 / 6.0, 0.5, 4.0 / 6.0, 5.0 / 6.0, 1.0];
+        // Rows at thirds of the whole height (one patch down): v = 0, 1/3, 2/3, 1.
+        let points: Vec<[f64; 2]> = (0..4)
+            .flat_map(|j| {
+                let v = f64::from(j) / 3.0;
+                line.iter().map(move |&u| (u, v)).collect::<Vec<_>>()
+            })
+            .map(|(u, v)| {
+                let d = lumpy(u, v);
+                [128.0 * u + d[0], 128.0 * v + d[1]]
+            })
+            .collect();
+        let mesh = BezierMesh { us: vec![0.0, 0.5, 1.0], vs: vec![0.0, 1.0], points };
+        assert!(mesh.is_valid());
+        let f = |x: f64, y: f64| {
+            let p = mesh.eval(x / 128.0, y / 128.0);
+            (p[0], p[1])
+        };
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        src.fill_rect(Rect::new(0, 0, 128, 128), &[1.0, 1.0, 1.0, 1.0]);
+        let out = warp_patches_surface(&src, Rect::new(0, 0, 128, 128), &f, [&[0.5], &[]], Fold::IN_PLACE, Sampling::Single, Facets::Mesh);
+        let a = out.read_region(Rect::new(-20, -20, 150, 150));
+        let alpha = |x: i32, y: i32| if (0..170).contains(&x) && (0..170).contains(&y) { a[((y * 170 + x) * 4 + 3) as usize] } else { 0.0 };
+        let mut holes = Vec::new();
+        for y in 1..169 {
+            for x in 1..169 {
+                let shut = |dx: i32, dy: i32| alpha(x - dx, y - dy) > 0.999 && alpha(x + dx, y + dy) > 0.999;
+                if alpha(x, y) < 0.99 && (shut(1, 0) || shut(0, 1) || shut(2, 0) || shut(0, 2)) {
+                    holes.push((x - 20, y - 20));
+                }
+            }
+        }
+        assert!(holes.is_empty(), "transparent pixels inside the picture: {holes:?}");
+    }
+
+    /// Two patches side by side, the left one whole and the right one cut in half down: the point
+    /// the right patch adds on the shared border joins the left patch's straight edge (and the
+    /// border's ends are shared), so the two sides meet.
+    #[test]
+    fn a_quilt_border_point_joins_the_bigger_neighbour() {
+        use crate::warp_tess::EnvelopeMesh;
+        let uv = vec![
+            [0.0, 0.0],
+            [0.5, 0.0],
+            [0.0, 1.0],
+            [0.5, 1.0], // left patch
+            [0.5, 0.0],
+            [1.0, 0.0],
+            [0.5, 0.5],
+            [1.0, 0.5],
+            [0.5, 1.0],
+            [1.0, 1.0], // right patch
+        ];
+        let mut pos: Vec<[f64; 2]> = uv.iter().map(|p| [100.0 * p[0], 100.0 * p[1]]).collect();
+        pos[6] = [53.0, 50.0]; // the right patch's border point, on its own (curved) surface
+        let quads = vec![[0, 1, 2, 3], [4, 5, 6, 7], [6, 7, 8, 9]];
+        let m = stitch_patches(EnvelopeMesh { uv, pos, quads }, &[0.0, 0.5, 1.0], &[0.0, 1.0]);
+        assert_eq!(m.uv.len(), 8, "the border's shared ends are one vertex each");
+        let k = m.uv.iter().position(|p| *p == [0.5, 0.5]).expect("border point");
+        assert_eq!(m.pos[k], [50.0, 50.0]);
+        assert_eq!(m.quads[1][0], m.quads[0][1], "the border's top end is shared");
     }
 }

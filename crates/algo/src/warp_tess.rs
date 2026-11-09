@@ -300,8 +300,9 @@ pub(crate) fn envelope_mesh(at: &dyn Fn(f64, f64) -> P, full: bool) -> Option<En
     let net = if swap { stored.transposed() } else { stored };
     let surf = |u: f64, v: f64| if swap { at(v, u) } else { at(u, v) };
     let twisty = net.nu.max(net.nv) == 4;
-    let (leaves, log) = cells(&net, twisty, swap, if full { START_FULL } else { START });
-    let mesh = triangulate(&net, &surf, &leaves, &log);
+    let rules = Rules { start: if full { START_FULL } else { START }, force_down: true, twist_spreads: false, fixed_level: 2 };
+    let (leaves, log) = cells(&net, twisty, swap, &rules);
+    let mesh = triangulate(&net, &surf, &leaves, &log, rules.fixed_level);
     Some(if swap {
         EnvelopeMesh {
             uv: mesh.uv.iter().map(|p| [p[1], p[0]]).collect(),
@@ -313,6 +314,57 @@ pub(crate) fn envelope_mesh(at: &dyn Fn(f64, f64) -> P, full: bool) -> Option<En
     })
 }
 
+/// Tessellates one patch of a warp split into several (a quilt), whose map from the patch's own
+/// normalised coordinates to the document is `at`, as the reference application cuts each patch:
+/// by the full mesh's rules, but starting from the whole patch as one cell (a flat or small patch
+/// stays whole), without the first level's forced split down, and with a split down for a cell's
+/// twist carried to the other cells cut from the same parent. `None` when the map isn't finite at
+/// the corners.
+pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMesh> {
+    let corners = [at(0.0, 0.0), at(1.0, 0.0), at(0.0, 1.0), at(1.0, 1.0)];
+    if corners.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
+        return None;
+    }
+    let net = cubic_net(at);
+    let rules = Rules { start: 1, force_down: false, twist_spreads: true, fixed_level: 0 };
+    let (leaves, log) = cells(&net, true, false, &rules);
+    Some(triangulate(&net, at, &leaves, &log, rules.fixed_level))
+}
+
+/// What differs between cutting a one-patch warp and a patch of a quilt.
+#[derive(Clone, Copy)]
+struct Rules {
+    /// Cells per side to start from.
+    start: usize,
+    /// A first-level cell split across splits down too.
+    force_down: bool,
+    /// A cell split down for its twist splits the other cells cut from its parent down too.
+    twist_spreads: bool,
+    /// Grid lines up to this many halvings in stay where they are on the surface (a T-junction
+    /// further in sits on the chord of the edge it lies on).
+    fixed_level: u32,
+}
+
+/// The parent cell of `c` (one halving up both ways), as a comparable key.
+fn parent_of(c: &Cell) -> (i64, i64, i64, i64) {
+    let (w, h) = (2.0 * (c[1] - c[0]), 2.0 * (c[3] - c[2]));
+    let q = |t: f64| (t * 1e6).round() as i64;
+    ((c[0] / w + EPS).floor() as i64, (c[2] / h + EPS).floor() as i64, q(w), q(h))
+}
+
+/// Splits down every cell whose parent has a cell split down for its twist.
+fn spread_twist(level_cells: &[Cell], decisions: &mut [(bool, bool)], twisted: &[bool]) {
+    let parents: Vec<_> = level_cells.iter().zip(twisted).filter(|(_, t)| **t).map(|(c, _)| parent_of(c)).collect();
+    if parents.is_empty() {
+        return;
+    }
+    for (c, d) in level_cells.iter().zip(decisions) {
+        if parents.contains(&parent_of(c)) {
+            d.1 = true;
+        }
+    }
+}
+
 /// The control net the reference application cuts by: an envelope's at the degree it was stored at
 /// (recovered from the map), a full mesh's cubic both ways, even where it is flatter.
 fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
@@ -321,7 +373,8 @@ fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
 }
 
 /// The leaf cells and the record of splits, in the stored frame.
-fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<Split>) {
+fn cells(net: &Net, twisty: bool, swap: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
+    let start = rules.start.max(1);
     let first = 1.0 / start as f64;
     let mut level_cells: Vec<Cell> = (0..start * start)
         .map(|k| {
@@ -332,6 +385,8 @@ fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<S
     let (mut leaves, mut log) = (Vec::new(), Vec::new());
     while !level_cells.is_empty() {
         let mut decisions = Vec::with_capacity(level_cells.len());
+        // Cells split down for their twist alone.
+        let mut twisted = Vec::with_capacity(level_cells.len());
         // Rows of sibling cells (by their top and bottom and their parent) with a cell split down
         // for its curvature.
         let mut curved_rows: Vec<(f64, f64, i64, f64)> = Vec::new();
@@ -342,6 +397,7 @@ fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<S
             let fv = need(&segment(&net.col(u0), v0, v1)).max(need(&segment(&net.col(u1), v0, v1)));
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
             let curved_across = across;
+            let mut twist_down = false;
             if twisty && down {
                 curved_rows.push((v0, v1, column(&c), u1 - u0));
             }
@@ -352,17 +408,22 @@ fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<S
                     if lu > lv + EPS || (lu > lv - EPS && swap) {
                         across = true;
                     } else {
+                        twist_down = !down;
                         down = true;
                     }
                 }
             }
-            if across && (u1 - u0 - first).abs() < EPS && (v1 - v0 - first).abs() < EPS {
+            if rules.force_down && across && (u1 - u0 - first).abs() < EPS && (v1 - v0 - first).abs() < EPS {
                 down = true;
             }
             if across || down {
                 log.push(Split { cell: c, across, curved_across });
             }
             decisions.push((across, down));
+            twisted.push(twist_down);
+        }
+        if rules.twist_spreads {
+            spread_twist(&level_cells, &mut decisions, &twisted);
         }
         let first_level = level_cells.first().is_some_and(|c| (c[3] - c[2] - first).abs() < EPS);
         if first_level && decisions.iter().any(|d| d.1) {
@@ -395,7 +456,7 @@ fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<S
 }
 
 /// Vertices, their places and the quads of `leaves` (stored frame).
-fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[Split]) -> EnvelopeMesh {
+fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[Split], fixed_level: u32) -> EnvelopeMesh {
     // Every corner, and the corners along each horizontal (by v) and vertical (by u) line.
     let mut keys: Vec<P> = Vec::new();
     let mut seen: HashMap<(u64, u64), ()> = HashMap::new();
@@ -447,7 +508,7 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
     order.sort_by_key(|p| level(p[0]));
     for &[u, v] in &order {
         let lv = level(u);
-        if lv <= 2 {
+        if lv <= fixed_level {
             continue;
         }
         let w = 1.0 / f64::from(1u32 << lv);
@@ -470,7 +531,7 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
     order.sort_by_key(|p| level(p[1]));
     for &[u, v] in &order {
         let lv = level(v);
-        if lv <= 2 || !(u.abs() < 1e-12 || (u - 1.0).abs() < 1e-12) {
+        if lv <= fixed_level || !(u.abs() < 1e-12 || (u - 1.0).abs() < 1e-12) {
             continue;
         }
         let w = 1.0 / f64::from(1u32 << lv);
@@ -564,7 +625,7 @@ mod tests {
             }
             o
         };
-        let (leaves, log) = cells(&net_of(&at, true), true, false, START_FULL);
+        let (leaves, log) = cells(&net_of(&at, true), true, false, &Rules { start: START_FULL, force_down: true, twist_spreads: false, fixed_level: 2 });
         assert!(log.iter().any(|s| s.cell == [0.0, 0.25, 0.0, 0.25]), "the corner cell splits");
         assert!(leaves.contains(&[0.75, 1.0, 0.0, 0.25]), "{leaves:?}");
     }
@@ -669,5 +730,64 @@ mod tests {
     fn a_non_finite_map_is_refused() {
         assert!(envelope_mesh(&|_, _| [f64::NAN, 0.0], false).is_none());
         assert!(envelope_mesh(&|_, _| [f64::NAN, 0.0], true).is_none());
+    }
+
+    /// A flat patch of a quilt stays one cell: the reference leaves flat or small patches whole
+    /// (a one-patch full mesh starts at four).
+    #[test]
+    fn a_flat_quilt_patch_stays_whole() {
+        let at = |u: f64, v: f64| [10.0 + 100.0 * u, 20.0 + 50.0 * v];
+        let m = quilt_patch_mesh(&at).expect("finite");
+        assert_eq!(m.quads.len(), 1);
+        assert_eq!(m.uv.len(), 4);
+        assert!(quilt_patch_mesh(&|_, _| [f64::NAN, 0.0]).is_none());
+    }
+
+    /// A quilt patch whose rows bend but whose columns are straight splits across only; a one-patch
+    /// full mesh splits its first cells down as well.
+    #[test]
+    fn a_quilt_patch_splits_only_where_it_bends() {
+        let at = |u: f64, v: f64| [128.0 * u, 128.0 * v + 20.0 * (std::f64::consts::PI * u).sin()];
+        let m = quilt_patch_mesh(&at).expect("finite");
+        assert!(m.quads.len() > 1);
+        for q in &m.quads {
+            let (top, bottom) = (m.uv[q[0]][1], m.uv[q[2]][1]);
+            assert!(top.abs() < 1e-12 && (bottom - 1.0).abs() < 1e-12, "a cell was split down: {top}..{bottom}");
+        }
+        let one = envelope_mesh(&at, true).expect("finite");
+        assert!(one.quads.iter().any(|q| one.uv[q[2]][1] - one.uv[q[0]][1] < 1.0 - 1e-9));
+    }
+
+    /// The top-left patch of a 2 × 2 quilt over a wave (a 128 px box, control points moved down by
+    /// 12 sin 2πu · sin πv px): its top cells split down for their twist, and the reference splits
+    /// the bottom cells of the same parent down with them, though they aren't twisted enough.
+    #[test]
+    fn a_twist_split_down_carries_to_its_siblings() {
+        let pi = std::f64::consts::PI;
+        let mut p = [[0.0f64; 2]; 16];
+        for (k, q) in p.iter_mut().enumerate() {
+            let (x, y) = (0.5 * (k % 4) as f64 / 3.0, 0.5 * (k / 4) as f64 / 3.0);
+            *q = [128.0 * x, 128.0 * y + 12.0 * (2.0 * pi * x).sin() * (pi * y).sin()];
+        }
+        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
+        let wave = |u: f64, v: f64| {
+            let (bu, bv) = (b(u), b(v));
+            let mut o = [0.0; 2];
+            for (j, wv) in bv.iter().enumerate() {
+                for (i, wu) in bu.iter().enumerate() {
+                    o[0] += wu * wv * p[j * 4 + i][0];
+                    o[1] += wu * wv * p[j * 4 + i][1];
+                }
+            }
+            o
+        };
+        let tallest = |rules: &Rules| {
+            let (leaves, _) = cells(&cubic_net(&wave), true, false, rules);
+            leaves.iter().filter(|c| c[2] >= 0.5 - 1e-9).map(|c| c[3] - c[2]).fold(0.0, f64::max)
+        };
+        let quilt = Rules { start: 1, force_down: false, twist_spreads: true, fixed_level: 0 };
+        assert!(tallest(&quilt) <= 0.25 + 1e-9, "bottom cells {}", tallest(&quilt));
+        let alone = Rules { twist_spreads: false, ..quilt };
+        assert!(tallest(&alone) >= 0.5 - 1e-9, "without the rule the bottom cells stay half the patch");
     }
 }
