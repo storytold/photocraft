@@ -19,10 +19,12 @@ const BRUSH_TOOLS: [LiquifyTool; 10] = [
 
 const EXTREME: [f64; 9] = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX, f64::MIN, 1e300, 3.0e9, -1.0, 0.0];
 
+/// A stroke of `tool` with brush `size` through `points`, at middling density, pressure and rate.
 fn stroke(tool: LiquifyTool, size: f64, points: Vec<Vec<f64>>) -> LiquifyStroke {
     LiquifyStroke { tool, size, density: 50.0, pressure: 50.0, rate: 50.0, points, amount: None }
 }
 
+/// Every brush tool, with every absurd size and position, replays without a panic.
 #[test]
 fn a_brush_with_an_absurd_size_or_position_replays_without_overflow() {
     let bounds = Rect::new(0, 0, 64, 64);
