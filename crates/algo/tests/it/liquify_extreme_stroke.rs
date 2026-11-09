@@ -54,7 +54,6 @@ fn a_huge_far_off_dab_leaves_the_field_finite() {
 fn a_far_off_dab_that_reaches_the_image_reports_what_it_changed() {
     let mut f = LiquifyField::new(Rect::new(0, 0, 64, 64), 8.0);
     let changed = f.stroke_begin(&stroke(LiquifyTool::Freeze, 1.2e10, vec![]), [-3e9, 10.0, 1.0]);
-    if f.freeze_at(10.0, 10.0) > 0.0 {
-        assert!(!changed.is_empty(), "the freeze changed nodes but reported {changed:?}");
-    }
+    assert!(f.freeze_at(10.0, 10.0) > 0.0, "the dab reaches the image, so it freezes nodes there");
+    assert!(!changed.is_empty(), "the freeze changed nodes but reported {changed:?}");
 }
