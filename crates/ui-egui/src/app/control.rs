@@ -13,13 +13,14 @@ impl PhotocraftApp {
     /// record across all its passes.
     pub(crate) fn finish_frame(&mut self, ctx: &egui::Context, ui_ms: f64) {
         self.perf.stage.ui_ms += ui_ms;
+        self.perf.stage.stroking |= self.live_stroke.is_some();
         if ctx.will_discard() {
             return;
         }
         let stages = std::mem::take(&mut self.perf.stage);
         let stages = self.slow_frames.finish(stages, gpu_canvas::now_ms(), self.perf.gpu, self.perf.gpu_ms);
         let info = &self.perf.gpu_info;
-        self.stroke_trace.frame(&stages, self.live_stroke.is_some(), || {
+        self.stroke_trace.frame(&stages, stages.stroking, || {
             let gpu = format!("{} {}", info.backend, info.adapter).trim().to_string();
             if info.present.is_empty() { gpu } else { format!("{gpu}, {}", info.present) }
         });

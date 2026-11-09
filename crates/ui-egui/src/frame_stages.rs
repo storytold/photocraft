@@ -58,6 +58,10 @@ pub struct FrameStages {
     /// Rendering stroke points (the stroke trace's `stroke`).
     #[serde(skip)]
     pub stroke_ms: f64,
+    /// A stroke was live in some egui pass of the frame, even one a later pass cancelled (a tool
+    /// change) and whose dab rendered no stroke points.
+    #[serde(skip)]
+    pub stroking: bool,
     /// Pointer moves the frame delivered.
     #[serde(skip)]
     pub moves: usize,
@@ -352,6 +356,30 @@ mod app_tests {
         assert_eq!(s.frames, 3, "{s:?}");
         assert_eq!(s.moves, [1.0, 1.0], "each row has its frame's moves: {s:?}");
         assert_eq!(s.stroke, [2.0, 2.0], "both passes' stroke rendering: {s:?}");
+    }
+
+    #[test]
+    fn a_stroke_live_only_in_a_discarded_pass_still_gets_its_frame_traced() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.stroke_trace.output = crate::stroke_trace::Output::Stderr;
+        let ctx = egui::Context::default();
+        app.perf.stage.start(crate::gpu_canvas::now_ms(), 1);
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ctx = ui.ctx().clone();
+            app.perf.stage.ui_start(crate::gpu_canvas::now_ms(), None);
+            if ctx.current_pass_index() == 0 {
+                // The first pass's live stroke (its `finish_frame` saw `live_stroke`), which the
+                // last pass cancels before rendering any stroke points.
+                app.perf.stage.stroking = true;
+                ctx.request_discard("a sizing pass");
+            }
+            app.finish_frame(&ctx, 1.0);
+        })
+        .drop_without_applying_deltas();
+        assert!(app.live_stroke.is_none() && app.stroke_trace.last.is_none());
+        frame(&mut app, &ctx, 2, 1, false);
+        let s = app.stroke_trace.last.clone().expect("the stroke ended");
+        assert_eq!(s.frames, 1, "the frame whose stroke the last pass cancelled: {s:?}");
     }
 
     #[test]
