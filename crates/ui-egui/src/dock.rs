@@ -365,12 +365,10 @@ fn sync_restore_notice(app: &mut PhotocraftApp) {
         app.ui.status_error = false;
         app.ui.docking_restore_status = Some(message);
         if !app.ui.notices.iter().any(|n| n.title == RESTORE_NOTICE_TITLE) {
-            crate::notices::post(
+            crate::notices::post_persistent(
                 app,
                 RESTORE_NOTICE_TITLE,
                 vec!["It has been preserved; editing panels or resetting the workspace will replace it.".into()],
-                false,
-                None,
             );
         }
     } else {
@@ -379,6 +377,17 @@ fn sync_restore_notice(app: &mut PhotocraftApp) {
             app.ui.status_error = false;
         }
         app.ui.notices.retain(|n| n.title != RESTORE_NOTICE_TITLE);
+    }
+}
+
+/// Refresh only the restore-owned status after the frame selects its language.
+pub(crate) fn refresh_restore_status(app: &mut PhotocraftApp) {
+    if app.ui.docking_kept.is_some() && app.ui.docking_restore_status.as_ref() == Some(&app.ui.status) {
+        let translated = tl!(RESTORE_NOTICE_MESSAGE);
+        if app.ui.status != translated {
+            app.ui.status = translated.into();
+            app.ui.docking_restore_status = Some(app.ui.status.clone());
+        }
     }
 }
 

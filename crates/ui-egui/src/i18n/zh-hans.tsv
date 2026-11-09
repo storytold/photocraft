@@ -3199,3 +3199,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	无法恢复已保存的面板布局。
+	It has been preserved; editing panels or resetting the workspace will replace it.	布局已保留；编辑面板或重置工作区将替换该布局。
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	无法恢复已保存的面板布局。 布局已保留；编辑面板或重置工作区将替换该布局。

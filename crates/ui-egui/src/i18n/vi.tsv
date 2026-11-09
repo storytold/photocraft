@@ -4021,3 +4021,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Không thể khôi phục bố cục bảng đã lưu.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Bố cục đã được giữ lại; chỉnh sửa các bảng hoặc đặt lại không gian làm việc sẽ thay thế bố cục này.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Không thể khôi phục bố cục bảng đã lưu. Bố cục đã được giữ lại; chỉnh sửa các bảng hoặc đặt lại không gian làm việc sẽ thay thế bố cục này.

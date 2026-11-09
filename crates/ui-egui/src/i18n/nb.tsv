@@ -4769,3 +4769,8 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	The path was discarded	Banen ble forkastet
 	The path was kept as the Work Path	Banen ble beholdt som arbeidsbane
 	Edit Brush…	Rediger pensel…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Det lagrede paneloppsettet kunne ikke gjenopprettes.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Det er bevart; redigering av paneler eller tilbakestilling av arbeidsområdet erstatter det.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Det lagrede paneloppsettet kunne ikke gjenopprettes. Det er bevart; redigering av paneler eller tilbakestilling av arbeidsområdet erstatter det.

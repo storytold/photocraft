@@ -4214,3 +4214,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Δεν ήταν δυνατή η επαναφορά της αποθηκευμένης διάταξης πλαισίων.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Έχει διατηρηθεί· η επεξεργασία πλαισίων ή η επαναφορά του χώρου εργασίας θα την αντικαταστήσει.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Δεν ήταν δυνατή η επαναφορά της αποθηκευμένης διάταξης πλαισίων. Έχει διατηρηθεί· η επεξεργασία πλαισίων ή η επαναφορά του χώρου εργασίας θα την αντικαταστήσει.

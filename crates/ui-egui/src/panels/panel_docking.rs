@@ -261,6 +261,7 @@ pub(crate) fn native_fallback(app: &PhotocraftApp) -> Option<Workspace> {
     valid_workspace(&workspace).then_some(workspace)
 }
 
+/// Install a customized Workspace, prune stale floating returns and synchronize panel visibility.
 fn commit(app: &mut PhotocraftApp, mut workspace: Workspace, mut returns: Returns) {
     returns.retain(|panel, _| floats(&workspace.layout, panel));
     compat::transfer_widths(app.ui.docking.as_ref().map(|w| &w.layout), &mut workspace.layout, &mut app.ui.panel_presentation);

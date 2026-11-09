@@ -4441,3 +4441,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Cor da parada
 	Shapes can't use patterns yet	Formas ainda não podem usar padrões
 	Edit Brush…	Editar pincel…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Não foi possível restaurar o layout de painéis salvo.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Ele foi preservado; editar os painéis ou redefinir a área de trabalho irá substituí-lo.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Não foi possível restaurar o layout de painéis salvo. Ele foi preservado; editar os painéis ou redefinir a área de trabalho irá substituí-lo.

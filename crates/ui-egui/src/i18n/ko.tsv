@@ -3734,3 +3734,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	저장된 패널 레이아웃을 복원할 수 없습니다.
+	It has been preserved; editing panels or resetting the workspace will replace it.	레이아웃은 보존되었습니다. 패널을 편집하거나 작업 영역을 초기화하면 대체됩니다.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	저장된 패널 레이아웃을 복원할 수 없습니다. 레이아웃은 보존되었습니다. 패널을 편집하거나 작업 영역을 초기화하면 대체됩니다.
