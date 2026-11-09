@@ -600,10 +600,11 @@ fn a_selective_color_step_in_the_scalar_form_keeps_its_values() {
     assert_eq!(range(&nulled, "reds"), [35.0, 0.0, 0.0, 0.0], "{nulled}");
 }
 
-/// A setting Photoshop's event has no field for is dropped by export, and the step then plays back
+/// A setting the exported event has no field for is dropped by export, and the step then plays back
 /// as a different edit: Crystallize's `seed` (#7668), Radial Blur's centre, Minimum's and
-/// Maximum's `preserve`. Such a step is refused, as one with no equivalent event already is. So is
-/// an adjustment edit that names its layer: the event edits the active one (#8532).
+/// Maximum's `preserve`, Equalize's `selectedAreaOnly`. Such a step is refused, as one with no
+/// equivalent event already is. So is an adjustment edit that names its layer: the event edits the
+/// active one (#8532).
 #[test]
 fn a_setting_the_event_cannot_hold_is_refused() {
     for (id, params) in [
@@ -611,6 +612,10 @@ fn a_setting_the_event_cannot_hold_is_refused() {
         ("filter.blur.radialBlur", json!({"amount": 10, "centerX": 0.25, "centerY": 0.5})),
         ("filter.other.minimum", json!({"radius": 4, "preserve": "roundness"})),
         ("filter.other.maximum", json!({"radius": 4, "preserve": "roundness"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": false})),
+        // Equalize reads `selectedAreaOnly` as a boolean only and refuses the string and null.
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": "true"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": null})),
         ("layer.setAdjustment", json!({"kind": "exposure", "layer": "Target_existing", "exposure": -0.75, "offset": 0.035, "gamma": 1.37})),
         ("layer.setAdjustment", json!({"kind": "exposure", "document": 2, "exposure": -0.75})),
     ] {
@@ -645,6 +650,8 @@ fn settings_at_the_value_the_event_plays_still_export() {
         // review).
         ("filter.other.minimum", json!({"radius": 4, "preserve": "Squareness"})),
         ("filter.other.maximum", json!({"radius": 4, "preserve": "Roundness"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": true})),
+        ("image.adjustments.equalize", json!({})),
     ] {
         let mut s = Session::new();
         s.actions.list.push(Action::new("A", vec![(id.into(), params.clone())]));
@@ -734,6 +741,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
+        ("file.automate.createDroplet", json!({"path": "/d/Sharpen.pcdroplet", "action": "Sharpen", "set": "Tools", "output": "/d/out", "overrideOpen": true})),
         ("filter.distort.shear", json!({"points": [[0,0], [0.5,0.25], [1,0]], "undefinedAreas": "repeat"})),
         ("filter.distort.pinch", json!({"amount": -30})),
         ("filter.distort.polarCoordinates", json!({"mode": "polarToRectangular"})),
@@ -827,6 +835,13 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.new.layer", json!({"name": "Ink", "opacity": 0.5, "mode": "Multiply"})),
         ("type.convertToShape", json!({})),
         ("type.createWorkPath", json!({})),
+        (
+            "path.set",
+            json!({"name":"work","path":{"fillRule":"evenodd","inverted":false,"subpaths":[{"closed":false,"op":"combine","knots":[
+                {"anchor":[1,2],"in":[1,2],"out":[3,4],"smooth":false},
+                {"anchor":[8,9],"in":[6,7],"out":[8,9],"smooth":false}
+            ]}]}}),
+        ),
         ("filter.blur.shapeBlur", json!({})),
         ("filter.blur.shapeBlur", json!({"radius": 10})),
         ("layer.new.group", json!({"name": "G"})),
@@ -1056,6 +1071,11 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})),
         ("layer.smartFilter.blendingOptions", json!({"index": 1, "opacity": 0.5, "blend": "Darken"})),
         ("layer.layerStyle.blendingOptions", json!({"blendClippedLayersAsGroup": false, "transparencyShapesLayer": false})),
+        ("layer.layerStyle.blendingOptions", json!({"blendIf": [{"channel": "gray", "thisLayer": [0, 30, 200, 255], "underlying": [0, 0, 255, 255]}]})),
+        (
+            "layer.layerStyle.blendingOptions",
+            json!({"opacity": 40, "fillOpacity": 70, "blend": "Multiply", "blendIf": [{"channel": "blue", "thisLayer": [5, 5, 250, 250]}]}),
+        ),
         ("layer.createClippingMask", json!({})),
         ("layer.lockLayers", json!({"transparency": true})),
         ("filter.stylize.diffuse", json!({"mode": "normal", "seed": 321654})),
@@ -1101,6 +1121,10 @@ fn every_mapped_command_exports_and_imports_back() {
                 if *id == "paint.gradient" {
                     // Executable values match; independent public tests verify the source carrier.
                     back.as_object_mut().unwrap().remove("__atnClassicGradient");
+                }
+                if *id == "path.set" {
+                    // The imported step retains the original descriptor alongside its playable path.
+                    back.as_object_mut().unwrap().remove(super::steps_path::SOURCE).unwrap();
                 }
                 if *id == "edit.perspectiveWarp" {
                     back.as_object_mut().unwrap().remove("__atnPerspectiveWarp");
@@ -1200,6 +1224,9 @@ fn every_mapped_command_exports_and_imports_back() {
         "filter.sharpen.sharpenMore",
         // Saves back only as the descriptor it was loaded from (loaded_camera_raw_filter_steps_save_back_unchanged).
         "filter.cameraRaw",
+        // Load with the recorded descriptor riding along (gradient_fill_steps_export_and_import_back).
+        "gradient.fill.set",
+        "layer.newFillLayer.gradient",
     ];
     let unexpected: Vec<&str> = missing.iter().copied().filter(|id| !allowed.contains(id)).collect();
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");
@@ -1392,6 +1419,7 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
             Some(desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(desc("AdjL").with("Type", D::Descriptor(desc("GdMp")))))),
         ),
         item("GsnB", "Gaussian Blur", None),
+        item("GsnB", "Gaussian Blur", Some(desc("null"))),
         // Duplicate into another open document: the `T` reference means nothing at
         // replay, so the step is kept verbatim instead of misplayed as a same-doc copy.
         item(
@@ -1413,8 +1441,11 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
     };
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     let ids: Vec<&str> = imp.actions[0].steps.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, "filter.blur.gaussianBlur", PHOTOSHOP_STEP]);
-    assert_eq!(imp.unsupported.len(), 5);
+    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, MENU_ITEM, "filter.blur.gaussianBlur", PHOTOSHOP_STEP]);
+    assert_eq!(imp.actions[0].steps[4].1["id"], "filter.blur.gaussianBlur");
+    assert_eq!(imp.actions[0].steps[4].1["eventKind"], "code");
+    assert_eq!(imp.actions[0].steps[5].1, json!({}));
+    assert_eq!(imp.unsupported.iter().map(|step| step.step).collect::<Vec<_>>(), [0, 1, 2, 3, 6]);
     assert!(imp.actions[0].disabled.is_empty(), "steps with a document effect stay on so playback reports them");
 }
 
@@ -3801,13 +3832,16 @@ fn loaded_camera_raw_filter_steps_save_back_unchanged() {
     assert_eq!(s.actions.list[0].steps[0].0, "filter.cameraRaw");
     let saved_step = |r: &Value| {
         let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
-        saved.actions[0].items.first().map(|i| (i.event.clone(), i.descriptor.clone()))
+        saved.actions[0].items.first().map(|i| (i.event.clone(), i.dictionary.clone(), i.descriptor.clone()))
     };
-    // Strict save, and the Actions panel's save (which skips what can't be written).
+    // Strict save, and the Actions panel's save (which skips what can't be written). The step's
+    // dictionary is stored action data, so it keeps Photoshop's wording and not the menu label
+    // ("RAW Develop Filter"): a loaded step reads the same in Photoshop's Actions panel.
     for skip in [false, true] {
         let r = s.execute("actions.save", json!({"action": "A", "skipUnsupported": skip})).unwrap();
         assert_eq!(r["skipped"], json!([]), "{r}");
-        assert_eq!(saved_step(&r), Some((AtnEvent::name("Adobe Camera Raw Filter"), Some(recorded.clone()))));
+        let expected = (AtnEvent::name("Adobe Camera Raw Filter"), b"Camera Raw Filter".to_vec(), Some(recorded.clone()));
+        assert_eq!(saved_step(&r), Some(expected));
     }
     // It plays.
     s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
@@ -6281,6 +6315,365 @@ fn shear_nonfinite_coordinates_stay_kept() {
         ] {
             assert!(matches!(steps_distort::shear_from(&d), Mapped::Unsupported { .. }), "{d:?}");
         }
+    }
+}
+
+/// #10771: a Gradient Fill as Photoshop records it: three stops, a transparency stop at 40 % and
+/// one midpoint per stop (`Mdpn` of stop k is the segment that ends at it).
+fn recorded_gradient(mids: [i32; 3]) -> Descriptor {
+    let stop = |hex: &str, at: i32, mid: i32| {
+        D::Descriptor(
+            desc("Clrt")
+                .with("Clr ", D::Descriptor(color_desc(hex).unwrap()))
+                .with("Type", enm("Clry", "UsrS"))
+                .with("Lctn", D::Integer(at))
+                .with("Mdpn", D::Integer(mid)),
+        )
+    };
+    let trn = |at: i32, o: f64| D::Descriptor(desc("TrnS").with("Opct", pct(o)).with("Lctn", D::Integer(at)).with("Mdpn", D::Integer(50)));
+    let grad = desc("Grdn")
+        .with("Nm  ", text("Custom"))
+        .with("GrdF", enm("GrdF", "CstS"))
+        .with("Intr", D::Double(4096.0))
+        .with("Clrs", D::List(vec![stop("#ff0000", 0, mids[0]), stop("#00ff00", 2048, mids[1]), stop("#0000ff", 4096, mids[2])]))
+        .with("Trns", D::List(vec![trn(0, 100.0), trn(4096, 40.0)]));
+    desc("gradientLayer").with("Angl", ang(30.0)).with("Type", enm("GrdT", "Rdl ")).with("Grad", D::Descriptor(grad))
+}
+
+fn gradient_set(t: Descriptor) -> AtnItem {
+    item("setd", "Set", Some(desc("null").with("null", target_ref("contentLayer")).with("T   ", D::Descriptor(t))))
+}
+
+fn gradient_make(t: Descriptor) -> AtnItem {
+    let d = desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))));
+    item("Mk  ", "Make", Some(d))
+}
+
+/// The first saved step of `action` (strict save).
+fn saved_first(s: &mut Session) -> (AtnEvent, Option<Descriptor>) {
+    let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
+    assert_eq!(r["skipped"], json!([]), "{r}");
+    let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
+    let i = &saved.actions[0].items[0];
+    (i.event.clone(), i.descriptor.clone())
+}
+
+fn without_hidden(p: &Value) -> Value {
+    let mut p = p.clone();
+    p.as_object_mut().unwrap().remove("__atnDescriptor");
+    normalise(&mut p);
+    p
+}
+
+fn active_fill(s: &Session) -> photocraft_doc::Fill {
+    let st = s.active().unwrap();
+    match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+        photocraft_doc::LayerContent::Fill(f) => f.clone(),
+        c => panic!("not a fill layer: {}", c.kind_name()),
+    }
+}
+
+/// #10771: a recorded Set of a Gradient Fill loads as `gradient.fill.set` with its midpoints on
+/// the segment they belong to, plays them, and saves back as the recorded descriptor.
+#[test]
+fn gradient_fill_set_imports_midpoints_plays_and_saves_back_unchanged() {
+    let recorded = recorded_gradient([50, 25, 70]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded.clone())])).unwrap())})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    let (id, p) = s.actions.list[0].steps[0].clone();
+    assert_eq!(id, "gradient.fill.set");
+    let mut expected = json!({
+        "style": "radial", "angle": 30,
+        "stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]],
+        "transparency": [[0, 100], [1, 40]],
+        "midpoints": [0.25, 0.7]
+    });
+    normalise(&mut expected);
+    assert_eq!(without_hidden(&p), expected);
+    assert_eq!(
+        saved_first(&mut s),
+        (AtnEvent::Code(*b"setd"), Some(desc("null").with("null", target_ref("contentLayer")).with("T   ", D::Descriptor(recorded))))
+    );
+    // It plays on a Gradient Fill layer.
+    s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
+    s.execute("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff"})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let photocraft_doc::Fill::Gradient { stops, midpoints, opacity_stops, .. } = active_fill(&s) else { panic!("not a gradient") };
+    assert_eq!(stops.len(), 3);
+    assert_eq!(midpoints, vec![0.25, 0.7]);
+    assert_eq!(opacity_stops.len(), 2);
+    // Default midpoints load as `[]`, which clears the custom ones when played.
+    let mut s2 = Session::new();
+    s2.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded_gradient([50, 50, 50]))])).unwrap())})).unwrap();
+    assert_eq!(s2.actions.list[0].steps[0].1["midpoints"], json!([]));
+    s.actions = s2.actions;
+    s.execute("actions.play", json!({"action": "A"})).unwrap();
+    let photocraft_doc::Fill::Gradient { midpoints, .. } = active_fill(&s) else { panic!("not a gradient") };
+    assert!(midpoints.is_empty() || midpoints.iter().all(|m| *m == 0.5), "{midpoints:?}");
+}
+
+/// #10771: an edited loaded step writes a fresh descriptor from its params, midpoints included.
+#[test]
+fn edited_gradient_fill_set_writes_a_fresh_descriptor() {
+    let mut s = Session::new();
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded_gradient([50, 25, 70]))])).unwrap())})).unwrap();
+    s.actions.list[0].steps[0].1["midpoints"] = json!([0.4, 0.6]);
+    let (_, d) = saved_first(&mut s);
+    let t = get_obj(d.as_ref().unwrap(), "T   ").unwrap();
+    let clrs = get_list(get_obj(t, "Grad").unwrap(), "Clrs").unwrap();
+    let mids: Vec<f64> = clrs.iter().map(|c| if let D::Descriptor(c) = c { get_num(c, "Mdpn").unwrap() } else { panic!() }).collect();
+    assert_eq!(mids, vec![50.0, 40.0, 60.0]);
+    // Its own import is the edited params.
+    let Mapped::Steps(steps) = (event_for(&AtnEvent::Code(*b"setd")).unwrap().from)(d.as_ref().unwrap()) else { panic!("did not import") };
+    let mut edited = without_hidden(&s.actions.list[0].steps[0].1);
+    edited["midpoints"] = json!([0.4, 0.6]);
+    normalise(&mut edited);
+    assert_eq!(without_hidden(&steps[0].1), edited);
+}
+
+/// #10771: a recorded Make of a Gradient Fill layer plays its stops, transparency and midpoints
+/// and saves back unchanged.
+#[test]
+fn gradient_fill_make_imports_plays_and_saves_back_unchanged() {
+    let recorded = recorded_gradient([50, 25, 70]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_make(recorded.clone())])).unwrap())})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    assert_eq!(s.actions.list[0].steps[0].0, "layer.newFillLayer.gradient");
+    let (event, d) = saved_first(&mut s);
+    assert_eq!(event, AtnEvent::Code(*b"Mk  "));
+    assert_eq!(get_obj(get_obj(d.as_ref().unwrap(), "Usng").unwrap(), "Type"), Some(&recorded));
+    for depth in [8, 16] {
+        s.execute("file.new", json!({"width": 16, "height": 12, "depth": depth})).unwrap();
+        let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        let photocraft_doc::Fill::Gradient { stops, midpoints, opacity_stops, .. } = active_fill(&s) else { panic!("not a gradient") };
+        assert_eq!((stops.len(), midpoints, opacity_stops.len()), (3, vec![0.25, 0.7], 2));
+        // One undo step.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(!matches!(s.active().unwrap().doc.layers.last().unwrap().content, photocraft_doc::LayerContent::Fill(_)));
+    }
+}
+
+/// #10771: PhotoCraft's own Gradient Fill steps export and load back as the same fill.
+#[test]
+fn gradient_fill_steps_export_and_import_back() {
+    let set = json!({"style": "linear", "angle": 45, "stops": [[0, "#ff0000"], [0.25, "#00ff00"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 50]], "midpoints": [0.3, 0.6]});
+    let item = export_item("gradient.fill.set", &set, "S").unwrap();
+    let Mapped::Steps(steps) = (event_for(&item.event).unwrap().from)(item.descriptor.as_ref().unwrap()) else { panic!("did not import") };
+    let mut expected = set.clone();
+    normalise(&mut expected);
+    assert_eq!((steps[0].0.as_str(), without_hidden(&steps[0].1)), ("gradient.fill.set", expected));
+    // The two-colour Make plays as the same two stops at full opacity.
+    let item = export_item("layer.newFillLayer.gradient", &json!({"from": "#ff0000", "to": "#0000ff", "angle": 45}), "S").unwrap();
+    let Mapped::Steps(steps) = (event_for(&item.event).unwrap().from)(item.descriptor.as_ref().unwrap()) else { panic!("did not import") };
+    let mut expected = json!({"angle": 45, "stops": [[0, "#ff0000"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]], "midpoints": []});
+    normalise(&mut expected);
+    assert_eq!((steps[0].0.as_str(), without_hidden(&steps[0].1)), ("layer.newFillLayer.gradient", expected));
+    // Stops replace `from` and `to` when it plays, so a Make with all three exports its stops.
+    let p = json!({"from": "#ff0000", "to": "#0000ff", "stops": [[0, "#00ff00"], [1, "#ffffff"]], "transparency": [[0, 100], [1, 100]]});
+    let item = export_item("layer.newFillLayer.gradient", &p, "S").unwrap();
+    let Mapped::Steps(steps) = (event_for(&item.event).unwrap().from)(item.descriptor.as_ref().unwrap()) else { panic!("did not import") };
+    assert_eq!(steps[0].1["stops"], json!([[0.0, "#00ff00"], [1.0, "#ffffff"]]));
+    // What the event cannot hold is refused: a Set without its transparency, toolbox colours,
+    // dragged handles, a path, a midpoint off a whole percent.
+    for (id, p) in [
+        ("gradient.fill.set", json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]]})),
+        ("gradient.fill.set", json!({"stops": [[0, "foreground"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]]})),
+        ("gradient.fill.set", json!({"from": [0, 0], "stops": [[0, "#ff0000"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]]})),
+        ("gradient.fill.set", json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]], "midpoints": [0.333]})),
+        ("layer.newFillLayer.gradient", json!({"from": "#ff0000", "to": "#0000ff", "path": "work"})),
+        ("layer.newFillLayer.gradient", json!({"from": "#ff0000"})),
+    ] {
+        assert!(export_item(id, &p, "S").is_none(), "{id}: {p}");
+    }
+}
+
+/// #10771: a Noise gradient, smoothness below 100 % or a transparency midpoint stay Photoshop
+/// steps rather than playing as a different fill.
+#[test]
+fn gradient_fills_the_command_cannot_play_stay_photoshop_steps() {
+    // `with` appends; these replace the recorded value.
+    fn replaced(mut d: Descriptor, key: &str, v: D) -> Descriptor {
+        d.items.retain(|(k, _)| !k.is(key));
+        d.with(key, v)
+    }
+    let base = recorded_gradient([50, 50, 50]);
+    let with_grad = |f: &dyn Fn(Descriptor) -> Descriptor| {
+        let g = get_obj(&base, "Grad").unwrap().clone();
+        replaced(base.clone(), "Grad", D::Descriptor(f(g)))
+    };
+    let trns_mid = desc("TrnS").with("Opct", pct(100.0)).with("Lctn", D::Integer(0)).with("Mdpn", D::Integer(30));
+    let trns_end = desc("TrnS").with("Opct", pct(100.0)).with("Lctn", D::Integer(4096)).with("Mdpn", D::Integer(50));
+    let trns = |at: i32, o: f64| D::Descriptor(desc("TrnS").with("Opct", pct(o)).with("Lctn", D::Integer(at)).with("Mdpn", D::Integer(50)));
+    for t in [
+        // A midpoint outside the dialog's 5..95 % would play clamped.
+        recorded_gradient([50, 2, 50]),
+        recorded_gradient([50, 50, 97]),
+        // Transparency stops out of range or out of order would play clamped and sorted.
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(0, 100.0), trns(5000, 40.0)]))),
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(0, 150.0), trns(4096, 40.0)]))),
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(4096, 100.0), trns(0, 40.0)]))),
+        // A Set without transparency stops would keep the layer's own.
+        with_grad(&|mut g| {
+            g.items.retain(|(k, _)| !k.is("Trns"));
+            g
+        }),
+        with_grad(&|g| replaced(g, "GrdF", enm("GrdF", "ClNs"))),
+        with_grad(&|g| replaced(g, "Intr", D::Double(2048.0))),
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![D::Descriptor(trns_mid.clone()), D::Descriptor(trns_end.clone())]))),
+        base.clone().with("gradientsInterpolationMethod", enm("gradientInterpolationMethodType", "Perc")),
+    ] {
+        let imp = import(&atn::write(&one_action(vec![gradient_set(t)])).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP);
+    }
+    // A Make whose new layer also gets a name, opacity, mode or clipping: the command plays none
+    // of them, so the step stays as recorded.
+    for (key, v) in [("Nm  ", text("Sky")), ("Opct", pct(50.0)), ("Md  ", enm("BlnM", "Mltp")), ("Grup", D::Boolean(true))] {
+        let using = desc("contentLayer").with("Type", D::Descriptor(base.clone())).with(key, v);
+        let make = item("Mk  ", "Make", Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(using))));
+        let imp = import(&atn::write(&one_action(vec![make])).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP, "{key}");
+    }
+}
+
+fn blend_if_entry(channel: &str, this: [i32; 4], under: Option<[i32; 4]>) -> D {
+    let mut d = desc("Blnd").with("Chnl", channel_ref(Some(channel)));
+    for (k, v) in ["SrcB", "Srcl", "SrcW", "Srcm"].into_iter().zip(this) {
+        d = d.with(k, D::Integer(v));
+    }
+    if let Some(u) = under {
+        for (k, v) in ["DstB", "Dstl", "DstW", "Dstt"].into_iter().zip(u) {
+            d = d.with(k, D::Integer(v));
+        }
+    }
+    D::Descriptor(d)
+}
+
+fn layer_set(t: Descriptor) -> AtnItem {
+    item("setd", "Set", Some(desc("null").with("null", target_ref("Lyr ")).with("T   ", D::Descriptor(t))))
+}
+
+fn blend_layers(depth: u8) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s
+}
+
+fn active_info(s: &Session) -> Value {
+    let st = s.active().unwrap();
+    crate::inspect::layer(st.doc.layer(st.active_layer.unwrap()).unwrap())
+}
+
+/// #10771: Blend If loads as `layer.layerStyle.blendingOptions` and plays (it used to be a
+/// silent no-op), on 8- and 16-bit documents, Gray and a colour channel, split sliders.
+#[test]
+fn blend_if_imports_and_plays() {
+    let blnd = D::List(vec![blend_if_entry("gray", [0, 30, 200, 255], Some([10, 10, 240, 250])), blend_if_entry("red", [20, 40, 255, 255], None)]);
+    for depth in [8, 16] {
+        let mut s = blend_layers(depth);
+        let loaded = s
+            .execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Blnd", blnd.clone()))])).unwrap())}))
+            .unwrap();
+        assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+        let mut expected = json!({"blendIf": [{"channel": "gray", "thisLayer": [0, 30, 200, 255], "underlying": [10, 10, 240, 250]}, {"channel": "red", "thisLayer": [20, 40, 255, 255]}]});
+        normalise(&mut expected);
+        let (id, p) = &s.actions.list[0].steps[0];
+        assert_eq!((id.as_str(), p), ("layer.layerStyle.blendingOptions", &expected));
+        let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        let b = active_info(&s)["blendIf"].clone();
+        assert_eq!(b[0], json!({"channel": 0, "thisLayer": [0, 30, 200, 255], "underlying": [10, 10, 240, 250]}), "{b}");
+        assert_eq!(b[1], json!({"channel": 1, "thisLayer": [20, 40, 255, 255], "underlying": [0, 0, 255, 255]}), "{b}");
+        // It saves back as the same `Blnd`.
+        let (_, d) = saved_first(&mut s);
+        assert_eq!(get_obj(d.as_ref().unwrap(), "T   ").unwrap().get("Blnd"), Some(&blnd));
+    }
+}
+
+/// #10771: the Blending Options dialog's OK (opacity, fill, mode and Blend If in one Set) is one
+/// step that applies them all; a Set that also renames splits into setProps and Blend If.
+#[test]
+fn blend_if_with_the_dialog_options_is_one_step_and_a_rename_splits() {
+    let blnd = D::List(vec![blend_if_entry("gray", [0, 0, 128, 255], None)]);
+    let dialog = desc("Lyr ").with("Opct", pct(40.0)).with("fillOpacity", pct(70.0)).with("Md  ", enm("BlnM", "Mltp")).with("Blnd", blnd.clone());
+    let mut s = blend_layers(8);
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(dialog.clone())])).unwrap())})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].0, "layer.layerStyle.blendingOptions");
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let info = active_info(&s);
+    assert!((info["opacity"].as_f64().unwrap() - 0.4).abs() < 1e-3, "{info}");
+    assert_eq!(info["blend"], json!("Multiply"), "{info}");
+    assert_eq!(info["blendIf"][0]["thisLayer"], json!([0, 0, 128, 255]), "{info}");
+    let (_, d) = saved_first(&mut s);
+    assert_eq!(get_obj(d.as_ref().unwrap(), "T   "), Some(&dialog));
+    // With a rename the Set is not the dialog's: the name and opacity go through setProps.
+    let mut s = blend_layers(8);
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Nm  ", text("Renamed")).with("Opct", pct(40.0)).with("Blnd", blnd))])).unwrap())}))
+        .unwrap();
+    let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(ids.contains(&"layer.setProps") && ids.contains(&"layer.layerStyle.blendingOptions"), "{ids:?}");
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let info = active_info(&s);
+    assert_eq!(info["name"], json!("Renamed"));
+    assert_eq!(info["blendIf"][0]["thisLayer"], json!([0, 0, 128, 255]), "{info}");
+}
+
+/// #10771: the Layer Style dialog's OK on a layer without effects also records the effects'
+/// scale (`Lefx` = {Scl}). With Blend If it is still the dialog's one step and saves back with it.
+#[test]
+fn blend_if_with_the_recorded_effects_scale_saves_back_unchanged() {
+    let blnd = D::List(vec![blend_if_entry("gray", [10, 20, 200, 230], Some([0, 0, 255, 255]))]);
+    let dialog = desc("Lyr ").with("Opct", pct(80.0)).with("Blnd", blnd.clone()).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0))));
+    let mut s = blend_layers(8);
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(dialog.clone())])).unwrap())})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].0, "layer.layerStyle.blendingOptions");
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let info = active_info(&s);
+    assert!((info["opacity"].as_f64().unwrap() - 0.8).abs() < 1e-3, "{info}");
+    assert_eq!(info["blendIf"][0]["thisLayer"], json!([10, 20, 200, 230]), "{info}");
+    let (_, d) = saved_first(&mut s);
+    assert_eq!(get_obj(d.as_ref().unwrap(), "T   "), Some(&dialog));
+    // A `Lefx` with an effect in it is not the scale alone: the step is not the dialog's.
+    let with_fx = desc("Lyr ").with("Blnd", blnd).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0)).with("DrSh", D::Descriptor(desc("DrSh")))));
+    let imp = import(&atn::write(&one_action(vec![layer_set(with_fx)])).unwrap()).unwrap();
+    assert!(imp.actions[0].steps.iter().all(|(_, p)| p.get("__atnEffectsScale").is_none()), "{:?}", imp.actions[0].steps);
+    // Nor can it play without the shadow: it stays the recorded step.
+    assert_eq!(imp.actions[0].steps.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), [PHOTOSHOP_STEP], "{:?}", imp.actions[0].steps);
+}
+
+/// #10771: Blend If entries that are not whole levels, out of order, with half the Underlying
+/// sliders or an unknown key stay Photoshop steps.
+#[test]
+fn blend_if_the_command_cannot_play_stays_a_photoshop_step() {
+    let with = |key: &str| match blend_if_entry("gray", [0, 0, 255, 255], None) {
+        D::Descriptor(d) => D::Descriptor(d.with(key, D::Integer(3))),
+        e => e,
+    };
+    let (half, unknown) = (with("DstB"), with("Zzzz"));
+    let inverted = blend_if_entry("gray", [0, 200, 100, 255], None);
+    for e in [blend_if_entry("gray", [0, 0, 300, 255], None), inverted, half, unknown] {
+        let imp = import(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Blnd", D::List(vec![e])))])).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP);
+    }
+    for p in [
+        json!({"blendIf": null}),
+        json!({"blendIf": {"channel": 2, "thisLayer": [0, 255]}}),
+        json!({"blendIf": {"channel": "gray", "thisLayer": [200, 100]}}),
+        json!({"blendIf": {"channel": "gray", "underlying": [0, 255]}}),
+    ] {
+        assert!(export_item("layer.layerStyle.blendingOptions", &p, "S").is_none(), "{p}");
     }
 }
 

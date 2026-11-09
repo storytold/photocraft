@@ -1275,6 +1275,20 @@ fn escape_with_the_palette_open_does_not_deselect() {
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to the palette");
 }
 
+/// The toolbar's "…" flyout owns Esc (it closes there, `toolbar_more_slot_flyout_tests`), so the
+/// selection stays.
+#[test]
+fn escape_with_the_toolbar_more_flyout_open_does_not_deselect() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("toolbar-more-flyout-open"), true));
+    h.run_steps(1);
+    assert!(crate::panels::toolbar::more_flyout_open(&h.ctx));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to the flyout");
+}
+
 /// Targa Options owns Esc (it cancels the save), so the selection stays.
 #[test]
 fn escape_with_targa_options_open_does_not_deselect() {

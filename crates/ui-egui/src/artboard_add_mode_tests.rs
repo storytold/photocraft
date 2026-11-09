@@ -85,14 +85,15 @@ fn a_click_with_the_mode_off_still_places_nothing() {
 }
 
 #[test]
-fn with_no_board_the_click_uses_the_canvas_size() {
+fn with_no_board_the_click_uses_the_bars_tool_option_size() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.sync_views();
     app.ui.tool = Tool::Artboard;
     app.ui.artboard_tool.adding = true;
     click(&mut app, 40.0, 50.0);
-    assert_eq!(boards(&app), vec![Rect::new(40, 50, 840, 650)]);
+    // The size the bar shows (the iPhone 8/7/6 default), not the canvas's 800 x 600.
+    assert_eq!(boards(&app), vec![Rect::new(40, 50, 790, 1384)]);
 }
 
 #[test]
