@@ -43,11 +43,12 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
     // Import PDF's answers (`--page`, `--image`, `--resolution`, …) open one page or image;
-    // `--pdf-dpi`/`--pdf-pages` open the pages as artboards. They pick different imports.
+    // `--pdf-dpi`/`--pdf-pages`/`--pdf-editable` open the pages as artboards. They pick different
+    // imports.
     let pdf = a.pdf.options()?;
-    if pdf.is_some() && (a.pdf_dpi.is_some() || a.pdf_pages.is_some()) {
+    if pdf.is_some() && (a.pdf_dpi.is_some() || a.pdf_pages.is_some() || a.pdf_editable) {
         return Err(CliError::Other(
-            "--pdf-dpi and --pdf-pages open the pages as artboards; --page, --image, --resolution, --crop, --mode, --depth and --no-antialias open one page or image: use one set".into(),
+            "--pdf-dpi, --pdf-pages and --pdf-editable open the pages as artboards; --page, --image, --resolution, --crop, --mode, --depth and --no-antialias open one page or image: use one set".into(),
         ));
     }
     let import_opts = photocraft_io::ImportOptions {
@@ -55,6 +56,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
         pdf_dpi: a.pdf_dpi.unwrap_or(300.0),
         pdf_pages: a.pdf_pages.as_deref().map(parse_pdf_pages).transpose()?,
         pdf,
+        pdf_editable: a.pdf_editable,
         ..Default::default()
     };
     let mut o = files::open_with_options(input, &import_opts)?;

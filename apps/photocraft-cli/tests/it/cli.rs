@@ -1625,14 +1625,15 @@ fn a_non_finite_pdf_resolution_is_refused() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
-/// `--pdf-dpi`/`--pdf-pages` (the artboard import) and Import PDF's answers (`--page`, …) pick
+/// `--pdf-dpi`/`--pdf-pages`/`--pdf-editable` (the artboard import) and Import PDF's answers (`--page`, …) pick
 /// different imports: given together, `convert` refuses rather than dropping one set.
 #[test]
 fn convert_refuses_artboard_and_import_pdf_flags_together() {
     let d = tmp("pdf-mixed-flags");
     let (pdf, out) = (d.join("doc.pdf"), d.join("out.png"));
     std::fs::write(&pdf, b"%PDF-1.7\n").unwrap();
-    for mixed in [["--pdf-dpi", "72", "--page", "1"], ["--pdf-pages", "1-2", "--crop", "mediaBox"]] {
+    let mixed_sets: [&[&str]; 3] = [&["--pdf-dpi", "72", "--page", "1"], &["--pdf-pages", "1-2", "--crop", "mediaBox"], &["--pdf-editable", "--page", "1"]];
+    for mixed in mixed_sets {
         let o = bin().arg("convert").arg(&pdf).arg(&out).args(mixed).output().unwrap();
         assert!(!o.status.success(), "{mixed:?} was accepted");
         assert!(String::from_utf8_lossy(&o.stderr).contains("use one set"), "{mixed:?}: {}", String::from_utf8_lossy(&o.stderr));

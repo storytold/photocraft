@@ -890,7 +890,10 @@ fn selection_after_edit(f: &Fill, p: &Value, previous: Option<Marker>) -> Option
 }
 
 fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pending: Option<&Value>, colors: ([f32; 4], [f32; 4])) -> Option<StopAction> {
-    let Fill::Gradient { stops, .. } = f else { return None };
+    // The stops as committed: a drag edit (and the two-stop minimum) addresses these, not the
+    // pending preview, which may already leave the dragged stop out.
+    let Fill::Gradient { stops, opacity_stops, .. } = f else { return None };
+    let opacity_count = if opacity_stops.is_empty() { 2 } else { opacity_stops.len() };
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width().max(120.0);
     let (outer, resp) = ui.allocate_exact_size(vec2(w, 58.0), Sense::click_and_drag());
@@ -995,19 +998,22 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
     let dragging: Option<Marker> = ui.data(|d| d.get_temp(key));
     let mut preview = None;
     if let (Some(m), Some(pos)) = (dragging, resp.interact_pointer_pos()) {
-        let off = if off_strip(pos, bar) { 1.0 } else { 0.0 };
+        // Pulled off the bar, up or down, the stop is deleted (the preview shows it gone;
+        // dragging back cancels), while at least two of its kind remain.
+        let off = off_strip(pos, bar);
         let loc = loc_of(pos.x);
         let edit = match m {
-            Marker::Color(i) if off > 0.0 && stops.len() > 2 => json!({"action": "delete", "index": i}),
+            Marker::Color(i) if off && stops.len() > 2 => json!({"action": "delete", "index": i}),
             Marker::Color(i) => json!({"action": "move", "index": i, "location": loc}),
-            Marker::Opacity(i) if off > 0.0 && ops.len() > 2 => json!({"action": "delete", "kind": "opacity", "index": i}),
+            Marker::Opacity(i) if off && opacity_count > 2 => json!({"action": "delete", "kind": "opacity", "index": i}),
             Marker::Opacity(i) => json!({"action": "move", "kind": "opacity", "index": i, "location": loc}),
             Marker::Mid(i) => {
                 let (a, b) = (sorted.get(i).map_or(0.0, |s| s.0), sorted.get(i + 1).map_or(1.0, |s| s.0));
                 json!({"action": "midpoint", "index": i, "location": ((loc - a) / (b - a).max(1e-4)).clamp(0.05, 0.95)})
             }
         };
-        if resp.dragged() {
+        // The release frame counts too: its own last move decides whether the stop comes off.
+        if resp.dragged() || resp.drag_stopped() {
             preview = Some(edit);
         }
     }

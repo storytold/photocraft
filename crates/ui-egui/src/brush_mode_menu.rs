@@ -166,6 +166,17 @@ pub(crate) fn is_gesture(tool: Tool, mods: egui::Modifiers) -> bool {
     mods.shift && !mods.alt && !mods.ctrl && !mods.command && !mods.mac_cmd && !items(tool).is_empty()
 }
 
+/// Does a right-click with `mods` open the menu? The Shift gesture for every tool that has one,
+/// and a plain right-click with the Eraser in Block mode, where the Brush Preset picker's Size and
+/// Hardness mean nothing (#11937, as in the reference application).
+/// A plain right-click opens it only where it would otherwise open the picker: with the Erase
+/// preference it still erases.
+pub(crate) fn opens_on(app: &PhotocraftApp, tool: Tool, mods: egui::Modifiers) -> bool {
+    let plain = !mods.shift && !mods.alt && !mods.ctrl && !mods.command && !mods.mac_cmd;
+    let block = tool == Tool::Eraser && app.ui.tool_options.eraser_mode == "block";
+    is_gesture(tool, mods) || (plain && block && !crate::paint_mouse::right_erases(app, tool))
+}
+
 /// The modifiers that decide a right-button gesture: the ones held when the button went down.
 /// egui reports `secondary_clicked` on release, so letting go of Shift a moment before the button
 /// must not turn Shift+right-click into a plain right-click (an erase dab, with the Erase
@@ -382,3 +393,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &Context) {
         close(app);
     }
 }
+
+#[cfg(test)]
+#[path = "eraser_block_right_click_tests.rs"]
+mod eraser_block_right_click_tests;

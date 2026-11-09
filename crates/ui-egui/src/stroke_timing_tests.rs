@@ -366,7 +366,7 @@ fn a_committed_stroke_repaints_a_gradient_overlay_over_the_whole_layer() {
     let c = app.committed_stroke.as_ref().expect("the commit took the live stroke's pixels");
     assert_eq!(c.revision, st.revision);
     // A cache that showed the live stroke's last step.
-    let missed = crate::canvas::damage_since(app, idx, (st.revision - 1, c.last_key()), (st.revision, 0), 0, st.last_damage).unwrap();
+    let missed = crate::canvas::damage_since(app, idx, (st.revision - 1, c.last_key()), (st.revision, 0), 0, (st.damage_from(), st.last_damage)).unwrap();
     assert!(missed.contains(25, 25), "the gradient around the first stroke is repainted: {missed:?}");
 }
 
@@ -390,7 +390,7 @@ fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
             app.perf.stage.start(t0, moves);
             app.perf.stage.ui_start(t0, Some(0.004));
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-            app.finish_frame(crate::gpu_canvas::now_ms() - t0);
+            app.finish_frame(&ctx, crate::gpu_canvas::now_ms() - t0);
         },
         app,
     );
