@@ -931,3 +931,74 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert_eq!(columns[0].width, 380.0);
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
+
+/// Whether the dock column holding `panel` is iconic, or `None` when no dock column holds it.
+fn column_iconic(layout: &Layout<String>, panel: &str) -> Option<bool> {
+    fn walk(node: &Node<String>, panel: &str) -> Option<bool> {
+        match node {
+            Node::Dock { columns, .. } => columns.iter().find(|c| c.groups.iter().any(|g| g.panels.iter().any(|id| id == panel))).map(|c| c.iconic),
+            Node::Split { first, second, .. } => walk(first, panel).or_else(|| walk(second, panel)),
+            _ => None,
+        }
+    }
+    layout.root.as_ref().and_then(|root| walk(root, panel))
+}
+
+/// A tab dropped on the dock column's inner edge makes a new column that starts as icons;
+/// the column it came from stays expanded.
+#[test]
+fn a_panel_dropped_beside_the_dock_column_starts_iconic() {
+    let mut h = harness(app(), vec2(1280.0, 800.0));
+    let canvas = canvas_rect(&h);
+    let source = tab_rect(&h, "layers").center();
+    let target = egui::pos2(canvas.right() + 6.0, canvas.center().y);
+    drag(&mut h, source, target);
+    let layout = lay(h.state());
+    assert!(valid(layout));
+    assert_eq!(column_iconic(layout, "layers"), Some(true), "{layout:?}");
+    assert_eq!(column_iconic(layout, "color"), Some(false), "{layout:?}");
+    assert_eq!(h.state().ui.status, "Layers is docked as an icon; select the icon to open it");
+    assert!(!h.state().ui.status_error);
+}
+
+/// A menu, keyboard or control move into a new column keeps it expanded: only the dock area's
+/// own drops collapse it.
+#[test]
+fn a_command_move_into_a_new_column_stays_expanded() {
+    let mut app = app();
+    app.run("window.panel.dock", json!({"panel":"layers", "anchor":"color", "zone":"left"})).unwrap();
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    h.run_steps(2);
+    let layout = lay(h.state());
+    assert!(valid(layout));
+    let Some(Node::Split { second, .. }) = &layout.root else { panic!("expected the canvas split") };
+    let Node::Dock { columns, .. } = second.as_ref() else { panic!("expected the dock") };
+    let column = |panel: &str| columns.iter().position(|c| c.groups.iter().any(|g| g.panels.iter().any(|id| id == panel)));
+    assert_ne!(column("layers"), column("color"), "a new column: {layout:?}");
+    assert_eq!(column_iconic(layout, "layers"), Some(false), "{layout:?}");
+}
+
+/// A drop into an existing group does not make anything iconic.
+#[test]
+fn only_a_new_column_starts_iconic() {
+    let column = || Target::At { anchor: "color".to_owned(), placement: Placement::Column { after: false } };
+    let group = || Target::At { anchor: "color".to_owned(), placement: Placement::Group { below: true, height: None } };
+    let new_dock = || Target::NewDock { side: Side::Start };
+    let layers = || "layers".to_owned();
+    let cases = [
+        (Action::Move { panel: layers(), anchor: "color".into(), placement: Placement::Column { after: false } }, true),
+        (Action::MovePanel { panel: layers(), to: column() }, true),
+        (Action::MoveGroup { panel: layers(), to: column() }, true),
+        (Action::MoveWindow { panel: layers(), to: column() }, true),
+        (Action::Move { panel: layers(), anchor: "color".into(), placement: Placement::Group { below: true, height: None } }, false),
+        (Action::MovePanel { panel: layers(), to: group() }, false),
+        (Action::MoveGroup { panel: layers(), to: group() }, false),
+        (Action::MoveWindow { panel: layers(), to: group() }, false),
+        (Action::MovePanel { panel: layers(), to: new_dock() }, false),
+        (Action::MoveGroup { panel: layers(), to: new_dock() }, false),
+        (Action::MoveWindow { panel: layers(), to: new_dock() }, false),
+    ];
+    for (action, iconic) in cases {
+        assert_eq!(new_column_panel(&action), iconic.then(layers), "{action:?}");
+    }
+}
