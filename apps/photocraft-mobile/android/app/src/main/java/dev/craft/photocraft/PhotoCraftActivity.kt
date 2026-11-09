@@ -17,8 +17,10 @@ class PhotoCraftActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         host = CraftHost(this, library = "photocraft_mobile")
-        // "Open with" / Share launched us; a recreated activity's intent was handled before.
-        if (savedInstanceState == null) host.openIntent(intent)
+        // "Open with" / Share launched us. A recreated activity's intent was handled before, unless
+        // the process died meanwhile: the app starts again without it.
+        if (savedInstanceState == null || !launchOpened) host.openIntent(intent)
+        launchOpened = true
         setContent {
             CraftTheme {
                 // PhotoCraft draws its own menus and panels: no native chrome on top.
@@ -37,5 +39,10 @@ class PhotoCraftActivity : ComponentActivity() {
         // and the new activity finds the app still running.
         if (isFinishing) host.close() else host.release()
         super.onDestroy()
+    }
+
+    private companion object {
+        /** Whether this process has opened a launch intent's documents (reset when it dies). */
+        var launchOpened = false
     }
 }
