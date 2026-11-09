@@ -215,7 +215,7 @@ fn an_answered_open_reads_the_shape_it_was_told() {
     let bytes = std::sync::Arc::new(gif(&[([255, 0, 0], 5), ([0, 0, 255], 5)]));
     for (choice, layers, is_video) in [(AnimatedOpen::Frames, 2, false), (AnimatedOpen::Video, 1, true)] {
         let mut s = crate::Session::new();
-        let started = s.start_open_answered("a.gif", OpenSource::Bytes(bytes.clone()), choice, true).unwrap();
+        let started = s.start_open_answered("a.gif", OpenSource::Bytes(bytes.clone()), None, choice, true).unwrap();
         let v = finished(&mut s, started);
         assert!(v.get("held").is_none(), "{choice:?}: {v}");
         let doc = &s.active().unwrap().doc;
@@ -232,10 +232,31 @@ fn a_video_layer_opened_from_a_path_reloads_from_it() {
     std::fs::write(&path, gif(&[([255, 0, 0], 5), ([0, 0, 255], 5)])).unwrap();
     let path = path.to_string_lossy().into_owned();
     let mut s = crate::Session::new();
-    let started = s.start_open_answered("a.gif", OpenSource::Path(path.clone()), AnimatedOpen::Video, true).unwrap();
+    let started = s.start_open_answered("a.gif", OpenSource::Path(path.clone()), None, AnimatedOpen::Video, true).unwrap();
     finished(&mut s, started);
     let v = s.active().unwrap().doc.layers[0].video.clone().unwrap();
     assert_eq!((v.frames.len(), v.source), (2, VideoSource::File { path }));
+}
+
+/// A native open hands over the bytes it already read along with their path: the video layer
+/// reloads from that path, whether File Handling chose Video or the prompt's answer did.
+#[test]
+fn a_video_layer_from_bytes_with_a_known_path_reloads_from_it() {
+    use crate::jobs::OpenSource;
+    let bytes = std::sync::Arc::new(gif(&[([255, 0, 0], 5), ([0, 0, 255], 5)]));
+    let path = "/pics/a.gif".to_string();
+    let mut s = crate::Session::new();
+    let started = s.start_open_answered("a.gif", OpenSource::Bytes(bytes.clone()), Some(path.clone()), AnimatedOpen::Video, true).unwrap();
+    finished(&mut s, started);
+    let v = s.active().unwrap().doc.layers[0].video.clone().unwrap();
+    assert_eq!((v.frames.len(), v.source), (2, VideoSource::File { path: path.clone() }));
+
+    let mut s = crate::Session::new();
+    s.edit_prefs(|p| p.file_handling.animated_gif = AnimatedOpen::Video);
+    let started = s.start_open_for_user_with_background("a.gif", OpenSource::Bytes(bytes), Some(path.clone()), true).unwrap();
+    finished(&mut s, started);
+    let v = s.active().unwrap().doc.layers[0].video.clone().unwrap();
+    assert_eq!(v.source, VideoSource::File { path });
 }
 
 /// An automation caller's `animation`: the first frame when it doesn't say, frames or a video

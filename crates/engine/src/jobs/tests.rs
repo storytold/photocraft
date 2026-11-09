@@ -1475,7 +1475,7 @@ fn approved_open_forwards_the_flag_and_the_bound_estimate() {
     photocraft_io::memory::with_mock_memory(snapshot, || {
         photocraft_io::psd_budget::with_test_estimate_charge(4 * gb + 1, || {
             let mut s = Session::new();
-            let started = s.start_open_for_user_with_background("tiny.psd", OpenSource::Bytes(Arc::clone(&bytes)), false).unwrap();
+            let started = s.start_open_for_user_with_background("tiny.psd", OpenSource::Bytes(Arc::clone(&bytes)), None, false).unwrap();
             let v = match started {
                 Started::Done(v) => v,
                 Started::Job(id) => s.wait_job(id).unwrap(),
@@ -1524,7 +1524,7 @@ fn unknown_capacity_metadata_never_invents_available_ram() {
         // Above both the 2 GiB unknown-capacity allowance and the 8 GiB warning threshold.
         photocraft_io::psd_budget::with_test_estimate_charge(8 * gb + 1, || {
             let mut s = Session::new();
-            let started = s.start_open_for_user_with_background("unknown.psd", OpenSource::Bytes(Arc::clone(&bytes)), false).unwrap();
+            let started = s.start_open_for_user_with_background("unknown.psd", OpenSource::Bytes(Arc::clone(&bytes)), None, false).unwrap();
             let v = match started {
                 Started::Done(v) => v,
                 Started::Job(id) => s.wait_job(id).unwrap(),
@@ -1549,7 +1549,7 @@ fn an_open_reports_a_typed_hard_budget_refusal() {
     photocraft_io::memory::with_mock_memory(snapshot, || {
         photocraft_io::psd_budget::with_test_estimate_charge(hard + 1, || {
             let mut s = Session::new();
-            let err = s.start_open_for_user_with_background("over.psd", OpenSource::Bytes(Arc::clone(&bytes)), false).unwrap_err();
+            let err = s.start_open_for_user_with_background("over.psd", OpenSource::Bytes(Arc::clone(&bytes)), None, false).unwrap_err();
             match &err {
                 EngineError::PsdHardBudget { required, limit, .. } => assert!(*required > hard && *limit == hard),
                 other => panic!("the job must keep the hard-budget fields, got {other:?}"),

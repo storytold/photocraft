@@ -1190,7 +1190,7 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
+        self.start_open_inner(name, source, None, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1205,26 +1205,35 @@ impl Session {
     /// opens as its first frame here; [`Self::start_open_for_user`] opens it as File Handling says
     /// (asking, `animated`, when it says Ask).
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false, false, None, None, true, None)
+        self.start_open_inner(name, source, None, false, false, None, None, true, None)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
     /// confirmation, without changing import or subsequent save behaviour.
     /// Headless callers keep using [`Self::start_open`].
     pub fn start_open_for_user(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_for_user_with_background(name, source, true)
+        self.start_open_for_user_with_background(name, source, None, true)
     }
 
     /// Interactive open with an explicit background/inline choice: damaged PSD content and
-    /// high-memory preflights wait for the user instead of opening non-interactively.
-    pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background, None)
+    /// high-memory preflights wait for the user instead of opening non-interactively. `path` is
+    /// where in-memory `source` bytes were read from, when known: a video layer reloads from it.
+    pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, path: Option<String>, background: bool) -> Result<Started> {
+        self.start_open_inner(name, source, path, true, false, None, None, background, None)
     }
 
     /// Reads a file again for the answer to the animation prompt, `choice` being Frames or Video:
     /// an interactive open that doesn't ask, whatever File Handling says.
-    pub fn start_open_answered(&mut self, name: &str, source: OpenSource, choice: crate::prefs::AnimatedOpen, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background, Some(choice))
+    /// `path` is as for [`Self::start_open_for_user_with_background`].
+    pub fn start_open_answered(
+        &mut self,
+        name: &str,
+        source: OpenSource,
+        path: Option<String>,
+        choice: crate::prefs::AnimatedOpen,
+        background: bool,
+    ) -> Result<Started> {
+        self.start_open_inner(name, source, path, true, false, None, None, background, Some(choice))
     }
 
     /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
@@ -1255,6 +1264,7 @@ impl Session {
         &mut self,
         name: &str,
         source: OpenSource,
+        known_path: Option<String>,
         for_user: bool,
         approve_high_memory: bool,
         approved_estimate: Option<u64>,
@@ -1362,7 +1372,8 @@ impl Session {
                     && crate::animated_open::more_frames(&imported.0.warnings)
                 {
                     let (bytes, path) = match video {
-                        OpenSource::Bytes(bytes) => (bytes, None),
+                        // Bytes read from a known file still reload from it.
+                        OpenSource::Bytes(bytes) => (bytes, known_path),
                         OpenSource::Path(p) => (Arc::new(std::fs::read(&p).map_err(|e| EngineError::Other(format!("read `{p}`: {e}")))?), Some(p)),
                     };
                     let r = &mut imported.0;

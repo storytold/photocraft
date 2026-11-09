@@ -281,7 +281,7 @@ pub fn start_open(
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
     let name = &app.open_name(name);
-    let started = app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())?;
+    let started = app.session.start_open_for_user_with_background(name, source, path.clone(), app.background_jobs).map_err(|e| e.to_string())?;
     track_open(app, name, path, started, slot, order)
 }
 
@@ -296,7 +296,7 @@ pub(crate) fn start_open_answered(
     order: Option<OpenOrder>,
     choice: photocraft_engine::prefs::AnimatedOpen,
 ) -> Result<(), String> {
-    let started = app.session.start_open_answered(name, source, choice, app.background_jobs).map_err(|e| e.to_string())?;
+    let started = app.session.start_open_answered(name, source, path.clone(), choice, app.background_jobs).map_err(|e| e.to_string())?;
     track_open(app, name, path, started, slot, order)
 }
 
