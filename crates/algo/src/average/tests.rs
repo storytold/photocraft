@@ -1,5 +1,6 @@
 use super::*;
-use photocraft_color::ColorMode;
+use crate::{Ctx, Image};
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
 
 #[test]
 fn preserves_alpha_and_averages_hidden_rgb_at_each_depth() {

@@ -26,7 +26,9 @@ impl Mean {
     /// Photoshop Average weights straight colors by selection, including hidden RGB, without changing coverage.
     fn push_colour(&mut self, p: [f32; 4], coverage: f32) {
         let weight = f64::from(coverage);
-        for (sum, value) in self.sum.iter_mut().zip(p) { *sum += f64::from(value) * weight; }
+        for (sum, value) in self.sum.iter_mut().zip(p) {
+            *sum += f64::from(value) * weight;
+        }
         self.weight += weight;
         self.count += weight;
         self.alpha += f64::from(p[3]) * weight;
@@ -105,7 +107,11 @@ fn apply_policy(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&
             if p.into_iter().any(|v| !v.is_finite()) || !k.is_finite() || !(0.0..=1.0).contains(&k) {
                 return Err(Error::NonFiniteSample);
             }
-            if preserve_alpha { mean.push_colour(p, k); } else { mean.push(p, k); }
+            if preserve_alpha {
+                mean.push_colour(p, k);
+            } else {
+                mean.push(p, k);
+            }
         }
     }
     let Some(avg) = mean.rgba() else { return Ok(surface.clone()) };
@@ -124,7 +130,9 @@ fn apply_policy(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&
             let original_alpha = dst.last().copied();
             let p = to_rgba(&surface.format(), dst);
             let mut target = avg;
-            if preserve_alpha { target[3] = p[3]; }
+            if preserve_alpha {
+                target[3] = p[3];
+            }
             let mut mixed = p;
             if !preserve_alpha && surface.format().alpha && p[3] != avg[3] {
                 let before = f64::from(p[3]) * (1. - f64::from(k));
@@ -154,7 +162,12 @@ fn apply_policy(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&
                 }
             }
             from_rgba_into(&surface.format(), mixed, dst);
-            if preserve_alpha && surface.format().alpha && let Some(alpha) = dst.last_mut() { *alpha = original_alpha.unwrap_or(p[3]); }
+            if preserve_alpha
+                && surface.format().alpha
+                && let Some(alpha) = dst.last_mut()
+            {
+                *alpha = original_alpha.unwrap_or(p[3]);
+            }
             if dst.iter().any(|v| !v.is_finite()) {
                 return Err(Error::NonFiniteSample);
             }
@@ -167,6 +180,7 @@ fn apply_policy(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&
 }
 
 /// Adapt raw native float images to checked Average, preserving bounded identity fallback on rejected work.
+#[cfg(test)]
 pub(crate) fn run_image(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx) -> Vec<f32> {
     run_image_policy(src, out, ctx, false)
 }
