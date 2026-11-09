@@ -86,6 +86,7 @@ impl DocState {
         self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
     }
 
+    /// A newly opened or created document's state: its top layer targeted, an empty history.
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();

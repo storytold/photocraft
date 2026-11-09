@@ -255,6 +255,8 @@ pub(super) struct ResolvedSource {
     invert: bool,
 }
 
+/// Resolve a channel reference (`p`) to the document, layer and plane it reads, for `cmd`;
+/// `gray`: whether a colour composite reads as its luminosity.
 pub(super) fn resolve_source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<ResolvedSource> {
     let di = doc_index(s, p, "document")?;
     let st = &s.documents()[di];

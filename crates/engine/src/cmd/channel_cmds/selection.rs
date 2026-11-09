@@ -60,6 +60,8 @@ pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "channel": i, "name": name, "document": di }))
 }
 
+/// `select.loadSelection`: combine a channel, a layer's transparency or a saved selection with
+/// the selection, as a background job.
 pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "select.loadSelection";
     let mode = match operation(p, "operation") {

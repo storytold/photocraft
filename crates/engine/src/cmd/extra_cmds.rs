@@ -37,6 +37,7 @@ fn has_mask(s: &Session) -> std::result::Result<(), String> {
     active_layer(s)?.mask.as_ref().map(|_| ()).ok_or_else(|| "the active layer has no layer mask".into())
 }
 
+/// Paste Into and Paste Outside are enabled with something copied and a selection.
 fn has_clip_and_selection(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     s.clipboard.as_ref().ok_or("the clipboard is empty")?;
@@ -927,6 +928,7 @@ pub(crate) fn rasterize_all(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// The commands this module registers: Paste Special's items and the other extras.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
