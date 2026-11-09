@@ -208,6 +208,7 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
             app.session.cancel_job(job);
         }
         app.jobs.opens.clear();
+        app.jobs.open_bytes.clear();
         app.jobs.batches.clear();
         app.ui.dialogs.retain(|d| !owns(&d.fields) && !owns_damage(&d.fields) && !owns_memory(&d.fields));
         app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);

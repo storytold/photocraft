@@ -383,6 +383,11 @@ pub(crate) fn tab_slot(app: &mut PhotocraftApp, slot: Option<usize>, order: Opti
 /// preflight keeps both in its prompt.
 pub(crate) fn finish_open_tab(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value) -> Result<(), String> {
     let kept = app.jobs.open_bytes.remove(&tab.job);
+    finish_open_tab_with(app, tab, v, kept)
+}
+
+/// [`finish_open_tab`] with the tab's kept source bytes already taken out of [`JobsUi::open_bytes`].
+fn finish_open_tab_with(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value, kept: Option<Arc<Vec<u8>>>) -> Result<(), String> {
     let r = finish_open_bytes(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order, kept);
     end_batch(app);
     r
@@ -648,20 +653,19 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         return;
     }
     if e.command == OPEN_JOB || app.jobs.opens.iter().any(|o| o.job == e.id) {
+        // Every end of the job frees its kept bytes, even when the tab is already gone (a cancelled
+        // open prompt clears the tabs).
+        let kept = app.jobs.open_bytes.remove(&e.id);
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);
         match e.outcome {
             JobOutcome::Done(v) => {
-                if let Err(err) = finish_open_tab(app, &tab, &v) {
+                if let Err(err) = finish_open_tab_with(app, &tab, &v, kept) {
                     app.open_failed(&tab.name, &err);
                 }
             }
-            JobOutcome::Failed(err) => {
-                app.jobs.open_bytes.remove(&tab.job);
-                app.open_failed(&tab.name, &err);
-            }
+            JobOutcome::Failed(err) => app.open_failed(&tab.name, &err),
             JobOutcome::Cancelled => {
-                app.jobs.open_bytes.remove(&tab.job);
                 app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &tab.name)]);
                 app.ui.status_error = false;
             }
@@ -711,7 +715,8 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 /// What [`crate::PhotocraftApp::open_bytes`] does after decoding, for a background open's result
 /// (`{document, docId, warnings, color}` or `{held, …}`). `slot` and `order` are the tab position
 /// and set place the file keeps: through a memory prompt, a profile/damage prompt and the final
-/// document, so an inline completion lands where a background tab would.
+/// document, so an inline completion lands where a background tab would. It has no source bytes to
+/// keep: [`finish_open_bytes`] is the form for a pathless file.
 fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
     finish_open_bytes(app, name, path, v, slot, order, None)
 }
