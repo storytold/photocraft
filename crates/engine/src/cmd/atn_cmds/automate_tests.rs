@@ -178,7 +178,13 @@ fn changed_settings_save_with_the_recorded_message() {
 #[test]
 fn a_damaged_recorded_descriptor_saves_the_settings() {
     let other_event = photocraft_paint::tile::b64_encode(&desc("null").with("Rds ", px(2.0)).to_bytes());
-    for damaged in [json!("not base64!"), json!(photocraft_paint::tile::b64_encode(b"not a descriptor")), json!(other_event), json!(7), json!(null)] {
+    // A message beside a broken Fit Image field: neither the descriptor nor its message is kept.
+    let mut missing_limit = recorded("Recorded message", 800.0, 600.0, true);
+    missing_limit.items.retain(|(k, _)| !k.is("limit"));
+    let missing_limit = photocraft_paint::tile::b64_encode(&missing_limit.to_bytes());
+    for damaged in
+        [json!("not base64!"), json!(photocraft_paint::tile::b64_encode(b"not a descriptor")), json!(other_event), json!(missing_limit), json!(7), json!(null)]
+    {
         let p = json!({"width": 800, "height": 600, "dontEnlarge": true, SOURCE: damaged});
         assert_eq!(export_item(FIT_IMAGE, &p, "S").and_then(|item| item.descriptor), Some(recorded("", 800.0, 600.0, true)), "{p}");
     }
