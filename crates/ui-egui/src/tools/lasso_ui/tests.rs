@@ -524,3 +524,39 @@ fn alt_clicking_narrow_and_rotated_polygons_keeps_the_fourth_corner() {
         assert!(app.session.active().unwrap().doc.selection.is_some());
     }
 }
+
+/// #9841: the Lasso reads its own raw pointer events (`lasso_ui::canvas_input`), so the
+/// `Buttons` starvation the other tools get does not reach it. A press that dismisses the
+/// canvas tool menu must not draw a Lasso selection, and the next ordinary drag must work.
+#[test]
+fn a_menu_dismissal_press_never_draws_a_lasso_selection() {
+    let mut h = harness();
+    // Right-click on the canvas: the selection menu opens.
+    let menu_at = crate::canvas::ViewXform::active(h.state()).unwrap().to_screen(300.0, 100.0);
+    h.event(Event::PointerMoved(menu_at));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: menu_at, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: menu_at, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "right-click opens the selection menu");
+    let revision = h.state().session.active().unwrap().revision;
+    // The dismissal press and drag, well clear of the menu.
+    mouse(&mut h, "down", 50.0, 250.0, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "the outside press dismisses the menu");
+    mouse(&mut h, "move", 50.0, 200.0, Modifiers::NONE);
+    mouse(&mut h, "move", 150.0, 200.0, Modifiers::NONE);
+    mouse(&mut h, "move", 150.0, 250.0, Modifiers::NONE);
+    mouse(&mut h, "up", 150.0, 250.0, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().drag.is_none(), "the consumed gesture must not leave a Lasso drag behind");
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "the consumed gesture must draw no selection");
+    assert_eq!(h.state().session.active().unwrap().revision, revision, "and no history step");
+    // The next ordinary drag draws one, so the guard did not stick.
+    mouse(&mut h, "down", 50.0, 50.0, Modifiers::NONE);
+    mouse(&mut h, "move", 90.0, 40.0, Modifiers::NONE);
+    mouse(&mut h, "move", 150.0, 60.0, Modifiers::NONE);
+    mouse(&mut h, "up", 150.0, 60.0, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "an ordinary Lasso drag draws again");
+}
