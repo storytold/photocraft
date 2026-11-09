@@ -89,18 +89,27 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
         if app.session.active_index() == Some(index) {
             return false;
         }
-        // The Move drag ends without moving anything; an ⌥-drag's copy is taken back.
-        let Some(drag) = app.drag.take() else { return false };
-        let previous = drag.transfer_floating_before.clone();
-        app.move_preview = None;
-        crate::move_mods::abandon(app);
+        let Some(previous) = app.drag.as_ref().map(|d| d.transfer_floating_before.clone()) else { return false };
         // An Option-drag of an existing float first drops it and floats a copy. Take that
         // compound start back before restoring the captured float, so document, history and
         // floating revision remain one consistent source state.
-        if previous.as_ref().is_some_and(|before| app.session.active().is_some_and(|st| st.revision != before.revision)) && !app.session.rollback() {
-            app.drag = Some(drag);
-            return false;
+        if previous.as_ref().is_some_and(|before| app.session.active().is_some_and(|st| st.revision != before.revision)) {
+            // The drag's own float is gone or stale: another edit (an opacity key, say) came
+            // after the drag started, and a rollback would take that edit back instead. The
+            // drag stays a move in its own document.
+            if app.session.active().and_then(photocraft_engine::float_cmds::floating).is_none() {
+                return false;
+            }
+            // Nothing is taken from the drag before this can fail (a background job holds the
+            // history): it goes on as it was, with its ⇧ lock and offset (`move_mods`).
+            if !app.session.rollback() {
+                return false;
+            }
         }
+        // The Move drag ends without moving anything; an ⌥-drag's copy is taken back.
+        app.drag = None;
+        app.move_preview = None;
+        crate::move_mods::abandon(app);
         // The rollback raised the revision; the restored document is the one the float was
         // over, so it floats over the new revision (else `floating()` drops it as stale).
         if let Some(st) = app.session.active_mut() {

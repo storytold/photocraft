@@ -224,6 +224,89 @@ fn an_option_drag_of_a_moved_float_onto_a_tab_keeps_the_source_float() {
     assert_eq!(float.offset, (5, 0));
 }
 
+/// A moved float in "source-doc", the Move tool, and an ⌥-press on it, moved a little so the
+/// drag has dropped the float and floats its copy. Returns the tab of "dest-doc".
+fn option_drag_of_a_moved_float(h: &mut Harness<'_, PhotocraftApp>) -> Pos2 {
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().run("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+    h.state_mut().run("select.float", json!({"dx": 5, "dy": 0})).unwrap();
+    h.run_steps(2);
+    let grab = ViewXform::active(h.state()).unwrap().to_screen(13.0, 10.0);
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.event(egui::Event::PointerMoved(grab));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: grab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(grab + vec2(0.0, 10.0 * k as f32)));
+        h.run_steps(1);
+    }
+    tab(h, "dest-doc")
+}
+
+fn release_at(h: &mut Harness<'_, PhotocraftApp>, p: Pos2) {
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+}
+
+#[test]
+fn an_edit_during_an_option_drag_of_a_float_is_not_taken_back_by_a_tab_hover() {
+    let (mut h, paint) = harness();
+    let over_tab = option_drag_of_a_moved_float(&mut h);
+    // An edit lands while the button is still held (as an opacity key would).
+    h.state_mut().run("layer.setProps", json!({"layer": paint.0, "opacity": 0.3})).unwrap();
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(over_tab + vec2(0.0, k as f32)));
+        h.run_steps(1);
+    }
+    let opacity = |h: &Harness<'_, PhotocraftApp>| h.state().session.documents()[0].doc.layer(paint).unwrap().opacity;
+    assert!((opacity(&h) - 0.3).abs() < 1e-6, "the hover took the opacity edit back");
+    release_at(&mut h, over_tab);
+    assert!((opacity(&h) - 0.3).abs() < 1e-6, "the release took the opacity edit back");
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 1, "nothing is copied over a later edit");
+}
+
+#[test]
+fn a_tab_hover_that_cannot_take_the_option_drag_back_keeps_the_move_going() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (mut h, _) = harness();
+    let over_tab = option_drag_of_a_moved_float(&mut h);
+    // A background job locks the source: the rollback can't run.
+    let gate = Arc::new(AtomicBool::new(false));
+    let open = gate.clone();
+    h.state_mut()
+        .session
+        .start_job(
+            "test.slow",
+            json!({}),
+            "Slow",
+            true,
+            move |ctx| {
+                while !open.load(Ordering::Relaxed) {
+                    ctx.check()?;
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Ok(())
+            },
+            |_, ()| Ok(json!({})),
+        )
+        .unwrap();
+    assert!(h.state().session.active_job().is_some());
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(over_tab + vec2(0.0, k as f32)));
+        h.run_steps(1);
+    }
+    // Still the same ⌥-drag of the copy, its modifier state intact.
+    assert_eq!(h.state().session.active().unwrap().doc.name, "source-doc");
+    assert!(h.state().drag.is_some());
+    assert!(crate::move_mods::copying(h.state(), false), "the drag's move state was cleared");
+    gate.store(true, Ordering::Relaxed);
+    release_at(&mut h, over_tab);
+}
+
 #[test]
 fn a_layers_panel_drag_onto_a_tab_drops_the_layer_where_it_is_released() {
     let (mut h, _) = harness();
