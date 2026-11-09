@@ -75,14 +75,17 @@ pub fn stroke_rasterizer(path: &Path, style: &StrokeStyle, tol: f64) -> Rasteriz
     stroke_rasterizer_with_alignment(path, style, tol, false)
 }
 
-/// Align actual straight outline edges, including widths other than one pixel.
+/// Align actual straight outline edges for integral widths above one pixel.
 /// Curved source paths keep their original outline antialiasing.
 fn stroke_rasterizer_with_alignment(path: &Path, style: &StrokeStyle, tol: f64, aligned: bool) -> Rasterizer {
     // Stroke outlines tolerate a coarser flattening than fills (the offset hides chord error).
     let lines = flatten_path(path, (tol * 4.0).min(style.width.max(0.01) * 0.1).max(1e-3));
     let mut polys = stroke_polygons(&lines, style, tol);
+    // Rounding both edges of a fractional-width outline can collapse it to zero.
+    // Keep its area coverage: a subpixel stroke cannot occupy an opaque integer row.
     if aligned
-        && style.width != 1.0
+        && style.width >= 2.0
+        && style.width.fract() == 0.0
         && path.subpaths.iter().all(|subpath| subpath.knots.iter().all(|knot| knot.anchor == knot.in_ctrl && knot.anchor == knot.out_ctrl))
     {
         for polygon in &mut polys {

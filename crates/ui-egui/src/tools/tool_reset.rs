@@ -171,10 +171,19 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
 /// what a tool preset made with + stores (#7356).
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
+    // This field's script/serialized name differs from its Rust identifier.
+    macro_rules! serialized_key {
+        (use_aligned_rendering) => {
+            "useAlignedRendering"
+        };
+        ($field:ident) => {
+            stringify!($field)
+        };
+    }
     macro_rules! reset {
         ($($f:ident),* $(,)?) => {{
             let _ = |o: &ToolOptions| { $(let _ = &o.$f;)* };
-            &[$(stringify!($f)),*]
+            &[$(serialized_key!($f)),*]
         }};
     }
     match tool {

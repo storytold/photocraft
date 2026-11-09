@@ -14,7 +14,9 @@ Curves and diagonals retain antialiasing; flattened curve chords are never snapp
 Stored paths, live parameters, stroke widths and dash settings are unchanged.
 Turning the option off restores the original coverage. Existing one-pixel stroke
 and dash-cap coverage rules remain in use after edge alignment. Straight outline
-edges of wider strokes also snap; curved source outlines retain antialiasing.
+edges of wider integer-width strokes also snap. Fractional stroke widths keep
+their area coverage so a subpixel outline cannot collapse to zero width; curved
+source outlines retain antialiasing.
 
 Native projects retain the setting. PSD `strokeStyleStrokeAdjust` is an independent
 stroke-style property: it neither enables Align Edges on import nor changes when

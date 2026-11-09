@@ -1671,3 +1671,18 @@ fn align_edges_ellipse_extrema_snap_without_thresholding_curves() {
     assert_ne!(aligned, legacy);
     assert_eq!(shape.path, stored);
 }
+
+/// Align Edges must not round a subpixel outline's two edges onto the same pixel.
+#[test]
+fn align_edges_fractional_stroke_width_keeps_area_coverage() {
+    let clip = Rect::new(0, 0, 80, 80);
+    for width in [0.25, 0.5, 1.5, 2.5] {
+        let mut shape =
+            ShapeLayer { path: shapes::rect(20.0, 20.0, 40.0, 30.0), stroke: Some(ShapeStroke { width, ..Default::default() }), ..Default::default() };
+        let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        shape.use_aligned_rendering = true;
+        let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert_eq!(aligned, legacy, "width={width}");
+        assert_eq!(aligned[20 * 80 + 35][3], width.min(2.0) / 2.0);
+    }
+}

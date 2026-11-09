@@ -1632,12 +1632,23 @@ fn pixel_align_live_line_with_effect_keeps_fill_and_outline_registered() {
             let mut layer = Layer::new("line", LayerContent::Shape(shape));
             layer.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(0.0, 1.0, 0.0) });
             doc.layers.push(layer);
-            let expected = flatten(&doc);
-            assert!(expected.get(35, 19)[3] > 0.0, "fixture must paint the upper half of the live bar");
             let LayerContent::Shape(shape) = &mut doc.layers[0].content else { panic!("shape") };
             shape.use_aligned_rendering = true;
             assert_eq!(shape.path, path);
             assert!(shape.cache.is_none());
+            // A full-opacity Color Overlay makes the aligned fill green, then the
+            // independent vector outline paints above it. Build that reference
+            // explicitly, rather than expecting alignment to retain legacy pixels.
+            let mut reference = Document::new("reference", Size::new(100, 50), ColorMode::Rgb, depth);
+            for part in [
+                ShapeLayer { live: None, stroke: None, fill: Some(Fill::Solid(Color::rgb(0.0, 1.0, 0.0))), ..shape.clone() },
+                ShapeLayer { fill: None, ..shape.clone() },
+            ] {
+                let surface = photocraft_vector::render_shape(&part, PixelFormat::RGBA8.with_sample(depth), Rect::new(0, 0, 100, 50));
+                reference.layers.push(Layer::new("part", LayerContent::Raster(surface)));
+            }
+            let expected = flatten(&reference);
+            assert!(expected.get(35, 20)[1] > 0.0, "fixture must paint the aligned green fill");
             let actual = flatten(&doc);
             for (i, (actual, expected)) in actual.px.iter().zip(&expected.px).enumerate() {
                 assert!(close4(*actual, *expected), "depth={depth:?}, arrow={arrow}, pixel={i}: {actual:?} != {expected:?}");
