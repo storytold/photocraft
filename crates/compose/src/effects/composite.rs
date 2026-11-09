@@ -56,16 +56,22 @@ pub(crate) fn build_maps_prepared(
             Effect::OuterGlow(g) => vec![glow_map(&shape, g, false, (rect.x0, rect.y0))],
             Effect::InnerGlow(g) => vec![glow_map(&shape, g, true, (rect.x0, rect.y0))],
             Effect::Satin(s) => vec![satin_map(&shape, s)],
-            // Stroke Emboss (#8639): an Inner Bevel of the layer's outline with its top Stroke
-            // effect (the stroked shape's outer edge, inside the stroke too), shading only the
-            // stroke, over the finished layer, as Photoshop's corpus files show it. Without a
-            // stroke it has nothing to emboss.
+            // Stroke Emboss (#8639): an Inner Bevel of the layer's outline with its Stroke effects
+            // (the stroked shape's outer edge, inside the stroke too), shading only the strokes,
+            // over the finished layer, as Photoshop's corpus files show it. Several strokes emboss
+            // as their union (a 4 px stroke over a 10 px one shades the whole 10 px band). Without
+            // a stroke it has nothing to emboss.
             Effect::BevelEmboss(b) if b.style == BevelStyle::StrokeEmboss => {
-                let stroke = items.iter().find_map(|e| if let Effect::Stroke(st) = e { Some(st) } else { None });
-                let band = stroke.map(|st| stroke_band(&shape, st));
-                // A stroke inside the layer shades with the layer, as an Inner Bevel does; one
+                let strokes: Vec<&photocraft_doc::StrokeFx> = items.iter().filter_map(|e| if let Effect::Stroke(st) = e { Some(st) } else { None }).collect();
+                let band = strokes.iter().map(|st| stroke_band(&shape, st)).reduce(|mut acc, m| {
+                    for (a, s) in acc.v.iter_mut().zip(&m.v) {
+                        *a = a.max(*s);
+                    }
+                    acc
+                });
+                // Strokes inside the layer shade with the layer, as an Inner Bevel does; one
                 // reaching outside shades over the finished layer and its backdrop.
-                bevel_paint[i] = if stroke.is_some_and(|st| stroke_widths(st).1 <= 0.0) { BevelPaint::Inner } else { BevelPaint::Both };
+                bevel_paint[i] = if strokes_inside(&strokes) { BevelPaint::Inner } else { BevelPaint::Both };
                 match band {
                     Some(band) => {
                         // The shape keeps its own (anti-aliased) edge; the stroke adds what lies outside it.
@@ -192,15 +198,22 @@ fn stroke_band(shape: &Map, st: &photocraft_doc::StrokeFx) -> Map {
     band
 }
 
+/// `true` if there are strokes and none reaches outside the layer: Stroke Emboss then shades with
+/// the layer, as an Inner Bevel does.
+fn strokes_inside(strokes: &[&photocraft_doc::StrokeFx]) -> bool {
+    !strokes.is_empty() && strokes.iter().all(|st| stroke_widths(st).1 <= 0.0)
+}
+
 /// `true` if an enabled effect painted inside the layer (with its content) blends in a mode
 /// other than Normal.
 pub(super) fn blends_inside(layer: &Layer) -> bool {
     let blends = |m: BlendMode| m != BlendMode::Normal;
-    // Stroke Emboss with its stroke wholly inside shades with the layer (`BevelPaint::Inner` in
+    // Stroke Emboss with its strokes wholly inside shades with the layer (`BevelPaint::Inner` in
     // `build_maps_prepared`), as an Inner Bevel does; one reaching outside shades over the
     // finished layer.
-    let top_stroke = layer.effects.items.iter().filter(|e| e.enabled()).find_map(|e| if let Effect::Stroke(st) = e { Some(st) } else { None });
-    let stroke_inside = top_stroke.is_some_and(|st| stroke_widths(st).1 <= 0.0);
+    let strokes: Vec<&photocraft_doc::StrokeFx> =
+        layer.effects.items.iter().filter(|e| e.enabled()).filter_map(|e| if let Effect::Stroke(st) = e { Some(st) } else { None }).collect();
+    let stroke_inside = strokes_inside(&strokes);
     layer.effects.items.iter().filter(|e| e.enabled()).any(|e| match e {
         Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => blends(common.blend),
         Effect::Satin(s) => blends(s.common.blend),
