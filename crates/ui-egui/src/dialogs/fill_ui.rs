@@ -104,26 +104,61 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
 }
 
 /// The `edit.fill` params the dialog can produce. Any other recorded param (`layer`, `target`,
-/// pattern placement, ...) is not the dialog's to change and playback keeps it.
-pub const PARAM_KEYS: &[&str] = &["contents", "mode", "opacity", "preserveTransparency", "color", "pattern", "colorAdaptation"];
+/// pattern placement, ...) is not the dialog's to change; `load_step` keeps it in `__kept`.
+const PARAM_KEYS: &[&str] = &["contents", "mode", "opacity", "preserveTransparency", "color", "pattern", "colorAdaptation"];
+/// The dialog field holding the recorded params outside `PARAM_KEYS`.
+const KEPT: &str = "__kept";
+
+/// The foreground colour as the dialog's hex string, for [`load_step`].
+pub fn foreground_hex(app: &PhotocraftApp) -> String {
+    hex(app.session.tools.foreground)
+}
 
 /// Show a recorded step in the dialog: what the step carries, and the engine's defaults for the
-/// rest (not the remembered choices). Without `contents` the engine fills with `color`.
-pub fn load_step(f: &mut Map<String, Value>, step: &Value) {
+/// rest (not the remembered choices): contents `color`, colour = `foreground` (a hex string),
+/// Normal 100%, no transparency lock, colour adaptation on, no pattern.
+pub fn load_step(f: &mut Map<String, Value>, step: &Value, foreground: &str) {
     let Some(o) = step.as_object() else { return };
+    let kept: Map<String, Value> =
+        o.iter().filter(|(k, _)| !PARAM_KEYS.contains(&k.as_str()) && !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    f.insert(KEPT.into(), Value::Object(kept));
     let is_set = |k: &str| o.get(k).is_some_and(|v| !v.is_null());
-    if !is_set("contents") {
-        f.insert("contents".into(), json!("color"));
-    }
-    for (k, v) in [("mode", json!("normal")), ("opacity", json!(100.0)), ("preserveTransparency", json!(false))] {
+    // The engine matches `contents` case-insensitively; the dialog knows the canonical names.
+    let contents = match o.get("contents") {
+        Some(Value::String(c)) => CONTENTS.iter().find(|(k, _)| k.eq_ignore_ascii_case(c)).map_or(c.as_str(), |(k, _)| *k),
+        _ => "color",
+    };
+    f.insert("contents".into(), json!(contents));
+    for (k, v) in [
+        ("mode", json!("normal")),
+        ("opacity", json!(100.0)),
+        ("preserveTransparency", json!(false)),
+        ("colorAdaptation", json!(true)),
+        ("color", json!(foreground)),
+    ] {
         if !is_set(k) {
             f.insert(k.into(), v);
         }
+    }
+    // The engine uses the library's first pattern only when asked; without one headless playback
+    // fails the same way, and the dialog shows no pattern.
+    if !is_set("pattern") {
+        f.remove("pattern");
     }
 }
 
 /// The `edit.fill` params of the dialog's fields: only the options of the chosen contents.
 pub fn params(f: &Map<String, Value>) -> Value {
+    let mut p = own_params(f);
+    if let (Some(out), Some(kept)) = (p.as_object_mut(), f.get(KEPT).and_then(Value::as_object)) {
+        for (k, v) in kept {
+            out.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    p
+}
+
+fn own_params(f: &Map<String, Value>) -> Value {
     let contents = f.get("contents").and_then(Value::as_str).unwrap_or("foreground");
     let mut p = json!({ "contents": contents });
     for k in ["mode", "opacity", "preserveTransparency"] {
@@ -152,7 +187,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         let remembered: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
         app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
     }
-    crate::actions::run_dialog_command(app, f, COMMAND, params(f), PARAM_KEYS)
+    crate::actions::run_dialog_command(app, f, COMMAND, params(f))
 }
 
 fn label(ui: &mut egui::Ui, text: &str) {

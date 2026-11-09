@@ -3150,3 +3150,40 @@ fn fill_step_dialog_keeps_recorded_target() {
     let bg = walk.iter().find(|(_, _, l)| l.name == "Background").unwrap();
     assert!(bg.2.surface().unwrap().pixel(2, 8)[0] < 1e-4, "the recorded layer was filled, not the active one");
 }
+
+#[test]
+fn color_range_step_dialog_preview_matches_ok() {
+    let mut app = two_tone_app();
+    let step = json!({"select": "sampledColors", "color": "#0000ff", "fuzziness": 10, "mode": "subtract"});
+    let id = pause_on(&mut app, (RANGE_STEP, step));
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    let shown = crate::color_range_ui::params(fields);
+    assert_eq!(shown["color"], "#0000ff", "the preview uses the recorded colour: {shown}");
+    assert_eq!(shown["mode"], "subtract", "{shown}");
+    assert!(!crate::dialogs::is_route_marker("__kept"));
+}
+
+#[test]
+fn color_range_resampled_drops_recorded_color() {
+    let mut app = two_tone_app();
+    let id = pause_on(&mut app, (RANGE_STEP, json!({"select": "sampledColors", "color": "#ff0000", "fuzziness": 10})));
+    app.ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[12.0, 8.0]]));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(probe(&mut app), (1.0, 0.0), "only the blue half was selected: the red half is untouched");
+}
+
+#[test]
+fn fill_step_dialog_ignores_remembered_color_adaptation() {
+    let mut app = two_tone_app();
+    app.session.prefs.edit(|p| p.dialogs.insert("edit.fill".into(), json!({"colorAdaptation": false})));
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "contentAware"})));
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["colorAdaptation"], true);
+}
+
+#[test]
+fn fill_step_contents_case_insensitive() {
+    let mut app = two_tone_app();
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "Color", "color": "#ff0000"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!((red_at(&app, 12, 8) - 1.0).abs() < 1e-4, "filled red");
+}

@@ -118,12 +118,17 @@ pub fn owns(f: &Map<String, Value>) -> bool {
 
 /// The `select.colorRange` params the dialog can produce. Any other recorded param (`mode`,
 /// `color`, `colors`, `sampleAllLayers`, ...) is not the dialog's to change and playback keeps it.
-pub const PARAM_KEYS: &[&str] = &["select", "invert", "fuzziness", "points", "subtractPoints", "order", "localized", "range", "tonalRange"];
+const PARAM_KEYS: &[&str] = &["select", "invert", "fuzziness", "points", "subtractPoints", "order", "localized", "range", "tonalRange"];
+/// The dialog field holding the recorded params outside `PARAM_KEYS`.
+const KEPT: &str = "__kept";
 
 /// Show a recorded step in the dialog: the inverse of [`params`]. Tonal selects keep their
 /// fuzziness and level(s) in other fields than the sampling ones.
 pub fn load_step(f: &mut Map<String, Value>, step: &Value) {
     let Some(o) = step.as_object() else { return };
+    let kept: Map<String, Value> =
+        o.iter().filter(|(k, _)| !PARAM_KEYS.contains(&k.as_str()) && !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    f.insert(KEPT.into(), Value::Object(kept));
     for k in ["select", "invert", "fuzziness", "points", "subtractPoints", "localized", "range"] {
         if let Some(v) = o.get(k) {
             f.insert(k.into(), v.clone());
@@ -134,6 +139,8 @@ pub fn load_step(f: &mut Map<String, Value>, step: &Value) {
     }
     let select = o.get("select").and_then(Value::as_str).unwrap_or("sampledColors");
     if matches!(select, "highlights" | "midtones" | "shadows") {
+        // Sampled Colors keeps its own fuzziness.
+        f.insert("fuzziness".into(), json!(40.0));
         if let Some(v) = o.get("fuzziness") {
             f.insert("toneFuzziness".into(), v.clone());
         }
@@ -160,8 +167,28 @@ pub fn load_step(f: &mut Map<String, Value>, step: &Value) {
     }
 }
 
+/// Merge the recorded params the dialog doesn't edit (`__kept`) into `p`; its own keys win.
+fn merge_kept(f: &Map<String, Value>, p: &mut Map<String, Value>) {
+    if let Some(kept) = f.get(KEPT).and_then(Value::as_object) {
+        for (k, v) in kept {
+            p.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+}
+
 /// The `select.colorRange` params for the dialog's state: only what the Select mode uses.
 pub fn params(f: &Map<String, Value>) -> Value {
+    let Value::Object(mut p) = own_params(f) else { return Value::Null };
+    merge_kept(f, &mut p);
+    // The user sampled again: the recorded colours no longer apply.
+    if !points(f, "points").is_empty() || !points(f, "subtractPoints").is_empty() {
+        p.remove("color");
+        p.remove("colors");
+    }
+    Value::Object(p)
+}
+
+fn own_params(f: &Map<String, Value>) -> Value {
     let select = s(f, "select", "sampledColors");
     let c = controls(f);
     let mut p = Map::new();
@@ -205,7 +232,7 @@ pub fn params(f: &Map<String, Value>) -> Value {
 /// OK: run the command on the document (one history step).
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     app.color_range = None;
-    crate::actions::run_dialog_command(app, f, COMMAND, params(f), PARAM_KEYS)
+    crate::actions::run_dialog_command(app, f, COMMAND, params(f))
 }
 
 /// Cached preview: the document proxy (per revision) and the textures drawn from it.
