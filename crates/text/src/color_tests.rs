@@ -236,3 +236,72 @@ fn colr_v1_gradient_runs_across_the_glyph() {
         }
     }
 }
+
+/// A COLR v1 table whose `base` paints itself (PaintColrGlyph), a cycle skrifa refuses to walk.
+fn colr_v1_cycle(base: u16) -> Vec<u8> {
+    let mut t = Vec::new();
+    for v in [1u16, 0] {
+        t.extend_from_slice(&v.to_be_bytes());
+    }
+    t.extend_from_slice(&0u32.to_be_bytes());
+    t.extend_from_slice(&0u32.to_be_bytes());
+    t.extend_from_slice(&0u16.to_be_bytes());
+    t.extend_from_slice(&34u32.to_be_bytes());
+    for _ in 0..4 {
+        t.extend_from_slice(&0u32.to_be_bytes());
+    }
+    t.extend_from_slice(&1u32.to_be_bytes());
+    t.extend_from_slice(&base.to_be_bytes());
+    t.extend_from_slice(&10u32.to_be_bytes());
+    // PaintColrGlyph (format 11) of itself.
+    t.push(11);
+    t.extend_from_slice(&base.to_be_bytes());
+    t
+}
+
+#[test]
+fn a_colour_glyph_skrifa_cannot_walk_draws_its_outline() {
+    // A paint graph that loops back on itself fails in skrifa; the glyph keeps its plain
+    // outline in the text colour instead of vanishing.
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let h = gid(inter, 'H');
+    let font = with_tables(inter, &[(*b"COLR", colr_v1_cycle(h)), (*b"CPAL", cpal(&[RED]))]);
+    let green = Color::rgb(0.0, 1.0, 0.0);
+    let px = pixels(&layout_with("H", font, green), PixelFormat::RGBA8);
+    let solid: Vec<_> = px.iter().filter(|p| p[3] > 0.99).collect();
+    assert!(solid.len() > 100, "{} pixels", solid.len());
+    assert!(solid.iter().all(|p| p[1] > 0.98 && p[0] < 0.02), "{:?}", solid.first());
+}
+
+#[test]
+fn a_colour_glyph_without_a_base_outline_still_paints() {
+    // The base glyph has no outline of its own (no glyf entry); its colour layer does.
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let h = gid(inter, 'H');
+    let base = 60000u16;
+    let font = with_tables(inter, &[(*b"COLR", colr_v0(base, &[(h, 0)])), (*b"CPAL", cpal(&[RED]))]);
+    assert!(FontRef::new(&font).is_ok_and(|f| f.outline_glyphs().get(skrifa::GlyphId::new(base.into())).is_none()));
+    let mut l = layout_with("H", font, Color::BLACK);
+    for g in &mut l.glyphs {
+        g.id = base.into();
+    }
+    let px = pixels(&l, PixelFormat::RGBA8);
+    let red = px.iter().filter(|p| p[3] > 0.99 && p[0] > 0.98 && p[1] < 0.02).count();
+    assert!(red > 100, "{red} red pixels");
+}
+
+#[test]
+fn colour_glyphs_keep_extended_text_colours_in_float_documents() {
+    // A layer in the text colour (palette entry 0xFFFF) keeps HDR and signed components in a
+    // float document, as plain glyphs do, and stays bounded in integer ones.
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let h = gid(inter, 'H');
+    let font = with_tables(inter, &[(*b"COLR", colr_v0(h, &[(h, 0xFFFF)])), (*b"CPAL", cpal(&[RED]))]);
+    let color = Color::rgba(2.5, -0.25, 0.5, 1.0);
+    let float = pixels(&layout_with("H", font.clone(), color), PixelFormat::RGBA32F);
+    let covered: Vec<_> = float.iter().filter(|p| p[3] > 0.01).collect();
+    assert!(covered.len() > 100);
+    assert!(covered.iter().all(|p| (p[0] - 2.5).abs() < 1e-4 && (p[1] + 0.25).abs() < 1e-4), "{:?}", covered.first());
+    let int = pixels(&layout_with("H", font, color), PixelFormat::RGBA8);
+    assert!(int.iter().filter(|p| p[3] > 0.01).all(|p| p[0] == 1.0 && p[1] == 0.0));
+}
