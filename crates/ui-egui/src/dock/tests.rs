@@ -846,16 +846,25 @@ fn applying_a_workspace_keeps_the_toolbar_side_unless_it_saved_one() {
     use crate::state::ToolbarSide;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let saved = snapshot(&app);
-    for (side, expected) in [(None, ToolbarSide::Right), (Some(json!("sideways")), ToolbarSide::Right), (Some(json!("left")), ToolbarSide::Left)] {
+    let cases = [
+        (None, ToolbarSide::Right),
+        (Some(json!("sideways")), ToolbarSide::Right),
+        (Some(json!("left")), ToolbarSide::Left),
+        (Some(json!("start")), ToolbarSide::Start),
+    ];
+    for (side, expected) in cases {
         app.ui.panels.toolbar_side = ToolbarSide::Right;
+        app.ui.panels.brush_settings = false;
         let mut saved = saved.clone();
         let panels = saved["panels"].as_object_mut().unwrap();
+        panels.insert("brush_settings".into(), json!(true));
         match &side {
             Some(side) => panels.insert("toolbar_side".into(), side.clone()),
             None => panels.remove("toolbar_side"),
         };
         apply(&mut app, &saved);
         assert_eq!(app.ui.panels.toolbar_side, expected, "{side:?}");
+        assert!(app.ui.panels.brush_settings, "the rest of the saved panels still apply: {side:?}");
     }
 }
 
