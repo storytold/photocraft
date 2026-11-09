@@ -727,6 +727,15 @@ fn ordered_triangles(verts: &[([f64; 2], [f64; 2])], pos: &[[f64; 2]], corners: 
     (tris, rank)
 }
 
+/// The bilinear blend of taps `[top-left, top-right, bottom-left, bottom-right]` at weights
+/// `fx`, `fy`: along the rows first, then down. With `steps` (an 8-bit source's 255), each row's
+/// blend and the result are rounded to those steps, as the reference blends 8-bit pixels.
+fn blend(t: [f64; 4], fx: f64, fy: f64, steps: Option<f32>) -> f64 {
+    let r = |v: f64| steps.map_or(v, |s| (v * f64::from(s)).round() / f64::from(s));
+    let (top, bottom) = (r(t[0] * (1.0 - fx) + t[1] * fx), r(t[2] * (1.0 - fx) + t[3] * fx));
+    r(top * (1.0 - fy) + bottom * fy)
+}
+
 /// Triangles in drawing order without a fold, and each one's rank where a fold stacks them.
 type RankedMesh = (Vec<[usize; 3]>, Vec<u32>);
 
@@ -1261,7 +1270,10 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                             continue;
                         }
                         let o = (y - t.y0) as usize * w + (x - t.x0) as usize;
-                        let q = [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]];
+                        // On a 1/65536 grid, so a point the mesh puts exactly on a 1/256 step isn't
+                        // tipped below it by float noise (that flips its weight and its colour by a
+                        // level).
+                        let q = [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]].map(|t| (t * 65536.0).round() / 65536.0);
                         // Another part of the source: a fold. Triangles of one layer meeting at a pixel
                         // (on their shared edge) interpolate the same source point, to float noise,
                         // and replace each other; one drawn again after another layer comes back on
@@ -1430,22 +1442,15 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                     // sample never quite reaches full weight), as its warp probes show.
                     let (fx, fy) = (((u - f64::from(ix)) * 256.0).floor() / 255.0, ((v - f64::from(iy)) * 256.0).floor() / 255.0);
                     if let Some(o) = base(win, ix, iy, 2) {
-                        for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
-                            for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
-                                let p = &win.px[o + (dy * win.fw + dx) * n..][..n];
-                                for (s, v) in acc.iter_mut().zip(p) {
-                                    *s += f64::from(*v) * wx * wy;
-                                }
-                            }
+                        let tap = |dx: usize, dy: usize, c: usize| win.px.get(o + (dy * win.fw + dx) * n + c).map_or(0.0, |v| f64::from(*v));
+                        for (c, s) in acc.iter_mut().enumerate().take(n) {
+                            *s = blend([tap(0, 0, c), tap(1, 0, c), tap(0, 1, c), tap(1, 1, c)], fx, fy, steps);
                         }
                         return;
                     }
-                    for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
-                        for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
-                            for (c, s) in acc.iter_mut().enumerate().take(n) {
-                                *s += at(win, ix + dx, iy + dy, c) * wx * wy;
-                            }
-                        }
+                    for (c, s) in acc.iter_mut().enumerate().take(n) {
+                        let t = [at(win, ix, iy, c), at(win, ix + 1, iy, c), at(win, ix, iy + 1, c), at(win, ix + 1, iy + 1, c)];
+                        *s = blend(t, fx, fy, steps);
                     }
                 }
                 Interp::Bicubic => {
@@ -1492,19 +1497,14 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             let (cx, cy) = ((q[0] - f64::from(win.foot.x0)) / sc - 0.5, (q[1] - f64::from(win.foot.y0)) / sc - 0.5);
             let (ix, iy) = (cx.floor(), cy.floor());
             let (fx, fy) = (((cx - ix) * 256.0).floor() / 255.0, ((cy - iy) * 256.0).floor() / 255.0);
-            for (dy, wy) in [(0.0, 1.0 - fy), (1.0, fy)] {
-                for (dx, wx) in [(0.0, 1.0 - fx), (1.0, fx)] {
-                    let (x, y) = (ix + dx, iy + dy);
-                    if x < 0.0 || y < 0.0 || x >= *mw as f64 || y >= *mh as f64 {
-                        continue;
-                    }
-                    let o = (y as usize * mw + x as usize) * n;
-                    if let Some(p) = m.get(o..o + n) {
-                        for (s, v) in acc.iter_mut().zip(p) {
-                            *s += f64::from(*v) * wx * wy;
-                        }
-                    }
+            let tap = |x: f64, y: f64, c: usize| -> f64 {
+                if x < 0.0 || y < 0.0 || x >= *mw as f64 || y >= *mh as f64 {
+                    return 0.0;
                 }
+                m.get((y as usize * mw + x as usize) * n + c).map_or(0.0, |v| f64::from(*v))
+            };
+            for (c, s) in acc.iter_mut().enumerate().take(n) {
+                *s = blend([tap(ix, iy, c), tap(ix + 1.0, iy, c), tap(ix, iy + 1.0, c), tap(ix + 1.0, iy + 1.0, c)], fx, fy, steps);
             }
         };
         // A premultiplied sample of triangle `k`'s source at (u, v): a mip level's tap, one point,
@@ -1884,7 +1884,9 @@ mod tests {
             out.read_region(Rect::new(dx - 20, dy - 120, dx + w + 20, dy + h + 120))
         };
         let (a, b) = (draw(0, 0), draw(37, 11));
-        let diff: Vec<f32> = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).collect();
+        // Premultiplied: a faint edge pixel's colour alone can swing with a step of its alpha.
+        let pm = |v: &[f32]| -> Vec<f32> { v.chunks(4).flat_map(|p| [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]).collect() };
+        let diff: Vec<f32> = pm(&a).iter().zip(&pm(&b)).map(|(x, y)| (x - y).abs()).collect();
         let off = diff.iter().filter(|d| **d > 1e-3).count();
         let worst = diff.iter().fold(0.0f32, |m, d| m.max(*d));
         assert!(a.iter().skip(3).step_by(4).filter(|v| **v > 0.5).count() > 40_000, "the flag is drawn");
@@ -2417,5 +2419,38 @@ mod tests {
         let k = m.uv.iter().position(|p| *p == [0.5, 0.5]).expect("border point");
         assert_eq!(m.pos[k], [50.0, 50.0]);
         assert_eq!(m.quads[1][0], m.quads[0][1], "the border's top end is shared");
+    }
+
+    /// An 8-bit source is blended along its rows first, each row rounded to a level, then down:
+    /// rows of 1.6 and 0.8 levels round to 2 and 1, which blend at 127/255 to 1.502 levels, so 2;
+    /// blending unrounded (1.2 levels) would give 1.
+    #[test]
+    fn an_8_bit_blend_rounds_each_row() {
+        let lv = |v: f64| v / 255.0;
+        let t = [lv(0.0), lv(4.0), lv(0.0), lv(2.0)];
+        let (fx, fy) = (102.0 / 255.0, 127.0 / 255.0);
+        assert_eq!((blend(t, fx, fy, Some(255.0)) * 255.0).round(), 2.0);
+        assert_eq!((blend(t, fx, fy, None) * 255.0).round(), 1.0);
+    }
+
+    /// A warp scaling a ramp to 3/4 samples pixel x at source position (8x + 1)/6, so many
+    /// pixels fall exactly on a 1/256 weight step; each takes exactly that weight, though float
+    /// noise in the triangles would tip some of them a step (and a level) lower.
+    #[test]
+    fn a_point_on_a_weight_step_stays_on_it() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        for x in 0..64 {
+            src.fill_rect(Rect::new(x, 0, x + 1, 64), &[f32::from((x * 3) as u8) / 255.0, 0.0, 0.0, 1.0]);
+        }
+        let f = |x: f64, y: f64| (x * 0.75, y * 0.75);
+        let out = warp_patches_surface(&src, Rect::new(0, 0, 64, 64), &f, [&[], &[]], Fold::IN_PLACE, Sampling::Single, Facets::Mesh);
+        let block = out.read_region(Rect::new(2, 2, 44, 44));
+        for (i, px) in block.chunks(4).enumerate() {
+            let (x, y) = (2 + (i % 42) as i64, 2 + (i / 42) as i64);
+            let (ix, r) = ((8 * x + 1).div_euclid(6), (8 * x + 1).rem_euclid(6));
+            let k = ((r * 256) / 6) as f64 / 255.0;
+            let want = (3.0 * ix as f64 * (1.0 - k) + 3.0 * (ix + 1) as f64 * k).round();
+            assert_eq!(f64::from(px[0] * 255.0).round(), want, "pixel ({x}, {y})");
+        }
     }
 }
