@@ -136,7 +136,9 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(l.bounds);
         }
         if flag(p, "wrap", false) {
-            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, crate::channel_cmds::is_color_target(p), CMD, |before, r| clone_sample(pre, id, before, which, r, &map, true, CMD));
+            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, crate::channel_cmds::is_color_target(p), CMD, |before, r| {
+                clone_sample(pre, id, before, which, r, &map, true, CMD)
+            });
         }
         let (bounds, cov) = coverage(CMD, &stroke)?;
         // Samples come from the pre-stroke state, so pixels painted earlier in the stroke are never re-cloned.
