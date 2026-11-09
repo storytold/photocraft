@@ -4854,3 +4854,22 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Zoom current window to fill the screen	Zuƙa taga na yanzu don cike allo
 	Zoom current window to screen size	Zuƙa taga na yanzu zuwa girman allo
 	brush tool	kayan aikin burushi
+	Allows rotation and scaling of selection	Yana ba da damar juya yankin zaɓi da daidaita girmansa
+	Bottom align text	Jera rubutu a ƙasa
+	Choose a remix mode	Zaɓi yanayin sake haɗawa
+	Copy CSS	Kwafi CSS
+	Could not use the type tool because the layer is locked.	An kasa amfani da kayan aikin rubutu saboda layer ɗin a kulle yake.
+	Draws background color over foreground colors	Yana zana launin bango a kan launukan gaba
+	Enable to remix all layers	Kunna don sake haɗa duk layer
+	No pixels are selected.	Babu pikselin da aka zaɓa.
+	Open as Smart Object…	Buɗe a matsayin abu mai wayo…
+	Preparing Free Transform	Ana shirya Sauya fasali sakaka
+	Scroll All Windows	Gungura duk tagogi
+	Scroll all open document windows when using the hand tool	Gungura duk tagogin daftari da ke buɗe yayin amfani da kayan aikin hannu
+	Search and select fonts	Nemi kuma zaɓi nauʼin harafi
+	Set font size	Saita girman harafi
+	Set font style	Saita salon harafi
+	Set text color	Saita launin rubutu
+	Set the brush angle	Saita kusurwar burushi
+	The preference could not be saved: {error}	An kasa ajiye fifikon: {error}
+	Top align text	Jera rubutu a sama
