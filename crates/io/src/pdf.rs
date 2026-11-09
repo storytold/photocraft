@@ -265,6 +265,11 @@ fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::Selectio
 /// (pixels ÷ resolution × 72 pt), as a one-page PDF. Layers and transparency are dropped — the
 /// warning says so — and the embedded profile travels with the image.
 pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
+    // A multi-page PDF workspace must never be flattened into one PDF page by the legacy writer.
+    let boards = doc.artboards();
+    if boards.len() > 1 && boards.iter().any(|(_, _, board)| board.preset.starts_with("photocraft.pdf.page.v1:")) {
+        return Err(IoError::Unsupported("multi-page PDF pages cannot be saved as a single PDF page; use .pcraft to preserve editable pages".into()));
+    }
     let (w, h) = (usize::try_from(doc.size.width).unwrap_or(0), usize::try_from(doc.size.height).unwrap_or(0));
     if w == 0 || h == 0 {
         return Err(IoError::Unsupported("PDF needs a document with non-zero width and height; nothing was written".into()));
