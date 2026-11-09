@@ -380,6 +380,7 @@ pub(crate) fn map_shape(sh: &mut ShapeLayer, h: Option<&photocraft_algo::transfo
     Ok(())
 }
 
+/// Report a shape layer's geometry, appearance, Align Edges state and optional cached bounds.
 pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
@@ -400,6 +401,8 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     }))
 }
 
+/// Run a lock-checked shape edit in one history step, restoring the layer content afterward.
+/// Recover missing PSD provenance before the edit and refresh cached pixels on success.
 pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
     if let Some(st) = s.active() {
         let locks = st.doc.effective_locks(id);
@@ -586,6 +589,7 @@ fn converted_path_frame(s: &Session, name: Option<&str>, path: &Path) -> Option<
     (photocraft_io::vector_map::path_from_resource(raw, w, h).as_ref() == Some(path)).then_some([w, h])
 }
 
+/// Apply geometry and appearance edits in one history step, rebuilding derived shape data as needed.
 pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.edit";
     let id = layer_id(s, p)?;

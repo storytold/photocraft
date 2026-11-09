@@ -24,6 +24,8 @@ struct SelectedShape {
     use_aligned_rendering: bool,
 }
 
+/// Capture the active shape's identity and appearance for the options bar.
+/// Return None when there is no active document, layer or shape target.
 fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape> {
     let st = session.active()?;
     let layer = st.active_layer?;
@@ -221,6 +223,8 @@ fn merge_pixel_alignment_edit(mut edit: Option<Value>, alignment: Option<Value>)
     edit
 }
 
+/// Show Align Edges in paint mode, preferring the target layer over the new-shape preference.
+/// Return an alignment patch and update the preference only when the checkbox changes.
 fn pixel_align_option(ui: &mut egui::Ui, preference: &mut bool, selected: Option<bool>, paint: bool) -> Option<Value> {
     if !paint {
         return None;
