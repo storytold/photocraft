@@ -138,6 +138,52 @@ fn a_segment_to_a_far_off_point_returns() {
     f.stroke_segment(&LiquifyStroke::new(LiquifyTool::Bloat, 30.0), [5.0, -1e15, 1.0], [5.0, 1e15, 1.0]);
 }
 
+/// A timed (live) stroke far off the field leaves it unchanged instead of panicking. The
+/// provisional closing dab used to take its node span from a far-off centre: the lower index
+/// saturated to `usize::MAX`, read as `-1` it passed the overlap check, and the snapshot then
+/// subtracted past zero (debug) or sliced out of range (release).
+#[test]
+fn a_timed_stroke_far_off_the_field_leaves_it_unchanged() {
+    let far = [
+        // The review's case: valid points, both far off on the right.
+        vec![vec![1e30, 3.0, 1.0], vec![1e30, 3.25, 1.0, 16.0]],
+        vec![vec![3.0, 1e30, 1.0], vec![3.25, 1e30, 1.0, 16.0]],
+        vec![vec![1e30, 1e30, 1.0], vec![1e30, 1e30 + 1e15, 1.0, 16.0]],
+        vec![vec![-1e30, 3.0, 1.0], vec![-1e30, 3.25, 1.0, 16.0]],
+        vec![vec![3.0, -1e30, 1.0], vec![3.25, -1e30, 1.0, 16.0]],
+        vec![vec![f64::MAX, 3.0, 1.0], vec![f64::MAX, 3.25, 1.0, 16.0]],
+    ];
+    use LiquifyTool::*;
+    for tool in [ForwardWarp, Reconstruct, Smooth, TwirlCw, TwirlCcw, Pucker, Bloat, PushLeft, Freeze, Thaw] {
+        for points in &far {
+            let mut s = LiquifyStroke::new(tool, 30.0);
+            s.points = points.clone();
+            s.validate().unwrap();
+            let mut f = LiquifyField::new(Rect::new(0, 0, 24, 16), 2.0);
+            f.apply_stroke(&s);
+            let fresh = LiquifyField::new(Rect::new(0, 0, 24, 16), 2.0);
+            assert!(f.d == fresh.d && f.freeze == fresh.freeze, "{tool:?} {points:?} changed the field");
+        }
+    }
+}
+
+/// `node_span` decides off the grid before converting to indices, on every side.
+#[test]
+fn node_span_rejects_spans_off_the_grid() {
+    let f = LiquifyField::new(Rect::new(0, 0, 24, 16), 2.0);
+    for c in [[1e30, 3.0], [3.0, 1e30], [-1e30, 3.0], [3.0, -1e30], [f64::MAX, f64::MAX], [-f64::MAX, 3.0], [f64::NAN, 3.0], [3.0, f64::INFINITY]] {
+        assert_eq!(f.node_span(c, 15.0), None, "{c:?}");
+    }
+    // On the grid, and partly off it, the span is the nodes inside it.
+    let (w, h) = (f.w - 1, f.h - 1);
+    assert_eq!(f.node_span([12.0, 8.0], 1e6), Some((0, 0, w, h)));
+    let Some((i0, j0, i1, j1)) = f.node_span([12.0, 8.0], 3.0) else { panic!("a dab on the field touches it") };
+    assert!(i0 <= i1 && i1 <= w && j0 <= j1 && j1 <= h, "{:?}", (i0, j0, i1, j1));
+    let Some((i0, _, i1, _)) = f.node_span([-10.0, 8.0], 12.0) else { panic!("a dab reaching the left edge touches it") };
+    assert_eq!(i0, 0);
+    assert!(i1 <= w);
+}
+
 fn sample(st: SampleType) -> Surface {
     let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, st, true));
     for y in 0..64 {

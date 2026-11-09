@@ -276,18 +276,25 @@ impl LiquifyField {
         ((x - f64::from(self.bounds.x0) - 0.5) / self.cell, (y - f64::from(self.bounds.y0) - 0.5) / self.cell)
     }
 
-    /// The field nodes a dab of radius `r` at `c` can touch, as `(i0, j0, i1, j1)` inclusive.
+    /// The field nodes a dab of radius `r` at `c` can touch, as `(i0, j0, i1, j1)` inclusive;
+    /// `None` when it touches none (off the grid, or a NaN centre).
     fn node_span(&self, c: [f64; 2], r: f64) -> Option<(usize, usize, usize, usize)> {
         let (gx0, gy0) = self.to_grid(c[0] - r, c[1] - r);
         let (gx1, gy1) = self.to_grid(c[0] + r, c[1] + r);
-        let i0 = gx0.floor().max(0.0) as usize;
-        let j0 = gy0.floor().max(0.0) as usize;
-        let i1 = (gx1.ceil().max(-1.0) as isize).min(self.w as isize - 1);
-        let j1 = (gy1.ceil().max(-1.0) as isize).min(self.h as isize - 1);
-        if i1 < i0 as isize || j1 < j0 as isize {
+        // Decide the overlap in f64, before any conversion to an index: a far-off centre saturated
+        // `as usize` to `usize::MAX`, which read back as `-1` passed the overlap check. Written so
+        // that NaN, which fails every comparison, touches nothing (`max`/`min` would hide it).
+        let (wmax, hmax) = (self.w as f64 - 1.0, self.h as f64 - 1.0);
+        if !(gx1.ceil() >= 0.0 && gy1.ceil() >= 0.0 && gx0.floor() <= wmax && gy0.floor() <= hmax) {
             return None;
         }
-        Some((i0, j0, i1 as usize, j1 as usize))
+        let (x0, y0) = (gx0.floor().max(0.0), gy0.floor().max(0.0));
+        let (x1, y1) = (gx1.ceil().min(wmax), gy1.ceil().min(hmax));
+        if !(x0 <= x1 && y0 <= y1) {
+            return None;
+        }
+        // Now 0 <= x0 <= x1 <= w - 1 (and likewise in y): whole numbers that convert exactly.
+        Some((x0 as usize, y0 as usize, x1 as usize, y1 as usize))
     }
 
     pub fn is_identity(&self) -> bool {
