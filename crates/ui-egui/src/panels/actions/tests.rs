@@ -3065,3 +3065,88 @@ fn color_range_then_fill_both_toggled_in_one_action() {
     assert!((red_at(&app, 12, 8) - outside).abs() < 1e-4, "outside the range: untouched");
     assert!(app.paused_playbacks.paused.is_empty());
 }
+
+/// Play `step` as a one-step action with its dialog toggled; returns the paused dialog's id.
+fn pause_on(app: &mut PhotocraftApp, step: (&str, Value)) -> u64 {
+    let mut a = Action::new("One", vec![(step.0.into(), step.1)]);
+    a.dialogs.insert(0);
+    app.session.actions.list.push(a);
+    let v = play(app, &json!({"action": "One"})).unwrap();
+    v["paused"]["dialog"].as_u64().unwrap()
+}
+
+/// Paint the selection black (a probe), then read the red channel on the red half and the blue
+/// channel on the blue half of the first layer: 0 where the selection covered, 1 where it didn't.
+fn probe(app: &mut PhotocraftApp) -> (f32, f32) {
+    app.run("edit.fill", json!({"contents": "color", "color": "#000000"})).unwrap();
+    let st = app.session.active().unwrap();
+    let walk = st.doc.walk();
+    let px = walk.first().and_then(|l| l.2.surface()).map(|s| (s.pixel(2, 8)[0], s.pixel(12, 8)[2]));
+    px.unwrap()
+}
+
+#[test]
+fn color_range_tonal_step_dialog_shows_recorded_range() {
+    let step = json!({"select": "midtones", "fuzziness": 30, "tonalRange": [90, 160]});
+    let mut app = two_tone_app();
+    let id = pause_on(&mut app, (RANGE_STEP, step.clone()));
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(fields["toneFuzziness"], 30.0);
+    assert_eq!(fields["midtonesLow"], 90.0);
+    assert_eq!(fields["midtonesHigh"], 160.0);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let mut reference = two_tone_app();
+    reference.run(RANGE_STEP, step).unwrap();
+    assert_eq!(has_selection(&app), has_selection(&reference));
+    assert_eq!(probe(&mut app), probe(&mut reference));
+}
+
+#[test]
+fn color_range_step_dialog_keeps_unedited_params() {
+    let step = json!({"select": "sampledColors", "color": "#0000ff", "fuzziness": 10, "mode": "subtract"});
+    let setup = || {
+        let mut app = two_tone_app();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 16})).unwrap();
+        app
+    };
+    let mut app = setup();
+    let id = pause_on(&mut app, (RANGE_STEP, step.clone()));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let mut reference = setup();
+    reference.run(RANGE_STEP, step).unwrap();
+    let want = probe(&mut reference);
+    assert!(want.0 < 0.1 && want.1 > 0.9, "the reference took the blue half out of the selection: {want:?}");
+    assert_eq!(probe(&mut app), want);
+}
+
+#[test]
+fn fill_legacy_color_step_dialog_fills_recorded_color() {
+    let mut app = two_tone_app();
+    app.session.tools.foreground = [0.0, 0.0, 1.0, 1.0];
+    let id = pause_on(&mut app, (FILL_STEP, json!({"color": "#ff0000"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!((red_at(&app, 12, 8) - 1.0).abs() < 1e-4, "filled red, not the foreground");
+}
+
+#[test]
+fn fill_step_dialog_ignores_remembered_prefs_and_keeps_them() {
+    let mut app = two_tone_app();
+    let remembered = json!({"mode": "multiply", "opacity": 30.0});
+    app.session.prefs.edit(|p| p.dialogs.insert("edit.fill".into(), remembered.clone()));
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "black"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(red_at(&app, 2, 8) < 1e-4, "black at 100% normal");
+    assert_eq!(app.session.prefs().dialogs.get("edit.fill"), Some(&remembered), "playback left the remembered choices alone");
+}
+
+#[test]
+fn fill_step_dialog_keeps_recorded_target() {
+    let mut app = two_tone_app();
+    app.run("layer.new.layer", json!({"name": "top"})).unwrap();
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "color", "color": "#00ff00", "layer": "Background"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let st = app.session.active().unwrap();
+    let walk = st.doc.walk();
+    let bg = walk.iter().find(|(_, _, l)| l.name == "Background").unwrap();
+    assert!(bg.2.surface().unwrap().pixel(2, 8)[0] < 1e-4, "the recorded layer was filled, not the active one");
+}

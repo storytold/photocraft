@@ -116,6 +116,50 @@ pub fn owns(f: &Map<String, Value>) -> bool {
     f.contains_key("__colorRange")
 }
 
+/// The `select.colorRange` params the dialog can produce. Any other recorded param (`mode`,
+/// `color`, `colors`, `sampleAllLayers`, ...) is not the dialog's to change and playback keeps it.
+pub const PARAM_KEYS: &[&str] = &["select", "invert", "fuzziness", "points", "subtractPoints", "order", "localized", "range", "tonalRange"];
+
+/// Show a recorded step in the dialog: the inverse of [`params`]. Tonal selects keep their
+/// fuzziness and level(s) in other fields than the sampling ones.
+pub fn load_step(f: &mut Map<String, Value>, step: &Value) {
+    let Some(o) = step.as_object() else { return };
+    for k in ["select", "invert", "fuzziness", "points", "subtractPoints", "localized", "range"] {
+        if let Some(v) = o.get(k) {
+            f.insert(k.into(), v.clone());
+        }
+    }
+    if let Some(v) = o.get("order") {
+        f.insert("__order".into(), v.clone());
+    }
+    let select = o.get("select").and_then(Value::as_str).unwrap_or("sampledColors");
+    if matches!(select, "highlights" | "midtones" | "shadows") {
+        if let Some(v) = o.get("fuzziness") {
+            f.insert("toneFuzziness".into(), v.clone());
+        }
+        let range = o.get("tonalRange");
+        let level = |i: usize| range.and_then(|r| r.as_array().map_or((i == 0).then_some(r), |a| a.get(i))).filter(|v| v.is_number()).cloned();
+        match select {
+            "shadows" => {
+                if let Some(v) = level(0) {
+                    f.insert("shadowsLevel".into(), v);
+                }
+            }
+            "highlights" => {
+                if let Some(v) = level(0) {
+                    f.insert("highlightsLevel".into(), v);
+                }
+            }
+            _ => {
+                if let (Some(lo), Some(hi)) = (level(0), level(1)) {
+                    f.insert("midtonesLow".into(), lo);
+                    f.insert("midtonesHigh".into(), hi);
+                }
+            }
+        }
+    }
+}
+
 /// The `select.colorRange` params for the dialog's state: only what the Select mode uses.
 pub fn params(f: &Map<String, Value>) -> Value {
     let select = s(f, "select", "sampledColors");
@@ -161,7 +205,7 @@ pub fn params(f: &Map<String, Value>) -> Value {
 /// OK: run the command on the document (one history step).
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     app.color_range = None;
-    crate::actions::run_dialog_command(app, f, COMMAND, params(f))
+    crate::actions::run_dialog_command(app, f, COMMAND, params(f), PARAM_KEYS)
 }
 
 /// Cached preview: the document proxy (per revision) and the textures drawn from it.

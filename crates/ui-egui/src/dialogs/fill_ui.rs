@@ -103,6 +103,25 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     app.ui.open_dialog(crate::state::DialogKind::Command, f)
 }
 
+/// The `edit.fill` params the dialog can produce. Any other recorded param (`layer`, `target`,
+/// pattern placement, ...) is not the dialog's to change and playback keeps it.
+pub const PARAM_KEYS: &[&str] = &["contents", "mode", "opacity", "preserveTransparency", "color", "pattern", "colorAdaptation"];
+
+/// Show a recorded step in the dialog: what the step carries, and the engine's defaults for the
+/// rest (not the remembered choices). Without `contents` the engine fills with `color`.
+pub fn load_step(f: &mut Map<String, Value>, step: &Value) {
+    let Some(o) = step.as_object() else { return };
+    let is_set = |k: &str| o.get(k).is_some_and(|v| !v.is_null());
+    if !is_set("contents") {
+        f.insert("contents".into(), json!("color"));
+    }
+    for (k, v) in [("mode", json!("normal")), ("opacity", json!(100.0)), ("preserveTransparency", json!(false))] {
+        if !is_set(k) {
+            f.insert(k.into(), v);
+        }
+    }
+}
+
 /// The `edit.fill` params of the dialog's fields: only the options of the chosen contents.
 pub fn params(f: &Map<String, Value>) -> Value {
     let contents = f.get("contents").and_then(Value::as_str).unwrap_or("foreground");
@@ -128,9 +147,12 @@ pub fn params(f: &Map<String, Value>) -> Value {
 
 /// OK: remember the choices, then fill.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let remembered: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
-    app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
-    crate::actions::run_dialog_command(app, f, COMMAND, params(f))
+    // A played-back step must not change the user's remembered choices.
+    if !crate::actions::is_paused_step(f) {
+        let remembered: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
+    }
+    crate::actions::run_dialog_command(app, f, COMMAND, params(f), PARAM_KEYS)
 }
 
 fn label(ui: &mut egui::Ui, text: &str) {

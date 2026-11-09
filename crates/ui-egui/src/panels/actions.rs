@@ -393,10 +393,22 @@ fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &
     let dialog = crate::dialogs::open_command_dialog(app, id, &label);
     let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
     let mut receiver = None;
+    let fill_default = if id == crate::fill_ui::COMMAND { crate::fill_ui::default_fields(app) } else { serde_json::Map::new() };
     if let Some(d) = app.ui.dialog_mut(dialog) {
         if let Some(o) = p.as_object() {
             // `__` keys are the dialog's own markers (`params_of` drops them), not step values.
             d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
+        }
+        if id == crate::color_range_ui::COMMAND {
+            crate::color_range_ui::load_step(&mut d.fields, p);
+        } else if id == crate::fill_ui::COMMAND {
+            crate::fill_ui::load_step(&mut d.fields, p);
+            // The engine fills a step without a colour with the foreground, not the last-used colour.
+            if !p.get("color").is_some_and(|c| !c.is_null())
+                && let Some(c) = fill_default.get("color")
+            {
+                d.fields.insert("color".into(), c.clone());
+            }
         }
         d.fields.insert(RESUME.into(), json!(token));
         // Kept for every implicit step, also one opened on a document target: the dialog
@@ -408,6 +420,7 @@ fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &
     }
     if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
         paused.filter_receiver = receiver;
+        paused.recorded = (id == crate::color_range_ui::COMMAND || id == crate::fill_ui::COMMAND).then(|| p.as_object().cloned()).flatten();
     }
     json!({"step": i, "id": id, "dialog": dialog})
 }
@@ -1177,6 +1190,8 @@ pub(crate) struct PausedPlayback {
     filter_receiver: Option<Option<photocraft_doc::LayerId>>,
     /// Descriptor-free menu playback owns this settings dialog and the concrete command it opened.
     menu_editor: Option<(u64, String)>,
+    /// The recorded params of a paused Color Range or Fill step, for the ones its dialog does not edit.
+    recorded: Option<serde_json::Map<String, Value>>,
     /// The actions that called this one through Play Action steps, nearest first, each with the
     /// step it continues from: confirming the dialog finishes `action`, then each of them in turn
     /// (at most [`MAX_CALLERS`]).
@@ -1231,6 +1246,7 @@ impl PausedPlaybacks {
                 doc: None,
                 filter_receiver: None,
                 menu_editor: None,
+                recorded: None,
                 callers: Vec::new(),
                 allow_continue: false,
                 timed: false,
@@ -1316,10 +1332,26 @@ pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, fields: &serde_json::Map<
     result
 }
 
-/// Confirm a dedicated dialog (Color Range, Fill) that runs its own command: through the paused
-/// action's gate and history, then the action goes on after it. A failure ends the paused action.
-/// With no pause behind the dialog this is just the command.
-pub(crate) fn run_dialog_command(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>, command: &str, params: Value) -> Result<Value, String> {
+/// Confirm a dedicated dialog (Color Range, Fill) that runs its own command. With no pause
+/// behind the dialog this is exactly `app.run(command, params)`. Behind a pause the recorded
+/// params the dialog doesn't edit (everything outside `dialog_keys`) join `params`, the final
+/// params go through the paused action's gate and history, then the action goes on after it. A
+/// failure ends the paused action.
+pub(crate) fn run_dialog_command(
+    app: &mut PhotocraftApp,
+    fields: &serde_json::Map<String, Value>,
+    command: &str,
+    mut params: Value,
+    dialog_keys: &[&str],
+) -> Result<Value, String> {
+    let Some(token) = fields.get(RESUME) else { return app.run(command, params) };
+    if let (Some(out), Some(kept)) =
+        (params.as_object_mut(), token.as_u64().and_then(|t| app.paused_playbacks.paused.get(&t)).and_then(|p| p.recorded.as_ref()))
+    {
+        for (k, v) in kept.iter().filter(|(k, _)| !dialog_keys.contains(&k.as_str())) {
+            out.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
     match run_step_dialog(app, fields, command, params) {
         Ok(value) => resume(app, fields).map(|()| value),
         Err(error) => {
@@ -1327,6 +1359,11 @@ pub(crate) fn run_dialog_command(app: &mut PhotocraftApp, fields: &serde_json::M
             Err(error)
         }
     }
+}
+
+/// Whether these dialog fields belong to a paused action's step (not to a dialog opened by hand).
+pub(crate) fn is_paused_step(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(RESUME)
 }
 
 /// Whether the dialog toggle of a recorded step shows a dialog of its own during playback.
