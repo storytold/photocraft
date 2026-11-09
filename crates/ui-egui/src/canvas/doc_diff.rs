@@ -29,11 +29,16 @@ pub(crate) fn changed_area(old: &Document, new: &Document) -> Option<Rect> {
     }
     let canvas = old.bounds();
     let mut area = Changed::Nothing;
-    diff_list(&old.layers, &new.layers, canvas, &mut area);
+    let mut view_only = false;
+    diff_list(&old.layers, &new.layers, canvas, &mut area, &mut view_only);
     match area {
         // Not clipped to the canvas yet: the caller widens it by the effects' reach first, then
         // the refresh clips it, so effects of pixels just past the edge are redrawn too.
         Changed::Area(r) => Some(r),
+        // Only groups opened or closed in the Layers panel (a view change kept in the document,
+        // `Group::expanded`): no pixel differs. Counted as a property change, it redrew a whole
+        // storyboard's folder each time selecting a layer revealed it.
+        Changed::Nothing if view_only => Some(Rect::EMPTY),
         // No visible difference here is still a change the caller saw: something this doesn't
         // look at (a display setting, a view state) may have changed, so redraw everything.
         Changed::Nothing | Changed::Unknown => None,
@@ -64,7 +69,7 @@ fn same_outside_layers(old: &Document, new: &Document) -> bool {
 }
 
 /// Compare two sibling lists layer by layer. The same layers in the same order, or `Unknown`.
-fn diff_list(old: &[Layer], new: &[Layer], canvas: Rect, area: &mut Changed) {
+fn diff_list(old: &[Layer], new: &[Layer], canvas: Rect, area: &mut Changed, view_only: &mut bool) {
     if old.len() != new.len() || old.iter().zip(new).any(|(a, b)| a.id != b.id) {
         area.add(None);
         return;
@@ -73,18 +78,23 @@ fn diff_list(old: &[Layer], new: &[Layer], canvas: Rect, area: &mut Changed) {
         if *area == Changed::Unknown {
             return;
         }
-        diff_layer(a, b, canvas, area);
+        diff_layer(a, b, canvas, area, view_only);
     }
 }
 
-fn diff_layer(a: &Layer, b: &Layer, canvas: Rect, area: &mut Changed) {
+fn diff_layer(a: &Layer, b: &Layer, canvas: Rect, area: &mut Changed, view_only: &mut bool) {
     if same_props(a, b) {
+        if let (LayerContent::Group(ga), LayerContent::Group(gb)) = (&a.content, &b.content)
+            && ga.expanded != gb.expanded
+        {
+            *view_only = true;
+        }
         match (&a.content, &b.content) {
             // Only pixels changed: where their tiles differ. Blending, clipping and effects act
             // pixel by pixel (effects spread further, which the caller's effect reach covers).
             (LayerContent::Raster(sa), LayerContent::Raster(sb)) => area.add(tile_diff(sa, sb)),
             // Only children changed: where they did.
-            (LayerContent::Group(ga), LayerContent::Group(gb)) => diff_list(&ga.children, &gb.children, canvas, area),
+            (LayerContent::Group(ga), LayerContent::Group(gb)) => diff_list(&ga.children, &gb.children, canvas, area, view_only),
             // `same_props` compares every other kind of content in full: nothing differs.
             _ => {}
         }
@@ -103,7 +113,11 @@ fn same_props(a: &Layer, b: &Layer) -> bool {
         let mut l = l.clone();
         match &mut l.content {
             LayerContent::Raster(s) => *s = Surface::new(s.format()),
-            LayerContent::Group(g) => g.children.clear(),
+            // Open or closed in the Layers panel: no pixel depends on it.
+            LayerContent::Group(g) => {
+                g.children.clear();
+                g.expanded = false;
+            }
             _ => {}
         }
         l
@@ -207,5 +221,19 @@ mod tests {
         .unwrap();
         paint(&mut s, a, Rect::new(10, 10, 50, 50));
         assert_eq!(changed_area(&before, &s.active().unwrap().doc.clone()), None);
+    }
+
+    #[test]
+    fn opening_or_closing_a_group_changes_no_pixels() {
+        let (mut s, a, _) = doc_with_two_layers();
+        paint(&mut s, a, Rect::new(100, 100, 300, 200));
+        s.select_layer(a).unwrap();
+        s.execute("layer.new.groupFromLayers", json!({"name": "G"})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        assert!(before.walk().iter().any(|(_, _, l)| l.is_group()), "the test needs a group");
+        s.execute("layer.setExpanded", json!({"all": true})).unwrap();
+        let after = s.active().unwrap().doc.clone();
+        assert!(!std::sync::Arc::ptr_eq(&before, &after), "expanding gave a new document");
+        assert_eq!(changed_area(&before, &after), Some(Rect::EMPTY), "nothing to redraw");
     }
 }

@@ -78,6 +78,16 @@ pub(crate) fn start(app: &mut PhotocraftApp, doc: &Document, visible: Rect) {
     state.pending = blocks(doc.bounds(), doc.bounds(), visible);
 }
 
+/// The safety net behind a change bounded by comparing documents ([`super::doc_diff`]): redraw
+/// everything in blocks. A sweep already running is that net for the blocks it hasn't drawn, and
+/// restarting it would throw away the ones it has: each change (a transform's commit and the
+/// selection update after it, say) restarted a whole-canvas redraw.
+pub(crate) fn safety_net(app: &mut PhotocraftApp, doc: &Document, visible: Rect) {
+    if !running(app, doc.id) {
+        start(app, doc, visible);
+    }
+}
+
 /// Add `region` of `doc`'s canvas to its sweep, drawn before what was already pending.
 pub(crate) fn add(app: &mut PhotocraftApp, doc: &Document, region: Rect, visible: Rect) {
     let region = region.intersect(&doc.bounds());
@@ -283,6 +293,30 @@ mod tests {
         assert_eq!(set(twice), set(&once));
         let last = *twice.last().unwrap();
         assert!(!last.intersect(&region).is_empty(), "the region is drawn first: {last:?}");
+    }
+
+    #[test]
+    fn the_safety_net_keeps_a_running_sweep_and_draws_the_change_first() {
+        let mut app = app();
+        let big = doc(10_000, 10_000);
+        start(&mut app, &big, big.bounds());
+        // Part of the sweep drawn.
+        let drawn = 10;
+        for _ in 0..drawn {
+            app.canvas_states.get_mut(&big.id).unwrap().pending.pop();
+        }
+        let left = app.canvas_states[&big.id].pending.len();
+        // A compared change: the net doesn't restart the sweep, and the changed area goes first.
+        let changed = Rect::new(7_000, 7_000, 8_000, 8_000);
+        safety_net(&mut app, &big, big.bounds());
+        assert_eq!(app.canvas_states[&big.id].pending.len(), left, "the running sweep carries on");
+        add(&mut app, &big, changed, big.bounds());
+        let next = *app.canvas_states[&big.id].pending.last().unwrap();
+        assert!(!next.intersect(&changed).is_empty(), "the changed area is drawn next: {next:?}");
+        // With nothing running, the net is a whole sweep.
+        app.canvas_states.get_mut(&big.id).unwrap().pending.clear();
+        safety_net(&mut app, &big, big.bounds());
+        assert!(running(&app, big.id));
     }
 
     #[test]

@@ -504,7 +504,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         && let Some(r) = crate::canvas::sweep::changed_since_shown(app, &doc, display_key)
     {
         damage = Some(if r.is_empty() { r } else { r.inflate(effect_reach(&doc.layers)) });
-        from_diff = true;
+        // An empty area is a certain answer (only view state changed, a group opened or
+        // closed): nothing to redraw, and no safety net behind it.
+        from_diff = !r.is_empty();
     }
     // The Navigator may draw this texture while it holds the plain document or a drag preview
     // that updates the full texture (not an adjustment preview composited only where the view is).
@@ -574,9 +576,14 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     if let Some((region, everything)) = sweep_region(app, &gpu, id, &doc, damage, present) {
         crate::background_redraw::cancel(app, id);
         gpu_budget(app, &gpu, idx, partial, visible);
-        // A compared change (`from_diff`) sweeps everything: the safety net below, in one.
-        if everything || from_diff {
+        // A compared change (`from_diff`) sweeps everything, the safety net below in one, but
+        // the area it found changed is drawn first: on a canvas of hundreds of layers the whole
+        // sweep takes seconds, and what changed showed only when the sweep reached it.
+        if everything {
             crate::canvas::sweep::start(app, &doc, visible);
+        } else if from_diff {
+            crate::canvas::sweep::safety_net(app, &doc, visible);
+            crate::canvas::sweep::add(app, &doc, region, visible);
         } else {
             crate::canvas::sweep::add(app, &doc, region, visible);
         }
@@ -733,7 +740,7 @@ fn after_refresh(
     if let Some(visible) = sweep_rest
         && crate::canvas::sweep::eligible(app, doc)
     {
-        crate::canvas::sweep::start(app, doc, visible);
+        crate::canvas::sweep::safety_net(app, doc, visible);
         ctx.request_repaint();
     }
 }
