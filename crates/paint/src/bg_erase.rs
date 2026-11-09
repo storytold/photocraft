@@ -132,10 +132,13 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
     let a = alpha_index(&fmt)?;
     let nc = a;
     let tol = if bs.tolerance.is_finite() { bs.tolerance.clamp(0.0, 1.0) } else { 0.0 };
-    // A colour picked as CMYK is compared by its inks in a CMYK target (#12352).
+    // A colour picked as CMYK is compared by its inks in a CMYK target (#12352), at the precision
+    // the document stores them.
     let native = |c: [f32; 4], picked: Option<([f32; 3], [f32; 4])>| -> Vec<f32> {
         match picked {
-            Some((rgb, inks)) if fmt.mode == ColorMode::Cmyk && rgb == [c[0], c[1], c[2]] => inks.iter().take(nc).copied().collect(),
+            Some((rgb, inks)) if fmt.mode == ColorMode::Cmyk && rgb == [c[0], c[1], c[2]] => {
+                inks.iter().take(nc).map(|&v| at_sample_precision(fmt.sample, v)).collect()
+            }
             _ => from_rgba(&fmt, [c[0], c[1], c[2], 1.0])[..nc].to_vec(),
         }
     };
@@ -416,6 +419,27 @@ mod tests {
         apply_background_eraser(&mut with, &st, &swatch, None);
         apply_background_eraser(&mut without, &st, &BgEraseSettings { background_cmyk: None, ..swatch }, None);
         assert_eq!(with, without, "an RGB target ignores the inks");
+    }
+
+    #[test]
+    fn picked_swatch_inks_match_their_stored_levels() {
+        // #12352: typed inks between two 8-bit levels (30% is stored as 77/255) still match the
+        // pixels filled with them, as the foreground already does.
+        const INKS: [f32; 4] = [0.3, 0.0, 0.0, 0.0];
+        const STAND_IN: [f32; 4] = [0.7, 1.0, 1.0, 1.0];
+        let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::U8, true);
+        let mut s = Surface::new(fmt);
+        s.fill_rect(Rect::new(0, 0, 80, 40), &[INKS[0], INKS[1], INKS[2], INKS[3], 1.0]);
+        let bs = BgEraseSettings {
+            sampling: Sampling::BackgroundSwatch,
+            limits: Limits::Discontiguous,
+            tolerance: 0.01,
+            background: STAND_IN,
+            background_cmyk: Some(([STAND_IN[0], STAND_IN[1], STAND_IN[2]], INKS)),
+            ..Default::default()
+        };
+        apply_background_eraser(&mut s, &stroke(&[(10.0, 20.0), (70.0, 20.0)]), &bs, None);
+        assert_eq!(alpha(&s, 40, 20), 0.0, "the stored inks are erased fully");
     }
 
     #[test]
