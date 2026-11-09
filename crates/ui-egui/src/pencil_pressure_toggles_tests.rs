@@ -116,6 +116,10 @@ fn the_brush_keeps_its_own_pressure_flags() {
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
     assert_eq!(flags(&h), (true, false), "the mixed pair came back unchanged");
+    // And the bar draws that pair, not just stores it.
+    let on = |h: &Harness<'static, PhotocraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    assert!(on(&h, "Always use pressure for opacity"), "the opacity toggle reads as on");
+    assert!(!on(&h, "Always use pressure for size"), "the size toggle reads as off");
 }
 
 #[test]
