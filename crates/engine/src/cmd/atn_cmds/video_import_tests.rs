@@ -136,6 +136,8 @@ fn other_forms_keep_the_photoshop_step() {
         Descriptor::new("null").with("Usng", D::Text(UnicodeString::new_nul(path))).with("makeAnimation", D::Boolean(false)),
         Descriptor::new("null").with("Usng", txtu(path)).with("makeAnimation", D::Integer(0)),
         Descriptor::new("null").with("Usng", txtu("")).with("makeAnimation", D::Boolean(false)),
+        // A NUL inside the path: the step couldn't be written back as a native one.
+        recorded("C:\\Footage\\a\0b.mov", false),
     ];
     for d in forms {
         let (mut s, r) = load(d.clone());

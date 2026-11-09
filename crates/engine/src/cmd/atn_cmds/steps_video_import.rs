@@ -19,10 +19,11 @@ fn descriptor(path: &str) -> Descriptor {
 }
 
 /// Map the measured form with Make Frame Animation off and no frame limit: `Usng` a path that
-/// decodes, then `makeAnimation` false, and nothing else. Anything else stays a complete kept step.
+/// decodes and has no NUL inside, then `makeAnimation` false, and nothing else. Anything else stays a complete kept step.
 pub(super) fn from(d: &Descriptor) -> Mapped {
     match d.get("Usng").and_then(path_text) {
-        Some(path) if d.items == descriptor(&path).items => step(COMMAND, json!({"path": path})),
+        // A path with a NUL inside could not be saved back, so it stays a kept step.
+        Some(path) if !path.contains('\0') && d.items == descriptor(&path).items => step(COMMAND, json!({"path": path})),
         _ => Mapped::Unsupported { harmless: false },
     }
 }
