@@ -178,30 +178,42 @@ fn paragraph_changes_on_a_type_target_leave_the_paragraph_defaults() {
     assert_eq!(app.ui.tool_options, options);
 }
 
-/// The text colour picked for a selected layer or selected characters is the next type's colour,
-/// without changing the foreground colour; a later foreground colour is new type's again.
+/// The text colour picked for a selected layer or selected characters recolours them without
+/// changing the foreground colour; new type still takes the foreground colour (#10824 review).
 #[test]
-fn a_text_color_picked_for_a_type_target_becomes_the_default() {
+fn a_text_color_picked_for_a_type_target_leaves_new_type_on_the_foreground() {
     for edit in [false, true] {
         let mut app = new_app();
         let id = selected_layer(&mut app, json!({}));
         if edit {
             editing(&mut app, id, 0, 2);
         }
-        let (revision, foreground) = (app.session.active().unwrap().revision, app.session.tools.foreground);
+        let (revision, foreground, options) = (app.session.active().unwrap().revision, app.session.tools.foreground, app.ui.tool_options.clone());
         let dialog = super::open_color_picker(&mut app, [0.0; 3]);
         app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#336699"));
         crate::dialogs::confirm(&mut app, dialog).unwrap();
         assert!(app.session.active().unwrap().revision > revision, "editing: {edit}");
         assert_eq!(text(&app, id).char_runs()[0].style.color.to_rgba8(), [51, 102, 153, 255], "editing: {edit}");
         assert_eq!(app.session.tools.foreground, foreground, "editing: {edit}");
-        let saved: crate::state::ToolOptions = serde_json::from_value(serde_json::to_value(&app.ui.tool_options).unwrap()).unwrap();
-        assert_eq!(saved, app.ui.tool_options, "the picked colour is saved with the tool options");
-        let (c, _) = new_type(&mut app);
-        assert_eq!(c.color.to_rgba8(), [51, 102, 153, 255], "editing: {edit}");
+        assert_eq!(app.ui.tool_options, options, "editing: {edit}: the pick is not a tool default");
+        assert_eq!(super::default_style_params(&app)["color"], json!(super::hex(foreground)), "editing: {edit}");
         app.run("tools.setColors", json!({"foreground": "#ff8800"})).unwrap();
-        assert_eq!(super::default_style_params(&app)["color"], "#ff8800", "a new foreground colour is new type's again");
+        assert_eq!(super::default_style_params(&app)["color"], "#ff8800", "editing: {edit}");
     }
+}
+
+/// A colour given to a type target through the panels' style path recolours it but is not kept
+/// for new type, unlike the other character settings.
+#[test]
+fn a_color_applied_to_a_type_target_is_not_a_default() {
+    let mut app = new_app();
+    let ctx = egui::Context::default();
+    let id = selected_layer(&mut app, json!({}));
+    super::apply(&mut app, &ctx, json!({"color": "#336699", "tracking": 40}));
+    assert_eq!(text(&app, id).char_runs()[0].style.color.to_rgba8(), [51, 102, 153, 255]);
+    assert_eq!(app.ui.tool_options.type_style_defaults.get("tracking"), Some(&json!(40)), "other settings are kept");
+    assert!(!app.ui.tool_options.type_style_defaults.contains_key("color"));
+    assert_eq!(super::default_style_params(&app)["color"], json!(super::hex(app.session.tools.foreground)));
 }
 
 /// Selecting a styled layer shows its settings in the options bar and the panels; the next new
@@ -254,25 +266,4 @@ fn a_style_chosen_at_a_caret_becomes_the_default() {
     assert!(app.ui.type_insertion_style.is_some(), "the caret keeps it for the next letters");
     assert_eq!(text(&app, id).char_runs(), before, "existing letters are unchanged");
     assert_eq!(app.ui.tool_options.type_style, "Bold");
-}
-
-/// A picked text colour expires with the foreground colour it was picked over: going back to
-/// that foreground later does not bring the pick back.
-#[test]
-fn a_picked_text_color_does_not_return_with_its_foreground() {
-    let mut app = new_app();
-    let id = selected_layer(&mut app, json!({}));
-    let original = super::hex(app.session.tools.foreground);
-    let dialog = super::open_color_picker(&mut app, [0.0; 3]);
-    app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#336699"));
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
-    assert_eq!(text(&app, id).char_runs()[0].style.color.to_rgba8(), [51, 102, 153, 255]);
-    super::expire_text_color(&mut app);
-    assert_eq!(super::default_style_params(&app)["color"], "#336699", "an unchanged foreground keeps the pick");
-    app.run("tools.setColors", json!({"foreground": "#ff8800"})).unwrap();
-    super::expire_text_color(&mut app);
-    app.run("tools.setColors", json!({"foreground": original})).unwrap();
-    super::expire_text_color(&mut app);
-    assert_eq!(super::default_style_params(&app)["color"], json!(original));
-    assert_eq!(app.ui.tool_options.type_color, None);
 }

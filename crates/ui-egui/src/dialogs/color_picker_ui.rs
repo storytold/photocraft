@@ -192,10 +192,6 @@ pub fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], com
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
-/// Set on a picker opened for the Type tool's text colour: OK also makes the colour the next
-/// type's (#9938).
-pub const TEXT_COLOR: &str = "__textColor";
-
 /// Open the picker on `rgb` for a colour field of another dialog (e.g. Edit › Fill's Color…): the
 /// field shows the picked colour while the picker is open ([`live_preview`]); OK writes
 /// `"#rrggbb"` into `field` of dialog `dialog`, which stays open; Cancel puts it back as it was.
@@ -982,9 +978,6 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
         if let Some((doc, key)) = shown {
             crate::canvas::shown_as_document(app, doc, |k| k == key);
         }
-        if f.get(TEXT_COLOR).and_then(Value::as_bool) == Some(true) {
-            crate::type_tool::text_color_chosen(app, color);
-        }
         return Ok(r);
     }
     if target == "field" {
@@ -1029,9 +1022,6 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
     let r = app.run("tools.setColors", params)?;
     if target == "foreground" {
         crate::apply_color::foreground_changed(app, None);
-    }
-    if f.get(TEXT_COLOR).and_then(Value::as_bool) == Some(true) {
-        crate::type_tool::text_color_chosen(app, color);
     }
     Ok(r)
 }

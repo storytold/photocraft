@@ -55,7 +55,6 @@ impl PhotocraftApp {
         self.sync_views();
         crate::memory_warning::tick(self, now);
         crate::type_font_preview::follow_hover(self, ctx);
-        crate::type_tool::expire_text_color(self);
         self.check_gpu(ctx);
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         if self.live_tokens.poll(ctx, self.ui.theme) {
