@@ -250,8 +250,8 @@ enum SpoolError {
 
 /// Sends the job and says where it went and through what. A named print server takes the IPP
 /// route. Otherwise: the app's spooler when it is preferred; else `craft-print` (`lp`, or the
-/// Windows spooler) when it is there; else CUPS over IPP; and the app's spooler when that had
-/// no route either. A route that exists but fails (an unknown printer, a refused job) is an
+/// Windows spooler) when it is there, or the app's spooler when CUPS lists no printer for `lp`;
+/// else CUPS over IPP; and the app's spooler when that had no route either. A route that exists but fails (an unknown printer, a refused job) is an
 /// error, never a fall-through.
 fn spool_job(spooler: Option<&Spooler>, job: &PrintJob, lp: &craft_print::Job) -> Result<(String, String)> {
     let app = |sp: &Spooler| (sp.run)(job).map(|m| (m, sp.name.to_string())).map_err(other);
@@ -261,7 +261,19 @@ fn spool_job(spooler: Option<&Spooler>, job: &PrintJob, lp: &craft_print::Job) -
         }
         if let Some(name) = system_spooler() {
             require_windows_pdf()?;
-            return with_spooler(|| craft_print::submit(&job.pdf, lp)).map(|m| (m, name.to_string())).map_err(other);
+            // lpstat is CUPS, not a Windows driver, so it runs outside SPOOLER. A listing that
+            // can't finish in time can't tell, so lp gets the job as it did before the check.
+            let route = match name {
+                "lp" => lp_printers(LP_LISTING_TIMEOUT).map_or_else(|| Some(lp.clone()), |list| lp_route(lp, &list)),
+                _ => Some(lp.clone()),
+            };
+            return match (route, spooler) {
+                (Some(lp), _) => with_spooler(|| craft_print::submit(&job.pdf, &lp)).map(|m| (m, name.to_string())).map_err(other),
+                // CUPS lists no printer. IPP would ask the same CUPS, or (it ignores client.conf)
+                // another server whose printer the user never chose, so only the portal is left.
+                (None, Some(sp)) => app(sp),
+                (None, None) => Err(other("no printers found; set one up in the system's printer settings, or print to PDF")),
+            };
         }
     }
     match cups_spool(job) {
@@ -272,6 +284,78 @@ fn spool_job(spooler: Option<&Spooler>, job: &PrintJob, lp: &craft_print::Job) -
         },
         Err(SpoolError::Failed(why)) => Err(other(why)),
     }
+}
+
+/// How long a print job waits for CUPS' printer list (`lpstat`, whose `-e` browses the network).
+const LP_LISTING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The most a printer listing may print; a longer one counts as no answer.
+const LP_LISTING_CAP: u64 = 1 << 20;
+
+/// CUPS' printers as `craft_print::printers` lists them, or `None` when that can't be told: an
+/// `lpstat` can't start, outlasts `timeout`, prints more than `LP_LISTING_CAP`, or `lpstat -e`
+/// fails (CUPS unreachable, or listing forbidden by policy). `lpstat -p -d`'s own status is not
+/// a failure: it exits 1 whenever there are no queues, as on a host with only driverless
+/// printers. Each `lpstat` is killed and reaped at the deadline, so a hung one never outlives
+/// the job.
+fn lp_printers(timeout: std::time::Duration) -> Option<Vec<craft_print::Printer>> {
+    let deadline = std::time::Instant::now() + timeout;
+    let (_, queues) = output_by(craft_print::lpstat_command(), deadline)?;
+    // `lpstat -e`, as craft-print runs it (its builder is private): the driverless printers.
+    let mut driverless = std::process::Command::new("lpstat");
+    driverless.arg("-e").env("LC_ALL", "C").env("LANG", "C").env("SOFTWARE", "Craft");
+    let (listed, available) = output_by(driverless, deadline)?;
+    listed.then(|| craft_print::printers_parsed(&queues, Some(&available)))
+}
+
+/// Whether `command` succeeded, and its standard output; `None` when it can't start, prints more
+/// than `LP_LISTING_CAP`, or is still running at `deadline`, when it is killed and reaped. The
+/// output is read on its own thread, so a full pipe can't stall the wait, and that thread ends
+/// when the process does.
+fn output_by(mut command: std::process::Command, deadline: std::time::Instant) -> Option<(bool, String)> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = std::thread::Builder::new().name("print-listing".into()).spawn(move || {
+        let mut out = Vec::new();
+        // One byte over the cap tells an oversized listing apart; stopping closes the pipe.
+        let _ = sender.send((&mut stdout).take(LP_LISTING_CAP + 1).read_to_end(&mut out).map(|_| out));
+    });
+    let status = reader.ok().and_then(|_| {
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+                _ => break None,
+            }
+        }
+    });
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let out = receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).ok()?.ok()?;
+    let fits = u64::try_from(out.len()).is_ok_and(|n| n <= LP_LISTING_CAP);
+    fits.then(|| (status.success(), String::from_utf8_lossy(&out).into_owned()))
+}
+
+/// The job for `lp`, or `None` when no printer was asked for and CUPS lists none: `lp` has
+/// nowhere to send it, and the portal still may (a Flatpak bundles `lp`). A printer asked for by
+/// name always goes to `lp`, which knows it even where CUPS won't list it, and the portal could
+/// not honour the name. With no printer asked for, no default and one printer, that printer, as
+/// `resolve_printer` picks for IPP.
+fn lp_route(lp: &craft_print::Job, printers: &[craft_print::Printer]) -> Option<craft_print::Job> {
+    let mut lp = lp.clone();
+    if lp.printer.is_none()
+        && !printers.iter().any(|p| p.default)
+        && let [only] = printers
+    {
+        lp.printer = Some(only.name.clone());
+    }
+    (lp.printer.is_some() || !printers.is_empty()).then_some(lp)
 }
 
 /// The spooler `craft-print` can talk to, as the job's `backend` name: `lp` when CUPS' command
@@ -392,8 +476,9 @@ fn system_printers(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- PDF ----------
 
-/// Paper sizes in points (portrait).
-pub const PAPERS: [(&str, f64, f64); 8] = [
+/// Paper sizes in points (portrait). The original list keeps its order and sizes; the Japanese
+/// photo, postcard and JIS sizes follow it (millimetres × 72/25.4).
+pub const PAPERS: &[(&str, f64, f64)] = &[
     ("letter", 612.0, 792.0),
     ("legal", 612.0, 1008.0),
     ("tabloid", 792.0, 1224.0),
@@ -402,7 +487,75 @@ pub const PAPERS: [(&str, f64, f64); 8] = [
     ("a5", 419.53, 595.28),
     ("4x6", 288.0, 432.0),
     ("5x7", 360.0, 504.0),
+    // Japanese postcards (はがき and 往復はがき), the JIS B series that Japanese printing and
+    // Excel use (B5 182×257, B4 257×364 mm), A6 and the photo sizes L判, 2L判, KG判, 六切, 四切.
+    ("postcard", 283.46, 419.53),
+    ("double-postcard", 419.53, 566.93),
+    ("b5", 515.91, 728.50),
+    ("b4", 728.50, 1031.81),
+    ("a6", 297.64, 419.53),
+    ("l", 252.28, 360.00),
+    ("2l", 360.00, 504.57),
+    ("kg", 289.13, 430.87),
+    ("6cut", 575.43, 720.00),
+    ("4cut", 720.00, 864.57),
 ];
+
+/// Japanese customary names and other spellings for the papers in [`PAPERS`], matched after
+/// [`normalize_paper`]: `はがき` is `postcard`, `L判` is `l`, `JIS B5` is `b5`, and so on.
+const PAPER_ALIASES: &[(&str, &str)] = &[
+    ("はがき", "postcard"),
+    ("ハガキ", "postcard"),
+    ("葉書", "postcard"),
+    ("ポストカード", "postcard"),
+    ("往復はがき", "double-postcard"),
+    ("往復ハガキ", "double-postcard"),
+    ("JIS B5", "b5"),
+    ("B5 (JIS)", "b5"),
+    ("JIS B4", "b4"),
+    ("B4 (JIS)", "b4"),
+    ("L判", "l"),
+    ("Lサイズ", "l"),
+    ("L-size", "l"),
+    ("2L判", "2l"),
+    ("2Lサイズ", "2l"),
+    ("KG判", "kg"),
+    ("KGサイズ", "kg"),
+    ("六切", "6cut"),
+    ("6切", "6cut"),
+    ("四切", "4cut"),
+    ("4切", "4cut"),
+];
+
+/// The form [`paper_size`] matches names in: lower case, with whitespace and punctuation ignored
+/// and `×`/`*` read as `x`, so `L判`, `l-size` and `l` are one name, `4 × 6` is `4x6`, and
+/// `B5（JIS）` and `JIS B5.` are `b5`.
+fn normalize_paper(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '×' | '*' => 'x',
+            c => c,
+        })
+        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation() && !matches!(c, '（' | '）' | '、' | '。' | '，' | '．'))
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// The portrait size in points of a named paper, `None` for unknown names. Case, spaces and
+/// punctuation don't matter, and the Japanese customary names (`はがき`, `L判`, `六切`, …) and the
+/// JIS spelling (`JIS B5`) are aliases of the papers above.
+pub fn paper_size(name: &str) -> Option<(f64, f64)> {
+    let n = normalize_paper(name);
+    if n.is_empty() {
+        return None;
+    }
+    let canonical = PAPERS
+        .iter()
+        .find(|p| normalize_paper(p.0) == n)
+        .map(|p| p.0)
+        .or_else(|| PAPER_ALIASES.iter().find(|(alias, _)| normalize_paper(alias) == n).map(|(_, name)| *name))?;
+    PAPERS.iter().find(|p| p.0 == canonical).map(|p| (p.1, p.2))
+}
 
 /// The image placed on a print page.
 pub struct PrintImage {
@@ -686,11 +839,9 @@ fn print_image(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintImage, Valu
 fn paper(p: &Value, cmd: &str) -> Result<(f64, f64)> {
     let (w, h) = match p.get("paper") {
         None => (612.0, 792.0),
-        Some(Value::String(name)) => PAPERS
-            .iter()
-            .find(|(n, _, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, w, h)| (*w, *h))
-            .ok_or_else(|| bad(cmd, format!("unknown paper `{name}` ({})", PAPERS.map(|p| p.0).join("|"))))?,
+        Some(Value::String(name)) => {
+            paper_size(name).ok_or_else(|| bad(cmd, format!("unknown paper `{name}` ({})", PAPERS.iter().map(|p| p.0).collect::<Vec<_>>().join("|"))))?
+        }
         Some(Value::Array(a)) if a.len() == 2 => (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)),
         _ => return Err(bad(cmd, "paper is a name or [width, height] in points")),
     };
@@ -905,11 +1056,11 @@ fn with_driver_printable(p: &Value) -> Value {
 
 fn driver_printable(p: &Value) -> Option<Value> {
     let printer = printer_name(p).ok()?;
-    let settings = printer_settings(p).ok()?;
-    let pg = with_spooler(|| craft_print::rgb::page(&printer, settings.as_ref())).ok()?;
-    // Only for the paper the driver is set to: a print laid out on another paper keeps the
-    // fixed margin (and `print_windows` refuses it), as before.
     let (pw, ph) = paper(p, "file.print").ok()?;
+    // The page `print_windows` prints on, turned as it turns it for the layout's orientation.
+    let (_, pg) = settings_for_layout(&printer, printer_settings(p).ok()?, (pw, ph)).ok()?;
+    // Only for the paper the driver is set to, either way round: a print laid out on another
+    // paper keeps the fixed margin (and `print_windows` refuses it), as before.
     if (pg.paper.0 - pw).abs() > 2.0 || (pg.paper.1 - ph).abs() > 2.0 {
         return None;
     }

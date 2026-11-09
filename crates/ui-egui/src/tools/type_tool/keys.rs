@@ -245,7 +245,8 @@ fn handle_pressed_key(
 
     use egui::Key;
     match key {
-        Key::Enter if modifiers.command => commit_with(app, *modifiers),
+        Key::Enter if modifiers.command && edit.edit.preedit.is_none() => commit_with(app, *modifiers),
+        Key::Enter if modifiers.command => {} // IME owns confirmation until preedit ends.
         Key::Enter => insert(app, "\n"),
         Key::Tab if !modifiers.command && !modifiers.alt && !modifiers.shift => {
             // egui queues focus navigation before this handler runs; consuming the
@@ -254,10 +255,15 @@ fn handle_pressed_key(
             insert(app, "\t");
         }
         Key::Escape if crate::type_transform::active(app) => crate::type_transform::cancel_drag(app),
-        Key::Escape if edit.edit.mask => cancel(app),
+        // A Type Mask commits on Escape as on ⌘↩, whatever "Use ESC to commit" says; the options bar's
+        // Cancel still throws it away (#12070). Escape on an empty mask text, or while an input
+        // method is composing, was not measured and still cancels.
+        Key::Escape if edit.edit.mask && (edit.text.is_empty() || edit.edit.preedit.is_some()) => cancel(app),
+        Key::Escape if edit.edit.mask => commit(app),
         Key::Escape if app.session.prefs().type_.use_esc_to_commit => commit(app),
         Key::Escape => cancel(app),
         Key::A if modifiers.command => {
+            app.ui.type_insertion_style = None;
             if let Some(state) = app.ui.text_edit.as_mut() {
                 state.anchor = 0;
                 state.caret = edit.char_count;
@@ -386,6 +392,9 @@ fn handle_move_key(app: &mut PhotocraftApp, key: egui::Key, modifiers: &egui::Mo
 
 fn set_caret(app: &mut PhotocraftApp, char_count: usize, caret: usize, extend: bool) {
     if let Some(state) = app.ui.text_edit.as_mut() {
+        if state.caret != caret.min(char_count) || (!extend && state.anchor != caret.min(char_count)) {
+            app.ui.type_insertion_style = None;
+        }
         state.caret = caret.min(char_count);
         if !extend {
             state.anchor = state.caret;

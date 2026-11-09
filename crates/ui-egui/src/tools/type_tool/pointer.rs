@@ -34,14 +34,21 @@ pub(crate) fn box_handle_at(app: &mut PhotocraftApp, id: LayerId, x: f64, y: f64
     let (r, b) = (bx + w, by + h);
     let (mx, my) = (bx + w / 2.0, by + h / 2.0);
     let spots = [(bx, by), (r, by), (r, b), (bx, b), (mx, by), (r, my), (mx, b), (bx, my)];
-    let tol = f64::from(6.0 / app.point_zoom().max(0.01));
-    spots
-        .iter()
-        .position(|&(sx, sy)| {
-            let p = aff.apply(Point::new(f64::from(sx), f64::from(sy)));
-            (p.x - x).abs() <= tol && (p.y - y).abs() <= tol
-        })
-        .map(|i| i as u8)
+    let zoom = app.point_zoom().max(0.01);
+    let tol = f64::from(6.0 / zoom);
+    let at = |(sx, sy): (f32, f32), tol: f64| {
+        let p = aff.apply(Point::new(f64::from(sx), f64::from(sy)));
+        (p.x - x).abs() <= tol && (p.y - y).abs() <= tol
+    };
+    if let Some(i) = spots.iter().position(|&s| at(s, tol)) {
+        return Some(i as u8);
+    }
+    // The enlarged overflow handle is square on screen, so in a rotated view its corners reach
+    // half a diagonal from the box corner along the document axes. Only where no handle
+    // answered at the ordinary reach: the middle handles of a small box keep their presses.
+    let over = app.ui.type_box_overflow && app.ui.text_edit.as_ref().is_some_and(|ed| ed.layer == id.0);
+    let big = f64::from(super::overlay::OVERFLOW_HANDLE / 2.0 * std::f32::consts::SQRT_2 / zoom);
+    (over && at(spots[2], big)).then_some(2)
 }
 
 /// Drag the handle of `r` (the box and transform snapshotted at the press) to the document
@@ -108,6 +115,7 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     if let Some(ed) = app.ui.text_edit.clone() {
         let id = LayerId(ed.layer);
         if let Some(i) = box_handle_at(app, id, x, y) {
+            app.ui.type_insertion_style = None;
             // Snapshot the box and transform now: every move recomputes from them, so ⌥ held
             // or released mid-drag mirrors about the centre the drag started with.
             let snap = box_shape(app, id).zip(layout(app, id)).map(|((bx, by, w, h), (_, aff, _))| BoxResize { handle: i, shape: [bx, by, w, h], aff });
@@ -120,6 +128,9 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
         // (left of a line's start, below the last line); only a click outside it commits.
         if hit_layer(app, x, y) == Some(id) || inside_box(app, id, x, y) {
             let off = hit_offset(app, id, x, y);
+            if off != ed.caret || (!mods.shift && off != ed.anchor) {
+                app.ui.type_insertion_style = None;
+            }
             if let Some(e) = app.ui.text_edit.as_mut() {
                 e.caret = off;
                 if !mods.shift {
@@ -129,10 +140,11 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
             }
             return true;
         }
-        // ⇧/⌥ on that click combine a Type Mask with the selection.
+        // A Type Mask replaces the selection with ⇧ or ⌥ on that click too (#12073).
         commit_with(app, mods);
         return true; // Photoshop: a click outside commits without starting new text
     }
+    app.ui.type_insertion_style = None;
     // The Type Mask tools always start new text: existing type layers are just pixels to them;
     // so does a ⇧-click with the Type tool, as in Photoshop, to start new text over old.
     if app.ui.tool.is_type_mask() || mods.shift {
@@ -140,6 +152,13 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     }
     if let Some(id) = hit_layer(app, x, y) {
         let _ = app.session.select_layer(id);
+        // Lock All (the layer's own or a group's) refuses the edit before it starts, as the engine
+        // would refuse the first keystroke; the reference application says so in an alert (#12040).
+        if app.session.active().is_some_and(|st| st.doc.effective_locks(id).all) {
+            let message = json!({"message": tl!("Could not use the type tool because the layer is locked.")});
+            app.ui.open_dialog(crate::state::DialogKind::Error, message.as_object().cloned().unwrap_or_default());
+            return true;
+        }
         let key = session_key(app);
         if begin_edit(app, id, &key).is_err() {
             return true;
@@ -171,6 +190,9 @@ pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     }
     if ed.dragging {
         let off = hit_offset(app, LayerId(ed.layer), x, y);
+        if off != ed.caret {
+            app.ui.type_insertion_style = None;
+        }
         if let Some(e) = app.ui.text_edit.as_mut() {
             e.caret = off;
         }

@@ -262,6 +262,41 @@ fn text_field_is_a_boxed_input_whose_selection_colour_stays_local() {
     assert_eq!(h.state().0, "abc", "typing reaches the bound string");
 }
 
+/// #2084: a plain text field's text is centred in its box, like a value field's digits, in the
+/// monospaced (hex) and proportional faces alike: neither low nor overshooting the middle.
+#[test]
+fn text_field_text_ink_is_centred_in_its_box() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let scale = 4.0;
+    for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
+        // Digits and capitals: no descenders, so their ink should straddle the box's middle.
+        for (text, mono) in [("A0F3C2", true), ("100", true), ("HEX", false)] {
+            let mut h = Harness::builder().with_size(egui::vec2(160.0, 40.0)).with_pixels_per_point(scale).wgpu().build_ui_state(
+                move |ui, s: &mut (String, egui::Rect)| {
+                    let before = ui.cursor().min;
+                    super::text_field(ui, egui::Id::unique("tf"), &mut s.0, "", 140.0, mono).accessible_name("Value");
+                    s.1 = egui::Rect::from_min_size(before, egui::vec2(140.0, super::TEXT_FIELD_H));
+                },
+                (text.to_owned(), egui::Rect::NOTHING),
+            );
+            crate::PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(3);
+            let image = h.render().expect("render text field");
+            let field = h.state().1;
+            let px = |v: f32| (v * scale) as u32;
+            let bg = image.get_pixel(px(field.right() - 3.0), px(field.center().y)).0;
+            let lum = |p: [u8; 4]| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]);
+            let rows: Vec<u32> = (px(field.top() + 2.0)..px(field.bottom() - 2.0))
+                .filter(|&y| (px(field.left() + 3.0)..px(field.right() - 6.0)).any(|x| lum(image.get_pixel(x, y).0) > lum(bg) + 150))
+                .collect();
+            let (top, bottom) = (rows.first().copied().unwrap_or(0) as f32 / scale, (rows.last().copied().unwrap_or(0) + 1) as f32 / scale);
+            let what = format!("{kind:?} {text:?} mono={mono}: field {field:?}, ink {top}..{bottom}, off {}", (top + bottom) / 2.0 - field.center().y);
+            assert!(!rows.is_empty(), "{what}");
+            assert!(((top + bottom) / 2.0 - field.center().y).abs() <= 0.25, "{what}");
+        }
+    }
+}
+
 /// #2150: a huge paste into a plain text field stops at its limit instead of growing the
 /// string (and its laid-out text) without bound.
 #[test]
@@ -834,6 +869,433 @@ fn value_field_holds_arithmetic_until_committed() {
     assert_eq!(*h.state(), (25.0, 3));
 }
 
+/// What stands in for the app around a zoom field in the tests below.
+#[derive(Clone, Copy, PartialEq)]
+enum EscEater {
+    /// Nothing takes Esc.
+    Nobody,
+    /// Like `shortcuts::handle`: Esc is taken when no text field has the keyboard.
+    Shortcuts,
+    /// Esc is taken before the field can see it, whatever the focus.
+    Always,
+}
+
+/// The zoom field alone, with a button after it (so Tab has somewhere to go). The state is the
+/// field's value and how many times it reported a change. `on_pasteboard` stands in for
+/// `zoom_field::tick`: a press at the right of the window is a press on the pasteboard.
+fn zoom_harness(start: f32, eater: EscEater, on_pasteboard: bool) -> egui_kittest::Harness<'static, (f32, u32)> {
+    egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
+        move |ui, (v, changes): &mut (f32, u32)| {
+            let ctx = ui.ctx().clone();
+            let typing = ctx.text_edit_focused() || crate::zoom_field::editing(&ctx);
+            if eater == EscEater::Always || (eater == EscEater::Shortcuts && !typing) {
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            }
+            let pressed = on_pasteboard && ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| p.x > 150.0));
+            crate::zoom_field::track_pasteboard(&ctx, pressed);
+            if super::compact_wrapping_value_field(ui, v, 0.0..=12800.0, "%", egui::vec2(90.0, 20.0)).accessible_name("Zoom").changed() {
+                *changes += 1;
+            }
+            let _ = ui.button("next");
+        },
+        (start, 0),
+    )
+}
+
+fn zoom_field_node<'a>(h: &'a egui_kittest::Harness<'static, (f32, u32)>) -> egui_kittest::Node<'a> {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role(egui::accesskit::Role::SpinButton)
+}
+
+/// Clicks the field and types `text` over its selected number, one key at a time.
+fn click_and_type(h: &mut egui_kittest::Harness<'static, (f32, u32)>, text: &str) {
+    zoom_field_node(h).click();
+    h.run();
+    for c in text.chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run();
+    }
+}
+
+/// A button down (and up) at `pos`.
+fn click_at(h: &mut egui_kittest::Harness<'static, (f32, u32)>, pos: egui::Pos2, button: egui::PointerButton) {
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE });
+        h.run();
+    }
+}
+
+/// The zoom field applies a typed number once, on Enter, however many digits it has: never the
+/// number its first keys spell on the way (`1`, `12` on the way to `1200`), and always clamped.
+#[test]
+fn a_typed_zoom_is_applied_once_on_enter() {
+    // (zoom before, typed, zoom after). The range is 0..=12800.
+    let cases = [(100.0, "200", 200.0), (3.0, "1200", 1200.0), (800.0, "5", 5.0), (25.0, "99999", 12800.0), (7.0, "7", 7.0)];
+    for (before, typed, after) in cases {
+        let mut h = zoom_harness(before, EscEater::Shortcuts, false);
+        click_and_type(&mut h, typed);
+        assert_eq!(*h.state(), (before, 0), "{typed} over {before}: nothing applies while typing");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        let changes = u32::from(after != before);
+        assert_eq!(*h.state(), (after, changes), "{typed} over {before}: Enter applies it once");
+    }
+}
+
+/// Esc drops what was typed, whoever else wants the key, and the field is the zoom again.
+#[test]
+fn esc_drops_the_typed_zoom() {
+    for eater in [EscEater::Nobody, EscEater::Shortcuts, EscEater::Always] {
+        let mut h = zoom_harness(200.0, eater, false);
+        click_and_type(&mut h, "40");
+        click_and_type_more(&mut h, "50");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(*h.state(), (200.0, 0), "Esc does not apply 40 or 50");
+        assert_eq!(h.ctx.memory(|m| m.focused()), None, "Esc leaves the field");
+        // Nothing typed is left to come back with the next click and Enter.
+        zoom_field_node(&h).click();
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (200.0, 0), "the field shows the zoom, 200, again");
+    }
+}
+
+/// Types more into the field that already has the keyboard.
+fn click_and_type_more(h: &mut egui_kittest::Harness<'static, (f32, u32)>, text: &str) {
+    // The first number is still selected only when the field was just reached: select it as
+    // Photoshop's user would, with Ctrl+A.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run();
+    for c in text.chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run();
+    }
+}
+
+/// Tab (and ⇧Tab) in the zoom field: the alert, the text selected, the focus kept, nothing applied.
+#[test]
+fn tab_in_the_zoom_field_alerts_and_selects_the_text() {
+    use egui_kittest::kittest::Queryable;
+    for modifiers in [egui::Modifiers::NONE, egui::Modifiers::SHIFT] {
+        let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, "200");
+        assert!(!crate::zoom_field::alert_pending(&h.ctx), "typing is silent");
+        h.key_press_modifiers(modifiers, egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(*h.state(), (100.0, 0), "Tab leaves the zoom alone");
+        assert!(zoom_field_node(&h).is_focused(), "and the focus in the field");
+        assert!(!h.get_by_label("next").is_focused(), "not on the next widget");
+        assert!(crate::zoom_field::alert_pending(&h.ctx), "and asks for the alert");
+        // The text is selected: this replaces 200 instead of making it 2003.
+        for c in "3".chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run();
+        }
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (3.0, 1));
+    }
+}
+
+/// A zoom field reads `1/2` as 50 % and `5/2` as 250 %, like Photoshop.
+#[test]
+fn a_zoom_field_reads_a_division_as_a_ratio() {
+    for (typed, after) in [("1/2", 50.0), ("5/2", 250.0), ("4/1", 400.0)] {
+        let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (after, 1), "{typed}");
+    }
+}
+
+/// Where the system's decimal separator is not known, `,` and `.` are both a decimal point in a
+/// zoom field: `100,90` is `100.90`.
+#[test]
+fn a_zoom_field_reads_a_comma_as_a_decimal_point() {
+    for (typed, after) in [("100,90", 100.9), ("100.90", 100.9), ("12,5", 12.5), ("200,", 200.0), ("100/5,0", 2000.0), ("100/5.0", 2000.0)] {
+        let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, typed);
+        assert!(!crate::zoom_field::alert_pending(&h.ctx), "{typed}: silent");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (after, 1), "{typed}");
+    }
+}
+
+/// The system's decimal separator is the zoom field's, as in Photoshop: on a German Windows a typed
+/// `.` is refused with the alert (and not inserted) and `,` is the decimal point; on an English one
+/// the other way round. Ratios follow it (`100/5,0` is 2000 % on German).
+#[test]
+fn a_zoom_field_takes_only_the_systems_decimal_separator() {
+    // (system separator, typed, alert, zoom after Enter)
+    let cases = [
+        (',', "12,5", false, 12.5),
+        (',', "12.5", true, 125.0),
+        (',', "100/5,0", false, 2000.0),
+        (',', "100/5.0", true, 200.0),
+        ('.', "12.5", false, 12.5),
+        ('.', "12,5", true, 125.0),
+        ('.', "100/5.0", false, 2000.0),
+        ('.', "100/5,0", true, 200.0),
+    ];
+    for (sep, typed, alert, after) in cases {
+        crate::i18n::with_decimal_separator(Some(sep), || {
+            let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+            click_and_type(&mut h, typed);
+            assert_eq!(crate::zoom_field::alert_pending(&h.ctx), alert, "{sep} {typed}: alert");
+            h.key_press(egui::Key::Enter);
+            h.run();
+            assert_eq!(*h.state(), (after, 1), "{sep} {typed}");
+            assert_eq!(crate::zoom_field::invalid_entry_pending(&h.ctx), None, "{sep} {typed}: a valid entry");
+        });
+    }
+}
+
+/// The field shows its zoom with the system's decimal separator (Photoshop's `12,5%`), so its own
+/// text is one that can be typed.
+#[test]
+fn a_zoom_field_shows_the_systems_decimal_separator() {
+    use egui_kittest::kittest::Queryable;
+    for (sep, shown) in [(Some(','), "12,5"), (Some('.'), "12.5"), (None, "12.5")] {
+        crate::i18n::with_decimal_separator(sep, || {
+            let mut h = zoom_harness(12.5, EscEater::Shortcuts, false);
+            h.run();
+            let text = h.get_by_role(egui::accesskit::Role::SpinButton).value();
+            assert!(text.as_deref().is_some_and(|t| t.contains(shown)), "{sep:?}: {text:?}");
+        });
+    }
+}
+
+/// A second separator can be typed (`80,,2`), silently. Enter asks for Photoshop's "Invalid numeric
+/// entry" message, with the field's range, and applies the number before the second separator.
+#[test]
+fn a_second_separator_is_typed_and_enter_applies_the_number_before_it_with_the_message() {
+    // (system separator, typed, zoom after Enter)
+    let cases = [
+        (Some(','), "80,,2", 80.0),
+        (Some(','), "1,5,2", 1.5),
+        (Some(','), "100/5,0,1", 2000.0),
+        (Some('.'), "80..2", 80.0),
+        (None, "1,000.5", 1.0),
+        (None, "12.5,", 12.5),
+    ];
+    for (sep, typed, after) in cases {
+        crate::i18n::with_decimal_separator(sep, || {
+            let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+            click_and_type(&mut h, typed);
+            assert!(!crate::zoom_field::alert_pending(&h.ctx), "{typed}: typed, silently");
+            assert_eq!(crate::zoom_field::invalid_entry_pending(&h.ctx), None, "{typed}: no message before Enter");
+            h.key_press(egui::Key::Enter);
+            h.run();
+            assert_eq!(*h.state(), (after, 1), "{typed}: the number before the second separator");
+            assert_eq!(crate::zoom_field::invalid_entry_pending(&h.ctx), Some((0.0, 12800.0)), "{typed}: the message, with the range");
+        });
+    }
+    // The number before it is the zoom already: nothing changes, but the message still comes.
+    let mut h = zoom_harness(80.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "80,,2");
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (80.0, 0));
+    assert!(crate::zoom_field::invalid_entry_pending(&h.ctx).is_some());
+    // No number before it at all: the zoom stays, with the message.
+    let mut h = zoom_harness(80.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, ",,5");
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (80.0, 0));
+    assert!(crate::zoom_field::invalid_entry_pending(&h.ctx).is_some());
+}
+
+/// Esc, or Tab, with a second separator typed: no message, nothing applied.
+#[test]
+fn esc_and_tab_with_a_second_separator_show_no_message() {
+    for key in [egui::Key::Escape, egui::Key::Tab] {
+        let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, "80,,2");
+        h.key_press(key);
+        h.run_steps(2);
+        assert_eq!(*h.state(), (50.0, 0), "{key:?}");
+        assert_eq!(crate::zoom_field::invalid_entry_pending(&h.ctx), None, "{key:?}");
+    }
+}
+
+/// A paste is filtered like typing: the other separator is dropped with the alert (`100/5.0` on a
+/// German system is `100/50`), and a second separator stays for Enter's message.
+#[test]
+fn a_paste_follows_the_typing_rules() {
+    crate::i18n::with_decimal_separator(Some(','), || {
+        let mut h = zoom_harness(150.0, EscEater::Shortcuts, false);
+        zoom_field_node(&h).click();
+        h.run();
+        h.event(egui::Event::Paste("100/5.0".into()));
+        h.run();
+        assert!(crate::zoom_field::alert_pending(&h.ctx), "the `.` asks for the alert");
+        assert_eq!(*h.state(), (150.0, 0), "and the paste applies nothing yet");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (200.0, 1), "100/50");
+        assert_eq!(crate::zoom_field::invalid_entry_pending(&h.ctx), None);
+
+        let mut h = zoom_harness(150.0, EscEater::Shortcuts, false);
+        zoom_field_node(&h).click();
+        h.run();
+        h.event(egui::Event::Paste("80,,2".into()));
+        h.run();
+        assert!(!crate::zoom_field::alert_pending(&h.ctx), "a second separator is pasted silently, as it is typed");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (80.0, 1));
+        assert!(crate::zoom_field::invalid_entry_pending(&h.ctx).is_some(), "Enter's message");
+    });
+}
+
+/// Tab writes the typed number as the field shows a zoom (`045` is `45`, `45,0` is `45`, `1/2` is
+/// `50`, past the range is its end) and selects it, without applying it.
+#[test]
+fn tab_writes_the_typed_number_as_the_zoom_it_makes() {
+    use egui_kittest::kittest::Queryable;
+    for (typed, shown) in [("045", "45"), ("45,0", "45"), ("45.50", "45.5"), ("1/2", "50"), ("99999", "12800"), ("80,,2", "80,,2")] {
+        let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, typed);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(*h.state(), (100.0, 0), "{typed}: Tab applies nothing");
+        let text = h.get_by_role(egui::accesskit::Role::SpinButton).value();
+        assert_eq!(text.as_deref(), Some(shown), "{typed}");
+        // Selected: a digit replaces it.
+        h.event(egui::Event::Text("7".into()));
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (7.0, 1), "{typed}: the text was selected");
+    }
+    // With the system's comma, the comma is kept.
+    crate::i18n::with_decimal_separator(Some(','), || {
+        let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, "045,50");
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(h.get_by_role(egui::accesskit::Role::SpinButton).value().as_deref(), Some("45,5"));
+    });
+    // The copy follows Backspace: `450` with the `0` deleted is `45`.
+    let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "0450");
+    h.key_press(egui::Key::Backspace);
+    h.run();
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.get_by_role(egui::accesskit::Role::SpinButton).value().as_deref(), Some("45"));
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (45.0, 1), "Enter then applies it");
+}
+
+/// After a key the field's copy of the text can't follow (a word deletion, an undo), Tab only
+/// selects the text: it never writes the digits typed since over the whole of it.
+#[test]
+fn tab_after_a_word_deletion_leaves_the_text_as_it_is() {
+    use egui_kittest::kittest::Queryable;
+    for (mods, key) in [(egui::Modifiers::COMMAND, egui::Key::Backspace), (egui::Modifiers::COMMAND, egui::Key::Z)] {
+        let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, "450");
+        h.key_press(egui::Key::End);
+        h.run();
+        h.key_press_modifiers(mods, key);
+        h.run();
+        h.key_press(egui::Key::End);
+        h.run();
+        for c in "05".chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run();
+        }
+        let typed = h.get_by_role(egui::accesskit::Role::SpinButton).value();
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(h.get_by_role(egui::accesskit::Role::SpinButton).value(), typed, "{key:?}: Tab leaves {typed:?} as it is");
+        assert_eq!(*h.state(), (100.0, 0), "{key:?}");
+    }
+}
+
+/// A click on the pasteboard writes the typed number like Tab does.
+#[test]
+fn a_click_on_the_pasteboard_writes_the_typed_number_as_the_zoom_it_makes() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = zoom_harness(40.0, EscEater::Shortcuts, true);
+    click_and_type(&mut h, "045,0");
+    click_at(&mut h, egui::pos2(250.0, 80.0), egui::PointerButton::Primary);
+    assert_eq!(*h.state(), (40.0, 0), "the zoom stays");
+    assert_eq!(h.get_by_role(egui::accesskit::Role::SpinButton).value().as_deref(), Some("45"));
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (45.0, 1));
+}
+
+/// Only digits, the decimal separator and `/` go into a zoom field: any other key (`%` too, which
+/// is drawn beside the field) asks for the alert and leaves the text as it was.
+#[test]
+fn a_zoom_field_takes_digits_and_separators_only() {
+    let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "2");
+    assert!(!crate::zoom_field::alert_pending(&h.ctx), "a digit is silent");
+    h.event(egui::Event::Text("a".into()));
+    h.run();
+    assert!(crate::zoom_field::alert_pending(&h.ctx), "a letter asks for the alert");
+    for c in "00".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run();
+    }
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (200.0, 1), "the letter was not inserted: 2, then 00");
+}
+
+/// A click, with either button, on the pasteboard keeps the typed zoom and selects it; a click
+/// on anything else applies it, as before.
+#[test]
+fn a_click_on_the_pasteboard_selects_the_typed_zoom_and_applies_nothing() {
+    let away = egui::pos2(250.0, 80.0);
+    for button in [egui::PointerButton::Primary, egui::PointerButton::Secondary] {
+        let mut h = zoom_harness(40.0, EscEater::Shortcuts, true);
+        click_and_type(&mut h, "50");
+        click_at(&mut h, away, button);
+        assert_eq!(*h.state(), (40.0, 0), "{button:?}: the zoom stays");
+        assert!(zoom_field_node(&h).is_focused(), "{button:?}: the field keeps the keyboard");
+        h.event(egui::Event::Text("7".into()));
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (7.0, 1), "{button:?}: the text was selected, 7 replaced 50");
+    }
+    let mut h = zoom_harness(40.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "50");
+    click_at(&mut h, away, egui::PointerButton::Primary);
+    assert_eq!(*h.state(), (50.0, 1), "a click elsewhere applies the typed zoom");
+}
+
+/// Enter right after a click on the pasteboard, in the frames egui draws next (the release's frame,
+/// one more for its events, then the Enter, with the mouse still): the typed zoom is applied.
+#[test]
+fn enter_right_after_a_click_on_the_pasteboard_applies_the_typed_zoom() {
+    let away = egui::pos2(250.0, 80.0);
+    let mut h = zoom_harness(40.0, EscEater::Shortcuts, true);
+    click_and_type(&mut h, "50");
+    h.event(egui::Event::PointerMoved(away));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: away, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(1);
+    assert_eq!(*h.state(), (40.0, 0), "the click applied nothing");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(1);
+    assert_eq!(*h.state(), (50.0, 1), "Enter applies the typed 50");
+}
+
 /// #5717: a value past the range shows as it is without reporting a change; an edit is clamped.
 #[test]
 fn value_field_keeps_a_shown_value_past_its_range_and_clamps_edits() {
@@ -1014,4 +1476,183 @@ fn the_wheel_leaves_a_plain_dropdown_alone() {
     let mut h = mode_dropdown(false);
     wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
     assert_eq!(*h.state(), 0);
+}
+
+/// The middle of an overflowing menu's lower scroll arrow, from the menu's laid-out rect.
+fn lower_menu_arrow(menu: egui::Rect) -> egui::Pos2 {
+    let half = super::dropdown::MENU_ARROW_HEIGHT / 2.0;
+    egui::pos2(menu.left() + half, menu.bottom() - half)
+}
+
+/// #2091: a menu taller than the window shows scroll arrows; hovering the lower one scrolls
+/// it, and a short menu gets none.
+#[test]
+fn overflowing_menus_get_scroll_arrows_that_scroll_on_hover() {
+    // (rows, overflowing, scroll offset, the menu's rect)
+    type S = (usize, bool, f32, egui::Rect);
+    let run = |rows: usize| {
+        let mut h = Harness::builder().with_size(egui::vec2(220.0, 300.0)).build_ui_state(
+            |ui, s: &mut S| {
+                let id = ui.scope_id().with("menu_scroll");
+                super::menu_scroll(ui, |ui| {
+                    for i in 0..s.0 {
+                        ui.label(format!("Item {i}"));
+                    }
+                });
+                s.1 = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+                s.2 = ui.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(0.0);
+                s.3 = ui.min_rect();
+            },
+            (rows, false, 0.0, egui::Rect::NOTHING),
+        );
+        h.run_steps(3);
+        h
+    };
+    let short = run(3);
+    assert!(!short.state().1, "a short menu has no arrows");
+    let mut long = run(80);
+    assert!(long.state().1, "a long menu overflows");
+    assert_eq!(long.state().2, 0.0);
+    let below = lower_menu_arrow(long.state().3);
+    long.event(egui::Event::PointerMoved(below));
+    long.run_steps(10);
+    assert!(long.state().2 > 0.0, "hovering the lower arrow scrolls down");
+}
+
+/// #2091: the step a hovered arrow leaves for the next frame isn't taken when a menu closed
+/// while hovering it opens again.
+#[test]
+fn a_reopened_menu_takes_no_stale_scroll_step() {
+    // (shown, scroll offset, the menu's rect)
+    type S = (bool, f32, egui::Rect);
+    let mut h = Harness::builder().with_size(egui::vec2(220.0, 300.0)).build_ui_state(
+        |ui, s: &mut S| {
+            let id = ui.scope_id().with("menu_scroll");
+            if s.0 {
+                super::menu_scroll(ui, |ui| {
+                    for i in 0..80 {
+                        ui.label(format!("Item {i}"));
+                    }
+                });
+                s.2 = ui.min_rect();
+            }
+            s.1 = ui.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(0.0);
+        },
+        (true, 0.0, egui::Rect::NOTHING),
+    );
+    h.run_steps(3);
+    h.event(egui::Event::PointerMoved(lower_menu_arrow(h.state().2)));
+    h.run_steps(3);
+    let offset = h.state().1;
+    assert!(offset > 0.0, "hovering the lower arrow scrolls down");
+    h.state_mut().0 = false;
+    h.run();
+    h.state_mut().0 = true;
+    h.event(egui::Event::PointerGone);
+    h.run();
+    assert_eq!(h.state().1, offset, "the reopened menu stays where it was left");
+}
+
+/// #2091: an overflowing menu's scroll arrows are as wide as its rows, so they don't widen the
+/// menu to the whole width it is offered.
+#[test]
+fn menu_scroll_arrows_do_not_widen_the_menu() {
+    // (overflowing, width of the menu)
+    type S = (bool, f32);
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 300.0)).build_ui_state(
+        |ui, s: &mut S| {
+            let id = ui.scope_id().with("menu_scroll");
+            super::menu_scroll(ui, |ui| {
+                for i in 0..80 {
+                    ui.label(format!("Item {i}"));
+                }
+            });
+            s.0 = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+            s.1 = ui.min_rect().width();
+        },
+        (false, 0.0),
+    );
+    h.run_steps(4);
+    assert!(h.state().0, "the menu overflows");
+    assert!(h.state().1 < 200.0, "the arrows follow the rows' width, not the 600 pt window: {}", h.state().1);
+}
+
+/// #2091: in a short window, between the shortest menu and that plus its arrows, an overflowing
+/// menu's arrows come out of the room rather than being added under it, so the lower arrow stays
+/// on screen. A window shorter than a menu's minimum gets a menu of the minimum height, arrows
+/// included.
+#[test]
+fn menu_scroll_arrows_stay_inside_a_short_window() {
+    // (overflowing, the menu's rect)
+    type S = (bool, egui::Rect);
+    let run = |height: f32| {
+        let mut h = Harness::builder().with_size(egui::vec2(220.0, height)).build_ui_state(
+            |ui, s: &mut S| {
+                let id = ui.scope_id().with("menu_scroll");
+                super::menu_scroll(ui, |ui| {
+                    for i in 0..80 {
+                        ui.label(format!("Item {i}"));
+                    }
+                });
+                s.0 = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+                s.1 = ui.min_rect();
+            },
+            (false, egui::Rect::NOTHING),
+        );
+        h.run_steps(4);
+        let screen = h.ctx.content_rect();
+        (h.state().0, h.state().1, screen)
+    };
+    // The room is 150 - 22 (the popup frame and edge gaps) = 128 pt: more than the shortest menu,
+    // less than it plus both 14 pt arrows.
+    let (overflow, menu, screen) = run(150.0);
+    assert!(overflow, "the menu overflows and shows its arrows");
+    assert!(menu.top() >= screen.top(), "the upper arrow is on screen: {menu:?} in {screen:?}");
+    assert!(menu.bottom() <= screen.bottom(), "the lower arrow is on screen: {menu:?} in {screen:?}");
+    assert!(menu.height() <= 128.5, "the menu, arrows included, fits the room: {}", menu.height());
+    let (overflow, menu, _) = run(60.0);
+    assert!(overflow, "a tiny window's menu overflows too");
+    let min = super::dropdown::MENU_MIN_HEIGHT;
+    assert!((menu.height() - min).abs() < 0.5, "a tiny window's menu is the minimum height, arrows included: {}", menu.height());
+}
+
+/// [`MODES`] in a wheel dropdown whose list draws a line above each option `starts_group` picks,
+/// opened: the open list's rect and each option's row in it.
+fn open_grouped_modes(starts_group: fn(&usize) -> bool) -> (egui::Rect, Vec<egui::Rect>) {
+    let mut h = Harness::builder().with_size(egui::vec2(300.0, 300.0)).build_ui_state(
+        move |ui, selected: &mut usize| {
+            super::dropdown_wheel_grouped(ui, "blend-mode", tl!("Blend Mode"), selected, &MODES, 120.0, starts_group);
+        },
+        0,
+    );
+    crate::theme::apply(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run();
+    h.get_by_role(egui::accesskit::Role::ComboBox).click();
+    h.run_steps(4);
+    let list = h.ctx.memory(|m| m.layer_ids().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)));
+    let Some(list) = list else { panic!("the list is open") };
+    let rows = MODES.iter().map(|(_, l)| h.get_all_by_label(l).map(|n| n.rect()).rfind(|r| list.contains_rect(*r)).unwrap_or(egui::Rect::NOTHING)).collect();
+    (list, rows)
+}
+
+/// The gaps between consecutive rows of an open list.
+fn row_gaps(rows: &[egui::Rect]) -> Vec<f32> {
+    rows.windows(2).map(|w| w[1].top() - w[0].bottom()).collect()
+}
+
+/// A grouped dropdown draws a line above each option starting a group, never above the first one,
+/// and the lines take no width: the list is as wide as without them (#5532).
+#[test]
+fn a_grouped_dropdown_list_draws_a_line_above_each_group_and_keeps_its_width() {
+    let (plain_list, plain) = open_grouped_modes(|_| false);
+    let plain_gaps = row_gaps(&plain);
+    let (lo, hi) = plain_gaps.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), g| (lo.min(*g), hi.max(*g)));
+    assert!(hi - lo < 1.0, "no groups, even row gaps: {plain_gaps:?}");
+    // Darken (index 2) starts a group; so does Normal, the first option, which never gets a line.
+    let (list, rows) = open_grouped_modes(|i| matches!(*i, 0 | 2));
+    let gaps = row_gaps(&rows);
+    assert!((gaps[0] - lo).abs() < 0.5 && (gaps[2] - lo).abs() < 0.5, "only Dissolve/Darken is wider: {gaps:?}");
+    assert!(gaps[1] > lo + 2.0, "a line between Dissolve and Darken: {gaps:?}");
+    assert!((rows[0].top() - plain[0].top()).abs() < 0.5, "no line above the first row: {rows:?} vs {plain:?}");
+    assert_eq!(list.width(), plain_list.width(), "the line doesn't widen the list");
 }
