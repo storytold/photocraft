@@ -141,6 +141,18 @@ fn a_loaded_step_frames_the_named_layer_and_undoes() {
     assert!(doc.layers.iter().any(|l| l.id == photo) && doc.layers.iter().any(|l| l.id == other));
 }
 
+/// A step that names its layer plays with no layer selected: the command is admitted on the
+/// named layer, not the (empty) selection.
+#[test]
+fn a_loaded_step_plays_with_no_layer_selected() {
+    let (mut s, _) = load(vec![recorded(by_name("Photo"), "Frame 1")]);
+    two_layers(&mut s);
+    s.execute("select.deselectLayers", json!({})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+    assert_eq!(frames(&s, "Frame 1").into_iter().map(|f| f.1).collect::<Vec<_>>(), vec![[10.0, 15.0, 30.0, 30.0]]);
+}
+
 /// Without a layer of its own the command still frames the selected layers.
 #[test]
 fn without_a_layer_the_selected_layers_are_framed() {
