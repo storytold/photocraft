@@ -235,7 +235,8 @@ fn the_tool_strip_has_no_twirl_counterclockwise() {
 }
 
 /// Alt held with Twirl Clockwise twirls the other way: at the same point, the displacement a
-/// dab leaves points the opposite way from one without Alt.
+/// dab leaves points the opposite way from one without Alt. Both strokes get the same fixed
+/// times: a held twirl's strength is its elapsed time, so the wall clock made them differ (#12697).
 #[test]
 fn alt_with_twirl_clockwise_twirls_counterclockwise() {
     let ctx = egui::Context::default();
@@ -243,11 +244,11 @@ fn alt_with_twirl_clockwise_twirls_counterclockwise() {
         let mut app = app_with_layer();
         open(&mut app, &ctx).unwrap();
         control(&mut app, &json!({"tool": "twirlCw", "size": 40, "rate": 80})).unwrap();
-        pointer(&mut app, ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, mods);
-        for _ in 0..4 {
-            pointer(&mut app, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 }, mods);
+        pointer_at(&mut app, ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, mods, 1000.0);
+        for k in 1..=4 {
+            pointer_at(&mut app, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 }, mods, 1000.0 + 16.0 * f64::from(k));
         }
-        pointer(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, mods);
+        pointer_at(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, mods, 1064.0);
         let d = app.distort.liquify.as_ref().unwrap();
         assert_eq!(d.opts.tool, LiquifyTool::TwirlCw);
         // Right of the centre: clockwise (y down) moves content down, so it samples from above.
