@@ -30,7 +30,8 @@ fn a_covered_canvas_paints_no_document() {
             .iter()
             .filter(|s| match &s.shape {
                 egui::Shape::Mesh(_) | egui::Shape::Callback(_) => true,
-                egui::Shape::Rect(r) => r.brush.is_some(),
+                // Icon-sized textured rects (a task bar's buttons) are not the document.
+                egui::Shape::Rect(r) => r.brush.is_some() && r.rect.size().min_elem() > 24.0,
                 _ => false,
             })
             .count()

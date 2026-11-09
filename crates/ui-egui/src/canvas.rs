@@ -1391,7 +1391,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     // So are Puppet Warp's, Perspective Warp's and Vanishing Point's warped pixels (#7781).
     crate::distort_ui::draw_content(app, painter, xf);
     // The grid and guides are under a full-window workspace as well, so they aren't drawn.
-    let covered = canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT;
+    let covered = covered_here(app, ctx);
     if app.ui.extras.grid && app.ui.view.extras && !covered {
         crate::rulers::draw_grid(app, painter, xf, doc);
     }
@@ -1939,6 +1939,35 @@ pub(crate) fn canvas_covered(app: &PhotocraftApp) -> bool {
     crate::distort_ui::modal_workspace(app).is_some()
 }
 
+/// Whether a full-window workspace covers this viewport's canvas. Only the main window is
+/// covered: a floating document window, in a viewport of its own, keeps its image.
+fn covered_here(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT
+}
+
+/// The document's paint for this frame: nothing under a covering workspace (no deferral for the
+/// Crop tool's camera either, and no marching ants: the selection is under the workspace too),
+/// `None` when `defer` leaves it until after input, else [`paint_canvas`]'s result.
+#[allow(clippy::too_many_arguments)]
+fn paint_document(
+    app: &mut PhotocraftApp,
+    ui: &egui::Ui,
+    covered: bool,
+    defer: bool,
+    view: &View,
+    xf: ViewXform,
+    input: &CanvasPaintInput<'_>,
+    img_rect: Rect,
+) -> Option<(bool, egui::layers::ShapeIdx, Rect, Vec<egui::Shape>)> {
+    if covered {
+        Some((false, input.painter.add(egui::Shape::Noop), img_rect, Vec::new()))
+    } else if defer {
+        None
+    } else {
+        Some(paint_canvas(app, ui, view, xf, input))
+    }
+}
+
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     // The Frame tool starts transforms from pointer events, which carry no context; the options
@@ -2055,17 +2084,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // A full-window workspace (Liquify, Select and Mask, Content-Aware Fill, Filter Gallery,
     // Adaptive Wide Angle) covers the canvas completely: its document is neither refreshed on
     // the GPU nor drawn while one is open, so the workspace's frames don't pay for a hidden image.
-    // Only the main window is covered: a floating document window keeps its image.
-    let covered = canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT;
-    let painted = if covered {
-        // Nothing to defer for the Crop tool's camera either, and no marching ants: the
-        // selection is under the workspace too.
-        Some((false, painter.add(egui::Shape::Noop), img_rect, Vec::new()))
-    } else if paint_after_input {
-        None
-    } else {
-        Some(paint_canvas(app, ui, &display_view, xf, &paint_input))
-    };
+    let painted = paint_document(app, ui, covered_here(app, &ctx), paint_after_input, &display_view, xf, &paint_input, img_rect);
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
