@@ -116,7 +116,8 @@ pub struct Compositor {
     fail_allocs: u32,
     acc_format: wgpu::TextureFormat,
     /// Whether the effect-map pipelines could be built (else documents with layer effects are
-    /// [`Unsupported`] and use the CPU compositor).
+    /// [`Unsupported`] and use the CPU compositor). Also off on the GL backend, whose float
+    /// effect-map targets don't composite correctly on the adapters we can test.
     effect_maps: bool,
     /// `CmykSpace::id` of the document being encoded (0: built-in coated CMYK).
     cmyk: u64,

@@ -21,6 +21,7 @@ struct Gpu {
     /// The same device with a simulated texture limit of [`PAGED_LIMIT`]: every check also runs
     /// through layer pages and per-cell effect maps.
     paged: Compositor,
+    backend: wgpu::Backend,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -138,7 +139,7 @@ fn gpu() -> Option<Gpu> {
     let comp = timed("pipeline creation", compositor)?;
     let mut paged = comp.sibling();
     paged.set_texture_limit(PAGED_LIMIT);
-    Some(Gpu { device, queue, comp, paged, _lock: lock })
+    Some(Gpu { device, queue, comp, paged, backend: info.backend, _lock: lock })
 }
 
 /// Any adapter and device, for the fallback-path tests (which don't need 32-bit float targets).
@@ -218,8 +219,14 @@ fn worst_diff(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> (f32, usize) {
 }
 
 /// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the
-/// tolerance, else the stats of the unpaged render.
+/// tolerance, else the stats of the unpaged render. What the app won't draw on this adapter
+/// (on GL, layer effects: the float effect-map targets don't composite correctly there) has
+/// nothing to compare: the document is drawn by the CPU compositor instead.
 fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
+    if g.backend == wgpu::Backend::Gl && g.comp.supports(doc).is_err() {
+        eprintln!("skipping GPU comparison on GL: {what} (the app uses the CPU compositor)");
+        return Ok(photocraft_gpu::Stats::default());
+    }
     let cpu = timed("CPU reference", || photocraft_compose::render(doc, rect));
     let mut first = None;
     for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
@@ -2061,6 +2068,9 @@ fn layer_effects_on_groups_clipping_and_fills() {
 #[test]
 fn layer_effects_update_incrementally() {
     let Some(mut g) = gpu() else { return };
+    if skip_gl_effects(&g) {
+        return;
+    }
     let stack = effect_cases().into_iter().find(|(n, _)| *n == "full stack").unwrap().1;
     let mut d = fx_doc(700, 600, SampleType::U8);
     let mut l = blob("fx", d.pixel_format(), 300.0, 280.0, 200.0, [0.9, 0.4, 0.2]);
@@ -2114,6 +2124,9 @@ fn layer_effects_move_with_a_layer_overhanging_the_canvas() {
     // (#761): its pixels overhang the edge, yet each move reuses the maps instead of rebuilding
     // them, and the result still matches the CPU.
     let Some(mut g) = gpu() else { return };
+    if skip_gl_effects(&g) {
+        return;
+    }
     let mut d = fx_doc(160, 120, SampleType::U8);
     let mut l = noise_layer("full", PixelFormat::RGBA8, Rect::new(-6, -4, 166, 124), 3, 0.6);
     l.surface_mut().unwrap().fill_rect(Rect::new(40, 30, 90, 70), &[0.0, 0.0, 0.0, 0.0]);
@@ -2949,6 +2962,17 @@ fn unbuildable_pipelines_are_an_error_not_a_panic() {
 
 // ---- documents larger than the texture limit ------------------------------------------------
 
+/// Layer effects use the CPU compositor on the GL backend, so tests that drive the effect-heavy
+/// `big_doc` through `render_to_vec_stats` and read its stats (not just its pixels) have nothing
+/// to compare there.
+fn skip_gl_effects(g: &Gpu) -> bool {
+    let skip = g.backend == wgpu::Backend::Gl;
+    if skip {
+        eprintln!("skipping: layer effects use the CPU compositor on the GL backend");
+    }
+    skip
+}
+
 /// A document several pages wide under [`PAGED_LIMIT`]: pixel layers crossing page borders (one
 /// masked, one off-canvas), a big effect layer whose region exceeds the limit (maps built per
 /// page cell), a type layer with a shadow, an adjustment, a clipped group and a gradient fill.
@@ -2992,6 +3016,9 @@ fn big_doc() -> Document {
 fn documents_larger_than_the_texture_limit() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut g) = gpu() else { return };
+    if skip_gl_effects(&g) {
+        return;
+    }
     let mut d = big_doc();
     assert!(g.paged.supports(&d).is_ok());
     // Every pass sees page borders, and effect maps and blurs crossing them.
@@ -3015,6 +3042,9 @@ fn documents_larger_than_the_texture_limit() {
 fn pages_are_evicted_under_the_budget() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut g) = gpu() else { return };
+    if skip_gl_effects(&g) {
+        return;
+    }
     let mut d = big_doc();
     check(&mut g, &d, "warm");
     let all = g.paged.resident_bytes();
@@ -3125,6 +3155,9 @@ fn a_layer_page_out_of_memory_retries_then_ends_only_that_refresh_on_the_cpu() {
 fn the_focused_view_stays_resident_after_a_full_refresh() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(g) = gpu() else { return };
+    if skip_gl_effects(&g) {
+        return;
+    }
     let d = big_doc();
     let mut comp = g.comp.sibling();
     // Exercise input-page residency itself: prefix hits can legitimately skip those pages.
@@ -3154,6 +3187,9 @@ fn the_focused_view_stays_resident_after_a_full_refresh() {
 fn layer_pages_that_just_miss_borrow_the_effect_map_share() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(g) = gpu() else { return };
+    if skip_gl_effects(&g) {
+        return;
+    }
     let d = big_doc();
     let mut comp = g.comp.sibling();
     comp.set_texture_limit(PAGED_LIMIT);

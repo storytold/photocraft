@@ -26,7 +26,7 @@ HDR display to verify.
 | Documents larger than the GPU texture limit | yes (tiled) | CPU fallback; tiling in progress (#49) | partial |
 | CPU-only fallback when no GPU | yes, reduced | `cpu` canvas preference; fails to start without an adapter on some Linux systems (#2519, #2412) | partial |
 | Choosing the GPU on a multi-GPU machine | Preferences â€º Performance â€º Use Graphics Processor | Linux only: Preferences â€º Performance â€º Advanced â€º GPU adapter and `PHOTOCRAFT_GPU_ADAPTER` (#1885); ignored on Windows and macOS | partial |
-| Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#1859), Rgba32Float panic (#2020); on Windows the GPU's OpenGL adapter composites once that adapter is selected (#7331), instead of software WARP; `auto` does not select it yet (#10284) | partial |
+| Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#1859), Rgba32Float panic (#2020); on Windows the GPU's OpenGL adapter composites once that adapter is selected (#7331), instead of software WARP; `auto` does not select it yet (#10284); layer effects use the CPU compositor on the GL backend (float effect-map targets don't composite correctly there on the adapters we can test) | partial |
 
 ## Pen tablets
 

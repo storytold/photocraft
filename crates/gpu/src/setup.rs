@@ -1,6 +1,6 @@
 ﻿use super::batch::tile_grid;
 use super::consts::{ACC_FORMAT, CHUNK, CHUNK_UNIFORM, FX_BUDGET, MAX_PATTERN_TEXTURE_BYTES, OP_UNIFORM, PAGE, PATTERN_BUDGET, RESIDENT_BUDGET};
-use super::kit::{BuildJob, Kit, SHADER, build_jobs, tex_entry, uniform_entry, vertex_shader};
+use super::kit::{Kit, SHADER, build_jobs, tex_entry, uniform_entry, vertex_shader};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
 use super::{
@@ -173,9 +173,15 @@ impl Compositor {
         };
         // Effect maps render to R32Float / R16Float, which some adapters (e.g. GL without float
         // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
+        // On the GL backend the float effect-map targets aren't built at all instead of relying on
+        // a pipeline failure: the GL adapters we can test (Intel HD 4600) accept the targets but
+        // composite garbage through them, so effect documents use the CPU there and the rest stays
+        // on the GPU. The GL backend builds pipelines one thread at a time ([`parallel_pipelines`]).
+        let gl = device.adapter_info().backend == wgpu::Backend::Gl;
         let build_one = |job: super::kit::BuildJob| {
             job.keys
                 .into_iter()
+                .filter(|key| !gl || !key.0.is_map())
                 .map(|key| {
                     let (built, error) = first_error(device, || pipeline(key.0, key.1, &job.vertex));
                     (key, built, error)
@@ -207,14 +213,16 @@ impl Compositor {
                 pipelines.insert(key, p);
             }
         }
-        if let Some(e) = &map_error {
+        if gl {
+            log::info!("GPU compositor: layer effects use the CPU compositor on the GL backend");
+        } else if let Some(e) = &map_error {
             log::info!("GPU compositor: no effect-map pipelines ({e}); layer effects use the CPU");
         } else {
             pipelines.extend(maps);
         }
         let dummy = Tex::new(device, "pc_compose_dummy", 1, 1, wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureUsages::TEXTURE_BINDING).view;
         let kit = Kit { pipelines, bgl0, bgl1, dummy };
-        let comp = Self::from_kit(kit, device.limits().max_texture_dimension_2d, acc_format, map_error.is_none());
+        let comp = Self::from_kit(kit, device.limits().max_texture_dimension_2d, acc_format, !gl && map_error.is_none());
         (comp, error)
     }
 
