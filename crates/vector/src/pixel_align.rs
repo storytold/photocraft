@@ -1,10 +1,17 @@
-//! Coverage-only alignment of one-pixel straight runs. Geometry and dash arc lengths are
-//! never rounded. Curve tangencies and joins retain their original area antialiasing.
+//! Render-only alignment of shape edges and straight one-pixel stroke runs. Stored
+//! geometry and dash settings remain unchanged; curved interiors retain area antialiasing.
 use photocraft_doc::{LiveShape, Path, ShapeLayer, StrokeAlign};
 use photocraft_geom::Rect;
 
 // Trigonometric live shapes and quarter-turn transforms carry tiny rounding errors.
 const ALIGN_EPSILON: f64 = 1e-7;
+/// Round an edge to the nearest pixel, choosing increasing coordinates at half ties.
+/// Comparing the fractional part avoids addition rounding just below a half pixel.
+pub(crate) fn snap_edge(coordinate: f64) -> f64 {
+    let lower = coordinate.floor();
+    if coordinate - lower >= 0.5 { lower + 1.0 } else { lower }
+}
+
 type CleanLine = (Vec<(f64, f64)>, Vec<bool>);
 /// Compare source coordinates without treating flattened curve chords as straight segments.
 fn same(a: f64, b: f64) -> bool {
@@ -482,14 +489,16 @@ pub(crate) fn aligned_edge_path(shape: &ShapeLayer) -> Option<Path> {
         }
         for ((target, original), (vertical, horizontal)) in subpath.knots.iter_mut().zip(source).zip(axes) {
             if vertical && original.anchor.x.is_finite() {
-                let delta = original.anchor.x.round() - original.anchor.x;
-                target.anchor.x = original.anchor.x.round();
+                let snapped = snap_edge(original.anchor.x);
+                let delta = snapped - original.anchor.x;
+                target.anchor.x = snapped;
                 target.in_ctrl.x = original.in_ctrl.x + delta;
                 target.out_ctrl.x = original.out_ctrl.x + delta;
             }
             if horizontal && original.anchor.y.is_finite() {
-                let delta = original.anchor.y.round() - original.anchor.y;
-                target.anchor.y = original.anchor.y.round();
+                let snapped = snap_edge(original.anchor.y);
+                let delta = snapped - original.anchor.y;
+                target.anchor.y = snapped;
                 target.in_ctrl.y = original.in_ctrl.y + delta;
                 target.out_ctrl.y = original.out_ctrl.y + delta;
             }

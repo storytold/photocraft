@@ -1688,3 +1688,57 @@ fn align_edges_fractional_stroke_width_keeps_area_coverage() {
         assert_eq!(aligned[20 * 80 + 35][3], width.min(2.0) / 2.0);
     }
 }
+
+/// Render the same document pixels after an integer translation of both geometry and clip.
+fn aligned_pixels_after_translation(shape: &ShapeLayer, offset: [i32; 2]) -> Vec<[f32; 4]> {
+    let [dx, dy] = offset;
+    let shifted = ShapeLayer { path: shape.path.transform(&photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy))), ..shape.clone() };
+    let clip = Rect::new(-30 + dx, -30 + dy, 50 + dx, 50 + dy);
+    CompiledShape::new(&shifted, DEFAULT_TOLERANCE, clip).render_rgba(clip)
+}
+
+/// A half-pixel rectangle spanning the origin keeps its dimensions and occupied pixels.
+#[test]
+fn align_edges_fill_half_ties_preserve_extent_across_zero() {
+    let shape =
+        ShapeLayer { path: shapes::rect(-10.5, -5.5, 31.0, 21.0), fill: Some(Fill::Solid(Color::BLACK)), use_aligned_rendering: true, ..Default::default() };
+    let reference = aligned_pixels_after_translation(&shape, [40, 30]);
+    assert!(reference.iter().all(|pixel| pixel[3] == 0.0 || pixel[3] == 1.0));
+    assert_eq!(reference.iter().filter(|pixel| pixel[3] == 1.0).count(), 31 * 21);
+    for offset in [[-40, -30], [0, 0], [40, 30]] {
+        let pixels = aligned_pixels_after_translation(&shape, offset);
+        let mismatch = pixels.iter().zip(&reference).position(|(actual, expected)| actual != expected);
+        assert_eq!(mismatch, None, "offset={offset:?}");
+    }
+}
+
+/// Odd-width outlines have half-pixel boundaries even when their source path is integral.
+#[test]
+fn align_edges_three_pixel_stroke_translates_across_zero() {
+    let shape = ShapeLayer {
+        path: shapes::rect(-10.0, -5.0, 31.0, 21.0),
+        stroke: Some(ShapeStroke { width: 3.0, ..Default::default() }),
+        use_aligned_rendering: true,
+        ..Default::default()
+    };
+    let reference = aligned_pixels_after_translation(&shape, [40, 30]);
+    assert!(reference.iter().all(|pixel| pixel[3] == 0.0 || pixel[3] == 1.0));
+    assert_eq!(reference.iter().filter(|pixel| pixel[3] == 1.0).count(), 2 * (31 + 21) * 3);
+    for offset in [[-40, -30], [0, 0], [40, 30]] {
+        let pixels = aligned_pixels_after_translation(&shape, offset);
+        let mismatch = pixels.iter().zip(&reference).position(|(actual, expected)| actual != expected);
+        assert_eq!(mismatch, None, "offset={offset:?}");
+    }
+}
+
+/// The common edge rule is half-up on both sides of zero and preserves nearby non-ties.
+#[test]
+fn align_edges_half_ties_choose_increasing_coordinates() {
+    for (source, expected) in [(-10.5, -10.0), (-0.5, 0.0), (0.5, 1.0), (10.5, 11.0), (-10.75, -11.0), (10.25, 10.0)] {
+        assert_eq!(super::pixel_align::snap_edge(source), expected, "source={source}");
+    }
+    let below_half = f64::from_bits(0.5_f64.to_bits() - 1);
+    assert_eq!(super::pixel_align::snap_edge(below_half), 0.0);
+    let large_integer = 4_503_599_627_370_497.0;
+    assert_eq!(super::pixel_align::snap_edge(large_integer), large_integer);
+}

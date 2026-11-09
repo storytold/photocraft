@@ -94,12 +94,12 @@ fn stroke_rasterizer_with_alignment(path: &Path, style: &StrokeStyle, tol: f64, 
                 let next = (index + 1) % original.len();
                 let (a, b) = (original[index], original[next]);
                 if a.0 == b.0 {
-                    polygon[index].0 = a.0.round();
-                    polygon[next].0 = b.0.round();
+                    polygon[index].0 = pixel_align::snap_edge(a.0);
+                    polygon[next].0 = pixel_align::snap_edge(b.0);
                 }
                 if a.1 == b.1 {
-                    polygon[index].1 = a.1.round();
-                    polygon[next].1 = b.1.round();
+                    polygon[index].1 = pixel_align::snap_edge(a.1);
+                    polygon[next].1 = pixel_align::snap_edge(b.1);
                 }
             }
         }
