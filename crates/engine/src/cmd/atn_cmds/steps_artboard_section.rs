@@ -136,7 +136,9 @@ pub(super) fn from(d: &Descriptor) -> Mapped {
     if let Some(name) = &settings.name {
         p["name"] = name.as_str().into();
     }
-    if *d != canonical(&settings) {
+    // Bytes, not descriptor equality: that takes an edge of -0.0 for 0.0, which would save
+    // another value than the one recorded.
+    if bytes != canonical(&settings).to_bytes() {
         p[SOURCE] = photocraft_paint::tile::b64_encode(&bytes).into();
     }
     step(id, p)

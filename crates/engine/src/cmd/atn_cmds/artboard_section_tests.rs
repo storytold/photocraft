@@ -104,6 +104,16 @@ fn recorded_steps_load_and_save_back_unchanged() {
         ),
         // Edges in the 32-bit range, a width past it.
         (new_board("Span", [0.0, -2e9, 10.0, 2e9]), NEW, json!({"rect": [-2_000_000_000_i64, 0, 4_000_000_000_i64, 10], "name": "Span"})),
+        // The canonical form but for an edge of -0.0, which only the bytes tell apart from 0.0.
+        (
+            {
+                let mut d = new_board("Zero", [-0.0, 10.0, 70.0, 110.0]);
+                d.items.retain(|(k, _)| !k.is("layerSectionStart") && !k.is("layerSectionEnd"));
+                d
+            },
+            NEW,
+            json!({"rect": [10, 0, 100, 70], "name": "Zero"}),
+        ),
         (from_layers("Cards"), FROM_LAYERS, json!({"name": "Cards"})),
         (no_ids, FROM_LAYERS, json!({"name": "Cards"})),
     ];
