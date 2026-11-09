@@ -183,6 +183,17 @@ pub fn params(f: &Map<String, Value>) -> Value {
     Value::Object(p)
 }
 
+/// How many recorded colours `__kept` still holds (`color` is one, `colors` its length).
+fn kept_colors(f: &Map<String, Value>) -> usize {
+    let Some(kept) = f.get(KEPT).and_then(Value::as_object) else { return 0 };
+    usize::from(kept.get("color").is_some_and(Value::is_string)) + kept.get("colors").and_then(Value::as_array).map_or(0, Vec::len)
+}
+
+/// The (added, subtracted) samples the dialog shows: clicked points plus recorded colours.
+fn sample_counts(f: &Map<String, Value>) -> (usize, usize) {
+    (points(f, "points").len() + kept_colors(f), points(f, "subtractPoints").len())
+}
+
 /// A new replacing sample (plain eyedropper, Clear Samples) supersedes the recorded colours.
 fn forget_kept_colors(f: &mut Map<String, Value>) {
     if let Some(kept) = f.get_mut(KEPT).and_then(Value::as_object_mut) {
@@ -279,9 +290,19 @@ fn query_key(app: &PhotocraftApp, params: &Value) -> u64 {
 }
 
 /// Keep the accelerated preview paths in sync with the engine's Color Range replacement.
-/// The full-resolution engine handles other combine modes itself.
+/// A recorded `mode` of add, subtract or intersect combines the sampled mask with the document's
+/// selection, as OK does; otherwise the mask is limited to the selection.
 fn scope_preview(proxy: &Document, params: &Value, mask: &mut [f32]) {
-    if matches!(params.get("mode").and_then(Value::as_str), Some("add" | "subtract" | "intersect")) {
+    let mode = photocraft_algo::selection::SelectionMode::parse(params.get("mode").and_then(Value::as_str).unwrap_or("replace"));
+    if mode != photocraft_algo::selection::SelectionMode::Replace {
+        if let Some(selection) = proxy.selection.as_ref() {
+            let area = proxy.bounds();
+            let combined = photocraft_algo::selection::combine(Some(selection), mask, area, mode);
+            let combined = photocraft_algo::selection::mask_from_surface(combined.as_ref(), area);
+            if combined.len() == mask.len() {
+                mask.copy_from_slice(&combined);
+            }
+        }
         return;
     }
     if let Some(selection) = proxy.selection.as_ref() {
@@ -600,7 +621,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         }
                     }
                 });
-                let (add, sub) = (points(f, "points").len(), points(f, "subtractPoints").len());
+                let (add, sub) = sample_counts(f);
                 let what = match (add, sub) {
                     (0, 0) => tl!("Sample: foreground color").to_string(),
                     (a, 0) => crate::i18n::trn(crate::i18n::current(), a as u64, "{n} sample", "{n} samples"),

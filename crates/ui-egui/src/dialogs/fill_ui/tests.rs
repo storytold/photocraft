@@ -280,3 +280,17 @@ fn the_pattern_is_picked_from_its_swatches() {
     assert_eq!(pattern(&h), json!(sky));
     assert!(h.query_by_label("Brick").is_none(), "the grid closes after a pick");
 }
+
+#[test]
+fn fill_load_step_copies_recorded_values() {
+    let mut f = Map::new();
+    for (k, v) in [("opacity", json!(10.0)), ("color", json!("#123456")), ("mode", json!("multiply")), ("contents", json!("pattern"))] {
+        f.insert(k.into(), v);
+    }
+    load_step(&mut f, &json!({"contents": "Color", "color": "#ff0000", "opacity": 50.0}), "#00ff00", None);
+    let p = params(&f);
+    assert_eq!(p["opacity"], json!(50.0));
+    assert_eq!(p["color"], json!("#ff0000"));
+    assert_eq!(p["contents"], json!("color"));
+    assert_eq!(p["mode"], json!("normal"), "a field the step lacks gets the engine default");
+}

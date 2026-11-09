@@ -3222,3 +3222,25 @@ fn fill_step_contents_case_insensitive() {
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert!((red_at(&app, 12, 8) - 1.0).abs() < 1e-4, "filled red");
 }
+
+#[test]
+fn fill_unedited_color_keeps_translucent_foreground() {
+    let pixel = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let walk = st.doc.walk();
+        walk.first().unwrap().2.surface().unwrap().pixel(12, 8)
+    };
+    let fg = [0.2, 0.9, 0.31, 0.5];
+    let mut headless = two_tone_app();
+    headless.session.tools.foreground = fg;
+    headless.run("select.all", json!({})).unwrap();
+    headless.run(FILL_STEP, json!({"contents": "color"})).unwrap();
+    let want = pixel(&headless);
+
+    let mut app = two_tone_app();
+    app.session.tools.foreground = fg;
+    app.run("select.all", json!({})).unwrap();
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "color"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(pixel(&app), want, "OK sends what headless playback sends");
+}

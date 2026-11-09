@@ -555,3 +555,32 @@ fn a_preview_failure_is_shown_not_silent() {
     set(&mut h, "select", json!("reds"));
     assert!(h.state().color_range.as_ref().unwrap().error.is_none(), "and cleared once the preview works again");
 }
+
+#[test]
+fn color_range_recorded_color_counts_as_a_sample() {
+    let mut f = Map::new();
+    load_step(&mut f, &json!({"select": "sampledColors", "color": "#ff0000"}));
+    assert_eq!(kept_colors(&f), 1);
+    assert_eq!(sample_counts(&f), (1, 0), "the summary and Clear Samples count the recorded colour");
+    let mut g = Map::new();
+    load_step(&mut g, &json!({"select": "sampledColors", "colors": ["#ff0000", "#0000ff"], "points": [[1, 1]]}));
+    assert_eq!(sample_counts(&g), (3, 0));
+    forget_kept_colors(&mut g);
+    assert_eq!(sample_counts(&g), (1, 0));
+}
+
+#[test]
+fn color_range_preview_applies_recorded_subtract() {
+    let mut app = app_with_doc();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 15})).unwrap();
+    let mut f = Map::new();
+    load_step(&mut f, &json!({"select": "sampledColors", "color": "#ff0000", "mode": "subtract", "fuzziness": 10}));
+    let params = super::params(&f);
+    let doc = app.session.active().unwrap().doc.clone();
+    let mask = proxy_mask(&app, &doc, 1, &params).unwrap();
+    let w = doc.size.width as usize;
+    assert!(mask[5 * w + 5] < 0.01, "the red half is subtracted from the selection");
+    assert!(mask[5 * w + 30] > 0.99, "the blue half stays selected");
+    app.run(COMMAND, params).unwrap();
+    assert!(coverage(&app, 5, 5) < 0.01 && coverage(&app, 30, 5) > 0.99, "OK leaves the same selection");
+}
