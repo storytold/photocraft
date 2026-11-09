@@ -83,7 +83,7 @@ impl DetailPreview {
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err("Camera Raw detail preview worker stopped".into()),
+            Err(TryRecvError::Disconnected) => Err("RAW Develop detail preview worker stopped".into()),
         };
         self.pending = None;
         match result {
@@ -112,7 +112,7 @@ impl DetailPreview {
         // The engine's full-image pipeline needs multiple temporary float buffers. Never start
         // an unbounded allocation just because a huge sparse document was zoomed into.
         if self.area.width() as u64 * self.area.height() as u64 > 64_000_000 {
-            self.error = Some("Full-resolution Camera Raw preview is limited to 64 megapixels; the proxy remains available".into());
+            self.error = Some("Full-resolution RAW Develop preview is limited to 64 megapixels; the proxy remains available".into());
             self.failed_revision = Some(revision);
             return;
         }
@@ -133,7 +133,7 @@ impl DetailPreview {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 develop(&source, raw_curve.as_deref().map(Vec::as_slice), raw.as_ref(), area, &params, &coverage)
             }))
-            .map_err(|_| "Camera Raw detail preview failed; the proxy remains available".to_string())
+            .map_err(|_| "RAW Develop detail preview failed; the proxy remains available".to_string())
             .and_then(|developed| developed)
             .map(|surface| (revision, surface));
             if !cancel.load(Ordering::Relaxed) {
@@ -152,7 +152,7 @@ impl DetailPreview {
             }) {
                 Ok(_) => self.pending = Some((revision, rx)),
                 Err(e) => {
-                    self.error = Some(format!("Cannot start Camera Raw preview: {e}"));
+                    self.error = Some(format!("Cannot start RAW Develop preview: {e}"));
                     self.failed_revision = Some(revision);
                 }
             }
@@ -163,7 +163,7 @@ impl DetailPreview {
             // instead of blocking its UI with the full-image engine pipeline.
             drop(work);
             drop(rx);
-            self.error = Some("Full-resolution filtered preview requires a native Camera Raw worker; the web preview keeps the proxy".into());
+            self.error = Some("Full-resolution filtered preview requires a native RAW Develop worker; the web preview keeps the proxy".into());
             self.failed_revision = Some(revision);
         }
     }
