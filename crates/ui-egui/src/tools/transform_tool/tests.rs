@@ -1148,6 +1148,47 @@ fn save_for_web_is_off_under_a_pending_transform() {
     assert!(crate::menus::is_enabled(&app, SAVE_FOR_WEB), "back after the box closes");
 }
 
+/// Layer › Copy CSS reads the committed document, so, as Save for Web (#6737), it is off while a
+/// box is pending: the clipboard never gets the bounds from before the move. After Cancel it
+/// copies the old place, after a commit the new one.
+#[test]
+fn copy_css_is_off_under_a_pending_transform() {
+    let id = photocraft_engine::layer_css_cmds::ID;
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let copy_css = |app: &mut PhotocraftApp| {
+        let mut result = None;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| result = Some(crate::menus::invoke(app, ui.ctx(), id, json!({}))));
+        out.textures_delta.clear();
+        (result.unwrap(), out.platform_output.commands)
+    };
+    let moved = |app: &mut PhotocraftApp| {
+        crate::menus::invoke(app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
+    };
+    assert!(crate::menus::is_enabled(&app, id), "enabled with no box");
+    moved(&mut app);
+    assert!(!crate::menus::is_enabled(&app, id), "off under the box");
+    let (result, clipboard) = copy_css(&mut app);
+    assert!(result.is_err(), "refused under the box: {result:?}");
+    assert!(clipboard.is_empty(), "nothing reaches the clipboard: {clipboard:?}");
+    assert!(app.ui.transform.is_some(), "the box stays open");
+    cancel(&mut app);
+    assert!(crate::menus::is_enabled(&app, id), "back after Cancel");
+    let (result, clipboard) = copy_css(&mut app);
+    let css = result.unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains("left: 8px;"), "{css}");
+    assert_eq!(clipboard, [egui::OutputCommand::CopyText(css)]);
+    moved(&mut app);
+    commit(&mut app);
+    assert!(app.ui.transform.is_none() && crate::menus::is_enabled(&app, id), "back after the commit");
+    let (result, clipboard) = copy_css(&mut app);
+    let css = result.unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains("left: 28px;"), "the moved place: {css}");
+    assert_eq!(clipboard, [egui::OutputCommand::CopyText(css)]);
+}
+
 /// #352: ⌥⌘T transforms a copy. OK leaves the original and a moved copy as one history step;
 /// Cancel leaves no copy and nothing to redo; with a selection the copy holds the selected
 /// pixels only.
@@ -2336,7 +2377,7 @@ fn plain_layers_from_the_top_cover_the_moving_one() {
     assert_eq!(covers(&layers, c), [tp, inner], "a clipped layer: covered by what is over its clipping group");
 
     // Under the box, the covering layers leave the document; over it, they alone show.
-    let above = Above { ctx: egui::Context::default(), name: String::new(), max_side: 64, ids: vec![tp, inner], applied: Vec::new(), shown: None };
+    let above = Above { ctx: egui::Context::default(), name: String::new(), max_side: 64, ids: vec![tp, inner], shown: None };
     let mut under = layers.clone();
     above.hide_in(&mut under);
     let vis = |ls: &[Layer]| [ls[0].visible, ls[1].visible, ls[2].visible];

@@ -112,6 +112,7 @@ pub use canvas::pixel_grid;
 pub use canvas::quick_pick;
 pub use canvas::rotate_view;
 pub use canvas::rulers;
+pub use canvas::scroll_all_windows;
 pub use canvas::scrollbars;
 pub use canvas::select_mask_view;
 pub use canvas::snap_ui;
@@ -262,8 +263,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn,
-    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable,
+    RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -487,6 +488,9 @@ pub struct PhotocraftApp {
     /// Window › Arrange: the first document of the shown run of tiles, when there are more
     /// documents than tiles (`canvas::arranged_cells`).
     pub(crate) arrange_start: usize,
+    /// The document window (`DocWindow::id`) whose canvas `canvas::extra_windows` is drawing.
+    /// `scroll_all_windows::source` reads it to skip the view that a Hand drag moves itself.
+    pub(crate) drawing_window: Option<u64>,
     /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`, which
     /// folds in both the display scale and Interface › UI Scale). The canvas maps document pixels
     /// to physical pixels, so point-space geometry divides the view zoom by this (see
@@ -586,6 +590,10 @@ pub struct PhotocraftApp {
     pub(crate) hist_uncached: Option<(DocId, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
+    /// The canvas area the last Free Transform box's preview changes (`transform_tool::damage`).
+    transform_area: Option<crate::transform_tool::OpenArea>,
+    /// A large layer's Free Transform box being prepared in the background.
+    transform_preparing: Option<crate::transform_tool::Preparing>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Cached document for a modal text Style Options color preview.
@@ -783,6 +791,8 @@ mod brush_options_tooltips_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
+mod cam_no_pixels_alert_tests;
+#[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod shape_bounds_box_tests;
@@ -917,6 +927,9 @@ mod smart_filter_rows_tests;
 mod blur_pins_tests;
 
 #[cfg(test)]
+mod filter_preview_locator_tests;
+
+#[cfg(test)]
 mod move_outline_tests;
 
 #[cfg(test)]
@@ -1020,6 +1033,8 @@ mod pen_path_ownership_tests;
 
 #[cfg(test)]
 mod artboard_options_bar_tests;
+#[cfg(test)]
+mod background_eraser_bar_angle_tests;
 #[cfg(test)]
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
