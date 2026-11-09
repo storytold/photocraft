@@ -1276,6 +1276,10 @@ fn ui_set_dock_width_scales_every_column() {
         columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
     }
     app.ui.docking = Some(Workspace::new(layout));
+    // The extra 180-point column first comes up to its 220-point minimum; the rest of the change
+    // is shared equally between the two columns.
+    let share = (520.0 - end_columns(&app)[0].width - 220.0) / 2.0;
+    let split = [end_columns(&app)[0].width + share, 220.0 + share];
     let total = |app: &PhotocraftApp| -> f32 {
         let root = app.ui.docking.as_ref().expect("a customized workspace").layout.root.as_ref().expect("root");
         let dock = match root {
@@ -1304,6 +1308,7 @@ fn ui_set_dock_width_scales_every_column() {
     };
     assert_eq!(widths.len(), 2, "both columns are kept");
     assert!(widths.iter().all(|width| *width > 0.0), "every column keeps a positive width: {widths:?}");
+    assert!(widths.iter().zip(split).all(|(width, expected)| (width - expected).abs() < 1.0), "both columns share the change: {widths:?}, expected {split:?}");
 
     // A target below the sum of the columns' 220-point panel minima must stop at that minimum,
     // not starve a column while leaving the other untouched.
@@ -1344,6 +1349,10 @@ fn ui_set_dock_width_queues_and_scales_every_column_when_drawn() {
     }
     app.ui.docking = Some(Workspace::new(layout));
     let mut h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::ProMedium);
+    // As in `ui_set_dock_width_scales_every_column`: the extra column comes up to its 220-point
+    // minimum and the rest of the change is shared equally.
+    let share = (520.0 - end_columns(h.state())[0].width - 220.0) / 2.0;
+    let split = [end_columns(h.state())[0].width + share, 220.0 + share];
     crate::panels::request_dock_width(&h.ctx, 520.0);
     h.run_steps(2);
     let root = h.state().ui.docking.as_ref().expect("a workspace").layout.root.as_ref().expect("root");
@@ -1357,6 +1366,7 @@ fn ui_set_dock_width_queues_and_scales_every_column_when_drawn() {
     assert!(widths.iter().all(|width| *width > 0.0), "every column keeps a positive width: {widths:?}");
     let total: f32 = widths.iter().sum();
     assert!((total - 520.0).abs() < 1.0, "the queued request sets the whole dock to 520 points, got {total} from {widths:?}");
+    assert!(widths.iter().zip(split).all(|(width, expected)| (width - expected).abs() < 1.0), "both columns share the change: {widths:?}, expected {split:?}");
 }
 
 /// A narrow window must still give the canvas its 200-point minimum; the dock shrinks instead.
@@ -1682,24 +1692,43 @@ fn replacing_the_workspace_cancels_the_dock_drag() {
 }
 
 /// A window too narrow for the column minima does not panic while resizing and keeps the panel
-/// inside the available space.
+/// inside the available space, also when the window shrinks to it in the middle of a drag.
 #[test]
 fn constrained_width_does_not_panic_while_resizing() {
-    let mut app = app();
-    let mut layout = legacy(&app);
-    let used: std::collections::HashSet<String> = layout.panels().into_iter().map(|panel| panel.to_string()).collect();
-    let extra = PANELS.iter().map(|(id, _, _)| *id).find(|id| !used.contains(*id)).expect("a free panel id");
-    {
-        let root = layout.root.as_mut().expect("the legacy layout has a root");
-        let dock = match root {
-            Node::Split { second, .. } => second.as_mut(),
-            _ => root,
-        };
-        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
-        columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
-    }
-    app.ui.docking = Some(Workspace::new(layout));
-    let mut h = dock_edge_harness(app, vec2(300.0, 600.0));
+    let two_columns = || {
+        let mut app = app();
+        let mut layout = legacy(&app);
+        let used: std::collections::HashSet<String> = layout.panels().into_iter().map(|panel| panel.to_string()).collect();
+        let extra = PANELS.iter().map(|(id, _, _)| *id).find(|id| !used.contains(*id)).expect("a free panel id");
+        {
+            let root = layout.root.as_mut().expect("the legacy layout has a root");
+            let dock = match root {
+                Node::Split { second, .. } => second.as_mut(),
+                _ => root,
+            };
+            let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+            columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
+        }
+        app.ui.docking = Some(Workspace::new(layout));
+        app
+    };
+    // A drag started in a wide window is cancelled once the shrunk window cannot fit the columns.
+    let mut h = dock_edge_harness(two_columns(), vec2(1280.0, 600.0));
+    let start = begin_outer_resize(&mut h);
+    h.event(Event::PointerMoved(start + vec2(-30.0, 0.0)));
+    h.run_steps(1);
+    assert!(crate::panels::dock_edge_drag_active(&h.ctx), "the drag is held in the wide window");
+    h.set_size(vec2(300.0, 600.0));
+    h.event(Event::PointerMoved(pos2(200.0, 300.0)));
+    h.run_steps(3);
+    assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "shrinking the window below the column minima cancels the held drag");
+    let drawn = crate::panels::dock_panel_width(&h.ctx);
+    assert!(drawn <= 80.0, "the dock stays within the shrunk window mid-drag, got {drawn}");
+    h.event(Event::PointerButton { pos: pos2(200.0, 300.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(crate::panels::dock_panel_width(&h.ctx) <= 80.0, "the release after the cancel keeps the dock in the window");
+
+    let mut h = dock_edge_harness(two_columns(), vec2(300.0, 600.0));
     let drawn = crate::panels::dock_panel_width(&h.ctx);
     assert!(drawn <= 80.0, "the dock stays within the narrow window, got {drawn}");
     let start = outer_handle(&h).center();
