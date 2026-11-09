@@ -128,6 +128,7 @@ pub(super) fn take_turned_page(f: &mut Map<String, Value>, r: &Value) {
     };
     f.insert("printerSettings".into(), json!(settings));
     f.insert("paper".into(), json!([w, h]));
+    f.insert("__paperAlreadyOriented".into(), json!(true));
     // The printable area turns with the paper; left portrait, it wouldn't fit the turned sheet.
     match r.get("printable").filter(|v| v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(Value::is_number))) {
         Some(area) => f.insert("printable".into(), area.clone()),
@@ -144,6 +145,7 @@ pub(super) fn driver_page(f: &mut Map<String, Value>) -> bool {
     match photocraft_engine::print_cmds::try_with_spooler(|| craft_print::rgb::page(&printer, settings.as_ref())) {
         Some(Ok(pg)) => {
             f.insert("paper".into(), json!([pg.paper.0, pg.paper.1]));
+            f.insert("__paperAlreadyOriented".into(), json!(true));
             f.insert("printable".into(), json!([pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3]));
             f.insert("orientation".into(), json!("portrait"));
             f.remove("__pageError");
@@ -257,6 +259,7 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         let mut papers: Vec<_> = photocraft_engine::print_cmds::PAPERS.iter().map(|p| (p.0.to_string(), print_paper_label(p.0))).collect();
         papers.push(("custom".to_string(), tl!("Custom")));
         if crate::widgets::dropdown(ui, "print-paper", tl!("Paper"), &mut selected, &papers, 110.0) {
+            f.remove("__paperAlreadyOriented");
             if selected == "custom" {
                 let (w, h) = print_paper_size(f.get("__customPaper").or(previous.as_ref()));
                 f.insert("paper".into(), json!([w, h]));
@@ -280,6 +283,7 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             })
             .inner;
         if changed {
+            f.remove("__paperAlreadyOriented");
             // Keep points in the command, and let the engine apply orientation and validation.
             f.insert("paper".into(), json!([w, h]));
             f.insert("__customPaper".into(), json!([w, h]));
@@ -722,6 +726,12 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
 /// an output path or a preview set in the same frame as the confirm still drops it.
 pub(super) fn print_params(f: &Map<String, Value>) -> Value {
     let mut p = params(f);
+    if f.get("__paperAlreadyOriented") == Some(&json!(true))
+        && let Some([w, h]) = p.get("paper").and_then(Value::as_array).and_then(|a| <&[Value; 2]>::try_from(a.as_slice()).ok())
+        && let (Some(w), Some(h)) = (w.as_f64(), h.as_f64())
+    {
+        p["orientation"] = json!(if w > h { "landscape" } else { "portrait" });
+    }
     if (b(f, "dryRun", false) || !s(f, "output", "").is_empty())
         && let Some(o) = p.as_object_mut()
     {

@@ -1272,7 +1272,10 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
         "4x6" => "na_index-4x6_4x6in".into(),
         "5x7" => "na_5x7_5x7in".into(),
         "c5" => "iso_c5_162x229mm".into(),
-        _ => return Err(bad(cmd, "unknown paper")),
+        // `paper()` has already validated named presets and aliases. Presets without a PWG media
+        // keyword still need to reach CUPS (for example Japanese and JIS papers), so describe the
+        // exact validated sheet instead of rejecting a paper that the PDF renderer supports.
+        _ => format!("Custom.{:.2}x{:.2}pt", pw.min(ph), pw.max(ph)),
     };
     options.retain(|(key, _)| !matches!(key.as_str(), "media" | "PageSize" | "PageRegion"));
     options.push(("media".into(), media));
