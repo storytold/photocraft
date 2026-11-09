@@ -106,6 +106,16 @@ fn the_brush_keeps_its_own_pressure_flags() {
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
     assert_eq!(flags(&h), (false, false), "the Pencil stayed off");
+
+    // A mixed setting: opacity on, size off, across a switch and back.
+    toggle(&mut h, "Always use pressure for opacity");
+    assert_eq!(flags(&h), (true, false), "mixed: opacity on, size off");
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(4);
+    assert_eq!(flags(&h), (true, true), "the Brush still has its own pair");
+    h.state_mut().ui.tool = Tool::Pencil;
+    h.run_steps(4);
+    assert_eq!(flags(&h), (true, false), "the mixed pair came back unchanged");
 }
 
 #[test]
