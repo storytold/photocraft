@@ -372,6 +372,7 @@ fn paint_color_glyphs(
     (w, h): (usize, usize),
     mut limits: Limits,
 ) -> Option<()> {
+    let after = warp.and_then(Warp::after_frame);
     let n = format.mode.color_channels();
     let stride = n + 1;
     let opaque = PixelFormat { alpha: false, ..*format };
