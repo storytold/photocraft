@@ -56,11 +56,11 @@ pub(super) fn preview_area(canvas: Rect, surf: &photocraft_raster::Surface) -> R
     let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
     let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
     let (Some(w), Some(h)) = (width, height) else {
-        return Err("Camera Raw preview bounds are too large".into());
+        return Err("RAW Develop preview bounds are too large".into());
     };
     let (w, h) = (w as usize, h as usize);
     if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
-        return Err("Camera Raw preview bounds are too large".into());
+        return Err("RAW Develop preview bounds are too large".into());
     }
     Ok((area, w, h))
 }
@@ -121,7 +121,7 @@ pub(super) fn raw_proxy(
     pw: usize,
     ph: usize,
 ) -> Result<Option<RawProxy>, String> {
-    let dev = raw.source.develop_proxy(tuning).map_err(|e| format!("Camera Raw preview develop failed: {e}"))?;
+    let dev = raw.source.develop_proxy(tuning).map_err(|e| format!("RAW Develop preview develop failed: {e}"))?;
     Ok(((dev.width, dev.height) == (pw, ph)).then(|| (raw.document_pixels(&dev.rgb), dev.white_balance)))
 }
 
