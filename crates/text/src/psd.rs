@@ -335,6 +335,23 @@ mod paragraph_run_tests {
         }
     }
 
+    /// Past the importer's run limit, one run per paragraph would drop later styles on reopen;
+    /// the model's runs are written as they are instead.
+    #[test]
+    fn paragraph_runs_over_the_import_limit_keep_every_style() {
+        let first = "x\n".repeat(MAX_ENGINE_RUNS);
+        let mut l = layer(&format!("{first}last"), TextShape::Point);
+        l.paragraphs = vec![
+            ParagraphRun { len: first.len(), style: ParagraphStyle { align: TextAlign::Center, ..Default::default() } },
+            ParagraphRun { len: 4, style: ParagraphStyle { align: TextAlign::Right, ..Default::default() } },
+        ];
+        let (lens, sheets) = paragraph_runs(&l);
+        assert_eq!(lens, [2 * MAX_ENGINE_RUNS as i64, 5]);
+        assert_eq!(sheets.len(), 2);
+        let back = text_layer_from_tysh(&build_tysh(&l, 72.0, None), 72.0).unwrap();
+        assert_eq!(back.paragraphs.last().map(|p| p.style.align), Some(TextAlign::Right));
+    }
+
     #[test]
     fn single_paragraph_text_writes_one_paragraph_run() {
         let (lens, sheets) = paragraph_runs(&layer("Line one", TextShape::Point));

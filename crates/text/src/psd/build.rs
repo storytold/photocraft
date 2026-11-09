@@ -1,5 +1,7 @@
 use super::edit::{TEMPLATE_NODES, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes};
-use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
+use super::import::{
+    MAX_ENGINE_RUNS, OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real,
+};
 use super::{
     AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Id, Kerning, Orientation, ParagraphStyle, TextAlign, TextLayer, TextShape,
     TySh, UnicodeString, ed, engine_data, enum_value, enumv, parse_tysh, write_tysh,
@@ -935,8 +937,7 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         sruns.push(E::Dict(vec![("StyleSheet".into(), E::Dict(vec![("StyleSheetData".into(), data)]))]));
         slens.push(E::Int(n as i64));
     }
-    let mut pruns = Vec::new();
-    let mut plens = Vec::new();
+    let mut psplit = Vec::new();
     let mut at = 0usize;
     for (i, p) in paras.iter().enumerate() {
         // The last run also covers the terminal `\r`.
@@ -958,6 +959,18 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
                 *first += tail;
             }
         }
+        psplit.push((sheet, lens));
+    }
+    // Past the importer's run limit, later runs would be dropped on reopen; keep one run per
+    // model run then, so every paragraph style survives.
+    if psplit.iter().map(|(_, l)| l.len()).sum::<usize>() > MAX_ENGINE_RUNS {
+        for (_, lens) in &mut psplit {
+            *lens = vec![lens.iter().sum()];
+        }
+    }
+    let mut pruns = Vec::new();
+    let mut plens = Vec::new();
+    for (sheet, lens) in psplit {
         for n in lens {
             pruns.push(sheet.clone());
             plens.push(E::Int(n));
