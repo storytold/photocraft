@@ -87,7 +87,7 @@ fn the_shield_shows_with_a_quad_follows_a_drag_and_goes_away() {
     let mut app = app();
     assert_eq!(painted(&app), 0, "no quad: no shield");
     // While the first box is dragged.
-    app.pcrop.drag = Some(Drag::New { start: [20.0, 20.0], cur: [180.0, 130.0] });
+    app.pcrop.drag = Some(Drag::New { start: [20.0, 20.0], cur: [180.0, 130.0], square: false, centred: false });
     assert!(painted(&app) > 0, "the shield follows the box being dragged");
     app.pcrop.drag = None;
     app.ui.perspective_crop = Some([[20.0, 20.0], [180.0, 20.0], [180.0, 130.0], [20.0, 130.0]]);

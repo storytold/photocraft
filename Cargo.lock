@@ -8903,7 +8903,7 @@ dependencies = [
  "photocraft-psd",
  "photocraft-raster",
  "rayon",
- "skrifa 0.44.0",
+ "skrifa 0.47.0",
 ]
 
 [[package]]

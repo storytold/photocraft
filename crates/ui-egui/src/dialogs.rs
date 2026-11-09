@@ -536,16 +536,21 @@ fn button_row(
     (outcome, apply_requested)
 }
 
-/// A prompt that asks before a command runs: deleting a layer from the Layers panel's trash or a
-/// note (#11788), or the subject model's offer.
+/// A prompt that asks before a command runs: deleting a layer from the Layers panel's trash, a
+/// note (#11788) or all notes (#11791), or the subject model's offer.
 fn is_short_prompt(fields: &serde_json::Map<String, Value>) -> bool {
-    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields) || crate::subject_model_prompt::owns(fields)
+    crate::delete_layer_prompt::owns(fields)
+        || crate::analysis_ui::owns_delete_note(fields)
+        || crate::analysis_ui::owns_clear_notes(fields)
+        || crate::subject_model_prompt::owns(fields)
 }
 
 /// The body of a prompt [`is_short_prompt`] names.
 fn short_prompt_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
     if crate::subject_model_prompt::owns(fields) {
         crate::subject_model_prompt::body(ui, fields);
+    } else if crate::analysis_ui::owns_clear_notes(fields) {
+        crate::analysis_ui::clear_notes_body(ui);
     } else if crate::analysis_ui::owns_delete_note(fields) {
         crate::analysis_ui::delete_note_body(ui, fields);
     } else {
@@ -557,6 +562,8 @@ fn short_prompt_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Val
 fn short_prompt_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
     if crate::subject_model_prompt::owns(fields) {
         crate::subject_model_prompt::confirm(app, fields)
+    } else if crate::analysis_ui::owns_clear_notes(fields) {
+        crate::analysis_ui::confirm_clear_notes(app, fields)
     } else if crate::analysis_ui::owns_delete_note(fields) {
         crate::analysis_ui::confirm_delete_note(app, fields)
     } else {
@@ -911,6 +918,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::delete_layer_prompt::owns,
     crate::subject_model_prompt::owns,
     crate::analysis_ui::owns_delete_note,
+    crate::analysis_ui::owns_clear_notes,
     crate::disk_change_prompt::owns,
     crate::actions::owns_stop_message,
     crate::actions::owns_insert_stop,
