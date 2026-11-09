@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn reached_lasts_only_the_pass_that_applied_the_focus() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("field");
+        let id = egui::Id::unique("field");
         let mut seen = Vec::new();
         for apply in [true, false, false] {
             ctx.run_ui(Default::default(), |ui| {
