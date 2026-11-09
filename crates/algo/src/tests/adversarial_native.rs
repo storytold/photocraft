@@ -1,6 +1,49 @@
 use super::*;
 use photocraft_raster::{Interrupt, Surface};
 
+#[test]
+/// Checked and optional Average replay publish the requested owner area beyond the document canvas.
+fn average_dispatch_uses_owner_extent_for_off_canvas_mean_and_writes() {
+    let canvas = Rect::new(0, 0, 2, 1);
+    let extent = Rect::new(-2, 0, 4, 1);
+    let area = Rect::new(-2, 0, 3, 1);
+    let mut source = Surface::new(PixelFormat::RGBA32F);
+    for x in -2..4 {
+        source.write_pixel(x, 0, &[(x + 2) as f32, 0.25, 0.5, 0.5]);
+    }
+    let expected = average::apply_preserving_alpha_with(&source, area, extent, None, &Interrupt::NONE).unwrap();
+    assert_eq!(expected.pixel(-2, 0), vec![2., 0.25, 0.5, 0.5]);
+    assert_eq!(expected.pixel(3, 0), source.pixel(3, 0), "outside the requested publication area");
+    let params = FilterParams::Average;
+    let actual = try_apply_in_with(&source, &params, area, canvas, None, extent, &Interrupt::NONE).unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(apply_in_with(&source, &params, area, canvas, None, extent, &Interrupt::NONE).unwrap(), expected);
+}
+
+#[test]
+/// HDR adaptation reads the complete owner while area restricts publication, including off-canvas pixels.
+fn hdr_dispatch_uses_owner_extent_for_adaptation_and_off_canvas_writes() {
+    let canvas = Rect::new(0, 0, 2, 1);
+    let extent = Rect::new(-2, -1, 4, 2);
+    let area = Rect::new(-1, 0, 3, 1);
+    let mut source = Surface::new(PixelFormat::RGBA32F);
+    for y in -1..2 {
+        for x in -2..4 {
+            source.write_pixel(x, y, &[if x == -2 { 16. } else { 0.2 + 0.3 * (x + 2) as f32 }, 0.1 + 0.12 * (y + 1) as f32, 0.4, 1.]);
+        }
+    }
+    let options = tone::HdrToning { radius: 1., ..Default::default() };
+    let expected = tone::checked_hdr::apply_with(&source, &options, area, extent, None, &Interrupt::NONE).unwrap();
+    let canvas_only = tone::checked_hdr::apply_with(&source, &options, area, canvas, None, &Interrupt::NONE).unwrap();
+    assert_ne!(expected.pixel(-1, 0), source.pixel(-1, 0), "off-canvas publication must actually change pixels");
+    assert_ne!(expected.pixel(0, 0), canvas_only.pixel(0, 0), "off-canvas owner samples must affect adaptation inside the canvas");
+    assert_eq!(expected.pixel(-2, -1), source.pixel(-2, -1), "area still limits publication");
+    let params = FilterParams::HdrToning(options);
+    let actual = try_apply_in_with(&source, &params, area, canvas, None, extent, &Interrupt::NONE).unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(apply_in_with(&source, &params, area, canvas, None, extent, &Interrupt::NONE).unwrap(), expected);
+}
+
 /// The fallible dispatcher retains native failures instead of converting them into missing output.
 #[test]
 fn checked_dispatch_preserves_parameters_samples_limits_and_cancellation() {

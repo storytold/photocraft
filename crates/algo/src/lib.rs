@@ -1199,11 +1199,11 @@ fn checked_native_filter(
 ) -> Option<Result<Surface, ApplyError>> {
     let domain = extent.unwrap_or(bounds);
     Some(match params {
-        FilterParams::HdrToning(options) => tone::checked_hdr::apply_with(surface, options, area, bounds, selection, ctl).map_err(ApplyError::Hdr),
+        FilterParams::HdrToning(options) => tone::checked_hdr::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Hdr),
         FilterParams::Percentile(options) => rank::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
         FilterParams::ChannelNoise(options) => channel_noise::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
         FilterParams::Convolution(options) => convolution::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
-        FilterParams::Average => average::apply_preserving_alpha_with(surface, area, bounds, selection, ctl).map_err(ApplyError::Native),
+        FilterParams::Average => average::apply_preserving_alpha_with(surface, area, domain, selection, ctl).map_err(ApplyError::Native),
         _ => coverage::apply_with(surface, coverage_operation(params)?, area, domain, selection, ctl).map_err(ApplyError::Native),
     })
 }

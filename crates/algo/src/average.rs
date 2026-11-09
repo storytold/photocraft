@@ -50,6 +50,15 @@ impl Mean {
 fn check(ctl: &Interrupt) -> Result<(), Error> {
     ctl.check().map_err(|_| Error::Cancelled)
 }
+
+/// Selection coverage saturates like the ordinary filter path; nonfinite masks remain invalid.
+fn selection_coverage(selection: Option<&Surface>, x: i32, y: i32) -> Result<f32, Error> {
+    let coverage = selection.map_or(1., |surface| surface.sample_channel(x, y, 0));
+    if !coverage.is_finite() {
+        return Err(Error::NonFiniteSample);
+    }
+    Ok(coverage.clamp(0., 1.))
+}
 /// Average a bounded native area using fallible row storage and publish only finite, uncancelled selection-mixed
 /// output.
 pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&Surface>, ctl: &Interrupt) -> Result<Surface, Error> {
@@ -75,7 +84,7 @@ fn apply_policy(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&
     }
     let w = area.width() as usize;
     let h = area.height() as usize;
-    if w > 65536 || h > 65536 || w.checked_mul(h).is_none_or(|n| n > crate::coverage::MAX_PIXELS) {
+    if w.checked_mul(h).is_none_or(|n| n > crate::coverage::MAX_PIXELS) {
         return Err(Error::InvalidGeometry);
     }
     let tile = i64::from(photocraft_geom::TILE_SIZE);
@@ -103,8 +112,8 @@ fn apply_policy(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&
         surface.read_region_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
         for (x, pixel) in (area.x0..area.x1).zip(row.chunks_exact(n)) {
             let p = to_rgba(&surface.format(), pixel);
-            let k = selection.map_or(1., |s| s.sample_channel(x, y, 0));
-            if p.into_iter().any(|v| !v.is_finite()) || !k.is_finite() || !(0.0..=1.0).contains(&k) {
+            let k = selection_coverage(selection, x, y)?;
+            if p.into_iter().any(|v| !v.is_finite()) {
                 return Err(Error::NonFiniteSample);
             }
             if preserve_alpha {
@@ -123,7 +132,7 @@ fn apply_policy(surface: &Surface, area: Rect, bounds: Rect, selection: Option<&
         check(ctl)?;
         surface.read_region_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
         for (x, dst) in (area.x0..area.x1).zip(row.chunks_exact_mut(n)) {
-            let k = selection.map_or(1., |s| s.sample_channel(x, y, 0));
+            let k = selection_coverage(selection, x, y)?;
             if k == 0. {
                 continue;
             }
@@ -193,9 +202,7 @@ pub(crate) fn kernel(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx) -> 
 /// Raw native images remain bounded and retain identity fallback on rejected work.
 fn run_image_policy(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx, preserve_alpha: bool) -> Vec<f32> {
     let format = photocraft_color::PixelFormat::new(ctx.mode, photocraft_color::SampleType::F32, ctx.alpha);
-    let valid = [src.rect, out].into_iter().all(|r| {
-        r.width() <= 65536 && r.height() <= 65536 && (r.width() as usize).checked_mul(r.height() as usize).is_some_and(|n| n <= crate::coverage::MAX_PIXELS)
-    });
+    let valid = [src.rect, out].into_iter().all(|r| (r.width() as usize).checked_mul(r.height() as usize).is_some_and(|n| n <= crate::coverage::MAX_PIXELS));
     if !valid
         || src.ch != format.channels()
         || (src.rect.width() as usize).checked_mul(src.rect.height() as usize).and_then(|n| n.checked_mul(src.ch)) != Some(src.data.len())
