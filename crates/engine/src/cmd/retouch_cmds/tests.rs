@@ -2723,3 +2723,19 @@ fn live_history_and_pattern_strokes_stop_at_the_canvas_edge() {
         assert_eq!(bounds(true), bounds(false), "{cmd}: the live stroke stays where it was drawn");
     }
 }
+
+/// `smoothing` (the options bar's %) overrides the session brush's amount and keeps its other
+/// options; without it the stroke takes the session brush's. The UI sends 0 for a ⇧-click line (#11887).
+#[test]
+fn stroke_brush_takes_the_smoothing_param() {
+    let mut base = BrushSettings::default();
+    base.smoothing.amount = 0.6;
+    base.smoothing.pulled_string = true;
+    assert_eq!(stroke_brush(&base, &json!({})).smoothing, base.smoothing);
+    let line = stroke_brush(&base, &json!({"smoothing": 0}));
+    assert_eq!(line.smoothing.amount, 0.0);
+    assert!(line.smoothing.pulled_string);
+    assert_eq!(stroke_brush(&base, &json!({"smoothing": 25})).smoothing.amount, 0.25);
+    assert_eq!(stroke_brush(&base, &json!({"smoothing": 1e9})).smoothing.amount, 1.0);
+    assert_eq!(stroke_brush(&base, &json!({"smoothing": -5})).smoothing.amount, 0.0);
+}
