@@ -1,4 +1,4 @@
-//! Bounded Average policies: Photoshop preserves coverage; native import keeps its existing weighted contract.
+//! Bounded alpha-weighted averaging and Photoshop's coverage-preserving Average.
 pub use crate::coverage::Error;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface, from_rgba_into, to_rgba};
