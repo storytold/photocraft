@@ -3,7 +3,7 @@
 use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::{NodeT, Queryable, by};
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -39,6 +39,15 @@ fn bar(tool: Tool, lang: Lang, width: f32, scale: f32, narrow: bool) -> Harness<
 
 fn control<'a>(h: &'a Harness<'static, PhotocraftApp>, role: Role, label: &str) -> egui_kittest::Node<'a> {
     h.query_all_by_role(role).find(|n| n.accesskit_node().label().as_deref() == Some(label)).unwrap_or_else(|| panic!("missing {role:?} {label:?}"))
+}
+
+fn control_name(h: &Harness<'static, PhotocraftApp>, lang: Lang, role: Role, label: &str) -> String {
+    // The existing scrub-caption link only names fields laid out left to right.
+    if role == Role::SpinButton && lang.dir() == crate::i18n::Dir::Rtl {
+        h.get_by_role(role).accesskit_node().label().unwrap_or_default()
+    } else {
+        tr(lang, label).to_owned()
+    }
 }
 
 fn hover(h: &mut Harness<'static, PhotocraftApp>, role: Role, label: &str, tip: &str) {
@@ -77,13 +86,7 @@ fn hover_uses_the_active_catalog_or_english_fallback() {
         for tool in [Tool::Burn, Tool::Dodge] {
             for (role, label, tip) in CONTROLS {
                 let mut h = bar(tool, lang, 1600.0, 1.0, false);
-                // The existing scrub-caption link only names fields laid out left to right.
-                // In RTL, select the sole numeric control rather than assuming that link exists.
-                let name = if role == Role::SpinButton && lang.dir() == crate::i18n::Dir::Rtl {
-                    h.get_by_role(role).accesskit_node().label().unwrap_or_default()
-                } else {
-                    tr(lang, label).to_owned()
-                };
+                let name = control_name(&h, lang, role, label);
                 hover(&mut h, role, &name, tr(lang, tip));
             }
         }
@@ -179,7 +182,8 @@ fn render_tooltips_for_visual_inspection() {
                 PhotocraftApp::setup_context(&h.ctx, theme);
                 h.run_steps(4);
                 h.render().unwrap().save(out.join(format!("{theme:?}-{tool:?}-{i}-before.png"))).unwrap();
-                hover(&mut h, role, tr(lang, label), tr(lang, tip));
+                let name = control_name(&h, lang, role, label);
+                hover(&mut h, role, &name, tr(lang, tip));
                 h.render().unwrap().save(out.join(format!("{theme:?}-{tool:?}-{i}-hover.png"))).unwrap();
             }
         }
@@ -187,8 +191,98 @@ fn render_tooltips_for_visual_inspection() {
     for tool in [Tool::Burn, Tool::Dodge] {
         for (i, (role, label, tip)) in CONTROLS.into_iter().enumerate() {
             let mut h = bar(tool, lang, 480.0, 3.0, true);
-            hover(&mut h, role, tr(lang, label), tr(lang, tip));
+            let name = control_name(&h, lang, role, label);
+            hover(&mut h, role, &name, tr(lang, tip));
             h.render().unwrap().save(out.join(format!("narrow-3x-{tool:?}-{i}.png"))).unwrap();
+            crate::theme::set_ui_font_size(&h.ctx, photocraft_engine::prefs::UiFontSize::Large);
+            h.run_steps(8);
+            let name = control_name(&h, lang, role, label);
+            hover(&mut h, role, &name, tr(lang, tip));
+            h.render().unwrap().save(out.join(format!("narrow-3x-large-font-{tool:?}-{i}.png"))).unwrap();
+        }
+    }
+}
+
+#[test]
+fn tooltip_descriptions_do_not_create_anonymous_accessibility_nodes() {
+    for tool in [Tool::Burn, Tool::Dodge] {
+        let mut h = bar(tool, Lang::EN, 1600.0, 1.0, false);
+        for (role, label, tip) in CONTROLS {
+            for node in h.query_all(by().predicate(|n| n.description().as_deref() == Some(tip))) {
+                assert_eq!(node.accesskit_node().role(), role, "{label}: tooltip metadata belongs on the named control");
+                assert_eq!(node.accesskit_node().label().as_deref(), Some(label));
+            }
+        }
+        assert_eq!(h.query_all_by_role(Role::CheckBox).count(), 1);
+        h.get_by_role_and_label(Role::CheckBox, "Protect Tones").focus();
+        h.run_steps(2);
+        let focused = h.ctx.memory(|m| m.focused());
+        hover(&mut h, CONTROLS[0].0, CONTROLS[0].1, CONTROLS[0].2);
+        assert_eq!(h.ctx.memory(|m| m.focused()), focused);
+        h.key_press(egui::Key::Space);
+        h.run_steps(2);
+        assert!(!h.state().ui.tool_options.protect_tones, "the named checkbox still responds to Space");
+    }
+}
+
+#[test]
+fn tooltip_text_fits_with_every_ui_font_size_in_a_narrow_scaled_bar() {
+    use photocraft_engine::prefs::UiFontSize;
+    for size in [UiFontSize::Tiny, UiFontSize::Small, UiFontSize::Medium, UiFontSize::Large] {
+        for lang in [Lang::EN, Lang::from_code("de").unwrap()] {
+            for tool in [Tool::Burn, Tool::Dodge] {
+                for (role, label, tip) in CONTROLS {
+                    let mut h = bar(tool, lang, 480.0, 3.0, true);
+                    crate::theme::set_ui_font_size(&h.ctx, size);
+                    h.run_steps(8);
+                    hover(&mut h, role, tr(lang, label), tr(lang, tip));
+                    let text = h.get_by_role_and_label(Role::Label, tr(lang, tip)).rect();
+                    assert!(h.ctx.content_rect().contains_rect(text), "{lang:?} {label} at {size:?}: tooltip text must remain readable: {text:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn both_checkbox_mouse_targets_show_the_tooltip_and_toggle() {
+    for tool in [Tool::Burn, Tool::Dodge] {
+        let mut h = bar(tool, Lang::EN, 1600.0, 1.0, false);
+        let label = control(&h, CONTROLS[2].0, CONTROLS[2].1).rect();
+        // The shared checkbox draws a 14 pt box, then a 6 pt gap before its named label.
+        let box_center = egui::pos2(label.left() - 13.0, label.center().y);
+        for (i, at) in [box_center, label.center()].into_iter().enumerate() {
+            h.hover_at(at);
+            h.run_steps(60);
+            assert!(h.query_by_role_and_label(Role::Label, CONTROLS[2].2).is_some());
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+            h.run_steps(3);
+            assert_eq!(h.state().ui.tool_options.protect_tones, i == 1);
+        }
+    }
+}
+
+#[test]
+fn exposure_keeps_its_bounds_and_text_entry_after_hover() {
+    for tool in [Tool::Burn, Tool::Dodge] {
+        for key in [egui::Key::Enter, egui::Key::Tab] {
+            for (typed, want) in [("1", 1.0), ("100", 100.0), ("0", 1.0), ("150", 100.0), ("abc", 50.0)] {
+                let mut h = bar(tool, Lang::EN, 1600.0, 1.0, false);
+                hover(&mut h, CONTROLS[1].0, CONTROLS[1].1, CONTROLS[1].2);
+                control(&h, CONTROLS[1].0, CONTROLS[1].1).click();
+                h.run_steps(2);
+                h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+                h.event(egui::Event::Text(typed.into()));
+                h.run_steps(2);
+                let focused = h.ctx.memory(|m| m.focused());
+                hover(&mut h, CONTROLS[0].0, CONTROLS[0].1, CONTROLS[0].2);
+                assert_eq!(h.ctx.memory(|m| m.focused()), focused, "hovering Range does not leave the Exposure editor");
+                h.key_press(key);
+                h.run_steps(4);
+                assert_eq!(h.state().ui.tool_options.exposure, want, "{tool:?}: {typed}, {key:?}");
+            }
         }
     }
 }
@@ -202,6 +296,26 @@ fn tooltips_remain_reachable_in_narrow_bars_at_supported_scales() {
                 hover(&mut h, role, label, tip);
                 let tooltip = h.get_by_label(tip).rect();
                 assert!(h.ctx.content_rect().contains_rect(tooltip), "tooltip fits at {scale}x: {tooltip:?}");
+                control(&h, role, label).click();
+                h.run_steps(3);
+                match role {
+                    Role::ComboBox => {
+                        assert!(egui::Popup::is_any_open(&h.ctx), "Range still opens at {scale}x");
+                        h.get_by_label("Highlights").click();
+                        h.run_steps(3);
+                        assert_eq!(h.state().ui.tool_options.tone_range, "highlights");
+                    }
+                    Role::SpinButton => {
+                        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+                        h.event(egui::Event::Text("37".into()));
+                        h.run_steps(2);
+                        h.key_press(egui::Key::Enter);
+                        h.run_steps(3);
+                        assert_eq!(h.state().ui.tool_options.exposure, 37.0, "Exposure remains editable at {scale}x");
+                    }
+                    Role::CheckBox => assert!(!h.state().ui.tool_options.protect_tones, "Protect Tones still toggles at {scale}x"),
+                    _ => unreachable!("the three shared Burn/Dodge controls"),
+                }
             }
         }
     }
