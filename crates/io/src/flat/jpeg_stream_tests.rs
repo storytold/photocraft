@@ -310,3 +310,75 @@ fn the_tiles_are_admitted_against_free_memory_first() {
     assert!(e.contains("not enough memory"), "{e}");
     assert!(import_jpeg_streamed_with("t", &bytes, &opts, &Interrupt::NONE, 0, || None).unwrap().is_some(), "unknown free memory is not a refusal");
 }
+
+/// Mutated files (cut, bits flipped, bytes overwritten, spans deleted or repeated) never make
+/// the stream panic, and it opens every file the whole-image path opens, at the same size and with
+/// at least its warnings. It opens some the whole-image path refuses (`zune-jpeg` gives up on
+/// stray bytes between marker segments, which libjpeg skips with a warning), and warns about
+/// damage `zune-jpeg` passes over.
+#[test]
+fn mutated_files_open_whenever_the_whole_image_does() {
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+    let inputs = [
+        Jpeg { restart: 33, ..Jpeg::new(257, 130, ColorType::Rgb) }.bytes(),
+        Jpeg { sampling: SamplingFactor::R_4_4_4, ..Jpeg::new(200, 90, ColorType::Rgb) }.bytes(),
+        Jpeg { restart: 5, ..Jpeg::new(120, 64, ColorType::CmykAsYcck) }.bytes(),
+        Jpeg { restart: 15, ..Jpeg::new(120, 64, ColorType::Luma) }.bytes(),
+    ];
+    let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+    let (mut both, mut neither, mut only_streamed) = (0, 0, 0);
+    for (n, original) in inputs.iter().enumerate() {
+        for case in 0..250 {
+            let mut b = original.clone();
+            match rng.below(5) {
+                0 => b.truncate(rng.below(b.len())),
+                1 => {
+                    for _ in 0..1 + rng.below(6) {
+                        let at = rng.below(b.len());
+                        b[at] ^= 1 << rng.below(8);
+                    }
+                }
+                2 => {
+                    let at = rng.below(b.len());
+                    b[at] = rng.next() as u8;
+                }
+                3 => {
+                    let at = rng.below(b.len());
+                    let len = rng.below(64).min(b.len() - at);
+                    b.drain(at..at + len);
+                }
+                _ => {
+                    let at = rng.below(b.len());
+                    let len = rng.below(256).min(b.len() - at);
+                    let span = b[at..at + len].to_vec();
+                    let to = rng.below(b.len());
+                    b.splice(to..to, span);
+                }
+            }
+            let what = format!("input {n} case {case}");
+            match (forced(&b), whole(&b)) {
+                (Ok(s), Ok(w)) => {
+                    assert_eq!(s.document.size, w.document.size, "{what}");
+                    assert!(w.warnings.iter().all(|x| s.warnings.contains(x)), "{what}: {:?} against {:?}", s.warnings, w.warnings);
+                    both += 1;
+                }
+                (Err(_), Err(_)) => neither += 1,
+                (Ok(_), Err(_)) => only_streamed += 1,
+                (Err(e), Ok(_)) => panic!("{what}: the whole image opens, the stream refuses: {e}"),
+            }
+        }
+    }
+    eprintln!("{both} open both ways, {neither} neither, {only_streamed} only streamed");
+    assert!(both > 500 && neither > 30, "{both} {neither} {only_streamed}");
+}
