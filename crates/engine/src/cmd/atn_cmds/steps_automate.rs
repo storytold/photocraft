@@ -82,14 +82,21 @@ fn native(p: &Value) -> Option<Fit> {
     Some(Fit { width: side("width")?, height: side("height")?, dont_enlarge })
 }
 
+/// The recorded descriptor carried in `SOURCE`, when it decodes to the measured form.
+fn source(p: &Value) -> Option<(Descriptor, Fit)> {
+    let d = Descriptor::from_bytes(&photocraft_paint::tile::b64_decode(jstr(p, SOURCE)?)?).ok()?;
+    let fit = recorded(&d)?;
+    Some((d, fit))
+}
+
 /// Save the recorded descriptor while the step still holds its settings; once they were
-/// changed, write the new settings with the recorded message.
+/// changed, write the new settings with the recorded message. The settings decide whether the
+/// step saves: a recorded descriptor that is missing or damaged only loses its message.
 pub(super) fn fit_image_to(_: &str, p: &Value) -> Option<Descriptor> {
     let fit = native(p)?;
-    let Some(source) = jstr(p, SOURCE) else { return Some(canonical(&fit)) };
-    let source = Descriptor::from_bytes(&photocraft_paint::tile::b64_decode(source)?).ok()?;
-    if recorded(&source)? == fit {
-        return Some(source);
-    }
-    Some(descriptor(&fit, source.get("Msge")?.clone()))
+    Some(match source(p) {
+        Some((d, recorded)) if recorded == fit => d,
+        Some((d, _)) => descriptor(&fit, d.get("Msge")?.clone()),
+        None => canonical(&fit),
+    })
 }

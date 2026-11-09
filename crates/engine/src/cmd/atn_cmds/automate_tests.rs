@@ -172,3 +172,14 @@ fn changed_settings_save_with_the_recorded_message() {
     p["dontEnlarge"] = json!(false);
     assert_eq!(export_item(FIT_IMAGE, &p, "S").and_then(|item| item.descriptor), Some(recorded("Recorded message", 500.0, 900.0, false)));
 }
+
+/// A damaged recorded descriptor doesn't stop a step with valid settings from saving: it saves
+/// as a step recorded in PhotoCraft would (CodeRabbit review on steps_automate.rs:87-95).
+#[test]
+fn a_damaged_recorded_descriptor_saves_the_settings() {
+    let other_event = photocraft_paint::tile::b64_encode(&desc("null").with("Rds ", px(2.0)).to_bytes());
+    for damaged in [json!("not base64!"), json!(photocraft_paint::tile::b64_encode(b"not a descriptor")), json!(other_event), json!(7), json!(null)] {
+        let p = json!({"width": 800, "height": 600, "dontEnlarge": true, SOURCE: damaged});
+        assert_eq!(export_item(FIT_IMAGE, &p, "S").and_then(|item| item.descriptor), Some(recorded("", 800.0, 600.0, true)), "{p}");
+    }
+}
