@@ -668,7 +668,8 @@ fn agent_space_right_click_opens_the_hand_view_menu() {
         let click = |space, command| json!({"space": space, "command": command, "button": "secondary", "events": [{"kind":"down","x":8,"y":8},{"kind":"up","x":8,"y":8}]});
         assert_eq!(call(&mut app, &ctx, "ui.pointer", click(true, false))["ok"], true);
         let menu = app.ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: no menu"));
-        assert!(crate::canvas_tool_menu::rows(&menu) == crate::canvas_tool_menu::VIEW_MENU, "{tool:?}");
+        assert!(crate::canvas_tool_menu::rows(&menu) == crate::canvas_tool_menu::HAND_MENU, "{tool:?}");
+        assert_eq!(menu.under, Some(tool), "{tool:?}");
         assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"view.twoHundredPercent"}))["ok"], true, "{tool:?}");
         assert_eq!(app.ui.views[0].zoom, 2.0, "{tool:?}");
         assert_eq!(app.ui.tool, tool);

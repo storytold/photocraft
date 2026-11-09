@@ -51,6 +51,7 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,

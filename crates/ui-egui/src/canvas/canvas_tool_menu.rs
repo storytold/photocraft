@@ -29,6 +29,10 @@ pub struct CanvasToolMenu {
     /// Zoom Out keep under the pointer.
     #[serde(default)]
     pub anchor: Option<[f64; 2]>,
+    /// The selected tool when Space holds the Hand over it (`tool` is then the Hand): the menu
+    /// closes when that tool changes (#11271).
+    #[serde(default)]
+    pub under: Option<Tool>,
     /// Opened while a Type tool edits text: the text and type rows instead of the tool's actions.
     #[serde(default)]
     pub text: bool,
@@ -311,6 +315,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -758,6 +763,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         transform: true,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -842,6 +848,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         transform: false,
         pasteboard: true,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -876,6 +883,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: true,
@@ -943,8 +951,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if sampler_menu(menu) {
         return command == SAMPLER_DELETE && menu.sampler.is_some() && sampler_current(app, menu);
     }
-    // The view menu (Space's Hand over a path tool, #11271) keeps the View commands' own rules.
-    if menu.transform || menu.anchor.is_some() || !path_menu(menu.tool) {
+    if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
     }
     let Some(st) = app.session.active() else { return false };
@@ -1018,6 +1025,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text,
         type_layer,
         guide: false,
@@ -1032,8 +1040,8 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
 }
 
 /// Right-click with the Zoom or Hand tool at screen point `pos`, over document point `doc`: the
-/// view menu. The menu belongs to the selected tool, so it closes when that changes: with the
-/// Hand held by Space over another tool, the one underneath (#11271).
+/// view menu. With the Hand held by Space over another tool, it closes when that tool changes
+/// (#11271).
 pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2], doc: [f64; 2]) -> bool {
     if !is_view_tool(tool) || !pos.iter().all(|v| v.is_finite()) || !doc.iter().all(|v| v.is_finite()) {
         return false;
@@ -1042,13 +1050,14 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
     app.ui.layer_menu = None;
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
-        tool: app.ui.tool,
+        tool,
         has_selection: false,
         has_path: false,
         path_name: None,
         transform: false,
         pasteboard: false,
         anchor: Some(doc),
+        under: (tool != app.ui.tool).then_some(app.ui.tool),
         text: false,
         type_layer: false,
         guide: false,
@@ -1316,7 +1325,7 @@ fn menu_id() -> egui::Id {
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let Some(menu) = app.ui.canvas_tool_menu.clone() else { return };
     if ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        || app.ui.tool != menu.tool
+        || app.ui.tool != menu.under.unwrap_or(menu.tool)
         || (menu.transform && app.ui.transform.is_none())
         || (menu.text && app.ui.text_edit.is_none())
         || (menu.type_layer && app.ui.text_edit.is_some())
