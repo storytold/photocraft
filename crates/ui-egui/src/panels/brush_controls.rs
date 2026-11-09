@@ -35,6 +35,18 @@ pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraf
     }
 }
 
+/// The Eraser's Smoothing %: whole numbers 0..100 that say when a typed value was past them, for
+/// the reference's alert (#11938). Returns the field and whether to show the alert.
+pub(super) fn smoothing_field_alerting(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> (egui::Response, bool) {
+    let mut sm = b.smoothing.amount * 100.0;
+    let (r, alert) = widgets::value_field_whole_alerting(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, "%", width);
+    if r.changed() {
+        b.smoothing.enabled = true;
+        b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);
+    }
+    (r, alert)
+}
+
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
 pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> egui::Response {
     let mut sm = (b.smoothing.amount * 100.0).round();
@@ -57,12 +69,68 @@ pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::Br
         if brush {
             ui.label(egui::RichText::new(tl!("Smoothing Options")).strong());
         }
-        widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
-        widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
-        widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
-        widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
+        // At 0 % there is no smoothing to tune: the four are greyed and keep their values, as in
+        // the reference application (#11939). Rounded like the Smoothing field, so a value that
+        // shows as 0 % greys them too.
+        let on = (s.amount * 100.0).round() > 0.0;
+        ui.add_enabled_ui(on, |ui| {
+            widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
+            widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
+            widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
+            widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
+        });
     });
 }
+
+/// A Useful mixer brush combinations entry: its label and the Wet, Load and Mix it sets.
+type MixerCombination = (&'static str, Option<(f32, f32, f32)>);
+
+/// The Mixer Brush's Useful mixer brush combinations, in the reference's order: each entry's label
+/// and the Wet, Load and Mix (0..1) it sets. Custom, the first, sets nothing.
+pub(crate) const MIXER_COMBINATIONS: [MixerCombination; 13] = [
+    ("Custom", None),
+    ("Dry", Some((0.0, 0.5, 0.0))),
+    ("Dry, Light Load", Some((0.0, 0.05, 0.0))),
+    ("Dry, Heavy Load", Some((0.0, 1.0, 0.0))),
+    ("Moist", Some((0.1, 0.05, 0.5))),
+    ("Moist, Light Mix", Some((0.1, 0.05, 0.0))),
+    ("Moist, Heavy Mix", Some((0.1, 0.05, 1.0))),
+    ("Wet", Some((0.5, 0.5, 0.5))),
+    ("Wet, Light Mix", Some((0.5, 0.5, 0.0))),
+    ("Wet, Heavy Mix", Some((0.5, 0.5, 1.0))),
+    ("Very Wet", Some((1.0, 0.5, 0.5))),
+    ("Very Wet, Light Mix", Some((1.0, 0.5, 0.0))),
+    ("Very Wet, Heavy Mix", Some((1.0, 0.5, 1.0))),
+];
+
+/// The entries of [`MIXER_COMBINATIONS`] a separator line goes above: Dry, Moist, Wet, Very Wet.
+const MIXER_COMBINATION_GROUPS: [usize; 4] = [1, 4, 7, 10];
+
+/// Mixer Brush: the Useful mixer brush combinations dropdown (#11946). Picking an entry sets Wet,
+/// Load and Mix together (Flow stays) and keeps showing it, also after a value is typed; Custom
+/// sets nothing. `picked` is the entry shown.
+pub(super) fn mixer_combination_dropdown(
+    ui: &mut egui::Ui,
+    picked: &mut usize,
+    m: &mut photocraft_engine::paint::mixer::MixerSettings,
+) -> Option<egui::Response> {
+    const ID: &str = "mixer-combination";
+    let opts: Vec<(usize, &str)> = MIXER_COMBINATIONS.iter().enumerate().map(|(i, (label, _))| (i, *label)).collect();
+    let mut shown = (*picked).min(MIXER_COMBINATIONS.len() - 1);
+    let chosen =
+        widgets::dropdown_wheel_grouped(ui, ID, tl!("Useful mixer brush combinations"), &mut shown, &opts, 132.0, |i| MIXER_COMBINATION_GROUPS.contains(i)).0;
+    if let Some(&i) = chosen.last() {
+        *picked = i;
+        if let Some((wet, load, mix)) = MIXER_COMBINATIONS[i].1 {
+            (m.wet, m.load, m.mix) = (wet, load, mix);
+        }
+    }
+    ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new(ID)))
+}
+
+#[cfg(test)]
+#[path = "../mixer_blend_combination_tests.rs"]
+mod mixer_blend_combination_tests;
 
 /// Mixer Brush: the Current Brush Load swatch shows the paint the next stroke starts with (an
 /// empty swatch when the brush is clean). Its menu holds Load Brush and Clean Brush.
@@ -139,3 +207,7 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../smoothing_options_greyed_tests.rs"]
+mod smoothing_options_greyed_tests;
