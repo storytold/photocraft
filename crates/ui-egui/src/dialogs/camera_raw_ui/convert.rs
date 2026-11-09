@@ -112,30 +112,34 @@ impl From<photocraft_raster::Surface> for Source {
 
 /// The preview proxy developed from a raw's binned sensor data with the settings the document
 /// was developed with, as straight RGBA: the same pixels [`box_proxy`] reads from the document,
-/// up to the binning. `None` when it can't be developed or its size is not `pw`×`ph`.
+/// up to the binning. `Ok(None)` when its size is not `pw`×`ph` (a canvas changed since); `Err`
+/// when it can't be developed, as Open would fail to.
 pub(super) fn raw_proxy(
     raw: &crate::camera_raw_detail_ui::RawDetail,
     tuning: &photocraft_io::raw::RawTuning,
     pw: usize,
     ph: usize,
-) -> Option<(Vec<[f32; 4]>, bool)> {
-    let dev = raw.source.develop_proxy(tuning).ok().filter(|d| (d.width, d.height) == (pw, ph))?;
-    Some((raw.document_pixels(&dev.rgb), dev.white_balance))
+) -> Result<Option<(Vec<[f32; 4]>, bool)>, String> {
+    let dev = raw.source.develop_proxy(tuning).map_err(|e| format!("Camera Raw preview develop failed: {e}"))?;
+    Ok(((dev.width, dev.height) == (pw, ph)).then(|| (raw.document_pixels(&dev.rgb), dev.white_balance)))
 }
 
-/// The conversion from a raw develop's ProPhoto RGB to `doc`'s colours: `None` when the document
-/// still has them (kept, or its profile discarded by the Color Settings open policy), else the
-/// conversion the policy made, with Color Settings' intent and black point compensation.
-pub(super) fn raw_to_document(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<std::sync::Arc<photocraft_cms::Transform>> {
-    doc.icc_profile.as_ref()?;
+/// The conversion from a raw develop's ProPhoto RGB to `doc`'s colours: `Ok(None)` when the
+/// document still has them (kept, or its profile discarded by the Color Settings open policy),
+/// else the conversion the policy made, with Color Settings' intent and black point compensation.
+/// `Err` when that conversion can't be built: the sensor pixels can't be shown as the document's.
+pub(super) fn raw_to_document(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Result<Option<std::sync::Arc<photocraft_cms::Transform>>, String> {
+    if doc.icc_profile.is_none() {
+        return Ok(None);
+    }
     let profile = photocraft_engine::color_cmds::document_profile(doc);
     let prophoto = photocraft_cms::Builtin::ProPhotoCompat.profile();
     if profile.same_colors(prophoto) {
-        return None;
+        return Ok(None);
     }
     let settings = &app.session.color.settings;
     let opts = photocraft_cms::TransformOptions { intent: settings.intent(), bpc: settings.bpc, ..Default::default() };
-    photocraft_cms::cached(prophoto, &profile, opts).ok()
+    photocraft_cms::cached(prophoto, &profile, opts).map(Some).map_err(|e| e.to_string())
 }
 
 pub(super) fn open_pixels(
@@ -164,7 +168,7 @@ pub(super) fn open_pixels(
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
     let developed = raw.as_ref().and_then(|r| {
         let as_opened = photocraft_io::raw::RawTuning { demosaic: r.demosaic, ..Default::default() };
-        raw_proxy(r, &as_opened, w.div_ceil(k), h.div_ceil(k)).map(|(px, _)| px)
+        raw_proxy(r, &as_opened, w.div_ceil(k), h.div_ceil(k)).ok().flatten().map(|(px, _)| px)
     });
     // A binned frame of another size can't stand in for the proxy; the raw still serves the
     // full-size preview and the tone curve.
@@ -261,6 +265,7 @@ pub(super) fn open_pixels(
         auto_proxy: Default::default(),
         pending: None,
         preview_error: None,
+        render_error: None,
         gpu,
         source_key: crate::camera_raw_gpu::source_key(),
         develop_ms: 0.0,

@@ -331,9 +331,11 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     // opened as a smart object is reviewed once it is that document, `jobs_ui::after_open`).
     if !smart_object && crate::camera_raw_ui::wants_open_dialog(app, &warnings) {
         // The Color Settings policy applies now, as to any open, so the dialog previews the
-        // pixels Open keeps.
-        let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
-        app.session.color.open_policy(&mut doc, ignore_exif);
+        // pixels Open keeps; once only (a background open already applied it).
+        if !policy_applied {
+            let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
+            app.session.color.open_policy(&mut doc, ignore_exif);
+        }
         crate::camera_raw_ui::hold_for_dialog(app, doc, &name, path.as_deref(), bytes.as_deref().map(Vec::as_slice), &warnings)?;
         return Ok(json!({"cameraRaw": true, "name": name}));
     }
@@ -476,13 +478,21 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         Ok(r) => {
             if accept {
                 if let Some(job) = r.get("job").and_then(Value::as_u64) {
-                    app.jobs.opens.push(crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(job), name: name.clone(), path, slot, order });
+                    app.jobs.opens.push(crate::jobs_ui::OpenTab {
+                        job: photocraft_engine::jobs::JobId(job),
+                        name: name.clone(),
+                        path,
+                        slot,
+                        order,
+                        bytes: None,
+                    });
                     app.jobs.focus = Some(photocraft_engine::jobs::JobId(job));
                     app.ui.chrome.home = None;
                     app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", &name)]);
                     app.ui.status_error = false;
                 } else if let Some(result) = r.get("result") {
-                    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(0), name: name.clone(), path: path.clone(), slot, order };
+                    let tab =
+                        crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(0), name: name.clone(), path: path.clone(), slot, order, bytes: None };
                     if let Err(e) = crate::jobs_ui::finish_open_tab(app, &tab, result) {
                         app.ui.status = e;
                         app.ui.status_error = true;

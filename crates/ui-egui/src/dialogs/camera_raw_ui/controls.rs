@@ -276,7 +276,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         d.curve_rect = None;
         d.scope.vectorscope_rect = None;
-        if let Err(e) = d.poll_render(ctx) {
+        let rendered = match d.render_error.take() {
+            Some(e) => Err(e),
+            None => d.poll_render(ctx),
+        };
+        if let Err(e) = rendered {
             d.preview_error = Some((e.clone(), d.preview_revision));
             app.ui.status = e;
             app.ui.status_error = true;
