@@ -160,6 +160,19 @@ impl CropTo {
         }
     }
 
+    /// What the choice keeps of the page, for the dialog's hint under Crop To (English source
+    /// string). A box the file doesn't set falls back as [`PdfPage`] fills it in.
+    pub fn description(self) -> &'static str {
+        match self {
+            CropTo::BoundingBox => "The smallest area around the page's visible content. Blank margins are cut off.",
+            CropTo::MediaBox => "The whole page at its full paper size, margins included.",
+            CropTo::CropBox => "The area a PDF viewer shows and prints. The whole page if the file sets none.",
+            CropTo::BleedBox => "The page plus the bleed printed past the trim line. The crop box if the file sets none.",
+            CropTo::TrimBox => "The finished page after trimming. The crop box if the file sets none.",
+            CropTo::ArtBox => "The meaningful content the author marked. The crop box if the file sets none.",
+        }
+    }
+
     /// The choice an id or label names, case-insensitively.
     pub fn from_id(s: &str) -> Option<CropTo> {
         let s = s.trim();

@@ -509,6 +509,24 @@ fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
+/// Under Crop To, a line says what the chosen box keeps, and follows the choice: Bounding Box cuts
+/// a page's blank margins, which surprised a tester expecting the page's full size (#11414).
+#[test]
+fn crop_to_says_what_the_chosen_box_keeps() {
+    let mut app = app();
+    app.open_bytes("multi.pdf", &three_pages()).expect("open");
+    let mut h = dialog_harness(app);
+    h.run_steps(4);
+    assert!(h.query_by_label(CropTo::BoundingBox.description()).is_some(), "the default's hint");
+    let id = dialog(h.state()).expect("dialog").id;
+    h.state_mut().ui.dialog_mut(id).expect("dialog").fields.insert("crop".into(), json!("mediaBox"));
+    h.run_steps(2);
+    assert!(h.query_by_label(CropTo::MediaBox.description()).is_some(), "the hint follows the choice");
+    assert!(h.query_by_label(CropTo::BoundingBox.description()).is_none(), "one hint at a time");
+    let hints: std::collections::HashSet<&str> = CropTo::ALL.iter().map(|c| c.description()).collect();
+    assert_eq!(hints.len(), CropTo::ALL.len(), "every choice has its own hint");
+}
+
 /// The password is masked as it is typed: the field never shows (or tells assistive technology)
 /// the characters.
 #[test]
