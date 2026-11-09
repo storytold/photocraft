@@ -301,7 +301,7 @@ mod tests {
         crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
         app.gpu.as_ref().expect("GPU canvas").wait_camera_raw_pass();
         let Some(gpu) = app.camera_raw.as_ref().and_then(|d| d.gpu.as_ref()) else {
-            eprintln!("skipping: the device can't run the Camera Raw pass");
+            eprintln!("skipping: the device can't run the RAW Develop pass");
             return;
         };
         // A layer about 450 times wider than tall has a 2 px tall proxy: its pyramid has one level.
