@@ -137,9 +137,14 @@ pub(crate) fn dock_is_empty(app: &PhotocraftApp) -> bool {
     dock_metrics(app).empty
 }
 
-/// A column's width as craft-ui displays it: `iconic_width` while collapsed to icons.
+/// craft-ui's iconic column width without a saved width, and its renderer's clamp.
+pub(crate) const ICONIC_WIDTH: f32 = 36.0;
+const ICONIC_MAX_WIDTH: f32 = 240.0;
+
+/// A column's width as craft-ui draws it: `iconic_width` (default 36, clamped to 36..240) while
+/// collapsed to icons, else the expanded width.
 fn display_width(column: &Column<String>) -> f32 {
-    if column.iconic { column.iconic_width.unwrap_or(column.width) } else { column.width }
+    if column.iconic { column.iconic_width.unwrap_or(ICONIC_WIDTH).clamp(ICONIC_WIDTH, ICONIC_MAX_WIDTH) } else { column.width }
 }
 
 /// The least displayed width of a column: the app's 220-point panel minimum, unless the column is
@@ -147,7 +152,13 @@ fn display_width(column: &Column<String>) -> f32 {
 const MIN_COLUMN_WIDTH: f32 = 220.0;
 
 fn column_minimum(column: &Column<String>) -> f32 {
-    if column.iconic || column.groups.iter().all(|group| group.panels.is_empty()) { 1.0 } else { MIN_COLUMN_WIDTH }
+    if column.iconic {
+        ICONIC_WIDTH
+    } else if column.groups.iter().all(|group| group.panels.is_empty()) {
+        1.0
+    } else {
+        MIN_COLUMN_WIDTH
+    }
 }
 
 fn columns_minimum(columns: &[Column<String>]) -> f32 {
@@ -159,7 +170,7 @@ fn columns_minimum(columns: &[Column<String>]) -> f32 {
 fn set_display_width(column: &mut Column<String>, width: f32) {
     let width = width.max(1.0);
     if column.iconic {
-        column.iconic_width = Some(width);
+        column.iconic_width = Some(width.clamp(ICONIC_WIDTH, ICONIC_MAX_WIDTH));
     } else {
         column.width = width;
     }

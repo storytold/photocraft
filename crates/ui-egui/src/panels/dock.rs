@@ -73,7 +73,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // An iconic-only dock keeps its narrow displayed width instead of being raised to the expanded
     // minimum; other docks keep the usual minimum and maximum.
     let iconic = metrics.iconic_only;
-    let min_visible = if iconic { 1.0 } else { min_dock };
+    let min_visible = if iconic { crate::panel_docking::ICONIC_WIDTH } else { min_dock };
     let mut stored = if iconic { metrics.width.clamp(1.0, max_dock) } else { metrics.width.clamp(min_dock, max_dock) };
     let drag_id = egui::Id::unique("dock-edge-drag");
     // Resizing is unavailable while locked, modal, or when the parent UI is disabled (screen
@@ -169,9 +169,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let color = if active { t.accent } else { t.separator };
             ui.ctx().layer_painter(line).vline(panel_edge, panel_rect.y_range(), Stroke::new(1.0, color));
             if response.drag_started() {
-                // The press origin, not the threshold-crossing frame: the dock then tracks the
-                // pointer exactly from where the user pressed.
-                let start_x = ui.ctx().input(|i| i.pointer.press_origin()).map_or(panel_edge, |pos| pos.x);
+                let start_x = response.interact_pointer_pos().map_or(panel_edge, |pos| pos.x);
                 ui.ctx().data_mut(|d| d.insert_temp(drag_id, (start_x, panel_w)));
             }
             if response.dragged() {

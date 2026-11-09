@@ -1476,10 +1476,45 @@ fn an_iconic_dock_column_takes_its_iconic_width() {
     assert!((dock_width(&app) - expanded).abs() < 0.5, "expanding restores the expanded width, got {} (was {expanded})", dock_width(&app));
 }
 
-/// An iconic-only dock keeps its narrow panel instead of reserving the expanded minimum; the rest
-/// of the window stays with the canvas.
+/// Collapsing a column through craft-ui's action leaves `iconic_width` unset; the dock must use
+/// the renderer's 36-point default rather than the expanded width.
 #[test]
 fn an_iconic_only_dock_keeps_its_narrow_panel() {
+    let mut app = app();
+    let layout = legacy(&app);
+    let panel = {
+        let root = layout.root.as_ref().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_ref(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns[0].groups[0].panels[0].clone()
+    };
+    let mut workspace = Workspace::new(layout);
+    workspace.apply(Action::SetIconic { panel, iconic: true }, permissions).expect("the column collapses");
+    {
+        let root = workspace.layout.root.as_ref().expect("root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_ref(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        assert!(columns[0].iconic);
+        assert!(columns[0].iconic_width.is_none(), "the collapse action leaves the stored width unset");
+    }
+    app.ui.docking = Some(workspace);
+    assert!((dock_width(&app) - 36.0).abs() < 0.5, "an unset iconic width displays 36 points, got {}", dock_width(&app));
+    let h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::ProMedium);
+    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
+    let drawn = crate::panels::dock_panel_width(&h.ctx);
+    assert!((drawn - (36.0 + rail)).abs() < 2.0, "the iconic panel is its 36 points plus the rail ({rail}), got {drawn}");
+    assert!(drawn < 120.0, "the iconic panel must not take the expanded minimum, got {drawn}");
+}
+
+/// Stored iconic widths are clamped to the renderer's 36..240 bounds.
+#[test]
+fn iconic_widths_follow_the_renderer_clamp() {
     let mut app = app();
     let mut layout = legacy(&app);
     {
@@ -1490,14 +1525,18 @@ fn an_iconic_only_dock_keeps_its_narrow_panel() {
         };
         let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
         columns[0].iconic = true;
-        columns[0].iconic_width = Some(36.0);
+        columns[0].iconic_width = Some(500.0);
     }
     app.ui.docking = Some(Workspace::new(layout));
-    let h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::ProMedium);
-    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
-    let panel = crate::panels::dock_panel_width(&h.ctx);
-    assert!((panel - (36.0 + rail)).abs() < 2.0, "the iconic panel is its 36 points plus the rail ({rail}), got {panel}");
-    assert!(panel < 120.0, "the iconic panel must not take the expanded minimum, got {panel}");
+    assert!((dock_width(&app) - 240.0).abs() < 0.5, "a stored 500 displays at most 240, got {}", dock_width(&app));
+    let root = app.ui.docking.as_mut().unwrap().layout.root.as_mut().unwrap();
+    let dock = match root {
+        Node::Split { second, .. } => second.as_mut(),
+        _ => root,
+    };
+    let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+    columns[0].iconic_width = Some(10.0);
+    assert!((dock_width(&app) - 36.0).abs() < 0.5, "a stored 10 displays at least 36, got {}", dock_width(&app));
 }
 /// Closing every panel leaves the dock with nothing in it, which the dock-edge layout uses to
 /// take no width for the column.
