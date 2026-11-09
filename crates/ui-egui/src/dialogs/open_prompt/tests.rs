@@ -23,6 +23,7 @@ fn held(name: &str, view: NativeInitialView) -> Held {
         order: None,
         question: None,
         policy_applied: true,
+        smart_object: false,
         color_settings: None,
         ignore_exif_profile_tag: None,
     }

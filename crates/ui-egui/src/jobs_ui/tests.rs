@@ -1438,6 +1438,7 @@ fn color_prompt_prepares_native_contents_before_admitting_the_document() {
             order: None,
             question: Some(json!({"missing": true, "ask": true})),
             policy_applied: false,
+            smart_object: false,
             color_settings: None,
             ignore_exif_profile_tag: None,
         },
