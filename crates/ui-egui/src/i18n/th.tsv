@@ -342,7 +342,7 @@
 	Last Filter	ฟิลเตอร์ล่าสุด
 	Filter Gallery…	แกลเลอรีฟิลเตอร์…
 	Liquify…	ทำให้เหลว…
-	Camera Raw Filter…	ฟิลเตอร์ Camera Raw…
+	RAW Develop Filter…	ฟิลเตอร์ การปรับแต่ง RAW…
 	Adaptive Wide Angle…	มุมกว้างแบบปรับได้…
 	Lens Correction…	การแก้ไขเลนส์…
 	Vanishing Point…	จุดลับสายตา…
@@ -861,7 +861,7 @@
 	Working Black Plate	จานดำทำงาน
 	Working Gray Plate	แผ่นสีเทาทำงาน
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 	Basic	ขั้นพื้นฐาน
 	Detail	รายละเอียด
 	HSL/Grayscale	HSL/ระดับสีเทา
@@ -891,8 +891,8 @@
 	Luminance Smoothness	ความนุ่มนวลของความสว่าง
 	Vignetting	วิกเนต
 	White Balance: As Shot	สมดุลแสงขาว: เท่าที่ถูกถ่าย
-	Camera Raw…	กล้องดิบ…
-	Camera Raw isn't open	Camera Raw ไม่เปิด
+	RAW Defaults…	ค่าเริ่มต้น RAW…
+	RAW Develop isn't open	การปรับแต่ง RAW ไม่เปิด
 	Dehaze	ลดหมอกควัน
 	Texture	พื้นผิว
 	Focal Length	ทางยาวโฟกัส
@@ -1163,8 +1163,6 @@
 	Roman Hanging Punctuation	เครื่องหมายวรรคตอนแขวนโรมัน
 	Avoid Widows/Orphans	หลีกเลี่ยงแม่ม่าย/เด็กกำพร้า
 	Compose	เขียน
-	Adobe Single-line Composer	Adobe นักแต่งเพลงบรรทัดเดียว
-	Adobe Every-line Composer	Adobe นักแต่งเพลงทุกบรรทัด
 	Justification	การให้เหตุผล
 	Word Spacing	การเว้นวรรคคำ
 	Letter Spacing	การเว้นวรรคจดหมาย
@@ -1743,8 +1741,8 @@
 	Load Settings…	โหลดการตั้งค่า…
 	Save these settings as a Camera Raw .xmp file	บันทึกการตั้งค่าเหล่านี้เป็นไฟล์ Camera Raw .xmp
 	Load settings from a Camera Raw .xmp file	โหลดการตั้งค่าจากไฟล์ Camera Raw .xmp
-	Loaded Camera Raw settings from {file}	โหลดการตั้งค่า Camera Raw จาก {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	โหลดการตั้งค่า Camera Raw จาก {file} (ไม่รองรับ {n})
+	Loaded RAW Develop settings from {file}	โหลดการตั้งค่า การปรับแต่ง RAW จาก {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	โหลดการตั้งค่า การปรับแต่ง RAW จาก {file} (ไม่รองรับ {n})
 	After (X)	หลัง (เอ็กซ์)
 	Original	ต้นฉบับ
 	Current	ปัจจุบัน
@@ -2328,7 +2326,7 @@
 	CPU (no GPU acceleration)	CPU (ไม่มีการเร่งความเร็ว GPU)
 	Cache levels	ระดับแคช
 	Cache tile size	ขนาดไทล์แคช
-	Camera Raw Defaults	ค่าเริ่มต้นCamera Raw
+	RAW Defaults	ค่าเริ่มต้น RAW
 	Canvas border	ขอบผ้าใบ
 	Show canvas dots	แสดงจุดผ้าใบ
 	Clip thumbnails to layer bounds	คลิปภาพขนาดย่อให้เป็นขอบเขตของเลเยอร์
@@ -2415,7 +2413,6 @@
 	Never	ไม่เคย
 	Normal tip	ทิปปกติ
 	Open as smart object	เปิดเป็นวัตถุอัจฉริยะ
-	Open in camera raw	เปิดในกล้องดิบ
 	Open documents as tabs	เปิดเอกสารเป็นแท็บ
 	OpenGL	OpenGL
 	Orange	ส้ม
@@ -2557,9 +2554,9 @@
 	Tone Histogram	โทนฮิสโตแกรม
 	Show Selected Region	แสดงภูมิภาคที่เลือก
 cameraRaw	Light	เบา
-# Camera Raw: contextual controls and window title
-	Camera Raw Filter ({layer})	ฟิลเตอร์ Camera Raw ({layer})
-	Camera Raw ({name})	กล้องดิบ ({name})
+# RAW Develop: contextual controls and window title
+	RAW Develop Filter ({layer})	ฟิลเตอร์ การปรับแต่ง RAW ({layer})
+	RAW Develop ({name})	การปรับแต่ง RAW ({name})
 	Aqua	อควา
 cameraRaw	Amount	จำนวน
 cameraRaw	Blacks	คนผิวดำ
@@ -3367,7 +3364,7 @@ curves	Smooth	เรียบเนียน
 	{name} was changed by another app after it was opened or saved here.	{name} ถูกเปลี่ยนโดยแอปอื่นหลังจากเปิดหรือบันทึกที่นี่
 	Replace it with this document, or cancel and use File › Save As to keep both.	แทนที่ด้วยเอกสารนี้ หรือยกเลิกและใช้ไฟล์ › บันทึกเป็นเพื่อเก็บทั้งสองอย่าง
 
-# Dynamic UI labels (fourth pass): filter and adjustment parameters, Camera Raw panels,
+# Dynamic UI labels (fourth pass): filter and adjustment parameters, RAW Develop panels,
 # lighting, History/Layers/paths/channels menus, metadata, System Info, status templates and
 # dialog text that other catalogs already carry. Written from the meaning of the English labels
 # in the ordinary Russian graphics-editor vocabulary; no proprietary resource consulted.
@@ -3393,13 +3390,11 @@ curves	Smooth	เรียบเนียน
 	Adjustment Layers	เลเยอร์ปรับแต่ง
 	Adjustment Properties	คุณสมบัติการปรับ
 	Adjustment layers have nothing to transform	เลเยอร์การปรับแต่งไม่มีอะไรจะเปลี่ยนแปลง
-	Adobe PDF Presets…	ค่าที่ตั้งล่วงหน้า Adobe PDF…
 	Adobe-rgb-compat	Adobe-rgb-compat
 	Adwaita (Dark)	แอดเวตา (ความมืด)
 	Adwaita (Light)	อัดเวตา (ธาตุเบา)
 	After	หลังจากนั้น
 	Airbrush: keeps painting while the pointer rests.	พู่กัน: คงการวาดภาพในขณะที่ตัวชี้วางอยู่
-	All shortcuts reset to Photoshop defaults.	ทางลัดทั้งหมดรีเซ็ตเป็นค่าเริ่มต้นของ Photoshop
 	Altitude	ระดับความสูง
 	Ambience	บรรยากาศ
 	Ambient	สิ่งแวดล้อม
@@ -3484,8 +3479,8 @@ curves	Smooth	เรียบเนียน
 	Brush Type	ประเภทแปรง
 	Burlap	ผ้ากระสอบ
 	Calculations	การคำนวณ
-	Camera Raw	กล้องดิบ
-	Camera Raw Filter	ฟิลเตอร์ Camera Raw
+	RAW Develop	การปรับแต่ง RAW
+	RAW Develop Filter	ฟิลเตอร์ การปรับแต่ง RAW
 	Cancel transform	ยกเลิกการแปลง
 	Candle Light	แสงเทียน
 	Canvas Size	ขนาดผ้าใบ
@@ -3632,7 +3627,6 @@ curves	Smooth	เรียบเนียน
 	Deep Yellow	สีเหลืองเข้ม
 	Default Foreground and Background Colors	สีพื้นหน้าและพื้นหลังเริ่มต้น
 	Default Leaves	ใบเริ่มต้น
-	Default Photoshop Size	ขนาด Photoshop เริ่มต้น
 	Defaults	ค่าเริ่มต้น
 	Define Brush Preset	กำหนดพรีเซ็ตแปรง
 	Define Custom Shape	กำหนดรูปร่างที่กำหนดเอง
@@ -4735,9 +4729,9 @@ shape	Appearance	ลักษณะที่ปรากฏ
 @plural	{n} document|{n} documents	{n} เอกสาร
 @plural	{n} pixel|{n} pixels	{n} พิกเซล
 cameraRaw	Before (Y)	ก่อน (ญ)
-cameraRaw	Camera Raw ({name})	กล้องดิบ ({name})
-cameraRaw	Camera Raw Filter ({layer})	ฟิลเตอร์ Camera Raw ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw ไม่เปิด
+cameraRaw	RAW Develop ({name})	การปรับแต่ง RAW ({name})
+cameraRaw	RAW Develop Filter ({layer})	ฟิลเตอร์ การปรับแต่ง RAW ({layer})
+cameraRaw	RAW Develop isn't open	การปรับแต่ง RAW ไม่เปิด
 cameraRaw	Cancel	ยกเลิก
 cameraRaw	Cancelled opening {name}	ยกเลิกการเปิด {name}
 cameraRaw	Cancelled {label}	ยกเลิก {label}
@@ -4749,7 +4743,7 @@ cameraRaw	Highlight Clipping Warning (O)	คำเตือนการตัด
 cameraRaw	Highlight Priority	เน้นลำดับความสำคัญ
 cameraRaw	Load Settings…	โหลดการตั้งค่า…
 cameraRaw	Load settings from a Camera Raw .xmp file	โหลดการตั้งค่าจากไฟล์ Camera Raw .xmp
-cameraRaw	Loaded Camera Raw settings from {file}	โหลดการตั้งค่า Camera Raw จาก {file}
+cameraRaw	Loaded RAW Develop settings from {file}	โหลดการตั้งค่า การปรับแต่ง RAW จาก {file}
 cameraRaw	Noise Reduction	ลดเสียงรบกวน
 cameraRaw	OK	ตกลง
 cameraRaw	Open	เปิด
@@ -4773,3 +4767,6 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 	Transparent (default)	โปร่งใส (ค่าเริ่มต้น)
 	The path was kept as the Work Path	เก็บเส้นทางไว้เป็นเส้นทางการทำงานแล้ว
 	The path was discarded	ทิ้งเส้นทางแล้ว
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	บันทึกการตั้งค่าการปรับแต่ง RAW ไปยัง {file} แล้ว
