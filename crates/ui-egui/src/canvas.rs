@@ -1200,6 +1200,11 @@ fn handle_canvas_tool_stroke(
                 g.over_ruler = on_ruler;
             }
         }
+        // Perspective Crop: a release egui counts as a click doesn't move the quad, so the
+        // first click of a double-click leaves it where it was (#11806).
+        if tool == Tool::PerspectiveCrop && buttons.clicked {
+            crate::perspective_crop_ui::click_released(app);
+        }
         let p = at.map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
         if let Some(d) = p {
             tap_at_peak_pressure(app);
@@ -1337,6 +1342,13 @@ fn handle_canvas_tool_clicks(
     // Crop: a double-click inside the frame commits it, as ↵ does (#1792).
     if tool == Tool::Crop && response.double_clicked() && response.interact_pointer_pos().is_some_and(|p| crate::crop_ui::commits_at(app, xf.to_doc(p))) {
         commit_crop(app);
+    }
+    // Perspective Crop: a double-click inside the quad commits it too (#11806).
+    if tool == Tool::PerspectiveCrop
+        && response.double_clicked()
+        && response.interact_pointer_pos().is_some_and(|p| crate::perspective_crop_ui::commits_at(app, xf.to_doc(p)))
+    {
+        crate::perspective_crop_ui::commit(app);
     }
     // Type: 2 clicks select a word, 3 the line, 4 the paragraph, 5 all text (Photoshop).
     if tool.is_type()
