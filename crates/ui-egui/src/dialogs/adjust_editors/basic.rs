@@ -195,10 +195,14 @@ pub(super) fn black_white(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Ed
 }
 
 /// Black & White's Auto (#9269): the weights `image.adjustments.blackWhite.auto` finds for
-/// `layer` (an adjustment layer: the image under it; a pixel layer: its pixels) into `v`, as one
-/// discrete edit of `e`.
-pub fn apply_auto(app: &mut crate::PhotocraftApp, v: &mut Value, layer: Option<photocraft_doc::LayerId>, e: &mut Edit) {
-    let p = layer.map_or(json!({}), |id| json!({"layer": id.0}));
+/// `layer` (an adjustment layer: the image under it; a pixel layer: its pixels; with `filter`, the
+/// smart object's pixels below that smart filter) into `v`, as
+/// one discrete edit of `e`.
+pub fn apply_auto(app: &mut crate::PhotocraftApp, v: &mut Value, layer: Option<photocraft_doc::LayerId>, filter: Option<u64>, e: &mut Edit) {
+    let mut p = layer.map_or(json!({}), |id| json!({"layer": id.0}));
+    if let Some(i) = filter {
+        p["filter"] = json!(i);
+    }
     match app.run("image.adjustments.blackWhite.auto", p) {
         Ok(Value::Object(w)) => {
             for (k, x) in w {

@@ -126,7 +126,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         crate::preset_files_ui::import_gradients_dialog(app);
     }
     if e.auto {
-        apply_auto(app, &mut values, Some(id), &mut e);
+        apply_auto(app, &mut values, Some(id), None, &mut e);
     }
     if e.changed {
         app.live_adjust = Some((id, values.clone()));

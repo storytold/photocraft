@@ -639,7 +639,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Black & White Auto",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?} → {"reds","yellows","greens","cyans","blues","magentas"} (%: the Auto mix for the image a Black & White adjustment layer sees, or for a pixel layer's own pixels; nothing changes)"##,
+            params: r##"{"layer":id?,"filter":index?} → {"reds","yellows","greens","cyans","blues","magentas"} (%: the Auto mix for the image a Black & White adjustment layer sees, a smart object's pixels below its smart filter `filter`, or a pixel layer's own pixels; nothing changes)"##,
             enabled: has_doc,
             run: black_white_auto,
             journal: false,
@@ -734,8 +734,10 @@ fn hide_from(layers: &mut [Layer], id: photocraft_doc::LayerId) -> bool {
 }
 
 /// `image.adjustments.blackWhite.auto`: [`auto_black_white`] for `layer` (default the active one):
-/// the composite of what lies below a Black & White adjustment layer (what it adjusts), or a pixel
-/// layer's own pixels (what Image › Adjustments › Black & White changes).
+/// the composite of what lies below a Black & White adjustment layer (what it adjusts), a smart
+/// object's pixels below smart filter `filter` (what that filter edits), or a pixel layer's own
+/// pixels (what Image › Adjustments › Black & White changes). As in the reference application,
+/// the whole canvas counts: a selection, the adjustment's mask and its clip base don't narrow it.
 fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "image.adjustments.blackWhite.auto";
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -743,19 +745,37 @@ fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?,
         Some(v) => photocraft_doc::LayerId(v.as_u64().ok_or_else(|| bad(cmd, "`layer` must be a layer id"))?),
     };
+    let filter = match p.get("filter") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(cmd, "`filter` must be a smart filter index"))?),
+    };
     let layer = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let area = st.doc.bounds();
-    let rgba: Vec<[f32; 4]> = match &layer.content {
-        LayerContent::Adjustment(_) => {
+    // Rendering or reading a canvas past the render limit gives nothing to sample: say so rather
+    // than answer with the default mix.
+    if u64::from(area.width()) * u64::from(area.height()) > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(bad(cmd, "the canvas is too large to analyse"));
+    }
+    let read = |surf: &Surface| -> Vec<[f32; 4]> {
+        let fmt = surf.format();
+        surf.read_region(area).chunks_exact(fmt.channels()).map(|c| to_rgba(&fmt, c)).collect()
+    };
+    let rgba: Vec<[f32; 4]> = match (&layer.content, filter) {
+        (LayerContent::Smart(sm), Some(i)) => {
+            if i >= sm.smart_filters.len() {
+                return Err(bad(cmd, format!("layer \"{}\" has no smart filter {i}", layer.name)));
+            }
+            let below = crate::smart_cmds::render_below_filter(&st.doc, sm, i)?
+                .ok_or_else(|| EngineError::Other("the smart object's contents are unavailable".into()))?;
+            read(&below)
+        }
+        (_, Some(_)) => return Err(bad(cmd, "`filter` needs a smart object layer")),
+        (LayerContent::Adjustment(_), None) => {
             let mut below = (*st.doc).clone();
             hide_from(&mut below.layers, id);
             photocraft_compose::render(&below, area).into_px()
         }
-        _ => {
-            let surf = layer.surface().ok_or_else(|| EngineError::Other(format!("layer \"{}\" has no pixels", layer.name)))?;
-            let fmt = surf.format();
-            surf.read_region(area).chunks_exact(fmt.channels()).map(|c| to_rgba(&fmt, c)).collect()
-        }
+        (_, None) => read(layer.surface().ok_or_else(|| EngineError::Other(format!("layer \"{}\" has no pixels", layer.name)))?),
     };
     let w = auto_black_white(&auto_bw_sample(&rgba));
     Ok(Value::Object(crate::adjust_params::HUE_RANGES.iter().zip(w).map(|(k, v)| ((*k).to_string(), json!(v))).collect()))

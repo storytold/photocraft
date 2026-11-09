@@ -1124,3 +1124,72 @@ fn black_white_auto_spreads_the_greys() {
     assert_ne!(got, BW_DEFAULTS.to_vec(), "only one colour was sampled");
     assert!(gap(&got.clone().try_into().unwrap()) > 1.0 / 32.0, "{got:?}");
 }
+
+/// #9301 review: as in the reference application, Auto reads the whole canvas whatever the
+/// selection, the adjustment's mask or its clip base; a smart filter's Auto reads the pixels below
+/// that filter, not the filtered result; a canvas too large to analyse is an error, not the
+/// default mix.
+#[test]
+fn black_white_auto_reads_the_whole_input() {
+    use crate::adjust_params::{BW_DEFAULTS, HUE_RANGES};
+    let (red, blue) = ([0.776, 0.2, 0.2, 1.0], [0.29, 0.29, 1.0, 1.0]);
+    let mix = auto_black_white(&[[red[0], red[1], red[2]], [blue[0], blue[1], blue[2]]]);
+    assert_ne!(mix, BW_DEFAULTS);
+    let auto = |s: &mut Session, p: Value| -> Vec<f32> {
+        let r = s.execute("image.adjustments.blackWhite.auto", p).unwrap();
+        HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect()
+    };
+    let split = |x: i32, _| if x < 10 { red } else { blue };
+
+    // A selection over the red half doesn't narrow Image › Adjustments' Auto.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    paint(&mut s, split);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    assert_eq!(auto(&mut s, json!({})), mix.to_vec());
+
+    // Nor does an adjustment layer's mask hiding the blue half.
+    s.execute("select.deselect", json!({})).unwrap();
+    let id = s.execute("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.edit("mask", |doc, _| {
+        let b = doc.bounds();
+        let mut m = photocraft_doc::LayerMask::reveal_all();
+        m.surface.write_region(Rect::new(10, 0, b.x1, b.y1), &vec![0.0; 10 * 10]);
+        doc.layer_mut(photocraft_doc::LayerId(id)).unwrap().mask = Some(m);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(auto(&mut s, json!({"layer": id})), mix.to_vec());
+
+    // Nor clipping it to a layer that only covers the red half.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    paint(&mut s, |_, _| blue);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint(&mut s, |x, _| if x < 10 { red } else { [0.0; 4] });
+    let id = s.execute("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.createClippingMask", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().clipped);
+    assert_eq!(auto(&mut s, json!({"layer": id})), mix.to_vec());
+
+    // A Black & White smart filter: its own result is grey, its input is the colours.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    paint(&mut s, split);
+    s.execute("filter.convertForSmartFilters", json!({})).unwrap();
+    s.execute("image.adjustments.blackWhite", json!({})).unwrap();
+    let smart = s.active().unwrap().active_layer.unwrap().0;
+    assert_eq!(auto(&mut s, json!({"layer": smart})), BW_DEFAULTS.to_vec(), "the filtered result is grey");
+    assert_eq!(auto(&mut s, json!({"layer": smart, "filter": 0})), mix.to_vec());
+    for bad in [json!({"layer": smart, "filter": 1}), json!({"layer": smart, "filter": "x"}), json!({"layer": smart, "filter": -1})] {
+        assert!(s.execute("image.adjustments.blackWhite.auto", bad).is_err());
+    }
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    assert!(s.execute("image.adjustments.blackWhite.auto", json!({"filter": 0})).is_err(), "not a smart object");
+
+    // Past the render limit there is nothing to sample.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40000, "height": 30000, "background": "transparent"})).unwrap();
+    let id = s.execute("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap()["layer"].as_u64().unwrap();
+    assert!(s.execute("image.adjustments.blackWhite.auto", json!({"layer": id})).is_err());
+}
