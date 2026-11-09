@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::pickers::browser::asset_browser::{BrowserAction, begin_item_rename};
+use crate::pickers::browser::asset_browser::BrowserAction;
 pub(crate) fn run(app: &mut PhotocraftApp, id: &str, p: Value) -> Option<Value> {
     match app.run(id, p) {
         Ok(v) => Some(v),
@@ -53,6 +53,7 @@ pub(crate) fn generic_with_state(
                 if prefix != "pattern.presets" {
                     state.rename_hierarchy_item(panel, k, n);
                 }
+                state.clear_browser_selection(panel);
                 true
             } else {
                 false
@@ -73,16 +74,11 @@ pub(crate) fn generic_with_state(
                 if prefix != "pattern.presets" {
                     state.rename_hierarchy_item_at_path(panel, group, group_path, key, text);
                 }
+                state.clear_browser_selection(panel);
                 true
             } else {
                 false
             }
-        }
-        BrowserAction::BeginRenameItems(targets) => {
-            state.renaming = None;
-            state.group_rename_queue.clear();
-            begin_item_rename(state, panel, targets);
-            true
         }
         BrowserAction::BeginInlineRenameItem(group, item) => {
             state.renaming = None;
@@ -122,23 +118,9 @@ pub(crate) fn generic_with_state(
             state.inline_group_renaming = None;
             true
         }
-        BrowserAction::BeginRenameGroup(group) => {
-            state.item_renaming = None;
-            state.item_rename_queue.clear();
-            state.renaming = Some((panel.to_owned(), format!("group:{group}"), group.clone()));
-            state.group_rename_queue.clear();
-            true
-        }
-        BrowserAction::BeginRenameGroups(groups) => {
-            state.item_renaming = None;
-            state.item_rename_queue.clear();
-            let mut groups = groups.iter();
-            if let Some(first) = groups.next() {
-                state.renaming = Some((panel.to_owned(), format!("group:{first}"), first.clone()));
-                state.group_rename_queue = groups.map(|group| (panel.to_owned(), format!("group:{group}"), group.clone())).collect();
-            }
-            true
-        }
+        // The shared popup layer consumes this combined request and presents group renames
+        // before card renames; it should not reach domain dispatch.
+        BrowserAction::BeginRenameSelection { .. } => true,
         BrowserAction::DeleteItem { group, group_path, key } => {
             let (command, params) = if prefix == "swatches" {
                 ("swatches.delete".to_owned(), json!({"swatch": key}))
@@ -175,27 +157,66 @@ pub(crate) fn generic_with_state(
             };
             if run(app, &command, params).is_some() {
                 state.rename_group(panel, g, n);
+                state.clear_browser_selection(panel);
+                true
+            } else {
+                false
+            }
+        }
+        BrowserAction::RenameNestedGroup { group_path, text, .. } => {
+            let Some(group) = group_path.last() else { return false };
+            let group = group.clone();
+            let (command, params) = if prefix == "swatches" {
+                ("swatches.renameGroup".to_owned(), json!({"group": group, "name": text}))
+            } else {
+                (edit.clone(), json!({"action": "renameGroup", "group": group, "name": text}))
+            };
+            if run(app, &command, params).is_some() {
+                state.rename_group(panel, &group, text);
+                state.clear_browser_selection(panel);
                 true
             } else {
                 false
             }
         }
         BrowserAction::DeleteGroup(g) => {
-            let (command, params) = if prefix == "swatches" {
-                ("swatches.deleteGroup".to_owned(), json!({"group": g}))
-            } else {
-                (edit.clone(), json!({"action": "deleteGroup", "group": g}))
-            };
-            if run(app, &command, params).is_some() {
-                if state.selected_group.get(panel) == Some(g) {
-                    state.clear_selected(panel);
+            let deletion_order = state.group_deletion_order(panel, g);
+            for group in &deletion_order {
+                let (command, params) = if prefix == "swatches" {
+                    ("swatches.deleteGroup".to_owned(), json!({"group": group}))
+                } else {
+                    (edit.clone(), json!({"action": "deleteGroup", "group": group}))
+                };
+                if run(app, &command, params).is_none() {
+                    return false;
                 }
-                state.delete_group(panel, g);
-                state.clear_browser_selection(panel);
-                true
-            } else {
-                false
+                state.delete_group(panel, group);
             }
+            if state.selected_group.get(panel).is_some_and(|selected| deletion_order.contains(selected)) {
+                state.clear_selected(panel);
+            }
+            state.clear_browser_selection(panel);
+            true
+        }
+        BrowserAction::DeleteNestedGroup { group_path, .. } => {
+            let Some(group) = group_path.last() else { return false };
+            let deletion_order = state.group_deletion_order(panel, group);
+            for name in &deletion_order {
+                let (command, params) = if prefix == "swatches" {
+                    ("swatches.deleteGroup".to_owned(), json!({"group": name}))
+                } else {
+                    (edit.clone(), json!({"action": "deleteGroup", "group": name}))
+                };
+                if run(app, &command, params).is_none() {
+                    return false;
+                }
+                state.delete_group(panel, name);
+            }
+            if state.selected_group.get(panel).is_some_and(|selected| deletion_order.contains(selected)) {
+                state.clear_selected(panel);
+            }
+            state.clear_browser_selection(panel);
+            true
         }
         BrowserAction::NewGroup => false,
         BrowserAction::CreateGroup(name) => {
@@ -237,8 +258,6 @@ pub(crate) fn generic_with_state(
         BrowserAction::SelectItem { .. }
         | BrowserAction::ActivateItem { .. }
         | BrowserAction::Drop(_, _)
-        | BrowserAction::RenameNestedGroup { .. }
-        | BrowserAction::DeleteNestedGroup { .. }
         | BrowserAction::AppendDefault
         | BrowserAction::Import
         | BrowserAction::ExportSelected(_) => false,

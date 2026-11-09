@@ -395,7 +395,9 @@ pub(super) fn apply_browser_item_gesture(
         if inline_rename {
             sink.emit(BrowserAction::BeginInlineRenameItem(group.name.clone(), item.clone()));
         } else {
-            sink.emit(BrowserAction::BeginRenameItems(vec![(group.name.clone(), item.clone())]));
+            sink.emit(BrowserAction::BeginRenameSelection {
+                targets: vec![super::selection::SelectionTarget::Item { group: group.name.clone(), path: item.group_path.clone(), key: item.key.clone() }],
+            });
         }
     } else if selected {
         sink.emit(BrowserAction::SelectItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });

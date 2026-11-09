@@ -74,9 +74,11 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
                     events.push(BrowserAction::DeleteItem { group, group_path, key })
                 }
                 crate::pickers::footer::FooterAction::DeleteSelection => {
-                    let selected = ui.ctx().data_mut(|data| {
-                        data.remove_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-delete-selection", panel.as_str()))).unwrap_or_default()
-                    });
+                    let selected = st
+                        .browser_selection_snapshot
+                        .get(&panel)
+                        .map(crate::pickers::browser::selection_operations::delete_selection)
+                        .unwrap_or_default();
                     if selected.is_empty() {
                         if let (Some(key), Some(group), Some(group_path)) =
                             (st.selected.get(&panel).cloned(), st.selected_group.get(&panel).cloned(), st.selected_group_path.get(&panel).cloned())
@@ -99,8 +101,7 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
     }
     let mut events = events;
     crate::pickers::browser::popup_dialogs::show_new_group_dialog(ui, &panel, adapter.groups, &mut events);
-    crate::pickers::browser::popup_dialogs::show_rename_group_dialog(ui, &panel, &mut events);
-    crate::pickers::browser::popup_dialogs::show_rename_card_dialog(ui, &panel, adapter.groups, &mut events, adapter.paint_item);
+    crate::pickers::browser::popup_dialogs::show_rename_selection_dialog(ui, &panel, adapter.groups, &mut events, adapter.paint_item);
     crate::pickers::browser::popup_dialogs::confirm_deletions(ui, &panel, adapter.groups, events)
 }
 

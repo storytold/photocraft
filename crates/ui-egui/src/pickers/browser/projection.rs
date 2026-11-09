@@ -11,7 +11,7 @@ use super::identity::{PickerNodeIdentity, PickerNodeRole, PickerProjectionKeys, 
 use super::path_identity_model::{HierarchyNode, PickerBrowserHierarchy, PickerId, PickerIdRegistry};
 
 /// Asset-neutral item projection supplied by a picker adapter.
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ItemView {
     /// Stable adapter-defined item key used by ordering and domain actions.
     pub(crate) key: String,
@@ -22,7 +22,7 @@ pub(crate) struct ItemView {
 }
 
 /// Asset-neutral group projection supplied by a picker adapter.
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GroupView {
     /// Stable adapter-defined group key and display label.
     pub(crate) name: String,

@@ -1,5 +1,7 @@
 //! Shared asset-browser implementation and picker-browser infrastructure.
 
+#[cfg(test)]
+mod action_tests;
 pub(crate) mod asset_browser;
 pub(crate) mod browser_actions;
 pub(crate) mod browser_interaction;
@@ -18,3 +20,5 @@ pub(crate) mod panel_menu;
 pub(crate) mod path_identity_model;
 pub(crate) mod popup_dialogs;
 pub(crate) mod projection;
+pub(crate) mod selection;
+pub(crate) mod selection_operations;

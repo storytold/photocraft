@@ -199,8 +199,6 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let _ = pos;
                 run(app, "style.presets.apply", json!({"preset": k}));
             }
-            // Only the brush browser supports nested-group context actions.
-            BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "styles", "style.presets", &e, json!({"name": "Style"}));
             }
@@ -294,8 +292,6 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
                 run(app, "shape.presets.place", p);
             }
-            // Only the brush browser supports nested-group context actions.
-            BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "shapes", "shape.presets", &e, json!({"name": "Shape"}));
             }
@@ -815,8 +811,10 @@ mod tests {
         assert_eq!(st.parent_of("gradients", "Child"), Some("Renamed"));
         assert_eq!(st.hierarchy_order["gradients"][""][0], HierarchyOrderEntry::Group("Renamed".into()));
         assert!(st.toggled.contains("gradients/Renamed/Inner"));
+        assert_eq!(st.group_deletion_order("gradients", "Renamed"), ["Grandchild", "Child", "Renamed"]);
         st.delete_group("gradients", "Renamed");
-        assert_eq!(st.parent_of("gradients", "Child"), None, "children of a deleted group become roots");
+        assert!(!st.hierarchy_order["gradients"].contains_key("Child"), "children of a deleted group are removed, not promoted");
+        assert!(!st.hierarchy_order["gradients"].contains_key("Grandchild"));
         assert!(!st.hierarchy_order["gradients"][""].contains(&HierarchyOrderEntry::Group("Renamed".into())));
         assert!(!st.toggled.iter().any(|key| key.starts_with("gradients/Renamed")));
 

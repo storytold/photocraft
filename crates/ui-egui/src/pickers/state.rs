@@ -61,20 +61,9 @@ pub(crate) struct NestedGroupRenameState {
     pub(crate) text: String,
 }
 
-/// Asset-neutral facts about the current multi-selection, derived by the shared browser.
-/// Adapters and menu consumers use this instead of interpreting picker node identities.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct BrowserSelectionSummary {
-    /// At least one card itself (rather than only its containing group) is selected.
-    pub(crate) contains_selected_card: bool,
-    pub(crate) contains_card: bool,
-    pub(crate) contains_group: bool,
-    /// Cards explicitly selected by the user, excluding cards covered only by a selected group.
-    pub(crate) selected_cards: Vec<(String, String)>,
-    /// Explicitly selected cards plus cards covered by selected groups, in browser order.
-    pub(crate) cards: Vec<(String, String)>,
-    pub(crate) groups: Vec<String>,
-}
+/// Compatibility name for the browser-derived snapshot. The canonical selected IDs remain in
+/// `browser_selection`; this value is rebuilt from them and is never edited independently.
+pub(crate) type BrowserSelectionSnapshot = super::browser::selection::BrowserSelection;
 
 /// Panel state (serde, so the control channel can read and drive it).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -120,7 +109,7 @@ pub struct PresetUi {
     #[serde(skip)]
     pub(crate) browser_selection: BTreeMap<String, std::collections::BTreeSet<crate::pickers::browser::path_identity_model::PickerId>>,
     #[serde(skip)]
-    pub(crate) browser_selection_summary: BTreeMap<String, BrowserSelectionSummary>,
+    pub(crate) browser_selection_snapshot: BTreeMap<String, BrowserSelectionSnapshot>,
     #[serde(skip)]
     pub(crate) browser_selection_anchor: BTreeMap<String, crate::pickers::browser::path_identity_model::PickerId>,
     /// Tool Presets: Current Tool Only.
@@ -309,6 +298,7 @@ impl PresetUi {
     pub(crate) fn clear_browser_selection(&mut self, panel: &str) {
         self.browser_selection.entry(panel.to_owned()).or_default().clear();
         self.browser_selection_anchor.remove(panel);
+        self.browser_selection_snapshot.remove(panel);
     }
 
     pub(crate) fn select_browser_node(&mut self, panel: &str, id: crate::pickers::browser::path_identity_model::PickerId, additive: bool) {
@@ -823,34 +813,44 @@ impl PresetUi {
         self.toggled.extend(renamed);
     }
 
-    /// Detach children of a removed group and discard its ordering/expansion entries.
+    /// Return a group's descendants followed by the group itself, so domain deletion can remove
+    /// child groups before their parent. Parentage is derived from the canonical sibling sequences.
+    pub(crate) fn group_deletion_order(&self, panel: &str, root: &str) -> Vec<String> {
+        fn visit(group: &str, parents: &BTreeMap<String, String>, seen: &mut BTreeSet<String>, out: &mut Vec<String>) {
+            if !seen.insert(group.to_owned()) {
+                return;
+            }
+            let children: Vec<String> = parents.iter().filter_map(|(child, parent)| (parent == group).then(|| child.clone())).collect();
+            for child in children {
+                visit(&child, parents, seen, out);
+            }
+            out.push(group.to_owned());
+        }
+
+        let mut order = Vec::new();
+        visit(root, &self.group_parents(panel), &mut BTreeSet::new(), &mut order);
+        order
+    }
+
+    /// Remove a group and its complete nested group subtree from ordering and expansion state.
     pub(crate) fn delete_group(&mut self, panel: &str, name: &str) {
+        let removed_groups: BTreeSet<String> = self.group_deletion_order(panel, name).into_iter().collect();
         if let Some(orders) = self.hierarchy_order.get_mut(panel) {
-            let promoted: Vec<HierarchyOrderEntry> =
-                orders.get(name).into_iter().flatten().filter(|entry| matches!(entry, HierarchyOrderEntry::Group(_))).cloned().collect();
-            orders.remove(name);
+            orders.retain(|parent, _| parent.is_empty() || !removed_groups.contains(parent));
             for entries in orders.values_mut() {
                 entries.retain(|entry| match entry {
-                    HierarchyOrderEntry::Group(group) => group != name,
-                    HierarchyOrderEntry::RootItem { group, .. } => group != name,
+                    HierarchyOrderEntry::Group(group) => !removed_groups.contains(group),
+                    HierarchyOrderEntry::RootItem { group, .. } => !removed_groups.contains(group),
                     HierarchyOrderEntry::Item(_) => true,
                 });
-            }
-            if !promoted.is_empty() {
-                let root = orders.entry(String::new()).or_default();
-                for entry in promoted {
-                    if !root.contains(&entry) {
-                        root.push(entry);
-                    }
-                }
             }
             orders.retain(|_, entries| !entries.is_empty());
             if orders.is_empty() {
                 self.hierarchy_order.remove(panel);
             }
         }
-        let prefix = format!("{panel}/{}", escape_hierarchy_key_part(name));
-        self.toggled.retain(|key| !key.strip_prefix(&prefix).is_some_and(|tail| tail.is_empty() || tail.starts_with('/')));
+        let prefixes: Vec<String> = removed_groups.iter().map(|group| format!("{panel}/{}", escape_hierarchy_key_part(group))).collect();
+        self.toggled.retain(|key| !prefixes.iter().any(|prefix| key.strip_prefix(prefix).is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))));
     }
 
     /// Apply the Brushes panel's header-drop convention to asset groups: the upper third inserts
@@ -1345,7 +1345,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_group_promotes_direct_children_to_root_in_their_previous_order() {
+    fn deleting_group_removes_its_complete_nested_group_subtree() {
         let mut state = PresetUi::default();
         state.set_hierarchy_order("panel", "", vec![HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("Sibling".into())]);
         state.set_hierarchy_order(
@@ -1354,15 +1354,16 @@ mod tests {
             vec![HierarchyOrderEntry::Group("Child C".into()), HierarchyOrderEntry::Item("card-a".into()), HierarchyOrderEntry::Group("Child B".into())],
         );
         state.set_hierarchy_order("panel", "Child C", vec![HierarchyOrderEntry::Group("Grandchild".into())]);
+        state.set_hierarchy_order("panel", "Grandchild", vec![HierarchyOrderEntry::Item("deep-card".into())]);
+        state.set_hierarchy_order("panel", "Child B", vec![HierarchyOrderEntry::Item("other-card".into())]);
+        state.toggled.extend(["panel/A".into(), "panel/A-child".into(), "panel/Child C".into(), "panel/Grandchild".into()]);
 
+        assert_eq!(state.group_deletion_order("panel", "A"), ["Child B", "Grandchild", "Child C", "A"]);
         state.delete_group("panel", "A");
-        assert_eq!(
-            state.hierarchy_order["panel"][""],
-            [HierarchyOrderEntry::Group("Sibling".into()), HierarchyOrderEntry::Group("Child C".into()), HierarchyOrderEntry::Group("Child B".into())]
-        );
-        assert_eq!(state.parent_of("panel", "Child C"), None);
-        assert_eq!(state.parent_of("panel", "Child B"), None);
-        assert_eq!(state.parent_of("panel", "Grandchild"), Some("Child C"));
+        assert_eq!(state.hierarchy_order["panel"][""], [HierarchyOrderEntry::Group("Sibling".into())]);
+        assert!(state.hierarchy_order["panel"].keys().all(|parent| !["A", "Child C", "Child B", "Grandchild"].contains(&parent.as_str())));
+        assert!(state.toggled.contains("panel/A-child"), "deleting A must not clear a separate group whose name shares its prefix");
+        assert!(!state.toggled.iter().any(|key| ["panel/A", "panel/Child C", "panel/Grandchild"].contains(&key.as_str())));
     }
 
     #[test]

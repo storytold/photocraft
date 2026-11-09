@@ -6,6 +6,7 @@ const PENDING: &str = "picker-delete-confirmation";
 const NEW_GROUP: &str = "picker-new-group-dialog";
 const RENAME_GROUP: &str = "picker-rename-group-dialog";
 const RENAME_CARD: &str = "picker-rename-card-dialog";
+const RENAME_HEADERS_AFTER_ITEMS: &str = "picker-rename-headers-after-items";
 const RENAME_TARGET: &str = "target";
 const RENAME_QUEUE: &str = "queue";
 
@@ -14,14 +15,13 @@ pub(crate) fn request_new_group(ctx: &egui::Context, panel: &str) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::new((NEW_GROUP, panel)), true));
 }
 
-/// Queue a group rename from a panel menu; the dialog owns the action instead of inline rename state.
-pub(crate) fn request_rename_group(ctx: &egui::Context, panel: &str, action: BrowserAction) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new((RENAME_GROUP, panel, "request")), Some(action)));
-}
-
-/// Queue selected card renames from a panel menu.
-pub(crate) fn request_rename_cards(ctx: &egui::Context, panel: &str, action: BrowserAction) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new((RENAME_CARD, panel, "request")), Some(action)));
+/// Queue one unified selection rename for the shared card/header workflow.
+pub(crate) fn request_rename_selection(ctx: &egui::Context, panel: &str, action: BrowserAction) {
+    let request_id = egui::Id::new((RENAME_CARD, panel, "request"));
+    ctx.data_mut(|data| {
+        data.insert_temp(request_id, Some(action));
+        data.insert_temp(request_id.with("defer"), true);
+    });
 }
 
 /// Turn New Group browser actions into a named group creation only after the dialog is accepted.
@@ -56,30 +56,25 @@ pub(crate) fn show_new_group_dialog(ui: &mut egui::Ui, panel: &str, groups: &[Gr
 }
 
 /// Render the Rename Group dialogue and translate accepted names into rename actions.
-pub(crate) fn show_rename_group_dialog(ui: &mut egui::Ui, panel: &str, actions: &mut Vec<BrowserAction>) {
+fn show_next_group_rename(ui: &mut egui::Ui, panel: &str, actions: &mut Vec<BrowserAction>) {
     let ctx = ui.ctx().clone();
     let request_id = egui::Id::new((RENAME_GROUP, panel));
-    let queued = ctx.data_mut(|data| data.remove_temp::<Option<BrowserAction>>(egui::Id::new((RENAME_GROUP, panel, "request")))).flatten();
-    let action = queued.or_else(|| {
-        actions
-            .iter()
-            .position(|action| matches!(action, BrowserAction::BeginRenameGroup(_) | BrowserAction::BeginRenameGroups(_)))
-            .map(|index| actions.remove(index))
-    });
-    if let Some(action) = action {
-        let (first, remaining) = match action {
-            BrowserAction::BeginRenameGroup(group) => (Some(group), Vec::new()),
-            BrowserAction::BeginRenameGroups(groups) => {
-                let mut groups = groups.into_iter();
-                (groups.next(), groups.collect())
-            }
-            _ => unreachable!(),
-        };
+    let defer = ctx.data_mut(|data| data.remove_temp::<bool>(request_id.with("defer")).unwrap_or(false));
+    let queued =
+        if defer { None } else { ctx.data_mut(|data| data.remove_temp::<Option<BrowserAction>>(egui::Id::new((RENAME_GROUP, panel, "request")))).flatten() };
+    if let Some(BrowserAction::BeginRenameSelection { targets }) = queued {
+        let mut headers = targets.into_iter();
+        let (first, remaining) = (headers.next(), headers.collect::<Vec<_>>());
         if let Some(first) = first {
             ctx.data_mut(|data| {
+                let name = match &first {
+                    super::selection::SelectionTarget::Group(group) => group.clone(),
+                    super::selection::SelectionTarget::Folder { path, .. } => path.last().cloned().unwrap_or_default(),
+                    super::selection::SelectionTarget::Item { .. } => String::new(),
+                };
                 data.insert_temp(request_id.with(RENAME_TARGET), first.clone());
                 data.insert_temp(request_id.with(RENAME_QUEUE), remaining);
-                data.insert_temp(request_id.with("name"), first);
+                data.insert_temp(request_id.with("name"), name);
                 data.insert_temp(request_id, true);
             });
         }
@@ -89,14 +84,27 @@ pub(crate) fn show_rename_group_dialog(ui: &mut egui::Ui, panel: &str, actions: 
     }
 
     let name_id = request_id.with("name");
-    let target = ctx.data(|data| data.get_temp::<String>(request_id.with(RENAME_TARGET))).unwrap_or_default();
-    let mut name = ctx.data(|data| data.get_temp::<String>(name_id)).unwrap_or_else(|| target.clone());
+    let target = ctx.data(|data| data.get_temp::<super::selection::SelectionTarget>(request_id.with(RENAME_TARGET)));
+    let Some(target) = target else { return };
+    let target_name = match &target {
+        super::selection::SelectionTarget::Group(group) => group.clone(),
+        super::selection::SelectionTarget::Folder { path, .. } => path.last().cloned().unwrap_or_default(),
+        super::selection::SelectionTarget::Item { .. } => return,
+    };
+    let mut name = ctx.data(|data| data.get_temp::<String>(name_id)).unwrap_or_else(|| target_name.clone());
     let mut decision = None;
-    show_group_name_editor(&ctx, request_id, "Rename Group", &mut name, &mut decision);
+    let title = if matches!(&target, super::selection::SelectionTarget::Folder { .. }) { tl!("Rename Folder") } else { tl!("Rename Group") };
+    show_group_name_editor(&ctx, request_id, title, &mut name, &mut decision);
 
     match decision {
         Some(true) if !name.trim().is_empty() => {
-            actions.push(BrowserAction::RenameGroup(target, name.trim().to_owned()));
+            actions.push(match target {
+                super::selection::SelectionTarget::Group(group) => BrowserAction::RenameGroup(group, name.trim().to_owned()),
+                super::selection::SelectionTarget::Folder { group, path } => {
+                    BrowserAction::RenameNestedGroup { group, group_path: path, text: name.trim().to_owned() }
+                }
+                super::selection::SelectionTarget::Item { .. } => return,
+            });
             advance_group_rename(&ctx, request_id, name_id, true);
         }
         Some(false) => advance_group_rename(&ctx, request_id, name_id, false),
@@ -107,23 +115,43 @@ pub(crate) fn show_rename_group_dialog(ui: &mut egui::Ui, panel: &str, actions: 
 }
 
 /// Render the card rename popup, including the adapter's real preset preview in its first column.
-pub(crate) fn show_rename_card_dialog(ui: &mut egui::Ui, panel: &str, groups: &[GroupView], actions: &mut Vec<BrowserAction>, paint_item: &mut PaintItem<'_>) {
+fn show_next_item_rename(ui: &mut egui::Ui, panel: &str, groups: &[GroupView], actions: &mut Vec<BrowserAction>, paint_item: &mut PaintItem<'_>) {
     let ctx = ui.ctx().clone();
-    let request_id = egui::Id::new((RENAME_CARD, panel));
-    let queued = ctx.data_mut(|data| data.remove_temp::<Option<BrowserAction>>(egui::Id::new((RENAME_CARD, panel, "request")))).flatten();
-    let action = queued.or_else(|| actions.iter().position(|action| matches!(action, BrowserAction::BeginRenameItems(_))).map(|index| actions.remove(index)));
-    if let Some(BrowserAction::BeginRenameItems(items)) = action {
-        let mut items = items.into_iter();
+    let request_id = egui::Id::new((RENAME_CARD, panel, "request"));
+    let defer = ctx.data_mut(|data| data.remove_temp::<bool>(request_id.with("defer")).unwrap_or(false));
+    let queued = if defer { None } else { ctx.data_mut(|data| data.remove_temp::<Option<BrowserAction>>(request_id)).flatten() };
+    let action = if defer {
+        None
+    } else {
+        queued.or_else(|| actions.iter().position(|action| matches!(action, BrowserAction::BeginRenameSelection { .. })).map(|index| actions.remove(index)))
+    };
+    if let Some(BrowserAction::BeginRenameSelection { targets }) = action {
+        let headers = targets.iter().filter(|target| !matches!(target, super::selection::SelectionTarget::Item { .. })).cloned().collect::<Vec<_>>();
+        let mut items = targets.into_iter().filter_map(|target| match target {
+            super::selection::SelectionTarget::Item { group, path, key } => groups
+                .iter()
+                .find(|view| view.name == group)
+                .and_then(|view| view.items.iter().find(|item| item.key == key && item.group_path == path))
+                .map(|item| (group, item.clone())),
+            super::selection::SelectionTarget::Group(_) | super::selection::SelectionTarget::Folder { .. } => None,
+        });
         if let Some((group, item)) = items.next() {
-            let group = group.clone();
-            let item = item.clone();
             let name = item.name.clone();
             ctx.data_mut(|data| {
+                if !headers.is_empty() {
+                    data.insert_temp(egui::Id::new((RENAME_HEADERS_AFTER_ITEMS, panel)), headers);
+                }
                 data.insert_temp(request_id.with("targets"), items.collect::<Vec<_>>());
                 data.insert_temp(request_id.with("group"), group);
                 data.insert_temp(request_id.with("item"), item);
                 data.insert_temp(request_id.with("name"), name);
                 data.insert_temp(request_id, true);
+            });
+        } else if !headers.is_empty() {
+            let group_request = egui::Id::new((RENAME_GROUP, panel, "request"));
+            ctx.data_mut(|data| {
+                data.insert_temp(group_request, Some(BrowserAction::BeginRenameSelection { targets: headers }));
+                data.insert_temp(egui::Id::new((RENAME_GROUP, panel)).with("defer"), true);
             });
         }
     }
@@ -148,13 +176,26 @@ pub(crate) fn show_rename_card_dialog(ui: &mut egui::Ui, panel: &str, groups: &[
                 key: item.key.clone(),
                 text: name.trim().to_owned(),
             });
-            advance_card_rename(&ctx, request_id, name_id, true);
+            advance_card_rename(&ctx, panel, request_id, name_id, true);
         }
-        Some(false) => advance_card_rename(&ctx, request_id, name_id, false),
+        Some(false) => advance_card_rename(&ctx, panel, request_id, name_id, false),
         _ => {
             ctx.data_mut(|data| data.insert_temp(name_id, name));
         }
     }
+}
+
+/// Run the rename workflow for the complete browser selection, regardless of its composition.
+/// Group and card editors are merely target-specific presentations within this one batch.
+pub(crate) fn show_rename_selection_dialog(
+    ui: &mut egui::Ui,
+    panel: &str,
+    groups: &[GroupView],
+    actions: &mut Vec<BrowserAction>,
+    paint_item: &mut PaintItem<'_>,
+) {
+    show_next_item_rename(ui, panel, groups, actions, paint_item);
+    show_next_group_rename(ui, panel, actions);
 }
 
 fn show_group_name_editor(ctx: &egui::Context, request_id: egui::Id, title: &str, name: &mut String, decision: &mut Option<bool>) {
@@ -224,7 +265,7 @@ fn show_card_name_editor(
             }
             let middle_width = 220.0;
             ui.allocate_ui_with_layout(egui::vec2(middle_width, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.label("Name:");
+                ui.label("Name");
                 let input_width = (ui.available_width() - 6.0).max(40.0);
                 let output = egui::TextEdit::singleline(name).desired_width(input_width).cursor_at_end(true).show(ui);
                 if !ctx.data(|data| data.get_temp::<bool>(name_id.with("focused")).unwrap_or(false)) {
@@ -266,7 +307,7 @@ fn card_type_name(panel: &str) -> &'static str {
     }
 }
 
-fn advance_card_rename(ctx: &egui::Context, request_id: egui::Id, name_id: egui::Id, confirmed: bool) {
+fn advance_card_rename(ctx: &egui::Context, panel: &str, request_id: egui::Id, name_id: egui::Id, confirmed: bool) {
     ctx.data_mut(|data| {
         data.remove::<String>(name_id);
         data.remove::<bool>(name_id.with("focused"));
@@ -283,6 +324,14 @@ fn advance_card_rename(ctx: &egui::Context, request_id: egui::Id, name_id: egui:
             data.remove::<String>(request_id.with("group"));
             data.remove::<crate::pickers::browser::asset_browser::ItemView>(request_id.with("item"));
             data.remove::<bool>(request_id);
+            let pending_headers_id = egui::Id::new((RENAME_HEADERS_AFTER_ITEMS, panel));
+            let pending_headers = data.get_temp::<Vec<super::selection::SelectionTarget>>(pending_headers_id);
+            data.remove::<Vec<super::selection::SelectionTarget>>(pending_headers_id);
+            if confirmed && let Some(headers) = pending_headers.filter(|headers| !headers.is_empty()) {
+                let group_request = egui::Id::new((RENAME_GROUP, panel, "request"));
+                data.insert_temp(group_request, Some(BrowserAction::BeginRenameSelection { targets: headers }));
+                data.insert_temp(egui::Id::new((RENAME_GROUP, panel)).with("defer"), true);
+            }
         }
     });
 }
@@ -299,16 +348,21 @@ fn advance_group_rename(ctx: &egui::Context, request_id: egui::Id, name_id: egui
     ctx.data_mut(|data| {
         data.remove::<String>(name_id);
         data.remove::<bool>(name_id.with("focused"));
-        data.remove::<String>(request_id.with(RENAME_TARGET));
-        let mut queue = data.get_temp::<Vec<String>>(request_id.with(RENAME_QUEUE)).unwrap_or_default();
+        data.remove::<super::selection::SelectionTarget>(request_id.with(RENAME_TARGET));
+        let mut queue = data.get_temp::<Vec<super::selection::SelectionTarget>>(request_id.with(RENAME_QUEUE)).unwrap_or_default();
         if confirmed && !queue.is_empty() {
             let next = queue.remove(0);
+            let name = match &next {
+                super::selection::SelectionTarget::Group(group) => group.clone(),
+                super::selection::SelectionTarget::Folder { path, .. } => path.last().cloned().unwrap_or_default(),
+                super::selection::SelectionTarget::Item { .. } => String::new(),
+            };
             data.insert_temp(request_id.with(RENAME_TARGET), next.clone());
-            data.insert_temp(name_id, next);
+            data.insert_temp(name_id, name);
             data.insert_temp(request_id.with(RENAME_QUEUE), queue);
             data.insert_temp(request_id, true);
         } else {
-            data.remove::<Vec<String>>(request_id.with(RENAME_QUEUE));
+            data.remove::<Vec<super::selection::SelectionTarget>>(request_id.with(RENAME_QUEUE));
             data.remove::<bool>(request_id);
         }
     });
@@ -455,6 +509,22 @@ fn is_delete(action: &BrowserAction) -> bool {
 }
 
 fn describe(actions: &[BrowserAction], groups: &[GroupView], panel: &str) -> (String, String) {
+    let contains_group = actions.iter().any(|action| matches!(action, BrowserAction::DeleteGroup(_) | BrowserAction::DeleteNestedGroup { .. }));
+    let contains_item = actions.iter().any(|action| matches!(action, BrowserAction::DeleteItem { .. }));
+    if contains_group && contains_item {
+        let kind = match panel {
+            "gradients" => "gradient",
+            "swatches" => "swatch",
+            "patterns" => "pattern",
+            "styles" => "style",
+            "shapes" => "shape",
+            "brushes" => "brush",
+            "toolPresets" => "tool preset",
+            "cloneSource" => "clone source",
+            _ => "item",
+        };
+        return (format!("{kind} and group"), String::new());
+    }
     if groups_only(actions) {
         let name = match actions.first() {
             Some(BrowserAction::DeleteGroup(group)) => group.clone(),
@@ -492,6 +562,8 @@ fn groups_only(actions: &[BrowserAction]) -> bool {
 
 fn delete_confirmation_messages(kind: &str) -> (&'static str, &'static str) {
     match kind {
+        "gradient and group" => ("Delete the selected gradient and group?", "Delete the selected gradients and groups?"),
+        kind if kind.ends_with(" and group") => ("Delete the selected item and group?", "Delete the selected items and groups?"),
         "group" => ("Delete group \"{name}\" and its gradients?", "Delete the selected groups and their gradients?"),
         "gradient" => ("Delete gradient \"{name}\"?", "Delete the selected gradients?"),
         "swatch" => ("Delete swatch \"{name}\"?", "Delete the selected swatches?"),
@@ -510,7 +582,7 @@ mod tests {
     use egui::vec2;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    use super::{next_group_name, request_new_group, show_new_group_dialog, show_popup_dialog, show_rename_group_dialog};
+    use super::{next_group_name, request_new_group, show_new_group_dialog, show_popup_dialog, show_rename_selection_dialog};
     use crate::pickers::browser::asset_browser::GroupView;
 
     #[test]
@@ -568,8 +640,10 @@ mod tests {
     #[test]
     fn rename_group_opens_the_shared_dialog_with_the_existing_name() {
         let mut harness = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui(|ui| {
-            let mut actions = vec![super::BrowserAction::BeginRenameGroup("Existing Group".into())];
-            show_rename_group_dialog(ui, "rename-test", &mut actions);
+            let mut actions =
+                vec![super::BrowserAction::BeginRenameSelection { targets: vec![super::super::selection::SelectionTarget::Group("Existing Group".into())] }];
+            let mut paint = |_: &egui::Ui, _: egui::Rect, _: usize, _: usize, _: super::ItemPaintState| {};
+            show_rename_selection_dialog(ui, "rename-test", &[], &mut actions, &mut paint);
             assert!(actions.is_empty(), "the rename request is consumed by the dialog");
         });
         crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
@@ -583,6 +657,68 @@ mod tests {
             }),
             "the popup title is Rename Group"
         );
+    }
+
+    #[test]
+    fn renaming_a_selected_folder_header_targets_only_that_header() {
+        let initial = vec![super::BrowserAction::BeginRenameSelection {
+            targets: vec![super::super::selection::SelectionTarget::Folder { group: "Parent".into(), path: vec!["Nested".into()] }],
+        }];
+        let mut harness = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui_state(
+            |ui, actions: &mut Vec<super::BrowserAction>| {
+                let mut paint = |_: &egui::Ui, _: egui::Rect, _: usize, _: usize, _: super::ItemPaintState| {};
+                show_rename_selection_dialog(ui, "folder-rename-test", &[], actions, &mut paint);
+            },
+            initial,
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(3);
+        assert!(harness.query_by_label("Name").is_some());
+        assert!(harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Rename Folder")));
+
+        harness.get_by_label("OK").click();
+        harness.run_steps(3);
+
+        assert!(harness.state().iter().any(|action| matches!(
+            action,
+            super::BrowserAction::RenameNestedGroup { group, group_path, text }
+                if group == "Parent" && group_path == &["Nested"] && text == "Nested"
+        )));
+    }
+
+    #[test]
+    fn mixed_selection_rename_runs_card_before_parent_group_dialog() {
+        use crate::pickers::browser::asset_browser::{BrowserAction, ItemPaintState, ItemView};
+
+        let groups = vec![GroupView {
+            name: "A".into(),
+            root_only: false,
+            items: vec![ItemView { key: "gradient-a".into(), name: "Gradient A".into(), group_path: Vec::new() }],
+        }];
+        let initial = vec![BrowserAction::BeginRenameSelection {
+            targets: vec![
+                super::super::selection::SelectionTarget::Group("B".into()),
+                super::super::selection::SelectionTarget::Item { group: "A".into(), path: Vec::new(), key: "gradient-a".into() },
+            ],
+        }];
+        let mut harness = Harness::builder().with_size(vec2(640.0, 480.0)).build_ui_state(
+            |ui, actions: &mut Vec<BrowserAction>| {
+                let mut paint_item = |_: &egui::Ui, _: egui::Rect, _: usize, _: usize, _: ItemPaintState| {};
+                show_rename_selection_dialog(ui, "gradients", &groups, actions, &mut paint_item);
+            },
+            initial,
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(3);
+
+        assert!(harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text().contains("Name"))));
+        harness.get_by_label("OK").click();
+        harness.run_steps(5);
+        assert!(harness.state().iter().any(|action| matches!(action, BrowserAction::RenameItem { group, key, .. } if group == "A" && key == "gradient-a")));
+        assert!(harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Rename Group")));
+        harness.get_by_label("OK").click();
+        harness.run_steps(4);
+        assert!(harness.state().iter().any(|action| matches!(action, BrowserAction::RenameGroup(group, _) if group == "B")));
     }
 
     #[test]

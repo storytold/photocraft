@@ -187,6 +187,117 @@ fn wrapped_list_uses_fixed_width_column_major_flow_and_shift_selection_order() {
 }
 
 #[test]
+fn shift_selection_spans_visible_groups_and_cards_but_skips_collapsed_group_contents() {
+    let groups = vec![group("A", vec![item("a1", "Hidden card A1", &[]), item("a2", "Hidden card A2", &[])]), group("B", vec![item("b1", "Card B1", &[])])];
+    let mut state = PresetUi::default();
+    state.toggled.insert(format!("{PANEL}/A"));
+    let mut harness = harness_with_state(groups, vec2(520.0, 520.0), state);
+    let click = |harness: &mut Harness<'static, UiTestState>, point: Pos2, modifiers: Modifiers| {
+        harness.hover_at(point);
+        harness.event(Event::ModifiersChanged(modifiers));
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers });
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers });
+        harness.run_steps(2);
+        harness.event(Event::ModifiersChanged(Modifiers::NONE));
+        harness.run_steps(1);
+    };
+
+    let first_group = harness.get_by_label("A").rect().center();
+    let visible_card = harness.get_by_label("Card B1").rect().center();
+    click(&mut harness, first_group, Modifiers::NONE);
+    click(&mut harness, visible_card, Modifiers::SHIFT);
+
+    let selected = &harness.state().0.browser_selection[PANEL];
+    assert!(selected.contains(&PickerId::group("A")));
+    assert!(selected.contains(&PickerId::group("B")));
+    assert!(selected.contains(&PickerId::item("B", "b1")), "visible cards remain part of the same Shift range as group headers");
+    assert_eq!(selected.len(), 3, "collapsed group contents must not leak into the visible Shift-selection range");
+    assert!(!selected.contains(&PickerId::item("A", "a1")));
+    assert!(!selected.contains(&PickerId::item("A", "a2")));
+}
+
+#[test]
+fn selecting_multiple_group_headers_produces_a_group_rename_batch() {
+    use crate::pickers::browser::context_menu::SelectionMenuModel;
+
+    let groups = vec![group("A", vec![item("a1", "Card A1", &[])]), group("B", vec![item("b1", "Card B1", &[])])];
+    let mut harness = harness_with_state(groups, vec2(520.0, 520.0), PresetUi::default());
+    let click = |harness: &mut Harness<'static, UiTestState>, point: Pos2, modifiers: Modifiers| {
+        harness.hover_at(point);
+        harness.event(Event::ModifiersChanged(modifiers));
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers });
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers });
+        harness.run_steps(2);
+        harness.event(Event::ModifiersChanged(Modifiers::NONE));
+        harness.run_steps(1);
+    };
+
+    let first_group = harness.get_by_label("A").rect().center();
+    let second_group = harness.get_by_label("B").rect().center();
+    click(&mut harness, first_group, Modifiers::NONE);
+    click(&mut harness, second_group, Modifiers::CTRL);
+
+    let selected = &harness.state().0.browser_selection[PANEL];
+    assert_eq!(selected, &std::collections::BTreeSet::from([PickerId::group("A"), PickerId::group("B")]));
+    let summary = harness.state().0.browser_selection_snapshot[PANEL].clone();
+    let menu = SelectionMenuModel::new("Asset", &summary);
+
+    assert_eq!(menu.rename_label, "Rename Groups…");
+    assert!(matches!(menu.rename_action, Some(BrowserAction::BeginRenameSelection { targets }) if targets == [
+        crate::pickers::browser::selection::SelectionTarget::Group("A".into()),
+        crate::pickers::browser::selection::SelectionTarget::Group("B".into()),
+    ]));
+}
+
+#[test]
+fn mixed_card_and_group_shift_selection_keeps_group_in_rename_and_delete_actions() {
+    use crate::pickers::browser::context_menu::SelectionMenuModel;
+
+    let groups = vec![group("A", vec![item("gradient-a", "Gradient A", &[])]), group("B", vec![item("gradient-b", "Gradient B", &[])])];
+    let mut harness = harness_with_state(groups, vec2(520.0, 520.0), PresetUi::default());
+    let click = |harness: &mut Harness<'static, UiTestState>, point: Pos2, modifiers: Modifiers| {
+        harness.hover_at(point);
+        harness.event(Event::ModifiersChanged(modifiers));
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers });
+        harness.run_steps(1);
+        harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers });
+        harness.run_steps(2);
+        harness.event(Event::ModifiersChanged(Modifiers::NONE));
+        harness.run_steps(1);
+    };
+
+    let gradient_b = harness.get_by_label("Gradient B").rect().center();
+    let gradient_a = harness.get_by_label("Gradient A").rect().center();
+    click(&mut harness, gradient_b, Modifiers::NONE);
+    click(&mut harness, gradient_a, Modifiers::SHIFT);
+
+    let selected = &harness.state().0.browser_selection[PANEL];
+    assert_eq!(selected, &std::collections::BTreeSet::from([PickerId::item("A", "gradient-a"), PickerId::group("B"), PickerId::item("B", "gradient-b")]));
+    let summary = harness.state().0.browser_selection_snapshot[PANEL].clone();
+    let menu = SelectionMenuModel::new("Gradient", &summary);
+
+    assert_eq!(menu.rename_label, "Rename Gradients and Groups…");
+    assert!(
+        matches!(&menu.rename_action, Some(BrowserAction::BeginRenameSelection { targets }) if targets == &[
+            crate::pickers::browser::selection::SelectionTarget::Item { group: "A".into(), path: Vec::new(), key: "gradient-a".into() },
+            crate::pickers::browser::selection::SelectionTarget::Item { group: "B".into(), path: Vec::new(), key: "gradient-b".into() },
+            crate::pickers::browser::selection::SelectionTarget::Group("B".into()),
+        ]),
+        "rename request should preserve every explicitly selected target and rename cards before their group; resolved selection={summary:?}"
+    );
+    assert_eq!(menu.delete_label, "Delete Gradients and Groups…");
+    assert!(matches!(menu.delete_actions.as_slice(), [
+        BrowserAction::DeleteItem { group: item_group, key, .. },
+        BrowserAction::DeleteGroup(group),
+    ] if group == "B" && item_group == "A" && key == "gradient-a"));
+}
+
+#[test]
 fn secondary_click_uses_the_same_modifier_selection_and_empty_clear_rules() {
     let groups = vec![group("A", vec![item("a1", "Card 1", &[]), item("a2", "Card 2", &[]), item("a3", "Card 3", &[])])];
     let mut harness = harness_with_state(groups, vec2(520.0, 520.0), PresetUi::default());
@@ -388,7 +499,8 @@ fn text_only_wraps_at_180px_by_default_and_can_be_unwrapped() {
     let mut unwrapped_state = PresetUi::default();
     unwrapped_state.display_modes.insert(PANEL.to_owned(), Mode::TextOnly);
     unwrapped_state.wrap_list.insert(PANEL.to_owned(), false);
-    let unwrapped = harness_with_state(vec![group("A", vec![item("a1", "Text card 1", &[]), item("a2", "Text card 2", &[])])], vec2(520.0, 520.0), unwrapped_state);
+    let unwrapped =
+        harness_with_state(vec![group("A", vec![item("a1", "Text card 1", &[]), item("a2", "Text card 2", &[])])], vec2(520.0, 520.0), unwrapped_state);
     let first = unwrapped.query_all_by_label("Text card 1").map(|node| node.rect()).max_by(|a, b| a.width().total_cmp(&b.width())).unwrap();
     let second = unwrapped.query_all_by_label("Text card 2").map(|node| node.rect()).max_by(|a, b| a.width().total_cmp(&b.width())).unwrap();
     assert!(first.width() > 400.0, "unwrapped Text Only rows span the available width: {first:?}");

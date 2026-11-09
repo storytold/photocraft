@@ -197,8 +197,6 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             BrowserAction::Import => crate::preset_files_ui::import_gradients_dialog(app),
             BrowserAction::ExportSelected(names) => export_selected_gradients_dialog(app, &names),
-            // Only the brush browser supports nested-group context actions.
-            BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "gradients", "gradient.presets", &event, json!({"name": "Custom"}));
             }
@@ -296,10 +294,8 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &cra
         crate::preset_files_ui::import_gradients_dialog(app);
         ui.close();
     }
-    let selection_actions = ui.ctx().data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-selection-actions", "gradients"))).unwrap_or_default());
-    let delete_actions = ui.ctx().data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-delete-selection", "gradients"))).unwrap_or_default());
-    let selection = state.browser_selection_summary.get("gradients").cloned().unwrap_or_default();
-    let menu = crate::pickers::browser::context_menu::SelectionMenuModel::new("gradients", "Gradient", &selection_actions, &delete_actions, &selection, false);
+    let selection = state.browser_selection_snapshot.get("gradients").cloned().unwrap_or_default();
+    let menu = crate::pickers::browser::context_menu::SelectionMenuModel::new("Gradient", &selection);
     let selected_names = menu.export_items;
     if crate::menu_keys::menu_item_button(ui, tl!("Export Selected Gradients…"), !selected_names.is_empty()).clicked() {
         export_selected_gradients_dialog(app, &selected_names);
@@ -320,14 +316,14 @@ mod tests {
 
     #[test]
     fn export_selection_includes_cards_from_selected_groups_and_mixed_selections() {
-        let selection = crate::pickers::state::BrowserSelectionSummary {
+        let selection = crate::pickers::state::BrowserSelectionSnapshot {
             contains_card: true,
             contains_group: true,
             cards: vec![("Basics".into(), "Blue 01".into()), ("Blues".into(), "Blue 02".into())],
             groups: vec!["Basics".into()],
             ..Default::default()
         };
-        let menu = crate::pickers::browser::context_menu::SelectionMenuModel::new("gradients", "Gradient", &[], &[], &selection, false);
+        let menu = crate::pickers::browser::context_menu::SelectionMenuModel::new("Gradient", &selection);
         assert_eq!(menu.export_items, ["Blue 01", "Blue 02"]);
     }
 

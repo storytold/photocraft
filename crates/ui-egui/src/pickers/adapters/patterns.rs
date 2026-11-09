@@ -205,8 +205,6 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             BrowserAction::Import => crate::preset_files_ui::import_patterns_dialog(app),
             BrowserAction::ExportSelected(names) => export_selected_patterns_dialog(app, &names),
-            // Only the brush browser supports nested-group context actions.
-            BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "patterns", "pattern.presets", &event, json!({}));
             }
