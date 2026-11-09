@@ -192,9 +192,11 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
             shift = crate::artboard_cmds::fit_canvas(doc);
         }
         // The Move tool carries the selection along when it moves several layers whole, as
-        // Photoshop does (#7538): one step, so Undo takes both back.
+        // Photoshop does (#7538): one step, so Undo takes both back. Wrap it only when a
+        // wrapping target moves; a selection of shapes would jump a canvas if it folded.
         if carry {
-            doc.selection = doc.selection.as_ref().map(|sel| move_surface(sel, dx, dy, tile));
+            let sel_wrap = tile.filter(|_| ids.iter().any(|id| doc.layer(*id).is_some_and(|l| subtree_wraps_only(l, 0))));
+            doc.selection = doc.selection.as_ref().map(|sel| move_surface(sel, dx, dy, sel_wrap));
         }
         Ok(nested)
     })?;
@@ -411,7 +413,7 @@ fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool) -> bo
 }
 
 fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
-    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() || l.frame.is_some() {
         return false;
     }
     if l.vector_mask.as_ref().is_some_and(|m| m.linked) && !wraps_linked_masks(&l.content) {
@@ -431,10 +433,15 @@ fn move_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, wrap: Option<p
     }
 }
 
-/// Linked raster and vector masks wrap with the layer when its pixels wrap (raster, groups,
-/// adjustments, fills). Type, shapes and smart objects keep the raw delta, so their masks do too.
+/// Linked raster and vector masks wrap with the layer when its pixels wrap. A group's mask wraps
+/// only when every descendant does; otherwise the mask would slide off a shape that kept the raw
+/// delta. Type, shapes and smart objects keep the raw delta, so their masks do too.
 pub(crate) fn wraps_linked_masks(content: &LayerContent) -> bool {
-    !matches!(content, LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_))
+    match content {
+        LayerContent::Raster(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) => true,
+        LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps_only(c, 0)),
+        _ => false,
+    }
 }
 
 fn tile_period(tile: photocraft_geom::Rect) -> Option<(i32, i32)> {
@@ -498,14 +505,24 @@ fn shifted_piece(s: &photocraft_raster::Surface, dest: photocraft_geom::Rect, fr
 }
 
 /// Drop samples `translated` kept because a tile-aligned shift clones whole 256×256 tiles.
+/// Only stored tiles are visited, so a sparse layer on a large canvas does not allocate the
+/// empty space between them.
 fn clip_to_rect(s: &mut photocraft_raster::Surface, dest: photocraft_geom::Rect) {
-    let extra = s.tile_bounds();
-    if extra.is_empty() || dest.contains_rect(&extra) {
+    let coords: Vec<_> = s.tiles().map(|(c, _)| *c).collect();
+    if coords.is_empty() {
         return;
     }
     let px = s.default_pixel();
-    for r in rect_minus(extra, dest) {
-        s.fill_rect(r, &px);
+    for c in coords {
+        let tr = c.rect();
+        let hit = tr.intersect(&dest);
+        if hit.is_empty() {
+            s.fill_rect(tr, &px);
+        } else if hit != tr {
+            for r in rect_minus(tr, dest) {
+                s.fill_rect(r, &px);
+            }
+        }
     }
     s.prune();
 }
@@ -525,9 +542,10 @@ fn copy_rect(dst: &mut photocraft_raster::Surface, src: &photocraft_raster::Surf
     }
 }
 
-/// Fold a vector mask the way [`wrap_surface`] folds samples: union of the wrap-zone copies that
-/// still overlap `tile`. Type and shapes keep the raw delta; this is only for linked masks on
-/// wrapping layers.
+/// Fold a linked vector mask the way [`wrap_surface`] folds samples. Subpaths that start outside
+/// the canvas stay put. Intersect/subtract masks keep the raw delta: flattening those copies
+/// would change the Boolean. Simple combine masks wrap as at most four zone copies of the
+/// in-canvas subpaths.
 pub(crate) fn wrap_path(path: &photocraft_doc::Path, dx: i32, dy: i32, tile: photocraft_geom::Rect) -> photocraft_doc::Path {
     let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
     let Some((w, h)) = tile_period(tile) else { return path.transform(&a) };
@@ -536,8 +554,39 @@ pub(crate) fn wrap_path(path: &photocraft_doc::Path, dx: i32, dy: i32, tile: pho
     if dx == 0 && dy == 0 {
         return path.clone();
     }
+    // Intersect/subtract/exclude copies would flatten into one Boolean and hide a seam. Keep
+    // the raw delta; only Combine/Join can be unioned as wrap-zone copies.
+    let simple = !path.inverted && path.subpaths.iter().all(|s| matches!(s.op, photocraft_doc::PathOp::Combine | photocraft_doc::PathOp::Join));
+    if !simple {
+        return path.transform(&a);
+    }
+    let mut outside = Vec::new();
+    let mut inside = Vec::new();
+    for sub in &path.subpaths {
+        let one = photocraft_doc::Path { subpaths: vec![sub.clone()], fill_rule: path.fill_rule, inverted: false };
+        if path_overlaps_tile(&one, tile) {
+            inside.push(sub.clone());
+        } else {
+            outside.push(sub.clone());
+        }
+    }
+    if inside.is_empty() {
+        return path.clone();
+    }
+    let inside_path = photocraft_doc::Path { subpaths: inside, fill_rule: path.fill_rule, inverted: false };
+    let mut wrapped = wrap_simple_inside(&inside_path, dx, dy, tile, w, h);
+    wrapped.subpaths.extend(outside);
+    wrapped
+}
+
+fn wrap_simple_inside(path: &photocraft_doc::Path, dx: i32, dy: i32, tile: photocraft_geom::Rect, w: i32, h: i32) -> photocraft_doc::Path {
     let moved = path.transform(&photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
     if path_inside_tile(&moved, tile) {
+        return moved;
+    }
+    // Already a handful of wrap copies: another pass would duplicate them. Keep the raw in-canvas
+    // shift; the next wrap that still fits will fold again.
+    if path.subpaths.len() > 4 {
         return moved;
     }
     let mut out = photocraft_doc::Path { subpaths: Vec::new(), fill_rule: moved.fill_rule, inverted: moved.inverted };

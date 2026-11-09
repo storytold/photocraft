@@ -136,7 +136,10 @@ fn exceeds(doc: &Document, ids: &[LayerId], limit: u64, mask_target: bool) -> bo
 }
 
 /// Preview keys of move drags: `BASE + n`, one per offset shown (see `canvas::display_doc`).
+/// [`PATTERN_BIT`] marks a wrapped preview so a mid-drag Pattern Preview toggle cannot reuse
+/// the other mode's cached pixels (`is_preview_key` still holds: `BASE + bit + n < BASE << 1`).
 const BASE: u64 = 1 << 39;
+const PATTERN_BIT: u64 = 1 << 20;
 
 pub(crate) struct MovePreview {
     doc: DocId,
@@ -149,7 +152,7 @@ pub(crate) struct MovePreview {
     /// than the canvas brings its pixels from beyond the edge into view (`None` = anything).
     bounds: Option<Rect>,
     canvas: Rect,
-    /// Offsets shown so far, by preview key (`BASE + index`).
+    /// Offsets shown so far, by preview key (`BASE + index`, with [`PATTERN_BIT`] when wrapping).
     offsets: Vec<(i32, i32)>,
     /// The document at the latest offset.
     shown: Option<Arc<Document>>,
@@ -164,13 +167,16 @@ pub(crate) struct MovePreview {
 
 impl MovePreview {
     fn key(&self) -> u64 {
-        BASE + self.offsets.len() as u64
+        BASE + self.offsets.len() as u64 + if self.pattern { PATTERN_BIT } else { 0 }
     }
     fn offset_of(&self, key: u64) -> Option<(i32, i32)> {
         if key == 0 {
             return Some((0, 0));
         }
-        let i = usize::try_from(key.checked_sub(BASE + 1)?).ok()?;
+        if (key & PATTERN_BIT != 0) != self.pattern {
+            return None;
+        }
+        let i = usize::try_from((key & !PATTERN_BIT).checked_sub(BASE + 1)?).ok()?;
         self.offsets.get(i).copied()
     }
     fn area(&self, d: (i32, i32)) -> Option<Rect> {
@@ -405,7 +411,8 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     // The raw drag, including a whole number of canvases. `layer.translate` drops that only
     // when every target is raster samples folding back onto themselves.
     let at = (dx as i32, dy as i32);
-    let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at));
+    let pattern = app.ui.view.pattern_preview;
+    let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at) && p.pattern == pattern);
     if dx == 0.0 && dy == 0.0 {
         return;
     }

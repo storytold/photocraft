@@ -2111,3 +2111,94 @@ fn translate_wrap_moves_a_shape_mask_by_the_raw_delta() {
     assert!(mask.sample_channel(9, 1, 0) > 0.9, "the mask followed the shape off-canvas");
     assert!(mask.sample_channel(1, 1, 0) < 0.1, "the mask did not wrap onto the opposite edge");
 }
+
+/// A linked vector mask that already sits outside the canvas stays there; wrapping it in would
+/// reveal pixels the mask was hiding.
+#[test]
+fn translate_wrap_leaves_an_off_canvas_vector_mask_in_place() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = rect_layer(&mut s, Rect::new(1, 1, 2, 2));
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(id).unwrap().vector_mask = Some(photocraft_doc::VectorMask::new(photocraft_vector::shapes::rect(-4.0, 1.0, 1.0, 1.0)));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.translate", json!({"dx": 1, "dy": 0, "wrap": true})).unwrap();
+    let vm = doc(&s).layer(id).unwrap().vector_mask.as_ref().unwrap();
+    let outside = photocraft_vector::vector_mask_values(vm, Rect::new(-4, 1, -3, 2));
+    let on_canvas = photocraft_vector::vector_mask_values(vm, Rect::new(1, 1, 2, 2));
+    assert!(outside[0] > 0.5, "the mask stayed off-canvas");
+    assert!(on_canvas[0] < 0.5, "the mask did not fold onto previously hidden pixels");
+}
+
+/// Combine masks wrap as a handful of zone copies; repeating a nudge that crosses the edge must
+/// not double the subpath count every time.
+#[test]
+fn wrap_path_caps_repeated_edge_crossings() {
+    let tile = Rect::new(0, 0, 8, 4);
+    let mut path = photocraft_vector::shapes::rect(7.0, 1.0, 1.0, 1.0);
+    for _ in 0..20 {
+        path = wrap_path(&path, 1, 0, tile);
+    }
+    assert!(path.subpaths.len() <= 8, "wrap copies stay bounded: {}", path.subpaths.len());
+}
+
+/// Shapes keep the raw delta, so a selection carried with them must too: wrapping it would leave
+/// later selection-limited edits on the opposite edge.
+#[test]
+fn translate_wrap_does_not_fold_a_selection_of_shapes() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let a = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [1, 1, 2, 2]})).unwrap()["layer"].as_u64().unwrap());
+    let b = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [3, 1, 4, 2]})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+    s.execute("select.rect", json!({"x": 1, "y": 1, "width": 3, "height": 1})).unwrap();
+    s.execute("layer.translate", json!({"dx": 7, "dy": 0, "wrap": true, "selection": true})).unwrap();
+    let sel = doc(&s).selection.as_ref().map(|m| m.content_bounds());
+    assert_eq!(sel, Some(Rect::new(8, 1, 11, 2)), "the selection followed the shapes off-canvas");
+    let xy = |id: LayerId| {
+        let LayerContent::Shape(sh) = &doc(&s).layer(id).unwrap().content else { panic!("shape") };
+        let photocraft_doc::LiveShape::Rect { rect, .. } = sh.live.as_ref().expect("live rect") else { panic!("rect") };
+        [rect[0], rect[1]]
+    };
+    assert_eq!(xy(a), [8.0, 1.0]);
+    assert_eq!(xy(b), [10.0, 1.0]);
+}
+
+/// A group that also holds a shape keeps its linked mask on the raw delta, so the mask still
+/// covers the shape after a wrap move.
+#[test]
+fn translate_wrap_does_not_fold_a_mixed_group_mask() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let raster = rect_layer(&mut s, Rect::new(7, 1, 8, 2));
+    s.execute("shape.create", json!({"kind": "rect", "rect": [2, 1, 3, 2]})).unwrap();
+    s.execute("layer.select", json!({"layer": raster.0, "mode": "add"})).unwrap();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let g = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(g).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(7, 1, 8, 2), &[1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.translate", json!({"dx": 1, "dy": 0, "wrap": true})).unwrap();
+    let mask = &doc(&s).layer(g).unwrap().mask.as_ref().unwrap().surface;
+    assert!(mask.sample_channel(8, 1, 0) > 0.9, "the group mask followed the shape off-canvas");
+    assert!(mask.sample_channel(0, 1, 0) < 0.1, "the group mask did not wrap onto the far edge");
+}
+
+/// Frame geometry is not a tile of samples. A whole-canvas wrap still moves the frame.
+#[test]
+fn translate_wrap_still_moves_a_frame() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = LayerId(s.execute("layer.new.frame", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap()["layer"].as_u64().unwrap());
+    let tx = |s: &Session| s.active().unwrap().doc.layer(id).unwrap().frame.as_ref().unwrap().transform.m[4];
+    let before = tx(&s);
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.translate", json!({"dx": 8, "dy": 0, "wrap": true})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "a framed layer still records a whole-canvas move");
+    assert_eq!(tx(&s), before + 8.0, "the frame kept the raw delta");
+}
