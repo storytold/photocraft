@@ -436,5 +436,10 @@ fn shape_header_paints_correct_icon() {
         });
 
         assert_eq!(painted_texture, Some(expected_texture), "{kind}: Properties header must paint {icon}");
+
+        if kind == "shape" {
+            let image = crate::icons::rasterize_svg(icon, 15, 15).expect("shape icon rasterized");
+            assert!(image.pixels.iter().any(|pixel| pixel.a() > 0), "shape icon must have nontransparent pixels");
+        }
     }
 }
