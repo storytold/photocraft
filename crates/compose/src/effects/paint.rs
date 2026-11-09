@@ -188,9 +188,7 @@ impl GradientMapping {
                         && (self.s == 0.0 || self.cy == other.cy)
                 }
                 GradientStyle::Radial => self.cx == other.cx && self.cy == other.cy && self.len == other.len,
-                GradientStyle::Diamond => {
-                    self.cx == other.cx && self.cy == other.cy && self.c == other.c && self.s == other.s && self.len == other.len
-                }
+                GradientStyle::Diamond => self.cx == other.cx && self.cy == other.cy && self.c == other.c && self.s == other.s && self.len == other.len,
                 GradientStyle::Angle => self.cx == other.cx && self.cy == other.cy && self.angle == other.angle,
             }
     }
