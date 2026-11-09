@@ -30,7 +30,7 @@ fn select(app: &mut PhotocraftApp, id: LayerId) {
 }
 
 fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1600.0, 80.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(4);
     h
