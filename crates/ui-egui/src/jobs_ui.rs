@@ -296,6 +296,32 @@ pub fn start_open(
     }
 }
 
+/// A PDF dialog opens selected page(s) with the explicit import layout and options.
+pub fn start_open_with(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    source: OpenSource,
+    opts: photocraft_io::ImportOptions,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+) -> Result<(), String> {
+    let name = &app.open_name(name);
+    match app.session.start_open_for_user_with_options(name, source, opts, app.background_jobs).map_err(|e| e.to_string())? {
+        // Inline (wasm, or background jobs off): finish now, like a background open that ended at
+        // once. A preflight keeps the slot and set order in its memory prompt.
+        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
+        Started::Job(job) => {
+            app.jobs.opens.push(OpenTab { job, name: name.to_string(), path, slot, order });
+            app.jobs.focus = Some(job);
+            app.ui.chrome.home = None;
+            app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", name)]);
+            app.ui.status_error = false;
+            Ok(())
+        }
+    }
+}
+
 /// Start a set of files opened together: the `batch` of their [`OpenOrder`]s. Its tabs follow the
 /// documents and opens already there. Call [`end_batch`] once every member has been started.
 pub(crate) fn begin_batch(app: &mut PhotocraftApp) -> u64 {
@@ -308,7 +334,6 @@ pub(crate) fn begin_batch(app: &mut PhotocraftApp) -> u64 {
 
 /// A member of a set opened at once (not in the background): its document is in place at the
 /// end, so later members go after it.
-#[cfg(test)]
 pub(crate) fn opened_in_order(jobs: &mut JobsUi, order: OpenOrder) {
     if let Some(batch) = jobs.batches.iter_mut().find(|b| b.id == order.batch) {
         batch.opened.push(order.seq);

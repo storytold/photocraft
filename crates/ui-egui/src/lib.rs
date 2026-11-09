@@ -50,6 +50,7 @@ pub mod monitor_status;
 pub mod notices;
 pub mod os_window;
 pub mod panels;
+pub mod pdf_import_ui;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
@@ -535,6 +536,8 @@ pub struct PhotocraftApp {
     pub(crate) kept: background_redraw::KeptComposites,
     /// Select › Color Range dialog preview (proxy document + mask / image textures).
     pub(crate) color_range: Option<color_range_ui::Preview>,
+    /// PDFs waiting in their Import PDF dialog, with bounded background inspection.
+    pub(crate) pdf_import: Vec<pdf_import_ui::PdfImport>,
     /// Image › Adjustments dialog preview through a temporary clipped adjustment layer.
     pub(crate) adjust_preview: Option<adjust_preview::AdjustPreview>,
     /// The Properties panel's live adjustment-layer drag: its damage region and coverage

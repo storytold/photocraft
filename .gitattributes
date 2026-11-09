@@ -1,0 +1,2 @@
+# Keep synthetic PDF byte offsets stable on Windows and Unix.
+crates/io/tests/fixtures/pdf-three-pages.pdf -text -diff

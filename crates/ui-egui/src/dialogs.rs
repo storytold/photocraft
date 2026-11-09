@@ -330,6 +330,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
 fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if crate::pdf_import_ui::owns(fields) => crate::pdf_import_ui::body(app, ui, fields),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
         _ if crate::color_picker_ui::owns(fields) => {
@@ -561,6 +562,9 @@ fn ok_label(d: &Dialog) -> &'static str {
 
 /// The widest a dialog grows when its body names no width of its own.
 fn default_max_width(d: &Dialog, compact: bool, curves: bool, about_tabs: bool, available: f32) -> f32 {
+    if crate::pdf_import_ui::owns(&d.fields) {
+        return crate::pdf_import_ui::WIDTH;
+    }
     if d.kind == DialogKind::NewDocument {
         800.0
     } else if about_tabs {
@@ -1097,6 +1101,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 /// The rest of the command dialogs: files, colour, preferences and export, then any other command.
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
+        _ if crate::pdf_import_ui::owns(&d.fields) => crate::pdf_import_ui::confirm(app, &d.fields),
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
@@ -1177,6 +1182,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     if crate::preset_group_prompt::owns(&closed.fields) {
         crate::preset_group_prompt::cancel(app);
     }
+    if crate::pdf_import_ui::owns(&closed.fields) { crate::pdf_import_ui::forget(app, id); }
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
     app.filter_preview = None;
     app.color_range = None;

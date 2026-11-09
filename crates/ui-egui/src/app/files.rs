@@ -82,6 +82,9 @@ impl PhotocraftApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
+        if crate::pdf_import_ui::wants_dialog(name, bytes) {
+            return crate::pdf_import_ui::open(self, name, path, bytes).map(|_| Vec::new());
+        }
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
@@ -140,6 +143,13 @@ impl PhotocraftApp {
             },
         );
         Ok(warnings)
+    }
+
+    /// Open selected PDF pages with the explicit layout, still on the standard background open job.
+    pub(crate) fn open_bytes_with(&mut self, name: &str, bytes: &[u8], path: Option<&str>, opts: photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
+        let name = self.open_name(name);
+        crate::jobs_ui::start_open_with(self, &name, path.map(str::to_string), crate::jobs_ui::bytes(bytes), opts, None, None)?;
+        Ok(Vec::new())
     }
 
     /// Open bytes supplied by an authenticated automation client without
