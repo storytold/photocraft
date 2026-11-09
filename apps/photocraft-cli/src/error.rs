@@ -41,6 +41,8 @@ pub(crate) enum CliError {
     BatchOption(String),
     #[error("{0} file(s) failed")]
     FilesFailed(usize),
+    #[error("{0}")]
+    Other(String),
 }
 
 pub(crate) type Result<T = (), E = CliError> = std::result::Result<T, E>;
