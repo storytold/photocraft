@@ -263,6 +263,9 @@ mod triangle_shift_equilateral_tests;
 #[cfg(test)]
 mod rectangle_gear_tests;
 
+#[cfg(test)]
+mod freeform_indexed_shape_tests;
+
 pub(crate) use pen::freeform_locked_shape;
 #[cfg(test)]
 use pen_resume::pen_finish_on_redo;
