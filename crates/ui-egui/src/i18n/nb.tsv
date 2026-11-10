@@ -4489,7 +4489,7 @@ curves	Smooth	Jevn ut
 	This Layer:	Dette laget:
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Dette smartobjektet må rasteriseres før du fortsetter. Innholdet kan da ikke lenger redigeres. Rasterisere smartobjektet?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Denne justeringen ({key}) beholdes som importert og kan ikke redigeres ennå.
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Dette fyllaget må rasteriseres før du fortsetter. Fyllinnholdet kan da ikke lenger redigeres. Rasterisere laget?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Dette fyllaget må rasteriseres før du fortsetter. Fyllinnholdet kan da ikke lenger redigeres. Rasterisere laget?
 	This layer must be rasterized before proceeding.	Dette laget må rasteriseres før du fortsetter.
 	This session: {reason}	Denne økten: {reason}
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Dette formlaget må rasteriseres før du fortsetter. Det kan da ikke lenger redigeres som form. Rasterisere formen?
