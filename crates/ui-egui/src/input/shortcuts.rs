@@ -698,10 +698,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
-    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
-    // When the document refuses it, ↩ keeps the draft to commit again; Esc keeps it as the Work Path.
+    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769);
+    // ↩ also deselects the Work Path. When the document refuses it, ↩ keeps the draft to commit
+    // again; Esc keeps it as the Work Path.
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
-        crate::vector_ui::pen_commit(app, false);
+        crate::vector_ui::pen_enter(app);
         return true;
     }
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
