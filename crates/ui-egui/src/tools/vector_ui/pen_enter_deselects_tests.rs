@@ -35,7 +35,7 @@ fn listed(h: &Harness<'static, PhotocraftApp>) -> bool {
 }
 
 fn make_buttons_enabled(h: &Harness<'static, PhotocraftApp>) -> [bool; 2] {
-    ["Make Selection", "Make Shape"].map(|label| !h.get_by_label(label).accesskit_node().is_disabled())
+    ["Selection…", "Shape"].map(|label| !h.get_by_label(label).accesskit_node().is_disabled())
 }
 
 #[test]
