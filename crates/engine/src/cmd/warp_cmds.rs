@@ -508,19 +508,24 @@ pub enum Split {
 }
 
 /// The default warp draws rule-of-thirds guides on its single patch. Make those real sections
-/// before a split, so the cut divides the grid on screen instead of replacing it.
-fn commit_default_sections(mesh: &mut BezierMesh) {
-    let _ = mesh.split_u(1.0 / 3.0);
-    let _ = mesh.split_u(2.0 / 3.0);
-    let _ = mesh.split_v(1.0 / 3.0);
-    let _ = mesh.split_v(2.0 / 3.0);
+/// before a split, so the cut divides the grid on screen instead of replacing it. A one-way split
+/// keeps only the thirds across its line and drops the ones it replaces (#12495).
+fn commit_default_sections(mesh: &mut BezierMesh, how: Split) {
+    if !matches!(how, Split::Vertical) {
+        let _ = mesh.split_u(1.0 / 3.0);
+        let _ = mesh.split_u(2.0 / 3.0);
+    }
+    if !matches!(how, Split::Horizontal) {
+        let _ = mesh.split_v(1.0 / 3.0);
+        let _ = mesh.split_v(2.0 / 3.0);
+    }
 }
 
 /// Applies a split (or removes the split nearest `at`) on `w`'s mesh (presets become custom).
 pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
     let mut mesh = w.to_mesh(1, 1);
     if !matches!(how, Split::Remove) && w.style == WarpStyle::Custom && mesh.us.len() == 2 && mesh.vs.len() == 2 {
-        commit_default_sections(&mut mesh);
+        commit_default_sections(&mut mesh, how);
     }
     let (s, t) = match at {
         Some(p) => mesh.param_at(p),
@@ -751,3 +756,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "warp_split_default_grid_tests.rs"]
+mod warp_split_default_grid_tests;
