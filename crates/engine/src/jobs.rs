@@ -927,6 +927,49 @@ pub fn edit_job<R: Send + 'static>(
     )
 }
 
+/// [`edit_job`] for an edit that moves the canvas origin: `f` returns the
+/// [`fit_canvas`](crate::cmd::artboard_cmds) shift alongside its result, and this applies
+/// [`follow_shift`](crate::cmd::artboard_cmds) to it once the document is back, so the Color
+/// Samplers and painting symmetry stay on their pixels (#9302) — on the inline path right after
+/// the edit, on the worker path after the finished document lands.
+pub fn edit_job_follow_shift<R: Send + 'static>(
+    s: &mut Session,
+    label: &str,
+    f: impl FnOnce(&mut Document, &mut Option<LayerId>, &JobCtx) -> Result<(R, (i32, i32))> + Send + 'static,
+    finish: impl FnOnce(R) -> Value + Send + 'static,
+) -> Result<Value> {
+    if !s.jobs.threaded() {
+        // Inline: exactly `Session::edit`, then the shift.
+        let ctx = s.jobs.inline.clone().unwrap_or_default();
+        let (r, shift) = s.edit(label, |doc, active| f(doc, active, &ctx))?;
+        crate::cmd::artboard_cmds::follow_shift(s, shift);
+        return Ok(finish(r));
+    }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let (base, active) = (st.doc.clone(), st.active_layer);
+    let label_owned = label.to_string();
+    run(
+        s,
+        label,
+        true,
+        move |ctx| {
+            let mut doc = (*base).clone();
+            let mut active = active;
+            let (r, shift) = f(&mut doc, &mut active, ctx)?;
+            Ok((doc, active, r, shift))
+        },
+        move |s, (doc, new_active, r, shift)| {
+            s.edit(&label_owned, move |d, active| {
+                *d = doc;
+                *active = new_active;
+                Ok(())
+            })?;
+            crate::cmd::artboard_cmds::follow_shift(s, shift);
+            Ok(finish(r))
+        },
+    )
+}
+
 /// Scan every layer surface's content bounds into the shared tile bounds cache, so the first
 /// draw of a document opened in the background doesn't do it on the UI thread: GPU planning
 /// asks each layer for its bounds, a multi-second scan on a multi-gigabyte PSB (#4024).

@@ -574,7 +574,7 @@ fn delete_variant(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "the selected artboard is not a responsive variant"));
     }
     let neighbors = crate::layer_multi_cmds::deletion_neighbours(&d.doc, id);
-    let next = s.edit("Delete Responsive Variant", |doc, active| {
+    let (next, shift) = s.edit("Delete Responsive Variant", |doc, active| {
         // #7970's model: plain `remove` never prunes (it is also the detach step of
         // rearrangements), so a true deletion prunes the responsive layout itself.
         fn collect_ids(layer: &photocraft_doc::Layer, ids: &mut std::collections::HashSet<photocraft_doc::LayerId>) {
@@ -592,11 +592,12 @@ fn delete_variant(s: &mut Session, p: &Value) -> Result<Value> {
         if doc.layers.is_empty() {
             return Err(EngineError::Other("a document must keep at least one layer".into()));
         }
-        fit_canvas(doc);
+        let shift = fit_canvas(doc);
         let next = neighbors.iter().copied().find(|candidate| doc.layer(*candidate).is_some()).or_else(|| doc.layers.last().map(|layer| layer.id));
         *active = next;
-        Ok(next)
+        Ok((next, shift))
     })?;
+    follow_shift(s, shift);
     if let Some(next) = next {
         crate::layer_multi_cmds::set_selection(s, vec![next], Some(next), Some(next))?;
     }
@@ -1657,7 +1658,7 @@ fn create_variant(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|variant| variant.master)
         .or(source_doc.responsive.master)
         .unwrap_or(source);
-    crate::jobs::edit_job(
+    crate::jobs::edit_job_follow_shift(
         s,
         "Create Artboard Variant",
         move |doc, active, job| {
@@ -1742,12 +1743,12 @@ fn create_variant(s: &mut Session, p: &Value) -> Result<Value> {
                 name: doc.layer(copy).map_or_else(String::new, |l| l.name.clone()),
                 layers: mappings,
             });
-            fit_canvas(doc);
+            let shift = fit_canvas(doc);
             *active = Some(copy);
             let rect = doc.layer(copy).and_then(Layer::artboard).map(|artboard| artboard.rect).ok_or(EngineError::NoLayer(copy))?;
             let scale = ((width as f64) / f64::from(original_rect.width())).min((height as f64) / f64::from(original_rect.height()));
             job.progress(1.0, "Responsive variant ready");
-            Ok((copy, rect, scale))
+            Ok(((copy, rect, scale), shift))
         },
         move |(created, rect, scale)| json!({"layer": created.0, "source": source.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()], "scale": scale}),
     )
@@ -1803,7 +1804,7 @@ fn update_variants(s: &mut Session, p: &Value) -> Result<Value> {
     let dpi = source_doc.resolution_dpi;
     let master_rules: std::collections::HashMap<_, _> = source_doc.responsive.rules.iter().cloned().map(|rule| (rule.layer, rule)).collect();
     let updated_count = variants.len();
-    crate::jobs::edit_job(
+    crate::jobs::edit_job_follow_shift(
         s,
         "Update Responsive Artboards",
         move |doc, _, job| {
@@ -1913,9 +1914,9 @@ fn update_variants(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             job.check()?;
-            fit_canvas(doc);
+            let shift = fit_canvas(doc);
             job.progress(1.0, "Responsive variants updated");
-            Ok((added, removed, conflicts))
+            Ok(((added, removed, conflicts), shift))
         },
         move |(added, removed, conflicts)| json!({"master":master_id.0,"updated":updated_count,"addedLayers":added,"removedLayers":removed,"overridesPreserved":true,"conflicts":conflicts}),
     )
