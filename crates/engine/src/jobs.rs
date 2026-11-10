@@ -1768,6 +1768,8 @@ impl Session {
             let converts = match id {
                 "edit.convertToProfile" => true,
                 "color.profileMismatch" => matches!(params.get("action").and_then(Value::as_str), Some("convert" | "convertToWorking")),
+                "image.mode.indexedColor" | "image.mode.multichannel" | "image.mode.bitmap" => (spec.enabled)(self).is_ok(),
+                "image.mode.duotone" => doc.mode == ColorMode::Grayscale,
                 "image.mode.rgb" => doc.mode != ColorMode::Rgb || explicit_profile,
                 "image.mode.grayscale" => doc.mode != ColorMode::Grayscale || explicit_profile,
                 "image.mode.cmyk" => doc.mode != ColorMode::Cmyk || explicit_profile,

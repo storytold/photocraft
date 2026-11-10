@@ -68,6 +68,8 @@ fn liquify_lease_blocks_sample_conversions_only_on_the_captured_document() {
         ("image.mode.grayscale", json!({})),
         ("image.mode.cmyk", json!({})),
         ("image.mode.lab", json!({})),
+        ("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})),
+        ("image.mode.multichannel", json!({})),
         ("image.mode.bits16", json!({})),
         ("image.mode.bits32", json!({})),
         ("color.profileMismatch", json!({"action": "convert"})),
@@ -89,6 +91,42 @@ fn liquify_lease_blocks_sample_conversions_only_on_the_captured_document() {
     drop(lease);
     s.execute("image.mode.bits16", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.depth, SampleType::U16);
+
+    let mut indexed = session(8, 8);
+    indexed.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    assert_eq!(indexed.active().unwrap().doc.mode, ColorMode::Indexed);
+    let mut multichannel = session(8, 8);
+    multichannel.execute("image.mode.multichannel", json!({})).unwrap();
+    assert_eq!(multichannel.active().unwrap().doc.mode, ColorMode::Multichannel);
+}
+
+#[test]
+fn liquify_lease_blocks_bitmap_and_initial_duotone_transitions() {
+    let mut s = session(8, 8);
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    assert_eq!(doc.mode, ColorMode::Grayscale);
+    let lease = s.hold_profile_conversion(doc.id);
+    let history = s.active().unwrap().history.past_len();
+    for (command, params) in [("image.mode.bitmap", json!({"method": "threshold"})), ("image.mode.duotone", json!({"type": "duotone"}))] {
+        let error = s.execute(command, params).unwrap_err();
+        assert!(error.to_string().contains("Close Liquify"), "{command}: {error}");
+    }
+    assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Grayscale);
+
+    drop(lease);
+    s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Bitmap);
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Grayscale);
+    s.execute("image.mode.duotone", json!({"type": "duotone"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Duotone);
+
+    let _lease = s.hold_profile_conversion(s.active().unwrap().doc.id);
+    let result = s.execute("image.mode.duotone", json!({"type": "monotone"})).unwrap();
+    assert_eq!(result["inks"].as_array().unwrap().len(), 1);
 }
 
 #[test]
