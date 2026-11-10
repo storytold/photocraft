@@ -165,6 +165,25 @@ fn hidden_and_locked_fill_layers_keep_the_choice() {
     }
 }
 
+/// A fill layer inside a hidden group is not shown, so like a hidden fill layer it keeps the
+/// stored choice; inside a visible group it is greyed as usual.
+#[test]
+fn a_fill_layer_in_a_hidden_group_keeps_the_choice() {
+    for hidden in [true, false] {
+        let (mut app, _, fill) = doc();
+        app.ui.tool_options.gradient_classic = true;
+        app.run("layer.groupLayers", json!({})).unwrap();
+        let group = app.session.active().unwrap().active_layer.unwrap();
+        app.run("layer.setProps", json!({"layer": group.0, "visible": !hidden})).unwrap();
+        select(&mut app, fill);
+        assert_eq!(crate::gradient_ui::live_mode(&app), !hidden, "hidden group: {hidden}");
+        let h = bar(app);
+        let want = if hidden { (false, "Classic gradient") } else { (true, "Gradient") };
+        assert_eq!(dropdown(&h), (want.0, want.1.into()), "hidden group: {hidden}");
+        assert!(h.state().ui.tool_options.gradient_classic, "the stored Classic choice is kept");
+    }
+}
+
 /// A fill layer made active while the list is open, as a script or a layer shortcut can do: a
 /// pick from the still-open list doesn't overwrite the stored choice.
 #[test]
