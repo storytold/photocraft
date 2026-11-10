@@ -7,6 +7,7 @@ use crate::PhotocraftApp;
 use crate::control::{ControlRequest, Outcome, handle};
 use crate::state::Tool;
 
+/// Build a small document with initialized views for the tool-state regressions.
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
@@ -14,6 +15,7 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// Dispatch a shell command through the control channel and synchronize the resulting state.
 fn invoke(app: &mut PhotocraftApp, id: &str, params: serde_json::Value) {
     let ctx = egui::Context::default();
     let (req, _rx) = ControlRequest::new("ui.menu.invoke", json!({"id": id, "params": params}));
@@ -22,12 +24,14 @@ fn invoke(app: &mut PhotocraftApp, id: &str, params: serde_json::Value) {
     app.sync_views();
 }
 
+/// Activate a tool and load its own brush before checking its settings.
 fn pick(app: &mut PhotocraftApp, tool: Tool) {
     app.ui.tool = tool;
     crate::paint_mouse::sync_tool_brush(app);
     app.sync_views();
 }
 
+/// Set deliberately nondefault options so stale values are visible after a reset or tool switch.
 fn scramble(app: &mut PhotocraftApp) {
     let b = &mut app.session.tools.brush;
     (b.size, b.hardness, b.spacing, b.angle, b.roundness) = (57.0, 0.4, 0.6, 30.0, 0.5);
@@ -40,6 +44,7 @@ fn scramble(app: &mut PhotocraftApp) {
     b.build_up = true;
 }
 
+/// Check #12847's reset defaults through both the command response and live brush state.
 fn assert_history_tip(app: &mut PhotocraftApp) {
     let b = app.run("brush.get", json!({})).unwrap();
     for (key, expected) in [("size", 21.0), ("hardness", 0.0), ("spacing", 0.25), ("angle", 0.0), ("roundness", 1.0), ("opacity", 1.0), ("flow", 1.0)] {
@@ -53,6 +58,7 @@ fn assert_history_tip(app: &mut PhotocraftApp) {
     assert_eq!(brush.tip, photocraft_engine::paint::brush::TipShape::Round);
 }
 
+/// Reset Tool restores the History Brush defaults while preserving session colors and seed.
 #[test]
 fn reset_tool_restores_the_history_brush_tip_and_options() {
     let mut app = app();
@@ -68,6 +74,7 @@ fn reset_tool_restores_the_history_brush_tip_and_options() {
     assert_eq!((b.color, b.background, b.seed), (colors.0, colors.1, 42));
 }
 
+/// Render the options bar to check its 21 px chip label and absence of a Smoothing field.
 #[test]
 fn the_options_bar_draws_21_on_the_brush_chip_without_a_smoothing_field() {
     let mut app = app();
@@ -95,6 +102,7 @@ fn the_options_bar_draws_21_on_the_brush_chip_without_a_smoothing_field() {
     assert!(!text.iter().any(|t| t.contains("Smoothing")), "{text:?}");
 }
 
+/// First use gets the History Brush defaults while the outgoing tool retains its edited brush.
 #[test]
 fn first_pick_uses_its_own_tip_instead_of_the_outgoing_brush() {
     let mut app = app();
@@ -107,6 +115,7 @@ fn first_pick_uses_its_own_tip_instead_of_the_outgoing_brush() {
     assert_eq!(app.session.tools.brush.smoothing.amount, 0.7);
 }
 
+/// Returning to a customized History Brush restores its settings instead of reapplying defaults.
 #[test]
 fn customized_history_brush_survives_tool_switches() {
     let mut app = app();
@@ -118,6 +127,7 @@ fn customized_history_brush_survives_tool_switches() {
     assert_eq!(app.session.tools.brush, custom);
 }
 
+/// Saved UI state retains the custom History Brush until an explicit Reset Tool request.
 #[test]
 fn saved_history_brush_is_preserved_until_explicitly_reset() {
     let mut app = app();
@@ -134,6 +144,7 @@ fn saved_history_brush_is_preserved_until_explicitly_reset() {
     assert_history_tip(&mut restored);
 }
 
+/// Reset All Tools restores the History Brush whether it is active or selected after the reset.
 #[test]
 fn reset_all_restores_the_history_brush_active_or_picked_later() {
     for active in [true, false] {
@@ -149,6 +160,7 @@ fn reset_all_restores_the_history_brush_active_or_picked_later() {
     }
 }
 
+/// Guard the existing reset tip and smoothing defaults of every other brush-picker tool.
 #[test]
 fn other_tools_keep_their_reset_tips_and_smoothing() {
     for tool in Tool::ALL.iter().copied().filter(|t| *t != Tool::HistoryBrush && crate::paint_mouse::has_brush_picker(*t)) {
