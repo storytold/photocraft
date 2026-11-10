@@ -239,6 +239,57 @@ fn channels_with_reserved_or_repeated_names_are_the_ones_chosen() {
     assert_eq!((sel.sample_channel(2, 5, 0), sel.sample_channel(8, 5, 0), sel.sample_channel(25, 5, 0)), (1.0, 0.0, 0.0), "the channel named Red");
 }
 
+/// The channels of A after the dialog saved A's right half into some of them: whether each holds it.
+fn replaced(app: &PhotocraftApp) -> Vec<(String, bool)> {
+    let doc = &app.session.documents()[0].doc;
+    doc.channels.iter().map(|c| (c.name.clone(), c.surface.read_region(doc.bounds())[25] == 1.0)).collect()
+}
+
+/// A command that deletes or adds channels while the dialog is open doesn't move the choice to
+/// the channel now at its place: the chosen channel follows its name, and when its name doesn't
+/// tell it apart Save Selection goes back to New and Load Selection to the first channel.
+#[test]
+fn a_channel_deleted_or_added_under_the_dialog_does_not_move_the_choice() {
+    let mut app = app();
+    for name in ["X", "Y", "Z"] {
+        app.run("select.saveSelection", json!({"name": name})).unwrap();
+    }
+    app.run("select.rect", json!({"x": 20, "y": 0, "width": 20, "height": 20, "mode": "replace"})).unwrap();
+    // Y is chosen; X is deleted, so Z is the second channel now.
+    let d = menu(&mut app, SAVE);
+    set(&mut app, d, "channel", json!(1));
+    app.run("channel.delete", json!({"channel": "X"})).unwrap();
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(replaced(&app), [("Y".to_string(), true), ("Z".to_string(), false)]);
+    // Z is chosen and a channel is added after it: Z keeps its place and is still the one.
+    let d = menu(&mut app, SAVE);
+    set(&mut app, d, "channel", json!(1));
+    app.run("select.saveSelection", json!({"name": "W"})).unwrap();
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(replaced(&app).iter().filter(|(_, r)| *r).map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["Y", "Z", "W"]);
+    // The second of two "Twin" channels is chosen and the first is deleted, so "Tail" is at its
+    // place: the name no longer tells which was chosen, so the selection goes into a new channel
+    // and neither the other Twin nor Tail changes.
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 20, "mode": "replace"})).unwrap();
+    for name in ["Twin", "Twin", "Tail"] {
+        app.run("select.saveSelection", json!({"name": name})).unwrap();
+    }
+    app.run("select.rect", json!({"x": 20, "y": 0, "width": 20, "height": 20, "mode": "replace"})).unwrap();
+    let d = menu(&mut app, SAVE);
+    set(&mut app, d, "channel", json!(4));
+    app.run("channel.delete", json!({"channel": 3})).unwrap();
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    let after: Vec<bool> = replaced(&app).into_iter().skip(3).map(|(_, r)| r).collect();
+    assert_eq!(after, [false, false, true], "Twin and Tail as they were, the selection in a new channel");
+    // Load Selection follows Z too after Y is deleted, rather than loading W.
+    app.run("select.deselect", json!({})).unwrap();
+    let d = menu(&mut app, LOAD);
+    set(&mut app, d, "channel", json!(1));
+    app.run("channel.delete", json!({"channel": "Y"})).unwrap();
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(app.session.journal.last().map(|(c, p)| (c.as_str(), p.clone())), Some((LOAD, json!({"channel": "Z", "invert": false, "operation": "new"}))));
+}
+
 /// OK after the chosen document closed, or after another document became active, is an error
 /// and saves nothing.
 #[test]
