@@ -55,6 +55,43 @@ fn job(r: Started) -> JobId {
 }
 
 #[test]
+fn liquify_lease_blocks_sample_conversions_only_on_the_captured_document() {
+    let mut s = session(8, 8);
+    let original = s.active_index().unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    assert_eq!(doc.mode, ColorMode::Rgb);
+    assert_eq!(doc.depth, SampleType::U8);
+    let lease = s.hold_profile_conversion(doc.id);
+    let history = s.active().unwrap().history.past_len();
+    for (command, params) in [
+        ("image.mode.rgb", json!({"profile": "srgb"})),
+        ("image.mode.grayscale", json!({})),
+        ("image.mode.cmyk", json!({})),
+        ("image.mode.lab", json!({})),
+        ("image.mode.bits16", json!({})),
+        ("image.mode.bits32", json!({})),
+        ("color.profileMismatch", json!({"action": "convert"})),
+        ("color.profileMismatch", json!({"action": "convertToWorking"})),
+    ] {
+        let error = s.execute(command, params).unwrap_err();
+        assert!(error.to_string().contains("Close Liquify"), "{command}: {error}");
+    }
+    assert_eq!(s.execute("image.mode.rgb", json!({})).unwrap(), Value::Null);
+    assert_eq!(s.execute("image.mode.bits8", json!({})).unwrap(), Value::Null);
+    assert_eq!(s.execute("color.profileMismatch", json!({"action": "preserve"})).unwrap()["action"], "kept");
+    assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+
+    s.execute("file.new", json!({"width": 8, "height": 8, "depth": 8})).unwrap();
+    s.execute("image.mode.bits16", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.depth, SampleType::U16);
+    assert!(s.set_active(original));
+    drop(lease);
+    s.execute("image.mode.bits16", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.depth, SampleType::U16);
+}
+
+#[test]
 fn a_job_applies_as_one_undo_step_and_matches_the_inline_result() {
     let mut inline = session(300, 200);
     inline.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();

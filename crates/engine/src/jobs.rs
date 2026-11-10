@@ -31,7 +31,7 @@ use std::any::Any;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
-use photocraft_doc::{DocId, Document, LayerId};
+use photocraft_doc::{ColorMode, DocId, Document, LayerId, SampleType};
 use photocraft_raster::Interrupt;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -1053,7 +1053,7 @@ impl Session {
         self.jobs.inline = ctx;
     }
 
-    /// Defer profile conversion for a captured document until the caller drops its token.
+    /// Defer sample conversions for a captured document until the caller drops its token.
     pub fn hold_profile_conversion(&mut self, document: DocId) -> Arc<()> {
         let owner = Arc::new(());
         self.profile_conversion_owner = Some((document, Arc::downgrade(&owner)));
@@ -1758,13 +1758,28 @@ impl Session {
             crate::document_preset_cmds::validate_new_params(self, &params)?;
         }
         crate::param_check::check(spec, &params)?;
-        // Refuse conversion before it can drop a floating selection.
-        if id == "edit.convertToProfile"
-            && let Some((document, owner)) = &self.profile_conversion_owner
+        // Refuse conversion before it can drop a floating selection or invalidate Liquify's source.
+        if let Some((document, owner)) = &self.profile_conversion_owner
             && owner.strong_count() != 0
-            && self.active().is_some_and(|st| st.doc.id == *document)
+            && let Some(active) = self.active().filter(|st| st.doc.id == *document)
         {
-            return Err(EngineError::Other("Close Liquify before converting the document profile.".into()));
+            let doc = &active.doc;
+            let explicit_profile = params.get("profile").is_some();
+            let converts = match id {
+                "edit.convertToProfile" => true,
+                "color.profileMismatch" => matches!(params.get("action").and_then(Value::as_str), Some("convert" | "convertToWorking")),
+                "image.mode.rgb" => doc.mode != ColorMode::Rgb || explicit_profile,
+                "image.mode.grayscale" => doc.mode != ColorMode::Grayscale || explicit_profile,
+                "image.mode.cmyk" => doc.mode != ColorMode::Cmyk || explicit_profile,
+                "image.mode.lab" => doc.mode != ColorMode::Lab || explicit_profile,
+                "image.mode.bits8" => doc.depth != SampleType::U8,
+                "image.mode.bits16" => doc.depth != SampleType::U16,
+                "image.mode.bits32" => doc.depth != SampleType::F32,
+                _ => false,
+            };
+            if converts {
+                return Err(EngineError::Other("Close Liquify before converting this document.".into()));
+            }
         }
         crate::filters::validate_params(id, &params)?;
         // A floating selection drops before any other command (Undo puts it back instead).
