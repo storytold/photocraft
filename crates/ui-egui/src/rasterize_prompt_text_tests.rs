@@ -15,7 +15,10 @@ fn the_four_prompts_read_as_measured() {
     );
     assert_eq!(Kind::Type.message(), "This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?");
     assert_eq!(Kind::Shape.message(), "This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?");
-    assert_eq!(Kind::Fill.message(), "This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?");
+    assert_eq!(
+        Kind::Fill.message(),
+        "The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?"
+    );
     assert!(!Kind::SmartObject.message().contains("  "), "single spaces between sentences");
 }
 
