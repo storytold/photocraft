@@ -2466,7 +2466,6 @@
 	Pixel	Pikseli
 	Adjustment	Daidaitawa
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Ja (igiya) ko danna ɗigogi (mai kusurwoyi) · {add} ƙara · {sub} rage
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Ja akwatin datsewa · ja a ciki don matsarwa · gefuna suna canja girma ({ratio} rabo, {centre} tsakiya) · Space yana matsarwa yayin zane · kibiyoyi suna gusa kaɗan · X yana sauya fuskantarwa · {commit} yana tabbatarwa · Esc yana sokewa
 	{mode} Color · {bits} bit	Launin {mode} · {bits} bit
 	Drag to move the layer	Ja don matsar da layer
 	Scrubby Zoom	Zuƙowa ta ja
@@ -3902,7 +3901,6 @@ curves	Smooth	Sanya santsi
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Dole a mayar da wannan layer na rubutu zuwa pikseli kafin a ci gaba. Ba za a iya gyara rubutunsa ba kuma. A mayar da rubutun zuwa pikseli?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Dole a mayar da wannan layer na siffa zuwa pikseli kafin a ci gaba. Ba za a iya gyara shi a matsayin siffa ba kuma. A mayar da siffar zuwa pikseli?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Dole a mayar da wannan abu mai wayo zuwa pikseli kafin a ci gaba. “Gyara abun ciki” ba zai ƙara samuwa ba. A mayar da abu mai wayo zuwa pikseli?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Dole a mayar da wannan layer na cikawa zuwa pikseli kafin a ci gaba. Ba za a iya gyara abun cikin cikawarsa ba kuma. A mayar da layer ɗin zuwa pikseli?
 	This layer must be rasterized before proceeding.	Dole a mayar da wannan layer zuwa pikseli kafin a ci gaba.
 	Color Picker (Background Color)	Mai zaɓin launi (Launin bango)
 	Color Picker (Foreground Color)	Mai zaɓin launi (Launin gaba)
@@ -4062,7 +4060,6 @@ shape	Appearance	Kamanni
 	Color Indicates:	Launi yana nuna:
 	Copy Texture to Other Tools	Kwafi yanayin fuska zuwa sauran kayan aiki
 	Create Smart Object after Loading Layers	Ƙirƙira abu mai wayo bayan loda layer
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Ja akwatin datsewa · ja a ciki don matsarwa · gefuna suna canja girma (rabo {ratio}, tsakiya {centre}) · Space yana matsarwa yayin zane · {commit} yana tabbatarwa · Esc yana sokewa
 	Drag to pan · Scroll to zoom · Double-click to fit	Ja don gungurawa · Gungura don zuƙowa · Danna sau biyu don daidaitawa
 	Drag: draw freehand · Release on the start point: close	Ja: zana sakaka · Saki a wurin farawa: rufe
 	Enter a name for the brush preset	Shigar da suna don saitin shiryayye na burushi
@@ -4873,3 +4870,44 @@ cameraRaw	Loaded RAW Develop settings from {file}	An loda saitunan Sarrafa RAW d
 	Move Toolbar to the Right	Matsar da sandar kayan aiki zuwa dama
 	Select Pixels	Zaɓa pikseli
 	The document changed. Please choose Clear All again.	Daftarin ya canja. Da fatan za a sake zaɓar "Goge duka".
+# Runtime labels the other complete catalogs carry: crop options and hints, artboard options, RAW demosaic, fill prompts
+	Background (default):	Bango (na asali):
+	Clear aspect ratio values	Goge ƙimomin rabon girma
+	Content-aware fill	Cika mai lura da abun ciki
+	Determines if pixel data outside the crop box is retained or deleted	Yana tantance ko za a riƙe ko a share bayanan pikseli a wajen akwatin datsewa
+	Displays pop-up help for the fill methods	Yana nuna taimako mai bayyana kai tsaye don hanyoyin cikawa
+	Fill options	Zaɓuɓɓukan cikawa
+	Fill the expanded area with your background color or transparent pixels	Cika yankin da aka faɗaɗa da launin bango ko pikseli masu bayyana ciki
+	How expanded crop area gets filled	Yadda ake cika yankin datsewa da aka faɗaɗa
+	Reset the crop box, image rotation, and aspect ratio settings	Sake saita akwatin datsewa, juyawar hoto da saitunan rabon girma
+	Sample content from part of the image and use it to fill a small area	Ɗauki abun ciki daga wani ɓangare na hoton don cika ƙaramin yanki da shi
+	Select a preset aspect ratio or crop size	Zaɓi rabon girma ko girman datsewa na shiryayye
+	Set the aspect ratio for the crop box	Saita rabon girma na akwatin datsewa
+	Set the overlay options for the Crop Tool	Saita zaɓuɓɓukan ɗorawa na Kayan aikin datsewa
+	Auto-nest Layers	Saka layer cikin juna ta atomatik
+	Auto-size Canvas	Girman fagen zane ta atomatik
+	Distribute Heights	Rarraba tsayi
+	Distribute Widths	Rarraba faɗi
+	Keep Relative Position During Layer Reordering	Riƙe matsayin dangi yayin sake tsara layer
+	Shrinkwrap Canvas on Save	Matse fagen zane zuwa abun ciki lokacin ajiyewa
+	Click to fill similar colors	Danna don cika launuka masu kama da juna
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Ja akwatin datsewa · ja a ciki don matsawa · gefuna suna canja girma (rabo {ratio}, tsakiya {centre}) · Space yana matsawa yayin zane · kibiyoyi suna ɗan matsawa · X yana sauya fuskanta · {commit} yana tabbatarwa · Esc yana soke
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Hanyar cike pikseli mai gyaran gradient: kaifi da sauri, da ɗan gefen launi a ƙananan bayanai.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: gefuna mafi tsabta da mafi ƙarancin gefen launi, mafi jinkiri.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Yadda ake cike mosaic na filtar launi na kyamara. Ana amfani da shi lokacin buɗe fayil; duban farko yana nuna hanyar da aka buɗe shi da ita.
+	The fastest and the softest, with color fringing on fine detail.	Mafi sauri kuma mafi laushi, da gefen launi a ƙananan bayanai.
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Dole ne a mayar da cikawar wannan layer zuwa pikseli kafin a ci gaba. Ba za a iya sake gyara ta a matsayin cikawa ba. A mayar da cikawar zuwa pikseli?
+	Skip transform when placing	Tsallake sauya fasali lokacin sakawa
+cameraRaw	Canceled opening {name}	An soke buɗe {name}
+cameraRaw	Canceled {label}	An soke {label}
+# Burn/Dodge, Eraser, Mixer Brush and Color Replacement options; anchor point tools
+	Anti-alias brush application	Santsin gefe ga shafa burushi
+	Determines the spread of replaced color	Yana tantance bazuwar launin da aka maye
+	Erase to History	Goge zuwa tarihi
+	Load Solid Colors Only	Loda launuka ɗaya ƙwal kawai
+	Minimizes clipping in shadows and highlights, and keeps colors from shifting hue	Yana rage yankewa a inuwoyi da wurare masu haske, kuma yana hana launuka sauya nauʼi
+	No options for the Add Anchor Point Tool.	Babu zaɓuɓɓuka don Kayan aikin ƙara ɗigon riƙo.
+	No options for the Delete Anchor Point Tool.	Babu zaɓuɓɓuka don Kayan aikin share ɗigon riƙo.
+	Set exposure for stroke	Saita fitowar haske don shafi
+	Tolerance for choosing related colors	Juriya wajen zaɓar launuka masu alaƙa
+	dodge tool	kayan aikin haskakawa

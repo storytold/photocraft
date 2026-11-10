@@ -2,7 +2,7 @@
 
 This note goes with the Hausa catalog (`crates/ui-egui/src/i18n/ha.tsv`). It covers every key
 `cargo xtask i18n-coverage` measures and the runtime labels the other complete catalogs carry
-(filter and adjustment parameters, Camera Raw, panels, dialogs, status messages). Translations are
+(filter and adjustment parameters, RAW Develop, panels, dialogs, status messages). Translations are
 written from the meaning of PhotoCraft's English labels; no proprietary translation resources,
 fonts, screenshots or user documents are included. The catalog was machine-translated with Claude
 for @tronicum against the terms below and has not yet been reviewed by a native speaker: review
@@ -11,8 +11,10 @@ corrections are welcome, and a changed term should change here and in every row 
 ## Choosing Hausa
 
 Open **Edit > Preferences > Interface > Language** (Hausa: **Gyara › Fifiko › Fuskar aiki ›
-Harshe**) and choose **Hausa**. With `interface.language` set to `auto`, the system locales `ha`,
+Harshe**) and choose **Hausa**. In the desktop app, with `interface.language` set to `auto`, the system locales `ha`,
 `ha-NG` and `ha_NG.UTF-8` resolve to Hausa.
+The web build doesn't read the browser's language yet, so `auto` stays English there: choose
+**Hausa** yourself.
 
 ## Hausa script
 
@@ -43,7 +45,7 @@ Harshe**) and choose **Hausa**. With `interface.language` set to `auto`, the sys
   and the spacing around placeholders.
 - **Placeholders** `{name}`, `{n}`, `{file}`, `{what}`, `{errors}` … are copied untouched. They
   may move to fit Hausa word order. The escapes `\n`, `\t` and `\\` stay exactly as in the source.
-- **Latin names stay unchanged:** PhotoCraft, ArtCraft, Photoshop, Camera Raw, PSD, PSB, TIFF,
+- **Latin names stay unchanged:** PhotoCraft, ArtCraft, Photoshop, RAW, Camera Raw (in the names of its .xmp files), PSD, PSB, TIFF,
   PNG, JPEG, GIF, WebP, PDF, SVG, ICC, EXIF, XMP, MCP, CMYK, RGB, Lab, HSB, HSL, sRGB, Adobe RGB,
   OpenType, Unicode, GPU, CPU, wgpu, 3D, HDR and "8-bit" / "16-bit" / "32-bit". Theme product
   names (Pro, Studio, Adwaita, Breeze, Solarized, Classic) keep their name; only "Theme" and

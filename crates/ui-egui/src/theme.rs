@@ -868,11 +868,16 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     let medium = add(&mut fonts, "Inter-Medium", photocraft_text::fonts::INTER_MEDIUM.as_slice());
     let semibold = add(&mut fonts, "Inter-SemiBold", photocraft_text::fonts::INTER_SEMIBOLD.as_slice());
     let mono = add(&mut fonts, "JetBrainsMono", photocraft_text::fonts::JETBRAINS_MONO_REGULAR.as_slice());
-    if let Some(inter) = inter {
-        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, inter);
-    }
     if let Some(mono) = mono {
         fonts.families.entry(FontFamily::Monospace).or_default().insert(0, mono);
+    }
+    if let Some(inter) = inter {
+        // Monospace text falls back to Inter ahead of egui's Ubuntu: JetBrains Mono, Hack and
+        // Ubuntu all lack Latin letters such as Hausa's ɓ and ɗ.
+        let mono = fonts.families.entry(FontFamily::Monospace).or_default();
+        let at = mono.iter().position(|f| f == "Ubuntu-Light").unwrap_or(mono.len());
+        mono.insert(at, inter.clone());
+        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, inter);
     }
     // The optional craft-fonts input carries Japanese, Simplified Chinese, Korean, Arabic, Thai and
     // other faces. They are not registered into this static stack: `cjk_fonts` installs a

@@ -1918,3 +1918,31 @@ fn system_fonts_cover_cjk_samples() {
     let all: String = samples.iter().filter(|(_, s)| available(*s)).map(|(t, _)| *t).collect::<Vec<_>>().join(" ");
     assert!(render(&ctx, &all), "{all}");
 }
+
+/// Monospace labels (Help › System Info) in Hausa use ɓ and ɗ, which JetBrains Mono, Hack and
+/// Ubuntu lack: the monospace stack falls back to the bundled Inter, without any system or craft
+/// face.
+#[test]
+fn monospace_draws_hausa_hooked_letters_from_the_bundled_fonts() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_with(
+        &ctx,
+        Sources {
+            locale: || Some("ha".into()),
+            files: no_files,
+            last_resort: Vec::new,
+            pending: || false,
+            scripts: |_| Vec::new(),
+            covers: scripts::covering_face,
+            embedded: no_embedded,
+            eager_craft_fonts: false,
+        },
+    );
+    let text = "ɓɗƙƴʼƁƊƘƳ";
+    ctx.run_ui(Default::default(), |ui| {
+        ui.label(egui::RichText::new(text).monospace());
+    })
+    .textures_delta
+    .clear();
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&FontId::monospace(12.0), text)), "{text} is missing from Monospace");
+}
