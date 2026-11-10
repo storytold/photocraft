@@ -84,6 +84,27 @@ fn the_full_document_takes_over_the_preview_tab_with_its_view_and_a_clean_state(
     }
 }
 
+/// File > Open submits a path, not bytes (#9433): its raw shows the previews too, and the full
+/// develop still comes from the file that was opened.
+#[test]
+fn a_raw_opened_by_path_shows_its_previews_before_the_full_develop() {
+    let dir = std::env::temp_dir().join(format!("pc-9433-path-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("p.dng");
+    std::fs::write(&path, dng(true)).unwrap();
+    let mut app = app_with_a_document();
+    start_open(&mut app, "p.dng", None, OpenSource::Path(path.to_string_lossy().into_owned()), None, None).unwrap();
+    until_previewed(&mut app);
+    let preview = app.session.documents()[1].doc.id;
+    assert!(app.session.job_on(preview).is_some(), "locked while the full develop runs");
+    until_opened(&mut app);
+    let st = &app.session.documents()[1];
+    assert_ne!(st.doc.id, preview);
+    assert_eq!((st.doc.size.width, st.doc.size.height), (48, 32), "the full develop");
+    assert!(app.jobs.previews.is_empty() && app.session.jobs().is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn closing_the_preview_cancels_the_open_without_leaking_a_lock_or_a_tab() {
     let mut app = app_with_a_document();

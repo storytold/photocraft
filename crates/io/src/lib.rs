@@ -831,6 +831,23 @@ pub fn import_file_for_open_verified(
     ctl: &photocraft_raster::Interrupt,
     identity_out: &mut Option<FileIdentity>,
 ) -> Result<(ImportResult, bool), IoError> {
+    import_file_for_open_verified_with(name, path, expected, opts, ctl, identity_out, &mut |_| Ok(()))
+}
+
+/// [`import_file_for_open_verified`] that hands `on_bytes` the file's bytes, read from the
+/// verified handle, just before they are decoded (not for a PSD/PSB or a streamed EXR, which are
+/// never read whole). An `Err` from it stops the import with that error. The interactive open
+/// uses it to show a raw's first-paint stages while the full develop runs.
+#[cfg(any(unix, windows))]
+pub fn import_file_for_open_verified_with(
+    name: &str,
+    path: &std::path::Path,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    on_bytes: &mut dyn FnMut(&[u8]) -> Result<(), IoError>,
+) -> Result<(ImportResult, bool), IoError> {
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let source = photocraft_psd::FileSource::open(path).map_err(read_failed)?;
@@ -878,6 +895,7 @@ pub fn import_file_for_open_verified(
             Some(result) => Ok((result, false)),
             None => {
                 let bytes = photocraft_format::read::read_all(&mut file, photocraft_psd::ReadAt::len(&source)).map_err(read_failed)?;
+                on_bytes(&bytes)?;
                 import_for_open_with(name, &bytes, opts, ctl)
             }
         }

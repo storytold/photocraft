@@ -712,6 +712,7 @@ fn import_path(
     expected: Option<&SourceFingerprint>,
     ctl: &photocraft_raster::Interrupt,
     opened: &mut Option<photocraft_io::FileIdentity>,
+    on_bytes: &mut dyn FnMut(&[u8]) -> std::result::Result<(), photocraft_io::IoError>,
 ) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
     let expected = match expected {
         None => None,
@@ -720,7 +721,7 @@ fn import_path(
     };
     // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
     // streamed from the open file instead of being read whole.
-    photocraft_io::import_file_for_open_verified(name, std::path::Path::new(path), expected, opts, ctl, opened)
+    photocraft_io::import_file_for_open_verified_with(name, std::path::Path::new(path), expected, opts, ctl, opened, on_bytes)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -731,8 +732,25 @@ fn import_path(
     _: Option<&SourceFingerprint>,
     _: &photocraft_raster::Interrupt,
     _: &mut Option<photocraft_io::FileIdentity>,
+    _: &mut dyn FnMut(&[u8]) -> std::result::Result<(), photocraft_io::IoError>,
 ) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
     Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
+}
+
+/// Publishes a raw's first-paint stages (the camera's JPEG, a half-size develop) from the job's
+/// thread, then checks for Cancel. A cancelled open drops the sensor decode the stages left for
+/// the full develop. Not a raw: nothing happens.
+fn raw_first_paint(ctx: &JobCtx, name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> std::result::Result<(), ()> {
+    if !photocraft_io::raw::is_raw(bytes) {
+        return Ok(());
+    }
+    ctx.progress(0.01, "Previewing");
+    photocraft_io::raw::publish_previews(name, bytes, opts.demosaic, &mut |r| ctx.publish(r), &|| ctx.cancelled());
+    if ctx.check().is_err() {
+        photocraft_io::raw::discard_predecoded();
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -1307,13 +1325,8 @@ impl Session {
                         ctx.check()?;
                         // Interactive raw opens show the camera's JPEG and a half-size develop while
                         // the full develop runs (the UI takes them with `take_published`).
-                        if progressive && !cfg!(target_arch = "wasm32") && photocraft_io::raw::is_raw(&bytes) {
-                            ctx.progress(0.01, "Previewing");
-                            photocraft_io::raw::publish_previews(&name_w, &bytes, opts.demosaic, &mut |r| ctx.publish(r), &|| ctx.cancelled());
-                            if let Err(e) = ctx.check() {
-                                photocraft_io::raw::discard_predecoded();
-                                return Err(e);
-                            }
+                        if progressive && !cfg!(target_arch = "wasm32") {
+                            raw_first_paint(ctx, &name_w, &bytes, &opts).map_err(|_| EngineError::Cancelled)?;
                         }
                         ctx.progress(0.02, "Decoding");
                         let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
@@ -1334,7 +1347,14 @@ impl Session {
                     }
                     OpenSource::Path(p) => {
                         let mut opened = None;
-                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
+                        // The same first-paint stages as for bytes, from the bytes the verified handle
+                        // read (its identity and preflight checks are unchanged).
+                        let mut first_paint = |bytes: &[u8]| -> std::result::Result<(), photocraft_io::IoError> {
+                            if progressive { raw_first_paint(ctx, &name_w, bytes, &opts).map_err(|_| photocraft_io::IoError::Cancelled) } else { Ok(()) }
+                        };
+                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| {
+                            import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened, &mut first_paint)
+                        });
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
