@@ -6,6 +6,16 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // A released stroke still catching up lands first: Undo right after a release undoes the
+        // stroke, and nothing runs on a document it hasn't reached yet. Still on its worker, the
+        // command waits for it (it runs once the stroke has committed), the window doesn't.
+        if self.run_depth == 0 && self.finishing_stroke.is_some() && !canvas::runs_while_a_stroke_finishes(id) && !canvas::flush_finishing_stroke(self) {
+            self.queued_commands.push((id.to_string(), params));
+            let n = self.queued_commands.len();
+            self.ui.status = format!("Finishing the last brush stroke… {n} action(s) will follow");
+            self.ui.status_error = false;
+            return Ok(json!({"pending": true, "queued": true}));
+        }
         let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;

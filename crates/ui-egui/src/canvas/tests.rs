@@ -3372,3 +3372,96 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
 }
+
+/// A slow brush (~3 ms a point on a storyboard) fell behind, each step took longer, and Wayland
+/// dropped the window. Each frame now renders what its budget holds; a release with a large
+/// backlog keeps catching up over the next frames and commits once caught up.
+fn slow_stroke_released_with_a_backlog(app: &mut PhotocraftApp) -> usize {
+    app.run("file.new", json!({"width":200,"height":100,"background":"#ffffff"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("tools.setBrush", json!({"brush":{"size":8,"smoothing":{"amount":0.0}}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let count = app.session.active().unwrap().history.past_len();
+    tool_event(app, ToolEvent::Down { x: 10.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    app.live_stroke.as_mut().expect("the brush strokes live").pretend_ms_per_point(10.0);
+    // The moves of one frame, not rendered yet.
+    app.defer_live_stroke = true;
+    for i in 1..=40 {
+        tool_event(app, ToolEvent::Move { x: 10.0 + f64::from(i) * 4.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    }
+    app.defer_live_stroke = false;
+    tool_event(app, ToolEvent::Up { x: 170.0, y: 50.0 }, egui::Modifiers::NONE);
+    count
+}
+
+#[test]
+fn a_slow_stroke_catches_up_over_frames_and_commits_once_caught_up() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let count = slow_stroke_released_with_a_backlog(&mut app);
+    assert!(app.finishing_stroke.is_some(), "about 400 ms of points left: not rendered in one go");
+    assert_eq!(app.session.active().unwrap().history.past_len(), count, "not committed yet");
+    assert!(super::strokes::live_stroke(&app, 0).is_some(), "the canvas keeps showing the stroke");
+    let mut frames = 0;
+    loop {
+        if let Some(l) = app.live_stroke.as_mut() {
+            l.pretend_ms_per_point(10.0);
+        }
+        if !continue_finishing_stroke(&mut app) {
+            break;
+        }
+        frames += 1;
+        assert!(frames < 100, "it catches up");
+    }
+    assert!(frames >= 10, "3 points a frame: {frames} frame(s)");
+    assert!(app.finishing_stroke.is_none() && app.live_stroke.is_none());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), count + 1, "one stroke, committed once caught up");
+    let id = st.active_layer.unwrap();
+    assert!(st.doc.layer(id).unwrap().surface().unwrap().rgba(160, 50)[3] > 0.5, "the end of the stroke is painted");
+}
+
+#[test]
+fn a_command_during_the_catch_up_lands_the_stroke_first() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let count = slow_stroke_released_with_a_backlog(&mut app);
+    assert!(app.finishing_stroke.is_some());
+    // Undo right after the release undoes the stroke, not what came before it.
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(app.finishing_stroke.is_none() && app.live_stroke.is_none());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), count);
+    let id = st.active_layer.unwrap();
+    assert!(st.doc.layer(id).unwrap().surface().unwrap().rgba(160, 50)[3] < 0.01, "the stroke was undone");
+}
+
+/// One dab of a very large brush on a storyboard took most of a second on the UI thread, and the
+/// window was dropped. The Brush now renders on a worker: the canvas shows the last finished step
+/// meanwhile, and the release commits once the worker has caught up.
+#[test]
+fn the_brush_renders_on_a_worker_and_commits_once_it_has_caught_up() {
+    super::strokes::TEST_WORKER.with(|w| w.set(true));
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width":200,"height":100,"background":"#ffffff"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("tools.setBrush", json!({"brush":{"size":8,"smoothing":{"amount":0.0}}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let count = app.session.active().unwrap().history.past_len();
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert!(matches!(app.live_stroke.as_ref().map(|l| &l.stroke), Some(super::strokes::EngineStroke::Busy(_))), "the first dabs render on the worker");
+    for i in 1..=40 {
+        tool_event(&mut app, ToolEvent::Move { x: 10.0 + f64::from(i) * 4.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    }
+    tool_event(&mut app, ToolEvent::Up { x: 170.0, y: 50.0 }, egui::Modifiers::NONE);
+    let start = std::time::Instant::now();
+    while continue_finishing_stroke(&mut app) {
+        assert!(start.elapsed() < std::time::Duration::from_secs(20), "the worker catches up");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    super::strokes::TEST_WORKER.with(|w| w.set(false));
+    assert!(app.finishing_stroke.is_none() && app.live_stroke.is_none());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), count + 1, "one stroke");
+    let id = st.active_layer.unwrap();
+    let px = st.doc.layer(id).unwrap().surface().unwrap();
+    assert!(px.rgba(12, 50)[3] > 0.5 && px.rgba(160, 50)[3] > 0.5, "painted from start to end");
+}

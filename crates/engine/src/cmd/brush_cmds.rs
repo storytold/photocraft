@@ -596,6 +596,15 @@ impl LiveStroke {
     /// Start a live stroke of `cmd`: `paint.stroke` (the Brush and Eraser) or `paint.pencil`.
     /// Committing `cmd` with the same params and `"seed": live.seed` gives the same pixels.
     pub fn begin_with(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
+        let (mut live, pts) = Self::begin_unrendered(s, cmd, p)?;
+        live.push(&pts)?;
+        Ok(live)
+    }
+
+    /// [`Self::begin_with`] without rendering the params' `points`: they are returned for the
+    /// caller to [`Self::push`], on a worker say (one dab of a very large brush on a gigapixel
+    /// document takes most of a second, too long for the UI thread).
+    pub fn begin_unrendered(s: &Session, cmd: &str, p: &Value) -> Result<(Self, Vec<StrokePoint>)> {
         let captured = crate::channel_cmds::inject_target(s, cmd, p.clone());
         let p = &captured;
         has_paintable(s).map_err(EngineError::Other)?;
@@ -624,7 +633,7 @@ impl LiveStroke {
         let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
         let mirror_distinct = vec![false; mirrors.len()];
         let pre = surf.clone();
-        let mut live = Self {
+        let live = Self {
             doc: std::sync::Arc::new(doc),
             seed,
             cmd: cmd.into(),
@@ -644,8 +653,7 @@ impl LiveStroke {
             points: Vec::new(),
             base,
         };
-        live.push(&pts)?;
-        Ok(live)
+        Ok((live, pts))
     }
 
     /// The stroke as its commit would take it over (see [`LiveCommit`]).

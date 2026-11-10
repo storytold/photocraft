@@ -605,9 +605,12 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
         // (Sample All Layers, say) keeps the trail.
         t if strokes_live(t) && app.live_stroke.is_some() => {
             // Smoothing holds the brush back from the pointer: draw the string between them.
-            if let Some(EngineStroke::Brush(l)) = app.live_stroke.as_ref().map(|l| &l.stroke)
-                && let Some(s) = l.smoothing_string()
-            {
+            let string = match app.live_stroke.as_ref().map(|l| &l.stroke) {
+                Some(EngineStroke::Brush(l)) => l.smoothing_string(),
+                Some(EngineStroke::Busy(b)) => b.smoothing_string(),
+                _ => None,
+            };
+            if let Some(s) = string {
                 draw_smoothing_string(painter, xf, s);
             }
         }

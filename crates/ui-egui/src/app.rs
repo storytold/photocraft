@@ -54,6 +54,8 @@ impl PhotocraftApp {
             move_blocked: false,
             tool_override: None,
             live_stroke: None,
+            finishing_stroke: None,
+            queued_commands: Vec::new(),
             committed_stroke: None,
             retouch_from_live: false,
             trail: None,

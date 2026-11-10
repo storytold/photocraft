@@ -101,9 +101,13 @@ pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{
-    ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live, unsmoothed_line,
+    ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, flush_finishing_stroke, freehand_tool, runs_while_a_stroke_finishes,
+    spread_ms, strokes_live, unsmoothed_line,
 };
-use strokes::{HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure};
+use strokes::{
+    HOLD_REPEAT_MS, continue_finishing_stroke, draw_clone_preview, feed_live_stroke, live_stroke_behind, pointer_button_modifiers, pointer_moves,
+    stroke_wants_time, tap_at_peak_pressure,
+};
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};
 pub(crate) use tabs::arranged_cells;
@@ -1112,6 +1116,11 @@ fn handle_canvas_tool_stroke(
     let rect = input.rect;
     let full = input.full;
     let tool = input.tool;
+    // A released stroke still catching up renders its next share now (a new press commits it
+    // first: `tool_event`).
+    if continue_finishing_stroke(app) {
+        ctx.request_repaint();
+    }
     // A drag is only recognised once the pointer has moved past egui's click distance: the
     // gesture starts where the button went down, not where it is now (#123).
     let gesture_active_before = app.drag.is_some();
@@ -1215,8 +1224,12 @@ fn handle_canvas_tool_stroke(
             ctx.request_repaint_after(std::time::Duration::from_millis(HOLD_REPEAT_MS as u64));
         }
         app.defer_live_stroke = false;
-        // One live-stroke update for the whole frame, not one per recovered sample.
+        // One live-stroke update for the whole frame, not one per recovered sample. What its
+        // budget leaves for later renders on the next frames, moved or not.
         feed_live_stroke(app);
+        if live_stroke_behind(app) {
+            ctx.request_repaint();
+        }
         crate::magnetic_lasso_ui::flush(app);
     }
     if buttons.stopped && !input.menu_dismiss_press {

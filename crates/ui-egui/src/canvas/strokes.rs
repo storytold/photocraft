@@ -178,6 +178,187 @@ pub(super) enum EngineStroke {
     Retouch(Box<photocraft_engine::retouch_cmds::LiveRetouch>),
     Dab(Box<photocraft_engine::retouch_cmds::LiveDab>),
     Mixer(Box<photocraft_engine::brush_cmds::mixer_live::LiveMixer>),
+    /// The Brush's stroke while a worker renders its next points (`StrokeWorker`): what the
+    /// canvas shows meanwhile.
+    Busy(Busy),
+}
+
+/// What [`EngineStroke::Busy`] keeps of the Brush's stroke while a worker has it.
+pub(super) struct Busy {
+    /// The document as the last finished step left it.
+    doc: std::sync::Arc<photocraft_doc::Document>,
+    bounds: DRect,
+    wants_time: bool,
+    seed: u64,
+    smoothing: Option<([f64; 2], [f64; 2])>,
+}
+
+impl Busy {
+    fn of(s: &photocraft_engine::brush_cmds::LiveStroke) -> Self {
+        Self { doc: s.doc.clone(), bounds: s.bounds(), wants_time: s.wants_time(), seed: s.seed, smoothing: s.smoothing_string() }
+    }
+
+    /// `(brush, pointer)` positions of the smoothing string when the worker took the stroke.
+    pub(super) fn smoothing_string(&self) -> Option<([f64; 2], [f64; 2])> {
+        self.smoothing
+    }
+}
+
+/// A finished worker step: the Brush's stroke back, and what the step changed (or why it failed).
+type WorkerStep = (Box<photocraft_engine::brush_cmds::LiveStroke>, photocraft_engine::Result<DRect>);
+
+/// A Brush step running on a worker ([`send_to_worker`]).
+pub(super) struct StrokeWorker {
+    rx: std::sync::mpsc::Receiver<WorkerStep>,
+    points: usize,
+    started: f64,
+}
+
+/// Whether the Brush (and Pencil and Eraser) render their live stroke on a worker, so the window
+/// never waits for a step: one dab of a very large brush on a gigapixel storyboard took most of a
+/// second, and a stalled window is dropped by Wayland. Off in tests (steps land at once there) and
+/// with `PHOTOCRAFT_STROKE_ON_UI_THREAD` set.
+pub(super) fn stroke_worker_enabled() -> bool {
+    #[cfg(test)]
+    if TEST_WORKER.with(std::cell::Cell::get) {
+        return true;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| !cfg!(target_arch = "wasm32") && !cfg!(test) && std::env::var_os("PHOTOCRAFT_STROKE_ON_UI_THREAD").is_none())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test on this thread renders the Brush on a worker, as the app does.
+    pub(super) static TEST_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Hand the Brush's stroke and `pts` to a worker; the canvas shows the last finished step
+/// meanwhile. False if no worker could start (the stroke is lost: the commit renders it).
+fn send_to_worker(l: &mut LiveStroke, pts: Vec<photocraft_engine::paint::StrokePoint>) -> bool {
+    let EngineStroke::Brush(b) = &l.stroke else { return false };
+    let busy = Busy::of(b);
+    let EngineStroke::Brush(mut stroke) = std::mem::replace(&mut l.stroke, EngineStroke::Busy(busy)) else { return false };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let n = pts.len();
+    let spawned = std::thread::Builder::new().name("photocraft-stroke".into()).spawn(move || {
+        let r = stroke.push(&pts);
+        let _ = tx.send((stroke, r));
+    });
+    if spawned.is_err() {
+        return false;
+    }
+    l.worker = Some(StrokeWorker { rx, points: n, started: crate::gpu_canvas::now_ms() });
+    true
+}
+
+/// A worker step slower than this (ms) is logged: what a slow brush costs.
+const SLOW_STROKE_STEP_MS: f64 = 100.0;
+
+/// Drop `x` on another thread: freeing a large document's tiles took the UI thread seconds.
+pub(crate) fn drop_elsewhere<T: Send + 'static>(x: T) {
+    // A failed spawn drops it here after all, with the closure.
+    let _ = std::thread::Builder::new().name("photocraft-drop".into()).spawn(move || drop(x));
+}
+
+/// How long a new press or a command waits for a released stroke's worker step before it is
+/// turned away (`flush_finishing_stroke`).
+const FLUSH_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Where [`prepare_commit`] stands.
+enum Prep {
+    /// The commit is ready (or the stroke isn't the Brush's: it commits as before).
+    Ready,
+    /// A worker is still taking it.
+    Running,
+    /// It couldn't be taken: the commit renders the stroke itself.
+    Failed,
+}
+
+/// Take the commit from the caught-up Brush stroke on a worker: it copies the stroke's document
+/// when the canvas still shows it, which took the UI thread up to 2 s on a storyboard.
+fn prepare_commit(l: &mut LiveStroke) -> Prep {
+    if l.prepared.is_some() {
+        return Prep::Ready;
+    }
+    if let Some(rx) = &l.preparing {
+        return match rx.try_recv() {
+            Ok(Ok(commit)) => {
+                l.preparing = None;
+                l.prepared = Some(commit);
+                Prep::Ready
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => Prep::Running,
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                l.preparing = None;
+                Prep::Failed
+            }
+        };
+    }
+    let EngineStroke::Brush(b) = &l.stroke else { return Prep::Ready };
+    let busy = Busy::of(b);
+    let EngineStroke::Brush(stroke) = std::mem::replace(&mut l.stroke, EngineStroke::Busy(busy)) else { return Prep::Ready };
+    let (tx, rx) = std::sync::mpsc::channel();
+    if std::thread::Builder::new()
+        .name("photocraft-stroke".into())
+        .spawn(move || {
+            let _ = tx.send(stroke.into_commit());
+        })
+        .is_err()
+    {
+        return Prep::Failed;
+    }
+    l.preparing = Some(rx);
+    Prep::Running
+}
+
+/// What [`land_worker`] found.
+#[derive(PartialEq, Eq)]
+enum Landed {
+    /// No step was running, or it finished and its stroke is back.
+    Idle,
+    /// The step is still running.
+    Running,
+    /// The step failed, or its worker died: the live stroke can't go on.
+    Failed,
+}
+
+/// Take back a finished worker step, waiting for it up to `wait` (not at all with `None`).
+fn land_worker(l: &mut LiveStroke, wait: Option<std::time::Duration>) -> Landed {
+    use std::sync::mpsc::RecvTimeoutError;
+    let Some(w) = l.worker.as_ref() else { return Landed::Idle };
+    let got = match wait {
+        Some(d) => w.rx.recv_timeout(d),
+        None => w.rx.try_recv().map_err(|e| match e {
+            std::sync::mpsc::TryRecvError::Empty => RecvTimeoutError::Timeout,
+            std::sync::mpsc::TryRecvError::Disconnected => RecvTimeoutError::Disconnected,
+        }),
+    };
+    let (stroke, r) = match got {
+        Ok(step) => step,
+        Err(RecvTimeoutError::Timeout) => return Landed::Running,
+        Err(RecvTimeoutError::Disconnected) => {
+            l.worker = None;
+            return Landed::Failed;
+        }
+    };
+    let Some(w) = l.worker.take() else { return Landed::Failed };
+    // The document the canvas showed meanwhile can hold the only copies of gigabytes of tiles
+    // the step replaced: freed on another thread, not this one.
+    if let EngineStroke::Busy(busy) = std::mem::replace(&mut l.stroke, EngineStroke::Brush(stroke)) {
+        drop_elsewhere(busy.doc);
+    }
+    let ms = crate::gpu_canvas::now_ms() - w.started;
+    if ms > SLOW_STROKE_STEP_MS {
+        log::info!("live stroke: one step of {} point(s) took {ms:.0} ms on the worker", w.points);
+    }
+    match r {
+        Ok(dmg) => {
+            l.damage.push(dmg);
+            Landed::Idle
+        }
+        Err(_) => Landed::Failed,
+    }
 }
 
 impl EngineStroke {
@@ -187,6 +368,7 @@ impl EngineStroke {
         match self {
             EngineStroke::Brush(l) => l.wants_time(),
             EngineStroke::Mixer(l) => l.wants_time(),
+            EngineStroke::Busy(b) => b.wants_time,
             EngineStroke::Retouch(_) | EngineStroke::Dab(_) => false,
         }
     }
@@ -197,6 +379,7 @@ impl EngineStroke {
             Self::Retouch(s) => &s.doc,
             Self::Dab(s) => &s.doc,
             Self::Mixer(s) => &s.doc,
+            Self::Busy(b) => &b.doc,
         }
     }
     fn bounds(&self) -> DRect {
@@ -205,6 +388,7 @@ impl EngineStroke {
             Self::Retouch(s) => s.bounds(),
             Self::Dab(s) => s.bounds(),
             Self::Mixer(s) => s.bounds(),
+            Self::Busy(b) => b.bounds,
         }
     }
     fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
@@ -213,6 +397,8 @@ impl EngineStroke {
             Self::Retouch(s) => s.push(pts),
             Self::Dab(s) => s.push(pts),
             Self::Mixer(s) => s.push(pts),
+            // Never pushed to: it is taken back from the worker first (`land_worker`).
+            Self::Busy(_) => Err(photocraft_engine::EngineError::Other("the live stroke is on a worker".into())),
         }
     }
     /// The jitter seed the commit must reuse (the Clone Stamp's comes from the session brush).
@@ -220,6 +406,7 @@ impl EngineStroke {
         match self {
             Self::Brush(s) => Some(s.seed),
             Self::Mixer(s) => Some(s.seed),
+            Self::Busy(b) => Some(b.seed),
             Self::Retouch(_) => None,
             Self::Dab(_) => None,
         }
@@ -239,7 +426,117 @@ pub(crate) struct LiveStroke {
     pub(super) damage: Vec<DRect>,
     /// Drag points rendered so far.
     fed: usize,
+    /// UI-thread time a point has taken to render (ms, moving average): how many points a
+    /// frame's budget holds ([`STROKE_FRAME_MS`]).
+    ms_per_point: Option<f64>,
+    /// The Brush step a worker is rendering ([`stroke_worker_enabled`]).
+    worker: Option<StrokeWorker>,
+    /// The commit being taken from the finished stroke on a worker ([`prepare_commit`]), then
+    /// taken.
+    preparing: Option<std::sync::mpsc::Receiver<photocraft_engine::Result<photocraft_engine::brush_cmds::LiveCommit>>>,
+    prepared: Option<photocraft_engine::brush_cmds::LiveCommit>,
 }
+
+/// UI-thread time a frame gives the live stroke (ms). Points beyond it wait for the next frame:
+/// a large brush on a storyboard took ~3 ms a point, each slow frame brought more points, and
+/// frames grew past a second until Wayland dropped the window.
+const STROKE_FRAME_MS: f64 = 30.0;
+
+/// Whether the live stroke has points it hasn't rendered yet (it catches up frame by frame).
+pub(super) fn live_stroke_behind(app: &PhotocraftApp) -> bool {
+    app.drag.as_ref().is_some_and(|d| behind(app, d))
+}
+
+fn behind(app: &PhotocraftApp, d: &Drag) -> bool {
+    app.live_stroke.as_ref().is_some_and(|l| !l.preview_failed && (l.fed < d.points.len() || l.worker.is_some()))
+}
+
+/// Estimated UI-thread work (ms) at a release with more than this left to render finishes over
+/// the next frames instead of in one go (`continue_finishing_stroke`).
+const STROKE_RELEASE_MS: f64 = 150.0;
+
+/// One frame of a released stroke catching up; commits it once caught up. Returns whether it is
+/// still catching up (the caller repaints). A document that changed meanwhile commits at once.
+pub(crate) fn continue_finishing_stroke(app: &mut PhotocraftApp) -> bool {
+    let Some(d) = app.finishing_stroke.take() else { return false };
+    // A step still on the worker: wait for it frame by frame, whatever happened meanwhile.
+    if let Some(l) = app.live_stroke.as_mut() {
+        match land_worker(l, None) {
+            Landed::Running => {
+                app.finishing_stroke = Some(d);
+                return true;
+            }
+            Landed::Failed => app.live_stroke = None,
+            Landed::Idle => {}
+        }
+    }
+    let same = app.live_stroke.as_ref().is_some_and(|l| app.session.active().is_some_and(|st| st.doc.id == l.doc && st.revision == l.revision));
+    if same && app.drag.is_none() {
+        app.drag = Some(d);
+        let deferred = std::mem::replace(&mut app.defer_live_stroke, false);
+        feed_live_stroke(app);
+        app.defer_live_stroke = deferred;
+        let Some(d) = app.drag.take() else { return false };
+        if behind(app, &d) {
+            app.finishing_stroke = Some(d);
+            return true;
+        }
+        // Caught up: the commit is taken on a worker too.
+        if stroke_worker_enabled()
+            && let Some(l) = app.live_stroke.as_mut()
+            && matches!(prepare_commit(l), Prep::Running)
+        {
+            app.finishing_stroke = Some(d);
+            return true;
+        }
+        commit_brush_stroke_now(app, &d);
+        return false;
+    }
+    commit_brush_stroke_now(app, &d);
+    false
+}
+
+/// Commit a released stroke that is still catching up, before a new press or a command; true
+/// once it is committed (or there was none). A stroke on the worker gets [`FLUSH_WAIT`]: still
+/// busy after it, it stays, and the press or command is turned away, rather than the window wait
+/// (a very large brush took 25 s, and a window stalled for a second is dropped by Wayland).
+pub(crate) fn flush_finishing_stroke(app: &mut PhotocraftApp) -> bool {
+    if app.finishing_stroke.is_none() {
+        return true;
+    }
+    let on_worker = app
+        .live_stroke
+        .as_ref()
+        .is_some_and(|l| l.worker.is_some() || l.preparing.is_some() || (stroke_worker_enabled() && matches!(l.stroke, EngineStroke::Brush(_))));
+    if !on_worker {
+        if let Some(d) = app.finishing_stroke.take() {
+            commit_brush_stroke_now(app, &d);
+        }
+        return true;
+    }
+    if let Some(l) = app.live_stroke.as_mut()
+        && land_worker(l, Some(FLUSH_WAIT)) == Landed::Failed
+    {
+        app.live_stroke = None;
+    }
+    // One more catch-up step: commits when nothing is left, else hands the rest to the worker.
+    !continue_finishing_stroke(app)
+}
+
+/// Run the commands that waited for a released stroke ([`queue_while_finishing`]), in order.
+pub(crate) fn run_queued_commands(app: &mut PhotocraftApp) {
+    for (id, params) in std::mem::take(&mut app.queued_commands) {
+        let _ = app.run(&id, params);
+    }
+}
+
+/// Commands that don't touch the document run while a released stroke is still finishing.
+pub(crate) fn runs_while_a_stroke_finishes(id: &str) -> bool {
+    ["view.", "help.", "tools."].iter().any(|p| id.starts_with(p))
+}
+
+/// The status line for a press turned away while a stroke finishes.
+pub(crate) const STILL_FINISHING: &str = "Finishing the last brush stroke…";
 
 impl LiveStroke {
     pub(super) fn display_key(&self) -> u64 {
@@ -289,7 +586,7 @@ impl CommittedStroke {
 /// The live stroke on document `idx`, while it is current.
 pub(super) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
     let st = app.session.documents().get(idx)?;
-    app.live_stroke.as_ref().filter(|l| app.drag.is_some() && l.doc == st.doc.id && l.revision == st.revision)
+    app.live_stroke.as_ref().filter(|l| (app.drag.is_some() || app.finishing_stroke.is_some()) && l.doc == st.doc.id && l.revision == st.revision)
 }
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
@@ -367,6 +664,8 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
     let d = app.drag.as_ref()?;
+    // The Brush's first points, when they render on a worker.
+    let mut first = None;
     let stroke = if d.tool == Tool::MixerBrush {
         let points = app.stylus.stroke_points(&d.points);
         let p = stroke_params(app, d, points.get(..1)?);
@@ -408,19 +707,37 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
         let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
+        let cmd = stroke_command(app, d.tool);
+        if stroke_worker_enabled() {
+            // The first dabs render on the worker too.
+            let (s, pts) = photocraft_engine::brush_cmds::LiveStroke::begin_unrendered(&app.session, cmd, &p).ok()?;
+            first = Some(pts);
+            EngineStroke::Brush(Box::new(s))
+        } else {
+            EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, cmd, &p).ok()?))
+        }
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
-    Some(LiveStroke {
+    let mut live = LiveStroke {
         stroke,
         doc: st.doc.id,
         revision: st.revision,
         key: (1 << 44) | (n << 20),
         damage,
         fed: if d.tool == Tool::MixerBrush { 1 } else { d.points.len() },
+        ms_per_point: None,
+        worker: None,
+        preparing: None,
+        prepared: None,
         preview_failed: false,
-    })
+    };
+    if let Some(pts) = first
+        && !send_to_worker(&mut live, pts)
+    {
+        return None;
+    }
+    Some(live)
 }
 
 /// Cancel uncommitted mixer paint when its document, tool or input context goes away.
@@ -450,10 +767,29 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
     if l.preview_failed {
         return;
     }
+    // The Brush's last step on its worker: wait for it (without waiting) before the next.
+    match land_worker(l, None) {
+        Landed::Idle => {}
+        Landed::Running => return,
+        Landed::Failed => {
+            app.live_stroke = None;
+            return;
+        }
+    }
     let pose = &app.stylus.stroke;
     // The same times `stroke_points` gives the commit (from the drag's first point).
     let t0 = app.stylus.point_ms(0);
-    let pts: Vec<_> = (l.fed..d.points.len())
+    // As many points as this frame's budget holds; the rest wait for the next frames. Not the
+    // Mixer Brush: its release commits what was fed, with no catch-up.
+    // On a worker, every point waiting goes in the next step: a step redraws the smoothing tail
+    // whatever its points, so fewer, larger steps cost less.
+    let on_worker = stroke_worker_enabled() && matches!(l.stroke, EngineStroke::Brush(_));
+    let budget = match l.ms_per_point {
+        Some(k) if !on_worker && !matches!(l.stroke, EngineStroke::Mixer(_)) => ((STROKE_FRAME_MS / k.max(0.01)).floor() as usize).max(1),
+        _ => usize::MAX,
+    };
+    let end = d.points.len().min(l.fed.saturating_add(budget));
+    let pts: Vec<_> = (l.fed..end)
         .filter_map(|i| {
             let p = d.points.get(i)?;
             let t = pose.get(i).or(pose.last()).copied().unwrap_or_default();
@@ -466,8 +802,15 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
     if pts.is_empty() {
         return;
     }
-    l.fed = d.points.len();
+    l.fed = end;
+    if on_worker {
+        if !send_to_worker(l, pts) {
+            app.live_stroke = None;
+        }
+        return;
+    }
     let started = crate::gpu_canvas::now_ms();
+    let n = pts.len();
     match l.stroke.push(&pts) {
         Ok(r) => l.damage.push(r),
         Err(e) => {
@@ -482,7 +825,20 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
             }
         }
     }
-    app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
+    let ms = crate::gpu_canvas::now_ms() - started;
+    app.perf.stage.stroke_ms += ms;
+    if let Some(l) = app.live_stroke.as_mut() {
+        let k = ms / n.max(1) as f64;
+        l.ms_per_point = Some(l.ms_per_point.map_or(k, |old| old * 0.7 + k * 0.3));
+    }
+}
+
+#[cfg(test)]
+impl LiveStroke {
+    /// Pretend each point takes `ms` to render (a large brush on a storyboard).
+    pub(crate) fn pretend_ms_per_point(&mut self, ms: f64) {
+        self.ms_per_point = Some(ms);
+    }
 }
 
 /// The points the live retouching stroke has rendered.
@@ -639,6 +995,51 @@ pub(super) fn draw_smoothing_string(painter: &egui::Painter, xf: &ViewXform, (br
 /// offered to the commit (`Session::offer_live_stroke`), so release costs no second render, and
 /// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`).
 pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
+    // Rendering what is left in one go would freeze the window (a second or more on a
+    // storyboard): it catches up over the next frames and commits then.
+    if let Some(l) = app.live_stroke.as_ref()
+        && !l.preview_failed
+        && release_backlog(l, d)
+    {
+        if l.worker.is_some() || d.points.len() > l.fed {
+            log::info!(
+                "live stroke: {} point(s) left at release{}; finishing over the next frames",
+                d.points.len().saturating_sub(l.fed),
+                if l.worker.is_some() { ", a step on the worker" } else { "" }
+            );
+        }
+        app.finishing_stroke = Some(d.clone());
+        return;
+    }
+    commit_brush_stroke_now(app, d);
+}
+
+/// Whether a release finishes over the next frames rather than at once: on the worker, always
+/// (what is left renders there, and the commit is taken there too); on the UI thread, when more
+/// than [`STROKE_RELEASE_MS`] of work is left.
+fn release_backlog(l: &LiveStroke, d: &Drag) -> bool {
+    let left = d.points.len().saturating_sub(l.fed);
+    // On the worker the commit is taken there too (`prepare_commit`), even with nothing left.
+    if l.worker.is_some() || (stroke_worker_enabled() && matches!(l.stroke, EngineStroke::Brush(_) | EngineStroke::Busy(_))) {
+        return true;
+    }
+    l.ms_per_point.is_some_and(|k| left as f64 * k > STROKE_RELEASE_MS)
+}
+
+fn commit_brush_stroke_now(app: &mut PhotocraftApp, d: &Drag) {
+    commit_brush_stroke_inner(app, d);
+    // Commands made while the stroke finished run now, after it.
+    run_queued_commands(app);
+}
+
+fn commit_brush_stroke_inner(app: &mut PhotocraftApp, d: &Drag) {
+    // A step still on the worker (a new press or a command came first): wait for it.
+    // By now the worker is done (`flush_finishing_stroke`, `continue_finishing_stroke`).
+    if let Some(l) = app.live_stroke.as_mut()
+        && land_worker(l, Some(std::time::Duration::from_secs(3600))) == Landed::Failed
+    {
+        app.live_stroke = None;
+    }
     let live = app.live_stroke.take();
     let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
     if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
@@ -670,12 +1071,21 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
             }
         }
     }
-    let LiveStroke { stroke, doc, key, damage, .. } = l;
+    let LiveStroke { stroke, doc, key, damage, prepared, .. } = l;
     let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
-    if let EngineStroke::Brush(stroke) = stroke
-        && app.session.offer_live_stroke(*stroke).is_err()
-    {
-        app.session.clear_live_stroke();
+    match stroke {
+        EngineStroke::Brush(stroke) => {
+            if app.session.offer_live_stroke(*stroke).is_err() {
+                app.session.clear_live_stroke();
+            }
+        }
+        // The commit was taken on a worker (`prepare_commit`); the document shown meanwhile is
+        // freed elsewhere.
+        EngineStroke::Busy(busy) => drop_elsewhere(busy.doc),
+        _ => {}
+    }
+    if let Some(commit) = prepared {
+        app.session.offer_live_commit(commit);
     }
     let started = crate::gpu_canvas::now_ms();
     let result = app.run(stroke_command(app, d.tool), p);
