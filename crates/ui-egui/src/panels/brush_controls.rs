@@ -35,6 +35,18 @@ pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraf
     }
 }
 
+/// The Eraser's Smoothing %: whole numbers 0..100 that say when a typed value was past them, for
+/// the reference's alert (#11938). Returns the field and whether to show the alert.
+pub(super) fn smoothing_field_alerting(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> (egui::Response, bool) {
+    let mut sm = b.smoothing.amount * 100.0;
+    let (r, alert) = widgets::value_field_whole_alerting(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, "%", width);
+    if r.changed() {
+        b.smoothing.enabled = true;
+        b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);
+    }
+    (r, alert)
+}
+
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
 pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> egui::Response {
     let mut sm = (b.smoothing.amount * 100.0).round();
@@ -120,8 +132,13 @@ pub(super) fn mixer_combination_dropdown(
 #[path = "../mixer_blend_combination_tests.rs"]
 mod mixer_blend_combination_tests;
 
+#[cfg(test)]
+#[path = "../mixer_load_solid_colors_tests.rs"]
+mod mixer_load_solid_colors_tests;
+
 /// Mixer Brush: the Current Brush Load swatch shows the paint the next stroke starts with (an
-/// empty swatch when the brush is clean). Its menu holds Load Brush and Clean Brush.
+/// empty swatch when the brush is clean). Its menu holds Load Brush, Clean Brush, a separator and
+/// the checkable Load Solid Colors Only.
 pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(40.0, 26.0), Sense::hover());
@@ -144,7 +161,7 @@ pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, r.center().y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Current Brush Load")));
     let resp = resp.on_hover_text(tl!("Current Brush Load"));
-    let mut run = None;
+    let (mut run, mut solid_colors) = (None, None);
     egui::Popup::menu(&resp).show(|ui| {
         if ui.button(tl!("Load Brush")).clicked() {
             run = Some("brush.mixer.load");
@@ -152,9 +169,21 @@ pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if ui.button(tl!("Clean Brush")).clicked() {
             run = Some("brush.mixer.clean");
         }
+        ui.separator();
+        // Load Solid Colors Only: ⌥-click loads one colour, not the tip image (#11952).
+        let mut solid = app.session.tools.brush.mixer.solid_colors_only;
+        if ui.checkbox(&mut solid, tl!("Load Solid Colors Only")).changed() {
+            solid_colors = Some(solid);
+        }
     });
     if let Some(id) = run
         && let Err(e) = app.run(id, json!({}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    if let Some(on) = solid_colors
+        && let Err(e) = app.run("tools.setBrush", json!({"brush": {"mixer": {"solidColorsOnly": on}}}))
     {
         app.ui.status = e;
         app.ui.status_error = true;
