@@ -740,6 +740,35 @@ fn content_aware_move_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Draw Protect Tones with the shared checkbox's appearance and mouse behavior.
+/// Keep the label response here so its accessibility description needs no shared-widget API change.
+fn protect_tones_checkbox(ui: &mut egui::Ui, on: &mut bool) -> (egui::Response, egui::Id) {
+    let label = tl!("Protect Tones");
+    let t = Tokens::get(ui.ctx());
+    let (mut resp, label_resp) = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::CLICK);
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            let l = ui
+                .add(egui::Label::new(egui::RichText::new(label).color(t.text_dim)).selectable(false).sense(egui::Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            // Pressing the label presses the box (#4476).
+            let pressed = resp.is_pointer_button_down_on() || l.is_pointer_button_down_on();
+            crate::widgets::check_box(ui.painter(), rect, *on, resp.hovered() || l.hovered(), pressed, &t);
+            (resp.union(l.clone()), l)
+        })
+        .inner;
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    // The label is the single named, focusable checkbox; the box is a mouse target.
+    // Override Label's metadata instead of creating a second node with the same name.
+    label_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label));
+    (resp, label_resp.id)
+}
+
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
@@ -829,11 +858,39 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::Dodge | Tool::Burn => {
+            let tooltip = |response: egui::Response, text: &str, accessibility_id: egui::Id| {
+                // The checkbox's box is a mouse target, not its named accessibility node.
+                // Match on_hover_text: enrich existing nodes without inventing another control.
+                if response.ctx.has_accesskit_node(accessibility_id) {
+                    response.ctx.accesskit_node_builder(accessibility_id, |node| {
+                        if node.description().is_none() {
+                            node.set_description(text);
+                        }
+                        if node.labelled_by().is_empty() && node.label().is_none_or(str::is_empty) {
+                            node.set_label(text);
+                        }
+                    });
+                }
+                response.on_hover_ui(|ui| {
+                    // Translations and larger UI fonts can make even the short tips overflow.
+                    let room = (ui.ctx().content_rect().width() - egui::Frame::popup(ui.style()).total_margin().sum().x).max(1.0);
+                    ui.set_max_width(ui.spacing().tooltip_width.min(room));
+                    ui.label(text);
+                });
+            };
             opt(ui, tl!("Range:"));
             let opts = [("shadows".to_string(), tl!("Shadows")), ("midtones".to_string(), tl!("Midtones")), ("highlights".to_string(), tl!("Highlights"))];
             crate::widgets::dropdown(ui, "tone-range", tl!("Range"), &mut o.tone_range, &opts, 100.0);
-            pct(ui, tl!("Exposure:"), &mut o.exposure);
-            crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"));
+            if let Some(range) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("tone-range"))) {
+                let id = range.id;
+                tooltip(range, tl!("Painting Mode"), id);
+            }
+            opt(ui, tl!("Exposure:"));
+            let exposure = crate::widgets::value_field(ui, &mut o.exposure, 1.0..=100.0, "%", 58.0);
+            let exposure_id = exposure.id;
+            tooltip(exposure, tl!("Set exposure for stroke"), exposure_id);
+            let (protect, protect_id) = protect_tones_checkbox(ui, &mut o.protect_tones);
+            tooltip(protect, tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"), protect_id);
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));
@@ -1013,3 +1070,7 @@ mod color_replacement_tolerance_field_tests;
 #[cfg(test)]
 #[path = "../cam_options_bar_tests.rs"]
 mod cam_options_bar_tests;
+
+#[cfg(test)]
+#[path = "../burn_bar_tooltips_tests.rs"]
+mod burn_bar_tooltips_tests;
