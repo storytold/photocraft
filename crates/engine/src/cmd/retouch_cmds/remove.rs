@@ -272,3 +272,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
         },
     )
 }
+
+#[cfg(test)]
+#[path = "remove_new_layer_name_tests.rs"]
+mod remove_new_layer_name_tests;
