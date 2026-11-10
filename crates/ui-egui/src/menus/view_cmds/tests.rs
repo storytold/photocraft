@@ -1367,3 +1367,26 @@ fn float_all_in_windows_reuses_a_documents_own_window() {
         assert_eq!(app.ui.windows.iter().filter(|w| !w.floating).count(), 1, "{command}: the second view stays");
     }
 }
+
+/// A second view (New Window for Document) keeps a view of its own: zooming the document's view
+/// leaves it, and zooming it leaves the document's view.
+#[test]
+fn a_second_view_keeps_its_own_view() {
+    let (mut app, ctx) = app_with(1);
+    menu(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
+    draw_windows(&mut app, &ctx);
+    let second = |app: &PhotocraftApp| app.ui.windows.iter().find(|w| !w.floating).unwrap().view.clone();
+    assert!(!app.ui.windows[0].floating, "a second view, not a floating window");
+    app.ui.windows[0].view.zoom = 0.5;
+    app.ui.views[0].zoom = 1.0;
+    draw_windows(&mut app, &ctx);
+    menu(&mut app, &ctx, "view.zoomIn", json!({})).unwrap();
+    draw_windows(&mut app, &ctx);
+    assert!(app.ui.views[0].zoom > 1.0, "the document's view zoomed in");
+    assert_eq!(second(&app).zoom, 0.5, "the second view keeps its zoom");
+    app.ui.windows[0].view.zoom = 0.25;
+    app.ui.windows[0].view.center = [10.0, 10.0];
+    let document = app.ui.views[0].clone();
+    draw_windows(&mut app, &ctx);
+    assert_eq!((app.ui.views[0].zoom, app.ui.views[0].center), (document.zoom, document.center), "and its changes stay its own");
+}
