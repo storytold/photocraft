@@ -231,7 +231,9 @@ fn snapshot_pool() -> Option<&'static rayon::ThreadPool> {
 /// Draws a costly drag's snapshot at the pointer, once its render has arrived (taking it).
 pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &crate::canvas::ViewXform) {
     let offset = drag_offset(app);
-    let Some(s) = app.move_preview.as_mut().and_then(|p| p.snapshot.as_mut()) else { return };
+    let Some(p) = app.move_preview.as_mut() else { return };
+    let canvas = p.canvas;
+    let Some(s) = p.snapshot.as_mut() else { return };
     if let Some(rx) = &s.rx {
         match rx.try_recv() {
             Ok(buf) => {
@@ -247,23 +249,39 @@ pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf
                 if px.len() == size[0] * size[1] {
                     let image = egui::ColorImage::new(size, px);
                     s.texture = Some(painter.ctx().load_texture("move-drag-snapshot", image, egui::TextureOptions::LINEAR));
+                    // The next frame hides the layers under it (`display_doc`), with or without input.
+                    painter.ctx().request_repaint();
                 }
                 s.rx = None;
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => s.rx = None,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            // The render thread can't wake the UI: look again soon, even if the pointer rests.
+            Err(std::sync::mpsc::TryRecvError::Empty) => painter.ctx().request_repaint_after(std::time::Duration::from_millis(50)),
         }
     }
     let (Some(texture), Some((dx, dy))) = (&s.texture, offset) else { return };
-    let r = s.rect.translate(dx, dy);
+    let Some((r, uvs)) = snapshot_quad(s.rect.translate(dx, dy), canvas) else { return };
     let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)];
-    let uvs = [egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0)];
     let mut mesh = egui::Mesh::with_texture(texture.id());
     for ((x, y), uv) in corners.into_iter().zip(uvs) {
         mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv, color: egui::Color32::WHITE });
     }
     mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
     painter.add(egui::Shape::mesh(mesh));
+}
+
+/// The part of a snapshot drawn at `full` that lies on `canvas`, and the texture coordinates of its
+/// corners (clockwise from the top left): the layers' pixels beyond the canvas stay hidden, as
+/// in the live preview and the result. In document space, so rotated views clip it too.
+fn snapshot_quad(full: Rect, canvas: Rect) -> Option<(Rect, [egui::Pos2; 4])> {
+    let r = full.intersect(&canvas);
+    if r.is_empty() || full.is_empty() {
+        return None;
+    }
+    let (w, h) = (full.width() as f32, full.height() as f32);
+    let (u0, v0) = ((r.x0 - full.x0) as f32 / w, (r.y0 - full.y0) as f32 / h);
+    let (u1, v1) = ((r.x1 - full.x0) as f32 / w, (r.y1 - full.y0) as f32 / h);
+    Some((r, [egui::pos2(u0, v0), egui::pos2(u1, v0), egui::pos2(u1, v1), egui::pos2(u0, v1)]))
 }
 
 impl MovePreview {
@@ -509,13 +527,40 @@ pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, 
     })
 }
 
-/// A snapshot drag's release: the canvas showed the document with the layers hidden (display key
-/// `key`), and the move at `revision` left them in `rect`: the only area to redraw.
+/// A Move drag's release, which made revision `revision` of document `doc`: what the canvas
+/// showed at each of the drag's preview keys, so a cache that last drew one redraws only what
+/// differs from the result ([`drop_damage`]).
 pub(crate) struct MoveDrop {
-    pub(crate) doc: DocId,
-    pub(crate) revision: u64,
-    pub(crate) key: u64,
-    pub(crate) rect: Rect,
+    doc: DocId,
+    revision: u64,
+    /// Where preview key `BASE + 1 + i` drew the moving layers, at `areas[i]`.
+    areas: Vec<Option<Rect>>,
+    /// A snapshot drag's: the key that showed the document with the layers hidden where they were,
+    /// and where they landed, the only area that differs from it.
+    landed: Option<(u64, Rect)>,
+}
+
+/// What a cache that last drew Move preview key `key` must redraw to show revision `revision` of
+/// document `doc`, made by the drag's release: for a snapshot drag's hidden-layers key, where the
+/// layers landed (widened by `reach` for their effects); for another preview, where it drew the
+/// layers plus `moved`, the move's own damage (where they were and are), since the pointer may
+/// have gone beyond both before the release. `None` when unknown: the caller redraws everything.
+pub(crate) fn drop_damage(app: &PhotocraftApp, doc: DocId, revision: u64, key: u64, moved: Option<Rect>, reach: i32) -> Option<Rect> {
+    let d = app.move_drop.as_ref().filter(|d| d.doc == doc && d.revision == revision)?;
+    if let Some((k, r)) = d.landed
+        && k == key
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(reach) });
+    }
+    let shown = (*d.areas.get(usize::try_from(key.checked_sub(BASE + 1)?).ok()?)?)?;
+    let moved = moved?;
+    Some(if shown.is_empty() {
+        moved
+    } else if moved.is_empty() {
+        shown
+    } else {
+        moved.union(&shown)
+    })
 }
 
 /// Whether a Move drag shows (or is about to show) a snapshot of its layers rather than an arrow.
@@ -552,8 +597,9 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     // A snapshot drag's canvas shows the layers hidden, drawn where they were: after the move it
     // differs only where they land, so that is all the drop redraws (not one rectangle around
     // both places: up to 585 MP for a 108 MP photo moved across a storyboard).
-    let landed =
-        preview.as_ref().filter(|p| p.snapshot.is_some() && p.shown.is_some() && p.offsets == [(0, 0)]).and_then(|p| Some((p.doc, p.key(), p.area(at)?)));
+    let landed = preview.as_ref().filter(|p| p.snapshot.is_some() && p.shown.is_some() && p.offsets == [(0, 0)]).and_then(|p| Some((p.key(), p.area(at)?)));
+    // Where each preview the canvas may still show drew the layers.
+    let drawn = preview.as_ref().map(|p| (p.doc, p.offsets.iter().map(|o| p.area(*o)).collect::<Vec<_>>()));
     let shown = preview.filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at));
     if dx == 0.0 && dy == 0.0 {
         return;
@@ -563,11 +609,13 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     else {
         return;
     };
-    if let Some((doc, key, rect)) = landed
+    if let Some((doc, areas)) = drawn
         && let Some(st) = app.session.active().filter(|st| st.doc.id == doc)
     {
-        log::info!("move: the drop redraws only where the layers landed ({:.0} MP)", rect.size().area() as f64 / 1_048_576.0);
-        app.move_drop = Some(MoveDrop { doc, revision: st.revision, key, rect });
+        if let Some((_, rect)) = landed {
+            log::info!("move: the drop redraws only where the layers landed ({:.0} MP)", rect.size().area() as f64 / 1_048_576.0);
+        }
+        app.move_drop = Some(MoveDrop { doc, revision: st.revision, areas, landed });
     }
     // A layer that changed board is clipped by its new board, not the old one the preview showed,
     // so the canvas recomposites instead of keeping the preview.

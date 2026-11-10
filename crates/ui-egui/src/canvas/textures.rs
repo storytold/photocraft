@@ -349,24 +349,14 @@ pub(crate) fn damage_since(
     if seen.1 == now.1 ^ display_key && in_span {
         return last_damage;
     }
-    // A snapshot drag's drop: the canvas shows the layers hidden where they were, so only where
-    // they landed differs (`move_ui::MoveDrop`).
-    if seen.0 + 1 == now.0
-        && now.1 == 0
-        && let Some(d) = app.move_drop.as_ref().filter(|d| d.key == seen.1 ^ display_key && d.revision == now.0)
-        && let Some(st) = app.session.documents().get(idx).filter(|st| st.doc.id == d.doc)
-    {
-        let r = d.rect;
-        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
-    }
-    // A Move drag's release when the canvas last showed one of its previews (not the final
-    // offset, or a layer that joined another artboard): the move's own damage, where the layers
-    // were and are, covers every pixel between that preview and the result. Without this the
-    // whole canvas recomposited (2.6 GP over 17 s on a storyboard).
+    // A Move drag's release when the canvas last showed one of its previews: only what differs
+    // from that preview (`move_ui::drop_damage`). Without this the whole canvas recomposited
+    // (2.6 GP over 17 s on a storyboard).
     if seen.0 + 1 == now.0
         && now.1 == 0
         && crate::move_ui::is_preview_key(seen.1 ^ display_key)
-        && let Some(r) = last_damage
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::move_ui::drop_damage(app, st.doc.id, now.0, seen.1 ^ display_key, last_damage, effect_reach(&st.doc.layers))
     {
         return Some(r);
     }

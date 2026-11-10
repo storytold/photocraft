@@ -733,22 +733,24 @@ fn a_costly_drag_shows_a_snapshot_and_its_drop_redraws_where_the_layers_land() {
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 2148.0, y: 94.0 }, m);
     let st = app.session.active().unwrap();
     assert_eq!(st.revision, before + 1, "one move");
-    let d = app.move_drop.as_ref().expect("a snapshot drop");
+    let (hidden, landed) = app.move_drop.as_ref().and_then(|d| d.landed).expect("a snapshot drop");
+    assert_eq!(hidden, key);
     let canvas = Rect::new(0, 0, 4096, 4096);
-    assert_eq!(d.rect, rect.translate(100, 30).inflate(1).intersect(&canvas), "where the layers landed");
+    assert_eq!(landed, rect.translate(100, 30).inflate(1).intersect(&canvas), "where the layers landed");
     // The move's own damage: where the layers were and are.
     let both = Some(canvas);
     let r = crate::canvas::textures::damage_since(&app, 0, (before, key), (st.revision, 0), 0, (before, both));
     let reach = crate::canvas::textures::effect_reach(&st.doc.layers);
-    assert_eq!(r, Some(d.rect.inflate(reach)));
+    assert_eq!(r, Some(landed.inflate(reach)));
 }
 
 /// A release after the canvas showed one of the drag's previews, but not its final offset,
-/// redraws the move's own damage rather than the whole canvas.
+/// redraws the move's own damage and where that preview drew the layers, not the whole canvas:
+/// the pointer went past both places before coming back.
 #[test]
-fn a_release_after_an_earlier_preview_redraws_only_the_moves_damage() {
+fn a_release_after_an_overshooting_preview_redraws_the_move_and_that_preview() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.session.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
     app.sync_views();
     app.session.execute("layer.new.layer", json!({})).unwrap();
     app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
@@ -759,14 +761,27 @@ fn a_release_after_an_earlier_preview_redraws_only_the_moves_damage() {
     app.ui.view.show.smart_guides = false;
     let m = egui::Modifiers::NONE;
     crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
-    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 96.0, y: 96.0, pressure: 1.0 }, m);
     let (_, key) = super::display_doc(&mut app, 0).expect("a live drag");
     assert!(super::is_preview_key(key));
     let before = app.session.active().unwrap().revision;
-    // Released at (20, 9), not the (14, 4) the canvas showed.
+    // Released at (20, 9), far from the (80, 80) the canvas showed.
     super::finish(&mut app, 20.0, 9.0);
     let st = app.session.active().unwrap();
-    let moved = Some(Rect::new(8, 8, 44, 33));
-    let r = crate::canvas::textures::damage_since(&app, 0, (before, key), (st.revision, 0), 0, (before, moved));
-    assert_eq!(r, moved);
+    // Where the layer was and is.
+    let moved = Rect::new(8, 8, 44, 33);
+    let r = crate::canvas::textures::damage_since(&app, 0, (before, key), (st.revision, 0), 0, (before, Some(moved))).expect("bounded");
+    assert_eq!(r.union(&moved), r, "where the layer was and is");
+    assert_eq!(r.union(&Rect::new(90, 90, 102, 102)), r, "where the preview drew it");
+    assert_ne!(r, Rect::new(0, 0, 128, 128), "not the whole canvas");
+}
+
+/// A snapshot shows only what lies on the canvas, sampling the matching part of its texture.
+#[test]
+fn a_snapshot_is_cut_at_the_canvas() {
+    let canvas = Rect::new(0, 0, 50, 50);
+    let (r, uv) = super::snapshot_quad(Rect::new(-100, 0, 100, 100), canvas).unwrap();
+    assert_eq!(r, canvas);
+    assert_eq!(uv, [egui::pos2(0.5, 0.0), egui::pos2(0.75, 0.0), egui::pos2(0.75, 0.5), egui::pos2(0.5, 0.5)]);
+    assert!(super::snapshot_quad(Rect::new(60, 0, 80, 20), canvas).is_none(), "off the canvas");
 }

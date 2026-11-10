@@ -404,7 +404,7 @@ pub struct PhotocraftApp {
     pub(crate) menu_cache: Option<menus::ItemCache>,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
-    /// The last snapshot drag's drop, to redraw only where its layers landed (`move_ui::MoveDrop`).
+    /// The last Move drag's release, to redraw only what differs from its previews (`move_ui::MoveDrop`).
     pub(crate) move_drop: Option<move_ui::MoveDrop>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
     pub(crate) move_hover: Option<move_hover::Hover>,
