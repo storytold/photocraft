@@ -1,22 +1,28 @@
+//! Regression coverage for Image Processor document sources and preservation of open work.
 use crate::Session;
 use photocraft_doc::Document;
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// Create a small document with explicit color and bit depth for export comparisons.
 fn add(s: &mut Session, name: &str, depth: u32, background: &str) -> crate::Result<Value> {
     s.execute("file.new", json!({"name": name, "width": 40, "height": 20, "depth": depth, "background": background}))
 }
 
+/// Sample the same interior pixel before and after processing through the CPU compositor.
 fn pixel(doc: &Document) -> [f32; 4] {
     photocraft_compose::render(doc, Rect::new(1, 1, 2, 2)).px[0]
 }
 
+/// Reimport a reported output so assertions examine encoded pixels and document metadata.
 fn exported(result: &Value, index: usize) -> std::result::Result<Document, Box<dyn std::error::Error>> {
     let path = result["files"][index].as_str().ok_or("export result has no filename")?;
     Ok(photocraft_io::import(path, &std::fs::read(path)?)?.document)
 }
 
+/// Resizing must use unsaved pixels at every supported depth while leaving the source
+/// snapshot, selected layers, history, dirty state and saved file intact.
 #[test]
 fn image_processor_current_uses_unsaved_edits_at_several_depths_without_changing_the_source() {
     for depth in [8, 16, 32] {
@@ -61,6 +67,7 @@ fn image_processor_current_uses_unsaved_edits_at_several_depths_without_changing
     }
 }
 
+/// Untitled documents need no source path, and omitted dimensions must preserve their size.
 #[test]
 fn image_processor_current_accepts_an_untitled_document() {
     let dir = tempfile::tempdir().unwrap();
@@ -72,6 +79,8 @@ fn image_processor_current_accepts_an_untitled_document() {
     assert_eq!(exported(&result, 0).unwrap().size, s.active().unwrap().doc.size, "no dimensions means no resize");
 }
 
+/// A duplicate output name must preserve the first result and allow later documents to
+/// finish without changing any open document or the active tab.
 #[test]
 fn image_processor_open_copies_every_document_and_reports_collisions_without_overwriting() {
     let dir = tempfile::tempdir().unwrap();
@@ -98,6 +107,7 @@ fn image_processor_open_copies_every_document_and_reports_collisions_without_ove
     assert_eq!(s.active_index(), active);
 }
 
+/// Exporting back to an open source path must report an error and preserve its disk bytes.
 #[test]
 fn image_processor_current_cannot_replace_an_open_source_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -116,6 +126,8 @@ fn image_processor_current_cannot_replace_an_open_source_file() {
     assert_eq!(std::fs::read(path).unwrap(), bytes);
 }
 
+/// Missing documents, malformed source values, unsafe extensions and absent output paths
+/// must fail without creating files.
 #[test]
 fn image_processor_open_sources_fail_gracefully_with_no_documents_or_bad_source_params() {
     let dir = tempfile::tempdir().unwrap();
@@ -131,8 +143,11 @@ fn image_processor_open_sources_fail_gracefully_with_no_documents_or_bad_source_
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 
+/// A scratch copy must obey the initiating session's resize authorization and write
+/// nothing when that nested command is denied.
 #[test]
 fn image_processor_current_preserves_authorization_for_resize_commands() {
+    /// Reject only the nested resize so the test can distinguish inherited authorization.
     fn deny_resize(id: &str, _: &Value) -> crate::Result<()> {
         if id == "image.imageSize" { Err(crate::EngineError::Other("resize denied".into())) } else { Ok(()) }
     }
@@ -147,6 +162,8 @@ fn image_processor_current_preserves_authorization_for_resize_commands() {
     assert_eq!(s.active().unwrap().doc.size.width, 40);
 }
 
+/// Both document-source modes must export the displayed floating selection while keeping
+/// the original floating parts, offset, revision and history unchanged.
 #[test]
 fn image_processor_open_sources_export_a_moved_selection_without_committing_it_in_the_original() {
     for source in ["current", "open"] {
@@ -175,6 +192,8 @@ fn image_processor_open_sources_export_a_moved_selection_without_committing_it_i
     }
 }
 
+/// Same-named relative assets must resolve against each source document's folder and
+/// survive PSD export as the corresponding embedded payload.
 #[test]
 fn image_processor_open_embeds_relative_links_from_each_documents_own_folder() {
     use photocraft_doc::{LayerContent, SmartSource};

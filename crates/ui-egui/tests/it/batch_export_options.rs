@@ -204,6 +204,8 @@ fn batch_custom_quality_is_bounded_dialog_local_and_reversible() {
     assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null(), "reopening returns to the existing default");
 }
 
+/// Actual folder-mode controls must pass both WebP quality endpoints to the encoder while
+/// preserving the active document, history, preferences and recorded actions.
 #[test]
 fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
     let _gpu = photocraft_testkit::gpu_lock();

@@ -88,6 +88,10 @@ pub(super) fn parse_steps(v: &Value) -> Result<Vec<(String, Value)>> {
         .collect()
 }
 
+/// Resize and export folder inputs or copies of the current/all open documents.
+/// An omitted `source` keeps the folder-input contract; document sources include unsaved
+/// edits without modifying the original documents. Invalid parameters and missing documents
+/// return an error; processing failures and output-name collisions appear in per-file errors.
 pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.scripts.imageProcessor";
     let source = match p.get("source") {

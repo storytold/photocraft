@@ -14,6 +14,7 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     menu_items(app).into_iter().find(|i| i.id == id).and_then(|i| i.checked)
 }
 
+/// The form must list every source first and default to Current only when a document exists.
 #[test]
 fn image_processor_source_choices_include_current_and_all_open_documents() {
     for n in [0, 2] {
@@ -28,6 +29,8 @@ fn image_processor_source_choices_include_current_and_all_open_documents() {
     }
 }
 
+/// Confirming either document source must ignore a stale input-folder field, export the
+/// expected number of copies and retain the open documents' original snapshots.
 #[test]
 fn image_processor_dialog_confirms_open_document_sources_without_reading_the_input_folder() {
     for source in ["current", "open"] {

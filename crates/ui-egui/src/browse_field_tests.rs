@@ -100,6 +100,8 @@ fn data_sets_as_files_folder_is_chosen_with_browse() {
     assert_eq!(field(&h, "dir"), Some(json!("/tmp/dataset-exports")));
 }
 
+/// Switching Source through the actual dropdown must show input-folder controls only for
+/// Folder, while retaining the output-folder picker for every source.
 #[test]
 fn image_processor_source_picker_hides_folder_fields_for_open_documents() {
     let (mut h, _) = harness(vec![]);

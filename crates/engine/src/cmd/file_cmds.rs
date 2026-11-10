@@ -235,6 +235,8 @@ fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// Register File-menu commands with their parameter contracts and enablement predicates.
+/// Filesystem operations are native-only; document operations remain available on the web.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
