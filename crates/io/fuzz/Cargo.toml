@@ -1,0 +1,23 @@
+[package]
+name = "photocraft-io-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# Separate cargo-fuzz workspace, following the other format crates.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-io = { path = ".." }
+
+[[bin]]
+name = "xcf_import"
+path = "fuzz_targets/xcf_import.rs"
+test = false
+doc = false
+bench = false
