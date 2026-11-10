@@ -943,8 +943,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
             let label = tl!("Strength:");
             opt(ui, label);
-            // Only Blur's Strength is measured (#12650); a copy, so a shared fraction is not rounded.
-            let out_of_range = if tool == Tool::Blur {
+            // Blur's (#12650) and Sharpen's (#12949) Strength are measured; a copy, so a shared fraction is not rounded.
+            let out_of_range = if matches!(tool, Tool::Blur | Tool::Sharpen) {
                 let mut s = o.strength;
                 let (r, alert) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
                 if r.changed() {
