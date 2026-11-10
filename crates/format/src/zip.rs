@@ -236,46 +236,51 @@ impl<'a> ZipReader<'a> {
 
     /// Entry payload (decompressed), at most `max` bytes, CRC-checked.
     pub fn read(&self, e: &Entry, max: usize) -> Result<Vec<u8>, FormatError> {
-        if e.uncompressed > max {
-            return Err(FormatError::LimitExceeded(format!("zip entry `{}` is {} bytes (max {max})", e.name, e.uncompressed)));
-        }
-        // `Entry` is public and cloneable: one from another archive must not index out of range.
-        let raw = e
-            .data_offset
-            .checked_add(e.compressed)
-            .and_then(|end| self.bytes.get(e.data_offset..end))
-            .ok_or_else(|| FormatError::corrupt(format!("zip entry `{}` out of range", e.name)))?;
-        let data = match e.method {
-            0 => raw.to_vec(),
-            8 => {
-                // The uncompressed length comes from an untrusted ZIP header: a
-                // small forged archive must not reserve gigabytes up front, so the
-                // preallocation is capped (DEFLATE expands at most ~1032x).
-                let mut out = Vec::with_capacity(e.uncompressed.min(raw.len().saturating_mul(1032)).min(64 << 20));
-                // One surplus byte proves a false size without expanding to the caller's larger budget.
-                flate2::bufread::DeflateDecoder::new(raw)
-                    .take((e.uncompressed as u64).saturating_add(1))
-                    .read_to_end(&mut out)
-                    .map_err(|err| FormatError::corrupt(format!("zip entry `{}`: {err}", e.name)))?;
-                out
-            }
-            m => {
-                return Err(FormatError::Unsupported(format!("zip compression method {m} for `{}`", e.name)));
-            }
-        };
-        if data.len() != e.uncompressed || data.len() > max {
-            return Err(FormatError::corrupt(format!("zip entry `{}` has wrong size", e.name)));
-        }
-        if crc32(&data) != e.crc {
-            return Err(FormatError::corrupt(format!("zip entry `{}` failed its CRC check", e.name)));
-        }
-        Ok(data)
+        read_entry(self.bytes, e, max)
     }
 
     pub fn read_by_name(&self, name: &str, max: usize) -> Result<Vec<u8>, FormatError> {
         let e = self.find(name).ok_or_else(|| FormatError::corrupt(format!("missing `{name}`")))?;
         self.read(e, max)
     }
+}
+
+/// [`ZipReader::read`] of an entry indexed earlier from the same `bytes`.
+pub(crate) fn read_entry(bytes: &[u8], e: &Entry, max: usize) -> Result<Vec<u8>, FormatError> {
+    if e.uncompressed > max {
+        return Err(FormatError::LimitExceeded(format!("zip entry `{}` is {} bytes (max {max})", e.name, e.uncompressed)));
+    }
+    // `Entry` is public and cloneable: one from another archive must not index out of range.
+    let raw = e
+        .data_offset
+        .checked_add(e.compressed)
+        .and_then(|end| bytes.get(e.data_offset..end))
+        .ok_or_else(|| FormatError::corrupt(format!("zip entry `{}` out of range", e.name)))?;
+    let data = match e.method {
+        0 => raw.to_vec(),
+        8 => {
+            // The uncompressed length comes from an untrusted ZIP header: a
+            // small forged archive must not reserve gigabytes up front, so the
+            // preallocation is capped (DEFLATE expands at most ~1032x).
+            let mut out = Vec::with_capacity(e.uncompressed.min(raw.len().saturating_mul(1032)).min(64 << 20));
+            // One surplus byte proves a false size without expanding to the caller's larger budget.
+            flate2::bufread::DeflateDecoder::new(raw)
+                .take((e.uncompressed as u64).saturating_add(1))
+                .read_to_end(&mut out)
+                .map_err(|err| FormatError::corrupt(format!("zip entry `{}`: {err}", e.name)))?;
+            out
+        }
+        m => {
+            return Err(FormatError::Unsupported(format!("zip compression method {m} for `{}`", e.name)));
+        }
+    };
+    if data.len() != e.uncompressed || data.len() > max {
+        return Err(FormatError::corrupt(format!("zip entry `{}` has wrong size", e.name)));
+    }
+    if crc32(&data) != e.crc {
+        return Err(FormatError::corrupt(format!("zip entry `{}` failed its CRC check", e.name)));
+    }
+    Ok(data)
 }
 
 #[cfg(test)]
