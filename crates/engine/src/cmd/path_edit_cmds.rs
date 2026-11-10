@@ -747,3 +747,7 @@ mod tests {
         assert_eq!(s.active().unwrap().history.entries().len(), steps);
     }
 }
+
+#[cfg(test)]
+#[path = "path_delete_last_anchor_tests.rs"]
+mod path_delete_last_anchor_tests;

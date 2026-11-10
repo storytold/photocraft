@@ -633,3 +633,7 @@ mod tests {
         assert!(subpath_anchors(&p, 4).is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "edit_delete_last_anchor_tests.rs"]
+mod edit_delete_last_anchor_tests;
