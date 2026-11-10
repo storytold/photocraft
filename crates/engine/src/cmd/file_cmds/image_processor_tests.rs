@@ -74,7 +74,8 @@ fn image_processor_current_accepts_an_untitled_document() {
     let mut s = Session::new();
     add(&mut s, "Untitled-1", 8, "#ff0000").unwrap();
     let result = s.execute("file.scripts.imageProcessor", json!({"source": "current", "output": dir.path(), "format": "png"})).unwrap();
-    assert_eq!(result["files"], json!([dir.path().join("Untitled-1.png")]));
+    assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
+    assert_eq!(std::path::Path::new(result["files"][0].as_str().unwrap()), dir.path().join("Untitled-1.png").as_path());
     assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
     assert_eq!(exported(&result, 0).unwrap().size, s.active().unwrap().doc.size, "no dimensions means no resize");
 }
@@ -267,7 +268,12 @@ fn image_processor_untitled_names_use_the_shared_filename_sanitizer() {
                 let original = s.active().unwrap().doc.clone();
                 let result = s.execute("file.scripts.imageProcessor", json!({"source": source, "output": output, "format": format})).unwrap();
                 assert!(result["errors"].as_array().unwrap().is_empty(), "{source}, {format}, {name:?}: {result}");
-                assert_eq!(result["files"], json!([output.join(format!("{safe_name}.{extension}"))]), "{source}, {format}, {name:?}");
+                assert_eq!(result["files"].as_array().unwrap().len(), 1, "{source}, {format}, {name:?}: {result}");
+                assert_eq!(
+                    std::path::Path::new(result["files"][0].as_str().unwrap()),
+                    output.join(format!("{safe_name}.{extension}")).as_path(),
+                    "{source}, {format}, {name:?}"
+                );
                 assert_eq!(exported(&result, 0).unwrap().size, original.size);
                 let state = s.active().unwrap();
                 assert!(Arc::ptr_eq(&state.doc, &original));
