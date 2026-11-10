@@ -4490,7 +4490,7 @@ curves	Smooth	Tasoita
 	This Layer:	Tämä taso:
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Tämä älykäs objekti on rasteroitava ennen jatkamista. Sen sisältöä ei voi enää muokata. Rasteroidaanko älykäs objekti?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Tämä säätö ({key}) säilytetään tuotuna, eikä sitä voi vielä muokata.
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Tämä täyttötaso on rasteroitava ennen jatkamista. Sen täyttösisältöä ei voi enää muokata. Rasteroidaanko taso?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Tämä täyttötaso on rasteroitava ennen jatkamista. Sen täyttösisältöä ei voi enää muokata. Rasteroidaanko taso?
 	This layer must be rasterized before proceeding.	Tämä taso on rasteroitava ennen jatkamista.
 	This session: {reason}	Tämä istunto: {reason}
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Tämä muototaso on rasteroitava ennen jatkamista. Sitä ei voi enää muokata muotona. Rasteroidaanko muoto?
