@@ -46,6 +46,16 @@ fn knot(cmd: &str, p: &Value) -> Result<[usize; 2]> {
     Ok([index(cmd, p, "subpath")?, index(cmd, p, "knot")?])
 }
 
+/// The History step name: `default`, or `named` when `stepName` asks for it (the Convert Point
+/// tool names its steps as the reference does, #12736). Any other value is refused.
+fn step_name(cmd: &str, p: &Value, default: &'static str, named: &'static str) -> Result<&'static str> {
+    match p.get("stepName") {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::String(n)) if n == named => Ok(named),
+        Some(_) => Err(bad(cmd, format!("`stepName` must be \"{named}\""))),
+    }
+}
+
 /// Applies `f` to the targeted path in one undoable step labelled `label`.
 fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(&mut Path) -> std::result::Result<(), String>) -> Result<Value> {
     // A malformed target is an error, never a silent edit of the Work Path or the active layer.
@@ -118,7 +128,8 @@ fn move_handle(s: &mut Session, p: &Value) -> Result<Value> {
     let h = p.get("handle").and_then(Value::as_str).and_then(Handle::parse).ok_or_else(|| bad(CMD, "`handle` must be \"in\" or \"out\""))?;
     let to = point(CMD, p, "to")?.ok_or_else(|| bad(CMD, "missing `to`"))?;
     let independent = p.get("independent").and_then(Value::as_bool).unwrap_or(false);
-    edit_path(s, CMD, p, "Drag Direction Point", |path| edit::move_handle(path, k, h, to, independent))
+    let label = step_name(CMD, p, "Drag Direction Point", "Corner Drag")?;
+    edit_path(s, CMD, p, label, |path| edit::move_handle(path, k, h, to, independent))
 }
 
 fn bend_segment(s: &mut Session, p: &Value) -> Result<Value> {
@@ -135,11 +146,12 @@ fn bend_segment(s: &mut Session, p: &Value) -> Result<Value> {
 fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.convertPoint";
     let k = knot(CMD, p)?;
+    let label = step_name(CMD, p, "Convert Point", "Change Anchor Point")?;
     if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
-        return edit_path(s, CMD, p, "Convert Point", |path| edit::toggle_curvature_point(path, k));
+        return edit_path(s, CMD, p, label, |path| edit::toggle_curvature_point(path, k));
     }
     let out = point(CMD, p, "out")?;
-    edit_path(s, CMD, p, "Convert Point", |path| edit::convert_point(path, k, out))
+    edit_path(s, CMD, p, label, |path| edit::convert_point(path, k, out))
 }
 
 fn add_anchor(s: &mut Session, p: &Value) -> Result<Value> {
@@ -255,7 +267,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.moveHandle",
             "Drag Direction Point",
-            r#""subpath":i,"knot":j,"handle":"in|out","to":[x,y],"independent":bool=false (a smooth point turns its other handle to stay collinear; independent = ⌥ / Convert Point, makes a corner)"#.into(),
+            r#""subpath":i,"knot":j,"handle":"in|out","to":[x,y],"independent":bool=false (a smooth point turns its other handle to stay collinear; independent = ⌥ / Convert Point, makes a corner),"stepName":"Corner Drag"? (History step name; the Convert Point tool sends it; default "Drag Direction Point"; any other value is refused)"#.into(),
             move_handle,
         ),
         spec(
@@ -267,7 +279,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.convertPoint",
             "Convert Point",
-            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror),"curvature":bool=false (the Curvature Pen's double-click: toggles smooth/corner and reflows the smooth knots of the subpath; out ignored)"#.into(),
+            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror),"curvature":bool=false (the Curvature Pen's double-click: toggles smooth/corner and reflows the smooth knots of the subpath; out ignored),"stepName":"Change Anchor Point"? (History step name; the Convert Point tool sends it; default "Convert Point"; any other value is refused)"#.into(),
             convert_point,
         ),
         spec(
