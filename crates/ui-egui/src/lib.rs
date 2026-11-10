@@ -1064,6 +1064,8 @@ mod pencil_shift_digit_opacity_tests;
 #[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
+mod dodge_default_tip_tests;
+#[cfg(test)]
 mod layers_empty_area_menu_tests;
 #[cfg(test)]
 mod pencil_auto_erase_tooltip_tests;
