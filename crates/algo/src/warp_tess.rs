@@ -9,29 +9,38 @@
 //!   stored degree, has an inner control point at least [`PERP_TOL`] off the chord sideways, or its
 //!   inner control points lie on average at least [`TANG_TOL`] along the chord from their even
 //!   spacing; the same test on its two columns splits it down (`v`);
-//! * for a mesh that is cubic in one direction, a cell whose control net twists (the largest
-//!   `P00 − P10 − P01 + P11` of its stored-degree net) by more than [`TWIST_TOL`] splits along its
-//!   longer side (a square cell: down the document); for an envelope, a split across counts only
-//!   the quads of the net's left column (the reference splits Arc Lower's top-left corner cell,
-//!   not its mirror image on the right) and a split down only its top row of quads; a 3 × 3
-//!   envelope's cell splits across (never down) when its left column twists downward by more than
-//!   [`TWIST33_TOL`];
+//! * for a mesh that is cubic in one direction, a cell whose control net twists by more than
+//!   [`TWIST_TOL`] splits along its longer side (a square cell: down the document). A full mesh's
+//!   twist is the largest `P00 − P10 − P01 + P11` of the cell's net. An envelope's is how unevenly
+//!   a quad of the cell's stored-degree net is stretched (the larger difference in length between
+//!   two opposite sides of it): for a split across, over the net's left column of quads only (the
+//!   reference splits Arc Lower's top-left corner cell, not its mirror image on the right), for a
+//!   split down over its top row;
+//! * a 3 × 3 envelope's wide cell splits across (never down) where the legs of the left column of
+//!   its control points are more than [`TWIST_TOL`] longer than the next column's, in the cell or
+//!   in the other half of the cell it was cut from;
 //! * a square cell of a tall envelope (stored with more control points down than across: the
 //!   presets bent sideways) whose whole net twists by more than [`TALL_SQUARE_TWIST_TOL`] splits
 //!   across too;
-//! * a first-level cell that splits across also splits down, and a down split anywhere on the
-//!   first level splits every first-level cell down;
+//! * a first-level cell of a full mesh that splits across also splits down; a split down on the
+//!   first level splits the other first-level cells of the same quarter of the surface down too
+//!   (a full mesh's four cells are one such block);
 //! * for a mesh that is cubic in one direction, a square cell split down for its columns'
 //!   curvature splits its sibling beside it (the other cell of its parent's row) down.
 //!
 //! Each cell becomes two triangles, split from its top-left corner, cut across at the vertices its
-//! left and right neighbours put on its sides. A new vertex on a row whose own segment wasn't
-//! curved enough to need it is dropped onto that segment's chord, perpendicular from its point on
-//! the surface, unless it is inside a cell that was split, or both cells beside it were split for
-//! their curvature; on the left and right sides of the surface the same holds for columns. A
-//! vertex inside a bigger cell's edge is instead dropped onto that edge the same way, so it keeps
-//! its place along the edge (the bigger cell's texture runs on straight past it, as the
-//! reference's does).
+//! left and right neighbours put on its sides (never at a side on the surface's middle line,
+//! u = ½: the cell stays whole there). A new vertex on a row whose own segment wasn't curved
+//! enough to need it is dropped onto that segment's chord, perpendicular from its point on the
+//! surface, unless it is inside a cell that was split; on the left and right sides of the surface
+//! the same holds for columns. The starting grid's own points stay on the surface, with two
+//! exceptions that follow the rule too: every point but the corners on the surface's top and
+//! bottom edges (an edge that needs no split is drawn straight from corner to corner), and an
+//! envelope's quarter points on its middle row. Inside an envelope that isn't tall, a new vertex
+//! on a column goes onto its column segment's chord only where that segment is nearly straight
+//! (under [`FLAT_COLUMN_TOL`] of a split). A vertex inside a bigger cell's edge is instead dropped
+//! onto that edge the same way, so it keeps its place along the edge (the bigger cell's texture
+//! runs on straight past it, as the reference's does).
 //!
 //! A tall envelope is cut in place by the same rules (not as its mirror image about the diagonal),
 //! with two differences in where the vertices go: its cells stay whole beside smaller neighbours
@@ -53,15 +62,15 @@ const TWIST_TOL: f64 = 1.0;
 /// a corner pulled out keeps its cell at (½..¾, 0..¼) whole up to a twist of 1.16 and splits it
 /// from 1.22 (a sweep of pulls), and an arc stored as a full mesh splits at 1.39.
 const ACROSS_TWIST_TOL: f64 = 1.2;
-/// The downward twist of a 3 × 3 envelope cell's left column past which it splits across: Inflate
-/// and Squeeze −46 (0.920) stay whole, −48 (0.960) split.
-const TWIST33_TOL: f64 = 0.92;
 /// The twist of a tall envelope's square cell (its whole net) past which it splits across as well:
 /// sideways Fish and Wave at ±50 match with 2.0 and lose most of their cells' agreement at 1.2.
 const TALL_SQUARE_TWIST_TOL: f64 = 2.0;
 /// Halvings down to which a tall envelope's column points stay on the surface: eighths stay,
 /// sixteenths and finer follow the chord rule.
 const TALL_COLUMN_LEVEL: u32 = 3;
+/// How much of a split (see [`need`]) a stretch of an inner column of an envelope that isn't tall
+/// may ask for and still count as straight: the points halfway along it sit on its chord.
+const FLAT_COLUMN_TOL: f64 = 0.5;
 /// Cells per side an envelope starts as.
 const START: usize = 4;
 /// Cells per side a full 4 × 4 mesh starts as.
@@ -70,6 +79,8 @@ const START_FULL: usize = 2;
 const MIN_CELL: f64 = 1.0 / 64.0;
 /// Comparisons allow this much rounding.
 const EPS: f64 = 1e-6;
+/// A point this near its chord (document px) is on it.
+const ON_CHORD: f64 = 1e-9;
 /// Most cells one tessellation makes.
 const MAX_CELLS: usize = 1 << 16;
 
@@ -106,37 +117,30 @@ impl Net {
         }
         Net { nu: self.nu, nv: self.nv, p }
     }
-    /// The largest downward twist (`−(P00 − P10 − P01 + P11)` in y) of the net's first column of
-    /// quads.
-    fn twist_left_down(&self) -> f64 {
+    /// How unevenly the control quad with its top-left point at `(i, j)` is stretched: the larger
+    /// difference in length between two opposite sides of it.
+    fn side_twist(&self, i: usize, j: usize) -> f64 {
+        let (a, b, c, d) = (self.at(i, j), self.at(i + 1, j), self.at(i, j + 1), self.at(i + 1, j + 1));
+        let len = |p: P, q: P| (q[0] - p[0]).hypot(q[1] - p[1]);
+        let (du, dv) = ((len(a, b) - len(c, d)).abs(), (len(a, c) - len(b, d)).abs());
+        if du.is_finite() && dv.is_finite() { du.max(dv) } else { 0.0 }
+    }
+    /// The largest [`Net::side_twist`] of the net's first column of quads (the cell's left edge).
+    fn twist_left(&self) -> f64 {
+        (0..self.nv.saturating_sub(1)).map(|j| self.side_twist(0, j)).fold(0.0, f64::max)
+    }
+    /// The largest [`Net::side_twist`] of the net's first row of quads (the cell's top edge).
+    fn twist_top(&self) -> f64 {
+        (0..self.nu.saturating_sub(1)).map(|i| self.side_twist(i, 0)).fold(0.0, f64::max)
+    }
+    /// How much longer a leg of the net's first column of control points is than the leg beside
+    /// it in the second column (the largest over the column; negative where the second column's
+    /// legs are the longer ones).
+    fn left_legs_longer(&self) -> f64 {
         let mut m = f64::NEG_INFINITY;
         for j in 0..self.nv.saturating_sub(1) {
             let (a, b, c, d) = (self.at(0, j), self.at(1, j), self.at(0, j + 1), self.at(1, j + 1));
-            let t = -(a[1] - b[1] - c[1] + d[1]);
-            if t.is_finite() {
-                m = m.max(t);
-            }
-        }
-        m
-    }
-    /// The largest twist of the net's first column of quads (the cell's left edge).
-    fn twist_left(&self) -> f64 {
-        let mut m = 0.0f64;
-        for j in 0..self.nv.saturating_sub(1) {
-            let (a, b, c, d) = (self.at(0, j), self.at(1, j), self.at(0, j + 1), self.at(1, j + 1));
-            let t = (a[0] - b[0] - c[0] + d[0]).hypot(a[1] - b[1] - c[1] + d[1]);
-            if t.is_finite() {
-                m = m.max(t);
-            }
-        }
-        m
-    }
-    /// The largest twist of the net's first row of quads (the cell's top edge).
-    fn twist_top(&self) -> f64 {
-        let mut m = 0.0f64;
-        for i in 0..self.nu.saturating_sub(1) {
-            let (a, b, c, d) = (self.at(i, 0), self.at(i + 1, 0), self.at(i, 1), self.at(i + 1, 1));
-            let t = (a[0] - b[0] - c[0] + d[0]).hypot(a[1] - b[1] - c[1] + d[1]);
+            let t = (c[0] - a[0]).hypot(c[1] - a[1]) - (d[0] - b[0]).hypot(d[1] - b[1]);
             if t.is_finite() {
                 m = m.max(t);
             }
@@ -310,14 +314,14 @@ fn stored_net(cubic: &Net) -> Net {
 /// A cell `[u0, u1, v0, v1]` (normalised).
 type Cell = [f64; 4];
 
-/// A recorded split: the cell, whether it split across and down, and whether its rows and its
-/// columns were curved enough to split it.
+/// A recorded split: the cell and whether it split across and down (the directions are what the
+/// tests read; placing the points needs only the cell).
 struct Split {
     cell: Cell,
+    #[cfg_attr(not(test), allow(dead_code))]
     across: bool,
-    curved_across: bool,
+    #[cfg_attr(not(test), allow(dead_code))]
     down: bool,
-    curved_down: bool,
 }
 
 /// The tessellation: vertices (normalised source position, document position) and quads of vertex
@@ -372,25 +376,27 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             force_down: true,
             twist_spreads: false,
             fixed_level: 1,
-            curved_makers: false,
+            mid_row_level: 1,
             cut_sides: false,
             across_twist: ACROSS_TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
+            flat_columns: None,
         }
     } else {
         Rules {
             start: START,
-            force_down: true,
+            force_down: false,
             twist_spreads: false,
             fixed_level: 2,
-            curved_makers: true,
+            mid_row_level: 1,
             cut_sides: !tall,
             across_twist: TWIST_TOL,
             twist_by_side: true,
             square_twist: tall.then_some(TALL_SQUARE_TWIST_TOL),
             column_chords: tall.then_some(TALL_COLUMN_LEVEL),
+            flat_columns: (!tall).then_some(FLAT_COLUMN_TOL),
         }
     }
 }
@@ -412,12 +418,13 @@ pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMes
         force_down: false,
         twist_spreads: true,
         fixed_level: 0,
-        curved_makers: false,
+        mid_row_level: 0,
         cut_sides: false,
         across_twist: TWIST_TOL,
         twist_by_side: false,
         square_twist: None,
         column_chords: None,
+        flat_columns: None,
     };
     let (leaves, log) = cells(&net, true, &rules);
     Some(triangulate(&net, at, &leaves, &log, &rules))
@@ -428,16 +435,17 @@ pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMes
 struct Rules {
     /// Cells per side to start from.
     start: usize,
-    /// A first-level cell split across splits down too.
+    /// A first-level cell split across splits down too (a one-patch full mesh).
     force_down: bool,
     /// A cell split down for its twist splits the other cells cut from its parent down too.
     twist_spreads: bool,
     /// Grid lines up to this many halvings in stay where they are on the surface (a T-junction
     /// further in sits on the chord of the edge it lies on): the starting grid's.
     fixed_level: u32,
-    /// A T-junction between cells that both split across for their rows' curvature stays on the
-    /// surface (envelopes only).
-    curved_makers: bool,
+    /// The same on the surface's middle row (v = ½), for its points along the row: an envelope's
+    /// quarter points there follow the chord rule though they are the starting grid's. (On the
+    /// top and bottom edges every point but the corners follows it.)
+    mid_row_level: u32,
     /// A leaf is cut across at the points of smaller neighbours on its left and right sides
     /// (envelopes that aren't tall); otherwise it stays whole and those points sit on its side's
     /// chord.
@@ -445,16 +453,20 @@ struct Rules {
     /// The twist past which a cell that already splits across splits down too: [`TWIST_TOL`],
     /// as for any cell, but [`ACROSS_TWIST_TOL`] in a one-patch full mesh.
     across_twist: f64,
-    /// A twist split is measured on one side of the cell's control net only (the reference's
-    /// envelopes): a split across on its left column of quads (Arc Lower's mirror-image corner
-    /// cells split on the left, not on the right), a split down on its top row. Otherwise on the
-    /// whole net.
+    /// A twist split is measured on one side of the cell's control net only, as how unevenly its
+    /// quads are stretched (the reference's envelopes): a split across on its left column of
+    /// quads (Arc Lower's mirror-image corner cells split on the left, not on the right), a split
+    /// down on its top row. Otherwise as the largest `P00 − P10 − P01 + P11` of the whole net.
     twist_by_side: bool,
     /// A square cell whose whole net twists past this splits across as well (tall envelopes).
     square_twist: Option<f64>,
     /// The chord rule for rows holds for every column too, for points more than this many
     /// halvings in (tall envelopes); otherwise only on the surface's left and right sides.
     column_chords: Option<u32>,
+    /// Otherwise, a point further in than the fixed lines on an inner column whose stretch of the
+    /// column asks for less than this much of a split sits on that stretch's chord (envelopes
+    /// that aren't tall).
+    flat_columns: Option<f64>,
 }
 
 /// The parent cell of `c` (one halving up both ways), as a comparable key.
@@ -464,9 +476,9 @@ fn parent_of(c: &Cell) -> (i64, i64, i64, i64) {
     ((c[0] / w + EPS).floor() as i64, (c[2] / h + EPS).floor() as i64, q(w), q(h))
 }
 
-/// Splits down every cell whose parent has a cell split down for its twist.
-fn spread_twist(level_cells: &[Cell], decisions: &mut [(bool, bool)], twisted: &[bool]) {
-    let parents: Vec<_> = level_cells.iter().zip(twisted).filter(|(_, t)| **t).map(|(c, _)| parent_of(c)).collect();
+/// Splits down every cell whose parent has a cell marked in `from`.
+fn spread_down(level_cells: &[Cell], decisions: &mut [(bool, bool)], from: &[bool]) {
+    let parents: Vec<_> = level_cells.iter().zip(from).filter(|(_, t)| **t).map(|(c, _)| parent_of(c)).collect();
     if parents.is_empty() {
         return;
     }
@@ -509,7 +521,6 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             let fu = need(&segment(&net.row(v0), u0, u1)).max(need(&segment(&net.row(v1), u0, u1)));
             let fv = need(&segment(&net.col(u0), v0, v1)).max(need(&segment(&net.col(u1), v0, v1)));
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
-            let (curved_across, curved_down) = (across, down);
             let mut twist_down = false;
             let (lu, lv) = (u1 - u0, v1 - v0);
             let square = (lu - lv).abs() < EPS;
@@ -533,11 +544,14 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
                     }
                 }
             } else if quadratic && goes_across {
-                // A 3 × 3 envelope's twist splits a wide cell across only, counting its left
-                // column's twist downward (Squeeze and Inflate below 0 split their left cells, the
-                // same bends above 0 do not, with the same twists turned up).
-                let tw = net.sub(c).twist_left_down();
-                if tw > TWIST33_TOL + EPS && (!across || tw > rules.across_twist + EPS) {
+                // A 3 × 3 envelope's twist splits a wide cell across only: where the legs of the
+                // left column of its control points are longer than the next column's, in the
+                // cell or in the other half of the cell it was cut from (Squeeze and Inflate below
+                // 0 split their left cells; above 0 the legs beside are the longer ones).
+                let h = 2.0 * lv;
+                let top = (v0 / h + EPS).floor() * h;
+                let tw = net.sub([u0, u1, top, top + lv]).left_legs_longer().max(net.sub([u0, u1, top + lv, top + h]).left_legs_longer());
+                if tw > TWIST_TOL + EPS && (!across || tw > rules.across_twist + EPS) {
                     across = true;
                 }
             }
@@ -552,19 +566,18 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
                 down = true;
             }
             if across || down {
-                log.push(Split { cell: c, across, curved_across, down, curved_down });
+                log.push(Split { cell: c, across, down });
             }
             decisions.push((across, down));
             twisted.push(twist_down);
         }
         if rules.twist_spreads {
-            spread_twist(&level_cells, &mut decisions, &twisted);
+            spread_down(&level_cells, &mut decisions, &twisted);
         }
         let first_level = level_cells.first().is_some_and(|c| (c[3] - c[2] - first).abs() < EPS);
-        if first_level && decisions.iter().any(|d| d.1) {
-            for d in &mut decisions {
-                d.1 = true;
-            }
+        if first_level {
+            let down: Vec<bool> = decisions.iter().map(|d| d.1).collect();
+            spread_down(&level_cells, &mut decisions, &down);
         }
         for (c, d) in level_cells.iter().zip(&mut decisions) {
             if curved_rows.iter().any(|&(a, b, k, cw)| (a - c[2]).abs() < EPS && (b - c[3]).abs() < EPS && (cw - (c[1] - c[0])).abs() < EPS && k == column(c)) {
@@ -610,6 +623,15 @@ fn onto(a: P, b: P, p: P) -> P {
     lerp(a, b, s)
 }
 
+/// A point `p` of the surface dropped onto the chord `a`-`b` of its row or column. A point that
+/// is on the chord already stays exactly where the surface puts it: on a straight row the drop
+/// would only move it by the arithmetic's rounding, and a vertex a rounding step off its place
+/// shifts the pixels along an edge that runs through pixel centres (a sheared mesh).
+fn onto_chord(a: P, b: P, p: P) -> P {
+    let m = onto(a, b, p);
+    if (m[0] - p[0]).hypot(m[1] - p[1]) < ON_CHORD { p } else { m }
+}
+
 /// Where each corner's own cells put it, before any is dropped onto a bigger cell's edge: on the
 /// surface, or on its row's chord (`lines`: the corners along each row by v, each column by u).
 fn own_points(
@@ -633,7 +655,14 @@ fn own_points(
     order.sort_by_key(|p| level(p[0]));
     for &[u, v] in &order {
         let lv = level(u);
-        if lv <= fixed_level {
+        // The surface's top and bottom edges keep only their corners, its middle row its own
+        // level; the other rows the starting grid's points.
+        let fixed = match level(v) {
+            0 => 0,
+            1 => rules.mid_row_level,
+            _ => fixed_level,
+        };
+        if lv <= fixed {
             continue;
         }
         let w = 1.0 / f64::from(1u32 << lv);
@@ -641,42 +670,40 @@ fn own_points(
         if log.iter().any(|s| s.cell[0] <= a + 1e-9 && s.cell[1] >= b - 1e-9 && s.cell[2] < v - 1e-9 && s.cell[3] > v + 1e-9) {
             continue;
         }
-        let makers: Vec<&Split> = log.iter().filter(|s| s.across && (s.cell[0] - a).abs() < 1e-9 && (s.cell[1] - b).abs() < 1e-9).collect();
-        let above: Vec<&&Split> = makers.iter().filter(|s| (s.cell[3] - v).abs() < 1e-9).collect();
-        let below: Vec<&&Split> = makers.iter().filter(|s| (s.cell[2] - v).abs() < 1e-9).collect();
-        if rules.curved_makers && !above.is_empty() && !below.is_empty() && above.iter().chain(&below).all(|s| s.curved_across) {
-            continue;
-        }
         if need(&segment(&net.row(v), a, b)) < 1.0 - EPS {
-            let m = onto(place(&own, a, v), place(&own, b, v), surf(u, v));
+            let m = onto_chord(place(&own, a, v), place(&own, b, v), surf(u, v));
             own.insert(key(u, v), m);
         }
     }
     // The same for columns: on the surface's left and right sides, or (a tall envelope) everywhere,
-    // by the row rule turned on its side.
+    // by the row rule turned on its side. Inside other envelopes, only where the column's own
+    // stretch is nearly straight.
     order.sort_by_key(|p| level(p[1]));
     for &[u, v] in &order {
         let lv = level(v);
         let w = 1.0 / f64::from(1u32 << lv);
         let (a, b) = (v - w, v + w);
+        let on_side = u.abs() < 1e-12 || (u - 1.0).abs() < 1e-12;
+        let across = |s: &Split| s.cell[2] <= a + 1e-9 && s.cell[3] >= b - 1e-9 && s.cell[0] < u - 1e-9 && s.cell[1] > u + 1e-9;
+        if let (None, Some(tol), false) = (rules.column_chords, rules.flat_columns, on_side) {
+            if lv > fixed_level && !log.iter().any(across) && need(&segment(&net.col(u), a, b)) < tol {
+                let m = onto_chord(place(&own, u, a), place(&own, u, b), surf(u, v));
+                own.insert(key(u, v), m);
+            }
+            continue;
+        }
         if let Some(fixed) = rules.column_chords {
             if lv <= fixed {
                 continue;
             }
-            if log.iter().any(|s| s.cell[2] <= a + 1e-9 && s.cell[3] >= b - 1e-9 && s.cell[0] < u - 1e-9 && s.cell[1] > u + 1e-9) {
+            if log.iter().any(across) {
                 continue;
             }
-            let makers: Vec<&Split> = log.iter().filter(|s| s.down && (s.cell[2] - a).abs() < 1e-9 && (s.cell[3] - b).abs() < 1e-9).collect();
-            let left: Vec<&&Split> = makers.iter().filter(|s| (s.cell[1] - u).abs() < 1e-9).collect();
-            let right: Vec<&&Split> = makers.iter().filter(|s| (s.cell[0] - u).abs() < 1e-9).collect();
-            if rules.curved_makers && !left.is_empty() && !right.is_empty() && left.iter().chain(&right).all(|s| s.curved_down) {
-                continue;
-            }
-        } else if lv <= fixed_level || !(u.abs() < 1e-12 || (u - 1.0).abs() < 1e-12) {
+        } else if lv <= fixed_level || !on_side {
             continue;
         }
         if need(&segment(&net.col(u), a, b)) < 1.0 - EPS {
-            let m = onto(place(&own, u, a), place(&own, u, b), surf(u, v));
+            let m = onto_chord(place(&own, u, a), place(&own, u, b), surf(u, v));
             own.insert(key(u, v), m);
         }
     }
@@ -770,8 +797,12 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
     for &[u0, u1, v0, v1] in leaves {
         let mut vs = vec![v0, v1];
         if rules.cut_sides {
-            vs.extend(inside(on_u.get(&u0.to_bits()), v0, v1));
-            vs.extend(inside(on_u.get(&u1.to_bits()), v0, v1));
+            // Not at a side on the surface's middle line (u = ½): the two halves stay whole there.
+            for u in [u0, u1] {
+                if (u - 0.5).abs() > 1e-12 {
+                    vs.extend(inside(on_u.get(&u.to_bits()), v0, v1));
+                }
+            }
         }
         vs.sort_by(f64::total_cmp);
         vs.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
@@ -856,12 +887,13 @@ mod tests {
                 force_down: true,
                 twist_spreads: false,
                 fixed_level: 1,
-                curved_makers: false,
+                mid_row_level: 1,
                 cut_sides: false,
                 across_twist: ACROSS_TWIST_TOL,
                 twist_by_side: false,
                 square_twist: None,
                 column_chords: None,
+                flat_columns: None,
             },
         );
         assert!(log.iter().any(|s| s.cell == [0.0, 0.25, 0.0, 0.25]), "the corner cell splits");
@@ -1028,12 +1060,13 @@ mod tests {
             force_down: false,
             twist_spreads: true,
             fixed_level: 0,
-            curved_makers: false,
+            mid_row_level: 0,
             cut_sides: false,
             across_twist: TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
+            flat_columns: None,
         };
         assert!(tallest(&quilt) <= 0.25 + 1e-9, "bottom cells {}", tallest(&quilt));
         let alone = Rules { twist_spreads: false, ..quilt };
@@ -1146,75 +1179,149 @@ mod tests {
         assert!((along(p) - len / 2.0).abs() > 0.08, "slid only {} from the chord's middle", along(p) - len / 2.0);
     }
 
-    /// An envelope's twist split across counts the cell's left column only: Arc Lower 50's top
-    /// corner cells are mirror images (largest twist 1.126 each), but the reference splits the
-    /// left one only, whose left column holds that twist (the right one's holds 0.55).
+    /// An envelope's twist split across counts the cell's left column of quads only: Arc Lower 50's
+    /// top corner cells are mirror images, but the reference splits the left one only, whose left
+    /// quads are stretched unevenly by 1.11 px (the right one's by 0.55).
     #[test]
     fn an_envelope_twist_split_across_counts_the_left_column() {
-        use photocraft_geom::warp::{Warp, WarpStyle};
-        let b = [96.0, 96.0, 224.0, 224.0];
-        let w = Warp::preset(WarpStyle::ArcLower, 50.0, b);
-        let at = |u: f64, v: f64| {
-            let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * v);
-            [x, y]
-        };
+        use photocraft_geom::warp::WarpStyle;
+        let at = in_perspective(WarpStyle::ArcLower, 50.0, 0.0, 0.0);
         let net = net_of(&at, false);
         assert_eq!((net.nu, net.nv), (4, 2));
-        let rules = Rules {
-            start: START,
-            force_down: true,
-            twist_spreads: false,
-            fixed_level: 2,
-            curved_makers: true,
-            cut_sides: true,
-            across_twist: TWIST_TOL,
-            twist_by_side: true,
-            square_twist: None,
-            column_chords: None,
-        };
+        let rules = one_patch_rules(&net, false);
         let (_, log) = cells(&net, true, &rules);
-        let split = |c: Cell| log.iter().any(|s| s.cell == c && s.across);
-        assert!(split([0.0, 0.25, 0.0, 0.125]), "the top-left corner cell splits across");
-        assert!(!split([0.75, 1.0, 0.0, 0.125]), "its mirror image on the right stays whole");
+        let split = |log: &[Split], c: Cell| log.iter().any(|s| s.cell == c && s.across);
+        let (left, right) = ([0.0, 0.25, 0.0, 0.125], [0.75, 1.0, 0.0, 0.125]);
+        assert!(net.sub(left).twist_left() > TWIST_TOL + EPS && net.sub(right).twist_left() < TWIST_TOL);
+        assert!(split(&log, left), "the top-left corner cell splits across");
+        assert!(!split(&log, right), "its mirror image on the right stays whole");
         let (_, sym) = cells(&net, true, &Rules { twist_by_side: false, ..rules });
-        assert!(sym.iter().any(|s| s.cell == [0.75, 1.0, 0.0, 0.125] && s.across), "the whole net's twist would split it");
+        assert!(split(&sym, right), "the whole net's twist would split it");
     }
 
-    /// A 3 × 3 envelope's left cells split across for a downward twist of their left column:
-    /// Inflate −48 splits the left cell at v ⅜..½ (0.96) but not its mirror image; −46 (0.92)
-    /// and +48 (the same twists turned up) split neither.
+    /// An envelope's twist is how unevenly a control quad is stretched: the larger difference in
+    /// length between two opposite sides of it, counted on the cell's left column of quads for a
+    /// split across and on its top row for a split down. A parallelogram has none, however far
+    /// it leans.
     #[test]
-    fn a_quadratic_envelope_splits_its_left_cells_for_a_downward_twist() {
+    fn an_envelopes_twist_compares_opposite_sides() {
+        let quad = |d: P| Net { nu: 2, nv: 2, p: vec![[0.0, 0.0], [10.0, 0.0], [0.0, 10.0], d] };
+        // Top 10, bottom √185, left 10, right √205.
+        let n = quad([13.0, 14.0]);
+        assert!((n.side_twist(0, 0) - (205f64.sqrt() - 10.0)).abs() < 1e-12, "{}", n.side_twist(0, 0));
+        assert!((n.twist() - 5.0).abs() < 1e-12, "the whole net's measure is another: {}", n.twist());
+        let leaning = Net { nu: 2, nv: 2, p: vec![[0.0, 0.0], [10.0, 0.0], [7.0, 10.0], [17.0, 10.0]] };
+        assert_eq!(leaning.side_twist(0, 0), 0.0);
+        assert_eq!(quad([f64::NAN, 14.0]).side_twist(0, 0), 0.0, "a point that isn't finite counts as no twist");
+        // A 3 × 3 grid of 10 px quads with one corner point pulled out.
+        let grid =
+            |k: usize, to: P| Net { nu: 3, nv: 3, p: (0..9).map(|i| if i == k { to } else { [10.0 * (i % 3) as f64, 10.0 * (i / 3) as f64] }).collect() };
+        let bottom_right = grid(8, [25.0, 26.0]);
+        assert!(bottom_right.twist() > 1.0);
+        assert_eq!((bottom_right.twist_left(), bottom_right.twist_top()), (0.0, 0.0), "neither the left column nor the top row has that quad");
+        let bottom_left = grid(6, [-3.0, 24.0]);
+        assert!(bottom_left.twist_left() > 1.0 && bottom_left.twist_top() == 0.0);
+        let top_right = grid(2, [24.0, -3.0]);
+        assert!(top_right.twist_top() > 1.0 && top_right.twist_left() == 0.0);
+    }
+
+    /// A 3 × 3 envelope's wide cell splits across where the legs of its left column of control
+    /// points are longer than the second column's by more than 1 px, in the cell itself or in the
+    /// other half of the cell it was cut from. Inflate −46.2 splits its four left cells between
+    /// v ¼ and ¾ as the reference does: the outer two measure 1.0002, the inner two 0.94 and split
+    /// with them. Their mirror images on the right stay whole, and so does everything at −46 and
+    /// at +48 (there the legs beside are the longer ones). Lengths don't change when the envelope
+    /// is turned upside down, so the same cells split then.
+    #[test]
+    fn a_quadratic_envelope_splits_its_left_cells_for_longer_left_legs() {
         use photocraft_geom::warp::{Warp, WarpStyle};
         let b = [96.0, 96.0, 224.0, 224.0];
-        let split_at = |bend: f64, c: Cell| {
+        let inflate = |bend: f64, flip: bool| {
             let w = Warp::preset(WarpStyle::Inflate, bend, b);
-            let at = |u: f64, v: f64| {
-                let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * v);
-                [x, y]
-            };
+            move |u: f64, v: f64| {
+                let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * if flip { 1.0 - v } else { v });
+                [x, if flip { 320.0 - y } else { y }]
+            }
+        };
+        let cut = |bend: f64, flip: bool| {
+            let at = inflate(bend, flip);
             let net = net_of(&at, false);
             assert_eq!((net.nu, net.nv), (3, 3));
-            let rules = Rules {
-                start: START,
-                force_down: true,
-                twist_spreads: false,
-                fixed_level: 2,
-                curved_makers: true,
-                cut_sides: true,
-                across_twist: TWIST_TOL,
-                twist_by_side: true,
-                square_twist: None,
-                column_chords: None,
-            };
-            let (_, log) = cells(&net, false, &rules);
-            log.iter().any(|s| s.cell == c && s.across)
+            let (leaves, log) = cells(&net, twisty_net(&net), &one_patch_rules(&net, false));
+            let across: Vec<Cell> = log.iter().filter(|s| s.across && s.cell[1] - s.cell[0] > s.cell[3] - s.cell[2] + EPS).map(|s| s.cell).collect();
+            (net, leaves.len(), across)
         };
-        let (left, right) = ([0.0, 0.25, 0.375, 0.5], [0.75, 1.0, 0.375, 0.5]);
-        assert!(split_at(-48.0, left), "the left cell splits");
-        assert!(!split_at(-48.0, right), "its mirror image stays whole");
-        assert!(!split_at(-46.0, left), "a smaller twist stays whole");
-        assert!(!split_at(48.0, left) && !split_at(48.0, right), "an upward twist splits nothing");
+        let left: Vec<Cell> = [0.25, 0.375, 0.5, 0.625].iter().map(|&v| [0.0, 0.25, v, v + 0.125]).collect();
+        for flip in [false, true] {
+            let (net, leaves, across) = cut(-46.2, flip);
+            assert_eq!(across, left, "the four left cells split across, and no cell on the right");
+            assert_eq!(leaves, 52);
+            let legs = |v: f64| net.sub([0.0, 0.25, v, v + 0.125]).left_legs_longer();
+            assert!(legs(0.25) > TWIST_TOL + EPS && legs(0.625) > TWIST_TOL + EPS, "the outer cells' own legs: {} {}", legs(0.25), legs(0.625));
+            assert!(legs(0.375) < TWIST_TOL && legs(0.5) < TWIST_TOL, "the inner cells split for their other halves: {} {}", legs(0.375), legs(0.5));
+        }
+        let (_, leaves, across) = cut(-46.0, false);
+        assert!(across.is_empty() && leaves == 48, "shorter legs split nothing: {across:?}");
+        let (_, _, across) = cut(-48.0, false);
+        assert_eq!(across, left);
+        let (_, leaves, across) = cut(48.0, false);
+        assert!(across.is_empty() && leaves == 48, "bent the other way nothing splits: {across:?}");
+    }
+
+    /// The nine control points the reference stores for Inflate −50 over the 128 px square at
+    /// (96, 96) in `d` % of horizontal perspective.
+    fn inflate_in_perspective(d: f64) -> [P; 9] {
+        let (e, m) = (0.64 * d, 0.32 * d);
+        [
+            [96.0, 96.0 + e],
+            [160.0, 128.0],
+            [224.0, 96.0 - e],
+            [128.0 - m, 160.0],
+            [160.0, 160.0],
+            [192.0 - m, 160.0],
+            [96.0, 224.0 - e],
+            [160.0, 192.0],
+            [224.0, 224.0 + e],
+        ]
+    }
+
+    /// The surface of nine control points (three rows of three).
+    fn nine_points(c: [P; 9]) -> impl Fn(f64, f64) -> P {
+        let w = |t: f64| [(1.0 - t) * (1.0 - t), 2.0 * t * (1.0 - t), t * t];
+        move |u: f64, v: f64| {
+            let (wu, wv) = (w(u), w(v));
+            let mut o = [0.0; 2];
+            for (row, b) in c.chunks(3).zip(wv) {
+                for (q, a) in row.iter().zip(wu) {
+                    o[0] += a * b * q[0];
+                    o[1] += a * b * q[1];
+                }
+            }
+            o
+        }
+    }
+
+    /// Perspective that shortens an envelope's left side shortens its left legs with it: Inflate
+    /// −50 (1.09 px longer when plain) still splits its left cells in 2 % perspective, and stays
+    /// whole there in 8 %, as in the reference. Where exactly it changes over this measure gets
+    /// slightly wrong: between 4.2 % and 4.6 %, and the reference between 4 % and 4.2 %.
+    #[test]
+    fn a_quadratic_envelopes_left_legs_shorten_in_perspective() {
+        let cut = |d: f64| {
+            let at = nine_points(inflate_in_perspective(d));
+            let net = net_of(&at, false);
+            assert_eq!((net.nu, net.nv), (3, 3));
+            let (leaves, log) = cells(&net, twisty_net(&net), &one_patch_rules(&net, false));
+            let legs = net.sub([0.0, 0.25, 0.25, 0.375]).left_legs_longer();
+            (leaves.len(), log.iter().any(|s| s.cell == [0.0, 0.25, 0.25, 0.375] && s.across), legs)
+        };
+        let (leaves, split, legs) = cut(0.0);
+        assert!(leaves == 52 && split && (legs - 1.0873).abs() < 1e-3, "plain: {leaves} cells, legs {legs}");
+        let (leaves, split, legs) = cut(2.0);
+        assert!(leaves == 52 && split && legs > TWIST_TOL + EPS, "2 %: {leaves} cells, legs {legs}");
+        let (leaves, split, legs) = cut(8.0);
+        assert!(leaves == 48 && !split && legs < TWIST_TOL, "8 %: {leaves} cells, legs {legs}");
+        assert!(cut(4.2).1 && !cut(4.6).1, "the measure's own change-over");
     }
 
     /// The 128 px square with its top-left corner pulled out to (48, 48), as a full mesh.
@@ -1255,12 +1362,13 @@ mod tests {
             force_down: true,
             twist_spreads: false,
             fixed_level: 1,
-            curved_makers: false,
+            mid_row_level: 1,
             cut_sides: false,
             across_twist: ACROSS_TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
+            flat_columns: None,
         };
         let (leaves, _) = cells(&net, true, &full);
         let tall = |ls: &[Cell]| ls.iter().any(|c| c[0] >= 0.5 - 1e-9 && c[1] <= 0.75 + 1e-9 && c[2].abs() < 1e-9 && (c[3] - 0.25).abs() < 1e-9);
@@ -1285,12 +1393,13 @@ mod tests {
             force_down: true,
             twist_spreads: false,
             fixed_level: 1,
-            curved_makers: false,
+            mid_row_level: 1,
             cut_sides: false,
             across_twist: ACROSS_TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
+            flat_columns: None,
         };
         let (leaves, _) = cells(&net, true, &full);
         assert_eq!(m.quads.len(), leaves.len(), "no leaf is cut across");
@@ -1370,7 +1479,7 @@ mod tests {
         let at = sideways(WarpStyle::Fish, 50.0);
         let net = net_of(&at, false);
         let (leaves, log) = cells(&net, twisty_net(&net), &one_patch_rules(&net, false));
-        assert!(log.iter().any(|s| s.cell == [0.0, 0.125, 0.125, 0.1875] && s.down && s.curved_down), "the outer cell splits down for its curvature");
+        assert!(log.iter().any(|s| s.cell == [0.0, 0.125, 0.125, 0.1875] && s.down), "the outer cell splits down for its curvature");
         assert!(leaves.contains(&[0.125, 0.25, 0.125, 0.1875]), "its sibling stays whole");
     }
 
@@ -1436,5 +1545,270 @@ mod tests {
         assert_eq!(m.quads.len(), leaves.len());
         let cut = triangulate(&net, &at, &leaves, &log, &Rules { cut_sides: true, ..rules });
         assert!(cut.quads.len() > leaves.len(), "the same cells cut at their sides make more quads");
+    }
+
+    /// A wide preset pulled into perspective (horizontal distortion, percent), which its stored
+    /// control points carry.
+    fn distorted(style: photocraft_geom::warp::WarpStyle, bend: f64, distort: f64) -> impl Fn(f64, f64) -> P {
+        in_perspective(style, bend, distort, 0.0)
+    }
+
+    /// A wide preset over the 128 px square at (96, 96), pulled into perspective both ways
+    /// (horizontal and vertical distortion, percent).
+    fn in_perspective(style: photocraft_geom::warp::WarpStyle, bend: f64, h: f64, v: f64) -> impl Fn(f64, f64) -> P {
+        let b = [96.0, 96.0, 224.0, 224.0];
+        let w = photocraft_geom::warp::Warp { h_distort: h, v_distort: v, ..photocraft_geom::warp::Warp::preset(style, bend, b) };
+        move |u: f64, t: f64| {
+            let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * t);
+            [x, y]
+        }
+    }
+
+    fn vertex(m: &EnvelopeMesh, u: f64, v: f64) -> P {
+        m.uv.iter().position(|q| (q[0] - u).abs() < 1e-12 && (q[1] - v).abs() < 1e-12).and_then(|i| m.pos.get(i).copied()).expect("a vertex")
+    }
+
+    fn off_line(a: P, b: P, p: P) -> f64 {
+        ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])).abs() / (b[0] - a[0]).hypot(b[1] - a[1])
+    }
+
+    /// An envelope's quarter points on its top and bottom edges follow the rows' chord rule: Arc
+    /// Lower 60 in 20 % perspective has a gently S-shaped top edge, and the reference puts (¼, 0)
+    /// and (¾, 0) on the chords from the corners to the middle, 0.4 px off the surface.
+    #[test]
+    fn an_envelopes_edge_quarter_points_follow_the_chord_rule() {
+        use photocraft_geom::warp::WarpStyle;
+        let at = distorted(WarpStyle::ArcLower, 60.0, 20.0);
+        let m = envelope_mesh(&at, false).expect("finite");
+        for (a, u, b) in [(0.0, 0.25, 0.5), (0.5, 0.75, 1.0)] {
+            let (p, s) = (vertex(&m, u, 0.0), at(u, 0.0));
+            assert!((p[0] - s[0]).hypot(p[1] - s[1]) > 0.3, "({u}, 0) is off the surface: {p:?} vs {s:?}");
+            assert!(off_line(vertex(&m, a, 0.0), vertex(&m, b, 0.0), p) < 1e-9, "({u}, 0) is on the chord");
+            for end in [a, b] {
+                let (p, s) = (vertex(&m, end, 0.0), at(end, 0.0));
+                assert!((p[0] - s[0]).hypot(p[1] - s[1]) < 1e-9, "({end}, 0) stays on the surface");
+            }
+        }
+    }
+
+    /// On the rows at ¼ and ¾ an envelope's quarter points stay where they are, however straight
+    /// the rows: Arc Lower 20's row at ¼ asks for no split between the side and the middle, and
+    /// the reference's quarter points there are on the surface all the same (on the chords they
+    /// would be up to 0.5 px off).
+    #[test]
+    fn an_envelopes_inner_quarter_points_stay_on_the_surface() {
+        use photocraft_geom::warp::{Warp, WarpStyle};
+        let b = [96.0, 96.0, 224.0, 224.0];
+        let w = Warp::preset(WarpStyle::ArcLower, 20.0, b);
+        let at = move |u: f64, v: f64| {
+            let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * v);
+            [x, y]
+        };
+        let net = net_of(&at, false);
+        let m = envelope_mesh(&at, false).expect("finite");
+        let mut seen = 0;
+        for (uv, p) in m.uv.iter().zip(&m.pos) {
+            let quarter = (uv[0] - 0.25).abs() < 1e-12 || (uv[0] - 0.75).abs() < 1e-12;
+            let (a, c) = if uv[0] < 0.5 { (0.0, 0.5) } else { (0.5, 1.0) };
+            if !quarter || level(uv[1]) < 2 || need(&segment(&net.row(uv[1]), a, c)) >= 1.0 - EPS {
+                continue;
+            }
+            let s = at(uv[0], uv[1]);
+            assert!((p[0] - s[0]).hypot(p[1] - s[1]) < 1e-9, "the quarter point at {uv:?} stays on the surface");
+            let chord = onto(at(a, uv[1]), at(c, uv[1]), s);
+            if (chord[0] - s[0]).hypot(chord[1] - s[1]) > 0.1 {
+                seen += 1;
+            }
+        }
+        assert!(seen > 0, "some of those rows' chords are well off the surface");
+    }
+
+    /// Inside an envelope that isn't tall, a column's new points go onto its chord only where the
+    /// column is nearly straight. Inflate −50 in 12 % perspective, by the nine control points the
+    /// reference stores for it: the middle column bows by a tenth of a pixel between quarter
+    /// points, and its eighth points sit on the chords between them (0.04 px off the surface); the
+    /// column at ¼ curves more, though less than a split's worth, and its eighth points stay on
+    /// the surface.
+    #[test]
+    fn an_envelopes_nearly_straight_column_takes_the_chord_rule() {
+        // inflate_in_perspective(12.0), as stored.
+        let c: [P; 9] =
+            [[96.0, 103.68], [160.0, 128.0], [224.0, 88.32], [124.16, 160.0], [160.0, 160.0], [188.16, 160.0], [96.0, 216.32], [160.0, 192.0], [224.0, 231.68]];
+        let at = nine_points(c);
+        let net = net_of(&at, false);
+        assert_eq!((net.nu, net.nv), (3, 3));
+        let m = envelope_mesh(&at, false).expect("finite");
+        for v in [0.125, 0.375, 0.625, 0.875] {
+            let (p, s) = (vertex(&m, 0.5, v), at(0.5, v));
+            let off = (p[0] - s[0]).hypot(p[1] - s[1]);
+            assert!(off > 0.02 && off < 0.2, "(½, {v}) is just off the surface: {off}");
+            assert!(off_line(vertex(&m, 0.5, v - 0.125), vertex(&m, 0.5, v + 0.125), p) < 1e-9, "(½, {v}) is on the chord between the quarter points");
+            let straight = need(&segment(&net.col(0.25), v - 0.125, v + 0.125));
+            assert!(straight > FLAT_COLUMN_TOL && straight < 1.0, "the column at ¼ asks for {straight} of a split");
+            let (p, s) = (vertex(&m, 0.25, v), at(0.25, v));
+            assert!((p[0] - s[0]).hypot(p[1] - s[1]) < 1e-9, "(¼, {v}) stays on the surface");
+        }
+    }
+    /// An envelope's middle row follows the rows' chord rule like its top and bottom edges: Arc
+    /// Lower 10's asks for 0.84 of a split between the side and the middle, and the reference puts
+    /// its quarter points on those chords, 0.63 px off the surface. The row at ¼ asks for less and
+    /// keeps its quarter points on the surface.
+    #[test]
+    fn an_envelopes_middle_row_quarter_points_follow_the_chord_rule() {
+        use photocraft_geom::warp::WarpStyle;
+        let at = in_perspective(WarpStyle::ArcLower, 10.0, 0.0, 0.0);
+        let net = net_of(&at, false);
+        let m = envelope_mesh(&at, false).expect("finite");
+        let off = |u: f64, v: f64| {
+            let (p, s) = (vertex(&m, u, v), at(u, v));
+            (p[0] - s[0]).hypot(p[1] - s[1])
+        };
+        for (a, u, b) in [(0.0, 0.25, 0.5), (0.5, 0.75, 1.0)] {
+            let asks = need(&segment(&net.row(0.5), a, b));
+            assert!(asks > 0.8 && asks < 0.9, "the middle row asks for {asks} of a split");
+            assert!(off(u, 0.5) > 0.6, "({u}, ½) is off the surface: {}", off(u, 0.5));
+            assert!(off_line(vertex(&m, a, 0.5), vertex(&m, b, 0.5), vertex(&m, u, 0.5)) < 1e-9, "({u}, ½) is on the chord");
+            assert!(off(a, 0.5) < 1e-9 && off(b, 0.5) < 1e-9, "the chord's ends stay on the surface");
+            assert!(need(&segment(&net.row(0.25), a, b)) < 0.5);
+            assert!(off(u, 0.25) < 1e-9, "({u}, ¼) stays on the surface");
+        }
+    }
+
+    /// An envelope's first cells split down only where their columns ask for it: Arch 40 is cut
+    /// into eighths across and stays in quarters down in the reference (32 cells). A full mesh's
+    /// first cell that splits across always splits down too.
+    #[test]
+    fn an_envelopes_first_cells_split_down_only_for_their_columns() {
+        use photocraft_geom::warp::WarpStyle;
+        let at = in_perspective(WarpStyle::Arch, 40.0, 0.0, 0.0);
+        let net = net_of(&at, false);
+        let rules = one_patch_rules(&net, false);
+        assert!(!rules.force_down);
+        let (leaves, _) = cells(&net, twisty_net(&net), &rules);
+        assert_eq!(leaves.len(), 32);
+        assert!(leaves.iter().all(|c| (c[1] - c[0] - 0.125).abs() < EPS && (c[3] - c[2] - 0.25).abs() < EPS), "every cell is an eighth by a quarter");
+        let (forced, _) = cells(&net, twisty_net(&net), &Rules { force_down: true, ..rules });
+        assert_eq!(forced.len(), 64, "forced down they would be eighths both ways");
+        let full = net_of(&at, true);
+        assert!(one_patch_rules(&full, true).force_down);
+    }
+
+    /// A first cell's split down carries to the other cells of its quarter of the envelope and no
+    /// further. Arc Lower 60 in −12 % perspective: the cell at u ¼..½, v 0..¼ asks for nothing
+    /// down itself and is split down with the corner cell beside it. Arc Upper 40 in −12 % by 8 %:
+    /// first cells of both right quarters ask for the split and none on the left does, and the
+    /// reference keeps the left half a quarter tall beside a right half in eighths.
+    #[test]
+    fn a_first_cells_split_down_stays_in_its_quarter() {
+        use photocraft_geom::warp::WarpStyle;
+        let tall = |c: &Cell| c[3] - c[2];
+        let first_down = |log: &[Split], u: f64, v: f64| {
+            log.iter().any(|s| s.down && (s.cell[0] - u).abs() < EPS && (s.cell[2] - v).abs() < EPS && (tall(&s.cell) - 0.25).abs() < EPS)
+        };
+        let at = in_perspective(WarpStyle::ArcLower, 60.0, -12.0, 0.0);
+        let net = net_of(&at, false);
+        let (leaves, log) = cells(&net, twisty_net(&net), &one_patch_rules(&net, false));
+        assert!(first_down(&log, 0.0, 0.0) && !first_down(&log, 0.25, 0.0));
+        assert!(
+            leaves.iter().filter(|c| c[0] > 0.25 - EPS && c[1] < 0.5 + EPS && c[3] < 0.25 + EPS).all(|c| (tall(c) - 0.125).abs() < EPS),
+            "split down with its neighbour"
+        );
+
+        let at = in_perspective(WarpStyle::ArcUpper, 40.0, -12.0, 8.0);
+        let net = net_of(&at, false);
+        let (leaves, log) = cells(&net, twisty_net(&net), &one_patch_rules(&net, false));
+        let asks = |quarter: [f64; 2]| [0.0, 0.25].iter().any(|du| [0.0, 0.25].iter().any(|dv| first_down(&log, quarter[0] + du, quarter[1] + dv)));
+        assert!(asks([0.5, 0.0]) && asks([0.5, 0.5]), "both right quarters have a cell that asks");
+        assert!(!asks([0.0, 0.0]) && !asks([0.0, 0.5]), "no left cell does");
+        assert!(leaves.iter().filter(|c| c[1] < 0.5 + EPS).all(|c| (tall(c) - 0.25).abs() < EPS), "the left half stays a quarter tall");
+        assert!(leaves.iter().filter(|c| c[0] > 0.5 - EPS).all(|c| (tall(c) - 0.125).abs() < EPS), "the right half is in eighths");
+    }
+
+    /// An envelope's cell isn't cut at a smaller neighbour's point on a side that lies on the
+    /// surface's middle line (u = ½): the two halves meet there whole. Arc Upper 40 in −12 % by
+    /// 8 % perspective has cells a quarter tall left of the line and an eighth tall right of it,
+    /// and the reference draws one quad per cell, the points between on the bigger cells' sides.
+    /// Off the middle line a cell is cut at such points (Wave 30 in 8 % by 8 %).
+    #[test]
+    fn an_envelopes_cells_stay_whole_along_the_middle_line() {
+        use photocraft_geom::warp::WarpStyle;
+        let at = in_perspective(WarpStyle::ArcUpper, 40.0, -12.0, 8.0);
+        let net = net_of(&at, false);
+        let rules = one_patch_rules(&net, false);
+        assert!(rules.cut_sides);
+        let (leaves, _) = cells(&net, twisty_net(&net), &rules);
+        let m = envelope_mesh(&at, false).expect("finite");
+        assert!(leaves.contains(&[0.25, 0.5, 0.5, 0.75]) && leaves.contains(&[0.25, 0.5, 0.75, 1.0]), "left of the line, a quarter tall");
+        assert!(leaves.iter().filter(|c| (c[0] - 0.5).abs() < EPS).all(|c| (c[3] - c[2] - 0.125).abs() < EPS), "right of it, an eighth");
+        assert_eq!(m.quads.len(), leaves.len(), "one quad per cell");
+        for v in [0.625, 0.875] {
+            assert!(off_line(vertex(&m, 0.5, v - 0.125), vertex(&m, 0.5, v + 0.125), vertex(&m, 0.5, v)) < 1e-9, "(½, {v}) is on the bigger cell's side");
+        }
+
+        let at = in_perspective(WarpStyle::Wave, 30.0, 8.0, 8.0);
+        let net = net_of(&at, false);
+        let (leaves, _) = cells(&net, twisty_net(&net), &one_patch_rules(&net, false));
+        let m = envelope_mesh(&at, false).expect("finite");
+        assert!(m.quads.len() > leaves.len(), "{} quads for {} cells", m.quads.len(), leaves.len());
+    }
+
+    /// An envelope's top and bottom edges keep only their corners where the surface puts them:
+    /// every other point follows the rows' chord rule, the midpoint too. Arc Lower 60 in −12 %
+    /// perspective has a top edge that asks for 0.89 of a split from corner to corner, and the
+    /// reference draws it straight, its quarter point 0.26 px off the surface. (In 20 % the edge
+    /// asks for the split and its midpoint stays on the surface, see
+    /// `an_envelopes_edge_quarter_points_follow_the_chord_rule`.) A full mesh's edges are drawn
+    /// the same way: Fisheye 40 in 8 % by 8 % perspective.
+    #[test]
+    fn an_edge_that_needs_no_split_is_drawn_corner_to_corner() {
+        use photocraft_geom::warp::WarpStyle;
+        let at = distorted(WarpStyle::ArcLower, 60.0, -12.0);
+        let net = net_of(&at, false);
+        let asks = need(&segment(&net.row(0.0), 0.0, 1.0));
+        assert!(asks > 0.85 && asks < 1.0 - EPS, "the top edge asks for {asks} of a split");
+        let m = envelope_mesh(&at, false).expect("finite");
+        let (a, b) = (vertex(&m, 0.0, 0.0), vertex(&m, 1.0, 0.0));
+        for u in [0.25, 0.5, 0.75] {
+            assert!(off_line(a, b, vertex(&m, u, 0.0)) < 1e-9, "({u}, 0) is on the chord between the corners");
+        }
+        let (p, s) = (vertex(&m, 0.25, 0.0), at(0.25, 0.0));
+        assert!((p[0] - s[0]).hypot(p[1] - s[1]) > 0.25, "(¼, 0) is off the surface: {p:?} vs {s:?}");
+        for u in [0.0, 1.0] {
+            assert_eq!(vertex(&m, u, 0.0), at(u, 0.0), "the corner at {u} stays");
+        }
+
+        let at = in_perspective(WarpStyle::Fisheye, 40.0, 8.0, 8.0);
+        let net = net_of(&at, true);
+        assert!(need(&segment(&net.row(0.0), 0.0, 1.0)) < 1.0 - EPS);
+        let m = envelope_mesh(&at, true).expect("finite");
+        let (p, s) = (vertex(&m, 0.5, 0.0), at(0.5, 0.0));
+        assert!(off_line(vertex(&m, 0.0, 0.0), vertex(&m, 1.0, 0.0), p) < 1e-9, "a full mesh's (½, 0) is on the chord between the corners");
+        assert!((p[0] - s[0]).hypot(p[1] - s[1]) > 0.02, "and off the surface: {p:?} vs {s:?}");
+    }
+
+    /// A point that is on its chord already stays exactly where the surface puts it. A sheared
+    /// flat mesh's rows and columns are straight, so every point of it is on its chord, and each
+    /// vertex is the surface's to the last bit; dropped onto the chord it would come out a
+    /// rounding step away, which is enough to move pixels along an edge through pixel centres.
+    #[test]
+    fn a_point_on_its_chord_stays_where_the_surface_puts_it() {
+        for (sx, sy) in [(12.8, 6.4), (41.0, 13.7), (33.3, 7.7)] {
+            let at = move |u: f64, v: f64| [96.3 + 128.0 * u + sx * v, 96.7 + 128.0 * v + sy * u];
+            let m = envelope_mesh(&at, true).expect("finite");
+            assert_eq!(m.uv.len(), 9);
+            for (uv, p) in m.uv.iter().zip(&m.pos) {
+                assert_eq!(*p, at(uv[0], uv[1]), "the vertex at {uv:?} of the mesh sheared by ({sx}, {sy})");
+            }
+            // The midpoints of the mesh's four sides are the points the chord rule is asked about.
+            let sides = [([0.0, 0.0], [1.0, 0.0]), ([0.0, 1.0], [1.0, 1.0]), ([0.0, 0.0], [0.0, 1.0]), ([1.0, 0.0], [1.0, 1.0])];
+            let moved = sides.iter().filter(|(a, b)| {
+                let p = at((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0);
+                onto(at(a[0], a[1]), at(b[0], b[1]), p) != p
+            });
+            assert!(moved.count() > 0, "the plain drop moves a point of the mesh sheared by ({sx}, {sy})");
+        }
+        // A point really off its chord is dropped onto it.
+        assert_eq!(onto_chord([0.0, 0.0], [10.0, 0.0], [5.0, 1e-6]), [5.0, 0.0]);
+        assert_eq!(onto_chord([0.0, 0.0], [10.0, 0.0], [5.0, 1e-12]), [5.0, 1e-12]);
     }
 }
