@@ -53,6 +53,10 @@ fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harn
         app
     });
     h.run_steps(8);
+    // The session fixture creates its layer without dispatching through the app. Open its
+    // Properties explicitly, as creating the layer in the app does.
+    h.state_mut().run("window.panel.properties", json!({"show": true})).unwrap();
+    h.run_steps(8);
     h
 }
 
