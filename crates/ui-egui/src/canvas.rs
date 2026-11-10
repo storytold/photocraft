@@ -2399,6 +2399,9 @@ mod tap_pressure_tests {
 mod tabs_tests;
 
 #[cfg(test)]
+mod doc_window_dialog_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
