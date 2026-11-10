@@ -54,9 +54,10 @@ fn can_split(s: &Session) -> std::result::Result<(), String> {
         Ok(())
     }
 }
+/// Merge Channels needs a document per colour channel: three at least (RGB and Lab; CMYK four).
 fn can_merge(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
-    if mergeable(s).len() >= 2 { Ok(()) } else { Err("Merge Channels needs at least two open grayscale documents of the same size".into()) }
+    if mergeable(s).len() >= 3 { Ok(()) } else { Err("Merge Channels needs at least three open grayscale documents of the same size".into()) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -134,7 +135,7 @@ pub(crate) use targeting::{
     Target, channel_surface_for_filter, clear_channel, clear_color_channel, color_restriction, edits_channel, filter_mask_layer, inject_target, invert_region,
     is_channel_target, is_spot_target, mask_target_enabled, restrict_to_color, routed, target_of, target_surface, targeted_channel,
 };
-pub use targeting::{follows_filter_mask, follows_target, read_target_surface};
+pub use targeting::{follows_filter_mask, follows_target, follows_vector_mask_target, read_target_surface};
 pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
 
@@ -173,7 +174,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculations…",
             ["Image"],
             None,
-            r##"{"source1":{"document","layer","channel","invert"},"source2":{…},"blending":"multiply|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"mask":{…}?,"result":"newChannel|newDocument|selection"="newChannel","name":str?}"##,
+            r##"{"source1":{"document","layer","channel","invert"},"source2":{…},"blending":"multiply|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"mask":{…}?,"result":"newChannel|newDocument|selection"="newChannel","name":str?} (source channel: {"targeted":true} for one targeted colour/alpha, {"name":text} for a literal alpha name, {"color":text} for a colour component; source layer: {"name":text} for a literal layer name)"##,
             has_doc,
             calculations
         ),

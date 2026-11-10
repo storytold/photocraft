@@ -21,6 +21,9 @@
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
+//! - **Hidden flags (network shares):** the temporary file's name never starts with a dot. An SMB
+//!   server that hides dot files marks one hidden when it is created, the mark survives the
+//!   rename, and the saved document then doesn't show in Finder (#11624). See [`temp_name`].
 //!
 //! On the web there is no file system: writes go through the platform services (downloads), so
 //! this module is never reached there; on `wasm32` every call returns the `std` "unsupported"
@@ -479,13 +482,53 @@ fn resolve_symlink(path: &Path) -> io::Result<PathBuf> {
     Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{}: too many levels of symbolic links", path.display())))
 }
 
-/// A unique hidden temporary file name to write beside `file` before renaming over it.
+/// What every [`temp_name`] ends with.
+const TEMP_SUFFIX: &str = ".pcsave.tmp";
+
+/// How many characters of the file name a [`temp_name`] keeps.
+const TEMP_STEM_CHARS: usize = 64;
+
+/// A unique temporary file name to write beside `file` before renaming over it:
+/// `{file}.{pid}-{n}.pcsave.tmp`.
+///
+/// It does not start with a dot of its own, so it is not hidden: an SMB server that hides dot
+/// files sets the hidden flag on such a file when it is created, the flag survives the rename,
+/// and the saved document would be invisible in Finder (#11624). The cost is that the file shows
+/// in a folder listing while a save writes it, and one an interrupted save leaves beside the
+/// document stays visible until it is removed (#6604). The
+/// process id, counter and suffix keep it apart from the files people name, and it is created
+/// with `create_new`, so it can never replace one. Older versions wrote
+/// `.{file}.{pid}-{n}.pcsave.tmp`; [`temp_owner`] recognizes both.
 pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     // Keep the name short: a long file name plus the suffix must stay under NAME_MAX.
-    let stem: String = file.chars().take(64).collect();
-    format!(".{stem}.{}-{n}.pcsave.tmp", std::process::id())
+    let stem: String = file.chars().take(TEMP_STEM_CHARS).collect();
+    format!("{stem}.{}-{n}{TEMP_SUFFIX}", std::process::id())
+}
+
+/// The id of the process that wrote `name`, if it is a [`temp_name`]: today's
+/// `{file}.{pid}-{n}.pcsave.tmp` or the `.{file}.{pid}-{n}.pcsave.tmp` older versions wrote, so
+/// their leftovers are still cleaned up.
+pub fn temp_owner(name: &str) -> Option<u32> {
+    let rest = name.strip_suffix(TEMP_SUFFIX)?;
+    let (stem, ids) = rest.rsplit_once('.')?;
+    let (pid, n) = ids.split_once('-')?;
+    // Only a file part `temp_name` writes: at most `TEMP_STEM_CHARS` characters, or one more when
+    // the first is the dot older versions put in front of them.
+    let chars = stem.chars().count();
+    if chars > TEMP_STEM_CHARS && !(chars == TEMP_STEM_CHARS + 1 && stem.starts_with('.')) {
+        return None;
+    }
+    let stem = stem.strip_prefix('.').unwrap_or(stem);
+    // Only numbers `temp_name` writes: plain decimal digits with no leading zero (a lone "0" is
+    // fine), a `u32` pid and the `u64` counter it counts with. Any other name is someone else's
+    // file, and the sweep must not delete it.
+    let decimal = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
+    if stem.is_empty() || !decimal(pid) || !decimal(n) || n.parse::<u64>().is_err() {
+        return None;
+    }
+    pid.parse().ok()
 }
 
 fn context(e: io::Error, msg: String) -> io::Error {
@@ -493,6 +536,40 @@ fn context(e: io::Error, msg: String) -> io::Error {
 }
 
 const UNCHANGED: &str = "the original file was not changed";
+
+/// Marks the error of a Windows replacement that moved the original to its backup name and then
+/// could neither complete the save nor put the original back: the original survives only at that
+/// backup, so the destination is not the unchanged original and must never be reported as such
+/// (#11178). `rename_error` recognizes the marker and passes the error through untouched.
+const RECOVERY_UNRESOLVED: &str = "could not restore the original";
+
+/// The error for that unresolved Windows replacement state: names the recovery copy and says the
+/// destination is currently missing, instead of the usual `UNCHANGED` reassurance (#11178).
+/// When the restoration failed because the backup itself is gone (`NotFound`), nothing survives
+/// at that name and saying so would be a second false comfort after the lost original.
+/// Its kind is deliberately not `PermissionDenied`: the retry loop must not pick a fresh backup
+/// name over the unresolved recovery and forget where the original is.
+#[cfg(any(windows, test))]
+pub(crate) fn unresolved_recovery_error(dest: &Path, completion: &io::Error, restoration: &io::Error, recovery: &Path) -> io::Error {
+    let msg = if restoration.kind() == io::ErrorKind::NotFound {
+        format!(
+            "cannot save {}: the previous version moved to its backup name but {RECOVERY_UNRESOLVED} from it \
+             (completing the save failed: {completion}; the backup {} no longer exists: {restoration}), \
+             so the destination currently holds no file under that name — check whether it was moved",
+            dest.display(),
+            recovery.display()
+        )
+    } else {
+        format!(
+            "cannot save {}: the previous version moved to its backup name but {RECOVERY_UNRESOLVED} from it \
+             (completing the save failed: {completion}; restoring the backup failed: {restoration}); \
+             your document survives at {}, recover it from there before saving again",
+            dest.display(),
+            recovery.display()
+        )
+    };
+    io::Error::other(msg)
+}
 
 /// Replacement already happened: never claim that the original file is unchanged or undo it.
 #[cfg(windows)]
@@ -515,6 +592,12 @@ fn write_error(e: io::Error, path: &Path, dir: &Path) -> io::Error {
 }
 
 fn rename_error(e: io::Error, path: &Path) -> io::Error {
+    // A Windows replacement that moved the original to its backup and failed to restore it is
+    // already fully described (with the recovery location); never append the `UNCHANGED`
+    // reassurance, which would be false in that state (#11178).
+    if e.to_string().contains(RECOVERY_UNRESOLVED) {
+        return e;
+    }
     let msg = if is_cross_device(&e) {
         format!("cannot save {}: the temporary file is on a different volume than the destination ({e}); {UNCHANGED}", path.display())
     } else if e.kind() == io::ErrorKind::PermissionDenied {
