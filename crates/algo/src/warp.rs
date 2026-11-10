@@ -922,6 +922,9 @@ fn strip(p: [f64; 2], &(a, b, sa, sb, (ax, sign, lim)): &BorderEdge, fwd: &[[f64
     }
     let mut q = [sa[0] + tau * (sb[0] - sa[0]), sa[1] + tau * (sb[1] - sa[1])];
     *q.get_mut(ax)? = lim + sign * out;
+    // On the 1/65536 grid of a point inside the picture, for the same reason: a mesh point stored
+    // as a float mustn't tip a tap that lies exactly on a 1/256 step below it.
+    let q = q.map(|t| (t * 65536.0).round() / 65536.0);
     Some((along, q, level))
 }
 
@@ -2184,6 +2187,25 @@ mod tests {
         // 0.51 px left of it is still within that level's reach (the normal's ends at 0.5).
         let a = step(&|x, y| (x + 1.01, y + 1.5 * x), 0, 8);
         assert_eq!(a.round(), 10.0, "0.51 px left of a sheared left side: {a}");
+    }
+
+    /// A strip's source point lies on the same 1/65536 grid as a point inside the picture: one
+    /// that float noise leaves a hair short of a 1/256 step still reads that step's weight.
+    #[test]
+    fn a_strips_source_point_is_on_the_fixed_point_grid() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        let r = Rect::new(0, 0, 16, 16);
+        src.fill_rect(r, &[1.0, 1.0, 1.0, 1.0]);
+        let alpha = |dy: f64| {
+            let out = warp_patches_surface(&src, r, &|x, y| (x, y + dy), [&[], &[]], Fold::IN_PLACE, Sampling::Single, Facets::Envelope);
+            (f64::from(out.read_region(Rect::new(8, 16, 9, 17))[3]) * 255.0).round()
+        };
+        // Moved down 56/256 px, the pixel centre under the bottom side is 72/256 px out: the tap
+        // is 200 steps down its last row, 55 left. A millionth of a step short of that (a mesh
+        // point stored as a float) is the same point, not step 199.
+        assert_eq!(alpha(56.0 / 256.0), 55.0);
+        assert_eq!(alpha(56.0 / 256.0 + 3e-7), 55.0);
+        assert_eq!(alpha(56.0 / 256.0 - 3e-7), 55.0);
     }
 
     #[test]
