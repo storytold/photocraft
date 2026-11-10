@@ -9,6 +9,7 @@ use super::{DialogCanvasInput, ViewXform, handle_dialog_canvas_input};
 use crate::PhotocraftApp;
 use crate::state::{Tool, View};
 
+/// What else holds the pointer in a test frame.
 #[derive(Clone, Copy, Default)]
 struct FrameOpts {
     middle: bool,
@@ -16,11 +17,11 @@ struct FrameOpts {
     popup: bool,
 }
 
-fn canvas_input(ctx: &egui::Context, app: &mut PhotocraftApp, view: &mut View, xf: &ViewXform, primary: bool, opts: FrameOpts) {
+/// One canvas's dialog input for the frame `ctx` is running, showing document `idx`.
+fn canvas_input(ctx: &egui::Context, app: &mut PhotocraftApp, view: &mut View, xf: &ViewXform, (idx, primary): (usize, bool), opts: FrameOpts) {
     let rect = xf.rect;
     let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), rect);
     let free_hover = crate::dialogs::free_pointer_over(ctx, rect).is_some();
-    let idx = app.session.active_index().unwrap_or(0);
     handle_dialog_canvas_input(
         app,
         DialogCanvasInput {
@@ -42,16 +43,19 @@ fn canvas_input(ctx: &egui::Context, app: &mut PhotocraftApp, view: &mut View, x
     );
 }
 
+/// One frame of the active document's canvas receiving `events`.
 fn step(ctx: &egui::Context, app: &mut PhotocraftApp, view: &mut View, xf: ViewXform, primary: bool, events: Vec<Event>, opts: FrameOpts) {
     ctx.begin_pass(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))), focused: true, events, ..Default::default() });
     if opts.popup {
         egui::Popup::open_id(ctx, egui::Id::unique("pattern-drag-popup"));
     }
-    canvas_input(ctx, app, view, &xf, primary, opts);
+    let idx = app.session.active_index().unwrap_or(0);
+    canvas_input(ctx, app, view, &xf, (idx, primary), opts);
     ctx.end_pass().textures_delta.clear();
 }
 
-/// An active canvas and an inactive one in the same frame, as Window › Arrange lays them out.
+/// An active canvas and an inactive one in the same frame, as Window › Arrange lays them out: the
+/// inactive cell shows the other of two documents.
 fn step_two(
     ctx: &egui::Context,
     app: &mut PhotocraftApp,
@@ -61,21 +65,25 @@ fn step_two(
     opts: FrameOpts,
 ) {
     ctx.begin_pass(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))), focused: true, events, ..Default::default() });
+    let active_idx = app.session.active_index().unwrap_or(0);
     let (view, xf) = active;
-    canvas_input(ctx, app, view, &xf, true, opts);
+    canvas_input(ctx, app, view, &xf, (active_idx, true), opts);
     let (view, xf) = inactive;
-    canvas_input(ctx, app, view, &xf, false, opts);
+    canvas_input(ctx, app, view, &xf, (1 - active_idx.min(1), false), opts);
     ctx.end_pass().textures_delta.clear();
 }
 
+/// A primary-button press at `p`.
 fn press_at(p: Pos2) -> Event {
     Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }
 }
 
+/// A primary-button release at `p`.
 fn release_at(p: Pos2) -> Event {
     Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }
 }
 
+/// A pointer move to `p`.
 fn moved(p: Pos2) -> Event {
     Event::PointerMoved(p)
 }
@@ -120,11 +128,13 @@ impl<'a> Drag<'a> {
     }
 }
 
+/// The phase the dialog shows.
 fn dialog_phase(app: &PhotocraftApp, dialog: u64) -> [f64; 2] {
     let a = app.ui.dialogs.iter().find(|d| d.id == dialog).expect("dialog").fields["phase"].as_array().expect("phase");
     [a[0].as_f64().expect("x"), a[1].as_f64().expect("y")]
 }
 
+/// Asserts two phases agree within float noise.
 fn assert_phase(got: [f64; 2], want: [f64; 2], why: &str) {
     assert!((got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3, "{why}: {got:?} != {want:?}");
 }
@@ -132,9 +142,12 @@ fn assert_phase(got: [f64; 2], want: [f64; 2], why: &str) {
 /// Whether the dialog still holds a private gesture waiting for its release.
 fn drag_stored(app: &PhotocraftApp, dialog: u64) -> bool {
     let f = &app.ui.dialogs.iter().find(|d| d.id == dialog).expect("dialog").fields;
-    crate::pattern_fill_ui::drag_target(app, f).and_then(|target| crate::pattern_fill_ui::drag_last(f, &target)).is_some()
+    // The test canvas: the root viewport showing the active document, outside any document window.
+    let owner = super::pattern_drag_owner(egui::ViewportId::ROOT, app.session.active_index().unwrap_or(0), None);
+    crate::pattern_fill_ui::drag_target(app, f).and_then(|target| crate::pattern_fill_ui::drag_last(f, &target.owned_by(owner))).is_some()
 }
 
+/// A document with a Pattern Fill dialog open: editing an existing linked fill, or creating one.
 fn pattern_drag_app(depth: u64, create: bool) -> (PhotocraftApp, u64, Option<u64>) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 40, "height": 30, "depth": depth})).unwrap();
@@ -612,4 +625,52 @@ fn a_drag_moves_the_visible_pattern_not_only_its_phase() {
     let committed = band(&app.session.active().unwrap().doc);
     assert_eq!(committed, moved, "OK commits the pixels the preview showed");
     assert_ne!(committed, before, "the drag is visible, not only a phase field");
+}
+
+/// A frame in which the main window's canvas and a Window › New Window view of the same document
+/// both run as primary views. Each OS window has its own pointer, so each gets its own context and
+/// events; the document window is drawn after the main one, as `extra_windows` does.
+fn step_windows(app: &mut PhotocraftApp, main: (&egui::Context, &mut View, ViewXform, Vec<Event>), window: (&egui::Context, &mut View, ViewXform, Vec<Event>)) {
+    let idx = app.session.active_index().unwrap_or(0);
+    let screen = Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0)));
+    let (ctx, view, xf, events) = main;
+    ctx.begin_pass(egui::RawInput { screen_rect: screen, focused: false, events, ..Default::default() });
+    canvas_input(ctx, app, view, &xf, (idx, true), FrameOpts::default());
+    ctx.end_pass().textures_delta.clear();
+    let (ctx, view, xf, events) = window;
+    ctx.begin_pass(egui::RawInput { screen_rect: screen, focused: true, events, ..Default::default() });
+    app.drawing_window = Some(7);
+    canvas_input(ctx, app, view, &xf, (idx, true), FrameOpts::default());
+    app.drawing_window = None;
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn a_new_window_view_keeps_its_drag_while_the_main_canvas_is_idle() {
+    let (mut app, dialog, _) = pattern_drag_app(8, false);
+    let (main_ctx, window_ctx) = (egui::Context::default(), egui::Context::default());
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+    let xf = ViewXform { rect, zoom: 1.0, center: [20.0, 15.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let mut main_view = View { zoom: 1.0, center: [20.0, 15.0], ..Default::default() };
+    let mut window_view = main_view.clone();
+    let start = xf.to_screen(20.0, 15.0);
+    let mut frame = |app: &mut PhotocraftApp, main: Vec<Event>, window: Vec<Event>| {
+        step_windows(app, (&main_ctx, &mut main_view, xf, main), (&window_ctx, &mut window_view, xf, window));
+    };
+    frame(&mut app, vec![], vec![moved(start)]);
+    frame(&mut app, vec![], vec![press_at(start)]);
+    frame(&mut app, vec![], vec![moved(start + vec2(3.0, 0.0))]);
+    assert_phase(dialog_phase(&app, dialog), [5.5, -3.25], "the window's drag moves the fill");
+    // The main window's button is up: its canvas does not end the window's gesture.
+    frame(&mut app, vec![], vec![moved(start + vec2(7.0, -4.0))]);
+    assert_phase(dialog_phase(&app, dialog), [9.5, -7.25], "the drag continues while the main canvas is idle");
+    // Nor does the main window losing the pointer.
+    frame(&mut app, vec![Event::PointerGone], vec![moved(start + vec2(9.0, -4.0))]);
+    assert_phase(dialog_phase(&app, dialog), [11.5, -7.25], "the main window losing the pointer does not end it");
+    frame(&mut app, vec![], vec![release_at(start + vec2(10.0, -4.0))]);
+    assert_phase(dialog_phase(&app, dialog), [12.5, -7.25], "the release lands where the window let go");
+    // The gesture is over: a later move in the window moves nothing.
+    frame(&mut app, vec![], vec![moved(start + vec2(20.0, 0.0))]);
+    assert_phase(dialog_phase(&app, dialog), [12.5, -7.25], "a released gesture does not resume");
+    crate::dialogs::cancel(&mut app, dialog).unwrap();
 }

@@ -148,6 +148,7 @@ fn insertion_unchanged(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
     st.active_layer.map(|id| id.0) == frozen
 }
 
+/// Whether this dialog creates a new fill layer rather than editing one.
 fn is_create(f: &Map<String, Value>) -> bool {
     f.get("__command").and_then(Value::as_str) == Some(cmds::CREATE)
 }
@@ -160,29 +161,49 @@ fn context_ok(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
 /// What a linked canvas drag moves: the Pattern Fill layer being edited, or the layer a new fill
 /// would be inserted above. Captured on the press so a changed target ends the gesture instead of
 /// moving a different layer, and so automation cannot redirect a held drag to a new insertion
-/// point. The pattern is part of it: choosing another one starts a fresh baseline.
+/// point. The pattern is part of it: choosing another one starts a fresh baseline. `owner` is the
+/// canvas the press landed on (see [`DragTarget::owned_by`]), so a second view of the same
+/// document neither moves nor ends a gesture it does not hold.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DragTarget {
     document: u64,
     command: &'static str,
     pattern: Option<String>,
     layer: Option<u64>,
+    owner: Option<u64>,
 }
 
 impl DragTarget {
+    /// The same target, held by the canvas `owner` identifies.
+    pub(crate) fn owned_by(mut self, owner: u64) -> Self {
+        self.owner = Some(owner);
+        self
+    }
+
+    /// Whether a stored gesture `state` was started on this target by this canvas.
     fn matches(&self, state: &Value) -> bool {
         state.get("document").and_then(Value::as_u64) == Some(self.document)
             && state.get("command").and_then(Value::as_str).is_some_and(|c| c == self.command)
             && state.get("pattern").and_then(Value::as_str) == self.pattern.as_deref()
             && state.get("layer").and_then(Value::as_u64) == self.layer
+            && state.get("owner").and_then(Value::as_u64) == self.owner
     }
 
+    /// Records this target and its canvas in a gesture's stored state.
     fn store(&self, state: &mut Map<String, Value>) {
         state.insert("document".into(), json!(self.document));
         state.insert("command".into(), json!(self.command));
         state.insert("pattern".into(), json!(self.pattern.as_deref()));
         state.insert("layer".into(), json!(self.layer));
+        state.insert("owner".into(), json!(self.owner));
     }
+}
+
+/// The canvas holding this dialog's stored gesture: `None` when no gesture is stored, and
+/// `Some(None)` for one stored without a canvas (driven directly, not from a canvas).
+pub(crate) fn drag_owner(f: &Map<String, Value>) -> Option<Option<u64>> {
+    let state = f.get(DRAG_KEY)?;
+    Some(state.get("owner").and_then(Value::as_u64))
 }
 
 /// The target a canvas drag moves, when this is a linked Pattern Fill dialog that can move one:
@@ -215,13 +236,13 @@ pub(crate) fn drag_target(app: &PhotocraftApp, f: &Map<String, Value>) -> Option
             if locks.pixels || locks.all {
                 return None;
             }
-            Some(DragTarget { document, command, pattern, layer: Some(id) })
+            Some(DragTarget { document, command, pattern, layer: Some(id), owner: None })
         }
         _ => {
             if link == Some(false) {
                 return None;
             }
-            Some(DragTarget { document, command, pattern, layer: st.active_layer.map(|id| id.0) })
+            Some(DragTarget { document, command, pattern, layer: st.active_layer.map(|id| id.0), owner: None })
         }
     }
 }
@@ -231,6 +252,14 @@ pub(crate) fn drag_target(app: &PhotocraftApp, f: &Map<String, Value>) -> Option
 /// unlinked or replaced, or Space/the middle button/temporary zoom took the pointer).
 pub(crate) fn end_phase_drag(f: &mut Map<String, Value>) {
     f.remove(DRAG_KEY);
+}
+
+/// Ends the stored gesture unless another canvas holds it: a release or `Gone` reported by one
+/// canvas says nothing about a press held in another window.
+fn end_own_drag(f: &mut Map<String, Value>, target: &DragTarget) {
+    if drag_owner(f).is_none_or(|owner| owner.is_none() || owner == target.owner) {
+        end_phase_drag(f);
+    }
 }
 
 /// The private state of an owned drag: the phase it started from, the travel at which that
@@ -244,6 +273,7 @@ struct DragState {
     travel: [f64; 2],
 }
 
+/// The stored gesture, when it belongs to `target` and every field is a finite pair.
 fn drag_state(f: &Map<String, Value>, target: &DragTarget) -> Option<DragState> {
     let state = f.get(DRAG_KEY).filter(|s| target.matches(s))?;
     Some(DragState {
@@ -328,9 +358,10 @@ pub(crate) enum CanvasEvent {
 ///
 /// A press starts a gesture only on the free canvas; a move previews only while it stays there; a
 /// release there applies the motion since the last preview and always ends the gesture. `Gone`
-/// ends it too. Order keeps each gesture's travel its own: a press and release in one frame applies
-/// exactly that click's movement, a tap moves nothing, and a release followed by a new press starts
-/// the new gesture instead of joining the two.
+/// ends it too, but neither ends a gesture another canvas holds. Order keeps each gesture's travel
+/// its own: a press and release in one frame applies exactly that click's movement, a tap moves
+/// nothing, and a release followed by a new press starts the new gesture instead of joining the
+/// two.
 pub(crate) fn canvas_events(
     f: &mut Map<String, Value>,
     target: &DragTarget,
@@ -355,7 +386,7 @@ pub(crate) fn canvas_events(
                 }
                 let Some(state) = drag_state(f, target) else { continue };
                 let Some(last) = drag_last(f, target) else {
-                    end_phase_drag(f);
+                    end_own_drag(f, target);
                     continue;
                 };
                 let d = delta(egui::pos2(last[0], last[1]), p);
@@ -364,17 +395,17 @@ pub(crate) fn canvas_events(
             }
             CanvasEvent::Release(p) => {
                 if !free(p) {
-                    end_phase_drag(f);
+                    end_own_drag(f, target);
                     continue;
                 }
                 let Some(last) = drag_last(f, target) else {
-                    end_phase_drag(f);
+                    end_own_drag(f, target);
                     continue;
                 };
                 let d = delta(egui::pos2(last[0], last[1]), p);
                 release_phase_drag(f, d, target);
             }
-            CanvasEvent::Gone => end_phase_drag(f),
+            CanvasEvent::Gone => end_own_drag(f, target),
         }
     }
 }

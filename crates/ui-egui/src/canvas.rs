@@ -703,10 +703,21 @@ struct DialogCanvasInput<'a> {
     aspect: f32,
 }
 
+/// Identifies one canvas for a Pattern Fill drag: its OS window (viewport), the document it shows
+/// and the document window it belongs to. The main canvas and a Window › New Window view of the
+/// same document differ, as do Window › Arrange cells.
+pub(crate) fn pattern_drag_owner(viewport: egui::ViewportId, idx: usize, window: Option<u64>) -> u64 {
+    egui::Id::unique(("pattern-fill-drag", viewport, idx, window)).value()
+}
+
 /// Routes this frame's pointer events to a linked Pattern Fill's canvas drag while one owns the
 /// pointer, and ends any stored gesture that no longer does. Returns true when the pattern drag
 /// owns the pointer and cursor this frame.
 fn pattern_fill_canvas_drag(app: &mut PhotocraftApp, input: &DialogCanvasInput<'_>, picking: bool) -> bool {
+    // The gesture belongs to the canvas its press landed on. Each OS window has its own pointer,
+    // so another canvas (the main one while a New Window view of the same document is dragged)
+    // must neither move it nor end it because its own button is up.
+    let owner = pattern_drag_owner(input.ctx.viewport_id(), input.idx, app.drawing_window);
     // A linked Pattern Fill: a drag on the free canvas moves the pattern. Only the view that owns
     // input (the active document's canvas, or the focused document window) may route or end it;
     // an inactive arranged cell or floating view must neither move the active fill nor cancel a
@@ -718,7 +729,14 @@ fn pattern_fill_canvas_drag(app: &mut PhotocraftApp, input: &DialogCanvasInput<'
         && !input.space_pan
         && !matches!(input.temporary, Some(crate::hold_keys::Temporary::ZoomIn | crate::hold_keys::Temporary::ZoomOut))
         && !egui::Popup::is_any_open(input.ctx))
-    .then(|| app.ui.dialogs.last().filter(|d| crate::pattern_fill_ui::owns(&d.fields)).and_then(|d| crate::pattern_fill_ui::drag_target(app, &d.fields)))
+    .then(|| {
+        app.ui
+            .dialogs
+            .last()
+            .filter(|d| crate::pattern_fill_ui::owns(&d.fields))
+            .and_then(|d| crate::pattern_fill_ui::drag_target(app, &d.fields))
+            .map(|t| t.owned_by(owner))
+    })
     .flatten();
     let owns = pattern_target.is_some();
     // Apply this frame's primary pointer events to the gesture in order, not just the pointer's
@@ -756,14 +774,20 @@ fn pattern_fill_canvas_drag(app: &mut PhotocraftApp, input: &DialogCanvasInput<'
     // With its press released, off that dialog or target, or below another Pattern Fill dialog,
     // the stored gesture is over: the next eligible press starts from the phase shown, not from
     // one captured before the interruption. This runs after the events so a release and a new
-    // press in one frame keep only the new gesture. Only the owning view clears it.
-    if input.primary {
-        let pressed = input.ctx.input(|i| i.pointer.primary_down());
-        let top_pattern = app.ui.dialogs.last().filter(|d| crate::pattern_fill_ui::owns(&d.fields)).map(|d| d.id);
-        for d in app.ui.dialogs.iter_mut().filter(|d| crate::pattern_fill_ui::owns(&d.fields)) {
-            if !owns || Some(d.id) != top_pattern || !pressed {
-                crate::pattern_fill_ui::end_phase_drag(&mut d.fields);
-            }
+    // press in one frame keep only the new gesture. Only the canvas holding the gesture clears it,
+    // reading its own window's button; it does so even after it stops owning input (its window
+    // lost focus), so the gesture cannot resume later from a stale position. A gesture stored
+    // without a canvas is cleared by the view that owns input.
+    let pressed = input.ctx.input(|i| i.pointer.primary_down());
+    let top_pattern = app.ui.dialogs.last().filter(|d| crate::pattern_fill_ui::owns(&d.fields)).map(|d| d.id);
+    for d in app.ui.dialogs.iter_mut().filter(|d| crate::pattern_fill_ui::owns(&d.fields)) {
+        let holds = match crate::pattern_fill_ui::drag_owner(&d.fields) {
+            None => false,
+            Some(Some(o)) => o == owner,
+            Some(None) => input.primary,
+        };
+        if holds && (!owns || Some(d.id) != top_pattern || !pressed) {
+            crate::pattern_fill_ui::end_phase_drag(&mut d.fields);
         }
     }
     owns
