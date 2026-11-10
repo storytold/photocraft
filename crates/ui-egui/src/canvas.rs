@@ -1630,6 +1630,43 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     }
 }
 
+/// The Type tool over a path shows Photoshop's area-type or type-on-a-path pointer (#218).
+/// Not while a type edit is open or a text box is dragged out, nor over type a click
+/// would edit (`hover_path_target`).
+fn type_path_hover(app: &mut PhotocraftApp, ui: &egui::Ui, xf: &ViewXform, tool: Tool, p: Pos2) -> Option<crate::type_tool::PathClick> {
+    if !matches!(tool, Tool::Type | Tool::VerticalType) {
+        return None;
+    }
+    let [x, y] = xf.to_doc(p);
+    let shift = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).shift;
+    crate::type_tool::hover_path_target(app, x, y, shift)
+}
+
+/// #12759: the Curvature Pen shows an arrow with a dotted circle over an anchor of the
+/// path being drawn or of the active path. Not the first anchor while drawing (#12750 owns
+/// its close cursor from 2 anchors on, so at 2 knots it keeps today's pen and at 3+ the
+/// close-path arm handles it), not while an anchor drag is in progress (the badge keeps
+/// Move there), and not for precise Other Cursors or Caps Lock, which keep the crosshair.
+fn curvature_pen_anchor_hover(app: &PhotocraftApp, ui: &egui::Ui, xf: &ViewXform, p: Pos2) -> bool {
+    if precise_other_cursor(app) {
+        return false;
+    }
+    if app.ui.direct_selection.drag.is_some() {
+        return false;
+    }
+    if app.ui.pen.as_ref().is_some_and(|pen| pen.moving.is_some()) {
+        return false;
+    }
+    let [x, y] = xf.to_doc(p);
+    let Some(h) = crate::direct_select::curvature_hover(app, [x, y], crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers))) else {
+        return false;
+    };
+    // The first anchor while drawing is left alone: a non-empty pen means the hit is one
+    // of the path being drawn, and [0, 0] is its first anchor.
+    let drawing_first = app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) && matches!(h, photocraft_vector::edit::Hit::Anchor([0, 0]));
+    !drawing_first && matches!(h, photocraft_vector::edit::Hit::Anchor(..))
+}
+
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
     let painter = input.painter;
     let xf = input.xf;
@@ -1645,13 +1682,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
     // The Type tool over a path shows Photoshop's area-type or type-on-a-path pointer (#218).
     // Not while a type edit is open or a text box is dragged out, nor over type a click
     // would edit (`hover_path_target`).
-    let type_path = if matches!(tool, Tool::Type | Tool::VerticalType) {
-        let [x, y] = xf.to_doc(p);
-        let shift = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).shift;
-        crate::type_tool::hover_path_target(app, x, y, shift)
-    } else {
-        None
-    };
+    let type_path = type_path_hover(app, ui, xf, tool, p);
     let icon = match tool {
         // Resizing the brush: the circle stays where the drag began (`brush_resize`).
         t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
@@ -1758,6 +1789,14 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             } =>
         {
             crate::tool_cursor::close_path(painter, p)
+        }
+        // Over an anchor of the path being drawn or the active path, the arrow with a small
+        // dotted circle beside it (#12759), before the pens' own cursors. The close-path arm
+        // above still wins on the first anchor while drawing from 3 knots on; at 2 knots the
+        // helper leaves it alone, so the pen stays.
+        Tool::CurvaturePen if curvature_pen_anchor_hover(app, ui, xf, p) => {
+            crate::icons::cursor_badge(ui.ctx(), "circle-dashed", p);
+            egui::CursorIcon::Default
         }
         // Over an endpoint of an open path, the continue-path pointer (#9356).
         Tool::Pen

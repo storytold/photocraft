@@ -676,3 +676,7 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tool_cursor/curvature_anchor_cursor_tests.rs"]
+mod curvature_anchor_cursor_tests;
