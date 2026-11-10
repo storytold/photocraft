@@ -407,6 +407,7 @@ pub struct LiveDab {
     neighborhood: DabNeighborhood,
     pre_surf: Surface,
     colors: Option<crate::color_channels::ColorChannels>,
+    indexed_table: Option<ColorTable>,
     work: WorkTiles,
     id: Option<LayerId>,
     params: Value,

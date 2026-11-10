@@ -13,7 +13,7 @@ use photocraft_cms::{ColorSpace, TransformOptions};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
-use photocraft_geom::{Affine, Rect};
+use photocraft_geom::Affine;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 

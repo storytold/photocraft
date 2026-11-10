@@ -333,7 +333,7 @@ fn process_tile(
             ChangeClass::None => return Ok(()),
             ChangeClass::All => {
                 let mut nearest = NearestCache::new();
-                let target = changed_target(after.bytes(), context.format, context.table, &mut nearest, 0)?;
+                let target = changed_target(&after.bytes(), context.format, context.table, &mut nearest, 0)?;
                 let encoded = target_bytes(target, context.format, context.table);
                 if encoded == after_pixel {
                     return Ok(());
@@ -368,7 +368,7 @@ fn process_tile(
             if pixel == old_pixel(original, original_default, base, bpp) {
                 continue;
             }
-            let target = changed_target(after_bytes, context.format, context.table, &mut nearest, base)?;
+            let target = changed_target(&after_bytes, context.format, context.table, &mut nearest, base)?;
             if target_bytes(target, context.format, context.table) != pixel {
                 changed = true;
                 min_x = min_x.min(x);
@@ -394,7 +394,7 @@ fn process_tile(
             if pixel == old_pixel(original, original_default, base, bpp) {
                 continue;
             }
-            let target = changed_target(after_bytes, context.format, context.table, &mut nearest, base)?;
+            let target = changed_target(&after_bytes, context.format, context.table, &mut nearest, base)?;
             let encoded = target_bytes(target, context.format, context.table);
             if encoded != pixel {
                 tile.bytes_mut()[base..base + bpp].copy_from_slice(encoded.as_slice());
