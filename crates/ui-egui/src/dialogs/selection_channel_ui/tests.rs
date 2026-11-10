@@ -51,6 +51,8 @@ fn plane(app: &PhotocraftApp, i: usize, name: &str) -> Vec<f32> {
     ch.surface.read_region(d.bounds())
 }
 
+/// The Document list is the open documents with the active one's pixel size; the dialogs open
+/// on the active document, a new channel (Save) or its first channel (Load).
 #[test]
 fn the_document_list_holds_the_open_images_of_the_same_size() {
     let mut app = app();
@@ -67,6 +69,8 @@ fn the_document_list_holds_the_open_images_of_the_same_size() {
     assert_eq!(f["channel"], "RGB", "no alpha channel: the composite");
 }
 
+/// Document: New offers only a new channel, and OK puts the selection into a new Multichannel
+/// document, which becomes the active one; the source gets no channel.
 #[test]
 fn new_saves_the_selection_into_a_new_multichannel_document() {
     let mut app = app();
@@ -91,6 +95,8 @@ fn new_saves_the_selection_into_a_new_multichannel_document() {
     );
 }
 
+/// Another document lists its own channels; an existing channel turns New Channel into Replace
+/// Channel and allows combining; OK saves there, ignores a typed Name and keeps the source active.
 #[test]
 fn another_document_lists_its_channels_and_the_operation_follows_the_channel() {
     let mut app = app();
@@ -124,6 +130,8 @@ fn another_document_lists_its_channels_and_the_operation_follows_the_channel() {
     assert_eq!(fields(&mut app, d)["operation"], "new");
 }
 
+/// Changing the Document starts from New (Save) or the document's first channel (Load), and a
+/// document of another size is not taken.
 #[test]
 fn a_channel_the_chosen_document_lacks_goes_back_to_its_first() {
     let mut app = app();
@@ -146,6 +154,8 @@ fn a_channel_the_chosen_document_lacks_goes_back_to_its_first() {
     assert_eq!(fields(&mut app, d)["channel"], "RGB", "B has no alpha channel");
 }
 
+/// Load Selection lists the chosen document's channels and its active layer, and loads the
+/// channel, inverted when asked, into the document the dialog was opened on.
 #[test]
 fn load_selection_reads_the_chosen_documents_channels() {
     let mut app = app();
@@ -229,6 +239,8 @@ fn channels_with_reserved_or_repeated_names_are_the_ones_chosen() {
     assert_eq!((sel.sample_channel(2, 5, 0), sel.sample_channel(8, 5, 0), sel.sample_channel(25, 5, 0)), (1.0, 0.0, 0.0), "the channel named Red");
 }
 
+/// OK after the chosen document closed, or after another document became active, is an error
+/// and saves nothing.
 #[test]
 fn a_document_closed_or_switched_before_ok_is_refused() {
     let mut app = app();
@@ -245,6 +257,7 @@ fn a_document_closed_or_switched_before_ok_is_refused() {
     assert!(app.session.documents().iter().all(|st| st.doc.channels.is_empty()));
 }
 
+/// A save into the active document sends no `document`, so the recorded step is as before.
 #[test]
 fn the_active_document_is_not_named_in_the_step() {
     let mut app = app();

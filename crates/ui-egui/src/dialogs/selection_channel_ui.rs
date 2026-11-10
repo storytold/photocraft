@@ -32,10 +32,12 @@ const NEW: &str = "new";
 const SAVE_OPERATIONS: [&str; 4] = ["replace", "add", "subtract", "intersect"];
 const LOAD_OPERATIONS: [&str; 4] = ["new", "add", "subtract", "intersect"];
 
+/// Whether `fields` are this dialog's.
 pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
 }
 
+/// Whether the dialog is Save Selection (else Load Selection).
 fn saving(f: &Map<String, Value>) -> bool {
     f.get("__command").and_then(Value::as_str) == Some(SAVE)
 }
@@ -230,6 +232,7 @@ pub fn params(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<Value, Stri
     Ok(Value::Object(p))
 }
 
+/// OK: runs the command with the dialog's choices, or reports why it can't.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     // A chosen document that closed meanwhile is refused, not swapped for another one.
     if f.get("document").and_then(Value::as_u64).is_some() && chosen(app, f).is_none() {
@@ -242,6 +245,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.run(command, p)
 }
 
+/// Draws the dialog: Document and Channel, Name (Save) or Invert (Load), and the Operation.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     normalize(app, f);
     let save = saving(f);

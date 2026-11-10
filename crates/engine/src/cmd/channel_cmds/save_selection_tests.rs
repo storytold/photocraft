@@ -29,6 +29,9 @@ fn assert_same_selection(loaded: &[f32], saved: &[f32]) {
     }
 }
 
+/// Document: New at 8, 16 and 32 bits: one new active Multichannel document of the source's
+/// size, depth and resolution whose only channel is a black ink over the unselected area, shown
+/// as the selection; the source is left as it was.
 #[test]
 fn save_to_a_new_document_makes_a_multichannel_image_of_the_selection() {
     for (depth, sample) in [(8, SampleType::U8), (16, SampleType::U16), (32, SampleType::F32)] {
@@ -70,6 +73,7 @@ fn save_to_a_new_document_makes_a_multichannel_image_of_the_selection() {
     }
 }
 
+/// Load Selection from the new document gives the saved selection back, under the typed name.
 #[test]
 fn the_new_documents_channel_loads_back_as_the_selection() {
     let mut s = feathered(16, 24, 16);
@@ -135,6 +139,7 @@ fn saving_into_the_new_documents_channel_combines_with_the_selection_it_holds() 
     }
 }
 
+/// Each save makes its own document, "Untitled-1", "Untitled-2", and a blank name is "Alpha 1".
 #[test]
 fn each_new_document_takes_the_next_untitled_name() {
     let mut s = feathered(8, 24, 16);
@@ -147,6 +152,8 @@ fn each_new_document_takes_the_next_untitled_name() {
     assert_eq!(names[2], ("Untitled-2".to_string(), vec!["Alpha 1".to_string()]));
 }
 
+/// With Document: New, an existing channel or an operation other than New is an error, and no
+/// document is made.
 #[test]
 fn a_new_document_has_no_channel_to_replace_or_combine_with() {
     let mut s = feathered(8, 24, 16);
@@ -165,6 +172,8 @@ fn a_new_document_has_no_channel_to_replace_or_combine_with() {
     }
 }
 
+/// A save into another open document lands there in its depth and leaves the source active; a
+/// document of another size is refused.
 #[test]
 fn save_to_another_open_document_of_the_same_size() {
     let mut s = feathered(8, 24, 16);
