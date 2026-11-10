@@ -377,6 +377,9 @@ pub struct Interface {
     /// #1271, #1316). The integrated title bar remains the default on Linux and Windows;
     /// the system frame is opt-in. Read when the app starts. macOS always uses the system's.
     pub system_title_bar: bool,
+    /// Linux: keep the menu bar inside the PhotoCraft window instead of using the desktop global
+    /// menu (applies at next launch).
+    pub use_in_window_bar_on_linux: bool,
     /// Show the active document's file name in the title bar and the OS window title. The tabs
     /// already name the file, so this can be turned off for a plain "PhotoCraft" title (#5037).
     /// The unsaved-changes mark stays either way.
@@ -411,6 +414,7 @@ impl Default for Interface {
             show_tooltips: true,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
+            use_in_window_bar_on_linux: false,
             show_file_name_in_title: true,
             notification_auto_hide: true,
             notification_duration_seconds: 6,
