@@ -1330,6 +1330,65 @@ fn value_field_applies_typed_arithmetic() {
 }
 
 #[test]
+fn exact_value_field_steps_keep_fractional_values_and_the_selected_text() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let mut h = Harness::new_ui_state(
+        |ui, value: &mut f32| {
+            crate::field_wheel::begin_frame(ui.ctx());
+            super::value_field_exact(ui, value, f32::MIN..=f32::MAX, 80.0).accessible_name("HDR channel");
+        },
+        0.12345679_f32,
+    );
+    h.run();
+    h.get_by_role_and_label(Role::SpinButton, "HDR channel").click();
+    h.run();
+
+    h.key_press(Key::ArrowUp);
+    h.run();
+    let after_arrow = 0.12345679_f32 + 1.0_f32;
+    assert_eq!(*h.state(), after_arrow, "ArrowUp adds one step to the fractional value");
+    h.run();
+    assert_eq!(*h.state(), after_arrow, "the next focused frame keeps the exact value");
+
+    let at = h.get_by_role_and_label(Role::SpinButton, "HDR channel").rect().center();
+    h.hover_at(at);
+    h.run();
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+    let after_wheel = after_arrow + 1.0_f32;
+    assert_eq!(*h.state(), after_wheel, "wheel adds one step to the fractional value");
+    h.run();
+    assert_eq!(*h.state(), after_wheel, "the next focused frame keeps the wheel result");
+
+    // Typing after a step replaces the complete selected round-trip value.
+    h.event(egui::Event::Text("0.5".into()));
+    h.run();
+    assert_eq!(*h.state(), 0.5);
+
+    // Crop's free-ratio wrapper remains on the ordinary grid path.
+    let mut ordinary = Harness::new_ui_state(
+        |ui, value: &mut f32| {
+            super::value_field_prec_blank(ui, value, 0.0..=100.0, "", 80.0, 0).accessible_name("Crop ratio");
+        },
+        55.4,
+    );
+    ordinary.run();
+    ordinary.get_by_role_and_label(Role::SpinButton, "Crop ratio").click();
+    ordinary.run();
+    ordinary.key_press(Key::ArrowUp);
+    ordinary.run();
+    assert_eq!(*ordinary.state(), 56.0);
+}
+
+#[test]
 fn numbers_drop_trailing_zero() {
     // #2434: the unit keys map to Photoshop's places, and the shared formatter trims zeros.
     assert_eq!(super::unit_decimals("px"), 0);
