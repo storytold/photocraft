@@ -3912,7 +3912,7 @@ cameraRaw	Temperature	색온도
 	Rectangle	사각형
 	Rectangular Selection	사각형 선택
 	Rename Layer Comp	레이어 구성 이름 바꾸기
-	Reorder Layer	레이어 순서 변경
+	Move Layer to Target	레이어를 대상으로 이동
 	Reset Preferences	환경 설정 초기화
 	Rise	상승
 	Ruler	눈금자
