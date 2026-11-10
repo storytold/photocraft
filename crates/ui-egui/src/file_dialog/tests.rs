@@ -322,6 +322,39 @@ fn menu_place_starts_transform_for_each_chosen_image() {
     }
 }
 
+/// #10031: File › Place decodes in the background; Free Transform starts when the layer lands, and
+/// a second place is refused while the first runs.
+#[test]
+fn menu_place_runs_in_the_background_and_starts_transform_when_it_lands() {
+    let (mut app, open, _) = app();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "source.png", &Default::default()).unwrap().bytes;
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    let layers = app.session.active().unwrap().doc.layer_count();
+    menus::invoke(&mut app, &ctx, "file.placeEmbedded", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Contents("drawing.png".into(), bytes.clone())));
+    app.poll_file_dialog(&ctx, None);
+    let place = app.jobs.place.clone().expect("being placed");
+    assert_eq!(place.name, "drawing.png");
+    assert!(app.ui.transform.is_none(), "Free Transform waits for the layer");
+    assert_eq!(app.session.active().unwrap().doc.layer_count(), layers);
+    // Another place is refused while this one runs, and the first one stays tracked.
+    assert!(crate::jobs_ui::start_place_bytes(&mut app, "other.png", bytes, None, &serde_json::json!({})).is_err());
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.job), Some(place.job));
+    let t = std::time::Instant::now();
+    while app.jobs.place.is_some() {
+        assert!(t.elapsed() < std::time::Duration::from_secs(30), "the place did not finish");
+        crate::jobs_ui::tick(&mut app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer_count(), layers + 1);
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "drawing");
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
 #[test]
 fn cancelled_or_invalid_menu_place_does_not_start_transform() {
     for command in ["file.placeEmbedded", "file.placeLinked"] {
@@ -1483,4 +1516,102 @@ fn import_variable_data_sets_menu_asks_for_a_csv_and_imports_it() {
     answer(&open, Some(FileDialogAnswer::Contents("sets.csv".into(), b"headline\nHello\nWorld\n".to_vec())));
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.active().map(|d| d.doc.variables.data_sets.len()), Some(2));
+}
+
+/// #10192: the folder an export dialog starts in, as a pure decision.
+#[test]
+fn export_start_dir_prefers_an_existing_remembered_folder() {
+    use std::path::PathBuf;
+    let doc = Some(PathBuf::from("/proj"));
+    let all_exist = |_: &Path| true;
+    let none_exist = |_: &Path| false;
+    // Remembered and present: used.
+    assert_eq!(export_start_dir(Some("/renders"), doc.clone(), all_exist), Some(PathBuf::from("/renders")));
+    // Remembered but gone: the document's folder.
+    assert_eq!(export_start_dir(Some("/renders"), doc.clone(), none_exist), doc);
+    // Nothing remembered (unset or empty): the document's folder, or nothing for an untitled one.
+    assert_eq!(export_start_dir(None, doc.clone(), all_exist), doc);
+    assert_eq!(export_start_dir(Some(""), doc.clone(), all_exist), doc);
+    assert_eq!(export_start_dir(None, None, all_exist), None);
+    assert_eq!(export_start_dir(Some("/renders"), None, none_exist), None);
+}
+
+/// #10192: exports start in the last successfully exported folder, across documents; a failed or
+/// cancelled export, a folder that is gone and other save dialogs change nothing.
+#[test]
+fn exports_start_in_the_last_exported_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let renders = root.path().join("renders");
+    std::fs::create_dir(&renders).unwrap();
+    let renders_text = renders.to_string_lossy().into_owned();
+    app.session.active_mut().unwrap().path = Some("/proj/original.psd".into());
+    let suggested = |open: &Open| match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => suggested.clone(),
+        other => panic!("save dialog expected, got {other:?}"),
+    };
+    let remembered = |app: &PhotocraftApp| app.session.prefs().export.last_folder.clone();
+    // No export yet: beside the document. Cancelled, nothing is remembered.
+    app.pick_export("a.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/proj", "a.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(remembered(&app), "");
+    // The user picks another folder, but the export fails: nothing is remembered.
+    app.pick_export("a.png", |_, _| Err("disk full".into())).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo(joined(&renders_text, "a.png"))));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(remembered(&app), "");
+    // ...and the next export still starts beside the document, not in the failed export's folder.
+    app.pick_export("a.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/proj", "a.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    // A successful export is remembered...
+    app.pick_export("a.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo(joined(&renders_text, "a.png"))));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(remembered(&app), renders_text);
+    // ...and starts the next export, of any document, even an untitled one.
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    app.pick_export("b.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined(&renders_text, "b.png"));
+    // A cancelled dialog changes nothing.
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(remembered(&app), renders_text);
+    // Other save dialogs keep their own start.
+    app.pick_save("c.psd", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), "c.psd");
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    // The folder disappears: back to the document's folder.
+    std::fs::remove_dir(&renders).unwrap();
+    app.session.set_active(0);
+    app.pick_export("d.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/proj", "d.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+#[test]
+fn the_last_export_folder_is_a_preference_that_old_files_lack() {
+    let prefs = photocraft_engine::prefs::Preferences::default();
+    assert_eq!(prefs.export.last_folder, "");
+    let mut json = serde_json::to_value(&prefs).unwrap();
+    json["export"]["lastFolder"] = "/renders".into();
+    let loaded: photocraft_engine::prefs::Preferences = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(loaded.export.last_folder, "/renders");
+    // Settings saved before the field existed still load.
+    json["export"].as_object_mut().unwrap().remove("lastFolder");
+    let old: photocraft_engine::prefs::Preferences = serde_json::from_value(json).unwrap();
+    assert_eq!(old.export.last_folder, "");
 }

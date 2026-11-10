@@ -49,9 +49,10 @@ pub fn is_gesture(mods: egui::Modifiers) -> bool {
 }
 
 /// Alt (Option) with the right button: Photoshop's Windows gesture (#297). The left button with
-/// Alt alone stays the painting tools' eyedropper.
+/// Alt alone stays the painting tools' eyedropper. Shift+Alt+right is Photoshop's HUD Color
+/// Picker (#6098), so Shift disqualifies the resize gesture.
 pub fn is_right_gesture(mods: egui::Modifiers) -> bool {
-    mods.alt
+    mods.alt && !mods.shift
 }
 
 /// The diameter and hardness a drag from `start` by (`dx`, `dy`) document pixels gives at `zoom`.
@@ -166,6 +167,37 @@ fn preview_tint(app: &PhotocraftApp) -> Color32 {
     crate::color_picker_ui::parse_hex(&app.session.prefs().cursors.brush_preview_color).map_or(Color32::from_rgba_unmultiplied(255, 0, 0, alpha), |c| {
         Color32::from_rgba_unmultiplied((c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8, alpha)
     })
+}
+
+/// Liquify density preview, kept separate from the paint engine's hardness falloff.
+/// A round tip of `radius` screen points: solid out to `hardness` of the radius, fading to clear
+/// at the edge. One mesh (two rings and a centre), so its cost doesn't grow with the brush.
+pub(crate) fn liquify_tip_preview(painter: &egui::Painter, c: Pos2, radius: f32, hardness: f32, color: Color32) {
+    let clip = painter.clip_rect();
+    if !clip.expand(radius).contains(c) {
+        return;
+    }
+    // Enough segments for a smooth edge at any size, capped so huge brushes stay cheap.
+    let n = ((radius * 0.5) as usize).clamp(24, 160);
+    let inner = radius * hardness.clamp(0.0, 1.0);
+    let clear = Color32::TRANSPARENT;
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(c, color);
+    for k in 0..n {
+        let a = k as f32 / n as f32 * std::f32::consts::TAU;
+        let d = vec2(a.cos(), a.sin());
+        mesh.colored_vertex(c + d * inner, color);
+        mesh.colored_vertex(c + d * radius, clear);
+    }
+    let n = n as u32;
+    for k in 0..n {
+        let (i0, o0) = (1 + 2 * k, 2 + 2 * k);
+        let (i1, o1) = (1 + 2 * ((k + 1) % n), 2 + 2 * ((k + 1) % n));
+        mesh.add_triangle(0, i0, i1);
+        mesh.add_triangle(i0, o0, o1);
+        mesh.add_triangle(i0, o1, i1);
+    }
+    painter.add(mesh);
 }
 
 /// The round tip as the brush engine paints it: `radius` document pixels at `zoom` screen points

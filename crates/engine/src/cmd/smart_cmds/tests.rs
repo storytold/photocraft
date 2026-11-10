@@ -4,6 +4,7 @@ mod filter_mask_paint;
 mod selection;
 mod source_flatten;
 mod stack_cache;
+mod svg_profile;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
 const W: i32 = 64;
@@ -109,7 +110,7 @@ fn paint(s: &mut Session) {
 }
 
 fn flat(s: &Session) -> Vec<[f32; 4]> {
-    photocraft_compose::flatten(&s.active().unwrap().doc).px
+    photocraft_compose::flatten(&s.active().unwrap().doc).into_px()
 }
 
 fn max_diff(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
@@ -421,6 +422,13 @@ fn selection_becomes_the_filter_mask() {
     s.execute("layer.smartFilter.deleteFilterMask", json!({})).unwrap();
     assert!(active_smart(&s).filter_mask.is_none());
     assert!(!s.is_enabled("layer.smartFilter.deleteFilterMask"));
+    // A Photoshop action deletes the mask Photoshop adds by default: with `ifPresent`, no mask
+    // is no step and no error. A layer that isn't a smart object still refuses.
+    let steps = s.active().unwrap().history.past_len();
+    assert_eq!(s.execute("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})).unwrap(), Value::Null);
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(s.execute("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})).is_err());
 }
 
 /// #5619: deleting (or dragging away) the last smart filter removes the filter mask with it, so
@@ -493,6 +501,193 @@ fn transforms_re_render_from_source_losslessly() {
     // Perspective keeps the full projective placement (and stays a smart object).
     smart.execute("edit.transform", json!({"layer": sid, "quad": [[0, 0], [10, 0], [12, 10], [-2, 10]]})).unwrap();
     assert!(active_smart(&smart).perspective.is_some());
+}
+
+/// The contents' box centre in document pixels under `sm`'s placement: what an affine placement is
+/// centred on, and where the box centre of a projective one maps to.
+fn placed_centre(s: &Session, sm: &SmartObject) -> (f64, f64) {
+    let b = crate::smart_cmds::source_box(&s.active().unwrap().doc, sm).unwrap();
+    placement(sm).apply((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+}
+
+/// The average of the four corners of `sm`'s placement in document pixels: the point Reset
+/// Transform keeps (measured in the reference application 2026-11-06, see the #11675 discussion).
+/// It is the box centre under an affine placement, and the quad's centre under a projective one.
+fn quad_centre(s: &Session, sm: &SmartObject) -> (f64, f64) {
+    let b = crate::smart_cmds::source_box(&s.active().unwrap().doc, sm).unwrap();
+    let h = placement(sm);
+    let (mut x, mut y) = (0.0, 0.0);
+    for (u, v) in [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])] {
+        let (px, py) = h.apply(u, v);
+        x += px;
+        y += py;
+    }
+    (x / 4.0, y / 4.0)
+}
+
+/// Layer ▸ Smart Objects ▸ Reset Transform (#11662): 100 % of the contents' own size, no rotation,
+/// skew, Distort or Perspective, and the object stays centred where it is.
+#[test]
+fn reset_transform_restores_100_percent_in_place() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let fresh = active_smart(&s).cache.unwrap().content_bounds();
+    s.execute("edit.transform", json!({"layer": id, "scaleX": 200, "scaleY": 200, "rotate": 30})).unwrap();
+    s.execute("layer.translate", json!({"dx": 7, "dy": 4})).unwrap();
+    let sm = active_smart(&s);
+    assert!(sm.transform.m[0].hypot(sm.transform.m[1]) > 1.5, "the object really is scaled up");
+    assert_ne!(sm.transform.m[1], 0.0, "…and rotated");
+    let centre = placed_centre(&s, &sm);
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let after = active_smart(&s);
+    assert!(after.perspective.is_none(), "no projective placement left");
+    assert_eq!(&after.transform.m[..4], &[1.0, 0.0, 0.0, 1.0], "100 %, square, neither rotated nor skewed");
+    let now = placed_centre(&s, &after);
+    assert!((now.0 - centre.0).abs() < 1e-6 && (now.1 - centre.1).abs() < 1e-6, "centred where it was: {now:?} vs {centre:?}");
+    let r = after.cache.unwrap().content_bounds();
+    assert_eq!((r.width(), r.height()), (fresh.width(), fresh.height()), "the contents at their own size");
+    // Re-rendered from the source rather than resampled from the rotated pixels: the reset object
+    // is exactly the converted layer moved by the same whole-pixel distance.
+    let mut control = session(8);
+    paint(&mut control);
+    convert(&mut control);
+    control.execute("layer.translate", json!({"dx": 7, "dy": 4})).unwrap();
+    let (got, want) = (flat(&s), flat(&control));
+    assert!(max_diff(&got, &want) < 1e-6, "lossless reset (mean {})", mean_diff(&got, &want));
+    // Already reset: the second run changes nothing.
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    assert_eq!(active_smart(&s).transform, after.transform, "idempotent");
+}
+
+/// Reset Transform takes the Warp back with the transform and keeps the smart filter stack:
+/// measured in the reference application 2026-11-06 (an Arc 50 warp came back as no warp at all),
+/// see the #11675 discussion.
+#[test]
+fn reset_transform_clears_the_warp_and_keeps_the_smart_filters() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    s.execute("edit.transform.warp", json!({"style": "arc", "bend": 30})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    let before = active_smart(&s);
+    assert!(before.warp.is_some(), "the fixture is warped");
+    let r = before.cache.unwrap().content_bounds();
+    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+    s.execute("edit.transform", json!({"layer": id, "rect": [x0, y0, x1, y1], "quad": [[x0, y0], [x1, y0], [x1 - 12.0, y1 - 8.0], [x0, y1]]})).unwrap();
+    assert!(active_smart(&s).perspective.is_some(), "Distort keeps a projective placement");
+    let centre = quad_centre(&s, &active_smart(&s));
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let after = active_smart(&s);
+    assert!(after.warp.is_none(), "the Warp goes with the transform, as the reference does");
+    assert_eq!(after.smart_filters.len(), 1, "the smart filter stack stays");
+    assert!(after.perspective.is_none(), "Distort is cleared");
+    assert_eq!(&after.transform.m[..4], &[1.0, 0.0, 0.0, 1.0]);
+    let now = placed_centre(&s, &after);
+    assert!((now.0 - centre.0).abs() < 1e-6 && (now.1 - centre.1).abs() < 1e-6, "centred where it was: {now:?} vs {centre:?}");
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let again = active_smart(&s);
+    assert_eq!(again.transform, after.transform, "idempotent");
+    assert!(again.warp.is_none(), "and still unwarpd");
+}
+
+/// The centre Reset Transform keeps is the average of the placement's four corners, not the point
+/// its box centre maps to: they differ once Distort or Perspective bends the quad, and the
+/// reference application keeps the corners' average (measured 2026-11-06, #11675 discussion).
+#[test]
+fn reset_transform_centres_a_distorted_object_on_its_corner_average() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let r = active_smart(&s).cache.unwrap().content_bounds();
+    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+    let quad = [[x0 - 10.0, y0 - 6.0], [x1 + 26.0, y0 - 2.0], [x1 + 4.0, y1 + 18.0], [x0 - 16.0, y1 + 8.0]];
+    s.execute("edit.transform", json!({"layer": id, "rect": [x0, y0, x1, y1], "quad": quad})).unwrap();
+    let sm = active_smart(&s);
+    assert!(sm.perspective.is_some(), "a projective placement");
+    let corners = quad_centre(&s, &sm);
+    let middle = placed_centre(&s, &sm);
+    assert!((corners.0 - middle.0).abs() + (corners.1 - middle.1).abs() > 1.0, "the fixture splits the two centres: {corners:?} vs {middle:?}");
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let after = active_smart(&s);
+    assert_eq!(&after.transform.m[..4], &[1.0, 0.0, 0.0, 1.0], "100 %, square");
+    assert!(after.perspective.is_none() && after.warp.is_none(), "no projective placement or warp left");
+    let now = placed_centre(&s, &after);
+    assert!((now.0 - corners.0).abs() < 1e-6 && (now.1 - corners.1).abs() < 1e-6, "centred on the corners: {now:?} vs {corners:?}");
+    assert!((now.0 - middle.0).abs() + (now.1 - middle.1).abs() > 1.0, "not on the point the box centre mapped to");
+}
+
+/// A stack holding a filter this build can't apply can't be re-rendered without the warp, so Reset
+/// Transform refuses the whole step instead of recording the old warped pixels at the new
+/// placement: no history state, and placement, warp and stack left exactly as they were.
+#[test]
+fn reset_transform_refuses_a_stack_it_cannot_re_render() {
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    s.execute("edit.transform.warp", json!({"style": "arc", "bend": 30})).unwrap();
+    s.execute("edit.transform", json!({"scaleX": 160, "scaleY": 160})).unwrap();
+    // A smart filter whose command this build doesn't have, as an imported PSD leaves it.
+    s.edit("unsupported filter", |doc, active| {
+        let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content else { panic!("a smart object") };
+        sm.smart_filters.push(SmartFilter {
+            command: UNSUPPORTED_FILTER.into(),
+            params: json!({"name": "Camera Raw Filter"}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        Ok(())
+    })
+    .unwrap();
+    let before = active_smart(&s);
+    assert!(!super::rendering::unapplied_filters(&before).is_empty(), "the fixture's filter can't be applied");
+    let states = s.active().unwrap().history.entries().len();
+    let err = s.execute("layer.smartObjects.resetTransform", json!({})).unwrap_err().to_string();
+    assert!(err.contains("Camera Raw Filter"), "the error names the filter that blocks it: {err}");
+    let after = active_smart(&s);
+    assert_eq!(after.transform, before.transform, "the placement is left alone");
+    assert_eq!(after.warp, before.warp, "the warp is still there");
+    assert_eq!(after.smart_filters, before.smart_filters, "so is the stack");
+    assert_eq!(s.active().unwrap().history.entries().len(), states, "a refused step records no history state");
+    // Only this step is refused: with the stack gone the same object resets normally.
+    s.execute("layer.smartFilter.clearSmartFilters", json!({})).unwrap();
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let cleared = active_smart(&s);
+    assert_eq!(&cleared.transform.m[..4], &[1.0, 0.0, 0.0, 1.0], "then the reset goes through");
+    assert!(cleared.warp.is_none(), "with the warp");
+}
+
+/// Enabled for a smart object only, and one undo step back (#11662).
+#[test]
+fn reset_transform_needs_a_smart_object_and_undoes_in_one_step() {
+    let mut empty = Session::new();
+    assert!(!empty.is_enabled("layer.smartObjects.resetTransform"), "no document");
+    assert!(empty.execute("layer.smartObjects.resetTransform", json!({})).is_err());
+    let mut s = session(8);
+    paint(&mut s);
+    let plain = s.active().unwrap().active_layer.unwrap().0;
+    assert!(!s.is_enabled("layer.smartObjects.resetTransform"), "a pixel layer has no placement to reset");
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({"layer": plain})).is_err());
+    let id = convert(&mut s);
+    assert!(s.is_enabled("layer.smartObjects.resetTransform"));
+    s.execute("edit.transform", json!({"layer": id, "matrix": [2, 0, 0, 2, 0, 0]})).unwrap();
+    let scaled = active_smart(&s);
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    assert_eq!(&active_smart(&s).transform.m[..4], &[1.0, 0.0, 0.0, 1.0]);
+    s.execute("edit.undo", json!({})).unwrap();
+    let back = active_smart(&s);
+    assert_eq!(back.transform, scaled.transform, "one history step back to the scaled placement");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(&active_smart(&s).transform.m[..4], &[1.0, 0.0, 0.0, 1.0], "…and forward again");
+    // Hostile targets are refused, never acted on.
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({"layer": u64::MAX})).is_err());
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({"layer": "nope"})).is_err());
+    // A locked layer can't be moved.
+    s.execute("layer.lockLayers", json!({"layer": id, "position": true})).unwrap();
+    let locked = active_smart(&s).transform;
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({})).is_err());
+    assert_eq!(active_smart(&s).transform, locked, "the placement is left alone");
 }
 
 #[test]
@@ -704,6 +899,7 @@ fn commands_are_registered_with_catalog_ids() {
         "layer.smartObjects.newSmartObjectViaCopy",
         "layer.smartObjects.rasterize",
         "layer.smartObjects.editContents",
+        "layer.smartObjects.resetTransform",
         "layer.smartObjects.replaceContents",
         "layer.smartObjects.exportContents",
         "layer.smartObjects.updateModifiedContent",
@@ -1311,4 +1507,118 @@ fn clouds_and_fibers_move_with_the_smart_object() {
             }
         }
     }
+}
+
+/// The native-source digest cache keys by allocation without keeping sources alive, never
+/// returns a digest for different bytes, and stays within its capacity.
+#[test]
+fn native_digest_cache_is_bounded_weak_and_never_stale() {
+    let mut cache = NativeDigests::new(4);
+    let source = Arc::new(b"%PDF-1.7\nfirst".to_vec());
+    let digest = *blake3::hash(&source).as_bytes();
+    assert_eq!(cache.get(&source), None);
+    cache.insert(&source, digest);
+    assert_eq!(cache.get(&source), Some(digest));
+    assert_eq!(Arc::strong_count(&source), 1, "the cache must not own the source");
+    // Equal bytes in another allocation are a different identity: verified separately.
+    let copy = Arc::new(source.as_ref().clone());
+    assert_eq!(cache.get(&copy), None);
+    // A dropped source's entry is pruned; a new source of the same length is never served
+    // the old digest, even if the allocator reuses the buffer.
+    drop(copy);
+    let address = Arc::as_ptr(&source);
+    drop(source);
+    let replacement = Arc::new(b"%PDF-1.7\nother".to_vec());
+    assert_ne!(Arc::as_ptr(&replacement), address, "the entry pins the old header address");
+    assert_eq!(cache.get(&replacement), None);
+    assert!(cache.entries.is_empty(), "dead entries are pruned");
+    // Capacity is a hard bound with least-recently-used eviction.
+    let live: Vec<Arc<Vec<u8>>> = (0..10u8).map(|n| Arc::new(vec![n; 8])).collect();
+    for bytes in &live {
+        cache.insert(bytes, *blake3::hash(bytes).as_bytes());
+        assert!(cache.entries.len() <= 4);
+    }
+    assert!(live[..6].iter().all(|bytes| cache.get(bytes).is_none()));
+    assert!(live[6..].iter().all(|bytes| cache.get(bytes) == Some(*blake3::hash(bytes).as_bytes())));
+    assert!(live.iter().all(|bytes| Arc::strong_count(bytes) == 1));
+    let mut disabled = NativeDigests::new(0);
+    disabled.insert(&live[0], [0; 32]);
+    assert!(disabled.entries.is_empty());
+}
+
+/// Commands edit sources copy-on-write. The cache keys by allocation, so it is only sound if a
+/// remembered allocation can never be changed in place. A live `Weak` guarantees that:
+/// `Arc::get_mut` refuses and `Arc::make_mut` moves the bytes to a new allocation (a miss), both
+/// for a uniquely held source and for one shared with another document. Lookups also refresh
+/// recency, so a source in active use is not evicted by newer one-off reads.
+#[test]
+fn native_digest_cache_misses_after_copy_on_write_and_keeps_recently_used_sources() {
+    let mut cache = NativeDigests::new(2);
+    let mut unique = Arc::new(b"%PDF-1.7\nunique".to_vec());
+    let before = *blake3::hash(&unique).as_bytes();
+    cache.insert(&unique, before);
+    assert!(Arc::get_mut(&mut unique).is_none(), "a remembered allocation cannot be edited in place");
+    let old_address = Arc::as_ptr(&unique);
+    Arc::make_mut(&mut unique).extend_from_slice(b" edited");
+    assert_ne!(Arc::as_ptr(&unique), old_address, "copy-on-write moved the edited bytes");
+    assert_eq!(cache.get(&unique), None, "the edited source must be hashed again");
+    // The entry for the old allocation is dead (its bytes are gone) and is pruned.
+    assert!(cache.entries.is_empty());
+    let mut shared = Arc::new(b"%PDF-1.7\nshared".to_vec());
+    let other_document = Arc::clone(&shared);
+    let digest = *blake3::hash(&shared).as_bytes();
+    cache.insert(&shared, digest);
+    Arc::make_mut(&mut shared).push(b'!');
+    assert_eq!(cache.get(&shared), None);
+    assert_eq!(cache.get(&other_document), Some(digest), "the untouched copy keeps its digest");
+    assert_eq!(Arc::strong_count(&other_document), 1, "only the other document owns it");
+    // Recency: `get` moves an entry to the back, so the next insert evicts the other one.
+    let newer = Arc::new(vec![1u8; 4]);
+    cache.insert(&newer, [1; 32]);
+    assert_eq!(cache.get(&other_document), Some(digest));
+    let newest = Arc::new(vec![2u8; 4]);
+    cache.insert(&newest, [2; 32]);
+    assert_eq!(cache.get(&other_document), Some(digest), "a recently read source survives eviction");
+    assert_eq!(cache.get(&newer), None, "the least recently used entry was evicted");
+    // A remembered source's buffer is released with its last owner: only a dead Weak remains.
+    let weak = Arc::downgrade(&newest);
+    drop(newest);
+    assert!(weak.upgrade().is_none());
+}
+
+/// `replace` makes `params` the filter's whole settings, so a key the edit left out stops
+/// applying; without it the params merge, as partial edits rely on. Either way it is one undo.
+#[test]
+fn set_params_replace_drops_the_keys_it_leaves_out() {
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    s.execute("image.adjustments.channelMixer", json!({"monochrome": true, "gray": [30, 30, 40, 0]})).unwrap();
+    let params = |s: &Session| active_smart(s).smart_filters[0].params.clone();
+
+    s.execute("layer.smartFilter.setParams", json!({"params": {"monochrome": false}})).unwrap();
+    assert_eq!(params(&s), json!({"monochrome": false, "gray": [30, 30, 40, 0]}), "merged by default");
+
+    let edit = json!({"monochrome": false, "red": [70, 30, 0, 0]});
+    s.execute("layer.smartFilter.setParams", json!({"params": edit, "replace": true})).unwrap();
+    assert_eq!(params(&s), edit, "replaced");
+
+    s.undo();
+    assert_eq!(params(&s), json!({"monochrome": false, "gray": [30, 30, 40, 0]}));
+}
+
+/// `replace` also holds for Shape Blur, whose settings otherwise merge before its shape resolves.
+#[test]
+fn set_params_replace_drops_a_shape_blur_radius_it_leaves_out() {
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    s.execute("filter.blur.shapeBlur", json!({"radius": 5, "shape": "circle"})).unwrap();
+    let params = |s: &Session| active_smart(s).smart_filters[0].params.clone();
+
+    s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}})).unwrap();
+    assert_eq!(params(&s)["radius"], json!(5), "merged by default");
+
+    s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}, "replace": true})).unwrap();
+    assert!(params(&s).get("radius").is_none(), "replaced: {}", params(&s));
 }

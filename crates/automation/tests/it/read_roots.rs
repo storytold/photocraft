@@ -55,7 +55,7 @@ fn layered_bytes(width: u32, background: &str) -> Vec<u8> {
     files::save_bytes(doc, "seed.pcraft", None, &Default::default()).unwrap().0
 }
 
-fn snapshot(headless: &Headless) -> (Value, Value, Vec<u8>) {
+fn snapshot(headless: &mut Headless) -> (Value, Value, Vec<u8>) {
     (headless.session_list(), headless.inspect(None).unwrap(), headless.render_png(None, 32).unwrap())
 }
 
@@ -83,10 +83,10 @@ fn library_first_open_cannot_overwrite_same_named_work_until_explicit_save_as() 
     assert!(headless.session.active().unwrap().path.is_none());
     edit(&mut headless, "Library edit");
 
-    let before = snapshot(&headless);
+    let before = snapshot(&mut headless);
     let error = headless.save(None, None, None, &Default::default()).unwrap_err().to_string();
     assert!(error.contains("pass `path`"), "{error}");
-    assert_eq!(snapshot(&headless), before, "denial must preserve pixels, history, selection, path and dirty revision");
+    assert_eq!(snapshot(&mut headless), before, "denial must preserve pixels, history, selection, path and dirty revision");
     assert_eq!(std::fs::read(roots.library.join("same.pcraft")).unwrap(), library);
     assert_eq!(std::fs::read(roots.work.join("same.pcraft")).unwrap(), work);
 
@@ -158,11 +158,11 @@ fn read_only_roots_can_reopen_exported_work_without_acquiring_write_authority() 
         assert_eq!(reader.inspect(None).unwrap()["layers"][0]["name"], "Exported for review");
         assert!(reader.session.active().unwrap().path.is_none());
         edit(&mut reader, "Unsaved review edit");
-        let before = snapshot(&reader);
+        let before = snapshot(&mut reader);
         assert!(reader.save(None, None, None, &Default::default()).is_err());
         let error = reader.save(None, Some(Path::new("review.pcraft")), None, &Default::default()).unwrap_err().to_string();
         assert!(error.contains("write authority is absent"), "{error}");
-        assert_eq!(snapshot(&reader), before);
+        assert_eq!(snapshot(&mut reader), before);
     }
     assert_eq!(std::fs::read(roots.work.join("review.pcraft")).unwrap(), exported);
     assert_eq!(std::fs::read(roots.library.join("same.pcraft")).unwrap(), library);
@@ -176,10 +176,10 @@ fn a_write_root_does_not_implicitly_grant_read_access_to_saved_work() {
     let mut headless = Headless::with_workspace(workspace);
     headless.open(Path::new("same.pcraft")).unwrap();
     headless.save(None, Some(Path::new("written.pcraft")), None, &Default::default()).unwrap();
-    let before = snapshot(&headless);
+    let before = snapshot(&mut headless);
     for path in [PathBuf::from("written.pcraft"), roots.work.join("written.pcraft")] {
         assert!(headless.open(&path).is_err());
-        assert_eq!(snapshot(&headless), before);
+        assert_eq!(snapshot(&mut headless), before);
     }
     assert!(roots.work.join("written.pcraft").is_file());
 }
@@ -191,13 +191,13 @@ fn flat_export_does_not_arm_implicit_save_for_a_library_document() {
     let mut headless = roots.headless();
     headless.open(Path::new("same.pcraft")).unwrap();
     edit(&mut headless, "Still unsaved");
-    let before = snapshot(&headless);
+    let before = snapshot(&mut headless);
     headless.save(None, Some(Path::new("preview.png")), None, &Default::default()).unwrap();
-    assert_eq!(snapshot(&headless), before, "a flat export must not clear dirty or attach a save path");
+    assert_eq!(snapshot(&mut headless), before, "a flat export must not clear dirty or attach a save path");
     let exported = std::fs::read(roots.work.join("preview.png")).unwrap();
     assert_eq!(photocraft_codecs::decode(&exported).unwrap().dimensions(), (11, 5));
     assert!(headless.save(None, None, None, &Default::default()).is_err());
-    assert_eq!(snapshot(&headless), before);
+    assert_eq!(snapshot(&mut headless), before);
     assert_eq!(std::fs::read(roots.work.join("preview.png")).unwrap(), exported);
     assert_eq!(std::fs::read(roots.library.join("same.pcraft")).unwrap(), library);
     assert_eq!(std::fs::read(roots.work.join("same.pcraft")).unwrap(), work);
@@ -213,7 +213,7 @@ fn library_absolute_paths_and_traversal_cannot_be_used_as_save_targets() {
     headless.open(&roots.library.join("same.pcraft")).unwrap();
     assert!(headless.session.active().unwrap().path.is_none());
     edit(&mut headless, "Must remain unsaved");
-    let before = snapshot(&headless);
+    let before = snapshot(&mut headless);
     for path in [
         roots.library.join("same.pcraft"),
         PathBuf::from("../library/same.pcraft"),
@@ -222,7 +222,7 @@ fn library_absolute_paths_and_traversal_cannot_be_used_as_save_targets() {
     ] {
         let error = headless.save(None, Some(&path), None, &Default::default()).unwrap_err().to_string();
         assert!(error.contains("automation path rejected"), "{path:?}: {error}");
-        assert_eq!(snapshot(&headless), before);
+        assert_eq!(snapshot(&mut headless), before);
     }
     assert_eq!(std::fs::read(roots.library.join("same.pcraft")).unwrap(), library);
     assert_eq!(std::fs::read(roots.work.join("same.pcraft")).unwrap(), work);
@@ -247,10 +247,10 @@ fn a_work_directory_symlink_cannot_write_into_another_read_root() {
     let mut headless = roots.headless();
     headless.open(Path::new("same.pcraft")).unwrap();
     edit(&mut headless, "Cannot follow the write link");
-    let before = snapshot(&headless);
+    let before = snapshot(&mut headless);
     for path in ["library-link/same.pcraft", "library-link/new.pcraft"] {
         assert!(headless.save(None, Some(Path::new(path)), None, &Default::default()).is_err());
-        assert_eq!(snapshot(&headless), before);
+        assert_eq!(snapshot(&mut headless), before);
     }
     assert_eq!(std::fs::read(roots.library.join("same.pcraft")).unwrap(), library);
     assert_eq!(std::fs::read(roots.work.join("same.pcraft")).unwrap(), work);
@@ -268,9 +268,9 @@ fn corrupt_first_match_is_an_error_instead_of_falling_through_to_a_valid_documen
     headless.open(&roots.work.join("same.pcraft")).unwrap();
     assert_source(&headless, 7, [0, 0, 0, 255]);
     edit(&mut headless, "Existing edit");
-    let before = snapshot(&headless);
+    let before = snapshot(&mut headless);
     assert!(headless.open(Path::new("same.pcraft")).is_err());
-    assert_eq!(snapshot(&headless), before);
+    assert_eq!(snapshot(&mut headless), before);
     assert_eq!(std::fs::read(roots.library.join("same.pcraft")).unwrap(), corrupt);
     assert_eq!(std::fs::read(roots.work.join("same.pcraft")).unwrap(), work);
 }
@@ -281,7 +281,7 @@ fn multiple_roots_do_not_grant_ambient_commands_or_nested_action_file_access() {
     let (library, work) = roots.seed();
     let mut headless = roots.headless();
     headless.open(Path::new("same.pcraft")).unwrap();
-    let before = snapshot(&headless);
+    let before = snapshot(&mut headless);
     let target = roots.work.join("ambient.psd");
     let error = headless.command_run("file.saveACopy", json!({"path": target})).unwrap_err().to_string();
     assert!(error.contains("ambient filesystem paths"), "{error}");
@@ -290,7 +290,7 @@ fn multiple_roots_do_not_grant_ambient_commands_or_nested_action_file_access() {
     headless.session.actions.list.push(Action::new("Nested write", vec![("actions.play".into(), json!({"action": "Write work"}))]));
     let played = headless.command_run("actions.play", json!({"action": "Nested write"})).unwrap();
     assert!(played["failed"].to_string().contains("ambient filesystem paths"), "{played}");
-    assert_eq!(snapshot(&headless), before);
+    assert_eq!(snapshot(&mut headless), before);
     assert!(!target.exists());
     assert_eq!(std::fs::read(roots.library.join("same.pcraft")).unwrap(), library);
     assert_eq!(std::fs::read(roots.work.join("same.pcraft")).unwrap(), work);

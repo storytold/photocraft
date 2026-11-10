@@ -160,11 +160,11 @@ fn studio_color_chips_keep_default_and_swap_buttons_below() {
         );
         PhotocraftApp::setup_context(&h.ctx, kind);
         h.run_steps(2);
-        h.get_by_label("Swap colours (X)").click();
+        h.get_by_label("Switch Foreground and Background Colors (X)").click();
         h.run_steps(2);
         assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0], "{kind:?}");
         assert_eq!(h.state().session.tools.background, [1.0, 0.0, 0.0, 1.0], "{kind:?}");
-        h.get_by_label("Default colours (D)").click();
+        h.get_by_label("Default Foreground and Background Colors (D)").click();
         h.run_steps(2);
         assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "{kind:?}");
         assert_eq!(h.state().session.tools.background, [1.0, 1.0, 1.0, 1.0], "{kind:?}");
@@ -219,7 +219,7 @@ fn swap_and_default_colors_recolour_selected_type() {
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(2);
-        h.get_by_label("Swap colours (X)").click();
+        h.get_by_label("Switch Foreground and Background Colors (X)").click();
         h.run_steps(2);
         assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(h.state().session.tools.background, [1.0, 0.0, 0.0, 1.0]);
@@ -228,7 +228,7 @@ fn swap_and_default_colors_recolour_selected_type() {
         assert_eq!((rgb(h.state(), id, 6), rgb(h.state(), id, 10)), (blue, blue), "selected: {selected}");
         // Default Colors: the selection takes black, the new foreground.
         h.state_mut().run("tools.setColors", json!({"foreground": "#00ff00"})).unwrap();
-        h.get_by_label("Default colours (D)").click();
+        h.get_by_label("Default Foreground and Background Colors (D)").click();
         h.run_steps(2);
         assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
         assert_eq!(rgb(h.state(), id, 6), [0, 0, 0, 255], "selected: {selected}");
@@ -407,6 +407,36 @@ fn docked_color_field_keeps_rgb_readout_at_compact_height() {
     h.run_steps(2);
     assert!(h.query_by_label("R").is_some(), "RGB readout stays visible when the group is short");
     assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_some(), "hex field stays visible");
+}
+
+/// #8968: the round cursor sits on the field's edge at the extremes and must not paint past it
+/// (over the hue strip or the chips).
+#[test]
+fn color_field_cursor_stays_inside_the_field() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    // Black is s = 0, v = 0: the bottom-left corner.
+    app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+    let h = field_harness(app);
+    let mut field = None;
+    let mut circles = Vec::new();
+    for clipped in &h.output().shapes {
+        match &clipped.shape {
+            // The saturation/brightness field is the 17 x 17 mesh; the hue strip is a 25 x 25 grid.
+            egui::Shape::Mesh(m) if m.vertices.len() == 17 * 17 => field = Some(m.calc_bounds()),
+            egui::Shape::Circle(c) => circles.push((c.center, c.radius, clipped.clip_rect)),
+            _ => {}
+        }
+    }
+    let field = field.expect("colour field drawn");
+    let expected_center = pos2(field.left(), field.bottom());
+    let rings: Vec<_> =
+        circles.into_iter().filter(|(center, radius, _)| center.distance(expected_center) < 0.01 && (*radius == 5.0 || *radius == 6.5)).collect();
+    assert!(rings.iter().any(|(_, radius, _)| *radius == 5.0), "inner ring sits at the field's bottom-left corner");
+    assert!(rings.iter().any(|(_, radius, _)| *radius == 6.5), "outer ring sits at the field's bottom-left corner");
+    for (center, radius, clip) in rings {
+        let visible = egui::Rect::from_center_size(center, vec2(2.0 * radius, 2.0 * radius)).intersect(clip);
+        assert!(field.contains_rect(visible), "cursor ring {visible:?} leaves the field {field:?}");
+    }
 }
 
 fn field_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {

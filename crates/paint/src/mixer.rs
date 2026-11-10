@@ -61,6 +61,9 @@ pub struct MixerState {
     pub amount: f32,
     /// Colour picked up from the canvas (straight RGBA), None = clean.
     pub pickup: Option<[f32; 4]>,
+    /// The foreground colour in effect when the reservoir was loaded from the canvas
+    /// (`load_sampled`), None when it holds the foreground itself.
+    pub sampled_over: Option<[f32; 4]>,
     /// A bounded 64 x 64 spatial load in tip-local coordinates. Empty cells carry no paint.
     pub spatial: Option<Vec<[f32; 4]>>,
     /// The color recorded by the last stroke (its color) or the last Load Brush or Clean Brush
@@ -74,6 +77,15 @@ impl MixerState {
         self.spatial = None;
         self.reservoir = Some(color);
         self.amount = 1.0;
+        self.sampled_over = None;
+    }
+
+    /// Load the reservoir with a colour sampled from the canvas (⌥-click) while `foreground` is
+    /// the foreground colour; `holds_sample` stays true until the foreground changes.
+    pub fn load_sampled(&mut self, color: [f32; 4], foreground: [f32; 4]) {
+        self.load(color);
+        self.sampled_over = Some(foreground);
+        self.color = Some(foreground);
     }
     /// Clean Brush: empty the reservoir and the pickup well.
     pub fn clean(&mut self) {
@@ -81,6 +93,12 @@ impl MixerState {
         self.reservoir = None;
         self.amount = 0.0;
         self.pickup = None;
+        self.sampled_over = None;
+    }
+
+    /// Whether the reservoir holds a canvas sample taken while `foreground` was the foreground.
+    pub fn holds_sample(&self, foreground: [f32; 4]) -> bool {
+        self.reservoir.is_some() && self.sampled_over == Some(foreground)
     }
     /// Before a stroke in `color`: choosing a color other than [`MixerState::color`] loads the
     /// reservoir with it.
@@ -95,14 +113,16 @@ impl MixerState {
     pub fn end_stroke(&mut self, color: [f32; 4], clean: bool, load: bool) {
         // Automatic Load replenishes a sampled tip as well as a solid-color load.
         // Move its bounded buffer through Clean instead of allocating a copy.
+        let sampled = self.holds_sample(color).then_some(color);
         let spatial = if load { self.spatial.take() } else { None };
-        let paint = if spatial.is_some() { self.reservoir.unwrap_or(color) } else { color };
+        let paint = if spatial.is_some() || sampled.is_some() { self.reservoir.unwrap_or(color) } else { color };
         if clean {
             self.clean();
         }
         if load {
             self.load(paint);
             self.spatial = spatial;
+            self.sampled_over = sampled;
         }
         self.color = Some(color);
     }
@@ -170,12 +190,14 @@ pub fn apply_mixer_dab(
     state: &mut MixerState,
     lock_transparency: bool,
 ) {
+    // Only the dab's own rectangle is ever read from the sample, not the whole stroke rectangle.
     let sample = sample.filter(|_| m.samples_canvas(&fp.dab)).map(|surface| {
-        let source = crate::retouch::Region::read(surface, work.rect);
+        let rect = fp.rect.intersect(&work.rect);
+        let source = crate::retouch::Region::read(surface, rect);
         if surface.format().mode == fmt.mode && surface.format().alpha == fmt.alpha {
             source
         } else {
-            let mut native = crate::retouch::Region::new(work.rect, fmt.channels());
+            let mut native = crate::retouch::Region::new(rect, fmt.channels());
             for (src, dst) in source.data.chunks_exact(source.ch).zip(native.data.chunks_exact_mut(native.ch)) {
                 from_rgba_into(&fmt, to_rgba(&surface.format(), src), dst);
             }
@@ -185,9 +207,10 @@ pub fn apply_mixer_dab(
     apply_mixer_dab_region(work, fp, fmt, sample.as_ref(), m, state, lock_transparency);
 }
 
-/// Contiguous native-channel sample variant. `sample` must have the same rectangle and
-/// channel layout as `work`. The live compositor supplies it directly, avoiding a tiled
-/// temporary surface and a heap allocation for every sampled/deposited pixel.
+/// Contiguous native-channel sample variant. `sample` must have the channel layout of `work` and
+/// cover at least `fp.rect` clipped to `work.rect` (the only pixels read). The live compositor
+/// supplies it directly, avoiding a tiled temporary surface and a heap allocation for every
+/// sampled/deposited pixel.
 pub fn apply_mixer_dab_region(
     work: &mut crate::retouch::Region,
     fp: &crate::retouch::Footprint,

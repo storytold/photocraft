@@ -5,9 +5,7 @@ signed installers for macOS, Windows, Linux and the web, plus a FreeBSD tarball,
 or updates a **draft** GitHub Release named `PhotoCraft v<version>`. Nobody sees a draft until a
 maintainer publishes it.
 
-This is PhotoCraft's implementation of the shared
-[release playbook](release-playbook.md). User-facing names say **PhotoCraft**. Files, binaries
-and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
+User-facing names say **PhotoCraft**. Files, binaries and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
 
 ## In-app update checks
 
@@ -65,8 +63,8 @@ in the dialog.
 | Platform | Artifacts | Built on |
 |---|---|---|
 | macOS 11+ (universal: Apple silicon + Intel) | `photocraft-<v>-macos-universal.dmg`, `photocraft-cli-<v>-macos-universal.zip` | `macos-15` |
-| Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip` | `windows-latest` |
-| Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip` | `windows-latest` |
+| Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip`, `photocraft-<v>-windows-x64-symbols.zip` | `windows-latest` |
+| Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip`, `photocraft-<v>-windows-x86-symbols.zip` | `windows-latest` |
 | Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
 | Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
 | Linux riscv64 (glibc 2.39+) | `photocraft-<v>-linux-riscv64.tar.gz` | cross-compiled on `ubuntu-24.04` (ports.ubuntu.com riscv64 libs); CLI smoke-tested under QEMU |
@@ -84,7 +82,7 @@ at the `craft-fonts-ref` commit in `.github/workflows/release.yml` and builds wi
 `docs/development.md` › Fonts) and fail rather than ship without them. The packages carry each font's licence as
 `OFL-<family>.txt` (`copy_font_licences` in `packaging/env.sh`; the portable zip on Windows;
 `Contents/Resources/Licenses` in the macOS app). Bump the pin deliberately, together with the one
-in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/development.md` › Fonts.
+in `ci.yml`. Build option: `docs/development.md` › Fonts.
 
 ### macOS
 
@@ -105,7 +103,11 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   Its Finder window (background, icon size and positions) comes from
   [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `PhotoCraft`
   without the version, which the window's background needs; the DMG file name keeps the version.
-- **CLI:** the universal `photocraft-cli` is signed with the same Developer ID, the hardened
+- **CLI:** `PhotoCraft.app/Contents/MacOS/photocraft-cli` is bundled and signed so generated
+  droplet scripts can run without installing the separate CLI download. The scripts prefer
+  `PHOTOCRAFT_CLI` when set, then the bundled CLI in `/Applications` or `~/Applications`, then
+  `photocraft-cli` on `PATH`. Finder drag-and-drop onto droplets still requires an app wrapper.
+  The universal standalone `photocraft-cli` is signed with the same Developer ID, the hardened
   runtime and a secure timestamp (identifier `ai.storyteller.photocraft-cli`), zipped, and the zip
   is sent to `notarytool`. Only `.app`, `.dmg` and `.pkg` can hold a stapled ticket, not a bare
   Mach-O, so Gatekeeper looks the CLI's ticket up online the first time a downloaded
@@ -187,6 +189,11 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   of `%APPDATA%\Photocraft`. If that folder isn't writable the app warns and uses `%APPDATA%`.
   The MSI has no marker. The logic is in `apps/photocraft/src/app_dirs.rs` and works the same
   on macOS and Linux.
+- **Symbols zip:** `photocraft.pdb` and `photocraft_cli.pdb` from the same release build, plus
+  `packaging/windows/symbols.txt` (how to load them in a profiler). An optional download, so the
+  MSI and portable zip stay their size; it lets anyone profile the released exes with function
+  names (#688). Only that build's PDBs match its exes, so they can't be rebuilt later; the
+  release profile has no line tables, so they carry function names, not source lines.
 - **Signing:** `packaging/windows/sign.ps1` signs both `.exe` files and then the `.msi` with
   `signtool`, using SHA-256 and an RFC 3161 timestamp. It uses whichever material is present:
   1. a `.pfx` file (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`), timestamped by
@@ -239,6 +246,12 @@ Why these formats:
   ~/.local/share/applications/ai.storyteller.photocraft.desktop` and `find
   ~/.local/share/icons/hicolor -name 'ai.storyteller.photocraft*' -delete`. The script is
   covered by `packaging/linux/apprun-test.sh` in the packaging-lint workflow.
+  A leading `--cli` launches the bundled `usr/bin/photocraft-cli`, without desktop
+  integration: `./photocraft-<version>-linux-x86_64.AppImage --cli mcp` serves MCP on
+  stdio. A symlink named `photocraft-cli` also selects that binary via the runtime's
+  `ARGV0`. Arguments and process streams pass through unchanged; the entry point
+  uses `exec` so signals and exit status reach the caller directly. CLI routing is
+  covered by `packaging/linux/apprun-cli-test.sh` in the same workflow.
 - **.deb** covers Debian, Ubuntu, Mint, Pop!_OS and elementary. **.rpm** covers Fedora, RHEL
   and its clones, and openSUSE. Both integrate with the menu, MIME and icon caches (the
   `postinst.sh` hook) and uninstall cleanly. Both are built by
