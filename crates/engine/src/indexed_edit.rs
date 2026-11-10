@@ -185,8 +185,8 @@ fn same_surface_storage(a: &Surface, b: &Surface) -> bool {
         && a.tiles().zip(b.tiles()).all(|((ac, at), (bc, bt))| ac == bc && Arc::ptr_eq(at, bt))
 }
 
-fn old_pixel(tile: Option<&Arc<Tile>>, default: PixelBytes, base: usize, bpp: usize) -> PixelBytes {
-    tile.and_then(|tile| tile.bytes().get(base..base + bpp).map(PixelBytes::from_slice)).unwrap_or(default)
+fn old_pixel(bytes: Option<&[u8]>, default: PixelBytes, base: usize, bpp: usize) -> PixelBytes {
+    bytes.and_then(|bytes| bytes.get(base..base + bpp).map(PixelBytes::from_slice)).unwrap_or(default)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -359,13 +359,15 @@ fn process_tile(
     let mut max_x = i32::MIN;
     let mut max_y = i32::MIN;
     let after_bytes = after.bytes();
+    // Tile::bytes now acquires a storage guard. Hold it once per tile, not once per pixel.
+    let original_bytes = original.map(|tile| tile.bytes());
     for y in region.y0..region.y1 {
         let ly = y.saturating_sub(tile_rect.y0) as usize;
         for x in region.x0..region.x1 {
             let lx = x.saturating_sub(tile_rect.x0) as usize;
             let base = (ly * TILE_SIZE as usize + lx) * bpp;
             let pixel = PixelBytes::from_slice(&after_bytes[base..base + bpp]);
-            if pixel == old_pixel(original, original_default, base, bpp) {
+            if pixel == old_pixel(original_bytes.as_deref(), original_default, base, bpp) {
                 continue;
             }
             let target = changed_target(&after_bytes, context.format, context.table, &mut nearest, base)?;
@@ -391,7 +393,7 @@ fn process_tile(
             let lx = x.saturating_sub(tile_rect.x0) as usize;
             let base = (ly * TILE_SIZE as usize + lx) * bpp;
             let pixel = PixelBytes::from_slice(&after_bytes[base..base + bpp]);
-            if pixel == old_pixel(original, original_default, base, bpp) {
+            if pixel == old_pixel(original_bytes.as_deref(), original_default, base, bpp) {
                 continue;
             }
             let target = changed_target(&after_bytes, context.format, context.table, &mut nearest, base)?;
