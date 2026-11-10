@@ -386,3 +386,7 @@ mod tests {
         assert!(reject_huge_stroke("t", &stroke(&[(0.0, 0.0), (9000.0, 9000.0)], 100.0)).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "pattern_stamp_indexed_tests.rs"]
+mod pattern_stamp_indexed_tests;
