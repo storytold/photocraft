@@ -105,10 +105,13 @@ fn retouch_tools_have_a_mode_dropdown() {
 }
 
 /// The Pattern Stamp's Mode dropdown has Behind after Dissolve and no Clear (#12879): the wheel
-/// steps Normal, Dissolve, Behind, Darken, and stepping on leaves Behind.
+/// steps Normal, Dissolve, Behind, Darken, and stepping on leaves Behind. On a pixel layer: on the
+/// Background Behind is greyed and the wheel passes it.
 #[test]
 fn the_pattern_stamp_mode_dropdown_has_behind() {
     let mut h = harness(Tool::PatternStamp);
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.run_steps(4);
     let at = mode_dropdown(&h).center();
     wheel(&mut h, at, -1.0);
     assert_eq!(brush_mode(&h), BlendMode::Dissolve);

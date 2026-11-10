@@ -73,6 +73,21 @@ pub(crate) fn pattern_stamp_choices() -> Vec<((Option<BlendMode>, bool), &'stati
     choices().into_iter().filter(|c| c.0 != (None, false)).collect()
 }
 
+/// What a pick in the Pattern Stamp's Mode dropdown sets, from `from` to `to` (both `(mode,
+/// behind)` of [`pattern_stamp_choices`]). With Behind greyed (`behind_enabled` false, the
+/// Background), a wheel notch or a key that lands on Behind steps on to the next mode the same
+/// way, so the greyed entry is never picked.
+pub(crate) fn pattern_stamp_pick(from: (Option<BlendMode>, bool), to: (Option<BlendMode>, bool), behind_enabled: bool) -> (Option<BlendMode>, bool) {
+    if behind_enabled || !to.1 {
+        return to;
+    }
+    let list = pattern_stamp_choices();
+    let at = |m: (Option<BlendMode>, bool)| list.iter().position(|c| c.0 == m);
+    let (Some(a), Some(b)) = (at(from), at(to)) else { return from };
+    let next = if a > b { b.checked_sub(1) } else { b.checked_add(1) };
+    next.and_then(|i| list.get(i)).map_or(from, |c| c.0)
+}
+
 /// The blend modes in their menu groups (a separator before Darken, Lighten, Overlay, Difference
 /// and Hue), with Behind and/or Clear after Dissolve.
 fn blend_items(behind: bool, clear: bool) -> Vec<Item> {

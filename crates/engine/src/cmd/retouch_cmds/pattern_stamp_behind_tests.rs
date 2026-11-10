@@ -1,7 +1,8 @@
 //! #12879: the Pattern Stamp's Behind mode (`"mode": "behind"`). The pattern goes beneath the
 //! layer's pixels: it shows where the layer is transparent and leaves existing pixels alone,
 //! Aligned on and off, as the Brush's Behind does. The live stroke shows what the commit paints,
-//! and every other mode paints what it painted before.
+//! and every other mode paints what it painted before. Behind with Impressionist was not
+//! measured, so an Impressionist stroke paints what it paints in Normal.
 
 use photocraft_paint::StrokePoint;
 use serde_json::json;
@@ -153,16 +154,10 @@ fn behind_paints_nothing_without_transparency_to_paint_into() {
     })
     .unwrap();
     let before = layer(&s);
-    for impressionist in [false, true] {
-        stamp(&mut s, json!({"mode": "behind", "impressionist": impressionist}));
-        assert_eq!(layer(&s), before, "locked transparency, impressionist {impressionist}");
-        let live = if impressionist {
-            live_impressionist(&s, &stroke(json!({"mode": "behind", "impressionist": true}))).unwrap().doc.clone()
-        } else {
-            super::super::LiveRetouch::begin(&s, "paint.patternStamp", &stroke(json!({"mode": "behind"}))).unwrap().doc.clone()
-        };
-        assert_eq!(pixels(&live, &s), before, "the live stroke too, impressionist {impressionist}");
-    }
+    stamp(&mut s, json!({"mode": "behind"}));
+    assert_eq!(layer(&s), before, "locked transparency");
+    let live = super::super::LiveRetouch::begin(&s, "paint.patternStamp", &stroke(json!({"mode": "behind"}))).unwrap().doc.clone();
+    assert_eq!(pixels(&live, &s), before, "the live stroke too");
     // The Background has no transparency.
     let mut s = Session::new();
     s.execute("file.new", json!({"width": W, "height": H})).unwrap();
@@ -171,54 +166,63 @@ fn behind_paints_nothing_without_transparency_to_paint_into() {
     assert_eq!(layer(&s), before, "the Background");
 }
 
-/// Impressionist dabs go beneath the pixels too.
+/// Behind with Impressionist was not measured: the stroke gives the pixels it gives in Normal,
+/// committed and live, on a half-filled layer and with transparency locked.
 #[test]
-fn behind_with_impressionist_leaves_existing_pixels_alone() {
+fn impressionist_paints_as_in_normal_when_behind_is_picked() {
+    let all = [[12.0, 24.0], [30.0, 20.0], [40.0, 28.0], [52.0, 24.0]];
+    let opts = |v: &[[f64; 2]], mode: &str| json!({"points": v, "size": 14, "hardness": 40, "opacity": 70, "pattern": "Bricks", "impressionist": true, "mode": mode, "seed": 11});
     for depth in [8, 16] {
-        let mut s = session(depth, half);
-        let before = layer(&s);
-        stamp(&mut s, json!({"mode": "behind", "impressionist": true, "pattern": "Bricks"}));
-        let got = layer(&s);
-        let mut painted = 0;
-        for y in 0..H {
-            for x in 0..W {
-                if x < W / 2 {
-                    assert_eq!(at(&got, x, y), at(&before, x, y), "{depth}-bit ({x}, {y})");
-                } else {
-                    painted += usize::from(at(&got, x, y)[3] > 0.99);
+        for lock in [false, true] {
+            let run = |mode: &str| {
+                let mut s = session(depth, half);
+                if lock {
+                    s.edit("lock", |doc, active| {
+                        doc.layer_mut(active.unwrap()).unwrap().locks.transparency = true;
+                        Ok(())
+                    })
+                    .unwrap();
                 }
-            }
+                let before = layer(&s);
+                let mut live = live_impressionist(&s, &opts(&all[..1], mode)).unwrap();
+                live.push(&all[1..].iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>()).unwrap();
+                let shown = pixels(&live.doc, &s);
+                s.execute("paint.patternStamp", opts(&all, mode)).unwrap();
+                (before, shown, layer(&s))
+            };
+            let (before, live_behind, behind) = run("behind");
+            let (_, live_normal, normal) = run("normal");
+            let tag = format!("{depth}-bit lock {lock}");
+            assert_eq!(behind, normal, "{tag}: the committed stroke");
+            assert_eq!(live_behind, live_normal, "{tag}: the live stroke");
+            assert_eq!(live_behind, behind, "{tag}: live is the commit");
+            // As in Normal, the dabs go over the filled half.
+            assert!((0..W / 2).any(|x| at(&behind, x, 24) != at(&before, x, 24)), "{tag}: painted over the pixels");
         }
-        assert!(painted > 200, "{depth}-bit: {painted} px");
     }
 }
 
-/// The live stroke, fed point by point, shows what the commit paints.
+/// The live aligned stroke, fed point by point, shows what the commit paints.
 #[test]
 fn the_live_behind_stroke_matches_the_commit() {
     let all = [[12.0, 24.0], [30.0, 20.0], [40.0, 28.0], [52.0, 24.0]];
     let pts = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
     for depth in [8, 16] {
-        for (impressionist, aligned) in [(false, true), (false, false), (true, true)] {
+        for aligned in [true, false] {
             let mut s = session(depth, |x, y| if x < W / 2 { RED } else { [0.2, 0.4, 0.9, 0.25 * ((x + y) % 4) as f32] });
             let before = layer(&s);
             let opts = |v: &[[f64; 2]]| {
                 json!({"points": v, "size": 14, "hardness": 40, "opacity": 70, "pattern": "Checkerboard", "scale": 150, "angle": 20,
-                       "aligned": aligned, "impressionist": impressionist, "mode": "behind", "seed": 11})
+                       "aligned": aligned, "mode": "behind", "seed": 11})
             };
-            let shown = if impressionist {
-                let mut live = live_impressionist(&s, &opts(&all[..1])).unwrap();
-                live.push(&pts(&all[1..3])).unwrap();
-                live.push(&pts(&all[3..])).unwrap();
-                live.doc.clone()
-            } else {
+            let shown = {
                 let mut live = super::super::LiveRetouch::begin(&s, "paint.patternStamp", &opts(&all[..1])).unwrap();
                 live.push(&pts(&all[1..3])).unwrap();
                 live.push(&pts(&all[3..])).unwrap();
                 live.doc.clone()
             };
             s.execute("paint.patternStamp", opts(&all)).unwrap();
-            let tag = format!("{depth}-bit impressionist {impressionist} aligned {aligned}");
+            let tag = format!("{depth}-bit aligned {aligned}");
             let committed = layer(&s);
             assert_eq!(pixels(&shown, &s), committed, "{tag}");
             assert_ne!(committed, before, "{tag}: the stroke painted");

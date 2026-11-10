@@ -7,7 +7,7 @@ use egui::{Context, Event, Key, Modifiers, RawInput};
 use photocraft_doc::BlendMode;
 use serde_json::{Value, json};
 
-use super::{Item, current, enabled, engine_call, items, labels, pattern_stamp_choices};
+use super::{Item, current, enabled, engine_call, items, labels, pattern_stamp_choices, pattern_stamp_pick};
 use crate::PhotocraftApp;
 use crate::control::{ControlRequest, Outcome, handle};
 use crate::state::Tool;
@@ -232,4 +232,107 @@ fn a_behind_stroke_paints_only_the_transparent_half() {
         stamp(&mut app);
         assert_ne!(pixel(&app, 16, 32), red, "aligned {aligned}: Normal paints over");
     }
+}
+
+/// The whole app drawn, with the Pattern Stamp on a new document; with `layer`, on a transparent
+/// layer above the Background.
+fn harness(layer: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        if layer {
+            app.run("layer.new.layer", json!({})).unwrap();
+        }
+        app.ui.tool = Tool::PatternStamp;
+        app
+    });
+    h.run_steps(8);
+    h
+}
+
+/// The options bar's Mode dropdown: the highest one showing `Normal` (the Layers panel's is lower).
+fn mode_dropdown(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Rect {
+    use egui_kittest::kittest::Queryable;
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .filter(|n| n.value().as_deref() == Some("Normal"))
+        .map(|n| n.rect())
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+        .unwrap()
+}
+
+/// Opens the options bar's Mode dropdown with a click.
+fn open_dropdown(h: &mut egui_kittest::Harness<'_, PhotocraftApp>) {
+    use egui_kittest::kittest::Queryable;
+    let top = mode_dropdown(h).top();
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Normal") && n.rect().top() == top).unwrap().click();
+    h.run_steps(4);
+}
+
+/// One wheel notch down (the next mode) over the point `at`.
+fn wheel_down(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, at: egui::Pos2) {
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, -1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+}
+
+/// On the Background the options bar's dropdown greys Behind: the row is disabled, a click on it
+/// picks nothing, and the wheel steps from Dissolve straight to Darken.
+#[test]
+fn the_options_bar_dropdown_greys_behind_on_the_background() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = harness(false);
+    let at = mode_dropdown(&h).center();
+    open_dropdown(&mut h);
+    assert!(h.get_by_label("Behind").accesskit_node().is_disabled(), "Behind is greyed");
+    assert!(!h.get_by_label("Dissolve").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Darken").accesskit_node().is_disabled());
+    let n = h.state().session.journal.len();
+    h.get_by_label("Behind").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.journal.len(), n, "a greyed entry picks nothing");
+    assert!(!h.state().session.tools.brush.behind);
+    assert_eq!(h.state().session.tools.brush.mode, BlendMode::Normal);
+    // The wheel passes it.
+    let mut h = harness(false);
+    wheel_down(&mut h, at);
+    assert_eq!(h.state().session.tools.brush.mode, BlendMode::Dissolve);
+    wheel_down(&mut h, at);
+    assert!(!h.state().session.tools.brush.behind, "the wheel steps past the greyed Behind");
+    assert_eq!(h.state().session.tools.brush.mode, BlendMode::Darken);
+}
+
+/// On a pixel layer the dropdown's Behind is enabled and a click picks it.
+#[test]
+fn the_options_bar_dropdown_offers_behind_on_a_pixel_layer() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = harness(true);
+    open_dropdown(&mut h);
+    assert!(!h.get_by_label("Behind").accesskit_node().is_disabled(), "Behind is enabled");
+    h.get_by_label("Behind").click();
+    h.run_steps(4);
+    assert!(h.state().session.tools.brush.behind, "picked");
+    assert_eq!(current(h.state(), Tool::PatternStamp), Some(Item::Behind));
+}
+
+/// What a pick stores: Behind when it is enabled; with it greyed, the mode one step further the
+/// same way, whichever way the wheel or a key came.
+#[test]
+fn a_pick_that_lands_on_a_greyed_behind_steps_on() {
+    let (normal, dissolve, behind, darken) =
+        ((Some(BlendMode::Normal), false), (Some(BlendMode::Dissolve), false), (None, true), (Some(BlendMode::Darken), false));
+    assert_eq!(pattern_stamp_pick(dissolve, behind, true), behind);
+    assert_eq!(pattern_stamp_pick(dissolve, behind, false), darken, "down");
+    assert_eq!(pattern_stamp_pick(normal, behind, false), darken, "two notches down");
+    assert_eq!(pattern_stamp_pick(darken, behind, false), dissolve, "up");
+    assert_eq!(pattern_stamp_pick(normal, darken, false), darken, "other modes are picked as they are");
+    // Behind chosen earlier on a pixel layer stays until another mode is picked.
+    assert_eq!(pattern_stamp_pick(behind, dissolve, false), dissolve);
 }

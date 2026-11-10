@@ -11,13 +11,13 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current
 /// [`dropdown`] whose option labels are shown exactly as given: names the user typed (a channel
 /// or layer name) must not be translated, unlike the built-in labels [`dropdown`] translates (#5335).
 pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false, &|_| false);
+    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false, &|_| false, &|_| true);
     !chosen.is_empty()
 }
 
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
-    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false);
+    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false, &|_| true);
     (!chosen.is_empty(), hovered)
 }
 
@@ -35,7 +35,7 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
     options: &[(T, &str)],
     width: f32,
 ) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, name, current, options, width, true, true, &|_| false)
+    dropdown_with(ui, id, name, current, options, width, true, true, &|_| false, &|_| true)
 }
 
 /// [`dropdown_wheel_hovered`] whose open list draws a line above each option (but the first) that
@@ -50,7 +50,24 @@ pub fn dropdown_wheel_grouped<T: PartialEq + Clone>(
     width: f32,
     starts_group: impl Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group)
+    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group, &|_| true)
+}
+
+/// [`dropdown_wheel_grouped`] whose open list greys the options `enabled` refuses: drawn disabled,
+/// not picked by the pointer and not previewed. The wheel and the keys still land on them; the
+/// caller steps past (#12879, the Pattern Stamp's Behind on the Background).
+#[allow(clippy::too_many_arguments)]
+pub fn dropdown_wheel_grouped_enabled<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    starts_group: impl Fn(&T) -> bool,
+    enabled: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group, &enabled)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -64,6 +81,7 @@ fn dropdown_with<T: PartialEq + Clone>(
     wheel: bool,
     translate: bool,
     starts_group: &dyn Fn(&T) -> bool,
+    enabled: &dyn Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
     let shown = |l: &str| if translate { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
@@ -105,9 +123,18 @@ fn dropdown_with<T: PartialEq + Clone>(
             if i > 0 && starts_group(v) {
                 list_separator(ui);
             }
-            let item = ui.selectable_label(v == current, text.as_str());
+            let on = enabled(v);
+            let item = if on {
+                ui.selectable_label(v == current, text.as_str())
+            } else {
+                ui.add_enabled(false, egui::Button::selectable(v == current, text.as_str()))
+            };
             if reveal && v == current {
                 item.scroll_to_me(None);
+            }
+            // A greyed option is neither previewed nor picked.
+            if !on {
+                continue;
             }
             if item.hovered() {
                 hovered = Some(v.clone());
