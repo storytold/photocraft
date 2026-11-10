@@ -3310,6 +3310,27 @@ fn fill_view_covers_the_canvas_and_centres_the_document() {
     assert!((view.zoom - 0.66).abs() < 1e-5, "{}", view.zoom);
 }
 
+/// A document opened while the canvas is still flat (a page or host view laying out) waits to
+/// fit until the canvas has room: fitting 3000 px into 30 pt put it at the lowest zoom, which
+/// stayed when the canvas grew, so the image looked missing.
+#[test]
+fn a_pending_fit_waits_for_a_canvas_with_room() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 3000, "height": 3000})).unwrap();
+    let doc = app.session.active().unwrap().doc.clone();
+    let ctx = egui::Context::default();
+    let mut view = View { fit_pending: true, ..View::default() };
+    for flat in [Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 30.0)), Rect::from_min_size(Pos2::ZERO, vec2(60.0, 900.0))] {
+        sync_view_to_document(&app, &ctx, &mut view, &doc, flat, 1.0);
+        assert!(view.fit_pending, "{flat:?}: no fit yet");
+        assert_eq!(view.zoom, View::default().zoom, "{flat:?}");
+    }
+    sync_view_to_document(&app, &ctx, &mut view, &doc, Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 900.0)), 1.0);
+    assert!(!view.fit_pending);
+    // 900 - 40 points over 3000 px: the whole image shows.
+    assert!((view.zoom - 860.0 / 3000.0).abs() < 1e-4, "{}", view.zoom);
+}
+
 #[test]
 fn a_hundred_percent_is_one_physical_pixel_per_document_pixel() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

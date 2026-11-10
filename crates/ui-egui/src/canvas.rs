@@ -2173,6 +2173,12 @@ fn layer_picker_eyedropper(app: &mut PhotocraftApp, ui: &egui::Ui, ctx: &egui::C
     }
 }
 
+/// The smallest canvas, in points each way, that a pending fit or fill waits for. A canvas only a
+/// few dozen points tall is a page or a host's view still laying out: a fit taken then puts a
+/// large image at the lowest zoom (3000 px into 30 pt is 0.1 %), the zoom stays when the canvas
+/// grows, and the opened image looks missing.
+const MIN_FIT_SIDE: f32 = 100.0;
+
 /// Per-frame reconciliation of the camera with its document: resize re-centre, pending fit/fill,
 /// and the overscroll clamp. Returns the pixel aspect the view is drawn with.
 fn sync_view_to_document(app: &PhotocraftApp, ctx: &egui::Context, view: &mut View, doc: &Document, rect: Rect, ppp: f32) -> f32 {
@@ -2186,10 +2192,11 @@ fn sync_view_to_document(app: &PhotocraftApp, ctx: &egui::Context, view: &mut Vi
     }
     // View › Pixel Aspect Ratio Correction: document pixels are shown this much wider.
     let aspect = app.ui.view.display_aspect();
-    if view.fit_pending && rect.width() > 50.0 {
+    let roomy = rect.width() >= MIN_FIT_SIDE && rect.height() >= MIN_FIT_SIDE;
+    if view.fit_pending && roomy {
         fit_view(view, doc, rect.size(), ppp, aspect);
     }
-    if view.fill_pending && rect.width() > 50.0 {
+    if view.fill_pending && roomy {
         fill_view(view, doc, rect.size(), ppp, aspect);
     }
     // Preferences › Tools › Overscroll off: clamp before anything is drawn (scrollbars.rs).
