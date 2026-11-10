@@ -30,7 +30,7 @@
 # Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
 # Command-id override: under Edit > Purge a bare "Undo" reads as an action, not the history.
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -55,7 +55,7 @@
 # Print dialog (#2697)
 # Counted status messages and labels (#3454)
 # View › Guides › New Guide… › Color
-# Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs) translated from
+# Dynamic labels (filter and adjustment parameters, RAW Develop, panels, dialogs) translated from
 # the English source, following the pattern of the other complete catalogs.
 # Path, channel, layer style, status and System Info labels
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
@@ -266,7 +266,7 @@
 	Plug-ins…	Plugin-uri…
 	Type…	Text…
 	Enhanced Controls…	Controale îmbunătățite…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Valori implicite RAW…
 	Raw Defaults…	Valori implicite Raw…
 	Integrations…	Integrări…
 	AI Integrations…	Integrări AI…
@@ -596,7 +596,7 @@
 	Last Filter	Ultimul filtru
 	Filter Gallery…	Galerie de filtre…
 	Adaptive Wide Angle…	Unghi larg adaptabil…
-	Camera Raw Filter…	Filtru Camera Raw…
+	RAW Develop Filter…	Filtru Developare RAW…
 	Liquify…	Lichefiere…
 	Vanishing Point…	Punct de fugă…
 	Blur	Neclaritate
@@ -944,8 +944,8 @@
 	Load Settings…	Încărcare setări…
 	Save these settings as a Camera Raw .xmp file	Salvare acestor setări ca fișier .xmp Camera Raw
 	Load settings from a Camera Raw .xmp file	Încărcare setări dintr-un fișier .xmp Camera Raw
-	Loaded Camera Raw settings from {file}	Setări Camera Raw încărcate din {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Setări Camera Raw încărcate din {file} ({n} nesuportate)
+	Loaded RAW Develop settings from {file}	Setări Developare RAW încărcate din {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Setări Developare RAW încărcate din {file} ({n} nesuportate)
 	Begin recording	Pornire înregistrare
 	Bend:	Curbură:
 	Bicubic	Bicubică
@@ -973,7 +973,7 @@
 	Brush Reconstruct Options	Opțiuni reconstrucție pensulă
 	Brush Tool Options	Opțiuni instrument Pensulă
 	Cache Level:	Nivel cache:
-	Camera Raw isn't open	Camera Raw nu este deschis
+	RAW Develop isn't open	Developare RAW nu este deschis
 	Cancel	Anulare
 	Cancel (Esc)	Anulare (Esc)
 	Manage submitted jobs in the system print queue	Gestionarea lucrărilor trimise în coada de imprimare a sistemului
@@ -1944,7 +1944,7 @@
 	Brush preview color	Culoare previzualizare pensulă
 	Cache levels	Niveluri cache
 	Cache tile size	Dimensiune mozaic cache
-	Camera Raw Defaults	Valori implicite Camera Raw
+	RAW Defaults	Valori implicite RAW
 	Canvas border	Margine pânză
 	Show canvas dots	Afișare puncte pânză
 	Clip thumbnails to layer bounds	Decupare miniaturi la limitele stratului
@@ -2026,7 +2026,6 @@
 	Never	Niciodată
 	Normal tip	Vârf normal
 	Open as smart object	Deschidere ca obiect inteligent
-	Open in camera raw	Deschidere în Camera Raw
 	Open documents as tabs	Deschidere documente ca file
 	Overscroll	Suprascrolare
 	Performance	Performanță
@@ -2387,8 +2386,8 @@
 	Tone Histogram	Histogramă tonală
 	Show Selected Region	Afișare regiune selectată
 cameraRaw	Light	Lumină
-	Camera Raw Filter ({layer})	Filtru Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Filtru Developare RAW ({layer})
+	RAW Develop ({name})	Developare RAW ({name})
 cameraRaw	Lights	Luminile
 cameraRaw	Darks	Umbrele
 cameraRaw	Red	Roșii
@@ -2985,8 +2984,6 @@ curves	Smooth	Netezire
 	Roman Hanging Punctuation	Punctuație latină suspendată
 	Avoid Widows/Orphans	Evitare linii văduve/orfane
 	Compose	Compunere
-	Adobe Single-line Composer	Compozitor Adobe cu o linie
-	Adobe Every-line Composer	Compozitor Adobe multilinie
 	Word Spacing	Spațiu între cuvinte
 	Letter Spacing	Spațiu între caractere
 	Glyph Scaling	Scalare glife
@@ -3182,7 +3179,6 @@ curves	Smooth	Netezire
 	Intersect with	Intersectare cu
 	Capture Comp	Capturare compoziție
 	No Layer Comps	Nicio compoziție de strat
-	Adobe PDF Presets…	Presetări Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Previzualizări de tehnologie…
 	Add a mask  (from the selection; ⌥ inverts)	Adăugare mască (din selecție; ⌥ inversează)
@@ -3799,8 +3795,8 @@ layerLabel	No Color	Fără culoare
 	Border	Margine
 	Box Blur	Neclaritate cutie
 	Calculations	Calcule
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Filtru Camera Raw
+	RAW Develop	Developare RAW
+	RAW Develop Filter	Filtru Developare RAW
 	Channel1	Canal 1
 	Channel2	Canal 2
 	Channel3	Canal 3
@@ -4614,3 +4610,8 @@ navigator	Zoom	Zoom
 @plural	{n} action file loaded|{n} action files loaded	{n} fișier de acțiuni încărcat|{n} fișiere de acțiuni încărcate|{n} de fișiere de acțiuni încărcate
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} fișier nu a putut fi încărcat: {errors}|{n} fișiere nu au putut fi încărcate: {errors}|{n} de fișiere nu au putut fi încărcate: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} ieșire Resurse imagine a eșuat|{what}: {n} ieșiri Resurse imagine au eșuat|{what}: {n} de ieșiri Resurse imagine au eșuat
+	Move Toolbar to the Right	Mută bara de instrumente la dreapta
+	Move Toolbar to the Left	Mută bara de instrumente la stânga
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	Setările de developare RAW au fost salvate în {file}
