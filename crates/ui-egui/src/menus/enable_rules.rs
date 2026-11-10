@@ -436,3 +436,7 @@ mod tests {
         assert!(off(&s, "layer.layerStyle.copyLayerStyle"));
     }
 }
+
+#[cfg(test)]
+#[path = "warp_split_enable_tests.rs"]
+mod warp_split_enable_tests;
