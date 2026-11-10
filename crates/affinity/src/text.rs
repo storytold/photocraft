@@ -45,10 +45,13 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
                 r.warn("text beyond the document text budget (paragraph alignment left out)");
             }
         }
-        // `block_chars` scans the `Utf8` string, or walks each segment's `Glys` slots (nulls included): charge the scan first.
+        // `block_chars` scans the `Utf8` string, or walks each segment's `Glys` slots (nulls included) and `Utf8` text: charge the scan first.
         let slots = match s.str(glyphs, b"Utf8") {
             Some(text) => text.len(),
-            None => s.objs(glyphs, b"Mixd").iter().fold(0usize, |n, seg| n.saturating_add(s.array_len(*seg, b"Glys").unwrap_or(0))),
+            None => s
+                .objs(glyphs, b"Mixd")
+                .iter()
+                .fold(0usize, |n, seg| n.saturating_add(s.array_len(*seg, b"Glys").unwrap_or(0)).saturating_add(s.str(*seg, b"Utf8").map_or(0, str::len))),
         };
         if !r.charge_text(slots) {
             r.warn("text beyond the document text budget (truncated)");
