@@ -413,7 +413,9 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
             && x >= 1.0
             && y >= 1.0
         {
-            enc.set_density(jpeg_encoder::Density::Inch { x: x.round().min(65535.0) as u16, y: y.round().min(65535.0) as u16 });
+            let dpi_x = x.round().min(65535.0) as u16;
+            let dpi_y = y.round().min(65535.0) as u16;
+            enc.set_density(jpeg_encoder::PixelDensity { density: (dpi_x, dpi_y), unit: jpeg_encoder::PixelDensityUnit::Inches });
         }
         // Metadata too large for its one segment is left out (and reported by the fidelity
         // warnings) rather than failing the whole export.
@@ -427,10 +429,12 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
             img.meta.exif.as_deref().and_then(|x| exif_segment(x, img.meta.dpi))
         };
         if let Some(seg) = exif {
-            enc.add_app_segment(1, &seg).map_err(e)?;
+            // Our segment is the complete APP1 payload (Exif\0\0 header included), so it goes
+            // through add_app_segment — add_exif_metadata would prepend the header again.
+            enc.add_app_segment(1, seg).map_err(e)?;
         }
         if let Some(seg) = img.meta.xmp.as_deref().and_then(|x| xmp_segment(x, img.meta.dpi)) {
-            enc.add_app_segment(1, &seg).map_err(e)?;
+            enc.add_app_segment(1, seg).map_err(e)?;
         }
     }
     if opts.embed_icc
