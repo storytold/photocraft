@@ -928,3 +928,7 @@ fn hint(ui: &mut egui::Ui, s: &str) {
 #[cfg(test)]
 #[path = "../eraser_range_alert_tests.rs"]
 mod eraser_range_alert_tests;
+
+#[cfg(test)]
+#[path = "../blur_strength_alert_tests.rs"]
+mod blur_strength_alert_tests;
