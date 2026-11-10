@@ -23,15 +23,18 @@ pub struct Imported {
     pub function_keys: Vec<(String, String)>,
     pub unsupported: Vec<Unsupported>,
     pub warnings: Vec<String>,
+    /// The encoding the file's 8-bit step names were read in (`"GBK"`, `"Shift_JIS"`,
+    /// `"macintosh"`…); `None` when none needed one.
+    pub encoding: Option<String>,
 }
 
-fn photoshop_step(item: &AtnItem) -> (String, Value) {
+fn photoshop_step(item: &AtnItem, label: String) -> (String, Value) {
     let descriptor = item.descriptor.as_ref().map(|d| photocraft_paint::tile::b64_encode(&d.to_bytes()));
     let event_kind = match &item.event {
         AtnEvent::Code(_) => "code",
         AtnEvent::Name(_) => "name",
     };
-    (PHOTOSHOP_STEP.into(), json!({"event": item.event.id(), "eventKind": event_kind, "name": item.label(), "descriptor": descriptor}))
+    (PHOTOSHOP_STEP.into(), json!({"event": item.event.id(), "eventKind": event_kind, "name": label, "descriptor": descriptor}))
 }
 
 /// Integral floats become integers (`2.0` → `2`), as the commands' own docs and recordings
@@ -61,21 +64,29 @@ pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
 }
 
-fn convert_action(a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) -> Action {
+fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) -> Action {
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
     for (i, item) in a.items.iter().enumerate() {
-        let mapped = match (event_for(&item.event), &item.descriptor) {
-            (Some(e), Some(d)) => (e.from)(d),
-            (Some(e), None) => (e.from)(&Descriptor::default()),
-            (None, _) => Mapped::Unsupported { harmless: false },
+        let menu = item.descriptor.is_none().then(|| super::menu_item::from_event(&item.event)).flatten();
+        let mapped = match (menu, event_for(&item.event), &item.descriptor) {
+            (Some(params), _, _) => Mapped::Steps(vec![(super::MENU_ITEM.into(), params)]),
+            (_, Some(e), Some(d)) => (e.from)(d),
+            (_, Some(e), None) => (e.from)(&Descriptor::default()),
+            _ => Mapped::Unsupported { harmless: false },
         };
         let (new_steps, enabled) = match mapped {
-            Mapped::Steps(s) => (s, item.enabled),
+            Mapped::Steps(mut s) => {
+                super::steps_gallery::remember_event(item, &mut s);
+                super::steps_stack::remember_item(item, &mut s);
+                super::steps_video::remember(item, &mut s);
+                (s, item.enabled)
+            }
             Mapped::Unsupported { harmless } => {
-                unsupported.push(Unsupported { action: name.clone(), step: i, event: item.event.id(), name: item.label() });
-                (vec![photoshop_step(item)], item.enabled && !harmless)
+                let label = file.item_label(item);
+                unsupported.push(Unsupported { action: name.clone(), step: i, event: item.event.id(), name: label.clone() });
+                (vec![photoshop_step(item, label)], item.enabled && !harmless)
             }
         };
         for mut s in new_steps {
@@ -96,12 +107,18 @@ fn convert_action(a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) 
 /// Convert a `.atn` file. Fails only when the file is unreadable: every step imports, as a
 /// command or as a kept Photoshop step.
 pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
-    let file = atn::parse(bytes).map_err(|e| e.to_string())?;
+    import_with_encoding(bytes, None)
+}
+
+/// [`import`], reading 8-bit step names in `encoding` (a label such as `"shift_jis"` or
+/// `"gbk"`) instead of working it out. An unknown label fails.
+pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
+    let file = atn::parse_with_encoding(bytes, encoding).map_err(|e| e.to_string())?;
     let set = file.name.to_string_lossy();
     let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { clip_name(&set) };
-    let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), ..Default::default() };
+    let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), encoding: file.encoding.clone(), ..Default::default() };
     for a in &file.actions {
-        let action = convert_action(a, &set, &mut out.unsupported);
+        let action = convert_action(&file, a, &set, &mut out.unsupported);
         if a.function_key > 0 {
             out.function_keys.push((action.name.clone(), function_key_name(a.function_key, a.shift, a.command)));
         }
@@ -121,6 +138,9 @@ pub struct Skipped {
 }
 
 pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
+    if id == super::MENU_ITEM {
+        return super::menu_item::export(params);
+    }
     if id == PHOTOSHOP_STEP {
         let event = jstr(params, "event")?;
         let event = match params.get("eventKind") {
@@ -141,12 +161,20 @@ pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem
         return Some(AtnItem { event, dictionary: jstr(params, "name").unwrap_or("").as_bytes().to_vec(), descriptor, ..Default::default() });
     }
     let mut params = params.clone();
-    if (id == "actions.play" || id == "actions.conditional") && params.get("set").is_none() {
+    if (id == "actions.play" || id == "actions.conditional") && params.get("set").is_none_or(Value::is_null) {
         params["set"] = json!(set);
     }
     let (e, descriptor) = event_and_descriptor(id, &params)?;
-    let event = if e.code.is_empty() { AtnEvent::name(e.name) } else { AtnEvent::Code(e.code.as_bytes().try_into().ok()?) };
-    Some(AtnItem { event, dictionary: e.label.as_bytes().to_vec(), descriptor: Some(descriptor), ..Default::default() })
+    // A Filter Gallery effect loaded from its own event saves back as that event (#10592).
+    if e.code == "GEfc"
+        && let Some((event, name)) = super::steps_gallery::recorded_event(id, &params)
+    {
+        return Some(AtnItem { event, dictionary: name, descriptor: Some(descriptor), ..Default::default() });
+    }
+    let event = if id == "path.set" || e.code.is_empty() { AtnEvent::name(e.name) } else { AtnEvent::Code(e.code.as_bytes().try_into().ok()?) };
+    let omit_descriptor = super::steps_stack::without_descriptor(id, &params) || super::steps_video::omitted(id, &params);
+    let descriptor = (!omit_descriptor).then_some(descriptor);
+    Some(AtnItem { event, dictionary: e.label.as_bytes().to_vec(), descriptor, ..Default::default() })
 }
 
 /// Photoshop applies only the rename when a Set mixes it with opacity or blend mode (#8304).
@@ -205,7 +233,7 @@ pub fn export(
     skip_unsupported: bool,
 ) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
     let mut skipped = Vec::new();
-    let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new() };
+    let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
     for a in actions {
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, ..Default::default() };
         if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
@@ -245,18 +273,18 @@ pub fn export(
 /// Assigns names not already used, as `name`, `name 2`, `name 3`… A plain linear scan of the
 /// taken list per candidate is cubic when an action file repeats one base name many times, so
 /// membership uses a set and the next suffix to try is cached per base name.
-pub(super) struct UniqueNames {
+pub(crate) struct UniqueNames {
     taken: std::collections::HashSet<String>,
     next_suffix: std::collections::HashMap<String, u32>,
 }
 
 impl UniqueNames {
-    pub(super) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
+    pub(crate) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
         UniqueNames { taken: existing.into_iter().collect(), next_suffix: std::collections::HashMap::new() }
     }
 
     /// Reserves and returns a unique name derived from `name`, recording it as taken.
-    pub(super) fn claim(&mut self, name: &str) -> String {
+    pub(crate) fn claim(&mut self, name: &str) -> String {
         if self.taken.insert(name.to_string()) {
             return name.to_string();
         }

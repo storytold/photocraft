@@ -110,6 +110,50 @@ fn dragging_a_shape_past_the_canvas_edge_leaves_no_trail() {
     }
 }
 
+/// #9329: an adjustment's mask slides over layers that stay put, so a Move drag of it changes
+/// pixels away from where its bound in place sits. Every pixel that differs between two drag
+/// frames' full composites must be inside the preview's damage (`None` redraws everything).
+#[test]
+fn dragging_a_masked_adjustment_redraws_the_layers_its_mask_slides_over() {
+    for depth in [8, 32] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 64, "height": 64, "background": "transparent", "depth": depth})).unwrap();
+        app.sync_views();
+        // A small static layer at (8..16)², and an Invert masked to x 24..56, clear of it.
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 8})).unwrap();
+        app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.session.execute("select.rect", json!({"x": 24, "y": 0, "width": 32, "height": 64})).unwrap();
+        app.session.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_auto_select = false;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 32.0, pressure: 1.0 }, m);
+        let mut frames = Vec::new();
+        // At -2 the mask (22..54) misses the small layer; at -20 (4..36) it covers it.
+        for x in [38.0, 20.0] {
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x, y: 32.0, pressure: 1.0 }, m);
+            frames.push(super::display_doc(&mut app, 0).unwrap());
+        }
+        let st = app.session.active().unwrap();
+        let r = super::damage(&app, st.doc.id, st.revision, frames[0].1, frames[1].1);
+        let canvas = st.doc.bounds();
+        let (a, b) = (photocraft_compose::render(&frames[0].0, canvas), photocraft_compose::render(&frames[1].0, canvas));
+        let w = canvas.width() as usize;
+        let mut changed = 0;
+        for (i, (pa, pb)) in a.px.iter().zip(&b.px).enumerate() {
+            if pa != pb {
+                changed += 1;
+                let (x, y) = (canvas.x0 + (i % w) as i32, canvas.y0 + (i / w) as i32);
+                assert!(r.is_none_or(|r| r.contains(x, y)), "{depth}-bit: ({x}, {y}) changed outside the redrawn {r:?}");
+            }
+        }
+        assert!(changed > 0, "{depth}-bit: the mask sliding over the small layer changes pixels");
+    }
+}
+
 /// Dragging with an unlinked mask targeted moves the mask alone, shown live and committed;
 /// with the mask linked (or the pixels targeted) the layer moves.
 #[test]
@@ -568,4 +612,45 @@ fn floating_selection_does_not_snap_to_its_own_starting_outline_or_preview_at_ze
     assert!(super::display_doc(&mut app, 0).is_some(), "preview is shown once offset is non-zero");
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 18.0, y: 17.0 }, m);
     assert_eq!(offset(&app), Some((2, 1)));
+}
+
+/// Board "A" at (10, 10, 50, 50) holding a red square at (10..30)², and an empty board "B" at
+/// (200, 20, 240, 60); the red layer selected, no selection, the Move tool without Auto-Select.
+fn two_boards() -> (PhotocraftApp, photocraft_doc::LayerId, photocraft_doc::LayerId, photocraft_doc::LayerId) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 300, "height": 100, "background": "transparent"})).unwrap();
+    app.sync_views();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.session.execute("select.deselect", json!({})).unwrap();
+    let red = app.session.active().unwrap().active_layer.unwrap();
+    let id = |v: serde_json::Value| photocraft_doc::LayerId(v["layer"].as_u64().unwrap());
+    let a = id(app.session.execute("layer.new.artboardFromLayers", json!({"name": "A"})).unwrap());
+    app.session.execute("layer.artboard.set", json!({"width": 40, "height": 40})).unwrap();
+    let b = id(app.session.execute("layer.new.artboard", json!({"rect": [200, 20, 40, 40], "name": "B"})).unwrap());
+    app.session.execute("layer.select", json!({"layer": red.0})).unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    (app, red, a, b)
+}
+
+/// #10218: a layer dragged with the Move tool from one artboard onto another joins that board
+/// (Photoshop's auto-nesting), so it shows there instead of staying in its old board, clipped away.
+/// ⌥-dragging does the same for the copy and leaves the original where it was.
+#[test]
+fn move_tool_drag_onto_another_artboard_nests_the_layer_there() {
+    let (mut app, red, a, b) = two_boards();
+    let board = |app: &PhotocraftApp, id| app.session.active().unwrap().doc.artboard_of(id);
+    drag(&mut app, [20.0, 20.0], [210.0, 30.0], egui::Modifiers::NONE);
+    assert_eq!(board(&app, red), Some(b), "the layer joined board B");
+    // ⌥-drag it back onto A: the copy joins A, the original stays on B.
+    drag(&mut app, [210.0, 30.0], [20.0, 20.0], egui::Modifiers::ALT);
+    let st = app.session.active().unwrap();
+    let copy = st.active_layer.unwrap();
+    assert_ne!(copy, red, "the copy is active");
+    assert_eq!(board(&app, copy), Some(a), "the copy joined board A");
+    assert_eq!(board(&app, red), Some(b), "the original stayed on board B");
 }
