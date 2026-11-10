@@ -1236,7 +1236,9 @@ fn smoothed_commits_are_the_same_pixels_with_and_without_the_live_view() {
     // Smoothing holds the catch-up back until `finish` (pen up). A commit takes the live stroke's
     // pixels (`into_commit` finishes it if the canvas hasn't); they must be bit-identical to
     // rendering the stroke from scratch, which is what a commit without a live view does, and
-    // what every commit did before. With and without distinct mirrors (the union path).
+    // what every commit did before. With and without distinct mirrors (the union path). Catch-up
+    // on Stroke End is on (it starts off), and Pressure for Size (also off by default) keeps the
+    // lagging dabs small enough to leave the stroke's end unpainted until the catch-up.
     let pts: Vec<[f64; 3]> = (0..30)
         .map(|i| {
             let t = f64::from(i) / 29.0;
@@ -1258,7 +1260,7 @@ fn smoothed_commits_are_the_same_pixels_with_and_without_the_live_view() {
                         s
                     };
                     let mut s = new();
-                    let mut p = json!({"points": [pts[0]], "brush": {"size": 24, "hardness": 0.2, "smoothing": {"amount": amount}}, "target": "pixels"});
+                    let mut p = json!({"points": [pts[0]], "brush": {"size": 24, "hardness": 0.2, "pressureSize": true, "smoothing": {"amount": amount, "catchUpOnEnd": true}}, "target": "pixels"});
                     let mut live = LiveStroke::begin(&s, &p).unwrap();
                     for q in &pts[1..] {
                         live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();

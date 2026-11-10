@@ -2510,6 +2510,8 @@ fn a_smoothed_stroke_dropped_before_pen_up_leaves_no_tail_and_a_tool_switch_stil
         app.run("file.new", json!({"width": 200, "height": 80, "background": "transparent"})).unwrap();
         app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5}})).unwrap();
         app.session.tools.brush.smoothing.amount = 0.6;
+        // Catch-up on Stroke End starts off; this is about where the catch-up goes.
+        app.session.tools.brush.smoothing.catch_up_on_end = true;
         app.ui.tool = Tool::Brush;
         let before = app.session.active().unwrap().doc.clone();
         let steps = app.session.active().unwrap().history.past_len();
