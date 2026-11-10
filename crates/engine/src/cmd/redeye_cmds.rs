@@ -475,3 +475,7 @@ mod tests {
 #[cfg(test)]
 #[path = "redeye_history_state_tests.rs"]
 mod redeye_history_state_tests;
+
+#[cfg(test)]
+#[path = "redeye_color_mode_tests.rs"]
+mod redeye_color_mode_tests;
