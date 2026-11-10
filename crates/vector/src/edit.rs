@@ -404,7 +404,7 @@ pub fn hit(path: &Path, p: Point, tol: f64, handles: &[([usize; 2], Handle)]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_doc::Subpath;
+    use photocraft_doc::{PathOp, Subpath};
 
     fn tri() -> Path {
         Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)])])
@@ -637,6 +637,18 @@ mod tests {
         let mut p = square();
         delete_anchor_and_segments(&mut p, [0, 1]).unwrap();
         assert_eq!(p, Path::new(vec![Subpath::polyline(&[(300.0, 500.0), (100.0, 500.0), (100.0, 300.0)])]));
+    }
+
+    #[test]
+    fn deleting_with_segments_leaves_one_open_anchor_of_a_closed_pair() {
+        let a = Knot::smooth(Point::new(0.0, 0.0), Point::new(-5.0, 5.0), Point::new(5.0, -5.0));
+        let b = Knot::smooth(Point::new(10.0, 0.0), Point::new(15.0, 5.0), Point::new(5.0, 5.0));
+        let pair = Subpath { closed: true, knots: vec![a, b], op: PathOp::Subtract };
+        for (k, kept) in [(0, b), (1, a)] {
+            let mut p = Path::new(vec![pair.clone()]);
+            assert!(!delete_anchor_and_segments(&mut p, [0, k]).unwrap());
+            assert_eq!(p, Path::new(vec![Subpath { closed: false, knots: vec![kept], op: PathOp::Subtract }]), "k={k}");
+        }
     }
 
     #[test]
