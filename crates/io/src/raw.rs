@@ -613,6 +613,17 @@ mod tests {
         assert!(decode_sensor(&bytes, &limits()).is_ok());
     }
 
+    /// A caller's tighter limits hold for the sensor decode, not only for the develop after it (#9462).
+    #[test]
+    fn import_raw_with_keeps_the_callers_decode_limits() {
+        use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+        let (w, h) = (40, 24);
+        let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
+        assert!(import_raw_with("a.dng", &bytes, &DevelopOptions::default()).is_ok());
+        let tight = DevelopOptions { limits: Limits { max_width: 8, max_height: 8, max_pixels: 64, max_alloc: 1 << 20 }, ..DevelopOptions::default() };
+        assert!(matches!(import_raw_with("a.dng", &bytes, &tight), Err(IoError::Raw(RawError::LimitExceeded(_)))));
+    }
+
     #[test]
     fn the_developed_note_says_which_demosaic_method_was_used() {
         let note = format!("NEF: {DEVELOPED_NOTE} (mhc demosaic, as-shot white balance) into 16-bit ProPhoto RGB");
