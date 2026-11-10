@@ -1250,3 +1250,14 @@ fn record_keeps_an_empty_loaded_sets_exact_name() {
     assert_eq!(crate::actions_edit_cmds::set_names(&s), [" Web "], "one folder, not a trimmed second one");
     assert_eq!(s.execute("actions.save", json!({"set": " Web "})).unwrap()["actions"], json!(["First"]));
 }
+
+#[test]
+fn skipped_steps_count_against_the_script_limit() {
+    let mut s = Session::new();
+    s.actions.list.push(Action::new("A", (0..3).map(|_| ("select.all".to_string(), json!({}))).collect()));
+    s.actions.script_depth = 1;
+    s.actions.script_steps = crate::automate_cmds::MAX_SCRIPT_STEPS - 1;
+    let e = s.execute("actions.play", json!({"action": "A", "from": 3})).err().map(|e| e.to_string());
+    assert!(e.is_some_and(|e| e.contains("the script ran more than")));
+    assert_eq!(s.actions.playing, 0);
+}

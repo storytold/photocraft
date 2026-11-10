@@ -523,6 +523,10 @@ pub fn begin_playback(s: &mut Session, action: &Action, from: usize) -> Result<O
     // The steps that run are charged one by one as they run; the ones walked past are charged
     // here ([`playback_plan`] checked that the whole action fits).
     let skipped = skipped_steps(action, from);
+    let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
+    if s.actions.script_depth > 0 && s.actions.script_steps.saturating_add(skipped) > max {
+        return Err(bad("actions.play", format!("the script ran more than {max} steps in all")));
+    }
     s.actions.playback_steps = s.actions.playback_steps.saturating_add(skipped);
     if s.actions.script_depth > 0 {
         s.actions.script_steps = s.actions.script_steps.saturating_add(skipped);
