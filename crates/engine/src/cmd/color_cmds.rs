@@ -567,9 +567,13 @@ pub fn document_profile(doc: &Document) -> Arc<Profile> {
 /// becomes gray 172, as the reference paints it (173, measured), not its Rec.601 luma 117 (#11940).
 /// The reference's swatch conversion doesn't follow the document's Dot Gain curve (that gives 153),
 /// so pixel conversions such as Image › Mode › Grayscale keep using the document's profile. Other
-/// modes, and a failed conversion, keep the colour.
+/// modes, and a failed conversion, keep the colour. So do Grayscale documents outside the default
+/// gray working space, which #11940 did not measure: a Working Gray other than Dot Gain 20 %, or a
+/// document tagged with a gray profile other than that one.
 pub fn swatch_in_doc(s: &Session, c: [f32; 4]) -> [f32; 4] {
-    if s.active().is_none_or(|st| st.doc.mode != ColorMode::Grayscale) {
+    let Some(st) = s.active().filter(|st| st.doc.mode == ColorMode::Grayscale) else { return c };
+    let default_gray = Builtin::DotGain20Compat;
+    if s.color.settings.working_gray != default_gray.id() || document_profile(&st.doc).content_hash() != default_gray.profile().content_hash() {
         return c;
     }
     let opts = photocraft_cms::TransformOptions { intent: Intent::RelativeColorimetric, bpc: true, ..Default::default() };

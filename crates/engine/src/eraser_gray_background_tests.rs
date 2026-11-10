@@ -91,3 +91,42 @@ fn pencil_auto_erase_keeps_the_raw_background_live_and_committed() {
     let got = pixel(&mut s, 20, 16);
     assert_eq!(level(got[0]), level(expected[0]), "live pixel {got:?}, committed {expected:?}");
 }
+
+fn assert_erase_and_fill_give_luma(mut s: Session, what: &str) {
+    erase_at(&mut s, 20, 16);
+    let erased = pixel(&mut s, 20, 16);
+    assert!((level(erased[0]) - 117).abs() <= 1, "{what}: erased pixel {erased:?}");
+    s.execute("edit.fill", json!({"contents": "background"})).unwrap();
+    let filled = pixel(&mut s, 5, 5);
+    assert!((level(filled[0]) - 117).abs() <= 1, "{what}: filled pixel {filled:?}");
+}
+
+#[test]
+fn other_gray_working_spaces_keep_the_plain_luma() {
+    // #11940 measured the default Working Gray only; the others keep today's behaviour.
+    for space in ["sgray", "gray-gamma-2.2"] {
+        let mut s = session("grayscale");
+        s.execute("edit.colorSettings", json!({"workingGray": space})).unwrap();
+        assert_erase_and_fill_give_luma(s, &format!("workingGray {space}"));
+    }
+}
+
+#[test]
+fn a_gray_document_tagged_with_another_profile_keeps_the_plain_luma() {
+    for profile in ["sgray", "gray-gamma-2.2"] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 32, "mode": "grayscale", "depth": 8, "background": "white", "profile": profile})).unwrap();
+        s.tools.background = GREEN_200;
+        assert_erase_and_fill_give_luma(s, &format!("document profile {profile}"));
+    }
+}
+
+#[test]
+fn a_gray_document_tagged_with_the_default_profile_still_gets_the_measured_gray() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 32, "mode": "grayscale", "depth": 8, "background": "white", "profile": "dot-gain-20-compat"})).unwrap();
+    s.tools.background = GREEN_200;
+    erase_at(&mut s, 20, 16);
+    let p = pixel(&mut s, 20, 16);
+    assert!((level(p[0]) - 173).abs() <= 2, "erased pixel {p:?}");
+}
