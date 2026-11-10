@@ -4057,7 +4057,7 @@ layerLabel	No Color	Fără culoare
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Acest strat de text trebuie rasterizat înainte de a continua. Textul său nu va mai fi editabil. Rasterizați textul?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Acest strat de formă trebuie rasterizat înainte de a continua. Nu va mai fi editabil ca formă. Rasterizați forma?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Acest obiect inteligent trebuie rasterizat înainte de a continua. Conținutul său nu va mai fi editabil. Rasterizați obiectul inteligent?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Acest strat de umplere trebuie rasterizat înainte de a continua. Conținutul său de umplere nu va mai fi editabil. Rasterizați stratul?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Acest strat de umplere trebuie rasterizat înainte de a continua. Conținutul său de umplere nu va mai fi editabil. Rasterizați stratul?
 	This layer must be rasterized before proceeding.	Acest strat trebuie rasterizat înainte de a continua.
 	Color Picker (Background Color)	Selector de culoare (culoare de fundal)
 	Color Picker (Foreground Color)	Selector de culoare (culoare frontală)
@@ -4615,3 +4615,17 @@ navigator	Zoom	Zoom
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Setările de developare RAW au fost salvate în {file}
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Alegeți un raport de aspect sau o dimensiune de decupare prestabilită
+	Set the aspect ratio for the crop box	Setați raportul de aspect pentru cadrul de decupare
+	Clear aspect ratio values	Goliți valorile raportului de aspect
+	Set the overlay options for the Crop Tool	Setați opțiunile suprapunerii de decupare
+	Determines if pixel data outside the crop box is retained or deleted	Stabilește dacă pixelii din afara cadrului de decupare sunt păstrați sau șterși
+	How expanded crop area gets filled	Cum se umple zona de decupare extinsă
+	Displays pop-up help for the fill methods	Afișează ajutorul contextual pentru metodele de umplere
+	Fill options	Opțiuni de umplere
+	Background (default):	Fundal (implicit):
+	Fill the expanded area with your background color or transparent pixels	Umple zona extinsă cu culoarea de fundal sau cu pixeli transparenți
+	Content-aware fill	Umplere în funcție de conținut
+	Sample content from part of the image and use it to fill a small area	Preia conținut dintr-o parte a imaginii pentru a umple o zonă mică
+	Reset the crop box, image rotation, and aspect ratio settings	Resetează cadrul de decupare, rotirea imaginii și raportul de aspect
