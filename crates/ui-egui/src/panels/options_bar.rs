@@ -1018,3 +1018,7 @@ mod eraser_range_alert_tests;
 #[cfg(test)]
 #[path = "../blur_strength_alert_tests.rs"]
 mod blur_strength_alert_tests;
+
+#[cfg(test)]
+#[path = "../sharpen_strength_alert_tests.rs"]
+mod sharpen_strength_alert_tests;
