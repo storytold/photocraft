@@ -654,3 +654,119 @@ fn move_tool_drag_onto_another_artboard_nests_the_layer_there() {
     assert_eq!(board(&app, copy), Some(a), "the copy joined board A");
     assert_eq!(board(&app, red), Some(b), "the original stayed on board B");
 }
+
+/// A document with at least [`super::MANY_LAYERS`] layers, `side` px square.
+fn many_layers(side: u32) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": side, "height": side})).unwrap();
+    app.sync_views();
+    while app.session.active().unwrap().doc.walk().len() < super::MANY_LAYERS {
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+    }
+    app
+}
+
+fn costly(app: &PhotocraftApp, bounds: Option<Rect>) -> bool {
+    super::costly_to_redraw(&app.session.active().unwrap().doc, bounds)
+}
+
+/// Only a drag over a large area of a document with many layers is too costly to redraw live:
+/// a storyboard's photo (#12841), not an ordinary photo or a small layer.
+#[test]
+fn only_large_moves_in_documents_with_many_layers_are_too_costly_to_redraw_live() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 4096, "height": 4096})).unwrap();
+    app.sync_views();
+    let full = Rect::new(0, 0, 4096, 4096);
+    assert!(!costly(&app, Some(full)), "few layers");
+    let app = many_layers(4096);
+    assert!(costly(&app, Some(full)), "16 MP under many layers");
+    assert!(!costly(&app, Some(Rect::new(0, 0, 4096, 4095))), "under 16 MP");
+    assert!(!costly(&app, Some(Rect::new(-8192, 0, 1, 4096))), "the area on the canvas counts");
+    assert!(costly(&app, None), "an unbounded layer");
+}
+
+/// A costly drag shows a reduced picture of the moving layers alone at the pointer, over the
+/// canvas with them hidden; the drop redraws only where they landed, not where they were too.
+#[test]
+fn a_costly_drag_shows_a_snapshot_and_its_drop_redraws_where_the_layers_land() {
+    let mut app = many_layers(4096);
+    // Two bands, top and bottom: between them the white background shows unless it's hidden.
+    app.session
+        .edit("paint", |doc, a| {
+            let s = doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap();
+            s.fill_rect(Rect::new(0, 0, 4096, 128), &[1.0, 0.0, 0.0, 1.0]);
+            s.fill_rect(Rect::new(0, 3968, 4096, 4096), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let moving = app.session.active().unwrap().active_layer.unwrap();
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 2048.0, y: 64.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 2148.0, y: 94.0, pressure: 1.0 }, m);
+    assert!(super::display_doc(&mut app, 0).is_none(), "the canvas is unchanged until the snapshot arrives");
+    assert!(super::snapshot_drag(&app), "no arrow: a snapshot is on its way");
+
+    let s = app.move_preview.as_mut().and_then(|p| p.snapshot.as_mut()).expect("a snapshot");
+    let rect = s.rect;
+    let buf = s.rx.take().unwrap().recv_timeout(std::time::Duration::from_secs(120)).expect("the snapshot render");
+    let (w, h) = (buf.rect.width() as usize, buf.rect.height() as usize);
+    assert!(w <= super::SNAPSHOT_SIDE as usize && h <= super::SNAPSHOT_SIDE as usize, "reduced: {w}×{h}");
+    let at = |x: i32, y: i32| {
+        let bx = (x - rect.x0) as usize * w / rect.width() as usize;
+        let by = (y - rect.y0) as usize * h / rect.height() as usize;
+        buf.px[by * w + bx]
+    };
+    assert!(at(2048, 32)[3] > 0.99, "the moving layer's band");
+    assert!(at(2048, 2048)[3] < 0.01, "the background and the other layers aren't in it");
+    let image = egui::ColorImage::new([1, 1], vec![egui::Color32::RED]);
+    s.texture = Some(egui::Context::default().load_texture("snapshot", image, egui::TextureOptions::LINEAR));
+
+    let (shown, key) = super::display_doc(&mut app, 0).expect("the canvas with the moving layers hidden");
+    assert!(super::is_preview_key(key));
+    assert!(!shown.layer(moving).unwrap().visible, "hidden while its snapshot follows the pointer");
+
+    let before = app.session.active().unwrap().revision;
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 2148.0, y: 94.0 }, m);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.revision, before + 1, "one move");
+    let d = app.move_drop.as_ref().expect("a snapshot drop");
+    let canvas = Rect::new(0, 0, 4096, 4096);
+    assert_eq!(d.rect, rect.translate(100, 30).inflate(1).intersect(&canvas), "where the layers landed");
+    // The move's own damage: where the layers were and are.
+    let both = Some(canvas);
+    let r = crate::canvas::textures::damage_since(&app, 0, (before, key), (st.revision, 0), 0, (before, both));
+    let reach = crate::canvas::textures::effect_reach(&st.doc.layers);
+    assert_eq!(r, Some(d.rect.inflate(reach)));
+}
+
+/// A release after the canvas showed one of the drag's previews, but not its final offset,
+/// redraws the move's own damage rather than the whole canvas.
+#[test]
+fn a_release_after_an_earlier_preview_redraws_only_the_moves_damage() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.sync_views();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.session.execute("select.deselect", json!({})).unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, m);
+    let (_, key) = super::display_doc(&mut app, 0).expect("a live drag");
+    assert!(super::is_preview_key(key));
+    let before = app.session.active().unwrap().revision;
+    // Released at (20, 9), not the (14, 4) the canvas showed.
+    super::finish(&mut app, 20.0, 9.0);
+    let st = app.session.active().unwrap();
+    let moved = Some(Rect::new(8, 8, 44, 33));
+    let r = crate::canvas::textures::damage_since(&app, 0, (before, key), (st.revision, 0), 0, (before, moved));
+    assert_eq!(r, moved);
+}
