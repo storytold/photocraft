@@ -241,6 +241,18 @@ fn converting(tool: Tool, mods: Modifiers, pen_idle: bool) -> bool {
     !mods.command && (tool == Tool::ConvertPoint || (tool == Tool::Pen && mods.alt && pen_idle))
 }
 
+/// The selected anchor when it is the only one and an endpoint of an open subpath of the active
+/// path: where the Curvature Pen carries the path on from (#10726), as Photoshop does after a
+/// click, or ⌘/Ctrl-click, on the last point. The path, the subpath's index and the knot's.
+pub(crate) fn selected_open_end(app: &PhotocraftApp) -> Option<(PathRef, usize, usize)> {
+    let ds = &app.ui.direct_selection;
+    let ([[s, k]], Some(target)) = (ds.anchors.as_slice(), ds.target) else { return None };
+    let (_, path) = active_paths(app).into_iter().find(|(r, _)| *r == target)?;
+    let sub = path.subpaths.get(*s).filter(|sub| !sub.closed)?;
+    sub.knots.get(*k).filter(|_| *k == 0 || *k + 1 == sub.knots.len())?;
+    Some((target, *s, *k))
+}
+
 /// Is the Curvature Pen idle (no path being drawn, no ⌘/Ctrl)? Then it edits the active path in
 /// place, as in Photoshop: a press on one of its anchors drags it, with no modifier.
 fn curvature_idle(app: &PhotocraftApp, mods: Modifiers) -> bool {
@@ -418,7 +430,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         ToolEvent::Up { x, y } => match app.ui.direct_selection.drag.take() {
             Some(Drag::Edit { target, base, edit, start, .. }) => {
                 let end = edit.constrain(start, [x, y], mods.shift);
-                release(app, target, &base, &edit, start, end);
+                release(app, target, &base, &edit, start, end, mods);
                 app.ui.direct_selection.coalesce = None;
                 true
             }
@@ -588,7 +600,7 @@ fn curvature_press(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
 
 /// End of an edit drag: commit it as one command. A click (no movement) commits nothing, except
 /// Pen + ⌥ on an anchor, which makes it a corner. The Pen path being drawn takes the edit directly.
-fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, start: [f64; 2], end: [f64; 2]) {
+fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, start: [f64; 2], end: [f64; 2], mods: Modifiers) {
     let moved = (end[0] - start[0]).hypot(end[1] - start[1]) * f64::from(app.point_zoom()) >= 1.0;
     if target == PathRef::Pen {
         let edited = match edit {
@@ -609,6 +621,17 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
         _ if !moved => return,
         e => e.command(start, end),
     };
+    // The Convert Point tool names its steps as the reference does; the Pen's ⌥ and Direct
+    // Selection (Convert Point with ⌘ too) keep the commands' own names.
+    let convert_tool = app.ui.tool == Tool::ConvertPoint && !direct(app.ui.tool, mods);
+    let step_name = match edit {
+        Edit::Convert(_) if convert_tool => Some("Change Anchor Point"),
+        Edit::Handle(.., true) if convert_tool => Some("Corner Drag"),
+        _ => None,
+    };
+    if let (Some(p), Some(name)) = (params.as_object_mut(), step_name) {
+        p.insert("stepName".into(), json!(name));
+    }
     if let (Some(p), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
         p.extend(t.clone());
     }
@@ -741,6 +764,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod convert_point_history_tests;
 
 #[cfg(test)]
 mod freeform_command_tests {
