@@ -266,19 +266,14 @@ impl DabTool {
 }
 
 /// The reference application refuses a Dodge stroke in Indexed Color and Bitmap documents, with
-/// its alert's words (#12686); other modes (Multichannel and Duotone were not measured) tone as
-/// before. The live stroke checks this too, so it previews nothing there.
+/// its alert's words (#12686); other modes tone as before. The live stroke checks this too, so it
+/// previews nothing there.
 fn mode_refusal(s: &Session, cmd: &str) -> Result<()> {
-    let tool = match cmd {
-        "paint.dodge" => "dodge tool",
-        _ => return Ok(()),
-    };
-    let why = match s.active().map(|st| st.doc.mode) {
-        Some(photocraft_color::ColorMode::Indexed) => "it does not work with Indexed Color images (convert image to RGB Color mode to edit).",
-        Some(photocraft_color::ColorMode::Bitmap) => "it does not work with Bitmap images (convert image to Grayscale mode to edit).",
-        _ => return Ok(()),
-    };
-    Err(EngineError::Other(format!("Could not use the {tool} because {why}")))
+    if cmd != "paint.dodge" {
+        return Ok(());
+    }
+    let Some(why) = s.active().and_then(|st| super::dodge_refusal(&st.doc)) else { return Ok(()) };
+    Err(EngineError::Other(format!("Could not use the dodge tool because {why}")))
 }
 
 /// Dodge, Burn, Sponge, Blur, Sharpen and Smudge: each dab edits a working copy in order
