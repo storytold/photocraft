@@ -278,8 +278,9 @@ fn uses_craft_jpeg(frame: Option<craft_jpeg::FrameKind>, meta: &JpegMeta) -> boo
     }
 }
 
-/// An 8-bit Huffman sequential frame (SOF0, SOF1) of 3 or 4 components whose largest sampling
-/// factor isn't on the first component. zune-jpeg 0.5.15 opens these with wrong colours (#12588;
+/// An 8-bit Huffman sequential frame (SOF0, SOF1) of 3 or 4 components in which a component after
+/// the first has a larger horizontal or vertical sampling factor than the first (so also a first
+/// (2, 1) with a later (1, 2)). zune-jpeg 0.5.15 opens these with wrong colours (#12588;
 /// fixed on its 0.5.16 line, not yet released), so craft-jpeg decodes them until zune-jpeg is
 /// updated. Progressive (SOF2) stays on zune-jpeg, which craft-jpeg doesn't decode at 8 bits, and
 /// so do other component counts, which craft-jpeg doesn't decode at all.
