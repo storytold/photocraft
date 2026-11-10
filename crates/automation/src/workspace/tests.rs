@@ -749,6 +749,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.stroke"
             | "path.toShape"
             | "type.attachToPath"
+            | "type.setPathPlacement"
             | "type.fillPath"
             | "type.detachFromPath"
             | "select.toWorkPath"

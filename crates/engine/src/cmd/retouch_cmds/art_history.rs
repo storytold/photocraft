@@ -195,7 +195,15 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, id) = parse_brush(s, p, CMD)?;
     let _ = stroke;
     // The same source as the History Brush: the `state` or `snapshot` passed, else the History
-    // panel's source, refused after a canvas size change.
+    // panel's source, refused after a canvas size change, then after a colour mode change, as
+    // Photoshop does (#12826), before a layer missing from it. Compare document modes: the pixel
+    // format reads Indexed and Multichannel as RGB.
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    if crate::history_source_cmds::paint_source(st, p, CMD)?.mode != st.doc.mode {
+        return Err(EngineError::Other(
+            "the current color mode does not match that of the History Brush source: set a source of this color mode in the History panel".into(),
+        ));
+    }
     let src_surface = super::history_source(s, id, p, CMD)?;
     // Truncating a huge row index only changes the seed.
     let seed = RNG_SEED ^ p.get("state").and_then(Value::as_u64).map_or(0, |i| i as u32);
@@ -535,3 +543,7 @@ mod tests {
 #[cfg(test)]
 #[path = "art_history_noop_state_tests.rs"]
 mod art_history_noop_state_tests;
+
+#[cfg(test)]
+#[path = "art_history_mode_mismatch_tests.rs"]
+mod art_history_mode_mismatch_tests;

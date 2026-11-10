@@ -114,12 +114,31 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
     Some((armed, mods))
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ToolViewContext<'a> {
+    pub(crate) xf: &'a super::ViewXform,
+    pub(crate) viewport: Option<egui::ViewportId>,
+}
+
+impl<'a> ToolViewContext<'a> {
+    /// Creates a view context pairing the current canvas transform with an optional viewport identity.
+    pub(crate) fn new(xf: &'a super::ViewXform, viewport: Option<egui::ViewportId>) -> Self {
+        Self { xf, viewport }
+    }
+}
+
 /// The handlers a pointer event meets before the tool: dropping a floating piece the press won't
 /// drag, snapping, and the overlays and modifier gestures (Free Transform, sticky keys, brush
 /// resize, the ⌥ eyedropper, path and shape widgets…) that take the event for themselves. `None`:
 /// one of them handled it; otherwise the event as it came and as filtered (snapped, the Move
 /// tool's axis lock), and the modifiers with the sticky keys applied.
-fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, armed: bool) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
+fn filter_event_before_tool(
+    app: &mut PhotocraftApp,
+    ev: ToolEvent,
+    mods: egui::Modifiers,
+    armed: bool,
+    view: Option<ToolViewContext<'_>>,
+) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
     // The Move tool's marquee selecting layers takes its moves and release unsnapped (move_box.rs).
@@ -183,6 +202,11 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
         return None;
     }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
+    let xf = view.map(|v| v.xf);
+    let viewport = view.and_then(|v| v.viewport);
+    if crate::type_path_placement::pointer_with_context(app, raw, xf, viewport) {
+        return None;
+    }
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
     }
@@ -244,6 +268,9 @@ fn note_move_pick(app: &mut PhotocraftApp, active_before: Option<photocraft_doc:
     }
 }
 
+/// Handle Move-specific pointer events and report whether the event was consumed. Auto-Select
+/// picks on press so snapping and dragging use the resulting layer selection. When a locked-only
+/// hit starts a marquee, Shift preserves the selection that the marquee adds to.
 fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
@@ -266,41 +293,55 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
             // (not when the selected pixels move: those are the active layer's).
             if !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.command {
                 let target = app.ui.tool_options.move_target.clone();
-                let mode = if mods.shift { "add" } else { "replace" };
-                let before = app.session.active().map(|st| st.selected_layers());
-                let active_before = app.session.active().and_then(|st| st.active_layer);
-                // A locked layer under the pointer (the Background) can't move. Photoshop draws
-                // the layer marquee instead of reporting the lock (#4058). Probe without
-                // selecting so a locked hit doesn't become the selection first.
-                let probe = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "select": false}));
-                let locked_hit = probe.as_ref().ok().and_then(|v| v["layer"].as_u64()).is_some_and(|id| {
-                    app.session.active().is_some_and(|st| {
-                        let id = photocraft_doc::LayerId(id);
-                        let locks = st.doc.effective_locks(id);
-                        locks.position || locks.all || st.doc.is_background(id)
-                    })
-                });
-                if locked_hit || (probe.as_ref().is_ok_and(|v| v["layer"].is_null()) && crate::move_box::empty_at(app, [x, y])) {
-                    if locked_hit {
-                        // A click still selects the locked layer, as in Photoshop; a drag's
-                        // marquee then replaces that selection on release.
-                        let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
-                        note_move_pick(app, active_before);
+                // A held temporary Move tool keeps the ordinary point-pick behavior.
+                let move_auto_select = app.ui.tool == Tool::Move;
+                let mode = if !mods.shift {
+                    "replace"
+                } else if move_auto_select {
+                    "toggle"
+                } else {
+                    "add"
+                };
+                let probe = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "select": false, "moveAutoSelect": move_auto_select}));
+                if probe.as_ref().is_ok_and(|v| v["layer"].is_null()) {
+                    let empty = crate::move_box::empty_at(app, [x, y]);
+                    if empty || move_auto_select {
+                        if !empty {
+                            // Pressing locked selected pixels still uses the existing move-lock
+                            // handler. Otherwise a locked-only hit can start a marquee (#4058).
+                            if inside_selection(app, [x, y]) && crate::move_lock::blocked(app, tool, [x, y], mods) {
+                                app.move_blocked = true;
+                                return true;
+                            }
+                            // Shift preserves the base selection for its additive marquee.
+                            if !mods.shift {
+                                let _ = app.run("select.deselectLayers", json!({}));
+                            }
+                        }
+                        crate::move_box::begin(app, [x, y], mods.shift, move_auto_select, move_auto_select && !empty);
+                        return true;
                     }
-                    crate::move_box::begin(app, [x, y], mods.shift);
-                    return true;
-                }
-                let picked = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
-                // No pixels there at all (an empty spot, or off the canvas): drag a marquee that
-                // selects the layers it touches instead (move_box.rs).
-                if picked.is_ok_and(|v| v["layer"].is_null()) && crate::move_box::empty_at(app, [x, y]) {
-                    crate::move_box::begin(app, [x, y], mods.shift);
-                    return true;
-                }
-                note_move_pick(app, active_before);
-                // Snapping (and the drag's box) started before the pick: point it at what moves.
-                if app.session.active().map(|st| st.selected_layers()) != before {
-                    crate::snap_ui::retarget_move(app, [x, y], mods);
+                } else {
+                    let locked_hit = !move_auto_select
+                        && probe.as_ref().ok().and_then(|v| v["layer"].as_u64()).is_some_and(|id| {
+                            app.session.active().is_some_and(|st| {
+                                let id = photocraft_doc::LayerId(id);
+                                let locks = st.doc.effective_locks(id);
+                                locks.position || locks.all || st.doc.is_background(id)
+                            })
+                        });
+                    let before = app.session.active().map(|st| st.selected_layers());
+                    let active_before = app.session.active().and_then(|st| st.active_layer);
+                    let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode, "moveAutoSelect": move_auto_select}));
+                    note_move_pick(app, active_before);
+                    if locked_hit {
+                        crate::move_box::begin(app, [x, y], mods.shift, false, false);
+                        return true;
+                    }
+                    // Snapping (and the drag's box) started before the pick: point it at what moves.
+                    if app.session.active().map(|st| st.selected_layers()) != before {
+                        crate::snap_ui::retarget_move(app, [x, y], mods);
+                    }
                 }
             }
             // A locked layer: no drag, and Photoshop's message once the pointer moves (`move_lock`).
@@ -404,11 +445,16 @@ fn clear_off_on_background(app: &mut PhotocraftApp, tool: Tool) {
 
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    tool_event_with_view(app, ev, mods, None);
+}
+
+/// Dispatches a tool event through preflight, pre-tool overlays, and tool handlers within an explicit view context.
+pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, view: Option<ToolViewContext<'_>>) {
     if consumes_cancelled_vector_event(app, ev) {
         return;
     }
     let Some((armed, mods)) = preflight_tool_event(app, ev, mods) else { return };
-    let Some((raw, ev, mods)) = filter_event_before_tool(app, ev, mods, armed) else { return };
+    let Some((raw, ev, mods)) = filter_event_before_tool(app, ev, mods, armed, view) else { return };
     let tool = event_tool(app, mods);
     if handle_eyedropper_event(app, tool, ev, mods) {
         return;
@@ -631,6 +677,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             feed_live_stroke(app);
         }
         ToolEvent::Up { x, y } => {
+            // Before `resize` is cleared: a background box drag applies its box now.
+            crate::type_box_preview::flush(app);
             if tool.is_type()
                 && let Some(e) = app.ui.text_edit.as_mut()
             {

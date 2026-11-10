@@ -4811,3 +4811,17 @@ shape	Appearance	Оформление
 	Shrinkwrap Canvas on Save	Уменьшать холст до содержимого при сохранении
 	Move Toolbar to the Right	Переместить панель инструментов вправо
 	Move Toolbar to the Left	Переместить панель инструментов влево
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Выберите предустановленное соотношение сторон или размер кадрирования
+	Set the aspect ratio for the crop box	Задайте соотношение сторон рамки кадрирования
+	Clear aspect ratio values	Очистить значения соотношения сторон
+	Set the overlay options for the Crop Tool	Настроить параметры наложения кадрирования
+	Determines if pixel data outside the crop box is retained or deleted	Определяет, сохраняются или удаляются пиксели за пределами рамки кадрирования
+	How expanded crop area gets filled	Как заполняется расширенная область кадрирования
+	Displays pop-up help for the fill methods	Показывает всплывающую справку о методах заполнения
+	Fill options	Параметры заполнения
+	Background (default):	Фон (по умолчанию):
+	Fill the expanded area with your background color or transparent pixels	Заполнить расширенную область цветом фона или прозрачными пикселями
+	Content-aware fill	Заполнение с учётом содержимого
+	Sample content from part of the image and use it to fill a small area	Взять содержимое из части изображения для заполнения небольшой области
+	Reset the crop box, image rotation, and aspect ratio settings	Сбросить рамку кадрирования, поворот изображения и соотношение сторон

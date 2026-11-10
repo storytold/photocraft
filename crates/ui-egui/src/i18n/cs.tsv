@@ -4372,3 +4372,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shrinkwrap Canvas on Save	Při uložení zmenšit plátno na obsah
 	Move Toolbar to the Right	Přesunout panel nástrojů doprava
 	Move Toolbar to the Left	Přesunout panel nástrojů doleva
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Zvolit přednastavený poměr stran nebo velikost ořezu
+	Set the aspect ratio for the crop box	Nastavit poměr stran pro rámeček ořezu
+	Clear aspect ratio values	Vymazat hodnoty poměru stran
+	Set the overlay options for the Crop Tool	Nastavit možnosti překryvu ořezu
+	Determines if pixel data outside the crop box is retained or deleted	Určuje, zda se pixely mimo rámeček ořezu zachovají, nebo odstraní
+	How expanded crop area gets filled	Jak se vyplní rozšířená oblast ořezu
+	Displays pop-up help for the fill methods	Zobrazí místní nápovědu k metodám vyplňování
+	Fill options	Možnosti vyplnění
+	Background (default):	Pozadí (výchozí):
+	Fill the expanded area with your background color or transparent pixels	Vyplnit rozšířenou oblast barvou pozadí nebo průhlednými pixely
+	Content-aware fill	Vyplnění podle obsahu
+	Sample content from part of the image and use it to fill a small area	Vzít obsah z části obrázku k vyplnění malé oblasti
+	Reset the crop box, image rotation, and aspect ratio settings	Obnovit rámeček ořezu, otočení obrázku a poměr stran
