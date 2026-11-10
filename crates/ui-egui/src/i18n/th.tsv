@@ -4772,3 +4772,17 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	บันทึกการตั้งค่าการปรับแต่ง RAW ไปยัง {file} แล้ว
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	เลือกอัตราส่วนหรือขนาดครอปที่ตั้งไว้ล่วงหน้า
+	Set the aspect ratio for the crop box	กำหนดอัตราส่วนสำหรับกรอบครอป
+	Clear aspect ratio values	ล้างค่าอัตราส่วน
+	Set the overlay options for the Crop Tool	กำหนดตัวเลือกการซ้อนทับการครอป
+	Determines if pixel data outside the crop box is retained or deleted	กำหนดว่าเก็บหรือลบพิกเซลนอกกรอบครอป
+	How expanded crop area gets filled	วิธีเติมพื้นที่ครอปที่ขยายออก
+	Displays pop-up help for the fill methods	แสดงความช่วยเหลือแบบป๊อปอัปสำหรับวิธีการเติม
+	Fill options	ตัวเลือกการเติม
+	Background (default):	พื้นหลัง (ค่าเริ่มต้น):
+	Fill the expanded area with your background color or transparent pixels	เติมพื้นที่ที่ขยายด้วยสีพื้นหลังหรือพิกเซลโปร่งใส
+	Content-aware fill	เติมตามเนื้อหา
+	Sample content from part of the image and use it to fill a small area	สุ่มเนื้อหาจากส่วนหนึ่งของภาพเพื่อเติมพื้นที่เล็ก ๆ
+	Reset the crop box, image rotation, and aspect ratio settings	รีเซ็ตกรอบครอป การหมุนภาพ และอัตราส่วน

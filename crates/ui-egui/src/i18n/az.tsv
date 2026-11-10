@@ -4632,3 +4632,17 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW emalı ayarları {file} faylında saxlanıldı
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Əvvəlcədən təyin edilmiş aspekt nisbətini və ya kəsmə ölçüsünü seçin
+	Set the aspect ratio for the crop box	Kəsmə çərçivəsinin aspekt nisbətini təyin edin
+	Clear aspect ratio values	Aspekt nisbəti dəyərlərini təmizləyin
+	Set the overlay options for the Crop Tool	Kəsmə örtüyünün parametrlərini təyin edin
+	Determines if pixel data outside the crop box is retained or deleted	Kəsmə çərçivəsindən kənar piksellərin saxlanılıb-silinmədiyini müəyyən edir
+	How expanded crop area gets filled	Genişləndirilmiş kəsmə sahəsinin necə doldurulacağı
+	Displays pop-up help for the fill methods	Doldurma üsulları üçün açılan köməyi göstərir
+	Fill options	Doldurma seçimləri
+	Background (default):	Fon (defolt):
+	Fill the expanded area with your background color or transparent pixels	Genişləndirilmiş sahəni fon rəngi və ya şəffaf piksellərlə doldurun
+	Content-aware fill	Məzmuna əsaslanan doldurma
+	Sample content from part of the image and use it to fill a small area	Kiçik sahəni doldurmaq üçün şəklin bir hissəsindən məzmun götürün
+	Reset the crop box, image rotation, and aspect ratio settings	Kəsmə çərçivəsini, şəkil fırlanmasını və aspekt nisbətini sıfırlayın

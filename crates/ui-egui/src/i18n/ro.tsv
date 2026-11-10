@@ -4615,3 +4615,17 @@ navigator	Zoom	Zoom
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Setările de developare RAW au fost salvate în {file}
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Alegeți un raport de aspect sau o dimensiune de decupare prestabilită
+	Set the aspect ratio for the crop box	Setați raportul de aspect pentru cadrul de decupare
+	Clear aspect ratio values	Goliți valorile raportului de aspect
+	Set the overlay options for the Crop Tool	Setați opțiunile suprapunerii de decupare
+	Determines if pixel data outside the crop box is retained or deleted	Stabilește dacă pixelii din afara cadrului de decupare sunt păstrați sau șterși
+	How expanded crop area gets filled	Cum se umple zona de decupare extinsă
+	Displays pop-up help for the fill methods	Afișează ajutorul contextual pentru metodele de umplere
+	Fill options	Opțiuni de umplere
+	Background (default):	Fundal (implicit):
+	Fill the expanded area with your background color or transparent pixels	Umple zona extinsă cu culoarea de fundal sau cu pixeli transparenți
+	Content-aware fill	Umplere în funcție de conținut
+	Sample content from part of the image and use it to fill a small area	Preia conținut dintr-o parte a imaginii pentru a umple o zonă mică
+	Reset the crop box, image rotation, and aspect ratio settings	Resetează cadrul de decupare, rotirea imaginii și raportul de aspect
