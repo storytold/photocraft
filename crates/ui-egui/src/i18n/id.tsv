@@ -1061,6 +1061,17 @@
 	Change To:	Ubah Menjadi:
 	Channel Mixer	Channel Mixer
 	Channel:	Channel:
+	Document:	Dokumen:
+	Replace Channel	Ganti Channel
+	Add to Channel	Tambah ke Channel
+	Subtract from Channel	Kurangi dari Channel
+	Intersect with Channel	Irisan dengan Channel
+	Add to Selection	Tambah ke Seleksi
+	Subtract from Selection	Kurangi dari Seleksi
+	Intersect with Selection	Irisan dengan Seleksi
+	The active document changed. Choose the command again.	Dokumen aktif berubah. Pilih perintah itu lagi.
+	The document was closed. Choose Load Selection again.	Dokumen telah ditutup. Pilih Muat Seleksi lagi.
+	The document was closed. Choose Save Selection again.	Dokumen telah ditutup. Pilih Simpan Seleksi lagi.
 	Check All Layers	Centang Semua Layer
 	Check Spelling	Periksa Ejaan
 	Clarity	Clarity

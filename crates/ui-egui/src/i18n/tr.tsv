@@ -971,6 +971,17 @@
 	Change To:	Şuna Değiştir:
 	Channel Mixer	Kanal Karıştırıcı
 	Channel:	Kanal:
+	Document:	Belge:
+	Replace Channel	Kanalı değiştir
+	Add to Channel	Kanala ekle
+	Subtract from Channel	Kanaldan çıkar
+	Intersect with Channel	Kanalla kesiştir
+	Add to Selection	Seçime ekle
+	Subtract from Selection	Seçimden çıkar
+	Intersect with Selection	Seçimle kesiştir
+	The active document changed. Choose the command again.	Etkin belge değişti. Komutu yeniden seçin.
+	The document was closed. Choose Load Selection again.	Belge kapatıldı. Seçimi Yükle komutunu yeniden seçin.
+	The document was closed. Choose Save Selection again.	Belge kapatıldı. Seçimi Kaydet komutunu yeniden seçin.
 	Check All Layers	Tüm Katmanları Denetle
 	Check Spelling	Yazımı Denetle
 	Clarity	Netlik

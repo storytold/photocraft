@@ -1092,6 +1092,17 @@
 	Change To:	変更後:
 	Channel Mixer	チャンネルミキサー
 	Channel:	チャンネル:
+	Document:	ドキュメント:
+	Replace Channel	チャンネルを置き換え
+	Add to Channel	チャンネルに追加
+	Subtract from Channel	チャンネルから削除
+	Intersect with Channel	チャンネルとの共通部分
+	Add to Selection	選択範囲に追加
+	Subtract from Selection	選択範囲から削除
+	Intersect with Selection	選択範囲との共通部分
+	The active document changed. Choose the command again.	アクティブなドキュメントが変わりました。コマンドをもう一度選択してください。
+	The document was closed. Choose Load Selection again.	ドキュメントが閉じられました。「選択範囲を読み込む」をもう一度選択してください。
+	The document was closed. Choose Save Selection again.	ドキュメントが閉じられました。「選択範囲を保存」をもう一度選択してください。
 	Check All Layers	すべてのレイヤーをチェック
 	Check Spelling	スペルチェック
 	Clarity	明瞭度

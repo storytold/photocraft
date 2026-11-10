@@ -1013,6 +1013,17 @@
 	Change To:	Wijzigen in:
 	Channel Mixer	Kanaalmixer
 	Channel:	Kanaal:
+	Document:	Document:
+	Replace Channel	Kanaal vervangen
+	Add to Channel	Aan kanaal toevoegen
+	Subtract from Channel	Van kanaal aftrekken
+	Intersect with Channel	Doorsnede met kanaal
+	Add to Selection	Aan selectie toevoegen
+	Subtract from Selection	Van selectie aftrekken
+	Intersect with Selection	Doorsnede met selectie
+	The active document changed. Choose the command again.	Het actieve document is gewijzigd. Kies de opdracht opnieuw.
+	The document was closed. Choose Load Selection again.	Het document is gesloten. Kies Selectie laden opnieuw.
+	The document was closed. Choose Save Selection again.	Het document is gesloten. Kies Selectie opslaan opnieuw.
 	Check All Layers	Alle lagen controleren
 	Check Spelling	Spelling controleren
 	Clarity	Duidelijkheid

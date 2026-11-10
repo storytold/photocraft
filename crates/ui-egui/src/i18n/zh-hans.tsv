@@ -1091,6 +1091,21 @@
 	Change To:	更改为：
 	Channel Mixer	通道混合器
 	Channel:	通道：
+	Document:	文档：
+	New Channel	新建通道
+	Replace Channel	替换通道
+	Add to Channel	添加到通道
+	Subtract from Channel	从通道中减去
+	Intersect with Channel	与通道相交
+	New Selection	新建选区
+	Add to Selection	添加到选区
+	Subtract from Selection	从选区中减去
+	Intersect with Selection	与选区相交
+	Operation	操作
+	Mask	蒙版
+	The active document changed. Choose the command again.	当前文档已更改。请重新选择该命令。
+	The document was closed. Choose Load Selection again.	文档已关闭。请重新选择“载入选区”。
+	The document was closed. Choose Save Selection again.	文档已关闭。请重新选择“保存选区”。
 	Check All Layers	检查所有图层
 	Check Spelling	检查拼写
 	Clarity	清晰度

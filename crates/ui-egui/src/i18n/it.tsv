@@ -1078,6 +1078,17 @@
 	Change To:	Cambia in:
 	Channel Mixer	Miscelatore canali
 	Channel:	Canale:
+	Document:	Documento:
+	Replace Channel	Sostituisci canale
+	Add to Channel	Aggiungi al canale
+	Subtract from Channel	Sottrai dal canale
+	Intersect with Channel	Interseca con il canale
+	Add to Selection	Aggiungi alla selezione
+	Subtract from Selection	Sottrai dalla selezione
+	Intersect with Selection	Interseca con la selezione
+	The active document changed. Choose the command again.	Il documento attivo è cambiato. Scegli di nuovo il comando.
+	The document was closed. Choose Load Selection again.	Il documento è stato chiuso. Scegli di nuovo Carica selezione.
+	The document was closed. Choose Save Selection again.	Il documento è stato chiuso. Scegli di nuovo Salva selezione.
 	Check All Layers	Controlla tutti i livelli
 	Check Spelling	Controlla ortografia
 	Clarity	Chiarezza

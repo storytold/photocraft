@@ -716,6 +716,17 @@
 	Fill Content	Məzmunu doldurun
 	Adjustment Preview	Tənzimləmə Ön Baxışı
 	Channel:	Kanal:
+	Document:	Sənəd:
+	Replace Channel	Kanalı əvəz et
+	Add to Channel	Kanala əlavə et
+	Subtract from Channel	Kanaldan çıx
+	Intersect with Channel	Kanalla kəsişdir
+	Add to Selection	Seçimə əlavə et
+	Subtract from Selection	Seçimdən çıx
+	Intersect with Selection	Seçimlə kəsişdir
+	The active document changed. Choose the command again.	Aktiv sənəd dəyişdi. Əmri yenidən seçin.
+	The document was closed. Choose Load Selection again.	Sənəd bağlandı. «Seçimi Yüklə» əmrini yenidən seçin.
+	The document was closed. Choose Save Selection again.	Sənəd bağlandı. «Seçimi yadda saxla» əmrini yenidən seçin.
 	Channel Mixer…	Kanal qarışdırıcısı…
 	Output Channel:	Çıxış Kanalı:
 	RGB	RGB

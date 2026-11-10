@@ -878,6 +878,17 @@
 	Change To:	ჩანაცვლება:
 	Channel Mixer	არხების მიქშერი
 	Channel:	არხი:
+	Document:	დოკუმენტი:
+	Replace Channel	არხის ჩანაცვლება
+	Add to Channel	არხში დამატება
+	Subtract from Channel	არხს გამოკლება
+	Intersect with Channel	არხთან გადაკვეთა
+	Add to Selection	მონიშნულში დამატება
+	Subtract from Selection	მონიშნულს გამოკლება
+	Intersect with Selection	მონიშნულთან გადაკვეთა
+	The active document changed. Choose the command again.	აქტიური დოკუმენტი შეიცვალა. ბრძანება ხელახლა აირჩიეთ.
+	The document was closed. Choose Load Selection again.	დოკუმენტი დაიხურა. ხელახლა აირჩიეთ „მონიშნულის ჩატვირთვა“.
+	The document was closed. Choose Save Selection again.	დოკუმენტი დაიხურა. ხელახლა აირჩიეთ „მონიშნულის შენახვა“.
 	Check All Layers	ყველა შრის შემოწმება
 	Check Spelling	მართლწერის შემოწმება
 	Clarity	სიცხადე

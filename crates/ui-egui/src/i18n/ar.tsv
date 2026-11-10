@@ -981,6 +981,19 @@
 	Change To:	تغيير إلى:
 	Channel Mixer	مازج القنوات
 	Channel:	القناة:
+	Document:	المستند:
+	Replace Channel	استبدال القناة
+	Add to Channel	إضافة إلى القناة
+	Subtract from Channel	طرح من القناة
+	Intersect with Channel	تقاطع مع القناة
+	New Selection	تحديد جديد
+	Add to Selection	إضافة إلى التحديد
+	Subtract from Selection	طرح من التحديد
+	Intersect with Selection	تقاطع مع التحديد
+	Operation	العملية
+	The active document changed. Choose the command again.	تغيّر المستند النشط. اختر الأمر مرة أخرى.
+	The document was closed. Choose Load Selection again.	تم إغلاق المستند. اختر «تحميل التحديد» مرة أخرى.
+	The document was closed. Choose Save Selection again.	تم إغلاق المستند. اختر «حفظ التحديد» مرة أخرى.
 	Check All Layers	فحص كل الطبقات
 	Check Spelling	تدقيق إملائي
 	Clarity	الوضوح

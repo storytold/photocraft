@@ -2288,6 +2288,17 @@
 	Channel3	Κανάλι 3
 	Channel4	Κανάλι 4
 	Channel:	Κανάλι:
+	Document:	Έγγραφο:
+	Replace Channel	Αντικατάσταση καναλιού
+	Add to Channel	Προσθήκη στο κανάλι
+	Subtract from Channel	Αφαίρεση από το κανάλι
+	Intersect with Channel	Τομή με το κανάλι
+	Add to Selection	Προσθήκη στην επιλογή
+	Subtract from Selection	Αφαίρεση από την επιλογή
+	Intersect with Selection	Τομή με την επιλογή
+	The active document changed. Choose the command again.	Το ενεργό έγγραφο άλλαξε. Επιλέξτε ξανά την εντολή.
+	The document was closed. Choose Load Selection again.	Το έγγραφο έκλεισε. Επιλέξτε ξανά «Φόρτωση επιλογής».
+	The document was closed. Choose Save Selection again.	Το έγγραφο έκλεισε. Επιλέξτε ξανά «Αποθήκευση επιλογής».
 	Character Styles	Στυλ χαρακτήρων
 	Charcoal	Κάρβουνο
 	Check Spelling	Ορθογραφικός έλεγχος

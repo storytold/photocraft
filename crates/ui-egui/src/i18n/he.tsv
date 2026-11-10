@@ -953,6 +953,17 @@
 	Change To:	שנה ל:
 	Channel Mixer	מערבל ערוצים
 	Channel:	ערוץ:
+	Document:	מסמך:
+	Replace Channel	החלף ערוץ
+	Add to Channel	הוסף לערוץ
+	Subtract from Channel	החסר מהערוץ
+	Intersect with Channel	חתוך עם הערוץ
+	Add to Selection	הוסף לבחירה
+	Subtract from Selection	החסר מהבחירה
+	Intersect with Selection	חתוך עם הבחירה
+	The active document changed. Choose the command again.	המסמך הפעיל השתנה. בחר שוב בפקודה.
+	The document was closed. Choose Load Selection again.	המסמך נסגר. בחר שוב בפקודה "טען בחירה".
+	The document was closed. Choose Save Selection again.	המסמך נסגר. בחר שוב בפקודה "שמור בחירה".
 	Check All Layers	בדוק את כל השכבות
 	Check Spelling	בדיקת איות
 	Clarity	בהירות-על (Clarity)

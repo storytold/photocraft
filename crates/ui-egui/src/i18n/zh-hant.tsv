@@ -1075,6 +1075,21 @@
 	Change To:	變更為：
 	Channel Mixer	色版混合器
 	Channel:	色版：
+	Document:	文件：
+	New Channel	新增色版
+	Replace Channel	取代色版
+	Add to Channel	加入色版
+	Subtract from Channel	從色版減去
+	Intersect with Channel	與色版交集
+	New Selection	新增選取範圍
+	Add to Selection	加入選取範圍
+	Subtract from Selection	從選取範圍減去
+	Intersect with Selection	與選取範圍交集
+	Operation	操作
+	Mask	遮色片
+	The active document changed. Choose the command again.	作用中的文件已變更。請重新選擇該指令。
+	The document was closed. Choose Load Selection again.	文件已關閉。請重新選擇「載入選取範圍」。
+	The document was closed. Choose Save Selection again.	文件已關閉。請重新選擇「儲存選取範圍」。
 	Check All Layers	檢查所有圖層
 	Check Spelling	拼字檢查
 	Clarity	清晰度

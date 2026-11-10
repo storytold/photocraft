@@ -781,6 +781,17 @@
 
 # Channels panel
 	Channel:	Kanal:
+	Document:	Dokument:
+	Replace Channel	Ersätt kanalen
+	Add to Channel	Lägg till i kanalen
+	Subtract from Channel	Subtrahera från kanalen
+	Intersect with Channel	Skär med kanalen
+	Add to Selection	Lägg till i markeringen
+	Subtract from Selection	Subtrahera från markeringen
+	Intersect with Selection	Skär med markeringen
+	The active document changed. Choose the command again.	Det aktiva dokumentet har ändrats. Välj kommandot igen.
+	The document was closed. Choose Load Selection again.	Dokumentet stängdes. Välj Läs in markering igen.
+	The document was closed. Choose Save Selection again.	Dokumentet stängdes. Välj Spara markering igen.
 	Channel Mixer…	Kanalblandare…
 	Output Channel:	Utdatakanal:
 	RGB	RGB

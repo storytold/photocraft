@@ -1081,6 +1081,17 @@
 	Change To:	Zmień na:
 	Channel Mixer	Mikser kanałów
 	Channel:	Kanał:
+	Document:	Dokument:
+	Replace Channel	Zastąp kanał
+	Add to Channel	Dodaj do kanału
+	Subtract from Channel	Odejmij od kanału
+	Intersect with Channel	Część wspólna z kanałem
+	Add to Selection	Dodaj do zaznaczenia
+	Subtract from Selection	Odejmij od zaznaczenia
+	Intersect with Selection	Część wspólna z zaznaczeniem
+	The active document changed. Choose the command again.	Aktywny dokument się zmienił. Wybierz polecenie ponownie.
+	The document was closed. Choose Load Selection again.	Dokument został zamknięty. Wybierz ponownie polecenie Wczytaj zaznaczenie.
+	The document was closed. Choose Save Selection again.	Dokument został zamknięty. Wybierz ponownie polecenie Zapisz zaznaczenie.
 	Check All Layers	Sprawdź wszystkie warstwy
 	Check Spelling	Sprawdź pisownię
 	Clarity	Przejrzystość

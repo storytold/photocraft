@@ -784,6 +784,17 @@
 
 # Channels panel
 	Channel:	Kanava:
+	Document:	Asiakirja:
+	Replace Channel	Korvaa kanava
+	Add to Channel	Lisää kanavaan
+	Subtract from Channel	Vähennä kanavasta
+	Intersect with Channel	Leikkaa kanavan kanssa
+	Add to Selection	Lisää valintaan
+	Subtract from Selection	Vähennä valinnasta
+	Intersect with Selection	Leikkaa valinnan kanssa
+	The active document changed. Choose the command again.	Aktiivinen asiakirja vaihtui. Valitse komento uudelleen.
+	The document was closed. Choose Load Selection again.	Asiakirja suljettiin. Valitse Lataa valinta uudelleen.
+	The document was closed. Choose Save Selection again.	Asiakirja suljettiin. Valitse Tallenna valinta uudelleen.
 	Channel Mixer…	Kanavasekoitin…
 	Output Channel:	Lähtökanava:
 	RGB	RGB

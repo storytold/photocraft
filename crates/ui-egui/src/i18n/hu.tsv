@@ -2086,6 +2086,17 @@ navigator	Zoom	Nagyítás mértéke
 	Chalk Area	Krétás terület
 	Channel Mixer	Csatornakeverő
 	Channel:	Csatorna:
+	Document:	Dokumentum:
+	Replace Channel	Csatorna cseréje
+	Add to Channel	Hozzáadás a csatornához
+	Subtract from Channel	Kivonás a csatornából
+	Intersect with Channel	Metszet a csatornával
+	Add to Selection	Hozzáadás a kijelöléshez
+	Subtract from Selection	Kivonás a kijelölésből
+	Intersect with Selection	Metszet a kijelöléssel
+	The active document changed. Choose the command again.	Az aktív dokumentum megváltozott. Válassza újra a parancsot.
+	The document was closed. Choose Load Selection again.	A dokumentumot bezárták. Válassza újra a Kijelölés betöltése parancsot.
+	The document was closed. Choose Save Selection again.	A dokumentumot bezárták. Válassza újra a Kijelölés mentése parancsot.
 	Charcoal	Szénrajz
 	Charcoal Area	Szenes terület
 	Charcoal Thickness	Szén vastagsága

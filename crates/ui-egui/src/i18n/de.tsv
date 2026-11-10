@@ -1061,6 +1061,19 @@
 	Change To:	Ändern in:
 	Channel Mixer	Kanalmixer
 	Channel:	Kanal:
+	Document:	Dokument:
+	Replace Channel	Kanal ersetzen
+	Add to Channel	Zum Kanal hinzufügen
+	Subtract from Channel	Von Kanal abziehen
+	Intersect with Channel	Mit Kanal schneiden
+	New Selection	Neue Auswahl
+	Add to Selection	Zur Auswahl hinzufügen
+	Subtract from Selection	Von Auswahl abziehen
+	Intersect with Selection	Mit Auswahl schneiden
+	Operation	Vorgang
+	The active document changed. Choose the command again.	Das aktive Dokument hat sich geändert. Wählen Sie den Befehl erneut.
+	The document was closed. Choose Load Selection again.	Das Dokument wurde geschlossen. Wählen Sie „Auswahl laden“ erneut.
+	The document was closed. Choose Save Selection again.	Das Dokument wurde geschlossen. Wählen Sie „Auswahl speichern“ erneut.
 	Check All Layers	Alle Ebenen prüfen
 	Check Spelling	Rechtschreibung prüfen
 	Clarity	Klarheit

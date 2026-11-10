@@ -1157,6 +1157,18 @@
 	Blue, Red, Yellow	Xanh dương, Đỏ, Vàng
 	Brightness	Độ sáng
 	Channel:	Kênh:
+	Document:	Tài liệu:
+	Replace Channel	Thay thế kênh
+	Add to Channel	Thêm vào kênh
+	Subtract from Channel	Bớt khỏi kênh
+	Intersect with Channel	Giao với kênh
+	New Selection	Vùng chọn mới
+	Add to Selection	Thêm vào vùng chọn
+	Subtract from Selection	Bớt khỏi vùng chọn
+	Intersect with Selection	Giao với vùng chọn
+	The active document changed. Choose the command again.	Tài liệu hiện hành đã thay đổi. Hãy chọn lại lệnh.
+	The document was closed. Choose Load Selection again.	Tài liệu đã bị đóng. Hãy chọn lại Tải vùng chọn.
+	The document was closed. Choose Save Selection again.	Tài liệu đã bị đóng. Hãy chọn lại Lưu vùng chọn.
 	Click to add a point · drag off or {key}-click or Delete to remove	Bấm để thêm điểm · kéo ra hoặc {key}-bấm hoặc Delete để xóa
 	Colorize	Tô màu
 	Constant	Hằng số

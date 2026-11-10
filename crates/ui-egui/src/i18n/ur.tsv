@@ -953,6 +953,17 @@
 	Change To:	اس میں تبدیل کریں:
 	Channel Mixer	چینل مکسر
 	Channel:	چینل:
+	Document:	دستاویز:
+	Replace Channel	چینل تبدیل کریں
+	Add to Channel	چینل میں شامل کریں
+	Subtract from Channel	چینل سے منہا کریں
+	Intersect with Channel	چینل کے ساتھ جوڑیں
+	Add to Selection	انتخاب میں شامل کریں
+	Subtract from Selection	انتخاب سے منہا کریں
+	Intersect with Selection	انتخاب کے ساتھ جوڑیں
+	The active document changed. Choose the command again.	فعال دستاویز بدل گئی ہے۔ کمانڈ دوبارہ منتخب کریں۔
+	The document was closed. Choose Load Selection again.	دستاویز بند کر دی گئی۔ "انتخاب لوڈ کریں" دوبارہ منتخب کریں۔
+	The document was closed. Choose Save Selection again.	دستاویز بند کر دی گئی۔ "انتخاب محفوظ کریں" دوبارہ منتخب کریں۔
 	Check All Layers	تمام تہیں چیک کریں
 	Check Spelling	املا چیک کریں
 	Clarity	وضاحت

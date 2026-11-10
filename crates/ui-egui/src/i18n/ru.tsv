@@ -937,6 +937,17 @@
 	Fill Content	Содержимое заливки
 	Adjustment Preview	Предпросмотр коррекции
 	Channel:	Канал:
+	Document:	Документ:
+	Replace Channel	Заменить канал
+	Add to Channel	Добавить к каналу
+	Subtract from Channel	Вычесть из канала
+	Intersect with Channel	Пересечь с каналом
+	Add to Selection	Добавить к выделению
+	Subtract from Selection	Вычесть из выделения
+	Intersect with Selection	Пересечь с выделением
+	The active document changed. Choose the command again.	Активный документ изменился. Выберите команду снова.
+	The document was closed. Choose Load Selection again.	Документ был закрыт. Выберите «Загрузить выделенную область» снова.
+	The document was closed. Choose Save Selection again.	Документ был закрыт. Выберите «Сохранить выделенную область» снова.
 	Channel Mixer…	Микширование каналов…
 	Output Channel:	Выходной канал:
 	RGB	RGB

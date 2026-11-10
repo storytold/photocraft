@@ -1101,6 +1101,18 @@
 	Change To:	Změnit na:
 	Channel Mixer	Míchání kanálů
 	Channel:	Kanál:
+	Document:	Dokument:
+	Replace Channel	Nahradit kanál
+	Add to Channel	Přidat ke kanálu
+	Subtract from Channel	Odebrat z kanálu
+	Intersect with Channel	Průnik s kanálem
+	New Selection	Nový výběr
+	Add to Selection	Přidat k výběru
+	Subtract from Selection	Odebrat z výběru
+	Intersect with Selection	Průnik s výběrem
+	The active document changed. Choose the command again.	Aktivní dokument se změnil. Zvolte příkaz znovu.
+	The document was closed. Choose Load Selection again.	Dokument byl zavřen. Zvolte znovu příkaz Načíst výběr.
+	The document was closed. Choose Save Selection again.	Dokument byl zavřen. Zvolte znovu příkaz Uložit výběr.
 	Check All Layers	Zkontrolovat všechny vrstvy
 	Check Spelling	Kontrola pravopisu
 	Clarity	Zřetelnost

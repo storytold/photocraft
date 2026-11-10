@@ -769,6 +769,17 @@
 
 # Channels panel
 	Channel:	ช่องทาง:
+	Document:	เอกสาร:
+	Replace Channel	แทนที่ช่อง
+	Add to Channel	เพิ่มไปยังช่อง
+	Subtract from Channel	ลบออกจากช่อง
+	Intersect with Channel	ตัดกับช่อง
+	Add to Selection	เพิ่มไปยังส่วนที่เลือก
+	Subtract from Selection	ลบออกจากส่วนที่เลือก
+	Intersect with Selection	ตัดกับส่วนที่เลือก
+	The active document changed. Choose the command again.	เอกสารที่ใช้งานอยู่เปลี่ยนไป โปรดเลือกคำสั่งอีกครั้ง
+	The document was closed. Choose Load Selection again.	เอกสารถูกปิดแล้ว โปรดเลือก "โหลดการเลือก" อีกครั้ง
+	The document was closed. Choose Save Selection again.	เอกสารถูกปิดแล้ว โปรดเลือก "บันทึกการเลือก" อีกครั้ง
 	Channel Mixer…	ผสมช่องสัญญาณ…
 	Output Channel:	ช่องสัญญาณออก:
 	RGB	RGB

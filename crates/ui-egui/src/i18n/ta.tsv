@@ -942,6 +942,17 @@
 	Change To:	இதற்கு மாற்று:
 	Channel Mixer	சேனல் கலப்பி
 	Channel:	சேனல்:
+	Document:	ஆவணம்:
+	Replace Channel	சேனலை மாற்று
+	Add to Channel	சேனலில் சேர்
+	Subtract from Channel	சேனலிலிருந்து கழி
+	Intersect with Channel	சேனலுடன் வெட்டிக்கொள்
+	Add to Selection	தேர்வில் சேர்
+	Subtract from Selection	தேர்விலிருந்து கழி
+	Intersect with Selection	தேர்வுடன் வெட்டிக்கொள்
+	The active document changed. Choose the command again.	செயலில் உள்ள ஆவணம் மாறிவிட்டது. கட்டளையை மீண்டும் தேர்ந்தெடுக்கவும்.
+	The document was closed. Choose Load Selection again.	ஆவணம் மூடப்பட்டது. "தேர்வை ஏற்று" என்பதை மீண்டும் தேர்ந்தெடுக்கவும்.
+	The document was closed. Choose Save Selection again.	ஆவணம் மூடப்பட்டது. "தேர்வைச் சேமி" என்பதை மீண்டும் தேர்ந்தெடுக்கவும்.
 	Check All Layers	அனைத்து அடுக்குகளையும் சரிபார்
 	Check Spelling	எழுத்துப்பிழை சரிபார்
 	Clarity	தெளிவு

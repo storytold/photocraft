@@ -1063,6 +1063,20 @@
 	Change To:	변경할 내용:
 	Channel Mixer	채널 혼합
 	Channel:	채널:
+	Document:	문서:
+	Replace Channel	채널 대치
+	Add to Channel	채널에 추가
+	Subtract from Channel	채널에서 빼기
+	Intersect with Channel	채널과 교차
+	New Selection	새 선택 영역
+	Add to Selection	선택 영역에 추가
+	Subtract from Selection	선택 영역에서 빼기
+	Intersect with Selection	선택 영역과 교차
+	Operation	작업
+	Mask	마스크
+	The active document changed. Choose the command again.	활성 문서가 바뀌었습니다. 명령을 다시 선택하십시오.
+	The document was closed. Choose Load Selection again.	문서가 닫혔습니다. 선택 영역 불러오기를 다시 선택하십시오.
+	The document was closed. Choose Save Selection again.	문서가 닫혔습니다. 선택 영역 저장을 다시 선택하십시오.
 	Check All Layers	모든 레이어 검사
 	Check Spelling	맞춤법 검사
 	Clarity	명료도

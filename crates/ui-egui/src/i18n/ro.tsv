@@ -995,6 +995,17 @@
 	Change To:	Modificare în:
 	Channel Mixer	Mixer de canale
 	Channel:	Canal:
+	Document:	Document:
+	Replace Channel	Înlocuire canal
+	Add to Channel	Adăugare la canal
+	Subtract from Channel	Scădere din canal
+	Intersect with Channel	Intersectare cu canalul
+	Add to Selection	Adăugare la selecție
+	Subtract from Selection	Scădere din selecție
+	Intersect with Selection	Intersectare cu selecția
+	The active document changed. Choose the command again.	Documentul activ s-a schimbat. Alegeți din nou comanda.
+	The document was closed. Choose Load Selection again.	Documentul a fost închis. Alegeți din nou Încărcare selecție.
+	The document was closed. Choose Save Selection again.	Documentul a fost închis. Alegeți din nou Salvare selecție.
 	Check All Layers	Verificare toate straturile
 	Check Spelling	Verificare ortografică
 	Clarity	Claritate

@@ -783,6 +783,17 @@
 
 # Channels panel
 	Channel:	Kanal:
+	Document:	Dokument:
+	Replace Channel	Erstat kanal
+	Add to Channel	Tilføj til kanal
+	Subtract from Channel	Træk fra kanal
+	Intersect with Channel	Skær med kanal
+	Add to Selection	Tilføj til markering
+	Subtract from Selection	Træk fra markering
+	Intersect with Selection	Skær med markering
+	The active document changed. Choose the command again.	Det aktive dokument er skiftet. Vælg kommandoen igen.
+	The document was closed. Choose Load Selection again.	Dokumentet blev lukket. Vælg Indlæs markering igen.
+	The document was closed. Choose Save Selection again.	Dokumentet blev lukket. Vælg Gem markering igen.
 	Channel Mixer…	Kanalmikser…
 	Output Channel:	Outputkanal:
 	RGB	RGB

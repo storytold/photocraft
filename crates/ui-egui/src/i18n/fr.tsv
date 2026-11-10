@@ -1050,6 +1050,17 @@
 	Change To:	Remplacer par :
 	Channel Mixer	Mélangeur de canaux
 	Channel:	Canal :
+	Document:	Document :
+	Replace Channel	Remplacer le canal
+	Add to Channel	Ajouter au canal
+	Subtract from Channel	Soustraire du canal
+	Intersect with Channel	Intersection avec le canal
+	Add to Selection	Ajouter à la sélection
+	Subtract from Selection	Soustraire de la sélection
+	Intersect with Selection	Intersection avec la sélection
+	The active document changed. Choose the command again.	Le document actif a changé. Choisissez à nouveau la commande.
+	The document was closed. Choose Load Selection again.	Le document a été fermé. Choisissez à nouveau Charger la sélection.
+	The document was closed. Choose Save Selection again.	Le document a été fermé. Choisissez à nouveau Enregistrer la sélection.
 	Check All Layers	Vérifier tous les calques
 	Check Spelling	Vérifier l'orthographe
 	Clarity	Clarté

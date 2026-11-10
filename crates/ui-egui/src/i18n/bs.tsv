@@ -925,6 +925,17 @@
 	Change To:	Promijeni u:
 	Channel Mixer	Mikser kanala
 	Channel:	Kanal:
+	Document:	Dokument:
+	Replace Channel	Zamijeni kanal
+	Add to Channel	Dodaj u kanal
+	Subtract from Channel	Oduzmi od kanala
+	Intersect with Channel	Presijeci s kanalom
+	Add to Selection	Dodaj u odabir
+	Subtract from Selection	Oduzmi od odabira
+	Intersect with Selection	Presijeci s odabirom
+	The active document changed. Choose the command again.	Aktivni dokument se promijenio. Ponovo izaberite naredbu.
+	The document was closed. Choose Load Selection again.	Dokument je zatvoren. Ponovo izaberite „Učitaj odabir“.
+	The document was closed. Choose Save Selection again.	Dokument je zatvoren. Ponovo izaberite „Sačuvaj odabir“.
 	Check All Layers	Provjeri sve slojeve
 	Check Spelling	Provjeri pravopis
 	Clarity	Jasnoća
