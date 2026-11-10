@@ -394,7 +394,10 @@ fn nearest_on_segment(seg: &[Point; 4], p: Point, tol: f64) -> Option<(f64, f64)
                     a = c;
                 }
             }
-            let found = [(at(t0), t0), (at(t1), t1), (at(0.5 * (a + b)), 0.5 * (a + b))].into_iter().min_by(|x, y| x.0.total_cmp(&y.0));
+            // An even grid of the piece goes first, so a tie keeps its exact parameter (a click on
+            // a segment's middle lands on `t = 0.5`, not one rounding step beside it).
+            let m = 0.5 * (a + b);
+            let found = (0..=16).map(|i| t0 + (t1 - t0) * f64::from(i) / 16.0).chain([m]).map(|t| (at(t), t)).min_by(|x, y| x.0.total_cmp(&y.0));
             if let Some(f) = found.filter(|f| f.0 <= tol && best.is_none_or(|b| f.0 < b.0)) {
                 best = Some(f);
             }
