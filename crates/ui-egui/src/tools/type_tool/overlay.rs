@@ -5,6 +5,7 @@ use super::{Color32, LayerId, PhotocraftApp, Point, Pos2, Stroke, ViewXform, byt
 
 /// Selection highlight, caret and text frame over the canvas.
 pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+    app.ui.type_box_overflow = false;
     let Some(ed) = app.ui.text_edit.clone() else { return };
     // Until it commits, an edit in a document no longer active draws nothing over this one.
     if edit_home(app, &ed) != app.session.active_index() {
@@ -15,6 +16,11 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     }
     let id = LayerId(ed.layer);
     let Some((l, aff, text)) = layout(app, id) else { return };
+    // A handle drag rendered in the background has not changed the document: draw the box where
+    // the pointer has it. The caret, selection and overflow mark still come from the document's
+    // layout, so the first two are hidden for the drag and the overflow mark follows on release.
+    let dragged = crate::type_box_preview::wanted_box(app, id);
+    let aff = dragged.map_or(aff, |b| crate::type_box_preview::overlay_affine(aff, b));
     if ed.mask {
         draw_mask_overlay(app, painter, xf, id);
     }
@@ -24,9 +30,13 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
         let p = aff.apply(Point::new(x as f64, y as f64));
         xf.to_screen(p.x as f32, p.y as f32)
     };
-    let shape = app.session.active().and_then(|s| text_layer(&s.doc, id).map(|t| t.shape.clone()));
+    let mut shape = app.session.active().and_then(|s| text_layer(&s.doc, id).map(|t| t.shape.clone()));
+    if let Some(b) = dragged {
+        shape = Some(photocraft_doc::text::TextShape::Box { x: 0.0, y: 0.0, width: b[2].max(1.0) as f32, height: b[3].max(1.0) as f32 });
+    }
     // Type on a path: the caret, selection and underline follow the curve the glyphs sit on.
-    let bend = shape.as_ref().and_then(photocraft_text::warp::Warp::on_path);
+    let text_start = l.line_bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
+    let bend = shape.as_ref().and_then(|shape| photocraft_text::warp::Warp::on_path_oriented(shape, text_start, l.vertical));
     // Line space (lines, clusters, carets) → screen: vertical type turns it 90° clockwise.
     let scr = |x: f32, y: f32| -> Pos2 {
         let (x, y) = l.to_text(x, y);
@@ -53,14 +63,24 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     let frame = Stroke::new(1.0, t.accent);
     match shape {
         Some(photocraft_doc::text::TextShape::Box { x, y, width, height }) => {
+            // Text the box can't hold: as in the reference application, the lower-right handle
+            // grows and shows a black "+". Automation reads `ui.type_box_overflow` instead.
+            let over = l.overflows(&text);
+            app.ui.type_box_overflow = over;
             if !has_transform {
                 let c = [scr_t(x, y), scr_t(x + width, y), scr_t(x + width, y + height), scr_t(x, y + height)];
                 painter.add(egui::Shape::closed_line(c.to_vec(), frame));
                 let mids = [c[0].lerp(c[1], 0.5), c[1].lerp(c[2], 0.5), c[2].lerp(c[3], 0.5), c[3].lerp(c[0], 0.5)];
-                for p in c.iter().chain(mids.iter()) {
-                    let r = egui::Rect::from_center_size(*p, egui::vec2(7.0, 7.0));
+                for (i, p) in c.iter().chain(mids.iter()).enumerate() {
+                    let side = if over && i == 2 { OVERFLOW_HANDLE } else { 7.0 };
+                    let r = egui::Rect::from_center_size(*p, egui::vec2(side, side));
                     painter.rect_filled(r, 0.0, Color32::WHITE);
                     painter.rect_stroke(r, 0.0, frame, egui::StrokeKind::Inside);
+                }
+                if over {
+                    let (p, arm) = (c[2], OVERFLOW_HANDLE / 2.0 - 2.5);
+                    painter.line_segment([p - egui::vec2(arm, 0.0), p + egui::vec2(arm, 0.0)], OVERFLOW_PLUS);
+                    painter.line_segment([p - egui::vec2(0.0, arm), p + egui::vec2(0.0, arm)], OVERFLOW_PLUS);
                 }
             }
         }
@@ -82,6 +102,9 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
                 painter.add(egui::Shape::line(run(ln.x0.min(0.0), ln.x1.max(ln.x0 + 1.0), y), Stroke::new(1.0, t.accent.gamma_multiply(0.8))));
             }
         }
+    }
+    if dragged.is_some() {
+        return;
     }
     // Uncommitted IME text is underlined, but only while the stored range still holds exactly
     // the composition: an application edit may have shifted it onto committed characters.
@@ -137,6 +160,11 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
         }
     }
 }
+
+/// The side of a paragraph box's lower-right handle while the box can't hold its text (the
+/// other handles are 7 px), and the black "+" drawn inside it.
+pub(super) const OVERFLOW_HANDLE: f32 = 11.0;
+pub(super) const OVERFLOW_PLUS: Stroke = Stroke { width: 1.0, color: Color32::BLACK };
 
 /// The text caret, drawn in order: a white halo, then a solid black line inside it, so it reads on
 /// any background (#6085). The black line used to be a 0.75 pt hairline inside a white one, which

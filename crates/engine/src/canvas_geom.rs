@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use photocraft_doc::{Document, Fill, Layer, LayerContent, TextLayer};
+use photocraft_doc::{Document, Fill, GradientStyle, Layer, LayerContent, TextLayer};
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_raster::Surface;
 
@@ -52,8 +52,12 @@ fn map_angle(a: &Affine, deg: f32) -> f32 {
 }
 
 fn map_fill(a: &Affine, f: &mut Fill) {
-    if let Fill::Gradient { angle, offset, .. } = f {
+    if let Fill::Gradient { angle, offset, style, reverse, .. } = f {
         *angle = map_angle(a, *angle);
+        // An Angle gradient sweeps clockwise from its angle; a mirror turns the sweep around.
+        if *style == GradientStyle::Angle && a.m[0] * a.m[3] - a.m[1] * a.m[2] < 0.0 {
+            *reverse = !*reverse;
+        }
         // The centre offset (a fraction of the frame) turns with the canvas: exact for 90° turns
         // and flips, where the frame's sides swap with the axes. Scale (Image Size) resizes the
         // frame too, so only each axis's direction applies.
@@ -107,6 +111,66 @@ pub(crate) fn set_resolution(doc: &mut Document, dpi: f32) {
     });
 }
 
+/// Moves the type of `doc` (scratch copies on their way to another document) to `dpi` keeping its
+/// pixels, as the reference application does when a type layer is copied between documents of
+/// different resolutions: every size in points is rewritten by old / new (24 pt at 72 ppi is
+/// 5.76 pt at 300 ppi), so `pt x dpi / 72` pixels stay the same and the layer gets no
+/// compensating transform. Box, path and transform are in pixels and stay; tracking and kerning
+/// (1/1000 em) and auto leading (a multiple of the size) follow the size.
+pub(crate) fn retarget_type_resolution(doc: &mut Document, dpi: f32) {
+    // The text engine lays out a resolution that isn't a positive number at 72 ppi.
+    let effective = |d: f32| if d.is_finite() && d > 0.0 { f64::from(d) } else { 72.0 };
+    let old = std::mem::replace(&mut doc.resolution_dpi, dpi);
+    let k = effective(old) / effective(dpi);
+    if !(k.is_finite() && k > 0.0) || k == 1.0 {
+        return;
+    }
+    crate::image_cmds::for_each_layer(&mut doc.layers, &mut |l| {
+        let LayerContent::Text(t) = &mut l.content else { return };
+        t.size_pt = point_size(t.size_pt, k);
+        for r in &mut t.runs {
+            let st = &mut r.style;
+            st.size_pt = point_size(st.size_pt, k);
+            st.leading_pt = st.leading_pt.map(|v| point_size(v, k));
+            st.baseline_shift_pt = grown(st.baseline_shift_pt, k);
+        }
+        for p in &mut t.paragraphs {
+            let st = &mut p.style;
+            for v in [&mut st.first_line_indent_pt, &mut st.start_indent_pt, &mut st.end_indent_pt, &mut st.space_before_pt, &mut st.space_after_pt] {
+                *v = grown(*v, k);
+            }
+        }
+        retag_text(dpi, t);
+    });
+    // The styles travelling with the copies scale the same way: a style a copy brings to a
+    // document that lacks it defines the rewritten size, so the copy has no local override.
+    let st = &mut doc.text_styles;
+    let sets = st
+        .character
+        .iter_mut()
+        .map(|c| &mut c.attrs)
+        .chain(st.paragraph.iter_mut().chain([&mut st.basic]).flat_map(|p| [&mut p.para_attrs, &mut p.char_attrs]));
+    for attrs in sets {
+        for (key, v) in attrs.iter_mut() {
+            let Some(n) = v.as_f64().filter(|n| n.is_finite()) else { continue };
+            let n = n as f32;
+            let scaled = match key.as_str() {
+                "size_pt" | "leading_pt" => point_size(n, k),
+                "baseline_shift_pt" | "first_line_indent_pt" | "start_indent_pt" | "end_indent_pt" | "space_before_pt" | "space_after_pt" => grown(n, k),
+                _ => continue,
+            };
+            *v = serde_json::json!(scaled);
+        }
+    }
+}
+
+/// A positive size in points times `k`, kept finite and above zero (a tiny ratio must not make
+/// the text vanish).
+fn point_size(v: f32, k: f64) -> f32 {
+    let out = grown(v, k);
+    if v > 0.0 && out <= 0.0 { f32::MIN_POSITIVE } else { out }
+}
+
 /// `v x k` kept finite (a huge box from a file must not become infinite).
 fn grown(v: f32, k: f64) -> f32 {
     (f64::from(v) * k).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
@@ -116,6 +180,14 @@ fn grown(v: f32, k: f64) -> f32 {
 /// the parts Free Transform (`transform_layer`) doesn't move are touched: unlinked vector masks,
 /// gradient fill angles, effect reference points and artboards.
 pub(crate) fn transform_layer_geometry(l: &mut Layer, a: &Affine, content: bool, dpi: f32) {
+    if content && let Some(f) = &mut l.frame {
+        f.transform = a.mul(&f.transform);
+        // Past `Frame::valid`'s bounds it would no longer load; the vector mask, moved below,
+        // keeps the clip as a plain masked group.
+        if !f.valid() {
+            l.frame = None;
+        }
+    }
     if let Some(vm) = l.vector_mask.as_mut()
         && (content || !vm.linked)
     {
@@ -170,9 +242,27 @@ pub(crate) fn transform_doc_marks(doc: &mut Document, a: &Affine) {
     if let Some(wp) = &mut doc.work_path {
         *wp = wp.transform(a);
     }
+    // A note's icon point maps with the pixels; its popup keeps its size (#11795). Under Image Size
+    // and Canvas Size it also keeps its offset from the icon, as Photoshop's does. Where it sits
+    // after a turn or flip wasn't measured, so it keeps today's origin there: the top-left of the
+    // mapped rectangle.
     for n in &mut doc.notes {
+        // An all-zero popup means none is stored (PSD export writes its default one): keep it.
+        if n.popup == [0.0; 4] {
+            n.position = map_pt(a, n.position);
+            continue;
+        }
+        let [px, py] = n.position;
+        let (dx, dy, w, h) = (n.popup[0] - px, n.popup[1] - py, n.popup[2] - n.popup[0], n.popup[3] - n.popup[1]);
         n.position = map_pt(a, n.position);
-        n.popup = map_box(a, n.popup);
+        let [m0, m1, m2, m3, ..] = a.m;
+        let [x, y] = if m1.abs() < EPS && m2.abs() < EPS && m0 > 0.0 && m3 > 0.0 {
+            [n.position[0] + dx, n.position[1] + dy]
+        } else {
+            let [l, t, ..] = map_box(a, n.popup);
+            [l, t]
+        };
+        n.popup = [x, y, x + w, y + h];
     }
     for g in &mut doc.measurement.count_groups {
         for p in &mut g.points {

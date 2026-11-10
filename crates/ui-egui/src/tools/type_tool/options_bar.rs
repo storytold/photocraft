@@ -1,21 +1,14 @@
 use super::defaults::{apply, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
 use super::editing::{cancel, commit_with};
-use super::fonts::{font_picker, fonts_ready, selected_style, style_label, styles};
+use super::fonts::{font_picker, font_picker_tip, fonts_ready, selected_style, style_label, styles};
 use super::keys::is_vertical;
-use super::{Color32, LayerId, PhotocraftApp, Stroke, byte_of, json, text_layer};
+use super::{Color32, LayerId, PhotocraftApp, Stroke, byte_of, insertion_style, json, selected_styles, text_layer};
 
 /// Photoshop's Type options bar.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    // Show the target layer's (first-run) style, else the tool defaults.
-    let shown = target(app).and_then(|(id, _)| {
-        let st = app.session.active()?;
-        let tl = text_layer(&st.doc, LayerId(id))?;
-        let run = tl.char_runs().into_iter().next().map(|r| r.style);
-        // The size at the selection (else the first run), as the layer shows it (#124).
-        let size = styles_at(app).map_or(tl.size_pt, |(c, _)| c.size_pt) * shown_scale(app);
-        Some((tl.font_family.clone(), run.as_ref().map(selected_style).unwrap_or_default(), size, styles_at(app).map_or(tl.color, |(c, _)| c.color)))
-    });
+    // Both Type controls describe the selected characters, or the caret's typing style.
+    let shown = styles_at(app).map(|(c, _)| (shown_family(app, &c), selected_style(&c), c.size_pt * shown_scale(app), c.color));
     let o = app.ui.tool_options.clone();
     let (mut fam, mut style, size) = match &shown {
         Some((f, s, z, _)) => (f.clone(), if s.is_empty() { "Regular".into() } else { s.clone() }, *z),
@@ -50,21 +43,27 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 None => apply(app, ui.ctx(), json!({"font": fam})),
             }
         }
-        let opts: Vec<(String, String)> = styles(&fam).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
+        font_picker_tip(ui, tl!("Search and select fonts"));
+        let style_family = if fam.is_empty() { styles_at(app).map(|(c, _)| c.font_family).unwrap_or_default() } else { fam.clone() };
+        let opts: Vec<(String, String)> = styles(&style_family).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
         let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
         if crate::widgets::dropdown(ui, "type-style", tl!("Style"), &mut style, &opts_ref, 110.0) {
             app.ui.tool_options.type_style = style.clone();
             apply(app, ui.ctx(), json!({"fontStyle": style}));
+        }
+        // The menu's button, by the id its combo box takes from "type-style"; "Style" stays its name.
+        if let Some(menu) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("type-style"))) {
+            menu.on_hover_text(tl!("Set font style"));
         }
     }
     let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "type", 13.0, t.icon);
     icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Font size")));
     // Photoshop's "T" scrubs the size field beside it, like the Character panel's icons (#6437).
-    crate::widgets::scrub_option_icon(ui, &icon, tl!("Font size"));
+    crate::widgets::scrub_option_icon(ui, &icon, tl!("Set font size"));
     let (unit, label) = type_unit(app);
     let mut display = size * unit;
-    if crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 66.0).changed() {
+    if crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 66.0).on_hover_text(tl!("Set font size")).changed() {
         let size = display / unit;
         app.ui.tool_options.type_size = size;
         apply(app, ui.ctx(), json!({"size": size, "metricsAsShown": true}));
@@ -101,9 +100,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         },
         None => o.type_align.as_str(),
     };
-    for (align, icon, tip) in
+    // Vertical text shows Top / Center / Bottom for the same left / center / right values, after the
+    // targeted layer's orientation, or with no text targeted the Vertical Type tool's (#12059). The
+    // Type Mask tools keep the horizontal buttons (not measured).
+    let vertical = !app.ui.tool.is_type_mask()
+        && match super::defaults::target_text(app) {
+            Some(t) => t.orientation == photocraft_doc::text::Orientation::Vertical,
+            None => app.ui.tool == crate::state::Tool::VerticalType,
+        };
+    let buttons = if vertical {
+        [
+            ("left", "vertical-align-top", tl!("Top align text")),
+            ("center", "vertical-align-middle", tl!("Center text")),
+            ("right", "vertical-align-bottom", tl!("Bottom align text")),
+        ]
+    } else {
         [("left", "align-left", tl!("Left align text")), ("center", "align-center", tl!("Center text")), ("right", "align-right", tl!("Right align text"))]
-    {
+    };
+    for (align, icon, tip) in buttons {
         if crate::icons::button(ui, icon, 24.0, shown_align == align, tip).clicked() {
             app.ui.tool_options.type_align = align.into();
             apply(app, ui.ctx(), json!({"align": align}));
@@ -134,7 +148,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(q(c[0]), q(c[1]), q(c[2])));
     ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
-    let resp = resp.on_hover_text(tl!("Set the text color"));
+    let resp = resp.on_hover_text(tl!("Set text color"));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Set the text color")));
     if resp.clicked() {
         open_color_picker(app, [c[0], c[1], c[2]]);
@@ -168,13 +182,29 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Character and paragraph style at the target (selection start, else the layer's first run).
-/// The paragraph at a collapsed caret is the caret's, as Photoshop's options bar and Paragraph
-/// panel show it.
+/// A blank family represents mixed fonts, rather than falsely reporting the first one after
+/// commit. At a caret, the current/pending insertion font is the relevant single style.
+pub(super) fn shown_family(app: &PhotocraftApp, c: &photocraft_doc::text::CharStyle) -> String {
+    let same = |s: &photocraft_doc::text::CharStyle| s.font_family == c.font_family;
+    let Some(st) = target_doc(app) else { return c.font_family.clone() };
+    let uniform = if let Some(ed) = &app.ui.text_edit {
+        if ed.caret == ed.anchor {
+            true
+        } else {
+            text_layer(&st.doc, LayerId(ed.layer)).is_none_or(|t| selected_styles(t, ed.anchor, ed.caret).iter().all(same))
+        }
+    } else {
+        st.selected_layers().into_iter().filter_map(|id| text_layer(&st.doc, id)).all(|t| t.char_runs().iter().all(|r| same(&r.style)))
+    };
+    if uniform { c.font_family.clone() } else { String::new() }
+}
+
+/// Character and paragraph style at the selection, caret, or first run of selected layers.
+/// The paragraph at a collapsed caret is the caret's, as the options bar and Paragraph panel show it.
 pub(crate) fn styles_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle)> {
     let (layer, range) = target(app)?;
     let t = text_layer(&target_doc(app)?.doc, LayerId(layer))?;
-    let at = range.map_or(0, |r| byte_of(&t.text, r[0]));
+    let at = range.map_or_else(|| app.ui.text_edit.as_ref().map_or(0, |ed| byte_of(&t.text, ed.caret.saturating_sub(1))), |r| byte_of(&t.text, r[0]));
     let para_at = match (range, &app.ui.text_edit) {
         (None, Some(ed)) => byte_of(&t.text, ed.caret),
         _ => at,
@@ -191,7 +221,8 @@ pub(crate) fn styles_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::Ch
     };
     let runs = t.char_runs();
     let paras = t.paragraph_runs();
-    let c = runs.get(pick_at(at, runs.iter().map(|r| r.len).collect())).map(|r| r.style.clone())?;
+    let mut c = runs.get(pick_at(at, runs.iter().map(|r| r.len).collect())).map(|r| r.style.clone())?;
+    insertion_style::shown(app, &mut c);
     let p = paras.get(pick_at(para_at, paras.iter().map(|r| r.len).collect())).map(|r| r.style.clone()).unwrap_or_default();
     Some((c, p))
 }
@@ -253,20 +284,14 @@ pub(super) fn kerning_field(ui: &mut egui::Ui, shown: &str, width: f32) -> Optio
         }
         let presets = ["Metrics", "Optical", "0", "-100", "-75", "-50", "-25", "-10", "-5", "5", "10", "25", "50", "75", "100", "200"];
         let (press, close) = crate::press_menu::PressCombo::before(ui, "props-kern-presets");
-        let combo = craft_ui::ComboBox::from_id_salt("props-kern-presets")
-            .selected_text("")
-            .width(16.0)
-            .height(420.0)
-            .icon(crate::widgets::chevron_icon)
-            .close_behavior(close)
-            .show_ui(ui, |ui| {
-                for p in presets {
-                    let item = ui.selectable_label(p == shown, p);
-                    if press.chosen(ui, &item) {
-                        out = parse_kerning(p);
-                    }
+        let combo = crate::widgets::combo_list(ui, "props-kern-presets", "", 16.0, close, |ui| {
+            for p in presets {
+                let item = ui.selectable_label(p == shown, p);
+                if press.chosen(ui, &item) {
+                    out = parse_kerning(p);
                 }
-            });
+            }
+        });
         press.after(&combo.response);
         let _ = combo.response.accessible_name(tl!("Kerning"));
     });

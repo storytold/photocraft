@@ -1,8 +1,8 @@
 //! Pattern Stamp: paint with the current pattern through a brush stroke.
 //!
-//! Aligned strokes lock the tile origin in document space. Unaligned strokes restart the origin at
-//! the first point of that stroke. Impressionist jitters each dab's phase with a seeded RNG so a
-//! replay of the same points is identical.
+//! Aligned strokes lock the tile origin in document space. Unaligned strokes derive a new origin
+//! from the tile size and the first point of each stroke. Impressionist jitters each dab's phase
+//! with a seeded RNG so a replay of the same points is identical.
 
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_compose::pattern::{Placement, Tile, render};
@@ -21,7 +21,7 @@ const STREAM_PHASE_Y: u64 = 102;
 
 pub(super) fn enabled(s: &Session) -> std::result::Result<(), String> {
     has_pixel_layer(s)?;
-    if crate::pattern_cmds::resolve(s, "").is_none() { Err("no pattern selected".into()) } else { Ok(()) }
+    if crate::pattern_cmds::resolve_id(s, "").is_none() { Err("no pattern selected".into()) } else { Ok(()) }
 }
 
 /// A parsed `paint.patternStamp`: shared by the command and its live preview, so both paint the
@@ -56,7 +56,7 @@ impl Setup {
         let Some(first) = stroke.points.first() else {
             return Err(bad(CMD, "`points` is empty"));
         };
-        let phase = stamp_phase(p, CMD, aligned, first)?;
+        let phase = stamp_phase(p, CMD, aligned, first, (pat.width, pat.height))?;
         let tile = std::sync::Arc::new(Tile::new(&pat).ok_or_else(|| bad(CMD, "the pattern is empty or too large to paint"))?);
         reject_huge_stroke(CMD, &stroke)?;
         let seed = p.get("seed").and_then(Value::as_u64).unwrap_or_else(|| {
@@ -96,9 +96,7 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
             paint_aligned(surf, &st.stroke, sel, lock, &st.tile, st.placement(), st.mode, CMD)
         }
     })?;
-    if let Some(state) = s.active_mut() {
-        state.last_damage = Some(dmg);
-    }
+    s.hint_damage(dmg);
     Ok(json!({
         "damage": damage_json(dmg),
         "phase": [st.phase.0, st.phase.1],
@@ -154,13 +152,17 @@ fn stamp_angle(p: &Value, cmd: &str) -> Result<f32> {
     }
 }
 
-fn stamp_phase(p: &Value, cmd: &str, aligned: bool, first: &StrokePoint) -> Result<(f32, f32)> {
+fn stamp_phase(p: &Value, cmd: &str, aligned: bool, first: &StrokePoint, size: (u32, u32)) -> Result<(f32, f32)> {
     match p.get("phase") {
         None => {
             if aligned {
                 Ok((0.0, 0.0))
             } else {
-                Ok((first.x as f32, first.y as f32))
+                // Each axis starts from half its tile plus one pixel, mirrored about the
+                // stroke's first point. Keep one phase for the complete stroke, independent
+                // of its brush tip. Empty patterns have already been rejected by Setup.
+                let origin = |first: f64, edge: u32| (f64::from(edge / 2 + 1) - first).rem_euclid(f64::from(edge)) as f32;
+                Ok((origin(first.x, size.0), origin(first.y, size.1)))
             }
         }
         Some(v) => {
@@ -276,6 +278,10 @@ fn stamp_dab(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "pattern_stamp_origin_tests.rs"]
+mod pattern_stamp_origin_tests;
 
 #[cfg(test)]
 mod tests {
