@@ -207,6 +207,8 @@ impl Headless {
         if let Some(view) = &o.initial_view {
             view.validate(&o.document)?;
         }
+        // An import-only source remains protected even when its read root grants no implicit Save.
+        let path = if o.source_read_only { Some(requested.to_owned()) } else { path };
         let (index, color) = self.install_imported_document(o.document, path, o.source_read_only, o.initial_view)?;
         let d = &self.session.documents()[index];
         let mut warnings = o.warnings;

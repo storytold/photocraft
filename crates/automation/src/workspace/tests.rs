@@ -1420,6 +1420,31 @@ fn headless_save_rejects_nonregular_import_identity_without_publishing_output() 
     assert!(temp_files(&inside).is_empty());
 }
 
+#[test]
+fn import_only_library_sources_remain_protected_without_implicit_save_authority() {
+    let (library, work, _) = roots("import-library-source-protection");
+    let mut source = b"gimp xcf v003\0".to_vec();
+    for value in [1u32, 1, 0, 0, 0, 0, 0] {
+        source.extend_from_slice(&value.to_be_bytes());
+    }
+    std::fs::write(library.join("source.xcf"), &source).unwrap();
+    std::fs::hard_link(library.join("source.xcf"), work.join("alias.pcraft")).unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    let mut headless = crate::Headless::with_workspace(workspace);
+    headless.open(Path::new("source.xcf")).unwrap();
+    let state = headless.session.active().unwrap();
+    assert!(state.path.is_none());
+    assert!(state.source_read_only);
+    assert_eq!(state.protected_import_source.as_deref(), Some("source.xcf"));
+    let before = state.doc.clone();
+    let error = headless.save(None, Some(Path::new("alias.pcraft")), None, &Default::default()).unwrap_err().to_string();
+    assert!(error.contains("import-only source"), "{error}");
+    assert!(Arc::ptr_eq(&before, &headless.session.active().unwrap().doc));
+    headless.save(None, Some(Path::new("converted.pcraft")), None, &Default::default()).unwrap();
+    assert!(work.join("converted.pcraft").is_file());
+    assert_eq!(std::fs::read(library.join("source.xcf")).unwrap(), source);
+}
+
 /// Exercise the actual render RPC with a protected nonactive XCF document in either filesystem authority mode.
 fn render_import_source_protection_scenario(trusted: bool) {
     let (inside, _, workspace) = roots(if trusted { "render-import-trusted" } else { "render-import-workspace" });
