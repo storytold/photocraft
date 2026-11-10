@@ -20,6 +20,7 @@ fn canvas_input(ctx: &egui::Context, app: &mut PhotocraftApp, view: &mut View, x
     let rect = xf.rect;
     let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), rect);
     let free_hover = crate::dialogs::free_pointer_over(ctx, rect).is_some();
+    let idx = app.session.active_index().unwrap_or(0);
     handle_dialog_canvas_input(
         app,
         DialogCanvasInput {
@@ -35,6 +36,8 @@ fn canvas_input(ctx: &egui::Context, app: &mut PhotocraftApp, view: &mut View, x
             temporary: None,
             free_hover,
             img_rect: rect,
+            idx,
+            aspect: xf.aspect,
         },
     );
 }
@@ -42,7 +45,7 @@ fn canvas_input(ctx: &egui::Context, app: &mut PhotocraftApp, view: &mut View, x
 fn step(ctx: &egui::Context, app: &mut PhotocraftApp, view: &mut View, xf: ViewXform, primary: bool, events: Vec<Event>, opts: FrameOpts) {
     ctx.begin_pass(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))), focused: true, events, ..Default::default() });
     if opts.popup {
-        egui::Popup::open_id(ctx, egui::Id::new("pattern-drag-popup"));
+        egui::Popup::open_id(ctx, egui::Id::unique("pattern-drag-popup"));
     }
     canvas_input(ctx, app, view, &xf, primary, opts);
     ctx.end_pass().textures_delta.clear();

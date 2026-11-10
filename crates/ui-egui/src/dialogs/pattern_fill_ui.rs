@@ -245,7 +245,7 @@ struct DragState {
 }
 
 fn drag_state(f: &Map<String, Value>, target: &DragTarget) -> Option<DragState> {
-    let state = f.get(DRAG_KEY).filter(|s| target.matches(*s))?;
+    let state = f.get(DRAG_KEY).filter(|s| target.matches(s))?;
     Some(DragState {
         base: finite_pair(state.get("base"))?,
         total: finite_pair(state.get("total"))?,
