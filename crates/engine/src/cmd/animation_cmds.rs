@@ -40,7 +40,7 @@ fn frame_param(cmd: &str, p: &Value, key: &str, a: &FrameAnimation) -> Result<us
     v.as_u64()
         .and_then(|n| usize::try_from(n).ok())
         .filter(|n| *n < a.frames.len())
-        .ok_or_else(|| bad(cmd, format!("`{key}` must be a frame from 0 to {}, got {v}", a.frames.len() - 1)))
+        .ok_or_else(|| bad(cmd, format!("`{key}` must be a frame from 0 to {}, got {v}", a.frames.len().saturating_sub(1))))
 }
 
 /// The frames a command works on: the `frames` list, else `frame`, else the selected frame; sorted,
@@ -54,7 +54,7 @@ fn frames_param(cmd: &str, p: &Value, a: &FrameAnimation) -> Result<Vec<usize>> 
             .as_u64()
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n < a.frames.len())
-            .ok_or_else(|| bad(cmd, format!("`frames` holds {v}, which is not a frame from 0 to {}", a.frames.len() - 1)))?;
+            .ok_or_else(|| bad(cmd, format!("`frames` holds {v}, which is not a frame from 0 to {}", a.frames.len().saturating_sub(1))))?;
         out.push(i);
     }
     out.sort_unstable();
@@ -136,6 +136,9 @@ fn delete(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// Most layers Make Frames From Layers turns into frames.
 const MAX_FRAMES_FROM_LAYERS: usize = 1000;
+/// Most hidden-layer ids Make Frames From Layers stores across all its frames: each frame lists
+/// the other top-level layers and every hidden layer inside a group.
+const MAX_FRAMES_FROM_LAYERS_IDS: usize = 2_000_000;
 
 /// The layers in `layers` (and below) whose eye is off.
 fn hidden_inside(layers: &[photocraft_doc::Layer], out: &mut Vec<photocraft_doc::LayerId>) {
@@ -161,15 +164,19 @@ fn make_frames_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     if n > MAX_FRAMES_FROM_LAYERS {
         return Err(EngineError::Other(format!("{n} layers is more than the {MAX_FRAMES_FROM_LAYERS} Make Frames From Layers handles")));
     }
+    // Every frame also lists the hidden layers inside groups: refuse before the edit allocates them.
+    let mut nested = Vec::new();
+    for l in &s.active().ok_or(EngineError::NoDocument)?.doc.layers {
+        if let Some(children) = l.children() {
+            hidden_inside(children, &mut nested);
+        }
+    }
+    if n.saturating_mul(n.saturating_add(nested.len())) > MAX_FRAMES_FROM_LAYERS_IDS {
+        return Err(EngineError::Other(format!("{n} layers with {} hidden layers inside groups are more than Make Frames From Layers handles", nested.len())));
+    }
     s.edit("Make Frames From Layers", |doc, _| {
         let mut a = doc.frame_animation.take().unwrap_or_else(|| FrameAnimation::new(&doc.layers));
         // Layers inside groups keep their own eye in every frame, not only in the frame that shows their group.
-        let mut nested = Vec::new();
-        for l in &doc.layers {
-            if let Some(children) = l.children() {
-                hidden_inside(children, &mut nested);
-            }
-        }
         a.frames = (0..n)
             .map(|shown| {
                 let mut hidden: Vec<_> = doc.layers.iter().enumerate().filter(|(i, _)| *i != shown).map(|(_, l)| l.id).collect();

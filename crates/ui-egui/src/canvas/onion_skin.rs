@@ -111,7 +111,8 @@ pub fn ghosts(app: &PhotocraftApp, ctx: &egui::Context, canvas_doc: DocId) -> Ve
         return Vec::new();
     }
     let Some(st) = app.session.active().filter(|st| st.doc.id == canvas_doc) else { return Vec::new() };
-    let Some(a) = st.doc.frame_animation.as_ref() else { return Vec::new() };
+    // A stored animation isn't clamped on every path: an out-of-range current frame has no ghosts.
+    let Some(a) = st.doc.frame_animation.as_ref().filter(|a| a.current < a.frames.len()) else { return Vec::new() };
     let wanted = neighbours(settings, a.current, a.frames.len());
     let nav = crate::frame_strip_ui::nav_rev(ctx);
     let mut out = Vec::new();

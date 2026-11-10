@@ -724,3 +724,47 @@ fn an_edit_in_one_frame_leaves_the_other_frames_shared_and_tweens_store_only_wha
     }
     assert!(a.frames[0].opacities.is_empty() && a.frames[1].opacities.is_empty());
 }
+
+/// A stored animation with no frames reaches `frames_param` before `clamp()`: an out-of-range
+/// frame is an error, not an underflow while the message is written.
+#[test]
+fn a_frame_out_of_range_of_an_empty_animation_is_an_error() {
+    let mut s = session(&["A"]);
+    s.execute("animation.makeFramesFromLayers", json!({})).unwrap();
+    s.edit("empty", |doc, _| {
+        doc.frame_animation.as_mut().unwrap().frames.clear();
+        Ok(())
+    })
+    .unwrap();
+    let e = s.execute("animation.newFrame", json!({"frames": [5]})).unwrap_err().to_string();
+    assert!(e.contains("not a frame from 0 to 0"), "{e}");
+    let e = s.execute("animation.newFrame", json!({"frame": 5})).unwrap_err().to_string();
+    assert!(e.contains("frame from 0 to 0"), "{e}");
+}
+
+/// Make Frames From Layers counts the hidden layers inside groups that every frame copies, and
+/// refuses before allocating them.
+#[test]
+fn make_frames_from_layers_counts_hidden_layers_inside_groups() {
+    let mut s = session(&[]);
+    s.edit("layers", |doc, _| {
+        let fmt = doc.layers[0].surface().map(|surf| surf.format()).unwrap();
+        for i in 0..998 {
+            doc.layers.push(photocraft_doc::Layer::raster(format!("L{i}"), fmt));
+        }
+        let children = (0..1001)
+            .map(|i| {
+                let mut l = photocraft_doc::Layer::raster(format!("hidden {i}"), fmt);
+                l.visible = false;
+                l
+            })
+            .collect();
+        doc.layers.push(photocraft_doc::Layer::group("G", children));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(doc(&s).layers.len(), 1000, "at the top-level limit");
+    let e = s.execute("animation.makeFramesFromLayers", json!({})).unwrap_err().to_string();
+    assert!(e.contains("1001 hidden layers inside groups"), "{e}");
+    assert!(doc(&s).frame_animation.is_none(), "nothing was made");
+}
