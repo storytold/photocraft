@@ -225,14 +225,14 @@ pub fn request(f: &mut Map<String, Value>, title: &str) {
     request_field(f, "color", title);
 }
 
-/// [`request`] for another `"#rrggbb"` field of the dialog: a top-level key (`vineColor`), or a
-/// JSON pointer into the fields (`/values/guidesGridAndSlices/guideColor`).
 /// The private key a dialog may set to the value it loaded into `field` (a recorded step's
 /// stand-in). OK in the Color Picker is an explicit choice, so it removes the marker.
 pub fn loaded_marker(field: &str) -> String {
     format!("__loaded:{field}")
 }
 
+/// [`request`] for another `"#rrggbb"` field of the dialog: a top-level key (`vineColor`), or a
+/// JSON pointer into the fields (`/values/guidesGridAndSlices/guideColor`).
 pub fn request_field(f: &mut Map<String, Value>, field: &str, title: &str) {
     f.insert(REQUEST.into(), json!({ "title": title, "field": field }));
 }
