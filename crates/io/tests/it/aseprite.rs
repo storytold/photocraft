@@ -190,7 +190,7 @@ fn aseprite_independent_writer_grayscale_cel_has_exact_samples() {
 fn aseprite_import_25mp_release_benchmark() {
     // Retain the original Base layer, replace its cel with a large compressed checkerboard.
     let mut pixels = vec![0; 5000 * 5000 * 4];
-    for (i, p) in pixels.chunks_exact_mut(4).enumerate() {
+    for (i, p) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         p.copy_from_slice(if (i / 5000 / 32 + i % 5000 / 32) % 2 == 0 { &[32, 64, 96, 255] } else { &[192, 160, 128, 255] });
     }
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&pixels, 6);

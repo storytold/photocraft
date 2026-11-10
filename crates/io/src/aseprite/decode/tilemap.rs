@@ -155,8 +155,8 @@ pub(in crate::aseprite) fn render(map: &Map, tileset: &Tileset, at: (i32, i32), 
         return Ok((rect, out));
     }
     let [id_mask, x_mask, y_mask, d_mask] = map.masks;
-    for (i, word) in map.tiles.chunks_exact(4).enumerate() {
-        let value = u32::from_le_bytes(word.try_into().map_err(|_| invalid("truncated tile id"))?);
+    for (i, word) in map.tiles.as_chunks::<4>().0.iter().enumerate() {
+        let value = u32::from_le_bytes(*word);
         let id = (value & id_mask) >> id_mask.trailing_zeros();
         if tileset.flags & 4 != 0 && id == 0 || tileset.flags & 4 == 0 && value == u32::MAX {
             continue;
