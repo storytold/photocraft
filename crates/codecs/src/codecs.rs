@@ -13,6 +13,7 @@ pub(crate) mod iff;
 pub(crate) mod jpeg;
 pub(crate) mod jxl;
 pub(crate) mod pcx;
+pub(crate) mod pixar;
 pub(crate) mod png;
 pub(crate) mod pnm;
 pub(crate) mod tga;
