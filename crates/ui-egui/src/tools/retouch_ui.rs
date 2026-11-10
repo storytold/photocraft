@@ -574,6 +574,12 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 /// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
 /// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
+    if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
+        crate::object_finder::clear(app);
+        crate::brush_refusal::prompt(app, tl!(why));
+        return;
+    }
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let sample_all = app.ui.tool_options.sample_all.object_selection;
