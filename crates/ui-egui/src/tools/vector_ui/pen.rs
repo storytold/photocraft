@@ -1072,3 +1072,7 @@ mod shape_open_path_fill_tests;
 #[cfg(test)]
 #[path = "pen_history_steps_tests.rs"]
 mod pen_history_steps_tests;
+
+#[cfg(test)]
+#[path = "freeform_enter_deselects_tests.rs"]
+mod freeform_enter_deselects_tests;
