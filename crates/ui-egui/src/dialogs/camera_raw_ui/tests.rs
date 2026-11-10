@@ -784,7 +784,7 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
         }
     }
     let method = photocraft_io::raw::Demosaic::Ahd;
-    let raw = RawOpen { document, held: None, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method, crop: None };
+    let raw = RawOpen { document, held: None, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method, crop: None, active_before: None };
     let (unshown, _) = filmstrip::first_settings(&app, &raw);
     open_raw(&mut app, &ctx, raw).unwrap();
     let shown = &app.camera_raw.as_ref().unwrap().params;
@@ -826,7 +826,8 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
                 bytes: None,
                 developed_with: Default::default(),
                 demosaic: Default::default(),
-                crop: None
+                crop: None,
+                active_before: None
             }
         )
         .is_err()
@@ -1618,6 +1619,40 @@ fn a_raw_whose_camera_raw_step_is_cancelled_goes_back_with_its_settings() {
             assert_eq!(held.kept.as_ref().map(|(p, _)| p.contrast), Some(40.0));
         }
         None => assert_eq!(app.session.documents().len(), 2, "opened with its step"),
+    }
+}
+
+/// A held raw that goes back to the filmstrip after it became the active tab gives that place back
+/// to the tab that was active before Open, not to the tab beside it.
+#[test]
+fn a_raw_that_goes_back_to_the_filmstrip_restores_the_active_tab() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+    app.run("file.new", json!({"width": 30, "height": 30})).unwrap();
+    // The first tab is the active one; the raw is admitted after the second.
+    app.session.set_active(0);
+    let first = app.session.active().unwrap().doc.id;
+    app.open_bytes("one.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}}})).unwrap().unwrap();
+    app.background_jobs = true;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    if let Some(job) = r["filter"]["job"].as_u64() {
+        app.session.cancel_job(photocraft_engine::jobs::JobId(job));
+    }
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the job never finished");
+    // The step may finish before the cancel reaches it; then the raw simply opened.
+    if !app.raw_shelf.is_empty() {
+        assert_eq!(app.session.documents().len(), 2, "the admitted document closed again");
+        assert_eq!(app.session.active().map(|st| st.doc.id), Some(first), "the tab active before Open");
     }
 }
 
