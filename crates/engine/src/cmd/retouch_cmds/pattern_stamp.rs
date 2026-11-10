@@ -3,12 +3,15 @@
 //! Aligned strokes lock the tile origin in document space. Unaligned strokes derive a new origin
 //! from the tile size and the first point of each stroke. Impressionist jitters each dab's phase
 //! with a seeded RNG so a replay of the same points is identical.
+//!
+//! `"mode": "behind"` is the painting-only Behind mode, as the Brush's: the pattern goes beneath
+//! the layer's pixels, so it shows only where the layer is transparent (#12879).
 
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_compose::pattern::{Placement, Tile, render};
 use photocraft_doc::{LayerId, Pattern};
 use photocraft_geom::Rect;
-use photocraft_paint::retouch::{Footprint, Region, apply_coverage, apply_dab_stroke, over_native};
+use photocraft_paint::retouch::{Footprint, Region, alpha_index, apply_coverage, apply_dab_stroke, over_native};
 use photocraft_paint::{Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
@@ -30,6 +33,8 @@ pub(super) struct Setup {
     pub(super) stroke: Stroke,
     pub(super) id: Option<LayerId>,
     pub(super) mode: BlendMode,
+    /// Behind: paint beneath the layer's pixels (`mode` is then Normal).
+    pub(super) behind: bool,
     aligned: bool,
     pub(super) impressionist: bool,
     pat: Pattern,
@@ -44,7 +49,9 @@ impl Setup {
     pub(super) fn parse(s: &Session, p: &Value) -> Result<Self> {
         const CMD: &str = "paint.patternStamp";
         let (mut stroke, id) = parse_brush(s, p, CMD)?;
-        let mode = blend_param(p, CMD)?;
+        // Behind is a painting mode, not a blend mode: the pattern itself is laid in Normal.
+        let behind = p.get("mode").and_then(Value::as_str).is_some_and(|m| m.eq_ignore_ascii_case("behind"));
+        let mode = if behind { BlendMode::Normal } else { blend_param(p, CMD)? };
         let aligned = flag(p, "aligned", true);
         let impressionist = flag(p, "impressionist", false);
         let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
@@ -64,7 +71,7 @@ impl Setup {
             photocraft_paint::rng::seed_from_bytes(bytes.as_bytes())
         });
         stroke.brush.seed = seed;
-        Ok(Self { stroke, id, mode, aligned, impressionist, pat, tile, phase, scale, angle, seed })
+        Ok(Self { stroke, id, mode, behind, aligned, impressionist, pat, tile, phase, scale, angle, seed })
     }
 
     /// Where the pattern sits (aligned strokes; Impressionist jitters it per dab).
@@ -72,12 +79,90 @@ impl Setup {
         placement(self.phase, self.scale, self.angle)
     }
 
-    /// One Impressionist dab's edit of a working copy in `fmt`.
-    fn impressionist_effect(&self, fmt: PixelFormat) -> super::DabEffect {
-        let (tile, phase, scale, angle, seed, mode) = (self.tile.clone(), self.phase, self.scale, self.angle, self.seed, self.mode);
+    /// One Impressionist dab's edit of a working copy in `fmt`. With Behind, `lock` is the
+    /// target's transparency lock: nothing can go beneath locked pixels.
+    fn impressionist_effect(&self, fmt: PixelFormat, lock: bool) -> super::DabEffect {
+        let (tile, phase, scale, angle, seed) = (self.tile.clone(), self.phase, self.scale, self.angle, self.seed);
         let (tw, th) = (self.pat.width as f32 * scale, self.pat.height as f32 * scale);
-        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, phase, scale, angle, seed, tw, th, mode))
+        let lay = match (self.behind, alpha_index(&fmt)) {
+            (false, _) => Lay::Over(self.mode),
+            (true, Some(a)) if !lock => Lay::Behind(a),
+            // No transparency to paint into (the Background, a mask or channel, a locked layer).
+            (true, _) => return Box::new(|_, _| {}),
+        };
+        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, phase, scale, angle, seed, tw, th, lay))
     }
+}
+
+/// How one Impressionist dab meets the working pixels.
+#[derive(Clone, Copy)]
+enum Lay {
+    /// Over them, in this blend mode.
+    Over(BlendMode),
+    /// Beneath them; the alpha channel's index.
+    Behind(usize),
+}
+
+/// `src` beneath `dst` at coverage `k`, in native channels with alpha at `a`: the Brush's Behind.
+/// Opaque pixels are unchanged; partly transparent ones keep their colour's share.
+fn under_native(a: usize, dst: &mut [f32], src: &[f32], k: f32) {
+    let (Some(&da), Some(&sa)) = (dst.get(a), src.get(a)) else { return };
+    if da >= 1.0 {
+        return;
+    }
+    let under = sa * k * (1.0 - da);
+    let alpha = da + under;
+    if alpha <= 0.0 {
+        return;
+    }
+    for (d, s) in dst.iter_mut().zip(src).take(a) {
+        *d = (*d * da + *s * under) / alpha;
+    }
+    if let Some(d) = dst.get_mut(a) {
+        *d = alpha;
+    }
+}
+
+/// [`apply_coverage`], or with `behind` the same weights (`cov × opacity × selection`) laid
+/// beneath the pixels of `target`: shared by the commit and the live preview. Behind paints
+/// nothing where there is no transparency to paint into: a target without alpha (the Background,
+/// a mask, a channel) or with transparency locked.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lay_coverage(
+    target: &mut Surface,
+    rect: Rect,
+    cov: &[f32],
+    opacity: f32,
+    sel: Option<&Surface>,
+    lock: bool,
+    paint: &Region,
+    mode: BlendMode,
+    behind: bool,
+) -> Rect {
+    if !behind {
+        return apply_coverage(target, rect, cov, opacity, sel, lock, paint, mode);
+    }
+    let fmt = target.format();
+    let (Some(a), false, false) = (alpha_index(&fmt), lock, rect.is_empty()) else { return Rect::EMPTY };
+    let n = fmt.channels();
+    let w = rect.width() as usize;
+    let mut region = target.read_region(rect);
+    // The selection row under the current coverage row.
+    let mut sel_row = vec![1.0f32; if sel.is_some() { w } else { 0 }];
+    for (row, (pixels, cov)) in region.chunks_exact_mut(w.saturating_mul(n)).zip(cov.chunks_exact(w)).enumerate() {
+        let y = rect.y0.saturating_add(row as i32);
+        if let Some(s) = sel {
+            s.sample_row_strided(y, rect.x0, 1, 0, &mut sel_row);
+        }
+        for (col, (px, c)) in pixels.chunks_exact_mut(n).zip(cov).enumerate() {
+            let k = (c * opacity * sel_row.get(col).copied().unwrap_or(1.0)).min(1.0);
+            if k > 0.0 {
+                under_native(a, px, paint.px(rect.x0.saturating_add(col as i32), y), k);
+            }
+        }
+    }
+    target.write_region(rect, &region);
+    rect
 }
 
 pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
@@ -90,10 +175,10 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let sel = pre.selection.as_ref();
         if st.impressionist {
             // Halo is the dab footprint only: Impressionist jitters phase, it does not blur.
-            let effect = st.impressionist_effect(surf.format());
+            let effect = st.impressionist_effect(surf.format(), lock);
             Ok(apply_dab_stroke(surf, &st.stroke, sel, lock, 0, effect))
         } else {
-            paint_aligned(surf, &st.stroke, sel, lock, &st.tile, st.placement(), st.mode, CMD)
+            paint_aligned(surf, &st, sel, lock, CMD)
         }
     })?;
     s.hint_damage(dmg);
@@ -117,7 +202,9 @@ pub fn live_impressionist(s: &Session, p: &Value) -> Result<super::LiveDab> {
     }
     let (stroke, id) = (st.stroke.clone(), st.id);
     let doc = (*s.active().ok_or(crate::EngineError::NoDocument)?.doc).clone();
-    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format()))?.with_tail_preview()
+    // Behind paints nothing beneath locked pixels, as the commit.
+    let lock = st.behind && crate::channel_cmds::target_surface(&mut doc.clone(), id, p)?.1;
+    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format(), lock))?.with_tail_preview()
 }
 
 /// The pattern under destination `rect` in `fmt` (native channels): what an aligned stroke paints
@@ -196,23 +283,13 @@ fn rgba_to_region(fmt: &PixelFormat, rect: Rect, rgba: &[[f32; 4]]) -> Region {
     paint
 }
 
-#[allow(clippy::too_many_arguments)]
-fn paint_aligned(
-    surf: &mut Surface,
-    stroke: &Stroke,
-    sel: Option<&Surface>,
-    lock: bool,
-    tile: &Tile,
-    place: Placement,
-    mode: BlendMode,
-    cmd: &str,
-) -> Result<Rect> {
-    let (bounds, cov) = super::coverage(cmd, stroke)?;
+fn paint_aligned(surf: &mut Surface, st: &Setup, sel: Option<&Surface>, lock: bool, cmd: &str) -> Result<Rect> {
+    let (bounds, cov) = super::coverage(cmd, &st.stroke)?;
     if bounds.is_empty() {
         return Ok(Rect::EMPTY);
     }
-    let paint = paint_region(tile, &place, &surf.format(), bounds);
-    Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
+    let paint = paint_region(&st.tile, &st.placement(), &surf.format(), bounds);
+    Ok(lay_coverage(surf, bounds, &cov, st.stroke.brush.opacity, sel, lock, &paint, st.mode, st.behind))
 }
 
 fn footprint_cov(fp: &Footprint, x: i32, y: i32) -> f32 {
@@ -238,7 +315,7 @@ fn stamp_dab(
     seed: u64,
     tw: f32,
     th: f32,
-    mode: BlendMode,
+    lay: Lay,
 ) {
     let r = fp.rect.intersect(&work.rect);
     if r.is_empty() {
@@ -263,16 +340,24 @@ fn stamp_dab(
             let Some(px) = rgba.get(oy.saturating_mul(rw).saturating_add(ox)) else { continue };
             from_rgba_into(fmt, *px, &mut enc);
             let dst = work.px_mut(x, y);
-            if mode == BlendMode::Normal {
-                if let Some(src) = enc.get(..n) {
-                    over_native(fmt, dst, src, k, false);
+            match lay {
+                Lay::Behind(a) => {
+                    if let Some(src) = enc.get(..n) {
+                        under_native(a, dst, src, k);
+                    }
                 }
-            } else {
-                let d = to_rgba(fmt, dst);
-                let o = photocraft_color::blend::composite(mode, d, *px, k);
-                from_rgba_into(fmt, o, &mut enc);
-                if let Some(src) = enc.get(..n) {
-                    dst.copy_from_slice(src);
+                Lay::Over(BlendMode::Normal) => {
+                    if let Some(src) = enc.get(..n) {
+                        over_native(fmt, dst, src, k, false);
+                    }
+                }
+                Lay::Over(mode) => {
+                    let d = to_rgba(fmt, dst);
+                    let o = photocraft_color::blend::composite(mode, d, *px, k);
+                    from_rgba_into(fmt, o, &mut enc);
+                    if let Some(src) = enc.get(..n) {
+                        dst.copy_from_slice(src);
+                    }
                 }
             }
         }
@@ -282,6 +367,10 @@ fn stamp_dab(
 #[cfg(test)]
 #[path = "pattern_stamp_origin_tests.rs"]
 mod pattern_stamp_origin_tests;
+
+#[cfg(test)]
+#[path = "pattern_stamp_behind_tests.rs"]
+mod pattern_stamp_behind_tests;
 
 #[cfg(test)]
 mod tests {

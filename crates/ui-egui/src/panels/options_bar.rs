@@ -138,7 +138,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let before = app.session.tools.brush.clone();
                             let mut brush = before.clone();
                             // Mode is the tool's own brush's, kept per tool like its size.
-                            if let Some(modes) = crate::blend_keys::tool_modes(tool) {
+                            if tool == Tool::PatternStamp {
+                                // Its list has Behind (#12879).
+                                opt_label(ui, tl!("Mode"));
+                                super::brush_controls::pattern_stamp_mode_dropdown(ui, "retouch-mode", &mut brush);
+                            } else if let Some(modes) = crate::blend_keys::tool_modes(tool) {
                                 opt_label(ui, tl!("Mode"));
                                 if let Some(Some(m)) =
                                     tool_mode_dropdown(ui, "retouch-mode", &modes, Some(crate::blend_keys::brush_tool_mode(tool, brush.mode)))
