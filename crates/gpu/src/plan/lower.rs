@@ -218,6 +218,13 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             p[0] = [2f32.powf(*exposure), *offset, gamma.max(0.01), transfer_exponent(transfer.for_exposure())];
             (6, p, None)
         }
+        Adjustment::Light { exposure, contrast, highlights, shadows, whites, blacks } => {
+            // The CPU oracle's own lookup table (compose::adjust::light_lut) on every channel,
+            // through the same Levels / Curves kernel modern Brightness/Contrast uses: GPU and
+            // CPU draw the identical table.
+            let row = to_row(&adjust::light_lut(*exposure, *contrast, *highlights, *shadows, *whites, *blacks, transfer));
+            (7, p, Some(vec![row; 3]))
+        }
         Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. } if depth == photocraft_color::SampleType::F32 => {
             // Twenty coefficients exceed the sixteen uniform parameters. Store four records
             // in LUT row 0, read texel-exact by the analytic float Levels kernel.

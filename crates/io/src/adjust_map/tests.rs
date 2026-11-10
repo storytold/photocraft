@@ -172,6 +172,11 @@ fn roundtrips() {
     rt(Adjustment::Posterize { levels: 4 });
     rt(Adjustment::BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false });
     rt(Adjustment::BrightnessContrast { brightness: -150.0, contrast: 100.0, legacy: true });
+    // Photoshop 2026's Light adjustment (#6542): real slider values from two layers of a
+    // Photoshop-authored file (storytold/photocraft#6542).
+    rt(Adjustment::Light { exposure: -0.71, contrast: 100.0, highlights: 26.0, shadows: 50.0, whites: 13.0, blacks: 100.0 });
+    rt(Adjustment::Light { exposure: -0.753, contrast: -100.0, highlights: -100.0, shadows: -100.0, whites: -100.0, blacks: 100.0 });
+    rt(Adjustment::Light { exposure: 0.0, contrast: 0.0, highlights: 0.0, shadows: 0.0, whites: 0.0, blacks: 0.0 });
     rt(Adjustment::HueSaturation { hue: 30.0, saturation: -20.0, lightness: 5.0, colorize: false, ranges: HueRange::defaults() });
     rt(Adjustment::HueSaturation { hue: 200.0, saturation: 50.0, lightness: 0.0, colorize: true, ranges: HueRange::defaults() });
     let mut ranges = HueRange::defaults();

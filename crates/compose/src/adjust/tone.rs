@@ -1,4 +1,4 @@
-use super::{Adjustment, Buffer, ColorMode, CurvePoint, LevelsChannel, SampleType, ToneSpace, lab_to_srgb, srgb_to_lab};
+use super::{Adjustment, Buffer, ColorMode, CurvePoint, LevelsChannel, SampleType, ToneSpace, Transfer, lab_to_srgb, srgb_to_lab};
 
 /// Float RGB curve channels with no edit must preserve samples outside the LUT domain; edited
 /// ones extend past it (see [`float_tone_extrapolates`]).
@@ -268,6 +268,62 @@ pub fn modern_contrast(v: f32, contrast: f32) -> f32 {
     let half = |t: f32| end * 0.5 * (t * t * t - 2.0 * t * t + t) + (-2.0 * t * t * t + 3.0 * t * t) * 0.5 + mid * 0.5 * (t * t * t - t * t);
     let v = v.clamp(0.0, 1.0);
     if v <= 0.5 { half(v / 0.5) } else { 1.0 - half((1.0 - v) / 0.5) }
+}
+
+/// Photoshop 2026's Light adjustment (Exposure, Contrast, Highlights, Shadows, Whites, Blacks),
+/// which shares the Brightness/Contrast `brit` key (#6542), as one channel's lookup table
+/// ([`LUT_SIZE`] samples): Exposure in linear light (as [`super::Adjustment::Exposure`]), then
+/// [`modern_contrast`], then [`light_tone`]. Adobe's own formula for the last four sliders is not
+/// public; this is a documented clean-room approximation (loosely modelled on how Lightroom's
+/// Light panel describes itself), not yet tuned against a Photoshop oracle.
+pub fn light_lut(exposure: f32, contrast: f32, highlights: f32, shadows: f32, whites: f32, blacks: f32, transfer: Transfer) -> Vec<f32> {
+    let step = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
+    let et = transfer.for_exposure();
+    let m = 2f32.powf(exposure);
+    (0..LUT_SIZE)
+        .map(|k| {
+            let v = (et.decode(step(k)) * m).max(0.0);
+            let v = et.encode(v).clamp(0.0, 1.0);
+            let v = modern_contrast(v, contrast.clamp(-100.0, 100.0));
+            light_tone(v, highlights, shadows, whites, blacks)
+        })
+        .collect()
+}
+
+/// A measured Whites or Blacks row ([`photocraft_algo::camera_raw::whites_blacks`]) at grey
+/// level `v`: the row samples grey levels 0, 1/32, …, 1, so this is their piecewise-linear
+/// interpolation.
+fn wb_curve(row: &[f32; photocraft_algo::camera_raw::whites_blacks::STEPS], v: f32) -> f32 {
+    use photocraft_algo::camera_raw::whites_blacks::STEPS;
+    let p = v.clamp(0.0, 1.0) * (STEPS - 1) as f32;
+    let j = (p as usize).min(STEPS - 2);
+    let s = p - j as f32;
+    row[j] + (row[j + 1] - row[j]) * s
+}
+
+/// Highlights/Shadows (a smooth lift confined to their half of the tone range, by distance from
+/// the midtone: a documented clean-room approximation, not Photoshop's own unpublished local
+/// Laplacian filter, which needs neighbouring pixels this one-pixel-at-a-time LUT doesn't have)
+/// and Whites/Blacks (the measured curves, [`photocraft_algo::camera_raw::whites_blacks`], at the
+/// slider's own value: the fixed row every image shares, not adapted to this buffer's own black
+/// and white points, so a layer renders the same whichever region of it is composited), each
+/// -100..=100.
+fn light_tone(v: f32, highlights: f32, shadows: f32, whites: f32, blacks: f32) -> f32 {
+    use photocraft_algo::camera_raw::whites_blacks::{blacks_row, whites_row};
+    let v = v.clamp(0.0, 1.0);
+    let shadow_w = (1.0 - 2.0 * v).clamp(0.0, 1.0).powi(2);
+    let highlight_w = (2.0 * v - 1.0).clamp(0.0, 1.0).powi(2);
+    let mut v = v + 0.5 * (shadows.clamp(-100.0, 100.0) / 100.0) * shadow_w + 0.5 * (highlights.clamp(-100.0, 100.0) / 100.0) * highlight_w;
+    v = v.clamp(0.0, 1.0);
+    let whites = whites.clamp(-100.0, 100.0);
+    let blacks = blacks.clamp(-100.0, 100.0);
+    if whites != 0.0 {
+        v = wb_curve(&whites_row(whites), v);
+    }
+    if blacks != 0.0 {
+        v = wb_curve(&blacks_row(blacks), v);
+    }
+    v.clamp(0.0, 1.0)
 }
 
 /// Photoshop posterize: `n` equal input bins over 0..=255, output levels

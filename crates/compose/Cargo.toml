@@ -14,6 +14,7 @@ photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-cms = { workspace = true }
+photocraft-algo = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }

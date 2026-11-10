@@ -110,6 +110,20 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             };
             Adjustment::Exposure { exposure: r.num("exposure", e, -20.0, 20.0)?, offset: r.num("offset", o, -0.5, 0.5)?, gamma: r.num("gamma", g, 0.01, 9.99)? }
         }
+        "light" => {
+            let (e0, c0, h0, s0, w0, b0) = match base {
+                Some(Adjustment::Light { exposure, contrast, highlights, shadows, whites, blacks }) => (*exposure, *contrast, *highlights, *shadows, *whites, *blacks),
+                _ => (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            };
+            Adjustment::Light {
+                exposure: r.num("exposure", e0, -5.0, 5.0)?,
+                contrast: r.num("contrast", c0, -100.0, 100.0)?,
+                highlights: r.num("highlights", h0, -100.0, 100.0)?,
+                shadows: r.num("shadows", s0, -100.0, 100.0)?,
+                whites: r.num("whites", w0, -100.0, 100.0)?,
+                blacks: r.num("blacks", b0, -100.0, 100.0)?,
+            }
+        }
         "vibrance" => {
             let (v, s) = match base {
                 Some(Adjustment::Vibrance { vibrance, saturation }) => (*vibrance, *saturation),
@@ -217,6 +231,9 @@ pub fn to_params(adj: &Adjustment) -> Value {
         Adjustment::Threshold { level } => json!({"level": (level * 255.0).round()}),
         Adjustment::Posterize { levels } => json!({"levels": levels}),
         Adjustment::Exposure { exposure, offset, gamma } => json!({"exposure": exposure, "offset": offset, "gamma": gamma}),
+        Adjustment::Light { exposure, contrast, highlights, shadows, whites, blacks } => {
+            json!({"exposure": exposure, "contrast": contrast, "highlights": highlights, "shadows": shadows, "whites": whites, "blacks": blacks})
+        }
         Adjustment::Vibrance { vibrance, saturation } => json!({"vibrance": vibrance, "saturation": saturation}),
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
             let mut v = json!({"hue": hue, "saturation": saturation, "lightness": lightness, "colorize": colorize});

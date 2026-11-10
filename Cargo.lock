@@ -5484,6 +5484,7 @@ name = "photocraft-compose"
 version = "0.20.1"
 dependencies = [
  "criterion",
+ "photocraft-algo",
  "photocraft-cms",
  "photocraft-color",
  "photocraft-doc",

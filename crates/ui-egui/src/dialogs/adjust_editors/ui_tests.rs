@@ -11,11 +11,12 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-const ALL_KINDS: [&str; 16] = [
+const ALL_KINDS: [&str; 17] = [
     "brightnessContrast",
     "levels",
     "curves",
     "exposure",
+    "light",
     "vibrance",
     "hueSaturation",
     "colorBalance",
@@ -115,6 +116,7 @@ fn every_adjustment_layer_edits_through_properties() {
             let probe = match kind {
                 "brightnessContrast" => Some("Brightness"),
                 "exposure" => Some("Exposure"),
+                "light" => Some("Exposure"),
                 "vibrance" => Some("Vibrance"),
                 "hueSaturation" => Some("Hue"),
                 "colorBalance" => Some("Cyan  ·  Red"),

@@ -148,6 +148,7 @@ pub fn adjustment_kind(a: &Adjustment) -> &'static str {
         Adjustment::Levels { .. } => "levels",
         Adjustment::Curves { .. } => "curves",
         Adjustment::Exposure { .. } => "exposure",
+        Adjustment::Light { .. } => "light",
         Adjustment::Vibrance { .. } => "vibrance",
         Adjustment::HueSaturation { .. } => "hueSaturation",
         Adjustment::ColorBalance { .. } => "colorBalance",

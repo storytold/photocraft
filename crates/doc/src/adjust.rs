@@ -202,6 +202,18 @@ pub enum Adjustment {
         contrast: f32,
         legacy: bool,
     },
+    /// Photoshop 2026's Light adjustment (Exposure, Contrast, Highlights, Shadows, Whites,
+    /// Blacks): a `brit` layer whose `CgEd` descriptor sets `brightnessMode` to `Light` instead
+    /// of the classic two-slider form (#6542). `exposure` is in stops; the rest are percent,
+    /// -100..=100.
+    Light {
+        exposure: f32,
+        contrast: f32,
+        highlights: f32,
+        shadows: f32,
+        whites: f32,
+        blacks: f32,
+    },
     /// R, G, B (or the channels `space` names) first, then the master (composite) record.
     /// In CMYK this also applies to `black`; in Lab the master is ignored.
     Levels {
@@ -316,6 +328,7 @@ impl Adjustment {
     pub fn label(&self) -> &str {
         match self {
             Adjustment::BrightnessContrast { .. } => "Brightness/Contrast",
+            Adjustment::Light { .. } => "Light",
             Adjustment::Levels { .. } => "Levels",
             Adjustment::Curves { .. } => "Curves",
             Adjustment::Exposure { .. } => "Exposure",
