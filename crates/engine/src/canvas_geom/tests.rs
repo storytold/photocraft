@@ -465,7 +465,7 @@ fn canvas_turn_refuses_extreme_auxiliary_pixels_without_changing_state() {
                     }
                     layer.content = LayerContent::Smart(smart);
                 }
-                _ => unreachable!(),
+                _ => panic!("unknown pixel storage fixture: {target}"),
             }
             d.layers.push(layer);
             let mut s = Session::new();

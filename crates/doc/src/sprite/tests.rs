@@ -299,3 +299,26 @@ fn simultaneous_palette_and_pixel_edits_keep_indices_and_refresh_all_display_til
     assert_eq!(doc.layers[0].surface().unwrap().pixel(0, 0), [1.0, 0.0, 0.0, 1.0], "linked frame keeps its own palette");
     assert_eq!(indices(&before, 0)[1], 2, "history is unchanged");
 }
+
+/// A cel without an index plane has no identity to preserve for unchanged-looking samples.
+#[test]
+fn unindexed_cel_quantizes_samples_with_or_without_repainting() {
+    let rect = Rect::from_xywh(0, 0, 2, 1);
+    let palette = [
+        PaletteEntry { rgba: [0; 4], name: String::new() },
+        PaletteEntry { rgba: [255, 0, 0, 255], name: String::new() },
+        PaletteEntry { rgba: [0, 0, 255, 255], name: String::new() },
+    ];
+    let mut pixels = Surface::new(PixelFormat::RGBA8);
+    pixels.write_interleaved(rect, &[255, 0, 0, 255, 255, 0, 0, 255]);
+    for repaint in [false, true] {
+        let mut edited = pixels.clone();
+        if repaint {
+            edited.write_pixel(1, 0, &[0.0, 0.0, 1.0, 1.0]);
+        }
+        let mut cel = SpriteCel { rect, pixels: pixels.clone(), indices: None, opacity: 255, z_index: 0, linked_frame: None, precise: None };
+        pixels::capture_indices(&mut cel, &edited, &palette, Some(0)).unwrap();
+        assert_eq!(cel.indices.as_ref().unwrap().to_interleaved(rect), if repaint { [1, 2] } else { [1, 1] });
+        assert_eq!(cel.pixels, edited);
+    }
+}

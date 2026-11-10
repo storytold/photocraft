@@ -59,7 +59,7 @@ pub fn capture_indices(cel: &mut SpriteCel, edited: &Surface, palette: &[Palette
     let mut edited_row = Vec::new();
     let tiles: std::collections::BTreeSet<_> = cel.pixels.tiles().chain(edited.tiles()).map(|(tc, _)| *tc).collect();
     for tc in tiles {
-        if cel.pixels.tile(tc) == edited.tile(tc) {
+        if cel.indices.is_some() && cel.pixels.tile(tc) == edited.tile(tc) {
             continue;
         }
         let r = rect.intersect(&tc.rect());
@@ -79,7 +79,7 @@ pub fn capture_indices(cel: &mut SpriteCel, edited: &Surface, palette: &[Palette
                 let matches = |i: u8| palette.get(usize::from(i)).is_some_and(|e| color(e, i, transparent) == rgba);
                 // Palette edits can accompany painting. An unchanged displayed sample keeps
                 // its index even when that entry has just changed color.
-                let index = if matches(old) || rgba == rgba8_samples(original) {
+                let index = if matches(old) || cel.indices.is_some() && cel.rect.contains(x, y) && rgba == rgba8_samples(original) {
                     old
                 } else if rgba[3] == 0
                     && let Some(index) = transparent
