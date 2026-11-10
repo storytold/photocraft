@@ -723,6 +723,8 @@ fn moving_an_artboard_left_of_or_above_the_origin_grows_the_canvas_there() {
     }
 }
 
+/// Moving or making a board past the canvas origin re-bases the document; the Color Sampler
+/// points and the painting symmetry shift with it and stay on the same pixels.
 #[test]
 fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_document() {
     // #9302: the re-based document moved everything but the Color Sampler points and the
@@ -778,6 +780,8 @@ fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_docume
     assert_eq!(samplers(&s), vec![[f64::from(by) + 5.5, 5.5]]);
 }
 
+/// Duplicating a board whose document has boards past the origin (one or several selected
+/// layers) re-bases it; the Color Sampler points shift with the document.
 #[test]
 fn duplicating_a_board_beside_one_past_the_origin_moves_the_color_samplers_with_the_document() {
     // #9302 review: Layer › Duplicate puts the copy right of its board, but `fit_canvas` still
