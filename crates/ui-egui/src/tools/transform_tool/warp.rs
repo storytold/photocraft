@@ -193,3 +193,7 @@ pub fn split(app: &mut PhotocraftApp, id: &str, at: Option<[f64; 2]>) -> Result<
     }
     edit_session_warp(app, id, &p)
 }
+
+#[cfg(test)]
+#[path = "warp_split_one_shot_tests.rs"]
+mod warp_split_one_shot_tests;
