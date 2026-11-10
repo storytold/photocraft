@@ -12,12 +12,25 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     if !(is_shape_tool(tool)
         || matches!(
             tool,
-            Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::PathSelection | Tool::DirectSelection
+            Tool::Pen
+                | Tool::FreeformPen
+                | Tool::CurvaturePen
+                | Tool::AddAnchorPoint
+                | Tool::DeleteAnchorPoint
+                | Tool::ConvertPoint
+                | Tool::PathSelection
+                | Tool::DirectSelection
         ))
     {
         return false;
     }
     let t = Tokens::get(ui.ctx());
+    if tool == Tool::ConvertPoint {
+        ui.allocate_ui_with_layout(ui.available_size(), egui::Layout::centered_and_justified(ui.layout().main_dir()), |ui| {
+            ui.label(egui::RichText::new(tl!("No options for the Convert Point Tool.")).color(t.text_dim).size(12.0));
+        });
+        return true;
+    }
     let lbl = |ui: &mut egui::Ui, s: &str| {
         let label = ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
         // The caption scrubs and names the control drawn right after it.
