@@ -5617,6 +5617,7 @@ dependencies = [
  "craft-pdf",
  "crc32fast",
  "flate2",
+ "hayro",
  "imagesize",
  "kurbo 0.13.1",
  "lopdf",

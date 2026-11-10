@@ -68,6 +68,7 @@ pub mod pdf;
 #[cfg(all(feature = "pdf-editable", not(target_arch = "wasm32")))]
 mod pdf_editable;
 mod pdf_import;
+pub mod pdf_import_dialog;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -167,6 +168,9 @@ pub enum IoError {
     /// An SVG that does not parse (or is too large to rasterise).
     #[error("SVG: {0}")]
     Svg(String),
+    /// PDF parsing or rendering error.
+    #[error("PDF: {0}")]
+    Pdf(String),
     /// The file could not be read.
     #[error("{0}")]
     Read(String),
@@ -595,7 +599,7 @@ pub fn import_with_svg_group_depth_and_interrupt(
 }
 
 /// The user's settings that shape an import.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImportOptions {
     /// SVG groups nested deeper than this are rasterised.
     pub max_group_depth: usize,
@@ -626,6 +630,8 @@ pub struct ImportOptions {
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
     /// the fresh preflight estimate does not exceed this amount.
     pub psd_approved_estimate: Option<u64>,
+    /// Selected PDF page(s), crop, resolution and document layout.
+    pub pdf: Option<pdf_import_dialog::PdfOpenOptions>,
 }
 
 impl Default for ImportOptions {
@@ -640,6 +646,7 @@ impl Default for ImportOptions {
             pdf_editable: false,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
+            pdf: None,
         }
     }
 }
@@ -1005,6 +1012,11 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     }
     // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
     // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
+    if let Some(dialog_options) = opts.pdf.as_ref() {
+        if is_pdf_input(name, bytes) {
+            return pdf_import_dialog::import_pdf(name, bytes, dialog_options, ctl);
+        }
+    }
     if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && photocraft_codecs::detect(bytes).is_none()) {
         return pdf_import::import(name, bytes, opts, ctl);
     }
@@ -1029,6 +1041,12 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
 /// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
 /// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.
+/// A PDF file by magic signature or extension, without hiding known raster/SVG content.
+pub fn is_pdf_input(name: &str, bytes: &[u8]) -> bool {
+    if photocraft_codecs::detect(bytes).is_some() || svg::is_svg(bytes) { return false; }
+    pdf_import::is_pdf(bytes) || has_extension(name, "pdf")
+}
+
 pub fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
     // Keep the SVG extension as a fallback for malformed files so the SVG parser can return an
     // actionable SVG error. A recognized raster signature still wins over a misleading `.svg`
