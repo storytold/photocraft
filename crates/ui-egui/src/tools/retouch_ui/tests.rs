@@ -29,11 +29,52 @@ fn stripes(app: &mut PhotocraftApp, step: usize, target: &str) {
 }
 
 #[test]
+fn only_clone_stamp_and_healing_brush_wrap_in_pattern_preview() {
+    // View › Pattern Preview (#8883): a Clone Stamp or Healing Brush stroke across the right edge
+    // asks its command to go on at the opposite one, and only then. The reference application's
+    // other retouching tools stop at the edge.
+    let tools = [
+        (Tool::CloneStamp, "paint.cloneStamp", true),
+        (Tool::Healing, "paint.healingBrush", true),
+        (Tool::Blur, "paint.blur", false),
+        (Tool::Sharpen, "paint.sharpen", false),
+        (Tool::Smudge, "paint.smudge", false),
+        (Tool::Dodge, "paint.dodge", false),
+        (Tool::Burn, "paint.burn", false),
+        (Tool::Sponge, "paint.sponge", false),
+        (Tool::ColorReplacement, "paint.colorReplacement", false),
+        (Tool::PatternStamp, "paint.patternStamp", false),
+        (Tool::HistoryBrush, "paint.historyBrush", false),
+        (Tool::SpotHealing, "paint.spotHealing", false),
+        (Tool::BackgroundEraser, "paint.backgroundEraser", false),
+    ];
+    for (tool, cmd, wraps) in tools {
+        for pattern_preview in [false, true] {
+            let mut app = app();
+            stripes(&mut app, 8, "pixels");
+            app.ui.view.pattern_preview = pattern_preview;
+            app.ui.clone_source = Some([20.0, 30.0]);
+            app.ui.tool = tool;
+            let m = egui::Modifiers::NONE;
+            tool_event(&mut app, ToolEvent::Down { x: 86.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Move { x: 112.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Up { x: 112.0, y: 30.0 }, m);
+            assert!(!app.ui.status_error, "{tool:?}: {}", app.ui.status);
+            let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == cmd).cloned().unwrap_or_else(|| panic!("{tool:?}: no {cmd}"));
+            assert_eq!(p.get("wrap").and_then(Value::as_bool).unwrap_or(false), wraps && pattern_preview, "{tool:?}: {p}");
+        }
+    }
+}
+
+#[test]
 fn clone_stamp_in_pattern_preview_wraps_a_dab_across_the_right_edge() {
     for pattern_preview in [false, true] {
         let mut app = app();
         app.run("paint.pencil", json!({"points": [[10, 10]], "size": 24, "color": "#ff0000"})).unwrap();
         app.ui.tool = Tool::CloneStamp;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        // A hard tip, so the wrapped part of the dab is fully painted.
+        app.run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 1}})).unwrap();
         app.ui.clone_source = Some([10.0, 10.0]);
         app.ui.view.pattern_preview = pattern_preview;
         let modifiers = egui::Modifiers::NONE;
@@ -58,6 +99,8 @@ fn clone_stamp_in_pattern_preview_wraps_a_dab_across_the_right_edge() {
 fn clone_stamp_paints_with_the_brush_hardness() {
     let rim = |hardness: f32| {
         let mut app = app();
+        app.ui.tool = Tool::CloneStamp;
+        crate::paint_mouse::sync_tool_brush(&mut app);
         app.run("tools.setBrush", json!({"brush": {"size": 24, "hardness": hardness}})).unwrap();
         app.run("paint.pencil", json!({"points": [[15, 30]], "size": 40, "color": "#ff0000"})).unwrap();
         app.ui.tool = Tool::CloneStamp;
@@ -109,7 +152,7 @@ fn clone_stamp_brush_opacity_and_flow_reach_the_painted_pixels() {
     app.ui.clone_source = Some([10.0, 10.0]);
     app.ui.tool_options.clone_sample = "all".into();
     app.run("tools.setBrush", json!({"brush": {"opacity": 0.5, "flow": 0.5}})).unwrap();
-    assert!(finish_stroke(&mut app, Tool::CloneStamp, &[[50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::CloneStamp, &[[50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     let pixel = active(&app).surface().unwrap().rgba(50, 30);
     assert!(pixel[0] > 0.9 && pixel[3] > 0.0 && pixel[3] < 0.5, "partial-opacity, partial-flow red stamp: {pixel:?}");
@@ -186,7 +229,7 @@ fn clone_without_a_source_names_the_platform_modifier() {
     for tool in [Tool::CloneStamp, Tool::Healing] {
         let mut app = app();
         app.ui.tool = tool;
-        assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+        assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
         assert!(app.ui.status_error, "{tool:?}");
         let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
         assert!(app.ui.status.starts_with(want), "{tool:?}: {}", app.ui.status);
@@ -621,6 +664,7 @@ fn content_aware_move_tool_lassoes_then_moves_or_extends() {
         app.run("paint.pencil", json!({"points": [[20, 30], [24, 30]], "size": 6, "color": "#0000ff"})).unwrap();
         let blue = |app: &PhotocraftApp, x: i32| active(app).surface().unwrap().rgba(x, 30)[0] < 0.5;
         app.ui.tool = Tool::ContentAwareMove;
+        app.ui.tool_options.cam_transform_on_drop = false;
         app.ui.tool_options.cam_mode = mode.into();
         app.ui.tool_options.cam_structure = 7.0;
         let m = egui::Modifiers::NONE;
@@ -686,7 +730,7 @@ fn content_aware_move_transform_on_drop_turns_the_patch_on_enter() {
 }
 
 #[test]
-fn red_eye_click_corrects_a_pupil_and_errors_on_a_miss() {
+fn red_eye_click_corrects_a_pupil_and_a_miss_adds_an_unchanged_state() {
     let mut app = app();
     app.run("paint.pencil", json!({"points": [[50, 30]], "size": 18, "hardness": 100, "color": "#f21818"})).unwrap();
     let before = active(&app).surface().unwrap().rgba(50, 30);
@@ -700,10 +744,14 @@ fn red_eye_click_corrects_a_pupil_and_errors_on_a_miss() {
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.redEye"));
     let after = active(&app).surface().unwrap().rgba(50, 30);
     assert!(after[0] < before[0] - 0.15, "before {before:?} after {after:?}");
+    // A miss changes nothing but still adds a state, as in Photoshop (#12573).
+    let steps = app.session.active().unwrap().history.past_len();
     tool_event(&mut app, ToolEvent::Down { x: 8.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Up { x: 8.0, y: 8.0 }, egui::Modifiers::NONE);
-    assert!(app.ui.status_error);
-    assert!(app.ui.status.contains("no red-eye pixels"), "{}", app.ui.status);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let history = &app.session.active().unwrap().history;
+    assert_eq!(history.past_len(), steps + 1);
+    assert_eq!(history.entries().last().map(|e| e.to_string()).as_deref(), Some("Red Eye Removal Tool"));
 }
 
 #[test]
@@ -1002,7 +1050,7 @@ fn s_group_is_clone_stamp_then_pattern_stamp() {
 #[test]
 fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
     let mut app = app();
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[20.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[20.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.patternStamp"));
     assert!(app.ui.pattern_stamp_phase.is_some());
@@ -1010,7 +1058,7 @@ fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
     assert!(px[3] > 0.5, "the stamp paints through the brush: {px:?}");
     app.ui.tool_options.pattern_stamp_aligned = false;
     app.ui.pattern_stamp_phase = None;
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[70.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[70.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(app.ui.pattern_stamp_phase.is_none(), "unaligned strokes do not keep phase");
 }
 
@@ -1018,7 +1066,7 @@ fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
 fn pattern_stamp_does_not_require_a_clone_source() {
     let mut app = app();
     assert!(app.ui.clone_source.is_none());
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert!(app.ui.clone_source.is_none());
 }
@@ -1108,7 +1156,7 @@ fn history_brush_opacity_and_flow_reach_the_painted_pixels() {
     app.run("paint.pencil", json!({"points": [[10, 10]], "size": 16, "color": "#00ff00"})).unwrap();
     app.ui.tool = Tool::HistoryBrush;
     app.run("tools.setBrush", json!({"brush": {"opacity": 0.5, "flow": 0.5}})).unwrap();
-    assert!(finish_stroke(&mut app, Tool::HistoryBrush, &[[10.0, 10.0, 1.0]], egui::Modifiers::NONE));
+    assert!(finish_stroke(&mut app, Tool::HistoryBrush, &[[10.0, 10.0, 1.0]], egui::Modifiers::NONE, false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     let (id, params) = app.session.journal.last().unwrap();
     assert_eq!(id, "paint.historyBrush");
