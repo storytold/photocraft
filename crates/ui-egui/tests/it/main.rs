@@ -1,8 +1,13 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod actions_duplicate;
+mod actions_panel_menu;
+mod actions_record_again;
 mod adjust_preview_gpu;
 mod arbitrary_rotation_preview;
+mod background_eraser_reset_tip;
 mod batch_export_options;
+mod brush_reset_defaults;
 mod camera_raw_guided_upright;
 mod camera_raw_histogram;
 mod camera_raw_localization;
@@ -17,6 +22,7 @@ mod crop_ctrl_straighten;
 mod crop_default_mode;
 mod crop_defaults;
 mod crop_frame_look;
+mod crop_options_bar_chrome;
 mod crop_overlay_icons;
 mod crop_popup_keys;
 mod crop_shift_corner;
@@ -30,6 +36,12 @@ mod export_as_scaling;
 mod eyedropper_ring;
 mod full_res_preview;
 mod gpu_device_loss;
+mod healing_reset_tip;
+// The interactive bench's `#[cfg(test)]` reporting tests: CI runs `--tests`, never examples.
+// Embedding the example leaves its other entrypoints unused in this binary.
+#[path = "../../examples/interactive_bench.rs"]
+#[allow(dead_code)]
+mod interactive_bench_reporting;
 mod layout_perf;
 mod live_stroke_canvas;
 mod magnetic_lasso_right_click;
