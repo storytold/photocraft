@@ -123,7 +123,7 @@ fn the_shortcut_shows_a_layers_tab_closed_from_the_window_menu() {
     h.run_steps(4);
     h.get_by_label("✔ Layers F7").click();
     h.run_steps(4);
-    assert!(!h.state().ui.panels.layers, "Window › Layers closed the panel");
+    assert!(h.state().ui.docking.as_ref().is_some_and(|w| !w.layout.contains(&"layers".to_owned())), "Window › Layers closed the Layers tab");
     h.state_mut().ui.layer_filter_name = "lin".into();
     h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::ALT | egui::Modifiers::SHIFT, egui::Key::F);
     h.run_steps(6);
