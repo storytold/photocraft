@@ -391,9 +391,17 @@ impl ColorState {
         self.proofs.get(&doc).cloned().unwrap_or_else(|| self.default_proof_view())
     }
 
-    /// The proofing state a document starts with (see [`Self::proof`]).
+    /// The proofing state a document starts with (see [`Self::proof`]). A remembered Working CMYK
+    /// is resolved now, not when the preferences loaded, so it follows the working profile chosen
+    /// since; a named profile stays the one that was chosen.
     fn default_proof_view(&self) -> ProofView {
-        let setup = self.default_proof.as_ref().map(|(_, setup)| setup.clone()).unwrap_or_default();
+        let setup = match &self.default_proof {
+            Some((_, remembered)) if matches!(remembered.name.as_str(), "working-cmyk" | "workingCmyk") => {
+                ProofSetup { profile: self.working(ColorMode::Cmyk), ..remembered.clone() }
+            }
+            Some((_, remembered)) => remembered.clone(),
+            None => ProofSetup::default(),
+        };
         ProofView { setup, gamut_threshold: photocraft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() }
     }
 
