@@ -21,6 +21,8 @@ fn harness() -> Harness<'static, PhotocraftApp> {
         app
     });
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(6);
     h
 }
 
@@ -61,9 +63,10 @@ fn the_layers_blend_mode_list_has_a_line_between_each_group() {
     assert!(open_list(&h).is_some(), "the list is open");
     // Each mode's row in the open list: its label's last node (the box shows the chosen one's
     // first). Rows scrolled out of the list keep their place in it, so the gaps hold for all.
+    let row_left = h.get_by_label("Dissolve").rect().left();
     let rows: Vec<Rect> = BlendMode::LAYER_MODES
         .iter()
-        .map(|m| h.get_all_by_label(m.label()).map(|n| n.rect()).next_back().unwrap_or_else(|| panic!("{m:?} is in the list")))
+        .map(|m| h.get_all_by_label(m.label()).map(|n| n.rect()).filter(|r| (r.left() - row_left).abs() < 1.0).next_back().unwrap_or_else(|| panic!("{m:?} is in the list")))
         .collect();
     let gaps: Vec<f32> = rows.windows(2).map(|w| w[1].top() - w[0].bottom()).collect();
     let row_gap = gaps.iter().copied().fold(f32::INFINITY, f32::min);
