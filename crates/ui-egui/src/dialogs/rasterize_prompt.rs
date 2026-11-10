@@ -255,3 +255,7 @@ mod rasterize_prompt_text_tests;
 #[cfg(test)]
 #[path = "rasterize_prompt_fill_text_tests.rs"]
 mod rasterize_prompt_fill_text_tests;
+
+#[cfg(test)]
+#[path = "../rasterize_prompt_history_name_tests.rs"]
+mod rasterize_prompt_history_name_tests;
