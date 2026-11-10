@@ -215,8 +215,8 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(err("stroke too large"));
     }
 
-    // Nothing written (every dab under the tolerance, outside the selection or on locked
-    // transparency): a no-op stroke, with no history step.
+    // A stroke that writes nothing even at tolerance 0 (wholly outside the selection, locked
+    // transparency) is a quiet no-op; one the tolerance alone holds back adds an unchanged state (#12636).
     let mut nothing_written = false;
     let dmg = run_stroke(s, "Art History Brush", id, p, |_, surf, sel, lock| {
         let fmt = surf.format();
@@ -232,6 +232,10 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let sel_mask = selection_mask(sel, outer);
         let n = stamp_region(&mut dest, &src_reg, &dabs, hardness, opacity, flow, tolerance, sel_mask.as_deref(), lock, alpha_index(&fmt))?;
         if n == 0 {
+            // `dest` is unchanged, so the same stroke at tolerance 0 tells whether it would paint.
+            if tolerance > 0.0 && stamp_region(&mut dest, &src_reg, &dabs, hardness, opacity, flow, 0.0, sel_mask.as_deref(), lock, alpha_index(&fmt))? > 0 {
+                return Ok(Rect::EMPTY);
+            }
             nothing_written = true;
             return Err(err("the stroke changed no pixel"));
         }
@@ -242,7 +246,7 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
         Err(_) if nothing_written => return Ok(json!({ "damage": Value::Null })),
         r => r?,
     };
-    Ok(json!({ "damage": damage_json(dmg) }))
+    Ok(json!({ "damage": if dmg.is_empty() { Value::Null } else { damage_json(dmg) } }))
 }
 
 #[cfg(test)]
@@ -331,14 +335,15 @@ mod tests {
     }
 
     #[test]
-    fn stroke_under_the_tolerance_records_no_step() {
+    fn stroke_under_the_tolerance_records_an_unchanged_step() {
         let mut s = session(48, 32, 8, "rgb");
         paint_layer(&mut s, |_, _| [0.5, 0.5, 0.5, 1.0]);
         paint_layer(&mut s, |_, _| [0.6, 0.6, 0.6, 1.0]);
         let steps = s.active().unwrap().history.past_len();
         let r = stroke(&mut s, json!({"state": 1, "tolerance": 50})).unwrap();
         assert!(r["damage"].is_null(), "{r}");
-        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Art History Brush"));
         assert!((rgba(&s, 24, 16)[0] - 0.6).abs() < 0.01);
     }
 
@@ -388,7 +393,8 @@ mod tests {
     }
 
     /// A stroke that writes nothing (wholly outside the selection, or on transparent pixels
-    /// with Lock Transparency) does nothing, as with the tolerance: no error, no History step.
+    /// with Lock Transparency) does nothing, unlike one the tolerance holds back: no error, no
+    /// History step.
     #[test]
     fn a_stroke_that_writes_nothing_is_a_quiet_no_op() {
         let mut s = session(48, 32, 8, "rgb");
@@ -525,3 +531,7 @@ mod tests {
         assert!(s.is_enabled("paint.artHistoryBrush"));
     }
 }
+
+#[cfg(test)]
+#[path = "art_history_noop_state_tests.rs"]
+mod art_history_noop_state_tests;
