@@ -268,6 +268,7 @@ pub use services::{
     LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable,
     RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
+pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::bidi_text;
 pub use text::cjk_fonts;
 pub use text::direction;
@@ -1063,6 +1064,8 @@ mod pencil_shift_digit_opacity_tests;
 
 #[cfg(test)]
 mod doc_tab_menu_tests;
+#[cfg(test)]
+mod dodge_default_tip_tests;
 #[cfg(test)]
 mod layers_empty_area_menu_tests;
 #[cfg(test)]

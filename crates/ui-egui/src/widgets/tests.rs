@@ -334,6 +334,128 @@ fn text_field_bounds_an_oversized_existing_value() {
     assert!(h.state().chars().count() < super::TEXT_FIELD_LIMIT, "an edit keeps the bounded copy");
 }
 
+/// A text field's text, its box, and whether its editor has the focus.
+type FieldState = (String, egui::Rect, bool);
+
+/// A harness drawing one 140 pt text field holding `text`, in a `Ui` that is `enabled` or not.
+fn text_field_harness(text: &str, enabled: bool) -> Harness<'static, FieldState> {
+    let id = egui::Id::unique("tf");
+    let mut h = Harness::new_ui_state(
+        move |ui, s: &mut FieldState| {
+            let field = ui.add_enabled_ui(enabled, |ui| drop(super::text_field(ui, id, &mut s.0, "", 140.0, false).accessible_name("Value")));
+            s.1 = field.response.rect;
+            s.2 = ui.memory(|m| m.has_focus(id));
+        },
+        (text.to_owned(), egui::Rect::NOTHING, false),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run();
+    assert_eq!(h.state().1.size(), egui::vec2(140.0, super::TEXT_FIELD_H), "the state holds the field's box");
+    h
+}
+
+/// Clicks a field holding `text` at `at(its box)` and types "X": the text after that, and
+/// whether the click focused the editor.
+fn click_text_field_then_type(text: &str, enabled: bool, at: impl Fn(egui::Rect) -> egui::Pos2) -> (String, bool) {
+    let mut h = text_field_harness(text, enabled);
+    let pos = at(h.state().1);
+    click_at(&mut h, pos, egui::PointerButton::Primary);
+    let focused = h.state().2;
+    h.event(egui::Event::Text("X".into()));
+    h.run();
+    (h.state().0.clone(), focused)
+}
+
+/// #12302: a click in a text field's padding focuses its editor with the caret at the nearest
+/// point inside it: the start from the left, the end from the right. Before the fix only a click
+/// within egui's `interact_radius` (5 pt) of the editor reached it, so the left and right clicks
+/// sit half a point in from the box's edge (5.5 pt out, on the 6 pt sides) and the corner clicks
+/// are farther still diagonally, clamped into the editor in both axes.
+#[test]
+fn text_field_padding_click_focuses_the_editor() {
+    let click = |at: fn(egui::Rect) -> egui::Pos2| click_text_field_then_type("hello", true, at);
+    assert_eq!(click(|r| egui::pos2(r.left() + 0.5, r.center().y)), ("Xhello".to_owned(), true), "left padding");
+    assert_eq!(click(|r| egui::pos2(r.right() - 0.5, r.center().y)), ("helloX".to_owned(), true), "right padding");
+    assert_eq!(click(|r| r.left_top() + egui::vec2(0.5, 0.5)), ("Xhello".to_owned(), true), "top-left corner");
+    assert_eq!(click(|r| r.right_bottom() - egui::vec2(0.5, 0.5)), ("helloX".to_owned(), true), "bottom-right corner");
+    // Above and below the text, the caret goes where a click straight down (or up) into the
+    // editor puts it, in the middle of "hello" here.
+    let inside = click(|r| egui::pos2(r.left() + 20.0, r.center().y));
+    assert_eq!(click(|r| egui::pos2(r.left() + 20.0, r.top() + 0.5)), inside, "top padding");
+    assert_eq!(click(|r| egui::pos2(r.left() + 20.0, r.bottom() - 0.5)), inside, "bottom padding");
+}
+
+/// #12302: a padding click on an empty field focuses it, with the caret at the only place it
+/// can go.
+#[test]
+fn text_field_padding_click_focuses_an_empty_field() {
+    for (side, at) in [("left", 0.5), ("right", 139.5)] {
+        let clicked = click_text_field_then_type("", true, |r| egui::pos2(r.left() + at, r.center().y));
+        assert_eq!(clicked, ("X".to_owned(), true), "{side} padding");
+    }
+}
+
+/// #12302: in a value wider than the field, scrolled to its end while being edited, a click in
+/// the right padding puts the caret at the end of the text in view, which is the value's end.
+#[test]
+fn text_field_padding_click_follows_a_scrolled_value() {
+    let long = "abcdefghij".repeat(10);
+    let mut h = text_field_harness(&long, true);
+    let r = h.state().1;
+    click_at(&mut h, egui::pos2(r.left() + 0.5, r.center().y), egui::PointerButton::Primary);
+    h.event(egui::Event::Key { key: Key::End, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run();
+    click_at(&mut h, egui::pos2(r.right() - 0.5, r.center().y), egui::PointerButton::Primary);
+    h.event(egui::Event::Text("X".into()));
+    h.run();
+    assert_eq!(h.state().0, format!("{long}X"));
+}
+
+/// A disabled field's padding takes no click: the editor stays unfocused and typing changes
+/// nothing.
+#[test]
+fn disabled_text_field_padding_click_does_nothing() {
+    let clicked = click_text_field_then_type("hello", false, |r| egui::pos2(r.left() + 0.5, r.center().y));
+    assert_eq!(clicked, ("hello".to_owned(), false));
+}
+
+/// The popup arrow drawn in a [`super::text_field_with_trailing`]'s trailing space (the Type
+/// tool's font field) keeps its own click now that the editor covers the rest of the box
+/// (#12302): the editor stops short of that space.
+#[test]
+fn text_field_trailing_arrow_keeps_its_click() {
+    let id = egui::Id::unique("tf");
+    // The text, whether the arrow was clicked, the arrow's rect and whether the editor has the focus.
+    let mut h = Harness::new_ui_state(
+        move |ui, s: &mut (String, bool, egui::Rect, bool)| {
+            let (input, rect) = super::text_field_with_trailing(ui, id, &mut s.0, "", 140.0, super::POPUP_ARROW_W);
+            drop(input.accessible_name("Font"));
+            s.2 = egui::Rect::from_min_max(egui::pos2(rect.right() - super::POPUP_ARROW_W - 2.0, rect.top() + 2.0), rect.max - egui::vec2(2.0, 2.0));
+            let arrow = ui.interact(s.2, id.with("arrow"), egui::Sense::click());
+            arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Font"));
+            s.1 |= arrow.clicked();
+            s.3 = ui.memory(|m| m.has_focus(id));
+        },
+        ("hello".to_owned(), false, egui::Rect::NOTHING, false),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run();
+    let pos = h.state().2.center();
+    click_at(&mut h, pos, egui::PointerButton::Primary);
+    assert!(h.state().1, "the arrow takes the click");
+    assert!(!h.state().3, "the editor doesn't take the focus");
+}
+
+/// #12302: a click inside the editor keeps egui's own focus and caret placement: the box behind
+/// it doesn't take the click, and the caret lands inside the word rather than at either end.
+#[test]
+fn text_field_editor_click_places_the_caret_at_the_pointer() {
+    let (text, focused) = click_text_field_then_type("hello", true, |r| egui::pos2(r.left() + 20.0, r.center().y));
+    assert!(focused);
+    assert_eq!(text.len(), 6, "{text:?}");
+    assert!(text != "Xhello" && text != "helloX", "the X lands inside the word: {text:?}");
+}
+
 /// #2150: text queued by the control channel (`ui.type`) joins the input in `raw_input_hook`
 /// and is cut like the OS's, so the cap must run after it is appended.
 #[test]
@@ -918,7 +1040,7 @@ fn click_and_type(h: &mut egui_kittest::Harness<'static, (f32, u32)>, text: &str
 }
 
 /// A button down (and up) at `pos`.
-fn click_at(h: &mut egui_kittest::Harness<'static, (f32, u32)>, pos: egui::Pos2, button: egui::PointerButton) {
+fn click_at<S>(h: &mut egui_kittest::Harness<'_, S>, pos: egui::Pos2, button: egui::PointerButton) {
     h.event(egui::Event::PointerMoved(pos));
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE });
