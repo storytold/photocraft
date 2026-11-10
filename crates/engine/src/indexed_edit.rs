@@ -299,6 +299,7 @@ fn process_removed_tile(
     }
     let tile = surface.try_tile_mut(coordinate)?;
     let original_bytes = original.bytes();
+    let mut bytes = tile.bytes_mut();
     for y in region.y0..region.y1 {
         let ly = y.saturating_sub(tile_rect.y0) as usize;
         for x in region.x0..region.x1 {
@@ -306,7 +307,7 @@ fn process_removed_tile(
             let base = (ly * TILE_SIZE as usize + lx) * bpp;
             let before = PixelBytes::from_slice(&original_bytes[base..base + bpp]);
             if before != after_default {
-                tile.bytes_mut()[base..base + bpp].copy_from_slice(encoded.as_slice());
+                bytes[base..base + bpp].copy_from_slice(encoded.as_slice());
             }
         }
     }
@@ -353,15 +354,11 @@ fn process_tile(
     }
 
     let mut nearest = NearestCache::new();
-    let mut changed = false;
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
+    let mut first_change = None;
     let after_bytes = after.bytes();
     // Tile::bytes now acquires a storage guard. Hold it once per tile, not once per pixel.
     let original_bytes = original.map(|tile| tile.bytes());
-    for y in region.y0..region.y1 {
+    'find_change: for y in region.y0..region.y1 {
         let ly = y.saturating_sub(tile_rect.y0) as usize;
         for x in region.x0..region.x1 {
             let lx = x.saturating_sub(tile_rect.x0) as usize;
@@ -372,24 +369,20 @@ fn process_tile(
             }
             let target = changed_target(&after_bytes, context.format, context.table, &mut nearest, base)?;
             if target_bytes(target, context.format, context.table) != pixel {
-                changed = true;
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x.saturating_add(1));
-                max_y = max_y.max(y.saturating_add(1));
+                first_change = Some((x, y));
+                break 'find_change;
             }
         }
     }
-    if !changed {
-        return Ok(());
-    }
+    let Some((first_x, first_y)) = first_change else { return Ok(()) };
 
     let tile = surface.try_tile_mut(coordinate)?;
-    let after_bytes = after.bytes();
-    let mut nearest = NearestCache::new();
-    for y in min_y..max_y {
+    let mut bytes = tile.bytes_mut();
+    // The prefix already needs no remap. Constrain the remaining pixels in one pass rather than
+    // computing every target twice; unchanged pixels still bypass the mapping.
+    for y in first_y..region.y1 {
         let ly = y.saturating_sub(tile_rect.y0) as usize;
-        for x in min_x..max_x {
+        for x in (if y == first_y { first_x } else { region.x0 })..region.x1 {
             let lx = x.saturating_sub(tile_rect.x0) as usize;
             let base = (ly * TILE_SIZE as usize + lx) * bpp;
             let pixel = PixelBytes::from_slice(&after_bytes[base..base + bpp]);
@@ -399,7 +392,7 @@ fn process_tile(
             let target = changed_target(&after_bytes, context.format, context.table, &mut nearest, base)?;
             let encoded = target_bytes(target, context.format, context.table);
             if encoded != pixel {
-                tile.bytes_mut()[base..base + bpp].copy_from_slice(encoded.as_slice());
+                bytes[base..base + bpp].copy_from_slice(encoded.as_slice());
             }
         }
     }
