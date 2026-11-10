@@ -1662,6 +1662,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::slice_ui::draw_overlay(app, painter, xf);
     crate::frame_tool::draw_overlay(app, painter, xf);
     crate::frame_tool::task_bar(app, ui, xf);
+    crate::arrow_ui::draw_overlay(app, painter, xf);
     // The Crop tool's contextual task bar under its frame (#10890), on the frame's own tile only:
     // the other tiles would map the active document's frame with their own transform.
     if app.session.active_index() == Some(idx) {
@@ -1727,6 +1728,8 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         ui.ctx().set_cursor_icon(c);
     } else if let Some(c) = response.hover_pos().and_then(|p| crate::cam_transform::cursor(app, ctx, xf, p)) {
         ui.ctx().set_cursor_icon(c);
+    } else if response.hover_pos().is_some_and(|p| crate::arrow_ui::hovers(app, xf.to_doc(p))) {
+        ui.ctx().set_cursor_icon(if app.ui.arrow_drag.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
     } else if let Some((p, grab)) = response
         .hover_pos()
         .filter(|_| matches!(tool, Tool::PathSelection | Tool::DirectSelection))

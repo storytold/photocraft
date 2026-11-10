@@ -228,6 +228,41 @@ pub enum LineJoin {
     Bevel,
 }
 
+/// Arrowhead at an open end of a stroked path. Sizes are multiples of the stroke width, so a
+/// head keeps its proportions when the stroke gets thicker.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Arrowhead {
+    /// Width across the line at the head's base, in stroke widths.
+    pub width: f32,
+    /// Distance from the base to the tip, in stroke widths.
+    pub length: f32,
+    /// How far the middle of the base is pulled toward the tip, as a fraction of the length
+    /// (0 = a plain triangle, positive = a swept-back barb, negative = a diamond).
+    pub concavity: f32,
+}
+
+impl Default for Arrowhead {
+    fn default() -> Self {
+        Arrowhead { width: 4.0, length: 4.0, concavity: 0.0 }
+    }
+}
+
+impl Arrowhead {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.width.is_finite() || !(0.5..=50.0).contains(&self.width) {
+            return Err("arrowhead width must be between 0.5 and 50 stroke widths");
+        }
+        if !self.length.is_finite() || !(0.5..=50.0).contains(&self.length) {
+            return Err("arrowhead length must be between 0.5 and 50 stroke widths");
+        }
+        if !self.concavity.is_finite() || !(-0.5..=0.5).contains(&self.concavity) {
+            return Err("arrowhead concavity must be between -50% and 50%");
+        }
+        Ok(())
+    }
+}
+
 /// Shape stroke (Photoshop's shape "Stroke" options, not the layer-style stroke).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -246,6 +281,10 @@ pub struct ShapeStroke {
     pub dashes: Vec<f32>,
     /// Dash offset in multiples of the width.
     pub dash_offset: f32,
+    /// Arrowhead at the first knot of each open subpath.
+    pub arrow_start: Option<Arrowhead>,
+    /// Arrowhead at the last knot of each open subpath.
+    pub arrow_end: Option<Arrowhead>,
 }
 
 impl Default for ShapeStroke {
@@ -260,6 +299,8 @@ impl Default for ShapeStroke {
             miter_limit: 100.0,
             dashes: Vec::new(),
             dash_offset: 0.0,
+            arrow_start: None,
+            arrow_end: None,
         }
     }
 }
@@ -285,6 +326,9 @@ impl ShapeStroke {
         }
         if !self.dashes.is_empty() && self.dashes.iter().sum::<f32>() < 0.01 {
             return Err("dash pattern total must be at least 0.01 widths");
+        }
+        for head in self.arrow_start.iter().chain(&self.arrow_end) {
+            head.validate()?;
         }
         Ok(())
     }

@@ -195,6 +195,10 @@ impl PhotocraftApp {
     /// and order survive an inline memory/profile prompt and the document's final placement.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path_placed(&mut self, path: &str, slot: Option<usize>, order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
+        // A screenshot library PNG opens as its editable copy, however it arrives (Finder, Open
+        // Recent, a drop, File › Open with a path): `screenshot_library::editable`.
+        let editable = crate::screenshot_library::editable(self, path);
+        let path = editable.as_str();
         if self.show_if_open(path) {
             return Ok(Vec::new());
         }

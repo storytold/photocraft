@@ -1,6 +1,6 @@
 //! Shape stroke geometry controls shared by the tool defaults and Properties.
 use egui::vec2;
-use photocraft_doc::{LineCap, LineJoin, ShapeStroke, StrokeAlign};
+use photocraft_doc::{Arrowhead, LineCap, LineJoin, ShapeStroke, StrokeAlign};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -15,6 +15,17 @@ pub struct StrokeOptions {
     pub dashes: Vec<f32>,
     pub dash_offset: f32,
     pub opacity: f32,
+    pub arrow_start: Option<Arrowhead>,
+    pub arrow_end: Option<Arrowhead>,
+}
+
+/// Which open ends of a stroke get an arrowhead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrowEnds {
+    None,
+    End,
+    Start,
+    Both,
 }
 
 impl Default for StrokeOptions {
@@ -25,7 +36,17 @@ impl Default for StrokeOptions {
 
 impl From<&ShapeStroke> for StrokeOptions {
     fn from(s: &ShapeStroke) -> Self {
-        Self { align: s.align, cap: s.cap, join: s.join, miter_limit: s.miter_limit, dashes: s.dashes.clone(), dash_offset: s.dash_offset, opacity: s.opacity }
+        Self {
+            align: s.align,
+            cap: s.cap,
+            join: s.join,
+            miter_limit: s.miter_limit,
+            dashes: s.dashes.clone(),
+            dash_offset: s.dash_offset,
+            opacity: s.opacity,
+            arrow_start: s.arrow_start,
+            arrow_end: s.arrow_end,
+        }
     }
 }
 
@@ -33,7 +54,8 @@ impl StrokeOptions {
     pub fn params(&self) -> Value {
         json!({"align": format!("{:?}", self.align).to_ascii_lowercase(),
             "cap": format!("{:?}", self.cap).to_ascii_lowercase(), "join": format!("{:?}", self.join).to_ascii_lowercase(),
-            "miterLimit": self.miter_limit, "dashes": self.dashes, "dashOffset": self.dash_offset, "opacity": self.opacity * 100.0})
+            "miterLimit": self.miter_limit, "dashes": self.dashes, "dashOffset": self.dash_offset, "opacity": self.opacity * 100.0,
+            "arrowStart": self.arrow_start.as_ref().map(arrow_params), "arrowEnd": self.arrow_end.as_ref().map(arrow_params)})
     }
 
     pub fn stroke(&self, width: f32, paint: photocraft_doc::Fill) -> ShapeStroke {
@@ -47,7 +69,31 @@ impl StrokeOptions {
             dashes: self.dashes.clone(),
             dash_offset: self.dash_offset,
             opacity: self.opacity,
+            arrow_start: self.arrow_start,
+            arrow_end: self.arrow_end,
         }
+    }
+
+    pub fn arrow_ends(&self) -> ArrowEnds {
+        match (self.arrow_start.is_some(), self.arrow_end.is_some()) {
+            (false, false) => ArrowEnds::None,
+            (false, true) => ArrowEnds::End,
+            (true, false) => ArrowEnds::Start,
+            (true, true) => ArrowEnds::Both,
+        }
+    }
+
+    /// Turns heads on or off, keeping the size of a head that stays (or copying the other's).
+    pub fn set_arrow_ends(&mut self, ends: ArrowEnds) {
+        let head = self.arrow_end.or(self.arrow_start).unwrap_or_default();
+        let (start, end) = match ends {
+            ArrowEnds::None => (false, false),
+            ArrowEnds::End => (false, true),
+            ArrowEnds::Start => (true, false),
+            ArrowEnds::Both => (true, true),
+        };
+        self.arrow_start = start.then(|| self.arrow_start.unwrap_or(head));
+        self.arrow_end = end.then(|| self.arrow_end.unwrap_or(head));
     }
 
     fn label(&self) -> &'static str {
@@ -62,7 +108,7 @@ impl StrokeOptions {
         }
     }
 
-    fn preset(&mut self, name: &str) {
+    pub(crate) fn preset(&mut self, name: &str) {
         self.dash_offset = 0.0;
         self.dashes = match name {
             "Dashed" => vec![4.0, 2.0],
@@ -77,6 +123,11 @@ impl StrokeOptions {
     pub(crate) fn valid(&self) -> bool {
         self.stroke(3.0, photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)).validate().is_ok()
     }
+}
+
+/// `shape.create` / `shape.edit` params for one arrowhead.
+pub fn arrow_params(h: &Arrowhead) -> Value {
+    json!({"width": h.width, "length": h.length, "concavity": h.concavity * 100.0})
 }
 
 #[derive(Clone)]

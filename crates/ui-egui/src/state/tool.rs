@@ -75,13 +75,19 @@ pub enum Tool {
     Star,
     Line,
     CustomShape,
+    /// Snagit-style arrow: drag tail to tip; a stroked open path with arrowheads, bendable.
+    Arrow,
+    /// Snagit-style Cut Out: drag across a band to remove it and join the sides.
+    CutOut,
+    /// Click to stamp a star, asterisk, circle or triangle marker.
+    Marker,
     Slice,
     SliceSelect,
     Frame,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 69] = [
+    pub const ALL: [Tool; 72] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -93,6 +99,7 @@ impl Tool {
         Tool::MagneticLasso,
         Tool::MagicWand,
         Tool::Crop,
+        Tool::CutOut,
         Tool::PerspectiveCrop,
         Tool::Eyedropper,
         Tool::ColorSampler,
@@ -147,6 +154,8 @@ impl Tool {
         Tool::Polygon,
         Tool::Star,
         Tool::Line,
+        Tool::Arrow,
+        Tool::Marker,
         Tool::CustomShape,
         Tool::Slice,
         Tool::SliceSelect,
@@ -178,6 +187,7 @@ impl Tool {
             Tool::MagneticLasso => "Magnetic Lasso Tool",
             Tool::MagicWand => "Magic Wand Tool",
             Tool::Crop => "Crop Tool",
+            Tool::CutOut => "Cut Out Tool",
             Tool::PerspectiveCrop => "Perspective Crop Tool",
             Tool::Slice => "Slice Tool",
             Tool::SliceSelect => "Slice Select Tool",
@@ -224,6 +234,8 @@ impl Tool {
             Tool::Star => "Star Tool",
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
+            Tool::Arrow => "Arrow Tool",
+            Tool::Marker => "Marker Tool",
         }
     }
     pub fn is_type(self) -> bool {
@@ -273,7 +285,7 @@ impl Tool {
             Tool::Eyedropper | Tool::ColorSampler | Tool::Ruler | Tool::Note | Tool::Count => 'I',
             Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso => 'L',
             Tool::MagicWand => 'W',
-            Tool::Crop | Tool::PerspectiveCrop | Tool::Slice | Tool::SliceSelect => 'C',
+            Tool::Crop | Tool::PerspectiveCrop | Tool::CutOut | Tool::Slice | Tool::SliceSelect => 'C',
             Tool::Frame => 'K',
             Tool::Gradient | Tool::PaintBucket => 'G',
             Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => 'T',
@@ -292,7 +304,7 @@ impl Tool {
             // In the Pen flyout, but P never reaches them.
             Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => ' ',
             Tool::PathSelection | Tool::DirectSelection => 'A',
-            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape => 'U',
+            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::Arrow | Tool::Marker | Tool::CustomShape => 'U',
         }
     }
     /// Glyph drawn in the toolbar (vector icons come later).

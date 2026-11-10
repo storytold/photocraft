@@ -17,6 +17,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     {
         return false;
     }
+    if tool == Tool::Arrow {
+        return crate::arrow_ui::options_bar(app, ui);
+    }
+    if tool == Tool::Marker {
+        return crate::marker_ui::options_bar(app, ui, tool);
+    }
     let t = Tokens::get(ui.ctx());
     let lbl = |ui: &mut egui::Ui, s: &str| {
         let label = ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
