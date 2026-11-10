@@ -57,8 +57,8 @@ pub(crate) use pen::over_first_anchor;
 use pen::pen_to_json;
 pub(crate) use pen::{PATH_OPS, pen_path, pen_replace};
 pub use pen::{
-    cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_enter, pen_grab_handle, pen_move,
-    pen_undo_last_point, pen_up,
+    cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_can_redo, pen_commit, pen_down, pen_end, pen_enter,
+    pen_grab_handle, pen_move, pen_redo_last_point, pen_undo_last_point, pen_up,
 };
 #[cfg(test)]
 use pen::{closing, pen_path_op};
@@ -213,6 +213,9 @@ mod path_selection_tests;
 mod pen_draw_tests;
 
 #[cfg(test)]
+mod pen_redo_tests;
+
+#[cfg(test)]
 mod pen_path_ops_tests;
 
 #[cfg(test)]
@@ -228,6 +231,13 @@ mod delete_anchor_options_bar_tests;
 mod pen_enter_deselects_tests;
 
 pub(crate) use pen::freeform_locked_shape;
+
+/// A draft-only Undo step. The expected result prevents replay over another gesture.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PenUndo {
+    before: PenPath,
+    after: Option<PenPath>,
+}
 
 /// Where a Pen draft goes, captured at its first anchor.
 #[derive(Clone, Debug)]

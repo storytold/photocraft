@@ -403,6 +403,9 @@ pub struct UiState {
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
+    /// Redo for uncommitted anchors, never persisted or added to document history.
+    #[serde(skip)]
+    pub pen_redo: Vec<crate::vector_ui::PenUndo>,
     /// The document the pen path is drawn on; switching away commits it to that Work Path.
     #[serde(default)]
     pub pen_doc: Option<photocraft_doc::DocId>,
@@ -682,6 +685,7 @@ impl Default for UiState {
             layer_filter_attribute: Default::default(),
             layer_filter_color: Default::default(),
             pen: None,
+            pen_redo: Vec::new(),
             pen_doc: None,
             stroke_editor: None,
             direct_selection: Default::default(),

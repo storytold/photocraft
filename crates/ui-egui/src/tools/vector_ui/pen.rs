@@ -44,6 +44,7 @@ pub fn continues_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> boo
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles). With ⇧ a new anchor
 /// lands on the nearest 45° ray from the previous one, at the pointer's projection onto it.
 pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
+    app.ui.pen_redo.clear();
     if !cancel_stale(app) {
         return;
     }
@@ -149,6 +150,54 @@ pub(super) fn shift_45(origin: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
 /// clicking the first anchor commits the path. Therefore Cmd/Ctrl+Z must consume one
 /// knot rather than undoing an unrelated, already committed document operation.
 pub fn pen_undo_last_point(app: &mut PhotocraftApp) -> bool {
+    if !pen_can_redo(app) {
+        app.ui.pen_redo.clear();
+    }
+    let before = app.ui.pen.clone();
+    if !undo_last_point(app) {
+        return false;
+    }
+    if let Some(mut before) = before {
+        before.dragging = false;
+        before.adjusting_last = false;
+        before.adjusting_in = false;
+        before.reposition = false;
+        before.moving = None;
+        before.last_pointer = None;
+        // Bound retained geometry during long drawing sessions.
+        if app.ui.pen_redo.len() == 128 {
+            app.ui.pen_redo.remove(0);
+        }
+        app.ui.pen_redo.push(super::PenUndo { before, after: app.ui.pen.clone() });
+    }
+    true
+}
+
+/// Only replay a step on its unchanged source document and expected draft.
+pub fn pen_can_redo(app: &PhotocraftApp) -> bool {
+    // Modal boxes own Undo/Redo until they are applied or cancelled.
+    if app.ui.transform.is_some() || crate::crop_ui::pending(app) {
+        return false;
+    }
+    app.ui
+        .pen_redo
+        .last()
+        .is_some_and(|step| step.before.drawn_with(app.ui.tool) && step.before.owner.as_ref().is_some_and(|owner| owner.valid(app)) && app.ui.pen == step.after)
+}
+
+pub fn pen_redo_last_point(app: &mut PhotocraftApp) -> bool {
+    if !pen_can_redo(app) {
+        app.ui.pen_redo.clear();
+        return false;
+    }
+    let Some(step) = app.ui.pen_redo.pop() else { return false };
+    app.ui.pen_doc = step.before.owner.as_ref().map(|owner| owner.document);
+    app.ui.pen = Some(step.before);
+    app.ui.direct_selection = Default::default();
+    true
+}
+
+fn undo_last_point(app: &mut PhotocraftApp) -> bool {
     if cancel_stale_pen(app) {
         return false;
     }
@@ -355,6 +404,7 @@ fn deselect_finished_work_path(app: &mut PhotocraftApp) {
 /// Finish the draft as [`pen_commit`] does. On failure the draft stays as it was, marked
 /// `commit_failed`, and the error is shown and returned.
 pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<(), String> {
+    app.ui.pen_redo.clear();
     // This is an explicit commit request; passive frame reconciliation never clears this flag.
     if let Some(pen) = app.ui.pen.as_mut() {
         pen.commit_failed = false;
@@ -385,6 +435,9 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
 
 /// Another tool finishes the Pen's draft, once: a draft whose commit failed waits for the user.
 pub(crate) fn finish_pen_if_left(app: &mut PhotocraftApp) {
+    if app.ui.pen_redo.last().is_some_and(|step| !step.before.drawn_with(app.ui.tool)) {
+        app.ui.pen_redo.clear();
+    }
     cancel_stale_pen(app);
     let shape_fallback =
         app.ui.pen.as_ref().is_some_and(|p| {
