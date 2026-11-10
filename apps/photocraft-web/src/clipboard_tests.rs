@@ -6,8 +6,12 @@ use serde_json::json;
 
 /// A `w`×`h` PNG of one colour, as a browser hands over a copied image.
 fn png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
+    png_with(w, h, rgba, &EncodeOptions::default())
+}
+
+fn png_with(w: u32, h: u32, rgba: [u8; 4], options: &EncodeOptions) -> Vec<u8> {
     let image = Image::from_u8(w, h, ChannelLayout::Rgba, rgba.repeat((w * h) as usize)).unwrap();
-    photocraft_codecs::encode(&image, Format::Png, &EncodeOptions::default()).unwrap()
+    photocraft_codecs::encode(&image, Format::Png, options).unwrap()
 }
 
 /// Ctrl+V with `file` on the clipboard: the keys, the paste event, then its image read.
@@ -159,21 +163,43 @@ fn input_waits_for_the_pasted_image_and_keeps_its_order() {
         |pressed| egui::Event::PointerButton { pos: egui::pos2(1.0, 0.0), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     let mut held = Held::default();
     let mut events = vec![key(true), key(false), click(true)];
-    held.hold_or_release(true, false, &mut events);
+    held.hold_or_release(true, false, 10.0, &mut events);
     assert!(events.is_empty());
     let mut events = vec![click(false)];
-    held.hold_or_release(true, false, &mut events);
+    held.hold_or_release(true, false, 10.1, &mut events);
     assert!(events.is_empty());
     let mut events = vec![egui::Event::Text("a".into())];
-    held.hold_or_release(false, false, &mut events);
+    held.hold_or_release(false, false, 10.2, &mut events);
     assert_eq!(events, vec![key(true), key(false), click(true), click(false), egui::Event::Text("a".into())]);
     let mut events = vec![click(true)];
-    held.hold_or_release(false, false, &mut events);
+    held.hold_or_release(false, false, 10.3, &mut events);
     assert_eq!(events, vec![click(true)], "released once");
     // A paste from a menu: its ⌘V goes ahead of what came after it.
     let mut events = vec![click(false)];
-    held.hold_or_release(false, true, &mut events);
+    held.hold_or_release(false, true, 10.4, &mut events);
     assert_eq!(events, vec![key(true), key(false), click(false)]);
+}
+
+/// A read that never finishes gives the input back after [`HOLD_SECONDS`], and input goes on
+/// until that read is done; the next one waits again.
+#[test]
+fn input_waits_no_longer_than_the_hold_limit() {
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    let mut held = Held::default();
+    let mut events = vec![key(egui::Key::A)];
+    held.hold_or_release(true, false, 1.0, &mut events);
+    assert!(events.is_empty());
+    let mut events = vec![key(egui::Key::B)];
+    held.hold_or_release(true, false, 1.0 + HOLD_SECONDS, &mut events);
+    assert_eq!(events, vec![key(egui::Key::A), key(egui::Key::B)], "time is up");
+    let mut events = vec![key(egui::Key::C)];
+    held.hold_or_release(true, false, 9.0, &mut events);
+    assert_eq!(events, vec![key(egui::Key::C)], "the same read: input goes on");
+    let mut events = vec![];
+    held.hold_or_release(false, false, 9.5, &mut events);
+    let mut events = vec![key(egui::Key::D)];
+    held.hold_or_release(true, false, 10.0, &mut events);
+    assert!(events.is_empty(), "a new read waits again");
 }
 
 #[test]
@@ -182,12 +208,61 @@ fn only_raster_images_are_read() {
     assert!(!is_raster("image/svg+xml") && !is_raster("text/plain") && !is_raster("text/html"));
 }
 
-/// The browser shell's clipboard services ([`crate::web`]) as a test can build them natively.
+/// Which of a paste's items is read: a raster image file, PNG first; an SVG alone is an image
+/// that can't be pasted here; text and image strings (not files) offer nothing.
+#[test]
+fn a_paste_offers_its_png_first_and_names_an_unsupported_image() {
+    let png = ("file", "image/png");
+    let jpeg = ("file", "image/jpeg");
+    let svg = ("file", "image/svg+xml");
+    let text = ("string", "text/plain");
+    assert_eq!(offer([text, jpeg, png]), Offer::Image(2));
+    assert_eq!(offer([svg, jpeg]), Offer::Image(1));
+    assert_eq!(offer([text, svg]), Offer::Unsupported("image/svg+xml".into()));
+    assert_eq!(offer([text, ("string", "text/html")]), Offer::Nothing);
+    assert_eq!(offer([("string", "image/png")]), Offer::Nothing);
+    assert_eq!(offer([]), Offer::Nothing);
+}
+
+#[test]
+fn an_unsupported_image_says_so_and_a_menu_paste_of_it_is_pressed() {
+    let clipboard = WebClipboard::default();
+    paste_image(&clipboard, png(3, 2, RED));
+    clipboard.unsupported("image/svg+xml", false);
+    assert_eq!(clipboard.image(), Err("Couldn't read the pasted image: image/svg+xml isn't supported".into()));
+    assert!(clipboard.take_press(), "no key held, no text: the paste is pressed so its message shows");
+}
+
+/// The browser may encode the same clipboard image differently each time: the pixels decide.
+#[test]
+fn the_same_pixels_in_another_encoding_are_the_same_image() {
+    let clipboard = WebClipboard::default();
+    paste_image(&clipboard, png(3, 2, RED));
+    clipboard.copied();
+    clipboard.left();
+    let interlaced = png_with(3, 2, RED, &EncodeOptions { png_interlaced: true, ..Default::default() });
+    assert_ne!(interlaced, png(3, 2, RED));
+    paste_image(&clipboard, interlaced);
+    assert_eq!(clipboard.image(), Ok(None), "still the image under the copy: the copy wins");
+}
+
+/// A second copy after a trip away is newer again: an image the clipboard held before it
+/// doesn't replace it.
+#[test]
+fn a_copy_after_coming_back_is_newer_again() {
+    let clipboard = WebClipboard::default();
+    paste_image(&clipboard, png(3, 2, RED));
+    clipboard.copied();
+    clipboard.left();
+    paste_image(&clipboard, png(3, 2, RED));
+    clipboard.copied();
+    paste_image(&clipboard, png(3, 2, RED));
+    assert_eq!(clipboard.image(), Ok(None));
+}
+
+/// The app with the browser shell's clipboard services ([`wire`], as `crate::web` wires them).
 fn app(clipboard: &WebClipboard) -> PhotocraftApp {
-    let (get, copied) = (clipboard.clone(), clipboard.clone());
-    let services =
-        Services { clipboard_get_image: Some(Box::new(move || get.image())), clipboard_copied: Some(Box::new(move || copied.copied())), ..Default::default() };
-    let mut app = PhotocraftApp::new(Session::new(), services);
+    let mut app = PhotocraftApp::new(Session::new(), wire(clipboard, Services::default()));
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();
     app
@@ -236,6 +311,17 @@ fn an_older_screenshot_does_not_replace_a_copy_made_here() {
     paste_image(&clipboard, png(3, 2, RED));
     app.run("edit.paste", json!({})).unwrap();
     assert_eq!(pasted_size(&app), (8, 4));
+}
+
+/// An image that can't be read: Paste says why, as an error.
+#[test]
+fn ctrl_v_with_an_unreadable_image_says_why() {
+    let clipboard = WebClipboard::default();
+    let mut app = app(&clipboard);
+    paste_image(&clipboard, b"not an image".to_vec());
+    assert!(app.run("edit.paste", json!({})).is_err());
+    assert!(app.ui.status.starts_with("Couldn't read the pasted image: "), "{}", app.ui.status);
+    assert!(app.ui.status_error);
 }
 
 /// Text on the clipboard and nothing copied in PhotoCraft: Paste says so quietly, not as an

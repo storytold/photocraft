@@ -57,24 +57,33 @@ fn os_clipboard_honours_export_clipboard_preference() {
 }
 
 /// The web build can't put a copy on the system clipboard, so it hears of every copy instead
-/// (#7842): Copy, Cut and Copy Merged, with Export Clipboard on or off.
+/// (#7842): Copy, Cut and Copy Merged, with Export Clipboard on or off. A copy of an empty area
+/// fails and isn't one, and a paste isn't one either.
 #[test]
 fn every_copy_is_announced_even_when_it_is_not_exported() {
-    let copies = Arc::new(Mutex::new(0));
-    let heard = copies.clone();
-    let services = Services { clipboard_copied: Some(Box::new(move || *heard.lock().unwrap() += 1)), ..Default::default() };
-    let mut app = PhotocraftApp::new(Session::new(), services);
-    app.session.execute("file.new", serde_json::json!({"width": 32, "height": 32})).unwrap();
-    app.sync_views();
-    app.run("select.rect", serde_json::json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
-    app.run("edit.copy", serde_json::json!({})).unwrap();
-    app.run("edit.copyMerged", serde_json::json!({})).unwrap();
-    app.session.execute("prefs.set", serde_json::json!({"values": {"general.exportClipboard": false}})).unwrap();
-    app.run("edit.cut", serde_json::json!({})).unwrap();
-    assert_eq!(*copies.lock().unwrap(), 3);
-    // A paste is not a copy.
-    app.run("edit.paste", serde_json::json!({})).unwrap();
-    assert_eq!(*copies.lock().unwrap(), 3);
+    for export in [true, false] {
+        for id in ["edit.copy", "edit.copyMerged", "edit.cut"] {
+            let copies = Arc::new(Mutex::new(0));
+            let heard = copies.clone();
+            let services = Services { clipboard_copied: Some(Box::new(move || *heard.lock().unwrap() += 1)), ..Default::default() };
+            let mut app = PhotocraftApp::new(Session::new(), services);
+            app.session.execute("prefs.set", json!({"values": {"general.exportClipboard": export}})).unwrap();
+            app.session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+            app.sync_views();
+            app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+            app.run(id, json!({})).unwrap();
+            assert_eq!(*copies.lock().unwrap(), 1, "{id}, export {export}");
+            app.run("edit.paste", json!({})).unwrap();
+            assert_eq!(*copies.lock().unwrap(), 1, "a paste after {id}");
+            if id != "edit.copyMerged" {
+                // An empty layer: nothing to copy.
+                app.run("layer.new.layer", json!({})).unwrap();
+                app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+                assert!(app.run(id, json!({})).is_err(), "{id} of an empty area");
+                assert_eq!(*copies.lock().unwrap(), 1, "a failed {id}");
+            }
+        }
+    }
 }
 
 /// A Copy step in an action is a copy like Edit › Copy (#7842): announced, and PhotoCraft's own,
