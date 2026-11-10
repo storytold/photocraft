@@ -145,7 +145,7 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::distort_ui::pointer(app, ev, mods) {
         return None;
     }
-    if crate::perspective_crop_ui::pointer(app, ev) {
+    if crate::perspective_crop_ui::pointer(app, ev, mods) {
         return None;
     }
     // Window › Modifier Keys: sticky Shift/⌘/⌥ act as held keys.
@@ -306,9 +306,11 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
             // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating
             // piece, from anywhere, as a marquee ⌘-drag does.
             if crate::move_ui::moves_selected_pixels_with(app, tool) {
+                let before = app.session.active().and_then(photocraft_engine::float_cmds::floating).cloned();
                 if crate::move_ui::float_selected_for_drag(app, mods.alt) {
                     let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
                     d.sel_move = Some(true);
+                    d.transfer_floating_before = before;
                     app.drag = Some(d);
                 }
                 return true;
@@ -359,6 +361,42 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
     true
 }
 
+/// A Mixer Brush press the engine refused: Indexed Color and Bitmap documents answer it with the
+/// reference's alert (#11958); anything else goes to the status bar, as before.
+fn mixer_press_failed(app: &mut PhotocraftApp, message: String) {
+    use photocraft_engine::brush_cmds::mixer_live::{BITMAP_REFUSAL, INDEXED_REFUSAL};
+    if message == INDEXED_REFUSAL || message == BITMAP_REFUSAL {
+        // One alert, even if more presses arrive while it is open (`ui.pointer` can send them).
+        let shown =
+            app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
+        if !shown {
+            let params = json!({ "message": message }).as_object().cloned().unwrap_or_default();
+            app.ui.open_dialog(crate::state::DialogKind::Error, params);
+        }
+    } else {
+        app.ui.status = message;
+        app.ui.status_error = true;
+    }
+}
+
+/// The Brush's chosen Clear paints as Normal on the Background, and its Mode then reads Normal
+/// (#11897): at the press of a Brush stroke on the Background's own pixels, Clear (chosen in the
+/// options bar, not a held `~`) is turned off, so the stroke is sent as Normal. A Background whose
+/// pixels are locked refuses the stroke, so Clear stays chosen there.
+fn clear_off_on_background(app: &mut PhotocraftApp, tool: Tool) {
+    let on_background = app.session.active().is_some_and(|st| {
+        st.active_layer.is_some_and(|id| {
+            st.doc.is_background(id) && {
+                let locks = st.doc.effective_locks(id);
+                !locks.pixels && !locks.all
+            }
+        })
+    });
+    if tool == Tool::Brush && app.ui.tool_options.brush_clear && !app.held_erase && on_background && paint_target(app) == serde_json::json!("pixels") {
+        app.ui.tool_options.brush_clear = false;
+    }
+}
+
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     if consumes_cancelled_vector_event(app, ev) {
@@ -399,9 +437,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
             let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
             // Painting on or moving a hidden layer is refused at the press, as in Photoshop (#571).
-            if !sets_source && let Some(why) = hidden_target(app, tool) {
-                app.ui.status = why.into();
-                app.ui.status_error = true;
+            if !sets_source && press_refused(app, tool) {
                 return;
             }
             if !sets_source && crate::rasterize_prompt::intercept(app, tool, x, y, pressure) {
@@ -524,6 +560,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 _ => {}
             }
             crate::paint_mouse::sync_tool_brush(app);
+            clear_off_on_background(app, tool);
             // Clear mode (`~` held, or chosen in the options bar) erases with the tool's own brush.
             let clear = crate::paint_mouse::clears(app, tool);
             let erase = std::mem::take(&mut app.secondary_erase) || tool == Tool::Eraser || clear;
@@ -543,7 +580,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
-            let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
+            let mut drag = Drag { clear, line: from.is_some(), ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
             drag.capture_selection_at_press(app);
             drag.document = super::drag::DragDocument::capture(app);
@@ -563,8 +600,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     && !LiveMixer::defers_to_release(&app.session, &p).is_ok_and(|deferred| deferred)
                 {
                     if let Err(e) = LiveMixer::begin(&app.session, &p) {
-                        app.ui.status = e.to_string();
-                        app.ui.status_error = true;
+                        mixer_press_failed(app, e.to_string());
                     }
                     app.drag = None;
                 }
@@ -680,6 +716,23 @@ fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     photocraft_engine::hidden_target::refusal(&app.session, cmd, &json!({}))
 }
 
+/// The press-time refusals: a hidden target layer (#571), and for the Brush a locked layer or a
+/// group's pixels. The Brush says why in an alert, as in Photoshop (#11898); the other tools say
+/// a hidden target in the status bar. True when the press is refused.
+fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    let hidden = hidden_target(app, tool);
+    if let Some(message) = crate::brush_refusal::alert(app, tool, hidden.is_some()) {
+        crate::brush_refusal::prompt(app, &message);
+        return true;
+    }
+    if let Some(why) = hidden {
+        app.ui.status = why.into();
+        app.ui.status_error = true;
+        return true;
+    }
+    false
+}
+
 /// Is document point `p` inside the active document's selection?
 fn inside_selection(app: &PhotocraftApp, p: [f64; 2]) -> bool {
     app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|sel| covers(sel, p))
@@ -765,3 +818,7 @@ pub(crate) fn command_guide_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mod
     let idle = app.ui.polygon.is_empty() && !crate::lasso_ui::active(app) && app.ui.transform.is_none() && app.ui.text_edit.is_none() && app.drag.is_none();
     (moves && mods.command && idle).then(|| crate::rulers::guide_at(app, p[0], p[1])).flatten()
 }
+
+#[cfg(test)]
+#[path = "art_history_shift_click_tests.rs"]
+mod art_history_shift_click_tests;

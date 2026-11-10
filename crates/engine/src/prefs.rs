@@ -570,6 +570,12 @@ pub struct FileHandling {
     pub recover_on_launch: bool,
     /// Open a file with no ICC profile as untagged even when its EXIF ColorSpace tag says sRGB.
     pub ignore_exif_profile_tag: bool,
+    /// PDF import resolution in DPI; the document keeps it so the page's print size is preserved.
+    pub pdf_dpi: f32,
+    /// The first PDF page to import (1-based; 0 imports from the first page).
+    pub pdf_first_page: u32,
+    /// The last PDF page to import (1-based; 0 imports to the last page).
+    pub pdf_last_page: u32,
     /// Most renderers write ACEScg EXRs without stating the colour space. With this on, an EXR
     /// that would otherwise open as linear sRGB opens as ACEScg (AP1, linear) instead.
     pub exr_aces_cg: bool,
@@ -607,6 +613,9 @@ impl Default for FileHandling {
             autosave_minutes: 10,
             recover_on_launch: true,
             ignore_exif_profile_tag: false,
+            pdf_dpi: 300.0,
+            pdf_first_page: 0,
+            pdf_last_page: 0,
             exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
@@ -630,6 +639,10 @@ pub struct Export {
     pub webp_quality: u32,
     pub metadata: ExportMetadata,
     pub convert_to_srgb: bool,
+    /// The folder the last successful export through a save dialog went to (Export As, Quick
+    /// Export, Save for Web, ...). The next export dialog starts there; empty until the first
+    /// export, and ignored while the folder no longer exists (#10192).
+    pub last_folder: String,
 }
 
 impl Default for Export {
@@ -642,6 +655,7 @@ impl Default for Export {
             webp_quality: 85,
             metadata: ExportMetadata::Copyright,
             convert_to_srgb: true,
+            last_folder: String::new(),
         }
     }
 }
