@@ -1,8 +1,10 @@
 //! #11974: the Perspective Crop's hover cursor says what a press does. With no quad a small
-//! crosshair with the tool's icon (hotspot on the crosshair's centre), inside the quad the arrow,
-//! over a corner the hollow arrowhead; outside the quad (no press there yet) the usual crosshair.
+//! crosshair with the tool's icon (hotspot on the crosshair's centre), our own solid black
+//! arrow inside the quad, over a corner the hollow arrowhead; outside the quad (no press there
+//! yet) the usual crosshair.
 
-use egui::{CursorIcon, pos2};
+use egui::epaint::ColorMode;
+use egui::{Color32, CursorIcon, Pos2, Shape, pos2};
 
 use crate::PhotocraftApp;
 use crate::canvas::ToolEvent;
@@ -104,9 +106,51 @@ fn only_the_perspective_crop_tool_with_a_document() {
 /// A cursor bitmap's hotspot and size.
 type Bitmap = ([u16; 2], [u16; 2]);
 
-/// The cursor drawn for `zone` at `at`: the OS cursor, the bitmap's hotspot if one is set, and
-/// whether anything was painted on top (the badge, the arrowhead).
-fn drawn(zone: Zone, at: egui::Pos2) -> (CursorIcon, Option<Bitmap>, bool) {
+/// What the cursor for a zone is made of.
+struct Drawn {
+    /// The OS cursor.
+    icon: CursorIcon,
+    /// The OS cursor bitmap's hotspot and size, if one is set.
+    bitmap: Option<Bitmap>,
+    /// Everything painted on top (the badge, the arrowhead, the arrow), flattened.
+    shapes: Vec<Shape>,
+}
+
+impl Drawn {
+    /// The positions of the fully opaque black vertices: a solid black fill (the arrowhead's dark
+    /// outline is translucent, its fill white).
+    fn black_fill(&self) -> Vec<Pos2> {
+        let mut at = Vec::new();
+        for shape in &self.shapes {
+            if let Shape::Mesh(mesh) = shape {
+                at.extend(mesh.vertices.iter().filter(|v| v.color == Color32::BLACK).map(|v| v.pos));
+            }
+        }
+        at
+    }
+
+    /// The closed light outlines.
+    fn light_outlines(&self) -> Vec<&egui::epaint::PathShape> {
+        let light = |c: Color32| c.r() > 200 && c.g() > 200 && c.b() > 200 && c.a() > 128;
+        self.shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Path(p) if p.closed && p.stroke.width > 0.0 && matches!(p.stroke.color, ColorMode::Solid(c) if light(c)) => Some(p),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+    match shape {
+        Shape::Vec(inner) => inner.into_iter().for_each(|s| flatten(s, out)),
+        s => out.push(s),
+    }
+}
+
+/// The cursor drawn for `zone` at `at`.
+fn drawn(zone: Zone, at: Pos2) -> Drawn {
     let ctx = egui::Context::default();
     ctx.add_plugin(crate::tool_cursor::CursorLifecycle);
     egui_extras::install_image_loaders(&ctx);
@@ -122,8 +166,11 @@ fn drawn(zone: Zone, at: egui::Pos2) -> (CursorIcon, Option<Bitmap>, bool) {
     run();
     run();
     let out = run();
-    let painted = !out.shapes.is_empty();
-    (out.platform_output.cursor_icon, out.platform_output.cursor_image.map(|i| (i.hotspot, i.size)), painted)
+    let mut shapes = Vec::new();
+    for clipped in out.shapes {
+        flatten(clipped.shape, &mut shapes);
+    }
+    Drawn { icon: out.platform_output.cursor_icon, bitmap: out.platform_output.cursor_image.map(|i| (i.hotspot, i.size)), shapes }
 }
 
 #[test]
@@ -136,17 +183,29 @@ fn the_zones_draw_distinct_cursors_with_their_hotspots() {
     // No quad: the small crosshair as the OS bitmap, centred on the point, with the
     // tool's icon painted beside it. (`CursorLifecycle` leaves the OS crosshair under a bitmap,
     // for a backend that can't show one.)
-    assert_eq!(idle.0, CursorIcon::Crosshair);
+    assert_eq!(idle.icon, CursorIcon::Crosshair);
     // The bitmap is padded for its outline: the hotspot is its centre, where the arms cross.
-    let (hot, size) = idle.1.expect("the crosshair bitmap");
+    let (hot, size) = idle.bitmap.expect("the crosshair bitmap");
     assert_eq!(hot[0], hot[1]);
     assert_eq!(hot[0] * 2 + 1, size[0], "the crosshair's centre is the hotspot: {hot:?} in {size:?}");
-    assert!(idle.2, "the tool badge");
-    // Inside: the solid arrow, its tip the hotspot.
-    assert_eq!(inside, (CursorIcon::Default, None, false));
+    assert!(!idle.shapes.is_empty(), "the tool badge");
+    // Inside: our own solid black arrow, not the OS one (which is white on Windows and follows the
+    // theme on Linux), with the OS cursor hidden under it.
+    assert_eq!(inside.icon, CursorIcon::None, "the OS arrow is not used");
+    assert_eq!(inside.bitmap, None, "no crosshair bitmap");
+    let fill = inside.black_fill();
+    assert!(!fill.is_empty(), "the arrow is filled solid black");
+    let (min, max) = fill.iter().fold((pos2(f32::MAX, f32::MAX), pos2(f32::MIN, f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    assert_eq!(min, at, "the arrow's tip is the hotspot, on the point");
+    assert!(max.x - min.x >= 9.0 && max.y - min.y >= 15.0, "an arrow of the usual size, not a dot: {min:?} to {max:?}");
+    let outlines = inside.light_outlines();
+    assert!(!outlines.is_empty(), "a thin light outline so it reads on a dark image");
+    assert!(outlines.iter().all(|o| o.stroke.width <= 2.0), "thin");
+    assert!(outlines.iter().any(|o| o.points.contains(&at)), "the outline passes through the tip too");
     // Corner: the hollow arrowhead, painted with its tip on the point.
-    assert_eq!(corner.0, CursorIcon::None);
-    assert_eq!(corner.1, None, "no crosshair bitmap");
-    assert!(corner.2, "the arrowhead");
-    assert!(idle != inside && inside != corner && idle != corner);
+    assert_eq!(corner.icon, CursorIcon::None);
+    assert_eq!(corner.bitmap, None, "no crosshair bitmap");
+    assert!(!corner.shapes.is_empty(), "the arrowhead");
+    assert!(corner.black_fill().is_empty(), "the corner arrowhead is hollow white, not the solid arrow");
+    assert!(idle.black_fill().is_empty());
 }

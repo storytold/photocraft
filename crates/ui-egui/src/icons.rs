@@ -80,6 +80,25 @@ pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f
     });
 }
 
+/// A solid black arrow as the pointer, above every window, its tip on `p` (the reference
+/// application's arrow, hotspot at its tip): filled black with a thin light outline so it reads on
+/// any image, and the same on every system. The caller hides the OS cursor (`CursorIcon::None`).
+pub fn cursor_arrow(ctx: &egui::Context, p: egui::Pos2) {
+    // The outline of the arrow in pixels from its tip, and its split into triangles.
+    const OUTLINE: [(f32, f32); 7] = [(0.0, 0.0), (0.0, 16.0), (3.6, 12.6), (6.8, 19.0), (9.6, 17.8), (6.6, 11.6), (11.5, 11.5)];
+    const TRIANGLES: [[u32; 3]; 5] = [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]];
+    let points: Vec<egui::Pos2> = OUTLINE.iter().map(|&(x, y)| p + egui::vec2(x, y)).collect();
+    // A new id every frame would restart the Area's fade-in each time and leave the arrow pale.
+    let area =
+        egui::Area::new(egui::Id::unique("pc-arrow-cursor")).order(egui::Order::Tooltip).fixed_pos(p).constrain(false).interactable(false).fade_in(false);
+    area.show(ctx, |ui| {
+        let vertices = points.iter().map(|&pos| egui::epaint::Vertex { pos, uv: egui::epaint::WHITE_UV, color: Color32::BLACK }).collect();
+        let fill = egui::Mesh { indices: TRIANGLES.iter().flatten().copied().collect(), vertices, ..Default::default() };
+        ui.painter().add(fill);
+        ui.painter().add(egui::Shape::closed_line(points, egui::Stroke::new(1.0, Color32::from_white_alpha(235))));
+    });
+}
+
 /// A small icon beside the OS arrow pointer at `p` (Photoshop's cursor badges: scissors for
 /// cutting the selected pixels). Below-right of the arrow, white with a dark outline. The caller
 /// keeps the arrow (`CursorIcon::Default`).
