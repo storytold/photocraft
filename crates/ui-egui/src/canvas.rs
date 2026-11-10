@@ -990,6 +990,7 @@ struct CanvasToolInput<'a> {
     display_zoom: f32,
 }
 
+/// Processes primary canvas pointer gestures, view transitions, and tool cancellations on focus loss.
 fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasToolInput<'_>) {
     let ctx = input.ctx;
     let response = input.response;
@@ -1041,7 +1042,12 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
         ctx.data_mut(|d| d.insert_temp(tool_press, press_mods));
         if tool.is_type() && press_mods.command && app.ui.text_edit.is_some() {
             let d = xf.to_doc(p);
-            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                press_mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
 
@@ -1049,6 +1055,7 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     handle_canvas_tool_navigation(app, ui, view, input, &mut buttons);
     handle_canvas_tool_stroke(app, ui, input, mods, capture_press, tool_press, &mut buttons);
     handle_canvas_tool_clicks(app, ui, view, input, mods, tool_press, &buttons);
+    crate::tools::type_path_placement::cancel_missing_release(app, ctx);
     // Clear the menu-dismissal flag on the gesture's pointer release, even when the release
     // occurs outside the canvas and produces no `buttons.clicked` event. It sits below (not
     // above) the click handling, so a release over the canvas in a later frame is first
@@ -1195,6 +1202,7 @@ fn handle_canvas_tool_navigation(
     }
 }
 
+/// Routes continuous stroke dragging events for active painting and vector tools to tool handlers with view context.
 fn handle_canvas_tool_stroke(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1234,7 +1242,12 @@ fn handle_canvas_tool_stroke(
         let d = xf.to_doc(p);
         // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
         let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
-        tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+        tool_input::tool_event_with_view(
+            app,
+            ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+            press_mods,
+            Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+        );
         app.press_stroke = app.drag.is_some();
     }
     let press_stroke = app.press_stroke;
@@ -1252,7 +1265,12 @@ fn handle_canvas_tool_stroke(
         if !refused {
             let d = xf.to_doc(p);
             let press_mods = if capture_press { ctx.data(|d| d.get_temp(tool_press)).unwrap_or(mods) } else { mods };
-            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                press_mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
     // A stroke started on the press takes its moves from the press on, not only once egui
@@ -1304,7 +1322,12 @@ fn handle_canvas_tool_stroke(
             // This move's share of the pen samples the frame brought (pressure, tilt, rotation).
             app.stylus.select(k, n);
             let d = xf.to_doc(p);
-            tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
         app.stylus.clear_selection();
         app.stylus.clock_ms = now_ms;
@@ -1337,7 +1360,12 @@ fn handle_canvas_tool_stroke(
         let p = at.map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
         if let Some(d) = p {
             tap_at_peak_pressure(app);
-            tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Up { x: d[0], y: d[1] },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
     // A stroke started on the press ends with the release, whether egui saw a drag, a click,
@@ -1349,7 +1377,12 @@ fn handle_canvas_tool_stroke(
             && app.drag.is_some()
         {
             tap_at_peak_pressure(app);
-            tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Up { x: d[0], y: d[1] },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
     if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
@@ -1357,6 +1390,7 @@ fn handle_canvas_tool_stroke(
     }
 }
 
+/// Dispatches discrete pointer click and release events to active tools with view transform context.
 fn handle_canvas_tool_clicks(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1390,7 +1424,12 @@ fn handle_canvas_tool_clicks(
         app.defer_live_stroke = true;
         for p in moves.into_iter().filter(|p| rect.contains(*p)) {
             let d = xf.to_doc(p);
-            tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
         app.defer_live_stroke = false;
         crate::magnetic_lasso_ui::flush(app);
@@ -1458,9 +1497,19 @@ fn handle_canvas_tool_clicks(
                 _ => {
                     // If this tool was not handled on pointer-down, fall back to a
                     // click-sized gesture while preserving pen pressure (mouse stays at 1).
-                    tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
+                    tool_input::tool_event_with_view(
+                        app,
+                        ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                        click_mods,
+                        Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+                    );
                     tap_at_peak_pressure(app);
-                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
+                    tool_input::tool_event_with_view(
+                        app,
+                        ToolEvent::Up { x: d[0], y: d[1] },
+                        click_mods,
+                        Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+                    );
                 }
             }
         }
@@ -1633,6 +1682,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     draw_canvas_tool_cursor(app, ui, input, resizing);
 }
 
+/// Renders custom canvas cursor overlays, including brush silhouettes and type path placement directional arrows.
 fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool) {
     let ctx = input.ctx;
     let xf = input.xf;
@@ -1675,6 +1725,13 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         ui.ctx().set_cursor_icon(c);
     } else if let Some(c) = response.hover_pos().and_then(|p| crate::cam_transform::cursor(app, ctx, xf, p)) {
         ui.ctx().set_cursor_icon(c);
+    } else if let Some((p, grab)) = response
+        .hover_pos()
+        .filter(|_| matches!(tool, Tool::PathSelection | Tool::DirectSelection))
+        .and_then(|p| crate::type_path_placement::cursor(app, xf, p).map(|grab| (p, grab)))
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        crate::type_path_placement::draw_cursor(ctx, p, grab);
     } else if let Some(p) = response.hover_pos().filter(|p| crate::corner_radius::hovers(app, xf.to_doc(*p))) {
         // Over a live rectangle's corner widget (or dragging one): the arrow with a rounded
         // corner badge, as Photoshop's corner radius cursor.
