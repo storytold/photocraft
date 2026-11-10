@@ -1160,8 +1160,7 @@ fn the_dock_edge_handle_resizes_and_a_locked_workspace_refuses_it() {
         }
         let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
         let stored = dock_width(h.state());
-        let rail = if h.state().ui.panels.rail { if h.state().ui.theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
-        let edge = 1280.0 - (stored + rail);
+        let edge = outer_handle(&h).center().x;
         drag(&mut h, pos2(edge, 400.0), pos2(edge + 60.0, 400.0));
         let resized = dock_width(h.state());
         h.run_steps(4);
@@ -1208,6 +1207,7 @@ fn disabling_the_ui_cancels_a_dock_edge_drag() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let mut app = app();
+    app.ui.panels.rail = true;
     app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
     app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
     let disabled = Arc::new(AtomicBool::new(false));
@@ -1811,6 +1811,7 @@ fn app_with_columns(widths: &[f32], iconic: bool) -> PhotocraftApp {
         .collect();
     let root = with_canvas(Node::Dock { side: Side::End, columns }, widths.iter().sum::<f32>().min(520.0));
     let mut app = app();
+    app.ui.panels.rail = true;
     app.ui.docking = Some(Workspace::new(Layout { root: Some(root), floating: Vec::new() }));
     assert!(valid_workspace(app.ui.docking.as_ref().unwrap()), "fixtures must be accepted saved workspaces");
     app

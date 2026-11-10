@@ -198,7 +198,8 @@ fn toolbar_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // their tooltips carry the full names.
     ui.allocate_ui_with_layout(vec2(bx, 14.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let (cr, resp) = ui.allocate_exact_size(vec2(bx.min(14.0), 14.0), Sense::click_and_drag());
+        let (cr, _) = ui.allocate_exact_size(vec2(bx.min(14.0), 14.0), Sense::hover());
+        let resp = ui.interact(cr, egui::Id::unique("tools-palette").with("columns"), Sense::click_and_drag());
         let (shrink, grow) = if side == ToolbarSide::Right { ("chevrons-right", "chevrons-left") } else { ("chevrons-left", "chevrons-right") };
         icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Toolbar")));
