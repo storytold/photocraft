@@ -44,6 +44,7 @@ pub fn blob(seed: u8, n: usize) -> Arc<Vec<u8>> {
     Arc::new((0..n).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed)).collect())
 }
 
+/// Build the shared rich-document fixture for native-format round-trip tests.
 pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
     let hdr = depth == SampleType::F32;
     let mut d = Document::with_background("Rich", Size::new(300, 280), mode, depth, Color::WHITE);

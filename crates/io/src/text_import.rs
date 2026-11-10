@@ -29,6 +29,7 @@ fn render_bounded(eng: &mut photocraft_text::TextEngine, t: &mut TextLayer, dpi:
 ///   let Photoshop re-render on open) is rendered from its model, instead of staying empty
 ///   until it is edited.
 pub(crate) fn prepare(doc: &mut Document, txt2: Option<&photocraft_text::engine_data::Value>) {
+    /// Prepare text models and caches recursively using the document rendering parameters.
     fn visit(
         layers: &mut [Layer],
         eng: &mut photocraft_text::TextEngine,

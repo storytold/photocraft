@@ -285,6 +285,7 @@ impl Layouter {
         Self { lcx: LayoutContext::new(), optical: crate::optical::Cache::default() }
     }
 
+    /// Shape text at the document resolution and place its lines in text-space coordinates.
     pub fn layout(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32) -> TextLayout {
         let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
         let runs = t.char_runs();
