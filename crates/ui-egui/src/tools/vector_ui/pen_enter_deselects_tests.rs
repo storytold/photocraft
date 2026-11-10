@@ -34,8 +34,8 @@ fn listed(h: &Harness<'static, PhotocraftApp>) -> bool {
     path_rows(&st.doc, st.active_layer).iter().any(|r| r.kind == PathRow::Work)
 }
 
-fn make_buttons_enabled(h: &Harness<'static, PhotocraftApp>) -> [bool; 2] {
-    ["Make Selection", "Make Shape"].map(|label| !h.get_by_label(label).accesskit_node().is_disabled())
+fn make_buttons_enabled(h: &Harness<'static, PhotocraftApp>) -> [bool; 3] {
+    ["Selection…", "Mask", "Shape"].map(|label| !h.get_by_label(label).accesskit_node().is_disabled())
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn enter_deselects_the_work_path_and_the_next_path_replaces_it() {
     assert_eq!(h.state().ui.selected_path, None, "but not selected");
     assert!(!work_path_shown(h.state()), "the Work Path is hidden");
     assert_eq!(overlay_shapes(h.state(), &egui::Context::default()), 0, "no outline on the canvas");
-    assert_eq!(make_buttons_enabled(&h), [false, false], "the Make buttons are greyed");
+    assert_eq!(make_buttons_enabled(&h), [false, false, false], "the Make buttons are greyed");
 
     draw_path(&mut h, [[30.0, 60.0], [150.0, 80.0]], Key::Enter);
     assert_eq!(work_anchors(&h), [[[30.0, 60.0], [150.0, 80.0]]], "the new path replaced the old one");
@@ -62,7 +62,7 @@ fn escape_keeps_the_work_path_selected_and_the_next_path_joins_it() {
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
     assert!(work_path_shown(h.state()));
     assert!(overlay_shapes(h.state(), &egui::Context::default()) > 0, "the outline stays");
-    assert_eq!(make_buttons_enabled(&h), [true, true]);
+    assert_eq!(make_buttons_enabled(&h), [true, true, true]);
 
     draw_path(&mut h, [[30.0, 60.0], [150.0, 80.0]], Key::Escape);
     assert_eq!(work_anchors(&h), [vec![[20.0, 20.0], [120.0, 20.0]], vec![[30.0, 60.0], [150.0, 80.0]]], "a second subpath");
@@ -80,7 +80,7 @@ fn enter_keeps_a_selected_saved_path_selected() {
     assert_eq!(doc.paths.iter().find(|p| p.name == "Saved").map(|p| p.path.subpaths.len()), Some(2), "the path joined the saved path");
     assert!(doc.work_path.is_none());
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("Saved"), "which stays selected");
-    assert_eq!(make_buttons_enabled(&h), [true, true]);
+    assert_eq!(make_buttons_enabled(&h), [true, true, true]);
 }
 
 #[test]
