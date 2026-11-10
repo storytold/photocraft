@@ -432,3 +432,35 @@ fn shader_fingerprint_is_fnv1a_of_embedded_source() {
     assert_eq!(super::fnv1a(b"hello"), 0xa430_d846_80aa_bd0b);
     assert_eq!(super::shader_fingerprint(), super::fnv1a(super::SHADER.as_bytes()));
 }
+
+/// A block binds only the passes whose clip meets its chunks: a layer at the far end of the
+/// document is skipped near the other end, and everything is bound over the whole canvas.
+#[test]
+fn passes_outside_a_cells_chunks_are_not_bound() {
+    use photocraft_color::{Color, ColorMode, SampleType};
+    use photocraft_doc::{Document, Layer};
+    let mut d = Document::with_background("t", photocraft_geom::Size::new(4096, 1024), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    // Two small layers at opposite ends, like layers of two storyboards.
+    for (name, r) in [("left", Rect::new(16, 16, 200, 200)), ("right", Rect::new(3800, 16, 4000, 200))] {
+        let mut l = Layer::raster(name.to_string(), d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(r, &[0.2, 0.4, 0.6, 1.0]);
+        d.layers.push(l);
+    }
+    let p = plan::plan(&d).unwrap();
+    let runs = batch_runs(&p);
+    let near_left = [Rect::new(0, 0, 512, 512)];
+    let live = cells::live_passes(&p, &runs, &near_left);
+    assert_eq!(live.len(), p.passes.len());
+    let right = Rect::new(3800, 16, 4000, 200);
+    for (i, pass) in p.passes.iter().enumerate() {
+        match pass.clip {
+            // Only a pass clipped to the far layer is skipped.
+            Some(c) if c.intersect(&right) == c => assert!(!live[i], "pass {i} draws only on the right"),
+            None => assert!(live[i], "pass {i} has no clip"),
+            _ => {}
+        }
+    }
+    assert!(live.iter().any(|l| !l), "the right layer's passes are skipped: {:?}", p.passes.iter().map(|p| p.clip).collect::<Vec<_>>());
+    // Chunks over both: everything is bound.
+    assert!(cells::live_passes(&p, &runs, &[Rect::new(0, 0, 4096, 1024)]).iter().all(|l| *l));
+}

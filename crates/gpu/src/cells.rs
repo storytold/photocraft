@@ -20,6 +20,7 @@ impl Compositor {
         cell: Cell,
         fr: &FrameRes,
         first_pass: usize,
+        live: &[bool],
         stats: &mut Stats,
     ) -> Bound {
         let cr = cell_rect(cell, self.page);
@@ -27,7 +28,7 @@ impl Compositor {
         let mut keys: Vec<ResKey> = Vec::new();
         let mut maps = Vec::with_capacity(plan.passes.len());
         for (i, p) in plan.passes.iter().enumerate() {
-            if i < first_pass {
+            if i < first_pass || !live.get(i).copied().unwrap_or(true) {
                 views.push((None, None));
                 maps.push(None);
                 continue;
@@ -91,7 +92,10 @@ impl Compositor {
         let first_pass = checkpoint
             .and_then(|_| chunks.iter().map(|c| self.prefix.restore_point(*c).map(|r| r.pass_end)).try_fold(usize::MAX, |m, p| Some(m.min(p?))))
             .unwrap_or(0);
-        let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats);
+        let live = live_passes(plan, runs, chunks);
+        stats.pass_bindings += plan.passes.len();
+        stats.passes_culled += live.iter().filter(|l| !**l).count();
+        let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, &live, stats);
         // A page couldn't be created: draw nothing with the pages missing (the caller ends the refresh).
         if self.layer_alloc.is_some() {
             return;
@@ -125,7 +129,7 @@ impl Compositor {
             data[i * STRIDE as usize..][..w.len()].copy_from_slice(&w);
         }
         for (i, p) in plan.passes.iter().enumerate() {
-            if i < first_pass {
+            if i < first_pass || !live[i] {
                 continue;
             }
             let (tex, mask) = bound.views[i];
@@ -154,7 +158,7 @@ impl Compositor {
         let resident_views: Vec<&wgpu::TextureView> = bound.keys.iter().map(|k| self.residents.get(k).map_or(dummy, |r| &r.view)).collect();
         let mut bg1 = Vec::with_capacity(plan.passes.len());
         for (i, p) in plan.passes.iter().enumerate() {
-            if i < first_pass || p.kernel.entry().is_none() {
+            if i < first_pass || !live[i] || p.kernel.entry().is_none() {
                 bg1.push(None);
                 continue;
             }
@@ -520,4 +524,21 @@ impl Compositor {
         self.temps.push((t, frame));
         v
     }
+}
+
+/// Which passes of `plan` can draw in any of `chunks`: those without a clip, and those whose clip
+/// (a layer's bounds) meets one. The rest are skipped by the chunk loop's scissor test anyway, but
+/// were bound all the same: every block of a storyboard canvas built page bindings, uniforms and a
+/// bind group for all of its ~450 passes, though a block meets the 30 or so of one storyboard, and
+/// that setup was most of a sweep's time on the UI thread. A batched run is live whole when any of
+/// its passes is: the run's first pass binds the others' pixels.
+pub(crate) fn live_passes(plan: &Plan<'_>, runs: &[usize], chunks: &[Rect]) -> Vec<bool> {
+    let mut live: Vec<bool> = plan.passes.iter().map(|p| p.clip.is_none_or(|clip| chunks.iter().any(|c| !clip.intersect(c).is_empty()))).collect();
+    for (i, &run) in runs.iter().enumerate() {
+        let end = i.saturating_add(run).min(live.len());
+        if run > 1 && i < end && live[i..end].contains(&true) {
+            live[i..end].fill(true);
+        }
+    }
+    live
 }

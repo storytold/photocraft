@@ -688,6 +688,17 @@ impl GpuCanvas {
         region: photocraft_geom::Rect,
         encode_srgb: bool,
     ) -> Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported> {
+        self.composite_regions(doc, &[region], encode_srgb)
+    }
+
+    /// [`Self::composite`] of several regions in one render (a sweep's blocks): one plan of the
+    /// document for all of them.
+    pub fn composite_regions(
+        &self,
+        doc: &photocraft_doc::Document,
+        regions: &[photocraft_geom::Rect],
+        encode_srgb: bool,
+    ) -> Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported> {
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let size = [doc.size.width, doc.size.height];
         if size[0] == 0 || size[1] == 0 {
@@ -745,7 +756,8 @@ impl GpuCanvas {
         let key = doc.id.0;
         let format = self.format_for(doc.depth, size);
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format);
-        let region = if fresh { doc.bounds() } else { region.intersect(&doc.bounds()) };
+        let regions: Vec<photocraft_geom::Rect> =
+            if fresh { vec![doc.bounds()] } else { regions.iter().map(|r| r.intersect(&doc.bounds())).filter(|r| !r.is_empty()).collect() };
         // Checked before allocating a new canvas texture only: `render` plans (and refuses) itself.
         if fresh && let Err(e) = comp.supports(doc) {
             res.compositor = Some(comp);
@@ -755,8 +767,10 @@ impl GpuCanvas {
         // evicted ones every time (no faster than the CPU, and more memory): the banded CPU
         // compositor does it (in the background on desktop). So does a large damage rect, such
         // as hiding a big layer (#4024); small edits in the view stay on the GPU.
-        let large = region.width() as u64 * region.height() as u64 >= DEFER_PX;
-        if region == doc.bounds() || large {
+        // One region only: several are a sweep's small blocks.
+        if let &[region] = regions.as_slice()
+            && (region == doc.bounds() || region.width() as u64 * region.height() as u64 >= DEFER_PX)
+        {
             let needed = comp.working_set(doc, region);
             let fit = LayerFit { doc: doc.id.0, needed, budget: comp.fit_layers(needed, region == doc.bounds()) };
             res.layer_fit = Some(fit);
@@ -783,7 +797,7 @@ impl GpuCanvas {
         // Last-resort guard: a wgpu panic (e.g. polling a device lost mid-refresh) marks the
         // device lost instead of taking the app and its documents down.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            comp.render(device, queue, doc, region, |enc, out| {
+            comp.render_regions(device, queue, doc, &regions, |enc, out| {
                 for t in &d.tiles {
                     let [tx, ty, tw, th] = t.rect.map(|v| v as i32);
                     let r = out.rect.intersect(&photocraft_geom::Rect::from_xywh(tx, ty, tw as u32, th as u32));
@@ -831,7 +845,9 @@ impl GpuCanvas {
             None => result,
         };
         if result.is_ok() {
-            d.regenerate_mips(device, queue, res, [region.x0 as u32, region.y0 as u32, region.x1 as u32, region.y1 as u32]);
+            for region in &regions {
+                d.regenerate_mips(device, queue, res, [region.x0 as u32, region.y0 as u32, region.x1 as u32, region.y1 as u32]);
+            }
             if std::env::var_os("PHOTOCRAFT_GPU_SYNC").is_some() {
                 // Benchmarking: wait for the GPU so callers can time the whole refresh.
                 #[cfg(not(target_arch = "wasm32"))]
@@ -905,6 +921,7 @@ impl GpuCanvas {
                 out.composite_ms = now_ms() - t0;
                 out.uploads = stats.tiles_uploaded as u64;
                 out.gpu = stats.gpu_time;
+                out.stats = Some(stats);
                 return out;
             }
             Err(e) => {
@@ -939,6 +956,41 @@ impl GpuCanvas {
         out.px = bounds.width() as u64 * bounds.height() as u64;
         out.composite_ms = now_ms() - t0;
         out
+    }
+
+    /// Several blocks of document `key`'s display texture brought up to date in one GPU render
+    /// (one plan of the document for all of them), for a sweep. `None` when that isn't possible
+    /// (no texture yet, the GPU compositor declined or failed): the caller refreshes them one by
+    /// one, as before, which also gives each its CPU fallback.
+    pub fn refresh_blocks(
+        &self,
+        key: u64,
+        doc: &photocraft_doc::Document,
+        blocks: &[photocraft_geom::Rect],
+        display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+    ) -> Option<Refresh> {
+        let size = [doc.size.width, doc.size.height];
+        if key != doc.id.0
+            || self.fault().is_some()
+            || !self.fits_canvas(doc)
+            || !self.has(key, size)
+            || self.format_of(key) != Some(self.format_for(doc.depth, size))
+        {
+            return None;
+        }
+        let bounds = doc.bounds();
+        let regions: Vec<photocraft_geom::Rect> = blocks.iter().map(|b| b.intersect(&bounds)).filter(|r| !r.is_empty()).collect();
+        let t0 = now_ms();
+        let stats = self.composite_regions(doc, &regions, display.is_some_and(|d| d.encode_srgb)).ok()?;
+        Some(Refresh {
+            kind: "gpu-rect",
+            px: regions.iter().map(|r| r.width() as u64 * r.height() as u64).sum(),
+            composite_ms: now_ms() - t0,
+            uploads: stats.tiles_uploaded as u64,
+            gpu: stats.gpu_time,
+            stats: Some(stats),
+            ..Default::default()
+        })
     }
 
     /// Composite the whole of `doc` with the CPU compositor into document `key`'s texture, band by

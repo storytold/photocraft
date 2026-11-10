@@ -45,6 +45,18 @@ pub struct Stats {
     pub layers_batched: usize,
     /// Batched passes drawn with Normal's code alone (`fs_layerbatch_normal`), summed over chunks.
     pub normal_batches: usize,
+    /// Passes not bound because they draw in none of a cell's chunks (a layer elsewhere on the
+    /// canvas), summed over cells; `pass_bindings` counts every pass a cell considered.
+    pub passes_culled: usize,
+    pub pass_bindings: usize,
+    /// CPU time of the render's stages (ms): planning the document, checking the lower-stack
+    /// cache against it, effect maps and frame resources, drawing the cells, and the clean-up
+    /// after them. For the sweep's log line: where a block's time goes.
+    pub plan_ms: f64,
+    pub prepare_ms: f64,
+    pub setup_ms: f64,
+    pub cells_ms: f64,
+    pub tail_ms: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

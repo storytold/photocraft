@@ -18,6 +18,20 @@ impl Compositor {
         queue: &wgpu::Queue,
         doc: &Document,
         region: Rect,
+        sink: impl FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
+    ) -> Result<Stats, Unsupported> {
+        self.render_regions(device, queue, doc, &[region], sink)
+    }
+
+    /// [`Self::render`] for several regions at once (the blocks of a canvas sweep): the document
+    /// is planned, and its frame resources set up, once for all of them. Planning a storyboard
+    /// canvas of ~450 passes took about 4 ms, and every block of a sweep planned it again.
+    pub fn render_regions(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &Document,
+        regions: &[Rect],
         mut sink: impl FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
     ) -> Result<Stats, Unsupported> {
         let result = scoped_work(device, self.health.clone(), || {
@@ -36,10 +50,10 @@ impl Compositor {
             // nothing has to reach back into the compositor for it afterwards.
             let landed = self.timer.as_mut().and_then(timing::GpuTimer::take);
             if let Some(t) = &mut self.timer {
-                let r = region.intersect(&doc.bounds());
-                t.start(&mut encoder, r.width() as u64 * r.height() as u64);
+                let px = regions.iter().map(|r| r.intersect(&doc.bounds())).map(|r| r.width() as u64 * r.height() as u64).sum();
+                t.start(&mut encoder, px);
             }
-            let mut stats = self.encode_inner(device, queue, &mut encoder, doc, region, &mut sink, true);
+            let mut stats = self.encode_inner(device, queue, &mut encoder, doc, regions, &mut sink, true);
             if let Ok(s) = &mut stats {
                 s.gpu_time = landed;
             }
@@ -81,7 +95,7 @@ impl Compositor {
         region: Rect,
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
     ) -> Result<Stats, Unsupported> {
-        let result = scoped_work(device, self.health.clone(), || self.encode_inner(device, queue, encoder, doc, region, sink, false));
+        let result = scoped_work(device, self.health.clone(), || self.encode_inner(device, queue, encoder, doc, &[region], sink, false));
         if result.is_err() {
             self.discard_failed_work();
         }
@@ -106,7 +120,7 @@ impl Compositor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         doc: &Document,
-        region: Rect,
+        regions: &[Rect],
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
         flush: bool,
     ) -> Result<Stats, Unsupported> {
@@ -116,7 +130,7 @@ impl Compositor {
         // CMYK layers convert through the document's own CMYK profile (uploads and plan colours).
         let space = photocraft_compose::cmyk_space(doc);
         self.cmyk = space.as_ref().map_or(0, |s| s.id);
-        photocraft_color::convert::with_cmyk_space(space.as_ref(), || self.encode_scoped(device, queue, encoder, doc, region, sink, flush))
+        photocraft_color::convert::with_cmyk_space(space.as_ref(), || self.encode_scoped(device, queue, encoder, doc, regions, sink, flush))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -126,22 +140,25 @@ impl Compositor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         doc: &Document,
-        region: Rect,
+        regions: &[Rect],
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
         flush: bool,
     ) -> Result<Stats, Unsupported> {
         let canvas = doc.bounds();
-        let region = region.intersect(&canvas);
+        let parts: Vec<Rect> = regions.iter().map(|r| r.intersect(&canvas)).filter(|r| !r.is_empty()).collect();
+        let t = clock();
         let plan = plan(doc)?;
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         self.pattern_doc = doc.id;
-        let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, ..Default::default() };
-        if region.is_empty() {
+        let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, plan_ms: ms(t), ..Default::default() };
+        if parts.is_empty() {
             return Ok(stats);
         }
         let page = self.page;
-        let mut cells = grid_rects(region, page);
+        // The page cells of every region: each is drawn on its own, so several regions are just
+        // more cells.
+        let mut cells: Vec<Rect> = parts.iter().flat_map(|r| grid_rects(*r, page)).collect();
         // Check every actual page cell before uploads, submissions or sink output. A later
         // cell can need more chunk records than the first; a failure must leave the device healthy.
         let buffer_limit = device.limits().max_buffer_size;
@@ -166,6 +183,7 @@ impl Compositor {
         // for every render of this plan, so a layer's bits don't depend on the cache: renders
         // capture and resume only where a run starts.
         let runs = batch_runs(&plan);
+        let t = clock();
         let checkpoint = if flush {
             let starts = run_starts(&runs);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
@@ -173,6 +191,8 @@ impl Compositor {
         } else {
             None
         };
+        stats.prepare_ms = ms(t);
+        let t = clock();
 
         // Effect maps of whole regions first (they may render group shapes through sub-plans);
         // regions larger than the limit are built per cell below.
@@ -184,6 +204,8 @@ impl Compositor {
             }
         }
         let fr = self.frame_res(device, queue, canvas, &plan);
+        stats.setup_ms = ms(t);
+        let t = clock();
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
@@ -278,6 +300,8 @@ impl Compositor {
             }
         }
 
+        stats.cells_ms = ms(t);
+        let t = clock();
         // Evict this document's textures whose layers are gone (hidden layers stay resident so
         // toggling visibility costs no upload).
         let frame = self.frame;
@@ -287,6 +311,7 @@ impl Compositor {
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
         self.evict_patterns();
+        stats.tail_ms = ms(t);
         Ok(stats)
     }
 
@@ -420,4 +445,21 @@ impl Compositor {
         let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat))).collect();
         FrameRes { areas, luts, patterns }
     }
+}
+
+/// A start time for the CPU timings in [`Stats`] (none on the web, where `Instant` isn't there).
+fn clock() -> Option<std::time::Instant> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Some(std::time::Instant::now())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// Milliseconds since `start` (0 without one).
+fn ms(start: Option<std::time::Instant>) -> f64 {
+    start.map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0)
 }

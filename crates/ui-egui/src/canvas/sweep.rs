@@ -47,7 +47,14 @@ pub(crate) struct CanvasState {
     pending: Vec<Rect>,
     /// A block came back other than as a GPU refresh: redraw in one go until a full one lands.
     failed: bool,
+    /// UI-thread time of a render's planning, and of each block on top of it (ms, moving
+    /// averages): how many blocks the rest of a frame's budget holds ([`batch_len`]).
+    plan_ms: Option<f64>,
+    block_ms: Option<f64>,
 }
+
+/// Most blocks drawn in one render.
+const MAX_BATCH: usize = 4;
 
 pub(crate) type CanvasStates = HashMap<DocId, CanvasState>;
 
@@ -130,7 +137,35 @@ pub(crate) fn changed_since_shown(app: &PhotocraftApp, doc: &Document, display_k
 /// while blocks remain.
 pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, doc: &Document, display: Option<&CanvasDisplay>) -> Step {
     let started = crate::gpu_canvas::now_ms();
+    let mut batches = true;
     loop {
+        // The blocks the rest of the budget holds go in one render: the document is planned
+        // once for all of them (about 2 ms a plan on a storyboard of ~450 passes, per block before).
+        let n = if batches { batch_len(app, doc.id, started) } else { 1 };
+        if n > 1 {
+            let batch: Vec<Rect> = app.canvas_states.get(&doc.id).map(|s| s.pending.iter().rev().take(n).copied().collect()).unwrap_or_default();
+            match gpu.refresh_blocks(doc.id.0, doc, &batch, display).filter(|_| batch.len() > 1) {
+                Some(r) => {
+                    app.perf.record_refresh(&r);
+                    app.perf.gpu_uploads = r.uploads;
+                    if let Some(s) = app.canvas_states.get_mut(&doc.id) {
+                        let keep = s.pending.len().saturating_sub(batch.len());
+                        s.pending.truncate(keep);
+                        s.learn(&r, batch.len());
+                    }
+                    if !running(app, doc.id) {
+                        return Step::Done;
+                    }
+                    if crate::gpu_canvas::now_ms() - started >= FRAME_BUDGET_MS {
+                        ctx.request_repaint();
+                        return Step::Continuing;
+                    }
+                    continue;
+                }
+                // One at a time for the rest of the frame, each with its own fallback.
+                None => batches = false,
+            }
+        }
         let Some(block) = app.canvas_states.get_mut(&doc.id).and_then(|s| s.pending.pop()) else { return Step::Done };
         let r = gpu.refresh_with(doc.id.0, doc, Some(block), display, false);
         // Counted like any refresh, so `ui.inspect` and slow-frame reports include the blocks.
@@ -139,6 +174,11 @@ pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas
             if r.kind.starts_with("gpu") {
                 app.perf.gpu_uploads = r.uploads;
             }
+        }
+        if r.fallback.is_none()
+            && let Some(s) = app.canvas_states.get_mut(&doc.id)
+        {
+            s.learn(&r, 1);
         }
         if let Some(end) = after_block(app, doc.id, r.kind, r.fallback.is_some()) {
             return end;
@@ -151,6 +191,25 @@ pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas
             return Step::Continuing;
         }
     }
+}
+
+impl CanvasState {
+    /// Learn from a GPU render of `blocks` blocks what planning and each block cost.
+    fn learn(&mut self, r: &crate::gpu_canvas::Refresh, blocks: usize) {
+        let Some(stats) = r.stats.as_ref() else { return };
+        let avg = |old: Option<f64>, new: f64| Some(old.map_or(new, |o| o * 0.7 + new * 0.3));
+        self.plan_ms = avg(self.plan_ms, stats.plan_ms);
+        self.block_ms = avg(self.block_ms, ((r.composite_ms - stats.plan_ms) / blocks.max(1) as f64).max(0.1));
+    }
+}
+
+/// How many of `doc`'s pending blocks fit what is left of this frame's budget, once a render's
+/// cost is known: 1 until then, at most [`MAX_BATCH`].
+fn batch_len(app: &PhotocraftApp, doc: DocId, started: f64) -> usize {
+    let Some(s) = app.canvas_states.get(&doc) else { return 1 };
+    let (Some(plan), Some(block)) = (s.plan_ms, s.block_ms) else { return 1 };
+    let left = FRAME_BUDGET_MS - (crate::gpu_canvas::now_ms() - started) - plan;
+    ((left / block).floor().max(1.0) as usize).min(MAX_BATCH)
 }
 
 /// What a block's refresh (`kind`, and whether the CPU stepped in) means for the sweep: `None`,
@@ -317,6 +376,27 @@ mod tests {
         app.canvas_states.get_mut(&big.id).unwrap().pending.clear();
         safety_net(&mut app, &big, big.bounds());
         assert!(running(&app, big.id));
+    }
+
+    /// One block a frame until a render has been measured; then as many as the frame budget
+    /// holds (up to `MAX_BATCH`), and back to one when each block costs a frame.
+    #[test]
+    fn blocks_are_batched_once_a_render_has_been_measured() {
+        let mut app = app();
+        let big = doc(10_000, 10_000);
+        start(&mut app, &big, big.bounds());
+        let now = crate::gpu_canvas::now_ms();
+        assert_eq!(batch_len(&app, big.id, now), 1, "one block until a render is measured");
+        let stats = photocraft_gpu::Stats { plan_ms: 2.0, ..Default::default() };
+        let r = crate::gpu_canvas::Refresh { kind: "gpu-rect", composite_ms: 6.0, stats: Some(stats), ..Default::default() };
+        app.canvas_states.get_mut(&big.id).unwrap().learn(&r, 1);
+        // 24 ms budget: a 2 ms plan, then 4 ms a block, at most MAX_BATCH.
+        assert_eq!(batch_len(&app, big.id, now), MAX_BATCH);
+        let slow = crate::gpu_canvas::Refresh { kind: "gpu-rect", composite_ms: 62.0, stats: Some(stats), ..Default::default() };
+        for _ in 0..20 {
+            app.canvas_states.get_mut(&big.id).unwrap().learn(&slow, 1);
+        }
+        assert_eq!(batch_len(&app, big.id, now), 1, "blocks that cost a frame each go one at a time");
     }
 
     #[test]
