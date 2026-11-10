@@ -377,8 +377,77 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     for key in [MARK, "__command", "__label", "__document", "__previewGuides", "__previewParams", "__previewSource"] {
         remembered.remove(key);
     }
-    app.ui.view.guide_layout = Value::Object(remembered);
+    remember(app, remembered);
     Ok(result)
+}
+
+/// The fields a confirmed layout keeps for the next launch. The colour is not one of them: it is
+/// the Guides, Grid & Slices preference, which is saved on its own.
+const REMEMBERED: [&str; 14] = [
+    "columns",
+    "rows",
+    "width",
+    "height",
+    "gutter",
+    "rowGutter",
+    "margin",
+    "centerColumns",
+    "clearExisting",
+    "target",
+    "__preset",
+    "__columnsEnabled",
+    "__rowsEnabled",
+    "__marginEnabled",
+];
+
+/// A remembered length: the pixels it applied, or a percent string ("10%"). Width and Height are
+/// `optional`, empty (null) when the layout divides the space evenly.
+fn remembered_length(v: &Value, optional: bool) -> bool {
+    match v {
+        Value::Null => optional,
+        Value::Number(n) => n.as_f64().is_some_and(|px| px.is_finite() && px >= 0.0),
+        Value::String(s) => percent_of(s, Unit::Pixels).is_some_and(|pct| pct.is_finite() && pct >= 0.0),
+        _ => false,
+    }
+}
+
+/// A saved value the dialog can open with. Saved data is never trusted: a hand-edited preferences
+/// file keeps the default of whatever it got wrong.
+fn remembered_value(key: &str, v: &Value) -> bool {
+    match key {
+        "columns" | "rows" => v.as_u64().is_some_and(|n| n <= 1000),
+        "width" | "height" => remembered_length(v, true),
+        "gutter" | "rowGutter" => remembered_length(v, false),
+        "margin" => match v {
+            Value::Array(sides) => sides.len() == 4 && sides.iter().all(|side| remembered_length(side, false)),
+            one => remembered_length(one, false),
+        },
+        "target" => matches!(v.as_str(), Some("document" | "selectedArtboards")),
+        "__preset" => matches!(v.as_str(), Some("custom" | "five" | "eight" | "twelve")),
+        _ => v.is_boolean(),
+    }
+}
+
+/// OK applied the layout: the next dialog opens with it, in this session and, through the
+/// preferences' remembered dialog settings, after a restart (#12978). Cancel and a failed OK never
+/// reach here.
+fn remember(app: &mut PhotocraftApp, layout: Map<String, Value>) {
+    let kept: Map<String, Value> =
+        REMEMBERED.iter().filter_map(|k| layout.get(*k).filter(|v| remembered_value(k, v)).map(|v| ((*k).to_string(), v.clone()))).collect();
+    app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(kept)));
+    app.ui.view.guide_layout = Value::Object(layout);
+}
+
+/// Bring back the layout the last OK applied before the previous quit, at launch. Only the
+/// values that are valid are taken, over the factory layout.
+pub fn restore(app: &mut PhotocraftApp) {
+    let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(COMMAND).cloned() else { return };
+    let Some(layout) = app.ui.view.guide_layout.as_object_mut() else { return };
+    for key in REMEMBERED {
+        if let Some(v) = saved.get(key).filter(|v| remembered_value(key, v)) {
+            layout.insert(key.into(), v.clone());
+        }
+    }
 }
 
 /// Full replacement guide set for the dialog's own document. Cancel/removal drops it immediately.

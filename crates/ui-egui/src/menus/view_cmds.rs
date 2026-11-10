@@ -115,7 +115,8 @@ pub struct ViewOptions {
     /// and the Middle Eastern & South Asian composer.
     pub language_features: String,
     pub middle_eastern_composer: bool,
-    /// Parameters from the last successfully applied New Guide Layout dialog.
+    /// Parameters from the last successfully applied New Guide Layout dialog, restored at launch
+    /// from `Preferences::dialogs` (`guide_layout_ui::restore`).
     pub guide_layout: Value,
     /// Developer overlay of the active layer's storage tiles (tile_overlay.rs), set with the
     /// control channel's `ui.set {"tileGrid": true}`.
