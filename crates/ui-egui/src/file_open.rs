@@ -415,7 +415,9 @@ impl PhotocraftApp {
             }
             return;
         }
-        while self.ui.transform.is_none() && self.jobs.place.is_none() && self.session.active_job().is_none() {
+        // A box still preparing (or its canceled job not yet handled) holds the queue too: the
+        // next place would lock the document before a canceled place could be taken back.
+        while self.ui.transform.is_none() && self.transform_preparing.is_none() && self.jobs.place.is_none() && self.session.active_job().is_none() {
             let Some(active) = self.session.active().map(|st| st.doc.id) else { return };
             let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
                 return;
@@ -600,12 +602,12 @@ fn digit_run(it: &mut std::iter::Peekable<std::str::Chars>) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn absolute(p: &str) -> String {
+pub(crate) fn absolute(p: &str) -> String {
     std::path::absolute(p).map(|a| a.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
-fn absolute(p: &str) -> String {
+pub(crate) fn absolute(p: &str) -> String {
     p.to_string()
 }
 
