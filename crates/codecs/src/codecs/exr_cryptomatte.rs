@@ -170,25 +170,38 @@ pub(crate) fn layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLay
         // result grow with keys * channels. A second key naming a listed layer is skipped;
         // `decode` resolves a name to its first layer anyway.
         let mut streams_for = layer_streams(header);
-        for key in cryptomatte_keys(&header.own_attributes.other) {
-            let Some(name) = attribute(&header.own_attributes.other, &key, "name") else { continue };
-            let Some(channels) = streams_for.remove(&normalize_layer(&name)) else { continue };
-            if channels.is_empty() {
-                continue;
-            }
-            let manifest = attribute(&header.own_attributes.other, &key, "manifest")
-                .filter(|m| m.len() <= MANIFEST_CAP)
-                .map(|m| parse_manifest(m.as_str()))
-                .unwrap_or_default();
+        // A key whose manifest is missing or unparseable only stands in for its layer when no later
+        // key naming it has a usable one.
+        let mut fallback: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+        let other = &header.own_attributes.other;
+        let mut push = |name: String, key: String, manifest: Vec<_>, channels: Vec<String>| {
             out.push(CryptomatteLayer {
                 part,
                 name,
-                key: key.clone(),
-                conversion: attribute(&header.own_attributes.other, &key, "conversion"),
+                conversion: attribute(other, &key, "conversion"),
                 manifest,
-                sidecar_manifest: attribute(&header.own_attributes.other, &key, "manif_file"),
+                sidecar_manifest: attribute(other, &key, "manif_file"),
+                key,
                 channels,
             });
+        };
+        for key in cryptomatte_keys(other) {
+            let Some(name) = attribute(other, &key, "name") else { continue };
+            let norm = normalize_layer(&name);
+            if streams_for.get(&norm).is_none_or(|c| c.is_empty()) {
+                continue;
+            }
+            let manifest = attribute(other, &key, "manifest").filter(|m| m.len() <= MANIFEST_CAP).map(|m| parse_manifest(m.as_str())).unwrap_or_default();
+            if manifest.is_empty() {
+                fallback.entry(norm).or_insert((name, key));
+            } else if let Some(channels) = streams_for.remove(&norm) {
+                push(name, key, manifest, channels);
+            }
+        }
+        for (norm, (name, key)) in fallback {
+            if let Some(channels) = streams_for.remove(&norm) {
+                push(name, key, Vec::new(), channels);
+            }
         }
     }
     out.sort_by(|a, b| (&a.part, &a.name).cmp(&(&b.part, &b.name)));
