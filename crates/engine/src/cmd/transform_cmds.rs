@@ -381,6 +381,27 @@ pub(crate) fn check_budget(src: Rect, h: &Homography, what: &str, format: PixelF
     check_budget_with_limit(src, h, what, format, active_budget())
 }
 
+/// [`check_budget`] for a render that writes only inside `r` (a warp clipped to the canvas): the
+/// result is at most `r`, whatever the whole placement would take.
+pub(crate) fn check_budget_rect(r: Rect, what: &str, format: PixelFormat) -> Result<()> {
+    check_budget_rect_with_limit(r, what, format, active_budget())
+}
+
+fn check_budget_rect_with_limit(r: Rect, what: &str, format: PixelFormat, budget: u64) -> Result<()> {
+    let bpp = PixelFormat::new(format.mode, format.sample, true).bytes_per_pixel() as u64;
+    let (w, ht) = (u64::from(r.width()), u64::from(r.height()));
+    let bytes = w.saturating_mul(ht).saturating_mul(bpp);
+    if bytes > budget {
+        let mb = |b: u64| b.div_ceil(1 << 20);
+        return Err(EngineError::Other(format!(
+            "too large to transform: the transformed {what} would be {w} x {ht} px ({} MB), more than the {} MB Memory Usage allows (Preferences › Performance); the document was not changed",
+            mb(bytes),
+            budget >> 20
+        )));
+    }
+    Ok(())
+}
+
 /// [`check_budget`] against `budget` bytes (the tests price the production budget with it).
 fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, format: PixelFormat, budget: u64) -> Result<()> {
     let Some((w, ht)) = warp_output_size(src, h) else { return Ok(()) };

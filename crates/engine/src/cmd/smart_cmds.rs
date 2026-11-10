@@ -186,7 +186,7 @@ mod rendering;
 mod source;
 
 pub(crate) use contents::on_close;
-pub use contents::{commit_child, contents_of, replace_contents_bytes, replace_contents_from_bytes};
+pub use contents::{Fit, commit_child, contents_of, replace_contents_bytes, replace_contents_fit, replace_contents_from_bytes, replace_contents_with};
 use contents::{edit_contents, export_contents, is_smart_child, path_param, replace_contents, set_source, update_all};
 use filters::smart_mut;
 pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
@@ -251,7 +251,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let i = s.active_index().ok_or(EngineError::NoDocument)?;
             Ok(json!({"updated": commit_child(s, i)?}))
         }),
-        spec!("layer.smartObjects.replaceContents", "Replace Contents…", SO, r##"{"layer":id?,"path":str}"##, has_smart, replace_contents),
+        spec!(
+            "layer.smartObjects.replaceContents",
+            "Replace Contents…",
+            SO,
+            r##"{"layer":id?,"path":str,"fit":"keep|stretch|contain"="keep","clipToCanvas":bool=false}"##,
+            has_smart,
+            replace_contents
+        ),
         spec!(
             "layer.smartObjects.exportContents",
             "Export Contents…",

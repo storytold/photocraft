@@ -245,7 +245,7 @@ impl Headless {
 
     /// Replace a smart object's contents with a file from the read root: the capability-scoped
     /// `layer.smartObjects.replaceContents`, which takes an ambient `path` and is refused in
-    /// automation (#8061). `params` is the command's own (`layer`).
+    /// automation (#8061). `params` is the command's own (`layer`, `fit`, `clipToCanvas`).
     pub fn replace_smart_object(&mut self, index: Option<usize>, path: &str, params: &Value) -> Result<Value, AutomationError> {
         self.on_doc(index, |this| {
             let mut opts = params.as_object().cloned().unwrap_or_default();

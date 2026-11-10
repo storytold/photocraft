@@ -47,6 +47,15 @@ pub(super) fn placed_key(bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, canva
     *h.finalize().as_bytes()
 }
 
+/// A placed stage rendered only inside `clip` (see `replace_contents_with`): never served for,
+/// nor served by, the full render of the same placement or one clipped to another rect.
+pub(super) fn clipped_key(placed: &StageKey, clip: Rect) -> StageKey {
+    let mut h = blake3::Hasher::new();
+    h.update(placed);
+    h.update(format!("clip:{clip:?}").as_bytes());
+    *h.finalize().as_bytes()
+}
+
 /// The stage after applying `f` to stage `below`.
 pub(super) fn filter_key(below: &StageKey, f: &SmartFilter) -> StageKey {
     let mut h = blake3::Hasher::new();

@@ -10,7 +10,7 @@
 //! - `session.list`, `doc.open {path}`, `doc.new {…file.new params}`,
 //!   `doc.place {path, scale?, fit?, center?, index?}` (#2810: the read root is the scope,
 //!   the counterpart of the refused ambient `file.placeEmbedded`),
-//!   `doc.replaceSmartObject {path, layer?, index?}` (#8061: the same scope for
+//!   `doc.replaceSmartObject {path, layer?, fit?, clipToCanvas?, index?}` (#8061: the same scope for
 //!   `layer.smartObjects.replaceContents`),
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
 //!   `doc.exportDataSets {dir, format?, dataSets?, naming?, index?}`,

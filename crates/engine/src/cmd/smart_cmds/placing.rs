@@ -48,6 +48,84 @@ pub(crate) fn transform_placement(sm: &mut SmartObject, a: &Affine) {
     }
 }
 
+/// The box around `new`'s centre with `old`'s aspect ratio that just holds `new`: stretching it
+/// onto `old` scales `new` uniformly to fit inside `old`, centred. Degenerate boxes are returned
+/// as they are ([`stretch_placement`] leaves those placements alone).
+pub(super) fn contain_box(old: [f64; 4], new: [f64; 4]) -> [f64; 4] {
+    let (ow, oh, nw, nh) = (old[2] - old[0], old[3] - old[1], new[2] - new[0], new[3] - new[1]);
+    if !(ow > 0.0 && oh > 0.0 && nw > 0.0 && nh > 0.0) || [ow, oh, nw, nh].iter().any(|v| !v.is_finite()) {
+        return new;
+    }
+    let k = (ow / nw).min(oh / nh);
+    let (w, h) = (ow / k, oh / k);
+    let (cx, cy) = ((new[0] + new[2]) / 2.0, (new[1] + new[3]) / 2.0);
+    [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0]
+}
+
+/// Re-aims `sm`'s placement so that the box `new` (source pixels of new contents) lands where
+/// `old` did: the map becomes `placement ∘ S` with `S` taking `new` onto `old`. A warp absorbs
+/// `S` in its box (a preset first becomes its exact mesh, over a box that also holds `old`, see
+/// [`preset_mesh_over`]); without one, `S` joins the perspective or the affine transform. A warp
+/// acts in source space, before the perspective (`place_source_projective`), so with both the
+/// perspective stays as it is.
+pub(super) fn stretch_placement(sm: &mut SmartObject, old: [f64; 4], new: [f64; 4]) {
+    let (ow, oh, nw, nh) = (old[2] - old[0], old[3] - old[1], new[2] - new[0], new[3] - new[1]);
+    if !(ow > 0.0 && oh > 0.0 && nw > 0.0 && nh > 0.0) || [ow, oh, nw, nh].iter().any(|v| !v.is_finite()) || old == new {
+        return;
+    }
+    let (kx, ky) = (ow / nw, oh / nh);
+    let (tx, ty) = (old[0] - kx * new[0], old[1] - ky * new[1]);
+    if let Some(w) = sm.warp.as_mut().filter(|w| !w.is_identity()) {
+        // A warp normalises over its box `B`, so `W ∘ S` is the same warp over `S⁻¹(B)`.
+        if w.style.is_preset() {
+            let b = w.bounds;
+            let e = [b[0].min(old[0]), b[1].min(old[1]), b[2].max(old[2]), b[3].max(old[3])];
+            *w = photocraft_geom::warp::Warp::custom(preset_mesh_over(w, e), e);
+        } else if w.style != photocraft_geom::warp::WarpStyle::Custom {
+            *w = photocraft_geom::warp::Warp::custom(w.to_mesh(1, 1), w.bounds);
+        }
+        let b = w.bounds;
+        w.bounds = [(b[0] - tx) / kx, (b[1] - ty) / ky, (b[2] - tx) / kx, (b[3] - ty) / ky];
+        return;
+    }
+    if let Some([a, b, c, d, e, f, g, i, j]) = sm.perspective {
+        // H · S, row-major, S = [kx 0 tx; 0 ky ty; 0 0 1]; `set_placement` keeps `transform` in step.
+        set_placement(sm, Homography([a * kx, b * ky, a * tx + b * ty + c, d * kx, e * ky, d * tx + e * ty + f, g * kx, i * ky, g * tx + i * ty + j]));
+        return;
+    }
+    sm.transform = sm.transform.mul(&Affine { m: [kx, 0.0, 0.0, ky, tx, ty] });
+}
+
+/// Preset warp `w` as one custom Bezier patch over the box `e`. A preset is one bicubic patch,
+/// defined past its own box too (it extrapolates there), while a custom mesh clamps to its box: so
+/// the patch is that same polynomial taken over `e`, found exactly from its values at the 4 × 4
+/// points `e`'s thirds. Over `w.bounds` it is the preset's own mesh.
+pub(super) fn preset_mesh_over(w: &photocraft_geom::warp::Warp, e: [f64; 4]) -> photocraft_geom::warp::BezierMesh {
+    // The Bezier control values of the cubic taking the values `f` at 0, 1/3, 2/3 and 1.
+    let control = |f: [[f64; 2]; 4]| {
+        let mut c = [f[0], [0.0; 2], [0.0; 2], f[3]];
+        for k in 0..2 {
+            let a = 27.0 * f[1][k] - 8.0 * f[0][k] - f[3][k];
+            let b = 27.0 * f[2][k] - f[0][k] - 8.0 * f[3][k];
+            c[1][k] = (2.0 * a - b) / 18.0;
+            c[2][k] = (2.0 * b - a) / 18.0;
+        }
+        c
+    };
+    let third = |lo: f64, hi: f64, i: usize| lo + (hi - lo) * i as f64 / 3.0;
+    // Along each row first, then down each column (the patch is a tensor product).
+    let rows: [[[f64; 2]; 4]; 4] = std::array::from_fn(|j| {
+        let y = third(e[1], e[3], j);
+        control(std::array::from_fn(|i| {
+            let (x, y) = w.map(third(e[0], e[2], i), y);
+            [x, y]
+        }))
+    });
+    let cols: [[[f64; 2]; 4]; 4] = std::array::from_fn(|i| control(std::array::from_fn(|j| rows[j][i])));
+    let points = (0..4).flat_map(|j| (0..4).map(move |i| (i, j))).map(|(i, j)| cols[i][j]).collect();
+    photocraft_geom::warp::BezierMesh { us: vec![0.0, 1.0], vs: vec![0.0, 1.0], points }
+}
+
 /// Moves a smart object by whole pixels without re-rendering.
 pub(crate) fn shift_smart(sm: &mut SmartObject, dx: i32, dy: i32) {
     transform_placement(sm, &Affine::translate(dx as f64, dy as f64));
