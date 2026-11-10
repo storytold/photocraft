@@ -107,6 +107,8 @@ fn an_artboard_background_opens_the_color_picker() {
         app.run("layer.new.artboard", json!({"x": 10, "y": 10, "width": 100, "height": 80})).unwrap();
         app.run("layer.artboard.set", json!({"background": "custom", "color": "#ff0000"})).unwrap();
     });
+    h.state_mut().run("window.panel.properties", json!({"show": true})).unwrap();
+    h.run_steps(6);
     pick(&mut h, "Color");
     let st = h.state().session.active().unwrap();
     let l = st.doc.layer(st.active_layer.unwrap()).unwrap();

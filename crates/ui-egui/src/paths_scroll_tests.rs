@@ -22,6 +22,8 @@ fn harness(paths: usize, size: egui::Vec2, ppp: f32) -> Harness<'static, Photocr
         app
     });
     h.run_steps(8);
+    h.state_mut().run("window.panel.paths", json!({"show": true})).unwrap();
+    h.run_steps(8);
     h
 }
 
@@ -33,7 +35,7 @@ fn harness(paths: usize, size: egui::Vec2, ppp: f32) -> Harness<'static, Photocr
 fn scrolling_the_paths_list_does_not_move_the_footer() {
     // Heights that moved it at 125 % (two bands of window heights), and ones that never did.
     for (ppp, height) in [(1.25, 520.0), (1.25, 900.0), (1.25, 960.0), (1.0, 900.0), (1.5, 900.0)] {
-        let mut h = harness(30, vec2(1440.0, height), ppp);
+        let mut h = harness(60, vec2(1440.0, height), ppp);
         let footer = |h: &Harness<'_, PhotocraftApp>| h.query_by_label("Delete path").map(|r| r.rect().min.y);
         let rest = footer(&h).unwrap_or_else(|| panic!("the footer shows at {ppp}x, {height} high"));
         let first_row = h.query_by_label("Path 1").unwrap().rect();

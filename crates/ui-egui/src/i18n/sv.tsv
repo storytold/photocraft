@@ -4828,6 +4828,11 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW-framkallningsinställningar sparade i {file}
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Den sparade panellayouten kunde inte återställas.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Den har bevarats; redigering av paneler eller återställning av arbetsytan ersätter den.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Den sparade panellayouten kunde inte återställas. Den har bevarats; redigering av paneler eller återställning av arbetsytan ersätter den.
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	Välj ett förinställt bildförhållande eller beskärningsstorlek
 	Set the aspect ratio for the crop box	Ange bildförhållandet för beskärningsramen

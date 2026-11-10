@@ -52,6 +52,7 @@ mod navigator;
 pub(crate) mod options_bar;
 pub(super) mod panel_docking;
 mod panel_state;
+pub(crate) mod panel_visibility;
 pub mod preset_panels;
 mod properties;
 pub mod props_layout;
@@ -62,6 +63,8 @@ pub(super) mod timeline_ui;
 pub(crate) mod title_bar;
 pub(super) mod titlebar;
 pub(crate) mod toolbar;
+pub(crate) mod toolbar_docking;
+
 pub mod type_panels_ui;
 pub(super) mod variables_ui;
 
@@ -1655,7 +1658,7 @@ mod embedding_tests {
     /// The rail is drawn inside the canvas panel, so its panel state is keyed under that panel's
     /// scope: find it by a button only the rail has.
     fn rail_drawn(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> bool {
-        h.query_by_label("Color & Swatches").is_some()
+        h.state().ui.panel_presentation.migrated && h.state().ui.panel_presentation.compact.iter().any(|id| id == "properties")
     }
 
     /// An app that embeds the UI can hide the icon rail and the menu bar; both are on by default.

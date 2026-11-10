@@ -4646,6 +4646,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Postavke RAW obrade sačuvane u {file}
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Sačuvani raspored panela nije moguće vratiti.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Raspored je sačuvan; uređivanje panela ili resetovanje radnog prostora će ga zamijeniti.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Sačuvani raspored panela nije moguće vratiti. Raspored je sačuvan; uređivanje panela ili resetovanje radnog prostora će ga zamijeniti.
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	Odaberite unaprijed postavljenu razmeru ili veličinu obrezivanja
 	Set the aspect ratio for the crop box	Postavite razmeru okvira za obrezivanje

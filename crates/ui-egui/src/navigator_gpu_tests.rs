@@ -55,6 +55,8 @@ fn navigator_draws_the_gpu_canvas_texture_and_follows_edits() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     h.run_steps(8);
+    h.state_mut().run("window.panel.navigator", json!({"show": true})).unwrap();
+    h.run_steps(8);
     if !h.state().perf.gpu {
         eprintln!("skipping: the canvas fell back to the CPU here");
         return;

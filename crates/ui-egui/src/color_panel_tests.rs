@@ -450,6 +450,8 @@ fn color_wheel_ignores_clicks_beside_it() {
 fn color_wheel_fits_the_default_color_group() {
     for kind in ThemeKind::ALL {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // Exercise the native group sizing; compact launcher columns have separate coverage.
+        app.ui.panels.rail = false;
         app.ui.color_panel.mode = ColorPanelMode::ColorWheel;
         app.ui.theme = kind;
         app.ui.dock_tabs.color = Group::Color.tabs(Tokens::for_kind(kind).pro).iter().position(|name| *name == "Color").unwrap();

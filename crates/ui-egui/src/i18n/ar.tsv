@@ -3625,6 +3625,11 @@ curves	Smooth	تنعيم
 	Saved RAW Develop settings to {file}	تم حفظ إعدادات معالجة RAW في {file}
 	RAW Develop	معالجة RAW
 	RAW Develop Filter	مرشح معالجة RAW
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	تعذرت استعادة تخطيط اللوحات المحفوظ.
+	It has been preserved; editing panels or resetting the workspace will replace it.	تم الاحتفاظ به؛ سيؤدي تعديل اللوحات أو إعادة تعيين مساحة العمل إلى استبداله.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	تعذرت استعادة تخطيط اللوحات المحفوظ. تم الاحتفاظ به؛ سيؤدي تعديل اللوحات أو إعادة تعيين مساحة العمل إلى استبداله.
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	اختر نسبة أبعاد أو حجم اقتصاص مسبق الضبط
 	Set the aspect ratio for the crop box	اضبط نسبة أبعاد إطار الاقتصاص

@@ -3284,6 +3284,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 # RAW Develop feature labels
 	RAW Develop	RAW 顯影
 	RAW Develop Filter	RAW 顯影濾鏡
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	無法還原已儲存的面板配置。
+	It has been preserved; editing panels or resetting the workspace will replace it.	配置已保留；編輯面板或重設工作區將取代此配置。
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	無法還原已儲存的面板配置。 配置已保留；編輯面板或重設工作區將取代此配置。
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	選擇預設的寬高比或裁切尺寸
 	Set the aspect ratio for the crop box	設定裁切框的寬高比

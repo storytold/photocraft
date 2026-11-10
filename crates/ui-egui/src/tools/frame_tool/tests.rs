@@ -492,6 +492,8 @@ fn double_clicking_frame_content_opens_only_smart_objects() {
     let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &r);
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(8);
     let double_click_content = |h: &mut egui_kittest::Harness<PhotocraftApp>, layer: u64| {
         // Past egui's double-click window, so the last pair's clicks don't run on into these.
         h.run_steps(30);

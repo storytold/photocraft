@@ -317,6 +317,7 @@ pub fn rail_click(app: &mut PhotocraftApp, g: Group, docked: bool) {
         let collapse = !app.ui.dock.is_collapsed(g);
         app.ui.dock.set_collapsed(g, collapse);
     }
+    discard_retained_layout(app);
 }
 
 /// A tab strip's Close: hide `tab` of `g`, and the group with its last tab. When the selected
@@ -339,17 +340,66 @@ pub(crate) fn close_tab(app: &mut PhotocraftApp, g: Group, tab: usize, pro: bool
 
 /// What `prefs.panelLayout` holds: the live layout and open panels.
 pub(crate) fn snapshot(app: &PhotocraftApp) -> Value {
-    let mut layout = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingReturns": app.ui.docking_returns, "dockingCollapsed": app.ui.docking_collapsed});
+    let mut layout = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingReturns": app.ui.docking_returns, "dockingCollapsed": app.ui.docking_collapsed, "toolbarFloating": app.ui.toolbar_floating, "panelPresentation": app.ui.panel_presentation});
     keep_newer(app, &mut layout);
     layout
 }
 
-/// A saved layout's workspace from a newer version stays as saved while the default layout
-/// shows in its place (craft-ui: keep it on disk, don't overwrite it).
+/// An unsupported saved workspace stays as saved while the default layout shows in its place.
+/// This includes unreadable payloads whose version number was not advanced.
 pub(crate) fn keep_newer(app: &PhotocraftApp, layout: &mut Value) {
     if let (None, Some(kept), Some(layout)) = (&app.ui.docking, &app.ui.docking_kept, layout.as_object_mut()) {
         layout.extend(kept.clone());
     }
+}
+
+const RESTORE_NOTICE_TITLE: &str = "The saved panel layout could not be restored.";
+const RESTORE_NOTICE_MESSAGE: &str =
+    "The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.";
+
+/// Preserve the explanation even when fullscreen or the status bar hides the chrome.
+fn sync_restore_notice(app: &mut PhotocraftApp) {
+    if app.ui.docking_kept.is_some() {
+        let message = tl!(RESTORE_NOTICE_MESSAGE).to_string();
+        app.ui.status = message.clone();
+        app.ui.status_error = false;
+        app.ui.docking_restore_status = Some(message);
+        if !app.ui.notices.iter().any(|n| n.title == RESTORE_NOTICE_TITLE) {
+            crate::notices::post_persistent(
+                app,
+                RESTORE_NOTICE_TITLE,
+                vec!["It has been preserved; editing panels or resetting the workspace will replace it.".into()],
+            );
+        }
+    } else {
+        if app.ui.docking_restore_status.take().is_some_and(|own| own == app.ui.status) {
+            app.ui.status.clear();
+            app.ui.status_error = false;
+        }
+        app.ui.notices.retain(|n| n.title != RESTORE_NOTICE_TITLE);
+    }
+}
+
+/// Refresh only the restore-owned status after the frame selects its language.
+pub(crate) fn refresh_restore_status(app: &mut PhotocraftApp) {
+    if app.ui.docking_kept.is_some() && app.ui.docking_restore_status.as_ref() == Some(&app.ui.status) {
+        let translated = tl!(RESTORE_NOTICE_MESSAGE);
+        if app.ui.status != translated {
+            app.ui.status = translated.into();
+            app.ui.docking_restore_status = Some(app.ui.status.clone());
+        }
+    }
+}
+
+/// An explicit layout edit replaces the retained fallback, not an unrelated view edit.
+pub(crate) fn discard_retained_layout(app: &mut PhotocraftApp) {
+    if app.ui.docking_kept.is_some() && app.ui.docking.is_none() {
+        let Some(workspace) = crate::panel_docking::native_fallback(app) else { return };
+        app.ui.docking = Some(workspace);
+        app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
+    }
+    app.ui.docking_kept = None;
+    sync_restore_notice(app);
 }
 
 /// Writes the current panels/layout snapshot now, for a discrete change such as the toolbar side,
@@ -371,11 +421,11 @@ pub(crate) fn persist_panels(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Remember the layout in the preferences once the user lets go of the mouse (Workspace ›
 /// Remember Workspace Changes), and once panel windows the OS moves or resizes keep still. Cheap:
-/// a small JSON compare per frame.
+/// a typed change stamp avoids serializing unchanged layouts.
 pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Once the layout changes, the newer workspace is replaced.
-    if app.ui.docking.is_some() {
-        app.ui.docking_kept = None;
+    if app.ui.docking.is_some() && app.ui.docking_kept.is_some() {
+        discard_retained_layout(app);
     }
     if !app.session.prefs().workspace.remember_workspace_changes || ctx.input(|i| i.pointer.any_down()) || crate::panels::dock_edge_drag_active(ctx) {
         return;
@@ -384,9 +434,68 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
         return;
     }
+    let key = egui::Id::unique("remembered-panel-layout");
+    let previous = ctx.data_mut(|d| d.get_temp::<std::sync::Arc<PersistStamp>>(key));
+    if previous.as_ref().is_some_and(|cached| cached.matches(app) && cached.json == app.session.prefs().panel_layout) {
+        return;
+    }
     let now = snapshot(app);
+    let stamp = std::sync::Arc::new(PersistStamp::new(app, now.clone()));
     if app.session.prefs().panel_layout != now {
         app.session.prefs.edit(|p| p.panel_layout = now);
+    }
+    ctx.data_mut(|d| d.insert_temp(key, stamp));
+}
+
+#[derive(Clone)]
+struct PersistStamp {
+    workspace: String,
+    panels: Panels,
+    tabs: DockTabs,
+    dock: DockLayout,
+    timeline: bool,
+    layout: Option<crate::panel_docking::Workspace>,
+    returns: BTreeMap<String, craft_ui::docking::Location<String>>,
+    kept: Option<serde_json::Map<String, Value>>,
+    collapsed: Vec<String>,
+    toolbar: Option<[f32; 2]>,
+    window_ids: Vec<u64>,
+    presentation: crate::state::PanelPresentation,
+    json: Value,
+}
+impl PersistStamp {
+    fn new(app: &PhotocraftApp, json: Value) -> Self {
+        let ui = &app.ui;
+        Self {
+            workspace: ui.workspace.clone(),
+            panels: ui.panels.clone(),
+            tabs: ui.dock_tabs,
+            dock: ui.dock.clone(),
+            timeline: ui.timeline.open,
+            layout: ui.docking.clone(),
+            returns: ui.docking_returns.clone(),
+            kept: ui.docking_kept.clone(),
+            collapsed: ui.docking_collapsed.clone(),
+            toolbar: ui.toolbar_floating,
+            presentation: ui.panel_presentation.clone(),
+            window_ids: ui.docking.iter().flat_map(|w| w.layout.floating.iter().map(|f| f.id)).collect(),
+            json,
+        }
+    }
+    fn matches(&self, app: &PhotocraftApp) -> bool {
+        let ui = &app.ui;
+        self.workspace == ui.workspace
+            && self.panels == ui.panels
+            && self.tabs == ui.dock_tabs
+            && self.dock == ui.dock
+            && self.timeline == ui.timeline.open
+            && self.layout == ui.docking
+            && self.returns == ui.docking_returns
+            && self.kept == ui.docking_kept
+            && self.collapsed == ui.docking_collapsed
+            && self.toolbar == ui.toolbar_floating
+            && self.presentation == ui.panel_presentation
+            && self.window_ids.iter().copied().eq(ui.docking.iter().flat_map(|w| w.layout.floating.iter().map(|f| f.id)))
     }
 }
 
@@ -496,15 +605,21 @@ pub fn restore(app: &mut PhotocraftApp) {
 ///
 /// `craft_ui::docking::DockArea` keeps only transient drag/focus data in `ctx.data`; the
 /// split/tab arrangement is the app's own `craft_ui::docking::Layout` JSON stored here. If a
-/// layout saved by a different craft-ui revision no longer deserializes, it is dropped and the
-/// legacy layout is rebuilt (the split/tab arrangement resets). Panel widths are a separate
-/// `egui::PanelState` migration and still carry over.
+/// layout saved by a different craft-ui revision no longer deserializes, its original payload
+/// is retained while the legacy layout is shown. Only an explicit layout edit replaces it.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
+    app.ui.panel_presentation = crate::panel_docking::migration::presentation(v);
+    app.ui.docking_flyout = None;
+    app.ui.toolbar_floating = v
+        .get("toolbarFloating")
+        .and_then(|v| serde_json::from_value::<[f32; 2]>(v.clone()).ok())
+        .filter(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 1_000_000.0));
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     (app.ui.docking, app.ui.docking_returns) = crate::panel_docking::load(v).map_or((None, Default::default()), |(w, r)| (Some(w), r));
-    app.ui.docking_kept = (app.ui.docking.is_none() && crate::panel_docking::newer(v))
-        .then(|| ["docking", "dockingReturns", "dockingCollapsed"].into_iter().filter_map(|key| Some((key.to_owned(), v.get(key)?.clone()))).collect());
+    app.ui.docking_kept = app.ui.docking.is_none().then(|| crate::panel_docking::retained_payload(v)).flatten();
+    sync_restore_notice(app);
+    crate::panel_docking::migration::upgrade_metrics(app);
     // Collapsed custom groups belong to the workspace; the native dock keeps its own flags.
     app.ui.docking_collapsed = match app.ui.docking {
         Some(_) => v.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),

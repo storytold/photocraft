@@ -17,6 +17,8 @@ fn harness(kind: crate::theme::ThemeKind, ppp: f32) -> (Harness<'static, crate::
         app
     });
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(6);
     (h, red, other)
 }
 
@@ -41,7 +43,7 @@ fn layer_color_context_menu_edits_the_clicked_layer_and_preserves_multi_selectio
         let (mut h, red, other) = harness(crate::theme::ThemeKind::Pro, ppp);
         let at = row(&h, red).center();
         click(&mut h, at, PointerButton::Secondary, Modifiers::NONE);
-        let at = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Color").last().expect("the Color submenu").rect().center();
+        let at = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Color").min_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).expect("the Color submenu").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);
         let at = h.get_by_role_and_label(egui::accesskit::Role::Button, "Seafoam").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);
@@ -55,7 +57,7 @@ fn layer_color_context_menu_edits_the_clicked_layer_and_preserves_multi_selectio
         assert_eq!(common_color(h.state(), clicked, true), None);
         let at = row(&h, red).center();
         click(&mut h, at, PointerButton::Secondary, Modifiers::NONE);
-        let at = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Color").last().expect("the Color submenu").rect().center();
+        let at = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Color").min_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).expect("the Color submenu").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);
         let at = h.get_by_role_and_label(egui::accesskit::Role::Button, "Indigo").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);

@@ -4328,6 +4328,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Αυτόματη αλλαγή μεγέθους καμβά
 	Keep Relative Position During Layer Reordering	Διατήρηση σχετικής θέσης κατά την αναδιάταξη επιπέδων
 	Shrinkwrap Canvas on Save	Σμίκρυνση καμβά στο περιεχόμενο κατά την αποθήκευση
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Δεν ήταν δυνατή η επαναφορά της αποθηκευμένης διάταξης πλαισίων.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Έχει διατηρηθεί· η επεξεργασία πλαισίων ή η επαναφορά του χώρου εργασίας θα την αντικαταστήσει.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Δεν ήταν δυνατή η επαναφορά της αποθηκευμένης διάταξης πλαισίων. Έχει διατηρηθεί· η επεξεργασία πλαισίων ή η επαναφορά του χώρου εργασίας θα την αντικαταστήσει.
 	Move Toolbar to the Right	Μετακίνηση γραμμής εργαλείων δεξιά
 	Move Toolbar to the Left	Μετακίνηση γραμμής εργαλείων αριστερά
 # Crop options bar (#10888)

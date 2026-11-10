@@ -65,9 +65,18 @@ pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String
     id
 }
 
+/// Post an important notice that survives the global auto-hide timer.
+pub(crate) fn post_persistent(app: &mut PhotocraftApp, title: &str, lines: Vec<String>) {
+    let id = app.ui.alloc_id();
+    app.ui.notices.push(Notice { id, title: title.into(), lines, sticky: true, ..Default::default() });
+    cap_notices(app);
+}
+
+/// Bound the notice stack, preferentially evicting temporary unpinned messages.
 fn cap_notices(app: &mut PhotocraftApp) {
     while app.ui.notices.len() > MAX_NOTICES {
         let oldest_temporary = app.ui.notices.iter().position(|notice| notice.dismiss_pref.is_none() && !notice.sticky).unwrap_or(0);
+
         app.ui.notices.remove(oldest_temporary);
     }
 }
@@ -468,5 +477,26 @@ mod tests {
         out.textures_delta.clear();
         assert!(app.ui.notices.is_empty());
         assert!(ctx.has_requested_repaint(), "the frame that drops a notice asks for another");
+    }
+    #[test]
+    /// Keep the restore warning past auto-hide and transient stack pressure until explicit acknowledgement.
+    fn restore_notice_survives_auto_hide_and_stack_pressure_until_acknowledged() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        let mut saved = crate::dock::snapshot(&app);
+        saved["docking"] = serde_json::json!({"version":2,"layout":{"kind":"unreadable"}});
+        crate::dock::apply(&mut app, &saved);
+        let id = app.ui.notices.iter().find(|n| n.sticky).unwrap().id;
+        app.ui.panels.status_bar = false;
+        for i in 0..MAX_NOTICES + 1 {
+            post(&mut app, format!("Transient {i}"), vec![], false, None);
+        }
+        expire(&mut app, 100.0, false, false, true, 6.0);
+        expire(&mut app, 120.0, false, false, true, 6.0);
+        assert_eq!(app.ui.notices.len(), 1);
+        assert_eq!(app.ui.notices[0].id, id);
+        dismiss(&mut app, id);
+        crate::dock::refresh_restore_status(&mut app);
+        assert!(app.ui.notices.is_empty());
+        assert!(app.ui.docking_kept.is_some());
     }
 }

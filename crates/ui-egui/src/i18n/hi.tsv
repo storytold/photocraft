@@ -702,6 +702,11 @@ cameraRaw	Yellow	पीला
 	RAW Develop Filter	RAW डेवलप फ़िल्टर
 	RAW Develop Filter…	RAW डेवलप फ़िल्टर…
 	Loaded RAW Develop settings from {file} ({n} not supported)	{file} से RAW डेवलप सेटिंग्स लोड की गईं ({n} समर्थित नहीं)
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	सहेजा गया पैनल लेआउट पुनर्स्थापित नहीं किया जा सका।
+	It has been preserved; editing panels or resetting the workspace will replace it.	इसे सुरक्षित रखा गया है; पैनल संपादित करने या कार्यस्थान रीसेट करने पर इसे बदल दिया जाएगा।
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	सहेजा गया पैनल लेआउट पुनर्स्थापित नहीं किया जा सका। इसे सुरक्षित रखा गया है; पैनल संपादित करने या कार्यस्थान रीसेट करने पर इसे बदल दिया जाएगा।
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	पहले से सेट पक्षानुपात या क्रॉप आकार चुनें
 	Set the aspect ratio for the crop box	क्रॉप फ़्रेम का पक्षानुपात सेट करें

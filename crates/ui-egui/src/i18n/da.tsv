@@ -4830,6 +4830,11 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW-fremkaldelsesindstillinger gemt i {file}
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Det gemte panellayout kunne ikke gendannes.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Det er bevaret; redigering af paneler eller nulstilling af arbejdsområdet erstatter det.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Det gemte panellayout kunne ikke gendannes. Det er bevaret; redigering af paneler eller nulstilling af arbejdsområdet erstatter det.
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	Vælg et forudindstillet billedformat eller beskæringsstørrelse
 	Set the aspect ratio for the crop box	Angiv billedformatet for beskæringsrammen

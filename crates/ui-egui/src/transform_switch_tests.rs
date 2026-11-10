@@ -43,12 +43,27 @@ fn red_bounds(h: &Harness<'static, PhotocraftApp>) -> photocraft_geom::Rect {
     top.surface().unwrap().content_bounds()
 }
 
+/// Scroll the toolbar as a user would before clicking a tool below the visible rows.
+fn click_hand(h: &mut Harness<'static, PhotocraftApp>) {
+    h.event(egui::Event::PointerMoved(egui::pos2(25.0, 200.0)));
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -1500.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(30);
+    h.event(egui::Event::PointerMoved(egui::pos2(300.0, 200.0)));
+    h.run_steps(2);
+    h.query_by_label_contains("Hand Tool").expect("the toolbar's Hand Tool").click();
+}
+
 #[test]
 fn picking_another_tool_in_the_toolbar_applies_the_transform() {
     let mut h = app();
     transform_and_move(&mut h);
-    let hand = h.query_by_label_contains("Hand Tool").expect("the toolbar's Hand Tool");
-    hand.click();
+    click_hand(&mut h);
     h.run_steps(4);
     assert!(h.state().ui.transform.is_none(), "the box closed");
     assert_eq!(red_bounds(&h), photocraft_geom::Rect::new(150, 140, 250, 200), "the move was applied, not cancelled");
@@ -93,7 +108,7 @@ fn placed_and_moved(h: &mut Harness<'static, PhotocraftApp>) {
 fn a_placed_image_is_applied_when_another_tool_is_picked() {
     let mut h = placed_app();
     placed_and_moved(&mut h);
-    h.query_by_label_contains("Hand Tool").expect("the toolbar's Hand Tool").click();
+    click_hand(&mut h);
     h.run_steps(4);
     assert!(h.state().ui.transform.is_none());
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 2, "the placed layer stays");

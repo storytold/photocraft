@@ -54,6 +54,8 @@ fn harness(session: photocraft_engine::Session, ppp: f32, theme: &str, dock_widt
     );
     crate::control::handle(h.state_mut(), &ctx, &req);
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(8);
     h
 }
 

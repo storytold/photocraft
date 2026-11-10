@@ -3,7 +3,11 @@ use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
 fn app() -> PhotocraftApp {
-    PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    // These tests exercise the native groups without the optional replacement launcher.
+    // The launcher's real-panel migration and gestures have their own presentation tests.
+    app.ui.panels.rail = false;
+    app
 }
 
 fn lay(app: &PhotocraftApp) -> &Layout<String> {
@@ -231,7 +235,7 @@ fn a_tab_dropped_on_the_canvas_floats_there_and_redocks() {
     assert!(tab_rect(&h, "layers").expand(4.0).contains(target), "the tab stays under the pointer");
 
     let source = tab_rect(&h, "layers").center();
-    let destination = tab_rect(&h, "properties").center();
+    let destination = tab_rect(&h, "properties").right_center();
     drag(&mut h, source, destination);
     let layout = lay(h.state());
     let mut members = group_members(layout, "layers");
@@ -241,7 +245,7 @@ fn a_tab_dropped_on_the_canvas_floats_there_and_redocks() {
 }
 
 #[test]
-fn brushes_tab_drag_opens_above_the_canvas_and_can_redock_into_another_tab_group() {
+fn brushes_tab_drag_at_the_canvas_edge_floats_and_can_redock_into_another_tab_group() {
     let mut app = app();
     crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.brushes", json!({})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
@@ -250,13 +254,10 @@ fn brushes_tab_drag_opens_above_the_canvas_and_can_redock_into_another_tab_group
     // The outer edge band along the canvas column's top.
     drag(&mut h, source, egui::pos2(canvas.center().x, canvas.top() + 6.0));
     let layout = lay(h.state());
-    assert!(canvas_side(layout).contains(&"brushes".to_string()), "{layout:?}");
-    assert!(!layout.floating.iter().any(|window| window.contains("brushes")));
-    let canvas_body = last_bodies(&h.ctx).into_iter().find(|(id, _)| id == CANVAS).expect("the canvas is drawn").1;
-    assert!(tab_rect(&h, "brushes").bottom() <= canvas_body.top(), "brushes is above the canvas");
+    assert!(layout.floating.iter().any(|window| window.contains("brushes")));
 
     let source = tab_rect(&h, "brushes").center();
-    let destination = tab_rect(&h, "layers").center();
+    let destination = tab_rect(&h, "layers").right_center();
     drag(&mut h, source, destination);
     let layout = lay(h.state());
     assert!(in_dock_column(layout, "brushes"));
@@ -510,7 +511,7 @@ fn populated_canvas_keeps_a_real_opacity_edit_after_floating_and_redocking() {
         h.render().unwrap().save(directory.join("photocraft-populated-opacity-floating.png")).unwrap();
     }
     let from = tab_rect(&h, "properties").center();
-    let to = tab_rect(&h, "layers").center();
+    let to = tab_rect(&h, "layers").right_center();
     drag(&mut h, from, to);
     assert!(lay(h.state()).floating.iter().all(|group| !group.contains(&"properties".to_string())));
     assert_eq!(h.state().session.active().unwrap().doc.layer(layer).unwrap().opacity, opacity);
@@ -694,6 +695,7 @@ fn custom_group_commands_preserve_members_and_workspace_timeline() {
 #[test]
 fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
     let mut app = app();
+    app.ui.panels.rail = true;
     app.run("window.panel.float", json!({"panel":"swatches","x":20,"y":40})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     assert!(h.query_all_by_label("Panel menu").count() > 0);
@@ -847,7 +849,7 @@ fn floating_group_grip_redocks_all_tabs_as_one_atomic_move() {
     app.run("window.panel.move", json!({"panel":"patterns","anchor":"swatches"})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     let from = hit_rect(&h, craft_ui::docking::Hit::DragBar("swatches".into())).center();
-    let to = tab_rect(&h, "layers").center();
+    let to = tab_rect(&h, "layers").right_center();
     drag(&mut h, from, to);
     let layout = lay(h.state());
     assert!(layout.floating.iter().all(|group| !group.contains(&"swatches".to_string()) && !group.contains(&"patterns".to_string())));
@@ -1158,8 +1160,7 @@ fn the_dock_edge_handle_resizes_and_a_locked_workspace_refuses_it() {
         }
         let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
         let stored = dock_width(h.state());
-        let rail = if h.state().ui.panels.rail { if h.state().ui.theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
-        let edge = 1280.0 - (stored + rail);
+        let edge = outer_handle(&h).center().x;
         drag(&mut h, pos2(edge, 400.0), pos2(edge + 60.0, 400.0));
         let resized = dock_width(h.state());
         h.run_steps(4);
@@ -1206,6 +1207,7 @@ fn disabling_the_ui_cancels_a_dock_edge_drag() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let mut app = app();
+    app.ui.panels.rail = true;
     app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
     app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
     let disabled = Arc::new(AtomicBool::new(false));
@@ -1809,6 +1811,7 @@ fn app_with_columns(widths: &[f32], iconic: bool) -> PhotocraftApp {
         .collect();
     let root = with_canvas(Node::Dock { side: Side::End, columns }, widths.iter().sum::<f32>().min(520.0));
     let mut app = app();
+    app.ui.panels.rail = true;
     app.ui.docking = Some(Workspace::new(Layout { root: Some(root), floating: Vec::new() }));
     assert!(valid_workspace(app.ui.docking.as_ref().unwrap()), "fixtures must be accepted saved workspaces");
     app

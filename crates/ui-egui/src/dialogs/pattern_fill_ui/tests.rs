@@ -1,6 +1,6 @@
 use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::{Fill, LayerContent, LayerId};
 use serde_json::json;
 
@@ -145,6 +145,8 @@ fn harness() -> (Harness<'static, PhotocraftApp>, LayerId) {
     let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &r);
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(8);
     (h, id)
 }
 
@@ -171,7 +173,7 @@ fn double_clicking_the_thumbnail_opens_the_dialog_and_a_picked_pattern_is_applie
     assert!(owns(&d.fields));
     assert_eq!(d.fields["__params"]["layer"], id.0);
     h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Patterns").click();
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Patterns").find(|n| !n.accesskit_node().is_disabled()).expect("enabled Patterns picker").click();
     h.run_steps(3);
     h.get_by_label("Bricks").click();
     h.run_steps(3);

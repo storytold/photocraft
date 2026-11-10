@@ -4202,6 +4202,11 @@ shape	Appearance	화면 모양
 	Auto-size Canvas	캔버스 크기 자동 조정
 	Keep Relative Position During Layer Reordering	레이어 순서 변경 시 상대 위치 유지
 	Shrinkwrap Canvas on Save	저장 시 캔버스를 내용에 맞게 축소
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	저장된 패널 레이아웃을 복원할 수 없습니다.
+	It has been preserved; editing panels or resetting the workspace will replace it.	레이아웃은 보존되었습니다. 패널을 편집하거나 작업 영역을 초기화하면 대체됩니다.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	저장된 패널 레이아웃을 복원할 수 없습니다. 레이아웃은 보존되었습니다. 패널을 편집하거나 작업 영역을 초기화하면 대체됩니다.
 	Move Toolbar to the Right	도구 모음을 오른쪽으로 이동
 	Move Toolbar to the Left	도구 모음을 왼쪽으로 이동
 # Crop options bar (#10888)

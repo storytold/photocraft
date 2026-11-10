@@ -4647,6 +4647,11 @@ shape	Appearance	Apparence
 	Auto-size Canvas	Redimensionner le canevas automatiquement
 	Keep Relative Position During Layer Reordering	Conserver la position relative lors de la réorganisation des calques
 	Shrinkwrap Canvas on Save	Réduire le canevas au contenu à l'enregistrement
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	La disposition enregistrée des panneaux n’a pas pu être restaurée.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Elle a été conservée ; modifier les panneaux ou réinitialiser l’espace de travail la remplacera.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	La disposition enregistrée des panneaux n’a pas pu être restaurée. Elle a été conservée ; modifier les panneaux ou réinitialiser l’espace de travail la remplacera.
 	Move Toolbar to the Right	Déplacer la barre d'outils à droite
 	Move Toolbar to the Left	Déplacer la barre d'outils à gauche
 # Crop options bar (#10888)

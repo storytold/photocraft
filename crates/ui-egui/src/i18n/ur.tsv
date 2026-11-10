@@ -4573,6 +4573,11 @@ navigator	Zoom	زوم
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW ڈیولپمنٹ کی ترتیبات {file} میں محفوظ ہو گئیں
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	محفوظ کردہ پینل کی ترتیب بحال نہیں ہو سکی۔
+	It has been preserved; editing panels or resetting the workspace will replace it.	اسے محفوظ رکھا گیا ہے؛ پینل میں ترمیم یا کام کی جگہ کو دوبارہ ترتیب دینے سے یہ بدل جائے گی۔
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	محفوظ کردہ پینل کی ترتیب بحال نہیں ہو سکی۔ اسے محفوظ رکھا گیا ہے؛ پینل میں ترمیم یا کام کی جگہ کو دوبارہ ترتیب دینے سے یہ بدل جائے گی۔
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	پہلے سے طے شدہ پہلو تناسب یا تراشنے کا سائز منتخب کریں
 	Set the aspect ratio for the crop box	تراشنے کے فریم کے لیے پہلو تناسب مقرر کریں

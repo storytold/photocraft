@@ -169,6 +169,12 @@ are adapted from Skyfuller1303’s MIT OR Apache-2.0 implementation in
 extension and current-main integration build on that source. Clipboard and unrelated
 Shape Tools changes from that branch are not included.
 
+## Panel workspace regression fixture (not shipped)
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/ui-egui/tests/fixtures/panel-repair-workspace.json` | Panel-only workspace regression fixture | @KotovGGG | Sanitized panel audit snapshot, 2026-10-29 | MIT OR Apache-2.0; adjacent `panel-repair-workspace.LICENSE` |
+
 ## Assets bundled by the PDF reader dependency (craft-pdf)
 
 PhotoCraft imports PDF pages through `craft-pdf`, pinned to the craft-libs revision
@@ -181,3 +187,4 @@ longer used or shipped.
 | `hayro-interpret 0.7.0 / assets/Foxit*.pfb` (13 standard-14 font files) | Foxit Software Inc. / PDFium Authors | <https://github.com/storytold/craft-libs/tree/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/vendor/hayro-interpret/assets> | BSD-3-Clause | Renders non-embedded standard-14 PDF fonts |
 | `hayro-interpret 0.7.0 / assets/CGATS001Compat-v2-micro.icc` | Clinton Ingram (saucecontrol/Compact-ICC-Profiles) | <https://github.com/storytold/craft-libs/tree/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/vendor/hayro-interpret/assets> | CC0-1.0 | Default CMYK colour conversion |
 | `hayro-cmap 0.1.0 / assets/cmaps.brotli` | Adobe | <https://github.com/storytold/craft-libs/tree/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/vendor/hayro-cmap/assets> | BSD-3-Clause | Character-code mapping for CJK PDFs |
+

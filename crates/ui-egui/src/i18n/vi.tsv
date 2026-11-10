@@ -4132,6 +4132,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Tự động đổi kích thước vùng vẽ
 	Keep Relative Position During Layer Reordering	Giữ vị trí tương đối khi sắp xếp lại lớp
 	Shrinkwrap Canvas on Save	Thu nhỏ vùng vẽ theo nội dung khi lưu
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Không thể khôi phục bố cục bảng đã lưu.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Bố cục đã được giữ lại; chỉnh sửa các bảng hoặc đặt lại không gian làm việc sẽ thay thế bố cục này.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Không thể khôi phục bố cục bảng đã lưu. Bố cục đã được giữ lại; chỉnh sửa các bảng hoặc đặt lại không gian làm việc sẽ thay thế bố cục này.
 	Move Toolbar to the Right	Di chuyển thanh công cụ sang phải
 	Move Toolbar to the Left	Di chuyển thanh công cụ sang trái
 # Crop options bar (#10888)

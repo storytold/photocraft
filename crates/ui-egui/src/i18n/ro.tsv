@@ -4615,6 +4615,11 @@ navigator	Zoom	Zoom
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Setările de developare RAW au fost salvate în {file}
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Aspectul salvat al panourilor nu a putut fi restaurat.
+	It has been preserved; editing panels or resetting the workspace will replace it.	A fost păstrat; editarea panourilor sau resetarea spațiului de lucru îl va înlocui.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Aspectul salvat al panourilor nu a putut fi restaurat. A fost păstrat; editarea panourilor sau resetarea spațiului de lucru îl va înlocui.
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	Alegeți un raport de aspect sau o dimensiune de decupare prestabilită
 	Set the aspect ratio for the crop box	Setați raportul de aspect pentru cadrul de decupare

@@ -4809,6 +4809,11 @@ shape	Appearance	Оформление
 	Auto-size Canvas	Автоматически менять размер холста
 	Keep Relative Position During Layer Reordering	Сохранять относительное положение при изменении порядка слоев
 	Shrinkwrap Canvas on Save	Уменьшать холст до содержимого при сохранении
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Не удалось восстановить сохранённую раскладку панелей.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Она сохранена; изменение панелей или сброс рабочей среды заменит её.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Не удалось восстановить сохранённую раскладку панелей. Она сохранена; изменение панелей или сброс рабочей среды заменит её.
 	Move Toolbar to the Right	Переместить панель инструментов вправо
 	Move Toolbar to the Left	Переместить панель инструментов влево
 # Crop options bar (#10888)

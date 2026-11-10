@@ -1686,6 +1686,8 @@ fn options_bar_hover_previews_with_the_character_picker_also_shown() {
         app
     });
     h.run_steps(8);
+    h.state_mut().run("window.panel.character", json!({"show": true})).unwrap();
+    h.run_steps(6);
     let layer = h.state().session.active().unwrap().active_layer.unwrap();
     let font = |h: &mut Harness<'static, PhotocraftApp>| {
         let (shown, _) = crate::canvas::display_doc(h.state_mut(), 0);

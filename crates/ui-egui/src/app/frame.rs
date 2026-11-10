@@ -35,6 +35,7 @@ impl PhotocraftApp {
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        crate::dock::refresh_restore_status(self);
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
         // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
         self.caps_lock = self.services.caps_lock.as_mut().is_some_and(|f| f());
@@ -293,13 +294,17 @@ impl PhotocraftApp {
         }
         // In Full Screen Mode, Tab shows the menu bar, options bar, toolbar and dock (#6760).
         let tabbed_in = !chrome && self.ui.panels.full_screen_chrome;
+        let hover = crate::panel_visibility::reveal(self, &ctx);
         if (chrome || tabbed_in) && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
-        // Home is only the menu bar and the Home content; the saved panel prefs are untouched.
         let home = self.home_screen_up();
-        if ((chrome && self.ui.panels.options_bar) || tabbed_in) && !home {
+        if ((chrome && (self.ui.panels.options_bar || hover.options)) || tabbed_in) && !home {
+            let before = ui.available_rect_before_wrap();
+
             panels::options_bar(self, ui);
+            let rect = egui::Rect::from_min_max(before.min, egui::pos2(before.right(), ui.available_rect_before_wrap().top()));
+            crate::panel_visibility::chrome(&ctx, "options", rect);
         } else {
             // Its Fill help modal is gone with the bar: do not let a stale flag hold the crop's keys.
             panels::options_bar::close_fill_help(ui.ctx());
@@ -307,9 +312,9 @@ impl PhotocraftApp {
         if chrome && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);
         }
-        let toolbar_shown = ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home;
+        let toolbar_shown = ((chrome && (self.ui.panels.toolbar || hover.toolbar)) || tabbed_in) && !home;
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
-        let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
+        let docking = ((chrome && (self.ui.panels.dock || hover.dock)) || tabbed_in) && !home;
         let toolbar_side = self.ui.panels.toolbar_side.resolve();
         let toolbar_right = toolbar_side == crate::state::ToolbarSide::Right;
         // The compact layout stacks the dock, rail and toolbar on the dock's physical edge.

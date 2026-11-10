@@ -4723,6 +4723,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ridimensiona quadro automaticamente
 	Keep Relative Position During Layer Reordering	Mantieni la posizione relativa durante il riordino dei livelli
 	Shrinkwrap Canvas on Save	Riduci il quadro al contenuto al salvataggio
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Impossibile ripristinare la disposizione dei pannelli salvata.
+	It has been preserved; editing panels or resetting the workspace will replace it.	È stata conservata; modificando i pannelli o reimpostando l’area di lavoro verrà sostituita.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Impossibile ripristinare la disposizione dei pannelli salvata. È stata conservata; modificando i pannelli o reimpostando l’area di lavoro verrà sostituita.
 	Move Toolbar to the Right	Sposta la barra degli strumenti a destra
 	Move Toolbar to the Left	Sposta la barra degli strumenti a sinistra
 # Crop options bar (#10888)

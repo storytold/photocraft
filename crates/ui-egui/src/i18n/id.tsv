@@ -3655,6 +3655,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 # RAW Develop feature labels
 	RAW Develop	Pengembangan RAW
 	RAW Develop Filter	Filter Pengembangan RAW
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Tata letak panel yang disimpan tidak dapat dipulihkan.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Tata letak tersebut tetap disimpan; mengedit panel atau mengatur ulang ruang kerja akan menggantinya.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Tata letak panel yang disimpan tidak dapat dipulihkan. Tata letak tersebut tetap disimpan; mengedit panel atau mengatur ulang ruang kerja akan menggantinya.
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	Pilih rasio aspek atau ukuran pangkas yang sudah ditetapkan
 	Set the aspect ratio for the crop box	Atur rasio aspek untuk bingkai pangkas

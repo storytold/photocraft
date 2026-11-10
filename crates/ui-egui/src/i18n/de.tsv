@@ -3671,6 +3671,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 # RAW Develop feature labels
 	RAW Develop	RAW-Entwicklung
 	RAW Develop Filter	RAW-Entwicklungsfilter
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Das gespeicherte Bedienfeldlayout konnte nicht wiederhergestellt werden.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Es wurde beibehalten; durch Bearbeiten der Bedienfelder oder Zurücksetzen des Arbeitsbereichs wird es ersetzt.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Das gespeicherte Bedienfeldlayout konnte nicht wiederhergestellt werden. Es wurde beibehalten; durch Bearbeiten der Bedienfelder oder Zurücksetzen des Arbeitsbereichs wird es ersetzt.
 # Crop options bar (#10888)
 	Select a preset aspect ratio or crop size	Voreingestelltes Seitenverhältnis oder Zuschnittgröße wählen
 	Set the aspect ratio for the crop box	Seitenverhältnis für den Zuschnittrahmen festlegen

@@ -23,6 +23,11 @@ pub fn exists(name: &str) -> bool {
     white_icons().contains(name)
 }
 
+/// The same SVG source for native panel strips and ordinary buttons.
+pub(crate) fn source(name: &str) -> egui::ImageSource<'static> {
+    white_icons().source(name)
+}
+
 /// Rasterize an embedded icon from the white icon set at exact pixel dimensions `[width, height]`.
 pub(crate) fn rasterize_svg(name: &str, width: u32, height: u32) -> Option<egui::ColorImage> {
     if width == 0 || height == 0 {
