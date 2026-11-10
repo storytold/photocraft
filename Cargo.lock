@@ -5559,6 +5559,7 @@ dependencies = [
  "exacl",
  "flate2",
  "libc",
+ "log",
  "photocraft-codecs",
  "photocraft-color",
  "photocraft-doc",

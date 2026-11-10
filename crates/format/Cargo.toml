@@ -13,6 +13,7 @@ workspace = true
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
+log = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-codecs = { workspace = true }
 craft-pcraft-format = { workspace = true }

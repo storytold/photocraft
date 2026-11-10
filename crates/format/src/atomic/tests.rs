@@ -616,8 +616,9 @@ fn a_directory_flush_the_file_system_cannot_do_still_saves() {
     atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap();
     assert_eq!(std::fs::read(&p).unwrap(), b"new");
     // EINVAL (22) means "can't flush a directory" only on Unix; EIO (5) is a real failure.
-    assert_eq!(dir_synced(Err(io::Error::from_raw_os_error(22))).is_ok(), cfg!(unix));
-    assert!(dir_synced(Err(io::Error::from_raw_os_error(5))).is_err());
+    let identity = RealFs.dir_identity(&d.0);
+    assert_eq!(dir_synced(Err(io::Error::from_raw_os_error(22)), &d.0, identity, &RealFs).is_ok(), cfg!(unix));
+    assert!(dir_synced(Err(io::Error::from_raw_os_error(5)), &d.0, identity, &RealFs).is_err());
     let fs = Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() };
     assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
 }
@@ -764,4 +765,140 @@ fn temp_owner_takes_only_a_file_part_temp_name_writes() {
         assert_eq!(temp_owner(&older(&dotted(63))), Some(42), "a dot file in the old form: {c}");
         assert_eq!(temp_owner(&older(&dotted(64))), None, "a dot file one character over: {c}");
     }
+}
+
+/// #11315: an AFP share on macOS refuses the directory flush with ENOENT (2), even though the
+/// rename into that folder just succeeded; there that counts as flushed, like the other codes a
+/// file system produces when it can't flush directories at all. On Linux and Windows 2 means a
+/// genuinely missing folder and stays a failure, as does EIO (5) everywhere.
+#[cfg(not(windows))]
+#[test]
+fn an_afp_enoent_directory_flush_is_unsupported_where_afp_lives() {
+    // A folder that still exists: the real file system answers `dir_exists`, so the code table
+    // alone decides (the vanished-folder case has its own test below).
+    let d = TempDir::new("syncdir-afp-codes");
+    let identity = RealFs.dir_identity(&d.0);
+    let code = |c| dir_synced(Err(io::Error::from_raw_os_error(c)), &d.0, identity, &RealFs);
+    assert_eq!(code(2).is_ok(), cfg!(target_vendor = "apple"), "code 2 counts as flushed only where AFP lives");
+    assert!(code(5).is_err(), "EIO stays a failure");
+}
+
+/// #11315: the macOS mirror of `a_directory_flush_the_file_system_cannot_do_still_saves`: an
+/// AFP share refusing the directory flush with ENOENT still saves through `atomic_write_with`,
+/// and the flush was attempted; EIO (5) still fails the save.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn an_afp_share_that_cannot_flush_a_directory_still_saves() {
+    let d = TempDir::new("syncdir-afp");
+    let p = d.0.join("doc.pcraft");
+    let fs = Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() };
+    atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap();
+    assert_eq!(fs.synced.get(), 1, "the flush was attempted");
+    assert_eq!(std::fs::read(&p).unwrap(), b"new");
+    let fs = Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() };
+    assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
+}
+
+/// The ENOENT refusal only counts as unsupported while the folder is still the one the rename
+/// went into (review on #11492): a folder genuinely deleted, moved or symlink-swapped between
+/// the rename and the flush must keep the save unconfirmed instead of counting a save into a
+/// folder the flush never knew as durable. Both mocks answer with the real folder's identity
+/// until the rename and with the changed state after it, like a file system would.
+#[cfg(target_vendor = "apple")]
+struct FolderChangedAfterRename {
+    fault: Faulty,
+    /// The identity the folder reports after the rename: none when it vanished, a different
+    /// one when a replacement took its place.
+    after: Option<u128>,
+}
+
+#[cfg(target_vendor = "apple")]
+impl FolderChangedAfterRename {
+    fn vanished() -> Self {
+        Self { fault: Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() }, after: None }
+    }
+    fn replaced() -> Self {
+        Self { fault: Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() }, after: Some(0xdead_beef) }
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+impl AtomicFs for FolderChangedAfterRename {
+    fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.fault.write_new(tmp, bytes)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.fault.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.fault.remove(path)
+    }
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        self.fault.sync_dir(dir)
+    }
+    fn dir_identity(&self, dir: &Path) -> Option<u128> {
+        if self.fault.renames.get() == 0 { RealFs.dir_identity(dir) } else { self.after }
+    }
+    fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.fault.copy_metadata(from, to)
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_vanished_folder_keeps_the_enoent_flush_a_failure() {
+    let d = TempDir::new("syncdir-afp-vanished");
+    let p = d.0.join("doc.pcraft");
+    let fs = FolderChangedAfterRename::vanished();
+    let e = atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
+    let fs = FolderChangedAfterRename { fault: Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() }, after: None };
+    assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err(), "EIO still fails");
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_replaced_folder_keeps_the_enoent_flush_a_failure() {
+    let d = TempDir::new("syncdir-afp-replaced");
+    let p = d.0.join("doc.pcraft");
+    let fs = FolderChangedAfterRename::replaced();
+    let e = atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
+}
+
+/// A failed pre-rename identity lookup is no proof either: with `None` captured, the ENOENT
+/// stays a failure instead of being swallowed as an AFP refusal.
+#[cfg(target_vendor = "apple")]
+struct NoIdentity(Faulty);
+
+#[cfg(target_vendor = "apple")]
+impl AtomicFs for NoIdentity {
+    fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.0.write_new(tmp, bytes)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.0.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.0.remove(path)
+    }
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        self.0.sync_dir(dir)
+    }
+    fn dir_identity(&self, _dir: &Path) -> Option<u128> {
+        None
+    }
+    fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.0.copy_metadata(from, to)
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_failed_identity_lookup_keeps_the_enoent_flush_a_failure() {
+    let d = TempDir::new("syncdir-afp-noid");
+    let p = d.0.join("doc.pcraft");
+    let fs = NoIdentity(Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() });
+    let e = atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
 }

@@ -74,6 +74,23 @@ pub trait AtomicFs {
     fn remove(&self, path: &Path) -> io::Result<()>;
     /// Flush a directory entry change on Unix and Windows; a no-op elsewhere.
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
+    /// A token that identifies the directory at `path` for a before/after comparison: `Some`
+    /// while the path names a directory, equal only for the same directory (on Unix device and
+    /// inode, so a moved-away-then-replaced folder differs). The ENOENT directory-flush path
+    /// ([#11315]) compares before and after to tell a file system that refuses the flush from a
+    /// folder that is genuinely gone or was replaced; by default the real file system answers.
+    fn dir_identity(&self, dir: &Path) -> Option<u128> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(dir).ok().map(|m| ((m.dev() as u128) << 64) | m.ino() as u128)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = dir;
+            None
+        }
+    }
     /// Copy the metadata a replacement should keep — mode, extended attributes, ACL — from the
     /// file about to be replaced onto the temporary file. Best effort; see [`meta`].
     fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()>;
@@ -347,6 +364,10 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, write_tmp: &
     // Replacing an existing file goes through `replace_existing`, which on Windows is the one
     // call that can keep the destination's DACL and named streams; creating a new one is a
     // plain rename, with nothing to preserve.
+    // The folder the rename lands in, captured before the swap: the ENOENT-flush path
+    // compares after the flush, so a folder replaced in between keeps the save unconfirmed.
+    #[cfg(not(windows))]
+    let dir_identity = fs.dir_identity(&dir);
     let swap = || if replacing { fs.replace_existing(&tmp, &target) } else { fs.rename(&tmp, &target) };
     if let Err(e) = retry_rename(retry, swap) {
         let _ = fs.remove(&tmp);
@@ -360,7 +381,7 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, write_tmp: &
     #[cfg(windows)]
     fs.sync_dir(&dir).map_err(|e| publication_error(e, path))?;
     #[cfg(not(windows))]
-    dir_synced(fs.sync_dir(&dir)).map_err(|e| unconfirmed_error(e, path))?;
+    dir_synced(fs.sync_dir(&dir), &dir, dir_identity, fs).map_err(|e| unconfirmed_error(e, path))?;
     Ok(())
 }
 
@@ -380,11 +401,31 @@ fn open_dir_for_sync(dir: &Path) -> io::Result<Option<std::fs::File>> {
 /// success: `EINVAL` (Linux file systems without directory fsync), `ENOTSUP`/`EOPNOTSUPP` and,
 /// on Apple platforms, `ENOTTY`, or [`io::ErrorKind::Unsupported`]. Waiting or retrying won't
 /// change those, and failing every save there would make saving impossible. Any other error is
-/// returned: the flush was attempted and failed.
+/// returned: the flush was attempted and failed. An Apple `ENOENT` (the AFP share's refusal,
+/// #11315) only counts as unsupported while `dir` still is the same directory the caller
+/// captured `identity` from before the rename — when it vanished or was replaced in between
+/// (deleted, moved, symlink-swapped), the save stays unconfirmed instead of counting a save
+/// into a folder it no longer knows as durable.
 #[cfg(not(windows))]
-pub(crate) fn dir_synced(result: io::Result<()>) -> io::Result<()> {
+pub(crate) fn dir_synced(result: io::Result<()>, dir: &Path, identity: Option<u128>, fs: &dyn AtomicFs) -> io::Result<()> {
     match result {
-        Err(e) if dir_sync_unsupported(&e) => Ok(()),
+        Err(e) if dir_sync_unsupported(&e) => {
+            let refused_enoent = e.raw_os_error() == Some(2) && cfg!(target_vendor = "apple");
+            // A missing original identity (the pre-rename lookup failed) cannot prove the
+            // folder is the same one: no fail-open on absent proof.
+            if refused_enoent && (identity.is_none() || fs.dir_identity(dir) != identity) {
+                // The folder vanished or was replaced between the rename and the flush.
+                Err(e)
+            } else {
+                // Durability is downgraded to "saved but not dir-synced". A refused ENOENT
+                // flush on the same folder is exactly that fail-open (#11315): make it
+                // distinguishable from a fully synced save.
+                if refused_enoent {
+                    log::warn!("directory flush refused with ENOENT on {dir:?} (AFP, #11315); the save stands but is not dir-synced");
+                }
+                Ok(())
+            }
+        }
         other => other,
     }
 }
@@ -395,13 +436,17 @@ fn dir_sync_unsupported(e: &io::Error) -> bool {
         return true;
     }
     // errno values: EINVAL is 22 everywhere; ENOTSUP and EOPNOTSUPP are 95 on Linux and
-    // Android, 45 and 102 on Apple platforms, 45 on the BSDs; ENOTTY is 25. Elsewhere 45 means
-    // something else (illumos: EDEADLK), so only EINVAL and `Unsupported` count there.
+    // Android, 45 and 102 on Apple platforms, 45 on the BSDs; ENOTTY is 25; ENOENT is 2.
+    // Elsewhere 45 means something else (illumos: EDEADLK), so only EINVAL and `Unsupported`
+    // count there.
     const EINVAL: i32 = 22;
+    const ENOENT: i32 = 2;
     let unsupported: &[i32] = if cfg!(any(target_os = "linux", target_os = "android")) {
         &[EINVAL, 95]
     } else if cfg!(target_vendor = "apple") {
-        &[EINVAL, 45, 102, 25]
+        // ENOENT: an AFP share (#11315) refuses the directory flush with it, even though the
+        // rename into that folder just succeeded, so the folder existed a moment before.
+        &[EINVAL, 45, 102, 25, ENOENT]
     } else if cfg!(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly")) {
         &[EINVAL, 45]
     } else if cfg!(unix) {

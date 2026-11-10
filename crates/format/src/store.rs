@@ -814,8 +814,8 @@ fn flush_bundle_dir(dir: &Path, written: &Path) -> std::io::Result<()> {
 /// [`flush_bundle_dir`], as the save's error when the flush was attempted and failed: `written`
 /// is in place, but may not survive a power loss or crash (#4968).
 #[cfg(not(windows))]
-fn confirm_flushed(dir: &Path, written: &Path) -> Result<()> {
-    crate::atomic::dir_synced(flush_bundle_dir(dir, written)).map_err(|e| {
+fn confirm_flushed(dir: &Path, written: &Path, identity: Option<u128>) -> Result<()> {
+    crate::atomic::dir_synced(flush_bundle_dir(dir, written), dir, identity, &crate::atomic::RealFs).map_err(|e| {
         FormatError::Io(std::io::Error::new(
             e.kind(),
             format!("{} was written, but its folder could not be flushed to disk, so the save may not survive a power loss or crash: {e}", written.display()),
@@ -878,6 +878,11 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
         // Recheck the parent and target just before publishing. rename replaces a symlink
         // itself, never its referent, even if one appears after this check.
         validate_bundle_file(root, path)?;
+        // The folder the rename lands in, captured before publishing: the ENOENT-flush path
+        // compares after the flush, so a folder replaced in between keeps the save
+        // unconfirmed instead of counting a save into a folder it never knew as durable.
+        #[cfg(not(windows))]
+        let dir_identity = crate::atomic::AtomicFs::dir_identity(&crate::atomic::RealFs, parent);
         crate::atomic::retry_rename(crate::atomic::RenameRetry::platform(), || std::fs::rename(&tmp, path))?;
         #[cfg(windows)]
         {
@@ -886,7 +891,7 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
         // Elsewhere a failed flush is reported too (#4968), but a file system that can't flush a
         // directory at all still saves, as in `atomic_write`.
         #[cfg(not(windows))]
-        confirm_flushed(parent, path)?;
+        confirm_flushed(parent, path, dir_identity)?;
         Ok(())
     })();
     if result.is_err() && validate_bundle_file(root, &tmp).is_ok() {
@@ -1292,6 +1297,12 @@ impl PcraftWriter {
         // Pin all GC directories before removing stale previews or objects.
         // Unix cleanup then stays within these directories even if a pathname is swapped.
         let gc = BundleGc::new(dir)?;
+        // Capture the object folders' identities before the confirm flush: a folder replaced
+        // after its objects were renamed into it keeps the save unconfirmed, as in
+        // `atomic_write` (review on #11492).
+        #[cfg(not(windows))]
+        let folder_identities: Vec<_> =
+            [TILES_DIR, BLOBS_DIR].iter().map(|sub| crate::atomic::AtomicFs::dir_identity(&crate::atomic::RealFs, &dir.join(sub))).collect();
         #[cfg(windows)]
         {
             // A previous attempt may have published an object and then failed its directory
@@ -1303,10 +1314,10 @@ impl PcraftWriter {
             }
         }
         #[cfg(not(windows))]
-        for sub in [TILES_DIR, BLOBS_DIR] {
+        for (i, sub) in [TILES_DIR, BLOBS_DIR].iter().enumerate() {
             let folder = dir.join(sub);
             if folder.is_dir() {
-                confirm_flushed(&folder, &folder)?;
+                confirm_flushed(&folder, &folder, folder_identities[i])?;
             }
         }
         scratch_ok(doc, scratch_generation)?;
