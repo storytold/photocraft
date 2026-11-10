@@ -6,7 +6,15 @@
 //! - While a modal dialog or workspace is up in the main window they drop to the normal level and
 //!   the main window comes forward once, so they can't cover the dialog.
 //! - While the application is inactive they drop behind other applications' windows, so they
-//!   don't cover them.
+//!   don't cover them. On Windows that is `AlwaysOnBottom`; elsewhere it is `Normal`, as for
+//!   craft-ui's palettes ([`INACTIVE`]).
+//!
+//! Known trade-offs, shared with floating panels' windows:
+//!
+//! - The main window's menus and drop-down lists are drawn inside it, so where a document window
+//!   lies over one, it covers that part of it.
+//! - Floating panels and document windows are both `AlwaysOnTop`, so whichever was clicked last
+//!   is in front (in Photoshop panels stay above documents).
 
 use egui::{Context, Id, ViewportCommand, ViewportId, WindowLevel};
 
@@ -23,7 +31,9 @@ const AWAY_DELAY: f64 = 0.25;
 const INACTIVE: WindowLevel = if cfg!(target_os = "windows") { WindowLevel::AlwaysOnBottom } else { WindowLevel::Normal };
 
 /// The level of the document windows for whether the application is `active` and whether a modal
-/// in the main window has the input (`blocked`).
+/// in the main window has the input (`blocked`): `Normal` while blocked, whatever the activity;
+/// else `AlwaysOnTop` while active, and [`INACTIVE`] while inactive (`AlwaysOnBottom` on Windows,
+/// `Normal` elsewhere).
 pub(crate) fn level(active: bool, blocked: bool) -> WindowLevel {
     match (blocked, active) {
         (true, _) => WindowLevel::Normal,
@@ -33,7 +43,9 @@ pub(crate) fn level(active: bool, blocked: bool) -> WindowLevel {
 }
 
 /// Whether the application is active this frame: one of its windows has focus, or had it less
-/// than [`AWAY_DELAY`] ago. A backend that reports no focus at all counts as active.
+/// than [`AWAY_DELAY`] ago. A backend that reports no focus at all counts as active, as in
+/// craft-ui. Records the time one of its windows last had focus in `ctx`'s temporary data, and
+/// asks for a repaint when the delay runs out.
 pub(crate) fn app_active(ctx: &Context) -> bool {
     let (focused, now) = ctx.input(|i| {
         let infos = || i.raw.viewports.values();
