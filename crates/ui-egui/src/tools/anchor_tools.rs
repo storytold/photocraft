@@ -53,7 +53,7 @@ fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path
 /// ⇧ or ⌘ is held, an anchor's handles are being pulled out, or the click hits nothing it edits.
 /// With ⌥ it takes only a straight segment of the active path while no path is being drawn
 /// (#12899): the press adds an anchor there and the drag pulls out its handles
-/// (`vector_ui::pen_alt_segment_press`).
+/// (`pen_alt_segment_press`).
 /// The end points of an open subpath are left to the Pen, as in Photoshop: on the path being
 /// drawn, the first closes it and the last breaks its handle.
 pub fn pen_auto(app: &PhotocraftApp, tool: Tool, mods: Modifiers, p: [f64; 2]) -> Option<(Tool, PathRef, Path, Hit)> {
@@ -87,6 +87,40 @@ pub fn pen_auto(app: &PhotocraftApp, tool: Tool, mods: Modifiers, p: [f64; 2]) -
         Hit::Handle(..) => return None,
     };
     Some((tool, r, path, hit))
+}
+
+/// ⌥/Alt-press with the Pen on a straight segment of the active path while no path is being drawn
+/// (#12899), as in Photoshop: an anchor is added where the segment was pressed (`path.addAnchor`)
+/// and the drag pulls out its handles, the outgoing one under the pointer and the incoming one
+/// opposite it (`path.convertPoint` on release, through Direct Selection's drag). Both are one
+/// History step, Add Anchor Point. False when the press is not that, so ⌥ stays Convert Point.
+pub fn pen_alt_segment_press(app: &mut PhotocraftApp, mods: Modifiers, p: [f64; 2]) -> bool {
+    use crate::direct_select::{Drag, Edit, Owner, active_paths};
+    if !mods.alt {
+        return false;
+    }
+    let Some((_, target, _, Hit::Segment([s, k], t))) = pen_auto(app, app.ui.tool, mods, p) else { return false };
+    let key = format!("pen-alt-add-{}", app.ui.alloc_id());
+    let mut params = serde_json::json!({"subpath": s, "knot": k, "t": t, "coalesce": key});
+    if let (Some(o), Some(tp)) = (params.as_object_mut(), target.params(app).as_object()) {
+        o.extend(tp.clone());
+    }
+    let added = match app.run("path.addAnchor", params) {
+        Ok(v) => v,
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+            return true;
+        }
+    };
+    let n = |f: &str| added["anchor"][f].as_u64().and_then(|v| usize::try_from(v).ok());
+    let (Some(s), Some(k), Some(base)) = (n("subpath"), n("knot"), active_paths(app).into_iter().find(|(r, _)| *r == target).map(|(_, path)| path)) else {
+        return true;
+    };
+    app.ui.direct_selection =
+        DirectSelection { target: Some(target), anchors: vec![[s, k]], coalesce: Some(key), owner: Owner::current(app), ..Default::default() };
+    app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Convert([s, k]), start: p, end: p, preview: None });
+    true
 }
 
 /// Is the segment leaving knot `k` (`[subpath, knot]`) straight: both of its handles retracted?

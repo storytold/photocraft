@@ -27,10 +27,12 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// The Work Path as it is now.
 fn work(app: &PhotocraftApp) -> Path {
     app.session.active().unwrap().doc.work_path.clone().unwrap()
 }
 
+/// How many History steps the document has.
 fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.entries().len()
 }
@@ -47,10 +49,12 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) 
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
 }
 
+/// Is `a` within 0.5 px of `b` on both axes?
 fn near(a: Point, b: [f64; 2]) -> bool {
     (a.x - b[0]).abs() <= 0.5 && (a.y - b[1]).abs() <= 0.5
 }
 
+/// The measured case: press (150, 300), release (150, 260).
 #[test]
 fn alt_drag_on_a_segment_adds_an_anchor_and_pulls_out_its_handles() {
     let mut app = app();
@@ -72,6 +76,7 @@ fn alt_drag_on_a_segment_adds_an_anchor_and_pulls_out_its_handles() {
     assert_eq!(work(&app), before, "one Undo takes both back");
 }
 
+/// The drag previews the handles, and the release commits where the pointer is.
 #[test]
 fn the_handle_follows_the_pointer_during_the_drag() {
     let mut app = app();
@@ -92,6 +97,7 @@ fn the_handle_follows_the_pointer_during_the_drag() {
     assert_eq!(steps(&app), n + 1);
 }
 
+/// Without a drag the new anchor has no handles.
 #[test]
 fn alt_click_on_a_segment_adds_a_corner_in_one_step() {
     let mut app = app();
@@ -104,6 +110,7 @@ fn alt_click_on_a_segment_adds_a_corner_in_one_step() {
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
 }
 
+/// The + badge shows only where the press would add an anchor.
 #[test]
 fn the_cursor_shows_the_add_badge_over_a_straight_segment_with_alt() {
     use crate::tool_feedback::{Badge, badge};

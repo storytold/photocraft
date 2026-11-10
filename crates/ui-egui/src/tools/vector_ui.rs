@@ -57,8 +57,8 @@ pub(crate) use pen::over_first_anchor;
 use pen::pen_to_json;
 pub(crate) use pen::{PATH_OPS, pen_path, pen_replace};
 pub use pen::{
-    cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_alt_segment_press, pen_break_handle, pen_commit, pen_down, pen_end, pen_enter,
-    pen_grab_handle, pen_move, pen_undo_last_point, pen_up,
+    cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_enter, pen_grab_handle, pen_move,
+    pen_undo_last_point, pen_up,
 };
 #[cfg(test)]
 use pen::{closing, pen_path_op};
@@ -208,9 +208,6 @@ mod path_drag_preview_tests;
 
 #[cfg(test)]
 mod path_selection_tests;
-
-#[cfg(test)]
-mod pen_alt_drag_segment_tests;
 
 #[cfg(test)]
 mod pen_draw_tests;
