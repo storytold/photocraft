@@ -20,11 +20,12 @@
 //!
 //! Each cell becomes two triangles, split from its top-left corner, cut across at the vertices its
 //! left and right neighbours put on its sides. A new vertex on a row whose own segment wasn't
-//! curved enough to need it sits on that segment's chord, unless it is inside a cell that was
-//! split, or both cells beside it were split for their curvature; on the left and right sides of
-//! the surface the same holds for columns. A vertex inside a bigger cell's edge is instead dropped
-//! onto that edge, perpendicular from its point on the surface, so it keeps its place along the
-//! edge (the bigger cell's texture runs on straight past it, as the reference's does).
+//! curved enough to need it is dropped onto that segment's chord, perpendicular from its point on
+//! the surface, unless it is inside a cell that was split, or both cells beside it were split for
+//! their curvature; on the left and right sides of the surface the same holds for columns. A
+//! vertex inside a bigger cell's edge is instead dropped onto that edge the same way, so it keeps
+//! its place along the edge (the bigger cell's texture runs on straight past it, as the
+//! reference's does).
 
 use std::collections::HashMap;
 
@@ -520,7 +521,7 @@ fn own_points(
     for p in keys {
         own.insert(key(p[0], p[1]), surf(p[0], p[1]));
     }
-    // A new vertex on a row the row didn't need sits on that row segment's chord.
+    // A new vertex on a row the row didn't need is dropped onto that row segment's chord.
     let mut order = keys.to_vec();
     order.sort_by_key(|p| level(p[0]));
     for &[u, v] in &order {
@@ -540,7 +541,7 @@ fn own_points(
             continue;
         }
         if need(&segment(&net.row(v), a, b)) < 1.0 - EPS {
-            let m = lerp(place(&own, a, v), place(&own, b, v), 0.5);
+            let m = onto(place(&own, a, v), place(&own, b, v), surf(u, v));
             own.insert(key(u, v), m);
         }
     }
@@ -554,7 +555,7 @@ fn own_points(
         let w = 1.0 / f64::from(1u32 << lv);
         let (a, b) = (v - w, v + w);
         if need(&segment(&net.col(u), a, b)) < 1.0 - EPS {
-            let m = lerp(place(&own, u, a), place(&own, u, b), 0.5);
+            let m = onto(place(&own, u, a), place(&own, u, b), surf(u, v));
             own.insert(key(u, v), m);
         }
     }
@@ -933,7 +934,7 @@ mod tests {
         let m = envelope_mesh(&at, true).expect("finite");
         let find = |u: f64, v: f64| m.uv.iter().position(|q| (q[0] - u).abs() < 1e-12 && (q[1] - v).abs() < 1e-12).map(|k| m.pos[k]);
         let (a, c, mid) = (find(0.0, 0.5).expect("left"), find(0.5, 0.5).expect("middle"), find(0.25, 0.5).expect("quarter"));
-        let chord = [(a[0] + c[0]) / 2.0, (a[1] + c[1]) / 2.0];
+        let chord = onto(a, c, at(0.25, 0.5));
         assert!((mid[0] - chord[0]).abs() < 1e-9 && (mid[1] - chord[1]).abs() < 1e-9, "{mid:?} vs chord {chord:?}");
         let surf = at(0.25, 0.5);
         assert!((surf[1] - mid[1]).abs() > 0.1, "the chord is off the surface here");
@@ -985,6 +986,30 @@ mod tests {
         assert!(off.abs() < 1e-9, "{p:?} is off the edge by {off}");
         assert!((along(p) - along(at(0.125, 0.5))).abs() < 1e-9, "at {} along", along(p));
         assert!(along(p) - len / 2.0 > 0.3, "slid only {} from the edge's middle", along(p) - len / 2.0);
+    }
+
+    /// A row point its row didn't need is dropped onto the row's chord from its surface point, so
+    /// it keeps its place along the chord: Arc Lower 50 at (⅛, ¼), which the reference slides
+    /// 0.125 px along the chord (no seam: both sides' cells have it there).
+    #[test]
+    fn a_row_point_keeps_its_place_along_the_chord() {
+        use photocraft_geom::warp::{Warp, WarpStyle};
+        let b = [96.0, 96.0, 224.0, 224.0];
+        let w = Warp::preset(WarpStyle::ArcLower, 50.0, b);
+        let at = |u: f64, v: f64| {
+            let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * v);
+            [x, y]
+        };
+        let m = envelope_mesh(&at, false).expect("finite");
+        let find = |u: f64, v: f64| m.uv.iter().position(|q| (q[0] - u).abs() < 1e-12 && (q[1] - v).abs() < 1e-12).map(|k| m.pos[k]);
+        let (a, c, p) = (find(0.0, 0.25).expect("left end"), find(0.25, 0.25).expect("right end"), find(0.125, 0.25).expect("middle"));
+        let d = [c[0] - a[0], c[1] - a[1]];
+        let len = d[0].hypot(d[1]);
+        let along = |p: P| ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len;
+        let off = ((p[0] - a[0]) * d[1] - (p[1] - a[1]) * d[0]) / len;
+        assert!(off.abs() < 1e-9, "{p:?} is off the chord by {off}");
+        assert!((along(p) - along(at(0.125, 0.25))).abs() < 1e-9, "at {} along", along(p));
+        assert!((along(p) - len / 2.0).abs() > 0.08, "slid only {} from the chord's middle", along(p) - len / 2.0);
     }
 
     /// The 128 px square with its top-left corner pulled out to (48, 48), as a full mesh.
