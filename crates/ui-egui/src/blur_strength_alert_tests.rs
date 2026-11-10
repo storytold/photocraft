@@ -1,6 +1,6 @@
 //! #12650: the Blur tool's Strength takes whole numbers 1..100; a value typed past the range becomes
 //! the closest one and, once the field is left, the reference's "Closest value inserted" alert with
-//! OK says so. Sharpen does the same since #12949; Smudge (not measured) keeps today's silent clamp.
+//! OK says so. Sharpen (#12949) and Smudge (#12962) do the same.
 
 use egui::accesskit::Role;
 use egui::vec2;
@@ -81,14 +81,6 @@ fn a_caption_scrub_past_either_end_does_not_alert() {
         assert_eq!(strength(&h), want, "{start}: the scrub reached the end");
         assert!(alerts(&h).is_empty(), "{start}: a scrub stops at the end without an alert");
     }
-}
-
-#[test]
-fn smudge_strength_keeps_the_silent_clamp() {
-    let mut h = bar(Tool::Smudge);
-    type_into(&mut h, "Strength", "150");
-    assert_eq!(strength(&h), 100.0);
-    assert!(alerts(&h).is_empty(), "not measured, so no alert");
 }
 
 #[test]
