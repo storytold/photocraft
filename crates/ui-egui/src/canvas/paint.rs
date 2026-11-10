@@ -578,6 +578,8 @@ pub(super) fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: 
     }
 }
 
+/// Draw the drag in progress over the canvas: a live stroke's smoothing string, a stroke's
+/// trail, a marquee and the like.
 pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     draw_tool_state(app, painter, xf, painter.ctx().input(|i| i.pointer.hover_pos()));
     // Remove strokes waiting for ↩ stay tinted between drags.

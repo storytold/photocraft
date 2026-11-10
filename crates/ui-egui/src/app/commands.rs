@@ -8,11 +8,21 @@ impl PhotocraftApp {
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // A released stroke still catching up lands first: Undo right after a release undoes the
         // stroke, and nothing runs on a document it hasn't reached yet. Still on its worker, the
-        // command waits for it (it runs once the stroke has committed), the window doesn't.
+        // window doesn't wait for it: a command made by hand runs once the stroke has committed,
+        // as if made after it. Automation gets an error to retry instead: queued, its command
+        // would run after the request returned, its result lost and outside its authorization.
         if self.run_depth == 0 && self.finishing_stroke.is_some() && !canvas::runs_while_a_stroke_finishes(id) && !canvas::flush_finishing_stroke(self) {
+            if self.automation_input || self.session.authorize.is_some() {
+                return Err(canvas::still_finishing().into());
+            }
             self.queued_commands.push((id.to_string(), params));
             let n = self.queued_commands.len();
-            self.ui.status = format!("Finishing the last brush stroke… {n} action(s) will follow");
+            self.ui.status = crate::i18n::trn(
+                crate::i18n::current(),
+                n as u64,
+                "Finishing the last brush stroke… {n} action will follow",
+                "Finishing the last brush stroke… {n} actions will follow",
+            );
             self.ui.status_error = false;
             return Ok(json!({"pending": true, "queued": true}));
         }

@@ -3344,6 +3344,7 @@ fn fade_dialog_previews_the_faded_layer_and_cancel_keeps_the_document() {
 }
 
 #[test]
+/// Opening and closing the Free Transform box redraws only what the moving layer covers.
 fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() {
     // Opening the box swapped the canvas to a preview document with no damage for it, so a
     // gigapixel canvas recomposited in full (over a second) on every ⌘T, and again on Cancel.
@@ -3395,6 +3396,7 @@ fn slow_stroke_released_with_a_backlog(app: &mut PhotocraftApp) -> usize {
 }
 
 #[test]
+/// A released stroke with ~400 ms of points left renders a few a frame, then commits once.
 fn a_slow_stroke_catches_up_over_frames_and_commits_once_caught_up() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let count = slow_stroke_released_with_a_backlog(&mut app);
@@ -3421,6 +3423,7 @@ fn a_slow_stroke_catches_up_over_frames_and_commits_once_caught_up() {
 }
 
 #[test]
+/// Undo right after the release undoes the stroke: the command commits it first.
 fn a_command_during_the_catch_up_lands_the_stroke_first() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let count = slow_stroke_released_with_a_backlog(&mut app);

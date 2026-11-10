@@ -53,11 +53,14 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
     }
 }
 
+/// What every tool event goes through before its tool sees it (a released stroke still
+/// finishing, the selected guide, a crop drag, symmetry handles); `None` when one of them used
+/// the event up.
 fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> Option<(bool, egui::Modifiers)> {
     // A released stroke still catching up commits before anything new starts; still on its
     // worker, it turns the press away.
     if matches!(ev, ToolEvent::Down { .. }) && !super::strokes::flush_finishing_stroke(app) {
-        app.ui.status = super::strokes::STILL_FINISHING.into();
+        app.ui.status = super::strokes::still_finishing().into();
         app.ui.status_error = false;
         return None;
     }

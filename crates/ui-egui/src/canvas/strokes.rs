@@ -194,6 +194,7 @@ pub(super) struct Busy {
 }
 
 impl Busy {
+    /// What the canvas keeps of `s` while a worker has it.
     fn of(s: &photocraft_engine::brush_cmds::LiveStroke) -> Self {
         Self { doc: s.doc.clone(), bounds: s.bounds(), wants_time: s.wants_time(), seed: s.seed, smoothing: s.smoothing_string() }
     }
@@ -373,6 +374,7 @@ impl EngineStroke {
         }
     }
 
+    /// The document as the stroke has drawn it so far (on a worker: as of its last finished step).
     pub(super) fn doc(&self) -> &std::sync::Arc<photocraft_doc::Document> {
         match self {
             Self::Brush(s) => &s.doc,
@@ -382,6 +384,7 @@ impl EngineStroke {
             Self::Busy(b) => &b.doc,
         }
     }
+    /// Everything the stroke has touched so far.
     fn bounds(&self) -> DRect {
         match self {
             Self::Brush(s) => s.bounds(),
@@ -391,6 +394,7 @@ impl EngineStroke {
             Self::Busy(b) => b.bounds,
         }
     }
+    /// Render more points; returns the rectangle that changed.
     fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
         match self {
             Self::Brush(s) => s.push(pts),
@@ -447,6 +451,7 @@ pub(super) fn live_stroke_behind(app: &PhotocraftApp) -> bool {
     app.drag.as_ref().is_some_and(|d| behind(app, d))
 }
 
+/// Whether the live stroke still has points of `d` to render, or a step on its worker.
 fn behind(app: &PhotocraftApp, d: &Drag) -> bool {
     app.live_stroke.as_ref().is_some_and(|l| !l.preview_failed && (l.fed < d.points.len() || l.worker.is_some()))
 }
@@ -535,8 +540,10 @@ pub(crate) fn runs_while_a_stroke_finishes(id: &str) -> bool {
     ["view.", "help.", "tools."].iter().any(|p| id.starts_with(p))
 }
 
-/// The status line for a press turned away while a stroke finishes.
-pub(crate) const STILL_FINISHING: &str = "Finishing the last brush stroke…";
+/// The status line for a press, or an automation command, turned away while a stroke finishes.
+pub(crate) fn still_finishing() -> &'static str {
+    tl!("Finishing the last brush stroke…")
+}
 
 impl LiveStroke {
     pub(super) fn display_key(&self) -> u64 {
@@ -660,6 +667,8 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
     if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
+/// A stroke shown while it is drawn: the engine renders the real result onto a copy of the
+/// document, and the canvas redraws only what each step changed.
 pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
@@ -1026,12 +1035,15 @@ fn release_backlog(l: &LiveStroke, d: &Drag) -> bool {
     l.ms_per_point.is_some_and(|k| left as f64 * k > STROKE_RELEASE_MS)
 }
 
+/// Commit the released stroke `d` now, then run the commands that waited for it.
 fn commit_brush_stroke_now(app: &mut PhotocraftApp, d: &Drag) {
     commit_brush_stroke_inner(app, d);
     // Commands made while the stroke finished run now, after it.
     run_queued_commands(app);
 }
 
+/// [`commit_brush_stroke_now`] without the waiting commands: `paint.stroke` takes the live
+/// stroke's pixels (or the commit prepared on its worker), and the canvas keeps its damage.
 fn commit_brush_stroke_inner(app: &mut PhotocraftApp, d: &Drag) {
     // A step still on the worker (a new press or a command came first): wait for it.
     // By now the worker is done (`flush_finishing_stroke`, `continue_finishing_stroke`).

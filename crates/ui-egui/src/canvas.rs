@@ -102,7 +102,7 @@ pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{
     ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, flush_finishing_stroke, freehand_tool, runs_while_a_stroke_finishes,
-    spread_ms, strokes_live, unsmoothed_line,
+    spread_ms, still_finishing, strokes_live, unsmoothed_line,
 };
 use strokes::{
     HOLD_REPEAT_MS, continue_finishing_stroke, draw_clone_preview, feed_live_stroke, live_stroke_behind, pointer_button_modifiers, pointer_moves,
@@ -1101,6 +1101,8 @@ fn handle_canvas_tool_navigation(
     }
 }
 
+/// One frame of the canvas's tool input: a released stroke still catching up, then presses,
+/// drags and releases.
 fn handle_canvas_tool_stroke(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
