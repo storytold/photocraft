@@ -443,9 +443,12 @@ fn default_name(kind: &str) -> &'static str {
     }
 }
 
-/// Create a shape, or append to one while applying only explicitly supplied alignment.
+/// Creates a shape layer, or adds path components to the shape identified by `addTo`.
+/// Applies alignment to additions only when explicitly supplied.
+/// The Freeform Pen history override labels new layers; additions retain the Add Shape label.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
+    let label = super::paths::pen_history_name(p, CMD, "New Shape Layer")?;
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("rect");
     let (path, live) = if kind == "path" {
         let v = p.get("path").ok_or_else(|| bad(CMD, "kind \"path\" needs `path`"))?;
@@ -483,7 +486,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let mut sh = ShapeLayer { path, fill, stroke, live, use_aligned_rendering: use_aligned_rendering.unwrap_or(false), ..Default::default() };
-    let id = s.edit("New Shape Layer", |doc, active| {
+    let id = s.edit(label, |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
         let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Shape(sh)), crate::layer_place::Place::AutoEditable);
