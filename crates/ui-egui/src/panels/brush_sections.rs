@@ -54,6 +54,33 @@ fn signed_pct(ui: &mut egui::Ui, label: &str, v: &mut f32, min: f32, max: f32) -
     changed
 }
 
+/// The checkbox labels the spacing field; toggling it must retain imported fractional values.
+fn spacing_row(ui: &mut egui::Ui, b: &mut BrushSettings) {
+    let mut percent = (b.spacing * 100.0).round();
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        widgets::checkbox(ui, &mut b.spacing_enabled, tl!("Spacing")).on_hover_text(tl!("Off: the speed of the pointer sets the spacing"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            changed = ui
+                .add_enabled_ui(b.spacing_enabled, |ui| widgets::value_field(ui, &mut percent, 1.0..=1000.0, "%", 74.0).accessible_name(tl!("Spacing")))
+                .inner
+                .changed();
+        });
+    });
+    changed |= ui
+        .add_enabled_ui(b.spacing_enabled, |ui| {
+            let s = widgets::slider(ui, &mut percent, 1.0..=1000.0, None);
+            s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(percent), tl!("Spacing")));
+            s
+        })
+        .inner
+        .changed();
+    if changed {
+        b.spacing = (percent.round() / 100.0).clamp(0.01, 10.0);
+    }
+    ui.add_space(4.0);
+}
+
 fn num(ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> bool {
     let mut x = *v;
     let changed = widgets::slider_row(ui, label, &mut x, range.clone(), suffix, None).changed();
@@ -356,11 +383,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
     ui.add_enabled_ui(matches!(b.tip, TipShape::Round), |ui| {
         pct(ui, tl!("Hardness"), &mut b.hardness, 1.0);
     });
-    // Unchecked, the pointer's speed sets the spacing (Photoshop).
-    widgets::checkbox(ui, &mut b.spacing_enabled, tl!("Spacing")).on_hover_text(tl!("Off: the speed of the pointer sets the spacing"));
-    ui.add_space(2.0);
-    let on = b.spacing_enabled;
-    ui.add_enabled_ui(on, |ui| signed_pct(ui, tl!("Spacing"), &mut b.spacing, 0.01, 10.0));
+    spacing_row(ui, b);
     None
 }
 

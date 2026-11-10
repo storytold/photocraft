@@ -7,6 +7,10 @@
 //! part of the serialisable UI state so the control channel can read and drive it). The Color
 //! Sampler points themselves live in the engine (`DocState.color_samplers`) so every front end
 //! shares them; this module only maps pointer input and draws the numbered markers.
+//!
+//! The Ruler options bar's Straighten Layer button is on when the engine's check says so, and a
+//! hidden target layer answers its click with the reference's alert rather than the status line
+//! (#12033).
 
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, RichText, Stroke, pos2, vec2};
 use photocraft_doc::{Document, Ruler};
@@ -15,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::Tool;
+use crate::state::{DialogKind, Tool};
 use crate::theme::Tokens;
 
 /// What a pointer drag is doing (not serialised).
@@ -68,7 +72,7 @@ impl Default for AnalysisUi {
             log_selected: Vec::new(),
             note_selected: None,
             note_author: String::new(),
-            note_color: [1.0, 1.0, 0.51],
+            note_color: photocraft_engine::notes_cmds::DEFAULT_NOTE_COLOR,
             use_measurement_scale: false,
             dialog: None,
             drag: None,
@@ -219,15 +223,24 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
-/// Shift constrains to 45° steps around `from`.
+/// Shift constrains to 45° steps around `from`, as the reference does (#11985): on a diagonal step
+/// both legs take the smaller of |dx| and |dy| (signs kept), on a 0° or 90° step the dominant
+/// component stays and the other becomes 0, so the ruler never gets longer than the pointer's legs.
 fn constrain(from: [f64; 2], to: [f64; 2], shift: bool) -> [f64; 2] {
     if !shift {
         return to;
     }
     let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-    let a = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
-    let l = dx.hypot(dy);
-    [from[0] + l * a.cos(), from[1] + l * a.sin()]
+    let step = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() as i64;
+    let (cx, cy) = match step.rem_euclid(4) {
+        0 => (dx, 0.0),
+        2 => (0.0, dy),
+        _ => {
+            let leg = dx.abs().min(dy.abs());
+            (leg.copysign(dx), leg.copysign(dy))
+        }
+    };
+    [from[0] + cx, from[1] + cy]
 }
 
 fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
@@ -315,7 +328,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
                 Some((g, i)) => app.ui.analysis.drag = Some(Drag::Count(g, i, [x, y])),
                 None if !mods.alt => {
-                    let _ = app.run("count.add", json!({"x": x, "y": y}));
+                    // A marker that stays invisible looks like the click did nothing, so adding one
+                    // brings View > Show > Count back. It is view state, not a history step.
+                    let added = app.run("count.add", json!({"x": x, "y": y})).is_ok();
+                    app.ui.view.show.count |= added;
                 }
                 None => {}
             }
@@ -547,8 +563,26 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut app.ui.analysis.use_measurement_scale, tl!("Use Measurement Scale"));
             let has = doc.measurement.ruler.is_some();
-            if ui.add_enabled_ui(has, |ui| crate::widgets::secondary_button(ui, tl!("Straighten Layer"), 0.0)).inner.clicked() {
-                let _ = app.run("image.analysis.straightenLayer", json!({}));
+            // The engine decides this button's state, so it goes grey for exactly the targets
+            // Straighten Layer is off for: the Background, several selected layers, a group and a
+            // layer locked in place (#12033).
+            let straighten = app.session.is_enabled("image.analysis.straightenLayer");
+            if ui.add_enabled_ui(straighten, |ui| crate::widgets::secondary_button(ui, tl!("Straighten Layer"), 0.0)).inner.clicked() {
+                let hidden = photocraft_engine::analysis_cmds::STRAIGHTEN_HIDDEN_ERROR;
+                if let Err(why) = app.run("image.analysis.straightenLayer", json!({})) {
+                    // A hidden target layer keeps the button on and answers the click with the
+                    // reference's alert (its message and an OK button), changing nothing (#12033).
+                    if why == hidden {
+                        app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(hidden)}).as_object().cloned().unwrap_or_default());
+                    }
+                    // Every other refusal goes to the status line, as the eraser tools do. What the
+                    // command itself answered is reported there by `PhotocraftApp::run`, but a
+                    // refusal raised before it runs - the automation gate a control or MCP-driven
+                    // click passes - returns early, and a click that says nothing reads as a dead
+                    // button (#12148).
+                    app.ui.status = why;
+                    app.ui.status_error = true;
+                }
             }
             if ui.add_enabled_ui(has, |ui| crate::widgets::secondary_button(ui, tl!("Clear"), 0.0)).inner.clicked() {
                 let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
@@ -614,9 +648,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Color")).clicked() {
                 crate::color_picker_ui::open_for_target(app, "noteColor", &crate::color_picker_ui::title_for(tl!("Color")), rgb);
             }
+            // Clear All asks first (#11791); `notes.delete {"all": true}` itself never does.
             if ui.add_enabled_ui(!doc.notes.is_empty(), |ui| crate::widgets::secondary_button(ui, tl!("Clear All"), 0.0)).inner.clicked() {
-                let _ = app.run("notes.delete", json!({"all": true}));
-                app.ui.analysis.note_selected = None;
+                ask_clear_notes(app);
             }
             if crate::icons::button(ui, "message-square", 22.0, app.ui.analysis.notes, tl!("Show or hide the Notes panel")).clicked() {
                 app.ui.analysis.notes = !app.ui.analysis.notes;
@@ -1024,6 +1058,45 @@ mod sampler_drag_tests;
 
 /// Marks the "Delete this note?" alert (#11788).
 const DELETE_NOTE_MARK: &str = "__deleteNote";
+
+/// Marks the "Are you sure you want to delete all notes?" alert (#11791).
+const CLEAR_NOTES_MARK: &str = "__clearAllNotes";
+
+/// The Note tool's Clear All: Photoshop's alert, OK / Cancel (#11791). OK deletes every note in one
+/// "Delete all Notes" step; Cancel (or Escape) changes nothing.
+pub fn ask_clear_notes(app: &mut PhotocraftApp) {
+    let Some(doc) = app.session.active().filter(|s| !s.doc.notes.is_empty()).map(|s| s.doc.id.0) else { return };
+    if app.ui.dialogs.iter().any(|d| owns_clear_notes(&d.fields)) {
+        return;
+    }
+    let mut f = Map::new();
+    f.insert(CLEAR_NOTES_MARK.into(), json!(true));
+    f.insert("__command".into(), json!("notes.delete"));
+    f.insert("__label".into(), json!(tl!("Clear All")));
+    f.insert("document".into(), json!(doc));
+    app.ui.open_dialog(crate::state::DialogKind::Command, f);
+}
+
+pub fn owns_clear_notes(fields: &Map<String, Value>) -> bool {
+    fields.contains_key(CLEAR_NOTES_MARK)
+}
+
+pub fn clear_notes_body(ui: &mut egui::Ui) {
+    ui.label(tl!("Are you sure you want to delete all notes?"));
+}
+
+/// OK: every note goes in one step, nothing stays selected, and the options bar shows the tool
+/// defaults again (a selected note had put its author and colour there).
+pub fn confirm_clear_notes(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    if app.session.active().map(|s| s.doc.id.0) != fields.get("document").and_then(Value::as_u64) {
+        return Err(tl!("The document changed. Please choose Clear All again.").into());
+    }
+    let result = app.run("notes.delete", json!({"all": true}))?;
+    let defaults = AnalysisUi::default();
+    let a = &mut app.ui.analysis;
+    (a.note_selected, a.note_author, a.note_color) = (None, defaults.note_author, defaults.note_color);
+    Ok(result)
+}
 /// Its "Don't show again", kept with the other dialog preferences.
 const DELETE_NOTE_PREF: &str = "notes.delete.confirmation";
 
@@ -1125,3 +1198,11 @@ pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 #[cfg(test)]
 #[path = "note_delete_key_tests.rs"]
 mod note_delete_key_tests;
+
+#[cfg(test)]
+#[path = "analysis_ruler_shift_tests.rs"]
+mod analysis_ruler_shift_tests;
+
+#[cfg(test)]
+#[path = "note_clear_all_tests.rs"]
+mod note_clear_all_tests;
