@@ -420,6 +420,10 @@ pub struct UiState {
     /// Panel edges the Cut Out tool snaps to (found when a drag starts).
     #[serde(skip)]
     pub cut_out_edges: Option<crate::cutout_ui::PanelEdges>,
+    #[serde(skip)]
+    pub type_path_drag: Option<crate::type_path_placement::Drag>,
+    #[serde(skip)]
+    pub type_path_geometry_cache: crate::type_path_placement::GeometryCache,
     /// The bounding box of several selected shape layers, a handle being dragged.
     #[serde(skip)]
     pub shape_box: Option<crate::shape_bounds_box::Drag>,
@@ -618,6 +622,7 @@ pub struct UiState {
 }
 
 impl Default for UiState {
+    /// Creates the default UI state with default tools and empty drag state.
     fn default() -> Self {
         Self {
             tool: Tool::Move,
@@ -689,6 +694,8 @@ impl Default for UiState {
             corner_radius: None,
             arrow_drag: None,
             cut_out_edges: None,
+            type_path_drag: None,
+            type_path_geometry_cache: Default::default(),
             shape_box: None,
             selected_path: None,
             hidden_work_path: None,
