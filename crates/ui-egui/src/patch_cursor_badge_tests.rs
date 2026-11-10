@@ -109,11 +109,13 @@ fn content_aware_move_and_the_curvature_pen_keep_their_cursors() {
     let mut app = app();
     app.hover_doc = Some(INSIDE);
     assert_eq!(badge(&app, Tool::ContentAwareMove, Modifiers::NONE), None);
-    // The Curvature Pen over an anchor of the active path: four arrows.
+    // #12759: the Curvature Pen over an anchor of the active path shows the arrow with a
+    // dotted circle, so no badge (the four-arrow glyph itself is unchanged: it still shows
+    // while an anchor drag is in progress).
     let path = json!({"subpaths": [{"closed": true, "knots": [[40, 40], [160, 40], [160, 160], [40, 160]]}]});
     app.run("path.set", json!({"name": "work", "path": path})).unwrap();
     app.ui.tool = Tool::CurvaturePen;
     app.hover_doc = Some([160.0, 40.0]);
-    assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), Some(Badge::Move));
+    assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), None);
     assert_eq!(badge_glyph(Badge::Move, egui::pos2(0.0, 0.0), 4.0).len(), 10, "four-arrow glyph unchanged");
 }

@@ -450,18 +450,20 @@ fn the_curvature_pen_cursor_shows_what_a_press_does() {
     use crate::tool_feedback::{Badge, badge};
     let mut app = app(Tool::CurvaturePen);
     with_corner_square(&mut app);
-    for (at, want) in [([100.0, 40.0], Some(Badge::Add)), ([160.0, 40.0], Some(Badge::Move)), ([100.0, 100.0], None)] {
+    // #12759: over an anchor the arrow with a dotted circle shows, so no badge; a segment
+    // keeps its `+`.
+    for (at, want) in [([100.0, 40.0], Some(Badge::Add)), ([160.0, 40.0], None), ([100.0, 100.0], None)] {
         app.hover_doc = Some(at);
         assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), want, "at {at:?}");
     }
     // ⌘/Ctrl is Direct Selection: no Curvature Pen badge.
     app.hover_doc = Some([160.0, 40.0]);
     assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::COMMAND), None);
-    // While drawing, its own anchors take the move badge and the active path's segments none.
+    // While drawing, its other anchors show no badge either, and the active path's segments none.
     click(&mut app, [20.0, 180.0], Modifiers::NONE);
     click(&mut app, [60.0, 190.0], Modifiers::NONE);
     app.hover_doc = Some([60.0, 190.0]);
-    assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), Some(Badge::Move));
+    assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), None);
     app.hover_doc = Some([100.0, 40.0]);
     assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), None);
 }

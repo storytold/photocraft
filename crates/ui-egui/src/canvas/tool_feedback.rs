@@ -112,10 +112,21 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
         return (!m.command).then_some(if t == Tool::AddAnchorPoint { Badge::Add } else { Badge::Subtract });
     }
     // The Curvature Pen over a point: + on the active path's segments (a click adds an anchor
-    // there), four arrows on an anchor (a press drags it).
+    // there); over an anchor the arrow with a dotted circle shows instead, so no badge (#12759).
+    // Except the first anchor while drawing, which this item leaves alone (#12750 owns its
+    // close cursor from 2 anchors on): it keeps today's four arrows. While an anchor drag is
+    // actually in progress the four arrows stay too (not measured, keep today's behaviour):
+    // an idle anchor drag lives in `direct_selection.drag`, a drawn one in the pen path's
+    // `moving` (this tool never sets `app.drag`).
     if let Some(p) = app.hover_doc.filter(|_| tool == Tool::CurvaturePen) {
-        return crate::direct_select::curvature_hover(app, p, m)
-            .map(|h| if matches!(h, photocraft_vector::edit::Hit::Segment(..)) { Badge::Add } else { Badge::Move });
+        let dragging = app.ui.direct_selection.drag.is_some() || app.ui.pen.as_ref().is_some_and(|pen| pen.moving.is_some());
+        let drawing = app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty());
+        return crate::direct_select::curvature_hover(app, p, m).and_then(|h| match h {
+            photocraft_vector::edit::Hit::Segment(..) => Some(Badge::Add),
+            photocraft_vector::edit::Hit::Anchor([0, 0]) if drawing => Some(Badge::Move),
+            photocraft_vector::edit::Hit::Anchor(..) if dragging => Some(Badge::Move),
+            _ => None,
+        });
     }
     // The Pen over the active path with Auto Add/Delete on: what a click would do (#4144).
     if let Some(p) = app.hover_doc.filter(|_| tool == Tool::Pen) {
