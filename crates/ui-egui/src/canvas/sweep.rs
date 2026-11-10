@@ -13,6 +13,10 @@
 //! least [`SWEEP_MIN_PX`]; elsewhere the canvas redraws in one go as before. A block that doesn't
 //! come back as a plain GPU refresh (the CPU compositor stepping in, the texture replaced) ends
 //! the sweep, and the document redraws in one go until the next full refresh succeeds.
+//!
+//! On the desktop the blocks are composited on the redraw thread ([`super::redraw_thread`]) while
+//! the UI thread only hands them out and shows them as they land; a block the thread can't draw
+//! comes back to the UI thread, which draws it as described above.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,7 +55,16 @@ pub(crate) struct CanvasState {
     /// averages): how many blocks the rest of a frame's budget holds ([`batch_len`]).
     plan_ms: Option<f64>,
     block_ms: Option<f64>,
+    /// Jobs out on the redraw thread: their tickets and blocks.
+    in_flight: Vec<(u64, Vec<Rect>)>,
+    /// A job failed on the redraw thread: this sweep goes on on the UI thread.
+    thread_failed: bool,
+    /// No jobs before this time ([`crate::gpu_canvas::now_ms`]): the compositor wasn't ready.
+    thread_wait_until: f64,
 }
+
+/// How long the redraw thread waits for a compositor that isn't ready yet (ms).
+const THREAD_RETRY_MS: f64 = 100.0;
 
 /// Most blocks drawn in one render.
 const MAX_BATCH: usize = 4;
@@ -74,15 +87,16 @@ pub(crate) fn eligible(app: &PhotocraftApp, doc: &Document) -> bool {
     app.background_jobs && doc.bounds().size().area() >= SWEEP_MIN_PX && !app.canvas_states.get(&doc.id).is_some_and(|s| s.failed)
 }
 
-/// Whether a sweep of `doc` still has blocks to draw.
+/// Whether a sweep of `doc` still has blocks to draw (or out on the redraw thread).
 pub(crate) fn running(app: &PhotocraftApp, doc: DocId) -> bool {
-    app.canvas_states.get(&doc).is_some_and(|s| !s.pending.is_empty())
+    app.canvas_states.get(&doc).is_some_and(|s| !s.pending.is_empty() || !s.in_flight.is_empty())
 }
 
 /// (Re)start a sweep of all of `doc`'s canvas, the blocks nearest `visible` first.
 pub(crate) fn start(app: &mut PhotocraftApp, doc: &Document, visible: Rect) {
     let state = app.canvas_states.entry(doc.id).or_default();
     state.pending = blocks(doc.bounds(), doc.bounds(), visible);
+    state.thread_failed = false;
 }
 
 /// The safety net behind a change bounded by comparing documents ([`super::doc_diff`]): redraw
@@ -95,20 +109,52 @@ pub(crate) fn safety_net(app: &mut PhotocraftApp, doc: &Document, visible: Rect)
     }
 }
 
-/// Add `region` of `doc`'s canvas to its sweep, drawn before what was already pending.
+/// Add `region` of `doc`'s canvas to its sweep. Its blocks still waiting from before (what is
+/// being redrawn was touched again) go first; its other blocks take turns with the rest of the
+/// sweep, a job's worth of each at a time, so a change elsewhere (a storyboard hidden or shown)
+/// doesn't hold up the rest of the canvas until it is drawn, nor the rest hold up the change.
 pub(crate) fn add(app: &mut PhotocraftApp, doc: &Document, region: Rect, visible: Rect) {
     let region = region.intersect(&doc.bounds());
     if region.is_empty() {
         return;
     }
     let state = app.canvas_states.entry(doc.id).or_default();
+    // A new redraw tries the redraw thread again, whatever happened to the last one.
+    if state.pending.is_empty() && state.in_flight.is_empty() {
+        state.thread_failed = false;
+    }
     // Blocks sit on one grid over the canvas, so a block already pending is the same rectangle:
-    // it moves to the front instead of being queued twice (a Move drag adds the same blocks
-    // every frame). Popped from the end: the new blocks first.
+    // it is queued once (a Move drag adds the same blocks every frame).
     let new = blocks(region, doc.bounds(), visible);
-    let queued: std::collections::HashSet<(i32, i32)> = new.iter().map(|b| (b.x0, b.y0)).collect();
-    state.pending.retain(|b| !queued.contains(&(b.x0, b.y0)));
-    state.pending.extend(new);
+    state.pending = queue_after_add(std::mem::take(&mut state.pending), new);
+}
+
+/// The sweep's queue (`pending`, popped from the end) once `new` (popped from the end too) joins
+/// it, as [`add`] describes: `new`'s blocks already pending first, then its other blocks and the
+/// rest of the queue in turns of [`JOB_BLOCKS`].
+///
+/// [`JOB_BLOCKS`]: super::redraw_thread::JOB_BLOCKS
+fn queue_after_add(pending: Vec<Rect>, new: Vec<Rect>) -> Vec<Rect> {
+    use super::redraw_thread::JOB_BLOCKS;
+    let key = |b: &Rect| (b.x0, b.y0, b.x1, b.y1);
+    let waiting: std::collections::HashSet<_> = pending.iter().map(key).collect();
+    let queued: std::collections::HashSet<_> = new.iter().map(key).collect();
+    // In the order they are drawn.
+    let rest: Vec<Rect> = pending.into_iter().rev().filter(|b| !queued.contains(&key(b))).collect();
+    let (again, fresh): (Vec<Rect>, Vec<Rect>) = new.into_iter().rev().partition(|b| waiting.contains(&key(b)));
+    let mut order = again;
+    let (mut a, mut b) = (fresh.chunks(JOB_BLOCKS), rest.chunks(JOB_BLOCKS));
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => break,
+            (x, y) => {
+                order.extend(x.into_iter().flatten());
+                order.extend(y.into_iter().flatten());
+            }
+        }
+    }
+    order.reverse();
+    order
 }
 
 /// Forget a sweep that failed, after a full refresh landed.
@@ -134,8 +180,12 @@ pub(crate) fn changed_since_shown(app: &PhotocraftApp, doc: &Document, display_k
 }
 
 /// Draw blocks of `doc`'s sweep until this frame's budget is spent, and ask for another frame
-/// while blocks remain.
-pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, doc: &Document, display: Option<&CanvasDisplay>) -> Step {
+/// while blocks remain. With the redraw thread, hand it the next blocks instead ([`step_threaded`]).
+pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, doc: &Arc<Document>, display: Option<&CanvasDisplay>) -> Step {
+    land_finished(app);
+    if app.canvas_states.get(&doc.id).is_some_and(|s| !s.thread_failed) && super::redraw_thread::thread(app, gpu, ctx).is_some() {
+        return step_threaded(app, ctx, doc, display);
+    }
     let started = crate::gpu_canvas::now_ms();
     let mut batches = true;
     loop {
@@ -189,6 +239,104 @@ pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas
         if crate::gpu_canvas::now_ms() - started >= FRAME_BUDGET_MS {
             ctx.request_repaint();
             return Step::Continuing;
+        }
+    }
+}
+
+/// Keep `doc`'s sweep going on the redraw thread on a frame that drew an edit of its own (a brush
+/// step, a drag): [`step`] runs only on frames with nothing new, so the rest of the canvas waited
+/// until the stroke or drag ended. Never draws on this thread: without the redraw thread the sweep
+/// waits as before, rather than take frame time from the edit.
+pub(crate) fn keep_fed(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, doc: &Arc<Document>, display: Option<&CanvasDisplay>) {
+    if !running(app, doc.id) {
+        return;
+    }
+    land_finished(app);
+    if app.canvas_states.get(&doc.id).is_some_and(|s| !s.thread_failed) && super::redraw_thread::thread(app, gpu, ctx).is_some() {
+        let _ = step_threaded(app, ctx, doc, display);
+    }
+}
+
+/// [`step`] on the redraw thread: keep it fed with [`IN_FLIGHT`] jobs of the next blocks and say
+/// whether the sweep is over. Never draws on this thread.
+///
+/// [`IN_FLIGHT`]: super::redraw_thread::IN_FLIGHT
+fn step_threaded(app: &mut PhotocraftApp, ctx: &egui::Context, doc: &Arc<Document>, display: Option<&CanvasDisplay>) -> Step {
+    use super::redraw_thread::{IN_FLIGHT, JOB_BLOCKS, JOB_BLOCKS_IDLE};
+    super::redraw_thread::publish(app, doc, display.is_some_and(|d| d.encode_srgb));
+    let now = crate::gpu_canvas::now_ms();
+    let waiting = app.canvas_states.get(&doc.id).is_some_and(|s| s.thread_wait_until > now);
+    // Larger jobs while nothing is drawn by hand; small ones keep an edit's wait for the
+    // compositor short.
+    let job = if app.drag.is_none() && app.live_stroke.is_none() { JOB_BLOCKS_IDLE } else { JOB_BLOCKS };
+    while !waiting && let Some(s) = app.canvas_states.get_mut(&doc.id) {
+        if s.in_flight.len() >= IN_FLIGHT || s.pending.is_empty() {
+            break;
+        }
+        // The next blocks (popped from the end), in drawing order.
+        let keep = s.pending.len().saturating_sub(job);
+        let blocks: Vec<Rect> = s.pending.drain(keep..).rev().collect();
+        let Some(ticket) = app.redraw_thread.as_mut().and_then(|t| t.send(doc.id, blocks.clone())) else {
+            if let Some(s) = app.canvas_states.get_mut(&doc.id) {
+                s.pending.extend(blocks.into_iter().rev());
+            }
+            thread_gone(app);
+            break;
+        };
+        if let Some(s) = app.canvas_states.get_mut(&doc.id) {
+            s.in_flight.push((ticket, blocks));
+        }
+    }
+    if !running(app, doc.id) {
+        return Step::Done;
+    }
+    // The thread asks for a repaint as each job lands; this is a backstop (and the retry of a
+    // compositor that wasn't ready).
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    Step::Continuing
+}
+
+/// Take the jobs the redraw thread finished, of any document ([`CanvasState::landed`]).
+fn land_finished(app: &mut PhotocraftApp) {
+    let Some((finished, alive)) = app.redraw_thread.as_ref().map(super::redraw_thread::RedrawThread::finished) else { return };
+    for done in finished {
+        if let Some(s) = app.canvas_states.get_mut(&done.doc) {
+            s.landed(done.ticket, done.blocks, done.result);
+        }
+    }
+    if !alive {
+        thread_gone(app);
+    }
+}
+
+/// The redraw thread stopped: the blocks it had go back to their sweeps, which go on on the UI
+/// thread, and no thread is started again.
+fn thread_gone(app: &mut PhotocraftApp) {
+    log::warn!("canvas: the redraw thread stopped; redrawing on the UI thread");
+    app.redraw_thread = None;
+    app.redraw_thread_failed = true;
+    for s in app.canvas_states.values_mut() {
+        for (_, blocks) in std::mem::take(&mut s.in_flight) {
+            s.pending.extend(blocks.iter().rev());
+        }
+        s.thread_failed = true;
+    }
+}
+
+impl CanvasState {
+    /// Job `ticket` of `blocks` came back from the redraw thread with `result`. Blocks it couldn't
+    /// draw go back to the front of the sweep: to try again shortly if the compositor wasn't
+    /// built yet, else to draw on the UI thread.
+    fn landed(&mut self, ticket: u64, blocks: Vec<Rect>, result: Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported>) {
+        self.in_flight.retain(|(t, _)| *t != ticket);
+        let Err(e) = result else { return };
+        // Popped from the end: the first of them is drawn first.
+        self.pending.extend(blocks.iter().rev());
+        if e.0 == crate::gpu_canvas::COMPOSITOR_BUILDING {
+            self.thread_wait_until = crate::gpu_canvas::now_ms() + THREAD_RETRY_MS;
+        } else {
+            log::info!("canvas: the redraw thread couldn't draw {} block(s) ({}); going on on the UI thread", blocks.len(), e.0);
+            self.thread_failed = true;
         }
     }
 }
@@ -268,6 +416,60 @@ fn blocks(region: Rect, canvas: Rect, visible: Rect) -> Vec<Rect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A region added to a running sweep: its blocks still waiting from before go first, then its
+    /// other blocks and the rest of the sweep take turns, a job's worth at a time.
+    #[test]
+    fn a_new_region_takes_turns_with_the_sweep_and_blocks_waiting_again_go_first() {
+        use super::super::redraw_thread::JOB_BLOCKS;
+        assert_eq!(JOB_BLOCKS, 3, "the order below is for jobs of three");
+        let r = |x: i32| Rect::new(x, 0, x + 1, 1);
+        // Drawn in the order 0, 1, ... 7 (popped from the end).
+        let pending: Vec<Rect> = (0..8).rev().map(r).collect();
+        // A region of blocks 100..106 and block 5, which was still waiting.
+        let new: Vec<Rect> = [100, 101, 102, 5, 103, 104, 105].into_iter().rev().map(r).collect();
+        let mut q = queue_after_add(pending, new);
+        let mut order = Vec::new();
+        while let Some(b) = q.pop() {
+            order.push(b.x0);
+        }
+        assert_eq!(order, [5, 100, 101, 102, 0, 1, 2, 103, 104, 105, 3, 4, 6, 7]);
+        // Nothing running: the region alone, in its own order.
+        let mut q = queue_after_add(Vec::new(), [1, 2].into_iter().rev().map(r).collect());
+        assert_eq!((q.pop().map(|b| b.x0), q.pop().map(|b| b.x0)), (Some(1), Some(2)));
+    }
+
+    /// Blocks out on the redraw thread keep the sweep running; a block the thread couldn't draw
+    /// comes back to be drawn on the UI thread, and a compositor not built yet makes the blocks
+    /// wait a moment instead. A new sweep tries the thread again.
+    #[test]
+    fn blocks_on_the_redraw_thread_keep_the_sweep_running_and_failed_ones_come_back() {
+        let mut app = app();
+        let big = doc(10_000, 10_000);
+        start(&mut app, &big, big.bounds());
+        let s = app.canvas_states.get_mut(&big.id).unwrap();
+        // The first three blocks go out, in drawing order (popped from the end).
+        let keep = s.pending.len() - 3;
+        let out: Vec<Rect> = s.pending.drain(keep..).rev().collect();
+        s.in_flight.push((1, out.clone()));
+        s.pending.clear();
+        assert!(running(&app, big.id), "blocks in flight are still to draw");
+        let s = app.canvas_states.get_mut(&big.id).unwrap();
+        s.landed(1, out.clone(), Err(photocraft_gpu::Unsupported(crate::gpu_canvas::COMPOSITOR_BUILDING.into())));
+        assert!(!s.thread_failed && s.thread_wait_until > 0.0, "not built yet: they wait and go again");
+        assert_eq!(s.pending.iter().rev().copied().collect::<Vec<_>>(), out, "back in the order they were sent");
+        s.pending.clear();
+        s.in_flight.push((2, out.clone()));
+        s.landed(2, out.clone(), Err(photocraft_gpu::Unsupported("no canvas texture to redraw into".into())));
+        assert!(s.thread_failed, "failed: the sweep goes on on the UI thread");
+        assert!(s.in_flight.is_empty() && s.pending.len() == 3);
+        s.pending.clear();
+        s.in_flight.push((3, out.clone()));
+        s.landed(3, out, Ok(photocraft_gpu::Stats::default()));
+        assert!(!running(&app, big.id), "drawn: the sweep is over");
+        add(&mut app, &big, Rect::new(0, 0, 100, 100), big.bounds());
+        assert!(!app.canvas_states[&big.id].thread_failed, "a new redraw tries the thread again");
+    }
 
     #[test]
     fn blocks_cover_the_canvas_once_and_draw_the_view_first() {

@@ -38,6 +38,7 @@ pub mod patch_preview;
 pub mod pattern_preview;
 pub mod pixel_grid;
 pub mod quick_pick;
+pub(crate) mod redraw_thread;
 pub mod rotate_view;
 pub mod rulers;
 pub mod scrollbars;

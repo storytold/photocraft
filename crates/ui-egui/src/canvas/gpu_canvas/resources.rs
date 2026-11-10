@@ -26,6 +26,9 @@ pub(super) struct Resources {
     pub(super) compositor: Option<photocraft_gpu::Compositor>,
     /// Why the wgpu compositor couldn't be created (then the CPU compositor is used).
     pub(super) compositor_failed: Option<photocraft_gpu::Unsupported>,
+    /// Bumped whenever `compositor` is reset: a compositor out on the redraw thread then isn't
+    /// put back ([`super::GpuCanvas::composite_lent`]).
+    pub(super) compositor_generation: u64,
     /// The device's health: the paint callback issues no GPU work once it's lost.
     pub(super) health: photocraft_gpu::DeviceHealth,
     /// GPU memory the compositor may hold (`None`: its default), and the document area the
@@ -365,6 +368,7 @@ impl Resources {
             separate_mip_targets: false,
             compositor: None,
             compositor_failed: None,
+            compositor_generation: 0,
             health: photocraft_gpu::DeviceHealth::new(),
             compositor_budget: None,
             layer_fit: None,

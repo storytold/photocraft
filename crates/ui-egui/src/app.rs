@@ -41,6 +41,8 @@ impl PhotocraftApp {
             services,
             canvases: HashMap::new(),
             canvas_states: Default::default(),
+            redraw_thread: None,
+            redraw_thread_failed: false,
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),

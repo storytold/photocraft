@@ -467,6 +467,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     };
     let (doc, raw_key) = display_doc(app, idx);
     let (display, _) = canvas_display(app, &doc, None);
+    // Before anything draws this frame: blocks the redraw thread renders from now on show this
+    // version, never an older one over what this frame draws.
+    crate::canvas::redraw_thread::publish(app, &doc, display.as_deref().is_some_and(|d| d.encode_srgb));
     // Repeated pattern tiles sample the same texture, including pixels outside the unwrapped
     // viewport. Refresh the affected document region while Pattern Preview is enabled.
     let blend_visible = if app.ui.view.pattern_preview { doc.bounds() } else { visible };
@@ -647,6 +650,8 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     // Drawn on the GPU, or nothing to draw ("rect" without a fallback): the texture holds `doc`.
     let drawn = (r.fallback.is_none() && (r.kind.starts_with("gpu") || r.kind == "rect")).then_some(r.kind == "gpu-full");
     after_refresh(app, ctx, id, &doc, display_key, drawn, from_diff.then_some(visible));
+    // A sweep under way goes on (on the redraw thread) while an edit draws itself frame after frame.
+    crate::canvas::sweep::keep_fed(app, ctx, &gpu, &doc, display.as_deref());
     let Some(cache) = app.canvases.get_mut(&(id, GPU_OUTPUT)) else { return true };
     cache.revision = revision;
     cache.preview_key = preview_key;
@@ -662,7 +667,7 @@ fn continue_sweep(
     ctx: &egui::Context,
     gpu: &crate::gpu_canvas::GpuCanvas,
     (idx, id): (usize, photocraft_doc::DocId),
-    doc: &Document,
+    doc: &std::sync::Arc<Document>,
     display: Option<&photocraft_engine::display_color::CanvasDisplay>,
     visible: DRect,
 ) {

@@ -351,6 +351,10 @@ pub struct PhotocraftApp {
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
     /// Per document: what its GPU canvas last showed and any redraw in blocks (`canvas::sweep`).
     pub(crate) canvas_states: crate::canvas::sweep::CanvasStates,
+    /// The thread those redraws composite on (`canvas::redraw_thread`), once a sweep needed it.
+    redraw_thread: Option<crate::canvas::redraw_thread::RedrawThread>,
+    /// It couldn't start, or stopped: sweeps stay on the UI thread.
+    redraw_thread_failed: bool,
     /// Navigator textures belong to open documents, not the lifetime of the egui context.
     navigator_textures: HashMap<DocId, canvas::NavigatorCache>,
     /// `canvas::display_doc`'s live-adjust and Duotone documents per document: (snapshot,
