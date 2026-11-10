@@ -86,6 +86,18 @@ impl PhotocraftApp {
                 return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
             }
         }
+        // Clipboard commands (#12876): while Free Transform is open the document still holds the
+        // untransformed pixels, so commit the box before Copy / Cut / Copy Merged, as New Layer
+        // does. Clipboard commands have no full precheck, so only guard the transform box here.
+        if matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") && self.ui.transform.is_some() {
+            transform_tool::commit(self);
+            if transform_tool::committing(self).is_some() {
+                return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+            }
+            if self.ui.transform.is_some() {
+                return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
+            }
+        }
         actions::suspended_guard(self, id)?;
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;

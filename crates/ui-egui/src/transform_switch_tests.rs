@@ -221,3 +221,34 @@ fn new_layer_with_bad_params_leaves_the_box_open() {
         assert_eq!(red_bounds(&h), photocraft_geom::Rect::new(100, 100, 200, 160), "{bad}");
     }
 }
+
+/// #12876: Edit > Copy while the box is open commits the transform first, so the copy holds
+/// the transformed pixels.
+#[test]
+fn copy_while_the_box_is_open_takes_the_transformed_pixels() {
+    let mut h = app();
+    transform_and_move(&mut h);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.copy", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().ui.transform.is_none(), "the box closed after Copy");
+    // The pasted layer should hold the transformed (scaled) pixels.
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.paste", json!({})).unwrap();
+    h.run_steps(4);
+    let st = h.state().session.active().unwrap();
+    let copy = st.doc.layers.last().unwrap();
+    let bounds = copy.surface().unwrap().content_bounds();
+    assert_eq!(bounds, photocraft_geom::Rect::new(150, 140, 250, 200), "the copy holds the transformed pixels");
+}
+
+/// #12876: Edit > Cut while the box is open commits the transform first.
+#[test]
+fn cut_while_the_box_is_open_takes_the_transformed_pixels() {
+    let mut h = app();
+    transform_and_move(&mut h);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.cut", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().ui.transform.is_none(), "the box closed after Cut");
+}
+
