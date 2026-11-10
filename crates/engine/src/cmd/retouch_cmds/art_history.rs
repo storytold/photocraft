@@ -543,3 +543,7 @@ mod tests {
 #[cfg(test)]
 #[path = "art_history_noop_state_tests.rs"]
 mod art_history_noop_state_tests;
+
+#[cfg(test)]
+#[path = "art_history_mode_mismatch_tests.rs"]
+mod art_history_mode_mismatch_tests;
