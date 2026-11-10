@@ -704,19 +704,14 @@ fn pen_shift_click_puts_the_next_anchor_on_a_45_degree_ray() {
     pen_down(&mut app, 20.0, 20.0, true);
     pen_up(&mut app);
     assert_eq!(app.ui.pen.as_ref().unwrap().knots[0][0], [20.0, 20.0]);
-    // ~30° below horizontal snaps to the 45° diagonal at the pointer's projection.
-    let (dx, dy) = (100.0 * 30f64.to_radians().cos(), 100.0 * 30f64.to_radians().sin());
-    pen_down(&mut app, 20.0 + dx, 20.0 + dy, true);
+    // 45 degrees: min(|dx|, |dy|) on both axes.
+    pen_down(&mut app, 120.0, 60.0, true);
     pen_up(&mut app);
-    let k = app.ui.pen.as_ref().unwrap().knots[1];
-    let t = 100.0 * 15f64.to_radians().cos() / std::f64::consts::SQRT_2;
-    assert!(close(k[0], [20.0 + t, 20.0 + t]), "{:?}", k[0]);
-    assert!(k[1] == k[0] && k[2] == k[0], "a click stays a corner");
-    // ~10° off vertical snaps to straight down from the previous anchor.
-    let prev = k[0];
-    pen_down(&mut app, prev[0] + 8.0, prev[1] + 50.0, true);
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots[1][0], [60.0, 60.0], "45° shift-click");
+    // A chain: from (60,60), Shift-click at (140,160) gives (140,140).
+    pen_down(&mut app, 140.0, 160.0, true);
     pen_up(&mut app);
-    assert!(close(app.ui.pen.as_ref().unwrap().knots[2][0], [prev[0], prev[1] + 50.0]));
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots[2][0], [140.0, 140.0], "45° shift-click chain");
     // Without ⇧ the anchor stays at the pointer.
     pen_down(&mut app, 200.0, 190.0, false);
     pen_up(&mut app);

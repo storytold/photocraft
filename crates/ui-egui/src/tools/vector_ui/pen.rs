@@ -97,7 +97,7 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
         return;
     }
     let p = match pen.knots.last() {
-        Some(prev) => shift_45(prev[0], [x, y], shift),
+        Some(prev) => shift_click_45(prev[0], [x, y], shift),
         None => [x, y],
     };
     pen.knots.push([p; 3]);
@@ -140,8 +140,24 @@ pub fn pen_move(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
 }
 
 /// `p`, or with ⇧ `p` projected onto the nearest 45° ray from `origin` (Pen tool constraint).
+/// Used while dragging a handle (`pen_move`): the whole click ray is preserved.
 pub(super) fn shift_45(origin: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
     if shift { crate::stroke_constraint::snap45(origin, p) } else { p }
+}
+
+/// `p`, or with ⇧ the anchor placed at `min(|dx|, |dy|)` on both axes from `origin` along the
+/// nearest 45° ray (Pen tool Shift-click). Used when placing a new anchor (`pen_down`).
+fn shift_click_45(origin: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
+    if !shift { return p; }
+    let (dx, dy) = (p[0] - origin[0], p[1] - origin[1]);
+    // If one axis dominates by more than 3×, project onto the nearest axis ray (0° or 90°),
+    // matching `snap45` behaviour. Otherwise treat it as a 45° diagonal and place at
+    // min(|dx|, |dy|) on both axes, keeping each axis's sign.
+    if dx.abs() < 1e-9 || dy.abs() < 1e-9 || dx.abs().max(dy.abs()) > dx.abs().min(dy.abs()) * 3.0 {
+        return crate::stroke_constraint::snap45(origin, p);
+    }
+    let m = dx.abs().min(dy.abs());
+    [origin[0] + dx.signum() * m, origin[1] + dy.signum() * m]
 }
 
 /// Undo the most recently placed Pen anchor while its path is still in progress.
@@ -936,3 +952,7 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
     }
     r
 }
+
+#[cfg(test)]
+#[path = "pen_shift_click_tests.rs"]
+mod pen_shift_click_tests;
