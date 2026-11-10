@@ -365,6 +365,24 @@ fn softer_outer_glow_blurs_with_the_glow_tent() {
             frac.size = 9.6;
             let outer = weights(&program(&Effect::OuterGlow(frac), &light, false));
             assert_eq!(outer, vec![glow_tent_kernel(9.0).1; 2], "outer glow, size 9.6");
+            // #12305 review (CodeRabbit's scope check): the whole-pixel split is the outer glow's
+            // only. Drop and inner shadow spread and the inner glow's choke keep the earlier fitted
+            // split, as on the CPU: 15 % of 10 dilates by 2 and blurs over 10 x 0.85 = 8.5 with the
+            // shared tent. Regression property: given the whole-pixel split they would blur over 8,
+            // a different kernel, and fail here.
+            let fitted = tent_kernel(10.0 * (1.0 - 0.15f32)).1;
+            assert_ne!(fitted, tent_kernel(8.0).1, "the two splits pick different kernels here");
+            let mut choke = g.clone();
+            choke.spread = 0.15;
+            let inner = weights(&program(&Effect::InnerGlow(choke), &light, false));
+            assert_eq!(inner, vec![fitted.clone(); 2], "inner glow, choke 15 %");
+            let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
+            s.size = 10.0;
+            s.spread = 0.15;
+            let drop = weights(&program(&Effect::DropShadow(s.clone()), &light, false));
+            assert_eq!(drop, vec![fitted.clone(); 2], "drop shadow, spread 15 %");
+            let inner_shadow = weights(&program(&Effect::InnerShadow(s), &light, false));
+            assert_eq!(inner_shadow, vec![fitted; 2], "inner shadow, choke 15 %");
         }
         let inner = weights(&program(&Effect::InnerGlow(g), &light, false));
         assert_eq!(inner, vec![tent_kernel(size).1; 2], "inner glow size {size}");

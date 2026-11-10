@@ -1247,9 +1247,10 @@ fn softer_flat_contour_glow_matches_photoshop() {
     assert!(row[..5].iter().all(|&v| v < 0.9) && row[5..].iter().all(|&v| v > 0.999), "{row:?}");
 }
 
-/// #12305: the spread split is whole pixels. The size is cut down to whole pixels, the dilation is
-/// `size × spread` rounded half up, and the blur is the whole width left, so the two add up to the
-/// size and no fractional width reaches a kernel.
+/// #12305: the Softer outer glow's spread split is whole pixels. The size is cut down to whole
+/// pixels, the dilation is `size × spread` rounded half up, and the blur is the whole width left,
+/// so the two add up to the size and no fractional width reaches a kernel. (Shadows and the inner
+/// glow's choke use `fitted_spread_split`: see `fitted_spread_split_keeps_the_earlier_split`.)
 #[test]
 fn spread_split_is_whole_pixels_and_adds_up_to_the_size() {
     for (size, spread, want) in [
@@ -1281,6 +1282,113 @@ fn spread_split_is_whole_pixels_and_adds_up_to_the_size() {
             assert_eq!(bw, (size - want) as f32, "size {size}, spread {pct} %: blur");
         }
     }
+}
+
+/// #12305 review (CodeRabbit's scope check): the whole-pixel split is measured on the Softer outer
+/// glow only, so shadows and the inner glow's choke keep the earlier fitted split, unchanged. This
+/// pins its exact outputs where the two splits disagree. Regression property: every row below
+/// fails if `fitted_spread_split` is given the whole-pixel law (the `ne` checks say so directly).
+#[test]
+fn fitted_spread_split_keeps_the_earlier_split() {
+    // `(size, spread, dilation, blur)`: the dilation is `size × spread` rounded, the blur
+    // `size × (1 − spread)`, fractional where that is.
+    for (size, spread, r, bw) in [
+        (10.0f32, 0.15f32, 2.0f32, 8.5f32),
+        (10.0, 0.05, 1.0, 9.5),
+        (6.0, 0.3, 2.0, 4.2),
+        (5.0, 0.02, 0.0, 4.9),
+        // A fractional size is not cut down.
+        (9.6, 0.0, 0.0, 9.6),
+        (10.5, 0.15, 2.0, 8.925),
+    ] {
+        let got = fitted_spread_split(size, spread);
+        assert_eq!(got.0, r, "size {size}, spread {spread}: dilation");
+        assert!((got.1 - bw).abs() < 1e-5, "size {size}, spread {spread}: blur {} vs {bw}", got.1);
+        assert_ne!(got, spread_split(size, spread), "size {size}, spread {spread}: the whole-pixel law would move this");
+    }
+    // Where the two agree (whole size, whole product), the fitted split is the same.
+    for (size, spread, want) in [(10.0f32, 0.0f32, (0.0f32, 10.0f32)), (10.0, 0.4, (4.0, 6.0)), (10.0, 1.0, (10.0, 0.0))] {
+        let got = fitted_spread_split(size, spread);
+        assert_eq!(got.0, want.0, "size {size}, spread {spread}");
+        assert!((got.1 - want.1).abs() < 1e-5, "size {size}, spread {spread}: blur {}", got.1);
+    }
+}
+
+/// #12305 review (CodeRabbit's scope check): drop and inner shadow spread render with the earlier
+/// fitted split, not the outer glow's whole-pixel law (which is measured on that glow only). Size
+/// 10, spread 15 %, Linear contour, distance 0, a straight edge of the 30 px square on its middle
+/// row: a dilation of 2, then the shared tent over `10 × 0.85 = 8.5`. The levels are that tent's
+/// tail by hand (its box has 7 full taps and two ¾ end taps), `d` px from the edge, outside for
+/// the drop shadow and inside for the inner shadow (the same row by symmetry).
+///
+/// Regression property: with the whole-pixel law the blur is 8 and the row reads 112.6, 84.7,
+/// 60.8, 40.8, 24.9, 13.0, 5.0, 1.0 at 3–10 px, so every pin from 4 px on is 1 to 3.6 levels off
+/// and fails at the half-level tolerance.
+#[test]
+fn shadow_spread_keeps_the_fitted_split() {
+    let n = 80;
+    let mut square = Map::new(n, n, 0.0);
+    for y in 25..55 {
+        for x in 25..55 {
+            square.v[y * n + x] = 1.0;
+        }
+    }
+    let s = Shadow {
+        common: photocraft_doc::FxCommon::new(BlendMode::Multiply, 1.0),
+        color: photocraft_color::Color::BLACK,
+        angle: 0.0,
+        use_global_light: false,
+        distance: 0.0,
+        spread: 0.15,
+        size: 10.0,
+        contour: Contour::Linear,
+        anti_alias: false,
+        noise: 0.0,
+        knocks_out: true,
+    };
+    // `(d, level)` for dilation 2 + `tent_kernel(8.5)`.
+    let rows = [(3usize, 113.16f32), (4, 86.69), (5, 63.75), (6, 44.34), (7, 28.46), (8, 16.10), (9, 7.28), (10, 1.99), (11, 0.0)];
+    for inner in [false, true] {
+        let m = shadow_map(&square, &s, &GlobalLight::default(), inner, (0, 0));
+        for (d, want) in rows {
+            let x = if inner { 24 + d } else { 25 - d };
+            let got = 255.0 * m.v[40 * n + x];
+            assert!((got - want).abs() <= 0.5, "inner {inner}, {d} px from the edge: {got} vs the fitted split's {want}");
+        }
+    }
+}
+
+/// #12305 review: a Softer inner glow's choke keeps the earlier fitted split too (unmeasured with
+/// the whole-pixel law), with the shared tent. The map is built here from its parts with the
+/// fitted split's dilation 2 and blur 8.5 at size 10, choke 15 %, and must match bit for bit.
+/// Regression property: the same parts with the whole-pixel blur of 8 differ by more than a level,
+/// so moving the inner glow to `spread_split` fails the bit-for-bit check.
+#[test]
+fn softer_inner_glow_choke_keeps_the_fitted_split() {
+    let n = 80;
+    let mut square = Map::new(n, n, 0.0);
+    for y in 25..55 {
+        for x in 25..55 {
+            square.v[y * n + x] = 1.0;
+        }
+    }
+    let g = Glow { spread: 0.15, contour: Contour::Linear, ..contour_glow(GlowTechnique::Softer, 10.0, &FLAT) };
+    let src = square.clone().map(|a| 1.0 - a);
+    let build = |r: f32, bw: f32| {
+        let mut m = dilate(&src, r);
+        blur(&mut m, bw);
+        let mut m = apply_lut(m, glow_paint_lut(&g, true));
+        for (v, a) in m.v.iter_mut().zip(&square.v) {
+            *v *= a;
+        }
+        m
+    };
+    let got = glow_map(&square, &g, true, (0, 0));
+    let fitted = build(2.0, 10.0 * (1.0 - 0.15f32));
+    assert_eq!(bits(&got.v), bits(&fitted.v), "inner glow choke 15 % at size 10: dilation 2, blur 8.5");
+    let whole = build(2.0, 8.0);
+    let worst = got.v.iter().zip(&whole.v).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(worst > 1.0 / 255.0, "the whole-pixel split would be indistinguishable here ({worst})");
 }
 
 /// #12305, measured by the maintainer in the reference application: Outer Glow, Softer, red on

@@ -7,6 +7,13 @@ use photocraft_doc::{Bevel, BevelTechnique, BevelTexture, GlobalLight, Glow, Glo
 use super::{B, In, contour_lut, offset, stage};
 use crate::plan::{Kernel, stroke_widths};
 
+/// How a spread divides a size into (dilation, blur width): `fx::spread_split` for a
+/// Softer outer glow, `fx::fitted_spread_split` for everything else (see `spread_blur`).
+type SpreadSplit = fn(f32, f32) -> (f32, f32);
+
+/// A blur kernel for a width: (radius, weights).
+type BlurKernel = fn(f32) -> (i32, Vec<f32>);
+
 /// A flag as the shaders read it: 1.0 or 0.0.
 fn flag(v: bool) -> f32 {
     f32::from(u8::from(v))
@@ -19,15 +26,20 @@ impl B {
         let angle = if s.use_global_light { light.angle } else { s.angle };
         let (dx, dy) = offset(angle, s.distance);
         let src = self.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
-        let m = self.spread_blur(src, (s.size, s.spread), inner, dx, dy, fx::tent_kernel);
+        // As the CPU's `shadow_map`: the earlier fitted split (the whole-pixel one is measured on
+        // the outer glow only, #12305).
+        let m = self.spread_blur(src, (s.size, s.spread), fx::fitted_spread_split, inner, dx, dy, fx::tent_kernel);
         self.finish(m, None, false, &s.contour, inner, 0);
         1
     }
 
     /// `src` spread or choked by `spread` of `size`, then blurred by the rest with `kernel`
-    /// (`fx::tent_kernel`, or `fx::glow_tent_kernel` for an outer glow).
-    fn spread_blur(&mut self, src: In, (size, spread): (f32, f32), inner: bool, dx: f32, dy: f32, kernel: fn(f32) -> (i32, Vec<f32>)) -> In {
-        let (r, bw) = fx::spread_split(size, spread);
+    /// (`fx::tent_kernel`, or `fx::glow_tent_kernel` for an outer glow). `split` divides the size
+    /// into dilation and blur: `fx::spread_split` for a Softer outer glow, `fx::fitted_spread_split`
+    /// for everything else, as on the CPU.
+    #[allow(clippy::too_many_arguments)]
+    fn spread_blur(&mut self, src: In, (size, spread): (f32, f32), split: SpreadSplit, inner: bool, dx: f32, dy: f32, kernel: BlurKernel) -> In {
+        let (r, bw) = split(size, spread);
         if r <= 0.0 {
             return self.blur_with(src, bw, kernel);
         }
@@ -56,10 +68,12 @@ impl B {
             GlowTechnique::Softer => {
                 // Inner glows spread 1 - alpha.
                 let src = if inner { self.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { In::Shape };
-                // As the CPU's `glow_map`: an outer glow falls off over Photoshop's whole-width
-                // tent (#11949), an inner glow over the shared one.
-                let kernel = if inner { fx::tent_kernel } else { fx::glow_tent_kernel };
-                self.spread_blur(src, (g.size, g.spread), inner, 0.0, 0.0, kernel)
+                // As the CPU's `glow_map`: an outer glow splits its spread into whole pixels
+                // (#12305) and falls off over Photoshop's whole-width tent (#11949); an inner glow
+                // keeps the earlier fitted split and the shared tent (both unmeasured).
+                let (split, kernel): (SpreadSplit, BlurKernel) =
+                    if inner { (fx::fitted_spread_split, fx::tent_kernel) } else { (fx::spread_split, fx::glow_tent_kernel) };
+                self.spread_blur(src, (g.size, g.spread), split, inner, 0.0, 0.0, kernel)
             }
         };
         // The same transfer as the CPU's `glow_map`, reach cap included (#11361).

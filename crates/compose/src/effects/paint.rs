@@ -365,17 +365,19 @@ pub(super) fn paint_color(dst: &mut Buffer, m: &Map, c: [f32; 3], blend: BlendMo
     paint(dst, m, |_| [c[0], c[1], c[2], 1.0], blend, opacity);
 }
 
-/// Spread / choke of a soft effect: (dilation radius, blur width), both whole pixels. The size is
+/// Spread of a Softer outer glow: (dilation radius, blur width), both whole pixels. The size is
 /// cut down to whole pixels first (9.6 renders as 9, 10.5 as 10), the dilation is `size × spread`
-/// rounded, half up (a 2 % spread of a 5 px shadow doesn't grow it at all; 15 % of 10 px grows it
-/// by 2), and the blur takes the whole width left, `size − r`: the two always add up to the size,
-/// so the reach stays `size − 1` px whatever the spread (#12305, measured on a Softer outer glow,
-/// flat contour Range 50 % and Linear Range 100 %: 23 sizes and spreads within a level at every pixel; size
-/// 10, spread 15 % reads 199, 100, 33 at 7–9 px and 0 at 10, a dilation of 2 and a tent of 8,
-/// where the earlier `size × (1 − spread)` blurred over 8.5 and read 237, 134, 61, 17). The
-/// reference never blurs over a fractional width, so `glow_tent_kernel` only ever sees whole ones.
-/// Shadow spread and inner glow choke share this split; they were not measured with it (the
-/// earlier `size × (1 − spread)` blur was fitted on ag-psd effects: 10.6 → 3.8 % of pixels off).
+/// rounded, half up (15 % of 10 px grows it by 2), and the blur takes the whole width left,
+/// `size − r`: the two always add up to the size, so the reach stays `size − 1` px whatever the
+/// spread (#12305, measured on a Softer outer glow, flat contour Range 50 % and Linear Range
+/// 100 %: 23 sizes and spreads within a level at every pixel; size 10, spread 15 % reads 199, 100,
+/// 33 at 7–9 px and 0 at 10, a dilation of 2 and a tent of 8, where the earlier
+/// `size × (1 − spread)` blurred over 8.5 and read 237, 134, 61, 17). The reference never blurs
+/// that glow over a fractional width, so `glow_tent_kernel` only ever sees whole ones from it.
+///
+/// This law is measured on the Softer **outer** glow only. Drop and inner shadow spread and the
+/// Softer inner glow's choke use [`fitted_spread_split`] until they are measured themselves
+/// (#12305 review: CodeRabbit's scope check asked to keep shadows on their existing split).
 pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
     let size = size.trunc();
     // A spread is a whole percent stored as `pct / 100` in f32, which is a hair under the percent
@@ -390,12 +392,26 @@ pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
 /// percents allow is 0.01 away.
 const SPREAD_HALF_NUDGE: f32 = 1e-3;
 
+/// Spread / choke of the effects nobody has measured a split for: drop shadow and inner shadow
+/// spread, and the Softer inner glow's choke. Returns (dilation radius, blur width).
+///
+/// This is the earlier fitted split, kept as it was for those effects: the dilation is whole
+/// pixels (`size × spread` rounded, so a 2 % spread of a 5 px shadow doesn't grow it at all) and
+/// the blur keeps `size × (1 − spread)`, which can be fractional (fitted on ag-psd effects: 10.6 →
+/// 3.8 % of pixels off). The whole-pixel law of [`spread_split`] is measured on the Softer outer
+/// glow only (#12305), so CodeRabbit's scope check on #12305 asked to leave these effects alone
+/// until they have their own measurements. Don't move a caller to [`spread_split`] without them.
+pub fn fitted_spread_split(size: f32, spread: f32) -> (f32, f32) {
+    ((size * spread).round(), size * (1.0 - spread))
+}
+
 pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin: (i32, i32)) -> Map {
     let angle = if s.use_global_light { light.angle } else { s.angle };
     let (dx, dy) = offset(angle, s.distance);
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
     let mut m = src.shifted(dx, dy, if inner { 1.0 } else { 0.0 });
-    let (r, bw) = spread_split(s.size, s.spread);
+    // Unmeasured with the outer glow's whole-pixel split (#12305): the earlier fitted one.
+    let (r, bw) = fitted_spread_split(s.size, s.spread);
     m = dilate(&m, r);
     blur(&mut m, bw);
     let mut m = apply_contour(m, &s.contour);
@@ -431,7 +447,9 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
             m
         }
         GlowTechnique::Softer => {
-            let (r, bw) = spread_split(g.size, g.spread);
+            // The whole-pixel split is measured on the outer glow only (#12305); an inner glow's
+            // choke keeps the earlier fitted split.
+            let (r, bw) = if inner { fitted_spread_split(g.size, g.spread) } else { spread_split(g.size, g.spread) };
             let mut m = dilate(&src, r);
             // An outer glow falls off over Photoshop's whole-width tent, which differs from the
             // shared one at even widths (#11949); inner glows keep the shared blur (unmeasured).

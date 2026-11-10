@@ -53,12 +53,12 @@ use distance::{
     sharp_edges,
 };
 use paint::dissolves;
-pub use paint::{
-    bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise, ranged_lut, sample_gradient, satin_lut,
-    spread_split,
-};
 #[cfg(test)]
-use paint::{glow_map, lut_at, noise, offset, shadow_map};
+use paint::{apply_lut, glow_map, lut_at, noise, offset, shadow_map};
+pub use paint::{
+    bevel_contour_lut, fitted_spread_split, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise, ranged_lut, sample_gradient,
+    satin_lut, spread_split,
+};
 
 /// `true` if the layer has at least one enabled effect and the master switch is on.
 pub fn has_effects(layer: &Layer) -> bool {
