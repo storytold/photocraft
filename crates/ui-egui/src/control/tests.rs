@@ -138,7 +138,7 @@ fn perf_output_includes_slow_frames() {
     assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"], json!([]));
     app.slow_frames.set_threshold_ms(0.0);
     app.run("file.new", json!({"width": 64, "height": 32})).unwrap();
-    app.finish_frame(1.0);
+    app.finish_frame(&ctx, 1.0);
     let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
     let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
     assert_eq!(last["command"], "file.new", "{last}");
@@ -156,7 +156,7 @@ fn perf_output_includes_slow_frames() {
     let played = app.run("actions.play", json!({"action": "Zoom"})).unwrap();
     assert_eq!(played["ran"], 2, "{played}");
     let outer_ms = app.perf.command_ms;
-    app.finish_frame(1.0);
+    app.finish_frame(&ctx, 1.0);
     let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
     let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
     assert_eq!(last["command"], "actions.play", "{last}");
@@ -1116,7 +1116,7 @@ fn ui_set_opens_the_brush_preset_picker_and_sets_its_cards() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();
     let list = &app.ui.brush_picker_list;
-    assert!(list.show_name && list.show_stroke && list.show_tip, "every card part is on by default");
+    assert!(list.show_name && list.show_stroke && !list.show_tip, "the cards show the name and the stroke by default");
     let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerStroke": false}));
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]));
@@ -1160,11 +1160,11 @@ fn ui_inspect_tracks_brush_picker_open_and_closed() {
     assert!(open["result"]["brushPicker"]["pos"].is_array(), "{open}");
     assert_eq!(open["result"]["brushPicker"]["list"]["showName"], true);
     assert_eq!(open["result"]["brushPicker"]["list"]["showStroke"], true);
-    assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], true);
+    assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], false);
 
-    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": false}))["ok"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": true}))["ok"], true);
     let changed = call(&mut app, &ctx, "ui.inspect", json!({}));
-    assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], false);
+    assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], true);
 
     assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
     let closed_again = call(&mut app, &ctx, "ui.inspect", json!({}));
@@ -1572,7 +1572,13 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
             Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
         })),
         export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
-        automation_read: Some(Box::new(|path: &str| Ok((path.rsplit('/').next().unwrap_or(path).to_string(), b"x".to_vec())))),
+        automation_read: Some(Box::new(|path: &str| {
+            Ok(crate::AutomationReadResult {
+                name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                bytes: b"x".to_vec(),
+                save_path: Some(path.to_string()),
+            })
+        })),
         automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
             w.borrow_mut().push(path.to_string());
             Ok(())
@@ -1708,7 +1714,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
         })),
         automation_read: Some(Box::new(|path: &str| {
             if path == "zipped.pcraft" {
-                Ok((path.rsplit('/').next().unwrap_or(path).to_string(), b"zip-bytes".to_vec()))
+                Ok(crate::AutomationReadResult { name: path.rsplit('/').next().unwrap_or(path).to_string(), bytes: b"zip-bytes".to_vec(), save_path: None })
             } else {
                 Err(format!("no such path: {path}"))
             }
@@ -2361,6 +2367,71 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     assert_eq!(l.mask.as_ref().unwrap().value(20, 20), 0.0, "the stroke went into the layer mask");
     let photocraft_doc::LayerContent::Smart(sm) = &l.content else { panic!("smart object") };
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
+}
+
+#[test]
+fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let written: Rc<RefCell<Vec<String>>> = Rc::default();
+    let writes = written.clone();
+    let services = crate::Services {
+        import: Some(Box::new(|name: &str, _: &[u8], _: &photocraft_io::ImportOptions| {
+            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+        })),
+        export: Some(Box::new(|_: &Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new())))),
+        automation_read: Some(Box::new(|path: &str| {
+            Ok(crate::AutomationReadResult {
+                name: "same.psd".into(),
+                bytes: b"source".to_vec(),
+                save_path: path.starts_with("work/").then(|| path.to_owned()),
+            })
+        })),
+        automation_write: Some(Box::new(move |path: &str, _: &[u8]| {
+            if path == "failed.psd" {
+                return Err("test write failure".into());
+            }
+            writes.borrow_mut().push(path.to_owned());
+            Ok(())
+        })),
+        write: Some(Box::new(|_, _| Err("ambient writer used".into()))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    let opened = call(&mut app, &ctx, "app.open", json!({"path": "library/same.psd"}));
+    assert_eq!(opened["ok"], true, "{opened}");
+    assert_eq!(app.session.active().unwrap().path, None);
+    assert_eq!(app.ui.recent_files, vec!["library/same.psd"]);
+    app.run("layer.new.layer", json!({"name": "edit"})).unwrap();
+    assert!(app.session.active().unwrap().is_dirty());
+    let refused = call(&mut app, &ctx, "app.save", json!({}));
+    assert!(refused["error"].as_str().unwrap().contains("pass `path`"), "{refused}");
+    assert!(written.borrow().is_empty());
+    assert!(app.session.active().unwrap().is_dirty());
+    let flat = call(&mut app, &ctx, "app.save", json!({"path": "copy.png"}));
+    assert_eq!(flat["ok"], true, "{flat}");
+    assert_eq!(app.session.active().unwrap().path, None);
+    assert!(app.session.active().unwrap().is_dirty());
+    let failed = call(&mut app, &ctx, "app.save", json!({"path": "failed.psd"}));
+    assert_eq!(failed["ok"], false, "{failed}");
+    assert_eq!(app.session.active().unwrap().path, None);
+    assert!(app.session.active().unwrap().is_dirty());
+    let saved = call(&mut app, &ctx, "app.save", json!({"path": "copy.psd"}));
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("copy.psd"));
+    assert!(!app.session.active().unwrap().is_dirty());
+    let again = call(&mut app, &ctx, "app.save", json!({}));
+    assert_eq!(again["ok"], true, "{again}");
+    assert_eq!(*written.borrow(), vec!["copy.png", "copy.psd", "copy.psd"]);
+    let opened = call(&mut app, &ctx, "app.open", json!({"path": "work/same.psd"}));
+    assert_eq!(opened["ok"], true, "{opened}");
+    let saved = call(&mut app, &ctx, "app.save", json!({}));
+    assert_eq!(saved["result"]["path"], "work/same.psd", "{saved}");
 }
 
 fn shift_right(app: &mut PhotocraftApp, ctx: &egui::Context, tool: &str) {

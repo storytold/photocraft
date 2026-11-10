@@ -167,6 +167,18 @@ pub fn follows_filter_mask(id: &str) -> bool {
         )
 }
 
+/// Edit › Transform's Rotate/Flip presets can turn a targeted vector mask's path (#12283).
+pub fn follows_vector_mask_target(id: &str) -> bool {
+    matches!(
+        id,
+        "edit.transform.rotate180"
+            | "edit.transform.rotate90Cw"
+            | "edit.transform.rotate90Ccw"
+            | "edit.transform.flipHorizontal"
+            | "edit.transform.flipVertical"
+    )
+}
+
 /// The paint and retouch tools that follow the targeted channel or mask.
 const PAINT_IDS: &[&str] = &[
     "paint.stroke",
@@ -251,6 +263,8 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
             json!("filterMask")
         }
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
+        // Edit › Transform's Rotate/Flip presets turn the targeted vector mask's path (#12283).
+        ChannelTarget::VectorMask if follows_vector_mask_target(id) => json!("vectorMask"),
         _ => return params,
     };
     match params {

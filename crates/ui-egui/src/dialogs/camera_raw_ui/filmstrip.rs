@@ -213,7 +213,7 @@ pub(super) fn done(app: &mut PhotocraftApp) -> Value {
         return json!({"done": false, "saved": saved});
     }
     app.ui.status = if !saved.is_empty() {
-        crate::i18n::fmt(tl!("Saved Camera Raw settings to {file}"), &[("file", &saved.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))])
+        crate::i18n::fmt(tl!("Saved RAW Develop settings to {file}"), &[("file", &saved.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))])
     } else if stored.iter().all(|s| *s == Stored::Defaults) {
         tl!("Nothing to save: these raws are at their default settings").to_string()
     } else {
