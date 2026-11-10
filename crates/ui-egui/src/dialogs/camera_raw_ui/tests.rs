@@ -1427,6 +1427,60 @@ fn auto_reads_the_default_develop_when_the_proxy_is_binned() {
     assert_eq!(r["params"]["whites"].as_f64().map(|v| v as f32), Some(expected.whites));
 }
 
+/// In the desktop app (background jobs) the open dialog shows at once on the document's pixels and
+/// takes the raw's sensor data when the worker has decoded it: then the proxy, the tone curve
+/// and Auto's pixels are the ones the inline open gives.
+#[test]
+fn the_raw_source_is_built_on_a_worker_and_attached_when_ready() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("IMG_0009.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    open_raw(&mut app, &ctx, raw.clone()).unwrap();
+    let inline = app.camera_raw.take().unwrap();
+    assert!(inline.raw_proxy && !inline.raw_source_pending());
+    app.background_jobs = true;
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    for _ in 0..2000 {
+        d.poll_raw_source();
+        if !d.raw_source_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!d.raw_source_pending(), "the worker never finished");
+    assert!(d.raw_proxy && d.raw_source.is_some() && d.raw_curve.is_some(), "the sensor data is attached");
+    assert!(d.dirty, "and the preview develops again from it");
+    assert_eq!(d.proxy.len(), inline.proxy.len());
+    let (_, max) = proxy_difference(&d.proxy, &inline.proxy);
+    assert!(max < 1e-6, "the same proxy as the inline open: {max}");
+    let (_, auto) = proxy_difference(&d.auto_pixels(), &inline.auto_pixels());
+    assert!(auto < 1e-6, "and the same pixels for Auto: {auto}");
+}
+
+/// The sensor preview converts with the intent and black point compensation Color Settings had
+/// when the raw was queued, as the open policy converted the document then, not the ones set
+/// while the raw waited.
+#[test]
+fn the_sensor_preview_keeps_the_queued_raws_conversion() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("edit.colorSettings", json!({"policyRgb": "convert", "askOnMismatch": false, "intent": "perceptual", "bpc": false})).unwrap();
+    app.open_bytes("IMG_0010.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    let queued = raw.conversion.expect("the queued raw keeps its conversion");
+    assert_eq!((queued.intent, queued.bpc), (photocraft_cms::Intent::Perceptual, false));
+    app.run("edit.colorSettings", json!({"intent": "absolute", "bpc": true})).unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let d = app.camera_raw.as_ref().unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    let expected =
+        photocraft_cms::cached(photocraft_cms::Builtin::ProPhotoCompat.profile(), &photocraft_engine::color_cmds::document_profile(doc), queued).unwrap();
+    let to_document = d.raw_source.as_ref().and_then(|r| r.to_document.clone()).expect("a converted document");
+    assert!(std::sync::Arc::ptr_eq(&to_document, &expected), "converted with the queued intent and BPC");
+}
+
 /// With Color Settings converting raws to the working space on open, the proxy developed from
 /// the sensor data is converted the same way, so it shows the document's colours.
 #[test]
