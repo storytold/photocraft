@@ -30,8 +30,9 @@ pub fn applies(tool: Tool) -> bool {
 }
 
 /// Tools that ⇧-click connects to the previous stroke with a straight line.
+/// The Art History Brush paints a separate cluster at the new click instead (#12627).
 pub fn connects(tool: Tool) -> bool {
-    tool.is_brushlike()
+    tool.is_brushlike() && tool != Tool::ArtHistoryBrush
 }
 
 /// The unit direction from `origin` towards `p`, snapped to the nearest multiple of `step`
