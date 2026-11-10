@@ -50,6 +50,12 @@ fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.entries().len()
 }
 
+/// The active layer's pixel at `(x, y)`.
+fn pixel(app: &PhotocraftApp, x: i32, y: i32) -> [f32; 4] {
+    let st = app.session.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)
+}
+
 /// Rows 150 and 250 (New, then ⇧ adds).
 fn two_rows(app: &mut PhotocraftApp) {
     click(app, Tool::SingleRowMarquee, [300.0, 250.5], Modifiers::NONE);
@@ -148,7 +154,8 @@ fn click_inside_with_snapping_on_selects_the_line() {
 
 /// A drag from inside that snapping pulls back to where it started (the selection's edge on a
 /// guide, 2 px away) is not a click: the selection stays, with no step. It took the click's path:
-/// one line replaced the rows, a floating piece was dropped, and the Rectangular Marquee deselected.
+/// one line replaced the rows, and the Rectangular Marquee deselected. A floating piece is dropped
+/// where it is by the press, which drags the outline (#11368).
 #[test]
 fn a_drag_snapped_back_to_its_start_leaves_the_selection() {
     let floats = |app: &PhotocraftApp| app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
@@ -170,14 +177,15 @@ fn a_drag_snapped_back_to_its_start_leaves_the_selection() {
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     app.run("select.float", json!({"dx": 0, "dy": 0})).unwrap();
     drag(&mut app, Tool::SingleRowMarquee, [200.0, 200.5], [200.0, 202.5], Modifiers::NONE);
-    assert!(floats(&app), "the piece still floats");
+    assert!(!floats(&app), "the press dropped the piece where it was (#11368)");
     assert_eq!(bounds(&app), Rect::new(100, 150, 300, 250));
+    assert_eq!(pixel(&app, 200, 200), [1.0, 0.0, 0.0, 1.0], "the dropped pixels are where they were");
 }
 
 /// A drag from inside that goes away and comes back to the press is not a click either: the
 /// selection stays where it was, with no step. Only the release was checked, so it took the
-/// click's path (one line replaced the rows, the piece was dropped, the Rectangular Marquee
-/// deselected).
+/// click's path (one line replaced the rows, the Rectangular Marquee deselected). A floating piece
+/// is dropped where it is by the press, which drags the outline (#11368).
 #[test]
 fn a_drag_that_returns_to_its_start_leaves_the_selection() {
     let floats = |app: &PhotocraftApp| app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
@@ -208,8 +216,9 @@ fn a_drag_that_returns_to_its_start_leaves_the_selection() {
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     app.run("select.float", json!({"dx": 0, "dy": 0})).unwrap();
     out_and_back(&mut app, Tool::SingleRowMarquee, [200.0, 200.5]);
-    assert!(floats(&app), "the piece still floats");
+    assert!(!floats(&app), "the press dropped the piece where it was (#11368)");
     assert_eq!(bounds(&app), Rect::new(100, 150, 300, 250));
+    assert_eq!(pixel(&app, 200, 200), [1.0, 0.0, 0.0, 1.0], "the dropped pixels are where they were");
 }
 
 /// A click whose release drifts under a pixel from the press (a zoomed-in hand jitter) is still a

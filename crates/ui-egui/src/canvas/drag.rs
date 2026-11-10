@@ -16,6 +16,9 @@ pub struct Drag {
     pub clear: bool,
     /// ⇧ constraint of a painting stroke (stroke_constraint.rs).
     pub constrain: Option<crate::stroke_constraint::Axis>,
+    /// A ⇧-click line from the previous stroke's end. Smoothing doesn't apply to it, so it ends
+    /// at the click whatever Catch-up on Stroke End is set to, as in Photoshop (#11887).
+    pub line: bool,
     /// Modifiers held now (updated on every pointer event of the gesture).
     pub live: egui::Modifiers,
     /// Which of the modifiers held at the press have been released since.
@@ -41,6 +44,8 @@ pub struct Drag {
     /// at the press picks the selection mode only then; without one it constrains the shape from
     /// the first move (#11389). `true` until recorded, which keeps that rule for drags that don't.
     pub selection_at_press: bool,
+    /// The document a press on the canvas started the drag on (`retouch_ui::cancel_stale`).
+    pub document: Option<DragDocument>,
 }
 
 impl Drag {
@@ -53,6 +58,7 @@ impl Drag {
             erase,
             clear: false,
             constrain: None,
+            line: false,
             live: modifiers,
             released: egui::Modifiers::NONE,
             reposition: false,
@@ -63,6 +69,7 @@ impl Drag {
             vector_owner: None,
             pen_owner: None,
             selection_at_press: true,
+            document: None,
         }
     }
 
@@ -81,6 +88,12 @@ impl Drag {
         if self.tool == Tool::FreeformPen {
             self.pen_owner = crate::vector_ui::capture_pen_owner(app);
         }
+    }
+
+    /// The document and target a vector drag was pressed on are still the current ones
+    /// ([`VectorGestureOwner`]); false for a drag that captured none.
+    pub(crate) fn vector_owner_valid(&self, app: &PhotocraftApp) -> bool {
+        self.vector_owner.as_ref().is_some_and(|owner| owner.valid(app))
     }
 
     /// Reposition: move the start and every point so the last one lands on `to` (same size).
@@ -380,6 +393,35 @@ pub(crate) fn draw_readout<const N: usize>(ctx: &egui::Context, id: &str, cursor
                 });
         },
     );
+}
+
+/// The document a drag was pressed on. A reopened document can keep its ID and revision, and be
+/// edited past it before the next frame, so the session's active generation, which closing and
+/// reopening advance, tells it apart; the snapshot catches one replaced in place. An ordinary edit
+/// replaces the snapshot but advances the revision, which keeps the drag on it (the rule
+/// `sync_views` applies to the Paths selection).
+#[derive(Clone, Debug)]
+pub struct DragDocument {
+    id: photocraft_doc::DocId,
+    generation: u64,
+    revision: u64,
+    snapshot: std::sync::Weak<Document>,
+}
+
+impl DragDocument {
+    pub fn capture(app: &PhotocraftApp) -> Option<Self> {
+        let st = app.session.active()?;
+        Some(Self { id: st.doc.id, generation: app.session.active_generation(), revision: st.revision, snapshot: std::sync::Arc::downgrade(&st.doc) })
+    }
+
+    /// The document is still the active one.
+    pub fn is_active(&self, app: &PhotocraftApp) -> bool {
+        app.session.active_generation() == self.generation
+            && app
+                .session
+                .active()
+                .is_some_and(|st| st.doc.id == self.id && (st.revision > self.revision || self.snapshot.ptr_eq(&std::sync::Arc::downgrade(&st.doc))))
+    }
 }
 
 /// The document, revision and target a vector drag started on.
