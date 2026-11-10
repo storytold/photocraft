@@ -550,6 +550,23 @@ fn thumbnail_blanking_keeps_ifd0_and_ignores_malformed_tags() {
         let out = export_exif(&over, None);
         assert_eq!(next_ifd(e, &out), 0, "IFD1 is still unlinked");
         assert_eq!(out[table.start..table.end], over[table.start..table.end], "IFD0's table is untouched");
+        // Offset 0, length 8: the range covers the TIFF header, which must stay parseable.
+        let mut header = exif.clone();
+        header[ifd1 + 2 + 8..ifd1 + 2 + 12].copy_from_slice(&e.u32(0));
+        header[ifd1 + 2 + 12 + 8..ifd1 + 2 + 12 + 12].copy_from_slice(&e.u32(8));
+        let out = export_exif(&header, None);
+        assert_eq!(out[..8], header[..8], "the TIFF header is untouched");
+        // IFD0's last entry (Unit) turned into an ExifIFD pointer at IFD1's table: that range is not a thumbnail.
+        let mut sub = exif.clone();
+        let entry = 8 + 2 + 3 * 12;
+        sub[entry..entry + 2].copy_from_slice(&e.u16(0x8769));
+        sub[entry + 2..entry + 4].copy_from_slice(&e.u16(LONG));
+        sub[entry + 4..entry + 8].copy_from_slice(&e.u32(1));
+        sub[entry + 8..entry + 12].copy_from_slice(&e.u32(ifd1 as u32));
+        sub[ifd1 + 2 + 8..ifd1 + 2 + 12].copy_from_slice(&e.u32(ifd1 as u32 + 2));
+        sub[ifd1 + 2 + 12 + 8..ifd1 + 2 + 12 + 12].copy_from_slice(&e.u32(4));
+        let out = export_exif(&sub, None);
+        assert_eq!(out[ifd1 + 2..ifd1 + 6], sub[ifd1 + 2..ifd1 + 6], "the sub-IFD's table is untouched");
         // A count of 2 on the offset tag: the thumbnail bytes are not blanked.
         let mut counted = exif.clone();
         counted[ifd1 + 2 + 4..ifd1 + 2 + 8].copy_from_slice(&e.u32(2));

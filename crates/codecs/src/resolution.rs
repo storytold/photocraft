@@ -526,11 +526,12 @@ fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
     }
     // Classic TIFF: also blank the thumbnail JPEG itself (IFD1's JPEGInterchangeFormat/Length),
     // which stays recoverable in the block once nothing points at it.
-    // Only a range clear of IFD0's table and values: one that covers them is not a thumbnail.
+    // Only a range clear of the TIFF header, IFD0's table and values, and its Exif/GPS sub-IFDs: one
+    // that covers them is not a thumbnail.
     let thumb = (!big_tiff)
         .then(|| thumbnail_range(order, body, next - prefix))
         .flatten()
-        .filter(|&(off, len)| !overlaps_ifd0(order, body, first - 2, count, off, len));
+        .filter(|&(off, len)| off >= 8 && !overlaps_ifd0(order, body, first - 2, count, off, len));
     let mut out = exif.to_vec();
     out.get_mut(next..next + width)?.fill(0);
     if let Some((off, len)) = thumb
@@ -542,15 +543,30 @@ fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Whether `off..off + len` of `body` covers part of classic IFD0 (`ifd0` is its entry count's
-/// offset): its table with the next-IFD pointer, or an out-of-line value of one of its entries.
+/// offset) or of its Exif / GPS sub-IFDs.
 fn overlaps_ifd0(order: Order, body: &[u8], ifd0: usize, count: usize, off: usize, len: usize) -> bool {
+    overlaps_ifd(order, body, ifd0, count, off, len)
+        || (0..count).any(|i| {
+            let e = ifd0 + 2 + i * 12;
+            // A LONG pointer (tag 0x8769 ExifIFD, 0x8825 GPSIFD) to a sub-IFD, whose own count says its size.
+            matches!(order.u16(body, e), Some(0x8769 | 0x8825))
+                && order
+                    .u32(body, e + 8)
+                    .and_then(|v| usize::try_from(v).ok())
+                    .is_some_and(|sub| order.u16(body, sub).is_some_and(|n| overlaps_ifd(order, body, sub, usize::from(n), off, len)))
+        })
+}
+
+/// Whether `off..off + len` of `body` covers the table of the classic IFD at `ifd` (its entry
+/// count's offset) with the next-IFD pointer, or an out-of-line value of one of its entries.
+fn overlaps_ifd(order: Order, body: &[u8], ifd: usize, count: usize, off: usize, len: usize) -> bool {
     let end = off.saturating_add(len);
     let hits = |a: usize, size: usize| a < end && off < a.saturating_add(size);
-    if hits(ifd0, 2 + count * 12 + 4) {
+    if hits(ifd, 2 + count * 12 + 4) {
         return true;
     }
     (0..count).any(|i| {
-        let e = ifd0 + 2 + i * 12;
+        let e = ifd + 2 + i * 12;
         let unit = match order.u16(body, e + 2) {
             Some(1 | 2 | 6 | 7) => 1,
             Some(3 | 8) => 2,
