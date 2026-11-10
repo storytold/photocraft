@@ -1,15 +1,27 @@
 use super::defaults::apply;
 use super::{Arc, HashMap, PhotocraftApp, PoisonError, json};
 
-/// The shared font engine, unless another thread holds it right now (a background job
-/// re-rendering type): the panels read fonts every frame, and waiting for a job froze the window
-/// for all of it. Busy, the reads below show what they have instead (a cached list, the stored
-/// style name, no axis sliders) and try again next frame. Not loaded yet, it loads as before.
-fn engine_unless_busy() -> Option<std::sync::MutexGuard<'static, photocraft_text::TextEngine>> {
-    match photocraft_text::try_shared().unwrap_or_else(photocraft_text::shared).try_lock() {
-        Ok(engine) => Some(engine),
-        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
-        Err(std::sync::TryLockError::WouldBlock) => None,
+/// The shared font engine, unless a background job holds it (re-rendering type,
+/// `photocraft_text::lock_shared`): the panels read fonts every frame, and waiting for a job froze
+/// the window for all of it. Busy, the reads below show what they have instead (a cached list, the
+/// stored style name, no axis sliders) and try again next frame. Any other hold (a type command,
+/// the canvas laying out type) is short and waited out. Not loaded yet, it loads as before.
+pub(super) fn engine_unless_busy() -> Option<std::sync::MutexGuard<'static, photocraft_text::TextEngine>> {
+    lock_unless(photocraft_text::try_shared().unwrap_or_else(photocraft_text::shared), photocraft_text::background_holds_shared)
+}
+
+/// `m` locked, waiting while another thread holds it unless `busy()` says that hold is a job's
+/// (`None` then). The web runs jobs on its one thread, so there it just locks.
+fn lock_unless<T>(m: &std::sync::Mutex<T>, busy: impl Fn() -> bool) -> Option<std::sync::MutexGuard<'_, T>> {
+    use std::sync::TryLockError;
+    loop {
+        match m.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(TryLockError::Poisoned(e)) => return Some(e.into_inner()),
+            Err(TryLockError::WouldBlock) if busy() => return None,
+            Err(TryLockError::WouldBlock) if cfg!(target_arch = "wasm32") => return Some(m.lock().unwrap_or_else(PoisonError::into_inner)),
+            Err(TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_micros(200)),
+        }
     }
 }
 
@@ -877,4 +889,53 @@ pub(super) fn wheel_family_index(index: usize, len: usize, notches: f32) -> Opti
     }
     let last = len - 1;
     Some(if notches < 0.0 { index.saturating_add(steps).min(last) } else { index.saturating_sub(steps) })
+}
+
+#[cfg(test)]
+mod busy_tests {
+    use super::lock_unless;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+
+    /// Holds `m` on another thread until the returned sender is used (or dropped).
+    fn hold(m: &Arc<Mutex<u32>>) -> (mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let (held, wait_held) = mpsc::channel();
+        let (release, wait_release) = mpsc::channel::<()>();
+        let m = m.clone();
+        let job = std::thread::spawn(move || {
+            let _guard = m.lock().unwrap();
+            held.send(()).unwrap();
+            let _ = wait_release.recv();
+        });
+        wait_held.recv().unwrap();
+        (release, job)
+    }
+
+    /// A hold that isn't a job's (a layout on another thread, a test running in parallel) is
+    /// waited out.
+    #[test]
+    fn a_hold_that_is_not_a_jobs_is_waited_out() {
+        let m = Arc::new(Mutex::new(0));
+        let (release, job) = hold(&m);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            release.send(()).unwrap();
+        });
+        assert!(lock_unless(&m, || false).is_some(), "waits for it");
+        releaser.join().unwrap();
+        job.join().unwrap();
+    }
+
+    /// While a job holds it the reads give up at once, and read again as soon as it lets go.
+    #[test]
+    fn a_jobs_hold_is_busy_until_it_lets_go() {
+        let m = Arc::new(Mutex::new(0));
+        let job_holds = AtomicBool::new(true);
+        let (release, job) = hold(&m);
+        assert!(lock_unless(&m, || job_holds.load(Ordering::SeqCst)).is_none(), "busy");
+        release.send(()).unwrap();
+        job.join().unwrap();
+        job_holds.store(false, Ordering::SeqCst);
+        assert!(lock_unless(&m, || job_holds.load(Ordering::SeqCst)).is_some(), "free again: it reads");
+    }
 }

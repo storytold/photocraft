@@ -3728,3 +3728,24 @@ fn colour_passes_hold_each_glyph_once() {
         assert!(p.glyphs.iter().all(|&i| l.styles[l.glyphs[i].style as usize].color == *c));
     }
 }
+
+/// A background job's hold on the shared engine shows in `background_holds_shared`; a hold on any
+/// other thread, or a job's that has ended, doesn't.
+#[test]
+fn only_a_background_jobs_hold_on_the_shared_engine_counts() {
+    let job = std::thread::spawn(|| {
+        let _job = crate::background_thread();
+        let guard = crate::lock_shared();
+        let during = crate::background_holds_shared();
+        drop(guard);
+        during
+    });
+    assert!(job.join().unwrap(), "seen while the job holds it");
+    // Other text tests may hold the engine meanwhile, but none of them as a job.
+    let other = std::thread::spawn(|| {
+        let _engine = crate::lock_shared();
+        crate::background_holds_shared()
+    });
+    assert!(!other.join().unwrap(), "a hold off a job's thread doesn't count");
+    assert!(!crate::background_holds_shared(), "nor once the job let go");
+}

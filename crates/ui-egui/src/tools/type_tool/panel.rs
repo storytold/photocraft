@@ -210,12 +210,13 @@ pub fn character_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bo
     type_sections(app, ui, !paragraph, paragraph, true);
 }
 
-/// Whether another thread holds the shared font engine now: a background job re-rendering type,
-/// such as Free Transform of a storyboard folder full of type layers (each layer re-rendered with
-/// the engine held). The panels' fields read fonts through the same engine, and waiting for it
-/// froze the window for the whole job (14 s), long enough for Wayland to drop it.
+/// Whether a background job re-rendering type holds the shared font engine, such as Free
+/// Transform of a storyboard folder full of type layers (each layer re-rendered with the engine
+/// held). The panels' fields read fonts through the same engine, and waiting for it froze the
+/// window for the whole job (14 s), long enough for Wayland to drop it. Other holds are short
+/// and waited out (`fonts::engine_unless_busy`).
 fn font_engine_busy() -> bool {
-    photocraft_text::try_shared().is_some_and(|m| matches!(m.try_lock(), Err(std::sync::TryLockError::WouldBlock)))
+    photocraft_text::try_shared().is_some() && super::fonts::engine_unless_busy().is_none()
 }
 
 /// The Character and/or Paragraph sections, with the shared collapsible headers and fields that
@@ -552,33 +553,5 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         app.ui.status = e;
         app.ui.status_error = true;
-    }
-}
-
-#[cfg(test)]
-mod busy_tests {
-    /// While another thread holds the font engine (a type job), the panels see it busy and don't wait.
-    #[test]
-    fn the_panels_see_the_font_engine_busy_while_another_thread_holds_it() {
-        // Loaded first, as it is by the time a type job runs.
-        let _ = photocraft_text::shared();
-        let (held, wait_held) = std::sync::mpsc::channel();
-        let (release, wait_release) = std::sync::mpsc::channel::<()>();
-        let job = std::thread::spawn(move || {
-            let _engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-            held.send(()).unwrap();
-            let _ = wait_release.recv();
-        });
-        wait_held.recv().unwrap();
-        // Another thread holds it (a Free Transform re-rendering type): the panels don't wait.
-        assert!(super::font_engine_busy());
-        // Nor do the font reads behind the fields, should a job take the engine after that
-        // check: they return what they have at once.
-        let start = std::time::Instant::now();
-        assert_eq!(super::styles("Any Family"), vec!["Regular".to_string()], "just Regular while busy");
-        let _ = super::super::fonts::families();
-        assert!(start.elapsed() < std::time::Duration::from_secs(1), "the reads waited for the engine");
-        release.send(()).unwrap();
-        job.join().unwrap();
     }
 }

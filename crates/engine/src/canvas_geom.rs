@@ -76,7 +76,7 @@ fn retag_text(dpi: f32, t: &mut TextLayer) {
     if t.psd_raw.is_none() {
         return;
     }
-    let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+    let mut eng = photocraft_text::lock_shared();
     let layout = eng.layout(t, dpi);
     t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));
 }

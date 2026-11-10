@@ -649,7 +649,9 @@ pub fn refresh(doc: &Document, t: &mut TextLayer) {
 /// pixel format. A caller holding the layer mutably reads them first instead of cloning the whole
 /// document to pass it, once per keystroke and pointer move while typing (#7092).
 pub fn refresh_at(dpi: f32, format: PixelFormat, t: &mut TextLayer) {
-    let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+    // Rendering a large layer holds the engine for long: a job's hold lets the panels skip their
+    // font reads meanwhile instead of waiting (`photocraft_text::lock_shared`).
+    let mut eng = photocraft_text::lock_shared();
     let (layout, r) = eng.render(t, dpi, format);
     t.cache = Some(r.surface);
     t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));
