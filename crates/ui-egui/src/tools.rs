@@ -2,8 +2,10 @@ pub(super) mod align_bar;
 pub mod analysis_ui;
 pub mod anchor_tools;
 pub mod artboard_tool;
+pub mod bg_eraser_popup;
 pub(crate) mod brush_cursor;
 pub mod brush_picker;
+pub mod brush_refusal;
 pub mod brush_resize;
 pub(super) mod cam_transform;
 pub mod cas_transform;
@@ -14,6 +16,7 @@ pub mod crop_presets;
 pub mod crop_shield;
 pub mod crop_size;
 pub mod crop_straighten;
+pub mod crop_task_bar;
 pub mod crop_ui;
 pub mod direct_select;
 pub mod eraser_ui;
@@ -28,11 +31,13 @@ pub mod move_hover;
 pub mod move_lock;
 pub mod move_mods;
 pub mod object_finder;
+pub(super) mod paint_picker;
 pub mod path_components;
 pub mod perspective_crop_ui;
 pub mod perspective_ui;
 pub mod puppet_ui;
 pub mod retouch_ui;
+pub mod shape_bounds_box;
 pub(super) mod shape_gradient_ui;
 pub(super) mod shape_options;
 pub(super) mod shape_paint_ui;
@@ -52,3 +57,10 @@ pub(super) mod type_transform;
 pub mod vector_ui;
 pub mod warp_preview;
 pub mod zoom_tool;
+
+#[cfg(test)]
+mod count_show_extras_tests;
+#[cfg(test)]
+mod crop_options_labels_tests;
+#[cfg(test)]
+mod gradient_options_bar_mode_tests;
