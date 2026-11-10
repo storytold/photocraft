@@ -100,7 +100,9 @@ pub(crate) use selection::{floating_outline, selection_drag_delta};
 pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
-pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
+pub(crate) use strokes::{
+    ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live, unsmoothed_line,
+};
 use strokes::{HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure};
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};
@@ -1294,6 +1296,16 @@ fn handle_canvas_tool_clicks(
         }
         app.defer_live_stroke = false;
         crate::magnetic_lasso_ui::flush(app);
+    }
+    // Perspective Crop: between corner clicks the preview quad follows the pointer (#11804).
+    if tool == Tool::PerspectiveCrop
+        && !app.pcrop.clicks.is_empty()
+        && !(buttons.started || buttons.dragged || buttons.stopped)
+        && response.hovered()
+        && let Some(p) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p))
+    {
+        let d = xf.to_doc(p);
+        tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: 1.0 }, mods);
     }
     if buttons.clicked
         && let Some(p) = response.interact_pointer_pos()

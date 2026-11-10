@@ -4258,7 +4258,7 @@ curves	Smooth	Hamarlama
 	This Layer:	Bu qat:
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Bu Ağıllı Obyekt davam etməzdən əvvəl rasterləşdirilməlidir. Onun məzmunu artıq redaktə edilə bilməyəcək. Ağıllı Obyekt rasterləşdirilsin?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Bu tənzimləmə ({key}) idxal edilmiş kimi saxlanılır və hələ redaktə edilə bilməz.
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Davam etməzdən əvvəl bu doldurma qatsi rasterləşdirilməlidir. Onun doldurma məzmunu artıq redaktə edilə bilməyəcək. Qat rasterləşdirilsin?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Davam etməzdən əvvəl bu doldurma qatsi rasterləşdirilməlidir. Onun doldurma məzmunu artıq redaktə edilə bilməyəcək. Qat rasterləşdirilsin?
 	This layer must be rasterized before proceeding.	Davam etməzdən əvvəl bu qat rasterləşdirilməlidir.
 	This session: {reason}	Bu sessiya: {reason}
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Davam etməzdən əvvəl bu forma qatsi rasterləşdirilməlidir. O, artıq forma kimi redaktə edilə bilməyəcək. Forma rasterləşdirilsin?
@@ -4627,6 +4627,8 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Auto-size Canvas	Kətanın ölçüsünü avtomatik təyin edin
 	Keep Relative Position During Layer Reordering	Qatları yenidən sıralayarkən nisbi mövqeyi saxlayın
 	Shrinkwrap Canvas on Save	Saxlayarkən kətanı məzmuna sıxın
+	Move Toolbar to the Right	Alət panelini sağa köçür
+	Move Toolbar to the Left	Alət panelini sola köçür
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW emalı ayarları {file} faylında saxlanıldı

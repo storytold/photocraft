@@ -4057,7 +4057,7 @@ layerLabel	No Color	Fără culoare
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Acest strat de text trebuie rasterizat înainte de a continua. Textul său nu va mai fi editabil. Rasterizați textul?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Acest strat de formă trebuie rasterizat înainte de a continua. Nu va mai fi editabil ca formă. Rasterizați forma?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Acest obiect inteligent trebuie rasterizat înainte de a continua. Conținutul său nu va mai fi editabil. Rasterizați obiectul inteligent?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Acest strat de umplere trebuie rasterizat înainte de a continua. Conținutul său de umplere nu va mai fi editabil. Rasterizați stratul?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Acest strat de umplere trebuie rasterizat înainte de a continua. Conținutul său de umplere nu va mai fi editabil. Rasterizați stratul?
 	This layer must be rasterized before proceeding.	Acest strat trebuie rasterizat înainte de a continua.
 	Color Picker (Background Color)	Selector de culoare (culoare de fundal)
 	Color Picker (Foreground Color)	Selector de culoare (culoare frontală)
@@ -4610,6 +4610,8 @@ navigator	Zoom	Zoom
 @plural	{n} action file loaded|{n} action files loaded	{n} fișier de acțiuni încărcat|{n} fișiere de acțiuni încărcate|{n} de fișiere de acțiuni încărcate
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} fișier nu a putut fi încărcat: {errors}|{n} fișiere nu au putut fi încărcate: {errors}|{n} de fișiere nu au putut fi încărcate: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} ieșire Resurse imagine a eșuat|{what}: {n} ieșiri Resurse imagine au eșuat|{what}: {n} de ieșiri Resurse imagine au eșuat
+	Move Toolbar to the Right	Mută bara de instrumente la dreapta
+	Move Toolbar to the Left	Mută bara de instrumente la stânga
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Setările de developare RAW au fost salvate în {file}

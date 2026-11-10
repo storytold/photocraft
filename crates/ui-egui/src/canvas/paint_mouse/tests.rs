@@ -423,9 +423,13 @@ fn picker_gear_menu_saves_and_names_a_new_preset() {
     assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Inky"));
     h.state_mut().ui.brush_picker = Some([c.x, c.y]);
     h.run_steps(2);
-    // The gear's boxes pick the card parts; the last one on can't be turned off.
+    // The gear's boxes pick the card parts; the last one on can't be turned off. Brush Tip
+    // starts off (#11819).
     h.get_by_label("Brush Preset Options").click();
     h.run_steps(2);
+    h.get_by_label("Brush Tip").click();
+    h.run_steps(2);
+    assert!(h.state().ui.brush_picker_list.show_tip);
     h.get_by_label("Brush Tip").click();
     h.run_steps(2);
     assert!(!h.state().ui.brush_picker_list.show_tip);
@@ -578,9 +582,9 @@ fn art_history_brush_starts_at_full_opacity() {
     sync_tool_brush(&mut app);
     assert_eq!(app.session.tools.brush.opacity, 1.0, "Art History starts at 100%");
     assert_eq!(app.session.tools.brush.size, 40.0, "and inherits the size");
-    app.ui.tool = Tool::CloneStamp;
+    app.ui.tool = Tool::HistoryBrush;
     sync_tool_brush(&mut app);
-    assert_eq!(app.session.tools.brush.opacity, 1.0, "the Clone Stamp takes the Art History brush's opacity");
+    assert_eq!(app.session.tools.brush.opacity, 1.0, "the History Brush takes the Art History brush's opacity");
     app.ui.tool = Tool::Brush;
     sync_tool_brush(&mut app);
     app.ui.tool = Tool::Eraser;

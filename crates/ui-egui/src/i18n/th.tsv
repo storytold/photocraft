@@ -4468,7 +4468,7 @@ curves	Smooth	เรียบเนียน
 	This Layer:	เลเยอร์นี้:
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	สมาร์ทออบเจ็กต์นี้ต้องได้รับการแรสเตอร์ก่อนดำเนินการต่อ เนื้อหาจะไม่สามารถแก้ไขได้อีกต่อไป แรสเตอร์วัตถุอัจฉริยะหรือไม่
 	This adjustment ({key}) is kept as imported and can't be edited yet.	การปรับเปลี่ยนนี้ ({key}) ถูกเก็บไว้เป็นการนำเข้าและยังไม่สามารถแก้ไขได้
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	เลเยอร์เติมนี้จะต้องถูกแรสเตอร์ก่อนดำเนินการต่อ เนื้อหาที่กรอกจะไม่สามารถแก้ไขได้อีกต่อไป แรสเตอร์เลเยอร์หรือไม่?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	เลเยอร์เติมนี้จะต้องถูกแรสเตอร์ก่อนดำเนินการต่อ เนื้อหาที่กรอกจะไม่สามารถแก้ไขได้อีกต่อไป แรสเตอร์เลเยอร์หรือไม่?
 	This layer must be rasterized before proceeding.	เลเยอร์นี้จะต้องถูกแรสเตอร์ก่อนดำเนินการต่อ
 	This session: {reason}	เซสชั่นนี้: {reason}
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	เลเยอร์รูปร่างนี้จะต้องถูกแรสเตอร์ก่อนดำเนินการต่อ จะไม่สามารถแก้ไขได้ในรูปแบบรูปร่างอีกต่อไป เปลี่ยนรูปร่างใหม่หรือไม่?
@@ -4767,6 +4767,8 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 	Transparent (default)	โปร่งใส (ค่าเริ่มต้น)
 	The path was kept as the Work Path	เก็บเส้นทางไว้เป็นเส้นทางการทำงานแล้ว
 	The path was discarded	ทิ้งเส้นทางแล้ว
+	Move Toolbar to the Right	ย้ายแถบเครื่องมือไปทางขวา
+	Move Toolbar to the Left	ย้ายแถบเครื่องมือไปทางซ้าย
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	บันทึกการตั้งค่าการปรับแต่ง RAW ไปยัง {file} แล้ว
