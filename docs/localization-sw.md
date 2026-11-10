@@ -2,7 +2,7 @@
 
 This note goes with the Swahili catalog (`crates/ui-egui/src/i18n/sw.tsv`). It covers every key
 `cargo xtask i18n-coverage` measures and the runtime labels the other complete catalogs carry
-(filter and adjustment parameters, Camera Raw, panels, dialogs, status messages). Translations are
+(filter and adjustment parameters, RAW Develop, panels, dialogs, status messages). Translations are
 written from the meaning of PhotoCraft's English labels; no proprietary translation resources,
 fonts, screenshots or user documents are included. The catalog was machine-translated with Claude
 for @tronicum against the terms below and has not yet been reviewed by a native speaker: review
@@ -11,8 +11,10 @@ corrections are welcome, and a changed term should change here and in every row 
 ## Choosing Swahili
 
 Open **Edit > Preferences > Interface > Language** (Swahili: **Hariri › Mapendeleo › Kiolesura ›
-Lugha**) and choose **Kiswahili**. With `interface.language` set to `auto`, the system locales
+Lugha**) and choose **Kiswahili**. In the desktop app, with `interface.language` set to `auto`, the system locales
 `sw`, `sw-KE`, `sw-TZ` and `sw_KE.UTF-8` resolve to Swahili.
+The web build doesn't read the browser's language yet, so `auto` stays English there: choose
+**Kiswahili** yourself.
 
 ## Swahili script
 
@@ -28,7 +30,7 @@ African software. It does not copy any other product's Swahili strings.
 
 - **Sentence case.** Only the first word and proper names are capitalised, even where the English
   uses Title Case: `Save As…` is `Hifadhi kama…`, `Image Size…` is `Ukubwa wa picha…`, `Brush Tool`
-  is `Zana ya brashi`. Product and format names keep their own case (PhotoCraft, Camera Raw).
+  is `Zana ya brashi`. Product and format names keep their own case (PhotoCraft, RAW).
 - **Commands use the imperative**, the bare verb stem: Fungua, Hifadhi, Funga, Futa, Nakili. Menu
   items and buttons never use the infinitive (`Kufungua`) or the plural polite form (`Fungueni`).
 - **Labels, panel names and headings** are nouns: `Layers` is `Safu`, `History` is `Historia`,
@@ -40,10 +42,12 @@ African software. It does not copy any other product's Swahili strings.
   `Ukubwa:`.
 - **Placeholders** such as `{n}`, `{file}` and `{error}` are copied unchanged, but move to wherever
   Swahili word order needs them. Escapes `\n`, `\t` and `\\` stay as written.
-- **Kept in Latin:** PhotoCraft, ArtCraft, Photoshop, Adobe, Camera Raw, file formats (PSD, PSB,
+- **Kept in Latin:** PhotoCraft, ArtCraft, Photoshop, Adobe, RAW, Camera Raw (in the names of its .xmp files), file formats (PSD, PSB,
   TIFF, PNG, JPEG, EXR, SVG, PDF, GIF, WebP), ICC, CMYK, RGB, sRGB, Lab, HSB, HSL, OpenType, GPU,
   CPU, 3D, MCP, Wayland, X11, key names (Ctrl, Alt, Shift, Cmd, Esc, Enter, Tab, Space), unit
-  symbols (px, pt, %, mm, cm, in, dpi, ppi, °) and the names Gaussian, Bicubic and Bilinear.
+  symbols (px, pt, %, mm, cm, in, dpi, ppi, °), the names Gaussian, Bicubic and Bilinear, and
+  the output terms Dither, Matte and Tetrahedral and the word droplet (Create Droplet…), which have
+  no settled Swahili form.
 - **Quotation marks** follow the source (“ ” or " ").
 - **Agreement.** Adjectives, possessives and verb prefixes follow the noun's class: `Safu mpya`
   (N), `Kikundi kipya` (KI-VI), `Mtindo mpya` (M-MI), `Dirisha jipya` (JI-MA), `Ubao mpya` (U).
@@ -102,7 +106,7 @@ faili, rangi, ruwaza, hatua) do not change; other classes swap their prefix.
 | Path / Work Path / Anchor point | Njia / Njia ya kazi / nukta ya nanga |
 | Selection / Deselect / Inverse | Uteuzi / Ondoa uteuzi / Kinyume |
 | Smart Object / Smart Filter | Kitu erevu / Kichujio erevu |
-| Artboard / Guides / Grid / Rulers | Ubao wa sanaa / Miongozo / Gridi / Rula |
+| Artboard / Artboards / Guides / Grid / Rulers | Ubao wa sanaa / Mbao za sanaa / Miongozo / Gridi / Rula |
 | Opacity / Fill: / Transparency | Ugubikaji / Ujazo: / Uwazi |
 | Visibility / Lock | Uonekanaji / Funga kwa kufuli |
 
@@ -181,7 +185,7 @@ faili, rangi, ruwaza, hatua) do not change; other classes swap their prefix.
 | Undo / Redo | Tendua / Rudia |
 | Cut / Copy / Paste / Delete / Clear | Kata / Nakili / Bandika / Futa / Safisha |
 | Duplicate / Rename | Rudufu / Badilisha jina |
-| Merge Down / Flatten Image | Unganisha chini / Bapisha picha |
+| Merge Layers / Merge Down / Flatten Image | Changanya safu / Changanya chini / Bapisha picha |
 | Rasterize / Transform / Free Transform | Geuza kuwa rasta / Geuza / Geuza huru |
 | Scale / Rotate / Skew | Badilisha kipimo / Zungusha / Inamisha |
 | Flip Horizontal / Crop / Trim | Pindua kwa mlalo / Punguza / Kata kingo |
@@ -223,20 +227,20 @@ These pairs are easy to confuse; the catalog keeps them distinct.
 - **Background** (layer) is `mandharinyuma`; background colour is `rangi ya nyuma`; **Theme** is
   `mandhari`.
 - **Light** has four readings: the plain row and the font weight are `Nyepesi`, the light theme is
-  `angavu`, Camera Raw light is `Mwanga`, and the **Lighten** blend mode is `Tia mwanga`.
+  `angavu`, RAW Develop light is `Mwanga`, and the **Lighten** blend mode is `Tia mwanga`.
 - **Smooth** alone is the adjective `Laini`; the commands `Smooth…` and the `curves` Smooth are
   the verb `Lainisha`. **Feather** is `Lainisha kingo`.
 - **Workspace** (layout) is `eneo la kazi`; colour **Working Space** is `nafasi ya kazi ya rangi`.
+- **Link** is `Unganisha` (Link Layers `Unganisha safu`); **Merge** is `Changanya` (Merge Layers
+  `Changanya safu`, Merge Down `Changanya chini`), so the two never read alike in the Layer menu.
+- Grid **Rows** and **Columns** are `Mistari` and `Nguzo` (`Nguzo 5, mistari 3`), never `safu`,
+  which is Layer.
+- **Kerning** is `Nafasi ya jozi za herufi` (one pair of letters) and **Tracking** is
+  `Nafasi ya jumla ya herufi` (a whole run); **Leading** is `Nafasi kati ya mistari`.
 
 ## Known ambiguities
 
 Points for reviewers to check:
 
-- **Rows / Columns** are `Safu mlalo` / `Safu wima`, while plain `safu` is also Layer. A grid
-  dialog may read as if it talks about layers.
-- **Link Layers** and **Merge Layers** both read `Unganisha safu`; only the menu position tells
-  them apart. The bare verbs Link and Merge Down also share `Unganisha`.
-- **Kerning** is `Nafasi kati ya herufi mbili` and **Tracking** is `Nafasi kati ya herufi`; they
-  differ by one word. **Leading** is `Nafasi kati ya mistari`.
 - **Clarity** is `Uwazi wa undani`, while plain `uwazi` is Transparency. **Transparent** is
   `Inayopenyeza mwanga`, not a form of `uwazi`.

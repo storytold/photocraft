@@ -20,7 +20,7 @@
 # it has one (kitendo 1 / vitendo 3) and keeps its form in the N class (safu 1 / safu 3).
 # Machine-translated with Claude (Anthropic) for @tronicum; not yet reviewed by a native speaker.
 
-	Rows	Safu mlalo
+	Rows	Mistari
 	Number	Idadi
 	Margin	Pambizo
 	Top:	Juu:
@@ -29,13 +29,13 @@
 	Right:	Kulia:
 	Target:	Lengo:
 	Selected Artboards	Mbao za sanaa zilizochaguliwa
-	Center Columns	Weka safu wima katikati
+	Center Columns	Nguzo katikati
 	Clear Existing Guides	Safisha miongozo iliyopo
 	Invalid guide layout	Mpangilio wa miongozo si sahihi
 	Leave empty for automatic size	Acha tupu kwa ukubwa otomatiki
-	5 Columns, 3 Rows	Safu wima 5, safu mlalo 3
-	8 Columns	Safu wima 8
-	12 Columns	Safu wima 12
+	5 Columns, 3 Rows	Nguzo 5, mistari 3
+	8 Columns	Nguzo 8
+	12 Columns	Nguzo 12
 	File	Faili
 	Edit	Hariri
 	Image	Picha
@@ -101,7 +101,7 @@
 	Conditional Mode Change…	Badilisha hali kwa masharti…
 	Fit Image…	Tosheleza picha…
 	Lens Correction…	Urekebishaji wa lenzi…
-	Merge to HDR Pro…	Unganisha kuwa HDR Pro…
+	Merge to HDR Pro…	Changanya kuwa HDR Pro…
 	Photomerge…	Photomerge…
 	Scripts	Skripti
 	Image Processor…	Kichakataji picha…
@@ -124,7 +124,7 @@
 	Fade…	Fifisha…
 	Cut	Kata
 	Copy	Nakili
-	Copy Merged	Nakili zilizounganishwa
+	Copy Merged	Nakili zilizochanganywa
 	Paste	Bandika
 	Paste Special	Bandika maalum
 	Paste in Place	Bandika mahali pale pale
@@ -383,9 +383,9 @@
 	Lock Layers…	Funga safu kwa kufuli…
 	Link Layers	Unganisha safu
 	Select Linked Layers	Chagua safu zilizounganishwa
-	Merge Layers	Unganisha safu
-	Merge Down	Unganisha chini
-	Merge Visible	Unganisha zinazoonekana
+	Merge Layers	Changanya safu
+	Merge Down	Changanya chini
+	Merge Visible	Changanya zinazoonekana
 	Stamp Visible	Bandika zinazoonekana
 	Stamp Down	Bandika chini
 	Flatten Image	Bapisha picha
@@ -408,7 +408,7 @@
 	Subtract Front Shape	Toa umbo la mbele
 	Intersect Shape Areas	Maeneo ya maumbo yanayokatana
 	Exclude Overlapping Shapes	Tenga maumbo yanayopishana
-	Merge Shape Components	Unganisha vijenzi vya umbo
+	Merge Shape Components	Changanya vijenzi vya umbo
 	Align	Linganisha
 	Top Edges	Kingo za juu
 	Vertical Centers	Vituo vya wima
@@ -1142,7 +1142,7 @@
 	Justify last centered	Sawazisha, ya mwisho katikati
 	Justify last left	Sawazisha, ya mwisho kushoto
 	Justify last right	Sawazisha, ya mwisho kulia
-	Kerning	Nafasi kati ya herufi mbili
+	Kerning	Nafasi ya jozi za herufi
 	Keyboard Shortcuts	Mikato ya kibodi
 	Keyboard Shortcuts and Menus	Mikato ya kibodi na menyu
 	Kind	Aina
@@ -1478,8 +1478,8 @@
 	Toolbar	Upau wa zana
 	Top	Juu
 	Total:	Jumla:
-	Tracking	Nafasi kati ya herufi
-	Tracking (1/1000 em)	Nafasi kati ya herufi (1/1000 em)
+	Tracking	Nafasi ya jumla ya herufi
+	Tracking (1/1000 em)	Nafasi ya jumla ya herufi (1/1000 em)
 	Transparency	Uwazi
 	Transparent	Inayopenyeza mwanga
 	Trilinear	Trilinear
@@ -1595,8 +1595,8 @@
 	Efficiency: 100%	Ufanisi: 100%
 	Ellipse Tool	Zana ya duaradufu
 	Elliptical Marquee Tool	Zana ya uteuzi wa duaradufu
-	Single Row Marquee Tool	Zana ya uteuzi wa safu mlalo moja
-	Single Column Marquee Tool	Zana ya uteuzi wa safu wima moja
+	Single Row Marquee Tool	Zana ya uteuzi wa mstari mmoja
+	Single Column Marquee Tool	Zana ya uteuzi wa nguzo moja
 	Emboss	Mchoro-tuta
 	Eraser	Kifutio
 	Eraser Tool	Zana ya kifutio
@@ -1812,7 +1812,7 @@
 	Canvas custom color	Rangi maalum ya turubai
 	Color picker	Kichagua rangi
 	Color space	Nafasi ya rangi
-	Column width	Upana wa safu wima
+	Column width	Upana wa nguzo
 	Concise	Fupi
 	Control port	Lango la udhibiti
 	Convert to srgb	Badilisha kuwa sRGB
@@ -2456,14 +2456,13 @@
 	Width and Height	Upana na kimo
 	Color Profile	Wasifu wa rangi
 	Units	Vipimo
-	Columns	Safu wima
+	Columns	Nguzo
 	Create new count group	Unda kikundi kipya cha hesabu
 	Adjustment Layer	Safu ya marekebisho
 	Pencil Tool	Zana ya penseli
 	Pixel	Pikseli
 	Adjustment	Marekebisho
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Buruta (kitanzi) au bofya nukta (poligoni) · {add} ongeza · {sub} toa
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Buruta kisanduku cha kupunguza · buruta ndani ili kusogeza · kingo hubadilisha ukubwa ({ratio} uwiano, {centre} katikati) · Space husogeza wakati wa kuchora · mishale husogeza kidogo · X hubadilisha mkao · {commit} hukamilisha · Esc hughairi
 	{mode} Color · {bits} bit	Rangi ya {mode} · biti {bits}
 	Drag to move the layer	Buruta ili kusogeza safu
 	Scrubby Zoom	Ukuzaji wa kuburuta
@@ -3634,7 +3633,7 @@ layerLabel	No Color	Bila rangi
 	Lock Layers	Funga safu kwa kufuli
 	Lum	Ung'aavu
 	Match Color	Oanisha rangi
-	Merge to HDR Pro	Unganisha kuwa HDR Pro
+	Merge to HDR Pro	Changanya kuwa HDR Pro
 	Mezzotint	Mezzotint
 	Mosaic	Mozaiki
 	Motion Blur	Ukungu wa mwendo
@@ -3751,7 +3750,7 @@ layerLabel	No Color	Bila rangi
 	Emulsion Down	Emalsheni chini
 	Functions	Vitendaji
 	Print Resolution:	Msongo wa kuchapisha:
-	Merge Group	Unganisha kikundi
+	Merge Group	Changanya kikundi
 	Manage submitted jobs in the system print queue	Simamia kazi zilizotumwa kwenye foleni ya uchapishaji ya mfumo
 	Enable animations	Wezesha uhuishaji
 	Saving {percent}	Inahifadhi {percent}
@@ -3809,13 +3808,13 @@ curves	Smooth	Lainisha
 	Duplicate Channel	Rudufu chaneli
 	Delete Channel	Futa chaneli
 	Rename Channel…	Badilisha jina la chaneli…
-	Merge Spot Channel	Unganisha chaneli ya rangi maalum
+	Merge Spot Channel	Changanya chaneli ya rangi maalum
 	Convert to Alpha Channel	Badilisha kuwa chaneli ya alfa
 	Exit Quick Mask	Toka kwenye barakoa ya haraka
 	New Channel…	Chaneli mpya…
 	New Spot Channel…	Chaneli mpya ya rangi maalum…
 	Split Channels	Tenganisha chaneli
-	Merge Channels…	Unganisha chaneli…
+	Merge Channels…	Changanya chaneli…
 	Color Indicates Masked Areas	Rangi huonyesha maeneo yaliyofunikwa na barakoa
 	Color Indicates Selected Areas	Rangi huonyesha maeneo yaliyochaguliwa
 	Up	Juu
@@ -3899,7 +3898,6 @@ curves	Smooth	Lainisha
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Safu hii ya maandishi lazima igeuzwe kuwa rasta kabla ya kuendelea. Maandishi yake hayataweza kuhaririwa tena. Geuza maandishi kuwa rasta?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Safu hii ya umbo lazima igeuzwe kuwa rasta kabla ya kuendelea. Haitaweza kuhaririwa tena kama umbo. Geuza umbo kuwa rasta?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Kitu erevu hiki lazima kigeuzwe kuwa rasta kabla ya kuendelea. “Hariri maudhui” haitapatikana tena. Geuza kitu erevu kuwa rasta?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Safu hii ya kujaza lazima igeuzwe kuwa rasta kabla ya kuendelea. Maudhui yake ya kujaza hayataweza kuhaririwa tena. Geuza safu kuwa rasta?
 	This layer must be rasterized before proceeding.	Safu hii lazima igeuzwe kuwa rasta kabla ya kuendelea.
 	Color Picker (Background Color)	Kichagua rangi (rangi ya nyuma)
 	Color Picker (Foreground Color)	Kichagua rangi (rangi ya mbele)
@@ -3954,7 +3952,7 @@ navigator	Zoom	Ukuzaji
 	{index} of {total}	{index} kati ya {total}
 	{shortcut} assigned.	{shortcut} imewekwa.
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} tayari inatumiwa na {commands} na itaondolewa hapo utakapobofya Sawa.
-	Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)	Nafasi kati ya herufi: Metrics, Optical au thamani katika 1/1000 em (Alt+←/→ kwenye kishale)
+	Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)	Nafasi ya jozi za herufi: Metrics, Optical au thamani katika 1/1000 em (Alt+←/→ kwenye kishale)
 	Basic Latin	Kilatini cha msingi
 	Latin 1	Kilatini 1
 	Latin Extended-A	Kilatini kilichopanuliwa-A
@@ -4059,7 +4057,6 @@ shape	Appearance	Mwonekano
 	Color Indicates:	Rangi inaonyesha:
 	Copy Texture to Other Tools	Nakili umbile kwa zana nyingine
 	Create Smart Object after Loading Layers	Unda kitu erevu baada ya kupakia safu
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Buruta kisanduku cha kupunguza · buruta ndani ili kusogeza · kingo hubadilisha ukubwa (uwiano {ratio}, katikati {centre}) · Space husogeza wakati wa kuchora · {commit} hukamilisha · Esc hughairi
 	Drag to pan · Scroll to zoom · Double-click to fit	Buruta ili kusogeza · Sogeza gurudumu ili kukuza · Bofya mara mbili ili kutosheleza
 	Drag: draw freehand · Release on the start point: close	Buruta: chora kwa mkono huru · Achilia kwenye nukta ya mwanzo: funga
 	Enter a name for the brush preset	Weka jina la mpangilio-awali wa brashi
@@ -4393,7 +4390,7 @@ layerLabel	Magenta	Majenta
 	120%	120%
 	From:	Kutoka:
 	Full Document	Hati nzima
-	Merged Layers	Safu zilizounganishwa
+	Merged Layers	Safu zilizochanganywa
 	Damaged Photoshop document	Hati ya Photoshop iliyoharibika
 	The document “{name}” may be damaged.	Hati “{name}” huenda imeharibika.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Baadhi ya safu, pikseli au barakoa hazikuweza kusomwa. Je, unataka kuendelea kuifungua?
@@ -4475,7 +4472,7 @@ layerLabel	Magenta	Majenta
 	Variable font	Fonti inayobadilika
 	Font size presets	Mipangilio-awali ya ukubwa wa fonti
 	Leading presets	Mipangilio-awali ya nafasi kati ya mistari
-	Tracking presets	Mipangilio-awali ya nafasi kati ya herufi
+	Tracking presets	Mipangilio-awali ya nafasi ya jumla ya herufi
 	Color Aware	Inayotambua rangi
 	Decontaminate Colors	Ondoa uchafu wa rangi
 	Edge Detection	Utambuzi wa kingo
@@ -4870,3 +4867,44 @@ cameraRaw	Loaded RAW Develop settings from {file}	Mipangilio ya Kusafisha RAW im
 	Move Toolbar to the Right	Sogeza upau wa zana kulia
 	Select Pixels	Chagua pikseli
 	The document changed. Please choose Clear All again.	Hati imebadilika. Tafadhali chagua "Safisha zote" tena.
+# Runtime labels the other complete catalogs carry: crop options and hints, artboard options, RAW demosaic, fill prompts
+	Background (default):	Mandharinyuma (chaguo-msingi):
+	Clear aspect ratio values	Futa thamani za uwiano wa pande
+	Content-aware fill	Jaza kwa kuzingatia maudhui
+	Determines if pixel data outside the crop box is retained or deleted	Huamua kama data ya pikseli nje ya kisanduku cha kupunguza inabaki au inafutwa
+	Displays pop-up help for the fill methods	Huonyesha msaada ibukizi kwa mbinu za kujaza
+	Fill options	Chaguo za kujaza
+	Fill the expanded area with your background color or transparent pixels	Jaza eneo lililopanuliwa kwa rangi ya nyuma au pikseli zinazopenyeza mwanga
+	How expanded crop area gets filled	Jinsi eneo lililopanuliwa la kupunguza linavyojazwa
+	Reset the crop box, image rotation, and aspect ratio settings	Weka upya kisanduku cha kupunguza, mzunguko wa picha na mipangilio ya uwiano wa pande
+	Sample content from part of the image and use it to fill a small area	Chukua maudhui kutoka sehemu ya picha na uyatumie kujaza eneo dogo
+	Select a preset aspect ratio or crop size	Chagua uwiano wa pande au ukubwa wa kupunguza uliowekwa awali
+	Set the aspect ratio for the crop box	Weka uwiano wa pande wa kisanduku cha kupunguza
+	Set the overlay options for the Crop Tool	Weka machaguo ya kufunika ya Zana ya kupunguza
+	Auto-nest Layers	Weka safu ndani otomatiki
+	Auto-size Canvas	Ukubwa wa turubai otomatiki
+	Distribute Heights	Sambaza vimo
+	Distribute Widths	Sambaza upana
+	Keep Relative Position During Layer Reordering	Dumisha nafasi linganishi wakati wa kupanga upya safu
+	Shrinkwrap Canvas on Save	Punguza turubai hadi maudhui wakati wa kuhifadhi
+	Click to fill similar colors	Bofya ili kujaza rangi zinazofanana
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Buruta kisanduku cha kupunguza · buruta ndani ili kusogeza · kingo hubadilisha ukubwa ({ratio} uwiano, {centre} katikati) · Space husogeza wakati wa kuchora · mishale husogeza kidogo · X hubadilisha mkao · {commit} hukamilisha · Esc hughairi
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Ukadiriaji uliorekebishwa kwa gradienti: mkali na wa haraka, na ukingo wa rangi kidogo kwenye undani mdogo.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: kingo safi zaidi na ukingo wa rangi mdogo zaidi, wa polepole zaidi.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Jinsi mozaiki ya kichujio cha rangi ya kamera inavyojazwa. Hutumika faili linapofunguliwa; hakiki huonyesha mbinu iliyotumika kulifungua.
+	The fastest and the softest, with color fringing on fine detail.	Wa haraka zaidi na laini zaidi, na ukingo wa rangi kwenye undani mdogo.
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Ujazo wa safu hii lazima ugeuzwe kuwa rasta kabla ya kuendelea. Hautaweza tena kuhaririwa kama ujazo. Geuza ujazo kuwa rasta?
+	Skip transform when placing	Ruka kugeuza wakati wa kuweka
+cameraRaw	Canceled opening {name}	Kufungua {name} kumeghairiwa
+cameraRaw	Canceled {label}	{label} imeghairiwa
+# Burn/Dodge, Eraser, Mixer Brush and Color Replacement options; anchor point tools
+	Anti-alias brush application	Lainisha ncha za mpigo wa brashi
+	Determines the spread of replaced color	Huamua msambao wa rangi iliyobadilishwa
+	Erase to History	Futa hadi historia
+	Load Solid Colors Only	Pakia rangi thabiti pekee
+	Minimizes clipping in shadows and highlights, and keeps colors from shifting hue	Hupunguza ukataji katika vivuli na sehemu angavu, na huzuia rangi kubadilika aina
+	No options for the Add Anchor Point Tool.	Hakuna machaguo kwa Zana ya kuongeza nukta ya nanga.
+	No options for the Delete Anchor Point Tool.	Hakuna machaguo kwa Zana ya kufuta nukta ya nanga.
+	Set exposure for stroke	Weka mfichuo kwa mpigo
+	Tolerance for choosing related colors	Uvumilivu wa kuchagua rangi zinazohusiana
+	dodge tool	zana ya kung'arisha
