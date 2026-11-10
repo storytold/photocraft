@@ -513,6 +513,70 @@ async fn headless_doc_save_writes_tiff_options() {
     cleanup(&dir);
 }
 
+/// #8064: headless `doc_save`/`doc_export` take `maximizeCompatibility` for a layered PSD/PSB's
+/// merged image: false writes Photoshop's placeholder and says so in resource 1057; unset, the
+/// real image. A value that isn't a boolean is refused before anything is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_doc_save_takes_maximize_compatibility() {
+    let dir = tmp("maximize-compat");
+    let client = connect(headless_in(&dir)).await;
+    call(&client, "doc_new", json!({"width": 64, "height": 32, "background": "white"})).await;
+    let r = call(&client, "command_run", json!({"id": "layer.new.layer", "params": {}})).await;
+    assert_ne!(r.is_error, Some(true), "{}", text(&r));
+    for (tool, params, real) in [
+        ("doc_export", json!({"path": "default.psd"}), true),
+        ("doc_export", json!({"path": "off.psd", "maximizeCompatibility": false}), false),
+        ("doc_save", json!({"path": "off.psb", "maximizeCompatibility": false}), false),
+        ("doc_save", json!({"path": "on.psd", "maximizeCompatibility": true}), true),
+    ] {
+        let r = call(&client, tool, params.clone()).await;
+        assert_ne!(r.is_error, Some(true), "{params}: {}", text(&r));
+        let bytes = std::fs::read(dir.join(params["path"].as_str().unwrap())).unwrap();
+        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+    }
+    let r = call(&client, "doc_export", json!({"path": "bad.psd", "maximizeCompatibility": "no"})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    assert!(!dir.join("bad.psd").exists());
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
+/// #8064: `doc_export_layers` takes `maximizeCompatibility` too, for PSD/PSB layer files.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_doc_export_layers_takes_maximize_compatibility() {
+    let dir = tmp("export-layers-maximize-compat");
+    let client = connect(headless_in(&dir)).await;
+    call(&client, "doc_new", json!({"width": 16, "height": 16, "background": "white", "name": "card"})).await;
+    for (sub, params, real) in
+        [("on", json!({"dir": "on", "format": "psd"}), true), ("off", json!({"dir": "off", "format": "psd", "maximizeCompatibility": false}), false)]
+    {
+        let result = json_of(&call(&client, "doc_export_layers", params.clone()).await);
+        assert_eq!(result["count"], 1, "{params}: {result}");
+        let file = result["files"][0].as_str().unwrap();
+        assert!(file.starts_with(sub), "{file}");
+        let bytes = std::fs::read(dir.join(file)).unwrap();
+        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+    }
+    let r = call(&client, "doc_export_layers", json!({"dir": "bad", "format": "psd", "maximizeCompatibility": "no"})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
+/// #8064: `maximizeCompatibility` reaches the app's `app.save` through the bridge; unset, nothing
+/// is sent and the app's preference decides.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_doc_save_forwards_maximize_compatibility() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let saved = json_of(&call(&client, "doc_save", json!({"path": "out.psd", "maximizeCompatibility": false})).await);
+    assert_eq!(saved, json!({"saved": {"path": "out.psd", "maximizeCompatibility": false}}));
+    let saved = json_of(&call(&client, "doc_save", json!({"path": "out.psd"})).await);
+    assert_eq!(saved, json!({"saved": {"path": "out.psd"}}));
+    client.cancel().await.unwrap();
+    app.abort();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_response_budget_drops_connection_without_retrying_the_operation() {
     use photocraft_automation::{BridgeClient, budgets::MAX_RESPONSE_BYTES};
@@ -1305,10 +1369,14 @@ async fn command_batch_step_without_waiting_starts_a_background_job() {
 async fn bridge_command_batch_forwards_each_steps_wait() {
     let (addr, app) = fake_app().await;
     let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
-    let r = json_of(&call(&client, "command_batch", json!({"steps": [{"id": "filter.blur.gaussianBlur", "wait": false}, {"id": "layer.new.layer"}]})).await);
-    assert_eq!(r["completed"], 2, "{r}");
+    let steps = json!([{"id": "filter.blur.gaussianBlur", "wait": false}, {"id": "layer.new.layer"}, {"id": "view.zoomIn"}]);
+    let r = json_of(&call(&client, "command_batch", json!({"steps": steps})).await);
+    assert_eq!(r["completed"], 3, "{r}");
     assert_eq!(r["results"][0]["result"]["wait"], false, "{r}");
-    assert_eq!(r["results"][1]["result"]["wait"], true, "{r}");
+    // A waited engine command starts without waiting too: the bridge polls a job it starts (#8130).
+    assert_eq!(r["results"][1]["result"]["wait"], false, "{r}");
+    // A UI command can't be polled, so the app waits on it.
+    assert_eq!(r["results"][2]["result"]["wait"], true, "{r}");
     client.cancel().await.unwrap();
     app.abort();
 }
@@ -1386,6 +1454,58 @@ async fn convention_tools_have_titles_hints_and_strict_schemas() {
             assert!(value["annotations"][hint].is_boolean(), "{value}");
         }
         assert_eq!(value["inputSchema"]["additionalProperties"], false, "{value}");
+    }
+    client.cancel().await.unwrap();
+}
+
+/// The hints say what each tool does, not just that hints exist (#8129): `jobs_list` was
+/// advertised as destructive. A new tool fails here until it is classified.
+#[tokio::test(flavor = "multi_thread")]
+async fn convention_tool_hints_match_what_each_tool_does() {
+    // (read-only, destructive, idempotent)
+    const READ: (bool, bool, bool) = (true, false, true);
+    const ADDS: (bool, bool, bool) = (false, false, false);
+    const EDITS: (bool, bool, bool) = (false, true, false);
+    let expected = [
+        ("command_list", READ),
+        ("doc_inspect", READ),
+        ("session_list", READ),
+        ("render_preview", READ),
+        ("doc_render_preview", READ),
+        ("ui_inspect", READ),
+        ("ui_screenshot", READ),
+        ("jobs_list", READ),
+        ("doc_new", ADDS),
+        ("doc_open", ADDS),
+        ("doc_place", ADDS),
+        ("doc_export_layers", ADDS),
+        ("doc_export_data_sets", ADDS),
+        ("doc_select", (false, false, true)),
+        ("doc_save", EDITS),
+        ("doc_replace_smart_object", EDITS),
+        ("doc_export", EDITS),
+        ("doc_close", EDITS),
+        ("doc_import_data_sets", EDITS),
+        ("command_run", EDITS),
+        ("command_batch", EDITS),
+        ("jobs_cancel", EDITS),
+        ("ui_pointer", EDITS),
+        ("ui_menu_invoke", EDITS),
+        ("ui_set", EDITS),
+        ("control_call", EDITS),
+    ];
+    let client = connect(PhotocraftMcp::headless()).await;
+    let tools = client.list_all_tools().await.unwrap();
+    assert_eq!(tools.len(), expected.len(), "classify every tool here");
+    for tool in tools {
+        let value = serde_json::to_value(&tool).unwrap();
+        let hints = &value["annotations"];
+        let actual = (hints["readOnlyHint"] == true, hints["destructiveHint"] == true, hints["idempotentHint"] == true);
+        let want = expected.iter().find(|(name, _)| *name == tool.name).map(|(_, hints)| *hints);
+        assert_eq!(Some(actual), want, "{}: {hints}", tool.name);
+        assert_eq!(hints["openWorldHint"], false, "{}", tool.name);
+        let description = tool.description.as_deref().unwrap_or_default();
+        assert!(!description.contains("  "), "{}: a run of spaces in {description:?}", tool.name);
     }
     client.cancel().await.unwrap();
 }
