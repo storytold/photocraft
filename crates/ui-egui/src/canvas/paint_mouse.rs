@@ -43,8 +43,10 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
         // The Background Eraser, the Healing Brush, the Burn and Dodge tools and the Clone Stamp
         // start with their own measured tips instead, as the whole brush Reset Tool gives them
-        // (#11911, #12099, #12671, #12684, #12601).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::CloneStamp) => fresh_brush(tool, &current),
+        // (#11911, #12099, #12671, #12684, #12601), and so does the Blur tool (#12651).
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::CloneStamp | Tool::Blur) => {
+            fresh_brush(tool, &current)
+        }
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
             BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, ..current }
@@ -85,14 +87,15 @@ const TONING_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
 const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
-/// smoothing, with the session's own fields of `current`. The Brush tool's tip is
+/// smoothing, with the session's own fields of `current`. The Brush and Blur tools' tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], the Burn and Dodge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] with no smoothing; the other tools keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
-        Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
+        // The Blur tool measures the same 13 px soft round (#12651).
+        Tool::Brush | Tool::Blur => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
         Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
         Tool::Burn | Tool::Dodge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,

@@ -1052,6 +1052,8 @@ mod artboard_options_bar_tests;
 #[cfg(test)]
 mod background_eraser_bar_angle_tests;
 #[cfg(test)]
+mod blur_default_tip_tests;
+#[cfg(test)]
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
 mod burn_default_tip_tests;
