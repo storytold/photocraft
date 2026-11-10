@@ -872,7 +872,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         }
         let b = crate::dialogs::free_buttons(input.ctx, input.rect);
         let pointer = input.ctx.input(|i| i.pointer.latest_pos());
-        crate::zoom_tool::drag(app, input.ctx, input.view, input.xf, &b, pointer);
+        crate::zoom_tool::drag(app, input.ctx, input.view, input.xf, &b, pointer, &zoom_out);
         if b.clicked
             && let Some(p) = pointer
         {
@@ -1197,7 +1197,7 @@ fn handle_canvas_tool_navigation(
     }
     // Zoom tool drags: scrubby zoom or a zoom rectangle (zoom_tool.rs); clicks step below.
     // Like the Hand, the selected Zoom yields to an open Free Transform box (#4799).
-    if tool == Tool::Zoom && !transform_owns_pointer && crate::zoom_tool::drag(app, ctx, view, xf, buttons, response.interact_pointer_pos()) {
+    if tool == Tool::Zoom && !transform_owns_pointer && crate::zoom_tool::drag(app, ctx, view, xf, buttons, response.interact_pointer_pos(), zoom_out) {
         (buttons.started, buttons.dragged, buttons.stopped) = (false, false, false);
     }
 }
@@ -2325,13 +2325,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
     // `~` held: a Brush or Pencil stroke that starts now erases (`tool_event`'s `Down`).
     app.held_erase = crate::hold_keys::erase_held(app, &ctx);
-    // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool), held or latched in
-    // Window › Modifier Keys (the way around a desktop that takes Alt+click, `alt_grab`).
+    // Zoom direction: the temporary zoom key decides, else the Zoom tool's Zoom In / Zoom Out
+    // mode, turned around by ⌥ held or latched in Window › Modifier Keys (the way around a
+    // desktop that takes Alt+click, `alt_grab`).
     let sticky_alt = app.ui.shell.sticky_alt;
+    let out_mode = !app.ui.tool_options.zoom_in;
     let zoom_out = |alt: bool| match temporary {
         Some(crate::hold_keys::Temporary::ZoomOut) => true,
         Some(crate::hold_keys::Temporary::ZoomIn) => false,
-        _ => alt || sticky_alt,
+        _ => (alt || sticky_alt) != out_mode,
     };
 
     if under_dialog {

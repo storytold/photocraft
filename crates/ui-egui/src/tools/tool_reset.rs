@@ -132,7 +132,11 @@ fn is_selection_tool(tool: Tool) -> bool {
     )
 }
 
-/// Put `tool`'s fields of `o` back to their defaults.
+/// Options a tool preset stores but Reset Tool leaves, as in Photoshop: the Zoom tool keeps Zoom
+/// Out selected (#12066).
+const KEPT_BY_RESET: &[&str] = &["zoom_in"];
+
+/// Put `tool`'s fields of `o` back to their defaults, except those [`KEPT_BY_RESET`].
 pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     let keys = option_keys(tool);
     if keys.is_empty() {
@@ -141,7 +145,7 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     let (Ok(Value::Object(mut cur)), Ok(Value::Object(d))) = (serde_json::to_value(&*o), serde_json::to_value(ToolOptions::default())) else {
         return;
     };
-    for k in keys {
+    for k in keys.iter().filter(|k| !KEPT_BY_RESET.contains(k)) {
         if let Some(v) = d.get(*k) {
             cur.insert((*k).to_string(), v.clone());
         }
@@ -167,8 +171,8 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
     m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
 }
 
-/// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets and
-/// what a tool preset made with + stores (#7356).
+/// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets (but
+/// for [`KEPT_BY_RESET`]) and what a tool preset made with + stores (#7356).
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
     macro_rules! reset {
@@ -226,7 +230,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
             reset!(type_font, type_style, type_size, type_aa, type_align, type_direction, type_style_defaults)
         }
-        Tool::Zoom => reset!(zoom_scrubby),
+        Tool::Zoom => reset!(zoom_scrubby, zoom_in),
         Tool::Hand => reset!(hand_scroll_all),
         Tool::SpotHealing => reset!(spot_type),
         Tool::Healing => reset!(clone_aligned, clone_sample),
