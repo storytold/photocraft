@@ -45,7 +45,10 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
     if !scratch_expected {
         let budget = photocraft_raster::memory::refresh();
         let side = TILE_SIZE as u64;
-        let tiles = u64::from(info.width).div_ceil(side).saturating_mul(u64::from(info.height).div_ceil(side));
+        // The document covers the staging canvas (the display window of a cropped render,
+        // the data window otherwise — the same rule as the whole-file decoder), not just
+        // the data window's bands.
+        let tiles = u64::from(info.canvas_width).div_ceil(side).saturating_mul(u64::from(info.canvas_height).div_ceil(side));
         ram_tile_capacity(
             photocraft_raster::spill::stats().resident_bytes as u64,
             budget.tile_bytes,
@@ -62,7 +65,16 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
         let Some(band) = band else {
             break;
         };
-        let rect = Rect::from_xywh(band.x as i32, band.y as i32, band.width, band.height);
+        // Bands arrive in data-window coordinates; the document is the staging canvas.
+        let x = i32::try_from(band.x)
+            .map_err(|_| IoError::Read("EXR band x overflows i32".into()))?
+            .checked_add(info.offset_x)
+            .ok_or_else(|| IoError::Read("EXR staged band x overflows".into()))?;
+        let y = i32::try_from(band.y)
+            .map_err(|_| IoError::Read("EXR band y overflows i32".into()))?
+            .checked_add(info.offset_y)
+            .ok_or_else(|| IoError::Read("EXR staged band y overflows".into()))?;
+        let rect = Rect::from_xywh(x, y, band.width, band.height);
         if !photocraft_raster::spill::enabled() {
             let missing = rect.tiles().filter(|c| surface.tile(*c).is_none()).count() as u64;
             ram_tile_capacity(
@@ -83,7 +95,7 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
     }
     require_scratch(scratch_expected)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let mut document = Document::new("", Size::new(info.width, info.height), mode, SampleType::F32);
+    let mut document = Document::new("", Size::new(info.canvas_width, info.canvas_height), mode, SampleType::F32);
     let mut layer = Layer::new("Background", LayerContent::Raster(surface));
     if !info.has_alpha {
         layer.locks.transparency = true;
