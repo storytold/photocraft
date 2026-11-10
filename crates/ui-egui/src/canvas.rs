@@ -703,6 +703,96 @@ struct DialogCanvasInput<'a> {
     aspect: f32,
 }
 
+/// Identifies one canvas for a Pattern Fill drag: its OS window (viewport), the document it shows
+/// and the document window it belongs to. The main canvas and a Window › New Window view of the
+/// same document differ, as do Window › Arrange cells.
+pub(crate) fn pattern_drag_owner(viewport: egui::ViewportId, idx: usize, window: Option<u64>) -> u64 {
+    egui::Id::unique(("pattern-fill-drag", viewport, idx, window)).value()
+}
+
+/// Routes this frame's pointer events to a linked Pattern Fill's canvas drag while one owns the
+/// pointer, and ends any stored gesture that no longer does. Returns true when the pattern drag
+/// owns the pointer and cursor this frame.
+fn pattern_fill_canvas_drag(app: &mut PhotocraftApp, input: &DialogCanvasInput<'_>, picking: bool) -> bool {
+    // The gesture belongs to the canvas its press landed on. Each OS window has its own pointer,
+    // so another canvas (the main one while a New Window view of the same document is dragged)
+    // must neither move it nor end it because its own button is up.
+    let owner = pattern_drag_owner(input.ctx.viewport_id(), input.idx, app.drawing_window);
+    // A linked Pattern Fill: a drag on the free canvas moves the pattern. Only the view that owns
+    // input (the active document's canvas, or the focused document window) may route or end it;
+    // an inactive arranged cell or floating view must neither move the active fill nor cancel a
+    // drag it is still using. Space, the middle button, temporary zoom, a popup or another dialog
+    // above take the pointer instead.
+    let pattern_target = (input.primary
+        && !picking
+        && !input.middle
+        && !input.space_pan
+        && !matches!(input.temporary, Some(crate::hold_keys::Temporary::ZoomIn | crate::hold_keys::Temporary::ZoomOut))
+        && !egui::Popup::is_any_open(input.ctx))
+    .then(|| {
+        app.ui
+            .dialogs
+            .last()
+            .filter(|d| crate::pattern_fill_ui::owns(&d.fields))
+            .and_then(|d| crate::pattern_fill_ui::drag_target(app, &d.fields))
+            .map(|t| t.owned_by(owner))
+    })
+    .flatten();
+    let owns = pattern_target.is_some();
+    // Apply this frame's primary pointer events to the gesture in order, not just the pointer's
+    // final hover: a press and release in one frame are one click, a release that leaves the
+    // window still carries its own position, and a release under a dialog never moves the fill.
+    // Event order also keeps a release followed by a new press from joining the two gestures.
+    // Only the view that owns input routes them.
+    if let Some(target) = &pattern_target {
+        let events = input.ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, .. } => {
+                        Some(if *pressed { crate::pattern_fill_ui::CanvasEvent::Press(*pos) } else { crate::pattern_fill_ui::CanvasEvent::Release(*pos) })
+                    }
+                    egui::Event::PointerMoved(pos) => Some(crate::pattern_fill_ui::CanvasEvent::Move(*pos)),
+                    egui::Event::PointerGone => Some(crate::pattern_fill_ui::CanvasEvent::Gone),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Some(d) = app.ui.dialogs.last_mut().filter(|d| crate::pattern_fill_ui::owns(&d.fields)) {
+            crate::pattern_fill_ui::canvas_events(
+                &mut d.fields,
+                target,
+                events,
+                |p| crate::dialogs::free_pointer_at(input.ctx, input.rect, p).is_some(),
+                |a, b| {
+                    let delta = input.xf.unmap_vec(b - a) / (input.view.zoom / input.ppp);
+                    [f64::from(delta.x), f64::from(delta.y)]
+                },
+            );
+        }
+    }
+    // With its press released, off that dialog or target, or below another Pattern Fill dialog,
+    // the stored gesture is over: the next eligible press starts from the phase shown, not from
+    // one captured before the interruption. This runs after the events so a release and a new
+    // press in one frame keep only the new gesture. Only the canvas holding the gesture clears it,
+    // reading its own window's button; it does so even after it stops owning input (its window
+    // lost focus), so the gesture cannot resume later from a stale position. A gesture stored
+    // without a canvas is cleared by the view that owns input.
+    let pressed = input.ctx.input(|i| i.pointer.primary_down());
+    let top_pattern = app.ui.dialogs.last().filter(|d| crate::pattern_fill_ui::owns(&d.fields)).map(|d| d.id);
+    for d in app.ui.dialogs.iter_mut().filter(|d| crate::pattern_fill_ui::owns(&d.fields)) {
+        let holds = match crate::pattern_fill_ui::drag_owner(&d.fields) {
+            None => false,
+            Some(Some(o)) => o == owner,
+            Some(None) => input.primary,
+        };
+        if holds && (!owns || Some(d.id) != top_pattern || !pressed) {
+            crate::pattern_fill_ui::end_phase_drag(&mut d.fields);
+        }
+    }
+    owns
+}
+
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
     let sticky_alt = app.ui.shell.sticky_alt;
     let zoom_out = |alt: bool| match input.temporary {
@@ -744,6 +834,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     if !gradient_drag && let Some(d) = app.ui.dialogs.last_mut().filter(|d| d.kind == crate::state::DialogKind::LayerStyle) {
         crate::layer_style::end_gradient_drag(&mut d.fields);
     }
+    let pattern_drag_owns = pattern_fill_canvas_drag(app, &input, picking);
     // ⌘/Ctrl-click with Curves open: a point at the pixel's tone (#7325), whatever the tool. The
     // press's own modifiers decide, and only the press adds: a drag would add one per frame.
     let curve_point_press = (input.primary && !input.middle && crate::adjust_dialog::curves_on_top(app))
@@ -766,6 +857,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         && !locating
         && !shadow_drag
         && !gradient_drag
+        && !pattern_drag_owns
         && curve_point_press.is_none();
     // ⌘Space / ⌥Space zoom under the dialog as they do without one, before Space pans (#6460).
     // With the Hand tool, ⌘ alone is Zoom In (#6434); under Curves that press is the dialog's
@@ -819,6 +911,12 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             if let (Some(bounds), Some(d)) = (bounds, app.ui.dialogs.last_mut()) {
                 crate::layer_style::drag_gradient(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)], bounds);
             }
+        }
+    } else if pattern_drag_owns {
+        // The pattern drag's events were applied above; this branch keeps the pointer from reaching
+        // the eyedropper and other dialog canvas gestures, and shows the move cursor.
+        if crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {
+            input.ctx.set_cursor_icon(egui::CursorIcon::Move);
         }
     } else if picking && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect) {
         if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
@@ -2394,6 +2492,9 @@ mod tap_pressure_tests {
         assert_eq!(s.pressure(), 1.0, "Use Tablet Pressure off stays full pressure");
     }
 }
+
+#[cfg(test)]
+mod pattern_drag_tests;
 
 #[cfg(test)]
 mod tabs_tests;
