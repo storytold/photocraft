@@ -21,6 +21,7 @@ mod crop_ctrl_straighten;
 mod crop_default_mode;
 mod crop_defaults;
 mod crop_frame_look;
+mod crop_options_bar_chrome;
 mod crop_overlay_icons;
 mod crop_popup_keys;
 mod crop_shift_corner;

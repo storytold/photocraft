@@ -908,6 +908,8 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+#[cfg(test)]
+mod move_shift_click_tests;
 
 #[cfg(test)]
 mod move_target_default_tests;
@@ -1069,3 +1071,6 @@ mod view_guides_submenu_tests;
 
 #[cfg(test)]
 mod background_eraser_digit_keys_tests;
+
+#[cfg(test)]
+mod clone_stamp_reset_tip_tests;
