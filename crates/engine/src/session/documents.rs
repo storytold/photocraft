@@ -234,7 +234,16 @@ impl Session {
     }
 }
 
+/// Closed documents still being freed on their own thread ([`Session::close_and_release`]).
+static RELEASING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl Session {
+    /// How many closed documents are still being freed off the calling thread
+    /// ([`Session::close_and_release`]): tests wait for none before checking the scratch pool.
+    pub fn documents_being_released() -> usize {
+        RELEASING.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Close document `index` as [`Session::close`] does, and free it off the UI thread. A
     /// gigapixel document and its history are millions of tiles: dropping them where the command
     /// ran took over a second, long enough for a Wayland compositor to drop the window. Returns
@@ -243,8 +252,20 @@ impl Session {
         let Some(closed) = self.close(index) else { return false };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // If the thread can't start, the closure (and the document) drops here instead.
-            let _ = std::thread::Builder::new().name("photocraft-close".into()).spawn(move || drop(closed));
+            use std::sync::atomic::Ordering::SeqCst;
+            RELEASING.fetch_add(1, SeqCst);
+            let spawned = std::thread::Builder::new().name("photocraft-close".into()).spawn(move || {
+                drop(closed);
+                // Its tiles went back to the scratch pool as they dropped, after the command's own
+                // release: give that memory back too.
+                photocraft_raster::scratch::release();
+                RELEASING.fetch_sub(1, SeqCst);
+            });
+            if spawned.is_err() {
+                // The closure, and the document with it, dropped here instead.
+                photocraft_raster::scratch::release();
+                RELEASING.fetch_sub(1, SeqCst);
+            }
         }
         #[cfg(target_arch = "wasm32")]
         drop(closed);

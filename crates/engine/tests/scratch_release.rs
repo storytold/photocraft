@@ -41,6 +41,12 @@ fn closing_a_document_leaves_none_of_its_buffers_in_the_pool() {
         // Dispatch holds the active document across the command; its tiles must not land in
         // the pool after the release.
         s.execute(close, json!({})).unwrap();
+        // The document is freed on its own thread, which releases the pool once it has.
+        let t = std::time::Instant::now();
+        while Session::documents_being_released() > 0 {
+            assert!(t.elapsed() < std::time::Duration::from_secs(30), "{close}: the closed document was not freed");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert_eq!(scratch::retained_bytes(), 0, "{close}");
     }
 }
