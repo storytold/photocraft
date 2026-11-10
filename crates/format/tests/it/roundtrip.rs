@@ -1157,7 +1157,7 @@ fn pixel_align_round2_legacy_psd_provenance_is_migrated() {
     assert_eq!(sh.psd_coordinate_frame, Some([doc.size.width, doc.size.height]));
     let saved = save_to_bytes(&loaded, &SaveOptions::default()).unwrap();
     assert_eq!(load_from_bytes(&saved).unwrap(), loaded);
-
+}
 /// `FileEncoding::source_images` is kept in `.pcraft` with the other encoder settings (#5733):
 /// the crash-recovery autosave is a `.pcraft` bundle reopened at the document's original path, so
 /// dropping the count would let Save write one frame over a multi-image file. A manifest written
