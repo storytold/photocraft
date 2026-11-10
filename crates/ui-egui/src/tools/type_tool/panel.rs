@@ -572,6 +572,12 @@ mod busy_tests {
         wait_held.recv().unwrap();
         // Another thread holds it (a Free Transform re-rendering type): the panels don't wait.
         assert!(super::font_engine_busy());
+        // Nor do the font reads behind the fields, should a job take the engine after that
+        // check: they return what they have at once.
+        let start = std::time::Instant::now();
+        assert_eq!(super::styles("Any Family"), vec!["Regular".to_string()], "just Regular while busy");
+        let _ = super::super::fonts::families();
+        assert!(start.elapsed() < std::time::Duration::from_secs(1), "the reads waited for the engine");
         release.send(()).unwrap();
         job.join().unwrap();
     }

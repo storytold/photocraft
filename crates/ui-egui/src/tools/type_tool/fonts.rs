@@ -1,6 +1,18 @@
 use super::defaults::apply;
 use super::{Arc, HashMap, PhotocraftApp, PoisonError, json};
 
+/// The shared font engine, unless another thread holds it right now (a background job
+/// re-rendering type): the panels read fonts every frame, and waiting for a job froze the window
+/// for all of it. Busy, the reads below show what they have instead (a cached list, the stored
+/// style name, no axis sliders) and try again next frame. Not loaded yet, it loads as before.
+fn engine_unless_busy() -> Option<std::sync::MutexGuard<'static, photocraft_text::TextEngine>> {
+    match photocraft_text::try_shared().unwrap_or_else(photocraft_text::shared).try_lock() {
+        Ok(engine) => Some(engine),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
 /// Font families: bundled, system, and those the host serves (`photocraft_text::served`, fetched
 /// when picked). Cached until the shared engine registers fonts or the served catalog changes.
 pub fn families() -> Arc<Vec<String>> {
@@ -13,7 +25,10 @@ pub fn families() -> Arc<Vec<String>> {
     {
         return v.clone();
     }
-    let mut v = photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default();
+    // Busy: the last list (if any) until the engine is free; nothing is cached meanwhile.
+    let Some(mut engine) = engine_unless_busy() else { return cached.as_ref().map(|(_, v)| v.clone()).unwrap_or_default() };
+    let mut v = engine.fonts.families();
+    drop(engine);
     for f in photocraft_text::served::families() {
         if !v.contains(&f) {
             v.push(f);
@@ -55,7 +70,8 @@ fn localized_families() -> Arc<HashMap<String, String>> {
     {
         return v.clone();
     }
-    let v = Arc::new(photocraft_text::shared().lock().map(|mut e| e.fonts.localized_family_names()).unwrap_or_default());
+    let Some(mut engine) = engine_unless_busy() else { return cached.as_ref().map(|(_, v)| v.clone()).unwrap_or_default() };
+    let v = Arc::new(engine.fonts.localized_family_names());
     *cached = Some((key, v.clone()));
     v
 }
@@ -106,7 +122,8 @@ fn weight_name(w: f32) -> &'static str {
 /// Style names available for a family: each face's actual OpenType subfamily (including numeric
 /// and nonstandard ones), plus the standard weights a variable face's `wght` axis covers.
 pub fn styles(family: &str) -> Vec<String> {
-    let faces = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(family);
+    // Busy: just Regular until the engine is free.
+    let faces = engine_unless_busy().map(|mut e| e.fonts.faces(family)).unwrap_or_default();
     let v = style_names(&faces);
     if v.is_empty() { vec!["Regular".into()] } else { v }
 }
@@ -188,11 +205,12 @@ fn axis_label(tag: &str) -> String {
 /// One slider row per variable-font axis of the style's font, below the font style (#2985).
 pub(super) fn axis_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photocraft_doc::text::CharStyle) {
     // Drawn every frame: no sliders until the background font scan is done (#3021).
-    let Some(engine) = photocraft_text::try_shared() else { return };
-    let axes = {
-        let faces = engine.lock().unwrap_or_else(PoisonError::into_inner).fonts.faces(&c.font_family);
-        slider_axes(&faces, c.italic)
-    };
+    // Nor while a job holds the engine (`engine_unless_busy`).
+    if photocraft_text::try_shared().is_none() {
+        return;
+    }
+    let Some(faces) = engine_unless_busy().map(|mut e| e.fonts.faces(&c.font_family)) else { return };
+    let axes = slider_axes(&faces, c.italic);
     let t = crate::theme::Tokens::get(ui.ctx());
     for axis in &axes {
         let (min, max) = (axis.1, axis.3);
@@ -222,13 +240,13 @@ pub(super) fn axis_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photo
 /// PSD text can identify a face only by its PostScript name. Show its real subfamily too.
 pub(crate) fn selected_style(style: &photocraft_doc::text::CharStyle) -> String {
     // Drawn every frame: while the font scan runs, the stored style name stands in.
+    // So does it while a job holds the engine (`engine_unless_busy`).
     if let Some(ps) = &style.postscript_name
-        && let Some(engine) = photocraft_text::try_shared()
+        && photocraft_text::try_shared().is_some()
+        && let Some(faces) = engine_unless_busy().map(|mut e| e.fonts.faces(&style.font_family))
+        && let Some(face) = faces.into_iter().find(|f| f.postscript_name.as_ref() == Some(ps))
     {
-        let faces = engine.lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(&style.font_family);
-        if let Some(face) = faces.into_iter().find(|f| f.postscript_name.as_ref() == Some(ps)) {
-            return face.style;
-        }
+        return face.style;
     }
     if style.font_style.is_empty() { if style.italic { "Italic".into() } else { "Regular".into() } } else { style.font_style.clone() }
 }
