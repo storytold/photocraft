@@ -1263,6 +1263,24 @@ fn image_processor_scratch_sessions_answer_to_the_authorization_gate() {
 }
 
 #[test]
+fn batch_save_points_answer_to_the_authorization_gate() {
+    fn deny_save(id: &str, _: &Value) -> Result<()> {
+        if id == "file.save" { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let dir = tmp("batch-save-gate");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    png(&input, "a.png", 8, 8, "#ff0000");
+    let mut s = Session::new();
+    s.authorize = Some(deny_save);
+    let out = join(&dir, "out");
+    let r = s.execute("file.automate.batch", json!({"steps": [["file.save", {}]], "input": input, "output": out, "format": "png"})).unwrap();
+    assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
+    assert!(!std::path::Path::new(&join(&out, "a.png")).exists());
+}
+
+#[test]
 fn load_files_into_stack_and_image_processor_and_batch() {
     let dir = tmp("batch");
     let input = join(&dir, "in");
