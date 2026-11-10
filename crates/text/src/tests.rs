@@ -320,6 +320,321 @@ fn box_text_wraps_inside_width() {
     assert_eq!(l2.lines.len(), 2);
 }
 
+fn soft_wrap_leading_ascii_space_advance(mut t: TextLayer, expected_start: usize, spaces: usize, carried: usize) {
+    use crate::layout::line_index;
+
+    let mut e = TextEngine::new();
+    let before = e.layout(&t, 72.0);
+    assert!(before.lines.len() > 1, "{:?}", before.lines);
+    let at = before.lines[1].range.start;
+    assert_eq!(at, expected_start, "{:?}", before.lines);
+    let before_x = before.caret(at).0;
+    let before_line = line_index(&before, at);
+
+    t.text.insert_str(at, &" ".repeat(spaces));
+    let after = e.layout(&t, 72.0);
+    let after_x = after.caret(at + spaces).0;
+    let inserted_advance: f32 = after.clusters.iter().filter(|c| (at..at + spaces).contains(&c.range.start)).map(|c| c.advance).sum();
+    assert!(inserted_advance > 0.0, "{:?}", after.clusters);
+    let space_advance: f32 = after.clusters.iter().filter(|c| (at + spaces - carried..at + spaces).contains(&c.range.start)).map(|c| c.advance).sum();
+    assert_eq!(line_index(&after, at + spaces), before_line, "{:?}", after.lines);
+    assert!(
+        (after_x - before_x - space_advance).abs() < 1e-3,
+        "text {:?}, before {before_x}, after {after_x}, carried spaces {space_advance}, lines {:?}, clusters {:?}",
+        t.text,
+        after.lines,
+        after.clusters
+    );
+}
+
+#[test]
+fn horizontal_soft_wrap_preserves_leading_ascii_spaces() {
+    let mut t = point("one two three four", 20.0);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 80.0, height: 200.0 };
+    soft_wrap_leading_ascii_space_advance(t, "one two ".len(), 3, 3);
+}
+
+fn vertical_soft_wrap_text(first: &str) -> TextLayer {
+    let mut t = point(&format!("{first}鈴木一郎 田中花子"), 36.0);
+    t.font_family = "Shippori Mincho".into();
+    t.orientation = Orientation::Vertical;
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 280.0, height: 480.0 };
+    t
+}
+
+#[test]
+fn vertical_soft_wrap_preserves_leading_ascii_spaces() {
+    let first = "担当：山田 太郎 佐藤 次郎君";
+    soft_wrap_leading_ascii_space_advance(vertical_soft_wrap_text(first), first.len(), 3, 3);
+}
+
+#[test]
+fn vertical_soft_wrap_ascii_space_carry_policy() {
+    for (last, spaces, carried) in [("君", 1, 1), ("君", 2, 2), ("君", 3, 3), ("A", 1, 0), ("A", 2, 1), ("A", 3, 2)] {
+        let first = format!("担当：山田 太郎 佐藤 次郎{last}");
+        soft_wrap_leading_ascii_space_advance(vertical_soft_wrap_text(&first), first.len(), spaces, carried);
+    }
+
+    let first = "担当：山田 太郎 佐藤 次郎A ";
+    soft_wrap_leading_ascii_space_advance(vertical_soft_wrap_text(first), first.len(), 3, 3);
+}
+
+fn vertical_soft_wrap_with_spaces(spaces: usize, rest: &str) -> (TextLayer, usize) {
+    let first = "担当：山田 太郎 佐藤 次郎君";
+    let mut t = vertical_soft_wrap_text(first);
+    t.text = format!("{first}{}{rest}", " ".repeat(spaces));
+    (t, first.len())
+}
+
+#[test]
+fn vertical_soft_wrap_carried_spaces_move_caret_and_hit_testing() {
+    let (t, boundary) = vertical_soft_wrap_with_spaces(2, "鈴木一郎 田中花子");
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    assert_eq!(l.lines[0].range.end, boundary, "{:?}", l.lines);
+    assert_eq!(l.lines[1].range.start, boundary, "{:?}", l.lines);
+    let spaces: Vec<_> = l.clusters.iter().filter(|c| (boundary..boundary + 2).contains(&c.range.start)).collect();
+    assert_eq!(spaces.len(), 2);
+    assert!(spaces.iter().all(|c| c.line == 1), "{spaces:?}");
+    assert!((spaces[0].x - l.lines[1].x0).abs() < 1e-3, "{spaces:?}");
+    assert!((spaces[1].x - spaces[0].x - spaces[0].advance).abs() < 1e-3, "{spaces:?}");
+    assert_eq!(l.caret(boundary).0, spaces[0].x);
+    assert_eq!(l.hit_test_line(spaces[0].x, l.lines[1].baseline), boundary);
+    assert_eq!(l.hit_test_line(spaces[1].x, l.lines[1].baseline), boundary + 1);
+}
+
+#[test]
+fn vertical_soft_wrap_negative_space_advance_still_carries() {
+    let (mut t, boundary) = vertical_soft_wrap_with_spaces(2, "鈴木\t田中花子");
+    let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
+    t.runs = vec![
+        TextRun { len: boundary, style: style.clone() },
+        TextRun { len: 2, style: CharStyle { tracking: -300.0, ..style.clone() } },
+        TextRun { len: t.text.len() - boundary - 2, style },
+    ];
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    assert_eq!(l.lines[0].range.end, boundary, "{:?}", l.lines);
+    assert_eq!(l.lines[1].range.start, boundary, "{:?}", l.lines);
+    let spaces: Vec<_> = l.clusters.iter().filter(|c| (boundary..boundary + 2).contains(&c.range.start)).collect();
+    assert_eq!(spaces.len(), 2);
+    assert!(spaces.iter().all(|c| c.advance < 0.0 && c.line == 1), "{spaces:?}");
+    assert!((spaces[0].x - l.lines[1].x0).abs() < 1e-3, "{spaces:?}");
+    assert!((spaces[1].x - spaces[0].x - spaces[0].advance).abs() < 1e-3, "{spaces:?}");
+    assert_eq!(l.caret(boundary).0, spaces[0].x);
+    assert_eq!(l.caret(boundary + 1).0, spaces[1].x);
+    for c in spaces {
+        assert_eq!(l.hit_test_line(c.x + c.advance * 0.25, l.lines[1].baseline), c.range.end);
+    }
+    let after_tab = boundary + 2 + "鈴木\t".len();
+    let x = cluster_x(&l, after_tab);
+    assert!((x - 72.0).abs() < 0.05, "after tab at {x}, expected the 72 px stop: {:?}", l.clusters);
+}
+
+#[test]
+fn vertical_soft_wrap_carried_spaces_reach_tab_stops() {
+    let (t, boundary) = vertical_soft_wrap_with_spaces(2, "鈴木\t田中花子");
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    let after_tab = boundary + 2 + "鈴木\t".len();
+    let x = cluster_x(&l, after_tab);
+    assert!((x - 108.0).abs() < 0.05, "after tab at {x}, expected the 108 px stop: {:?}", l.clusters);
+}
+
+#[test]
+fn vertical_soft_wrap_final_justification_counts_carry_once() {
+    let mut e = TextEngine::new();
+    for align in [TextAlign::JustifyCenter, TextAlign::JustifyRight] {
+        let (t, _) = vertical_soft_wrap_with_spaces(2, "鈴木一郎 田中花子");
+        let l = e.layout(&with_para(t, ParagraphStyle { align, ..Default::default() }), 72.0);
+        let last = l.lines.last().unwrap();
+        let aligned = match align {
+            TextAlign::JustifyCenter => (last.x0 + last.x1 - 480.0).abs() < 0.05,
+            TextAlign::JustifyRight => (last.x1 - 480.0).abs() < 0.05,
+            _ => false,
+        };
+        assert!(aligned, "{align:?}: {last:?}");
+    }
+}
+
+#[test]
+fn vertical_soft_wrap_carry_participates_in_line_breaking() {
+    let (t, _) = vertical_soft_wrap_with_spaces(2, &"鈴".repeat(13));
+    let mut area = t.clone();
+    area.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (280.0, 0.0), (280.0, 480.0), (0.0, 480.0)]) };
+    let mut e = TextEngine::new();
+    for t in [t, area] {
+        let l = e.layout(&t, 72.0);
+        assert_eq!(l.lines.len(), 3, "{:?}", l.lines);
+        assert!(l.lines.iter().all(|line| line.x1 <= 480.0 + 0.05), "{:?}", l.lines);
+        assert_eq!(l.lines.last().unwrap().range.end, t.text.len());
+    }
+}
+
+#[test]
+fn vertical_soft_wrap_kerned_carry_stays_inside_reserved_width() {
+    let (mut t, boundary) = vertical_soft_wrap_with_spaces(2, &"鈴".repeat(13));
+    let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
+    t.runs = vec![
+        TextRun { len: boundary, style: style.clone() },
+        TextRun { len: 1, style: CharStyle { kern: 1000.0, ..style.clone() } },
+        TextRun { len: t.text.len() - boundary - 1, style },
+    ];
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 3, "{:?}", l.lines);
+    assert_eq!(l.lines[1].range.start, boundary, "{:?}", l.lines);
+    let spaces: Vec<_> = l.clusters.iter().filter(|c| (boundary..boundary + 2).contains(&c.range.start)).collect();
+    assert_eq!(spaces.len(), 2, "{:?}", l.clusters);
+    assert!(spaces.iter().all(|space| space.line == 1), "{spaces:?}");
+    assert!(spaces[0].advance > spaces[1].advance + 35.0, "the fixture must include the positive manual kern: {spaces:?}");
+    assert!(l.lines[1].x1 <= 480.0 + 0.05, "the receiving column exceeded its reserved width: {:?}", l.lines);
+}
+
+/// A carry adopted into a column's width can move that column's break onto a space run, creating
+/// a carry for the next column, one column further per settle pass. A chain of eight such columns
+/// must still settle: every column ends inside the box.
+#[test]
+fn vertical_soft_wrap_settles_carry_chains_past_four_columns() {
+    let mut t = vertical_soft_wrap_text("");
+    t.text = "鈴".repeat(13) + "  " + &format!("{}  ", "鈴".repeat(12)).repeat(7);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 600.0, height: 495.0 };
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 8, "{:?}", l.lines);
+    assert!(l.lines.iter().all(|line| line.x1 <= 495.0 + 0.05), "{:?}", l.lines);
+    assert_eq!(l.lines.last().unwrap().range.end, t.text.len());
+}
+
+#[test]
+fn vertical_soft_wrap_non_finite_carry_does_not_clamp_the_receiving_width() {
+    let first = "鈴".repeat(13);
+    let middle = "鈴".repeat(12);
+    let mut t = vertical_soft_wrap_text("");
+    t.text = first.clone() + "  " + &middle + " " + "鈴";
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 1000.0, height: 495.0 };
+    let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
+    t.runs = vec![
+        TextRun { len: first.len(), style: style.clone() },
+        TextRun { len: 2, style: CharStyle { tracking: f32::NAN, ..style.clone() } },
+        TextRun { len: middle.len(), style: style.clone() },
+        TextRun { len: 1, style: CharStyle { tracking: 20_000.0, ..style.clone() } },
+        TextRun { len: "鈴".len(), style },
+    ];
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    let middle_start = first.len() + 2;
+    let middle_end = middle_start + middle.len();
+    let receiving = l.lines.iter().find(|line| line.range.contains(&middle_start)).expect("the receiving column");
+    assert!(receiving.range.end >= middle_end, "the receiving column used the minimum width: {receiving:?}, all lines {:?}", l.lines);
+    assert!(receiving.x0.is_finite() && receiving.x1.is_finite(), "non-finite receiving column: {receiving:?}");
+}
+
+/// Carry settling must keep the complete area layout after roman and tab passes consume the
+/// paragraph's shared area budget.
+#[test]
+fn vertical_area_carry_chain_survives_an_exhausted_shared_budget() {
+    use photocraft_doc::vector::{Path, Subpath};
+
+    let block = format!("Tabs\t{}    ", "鈴".repeat(7));
+    let mut t = vertical_soft_wrap_text("");
+    t.text = block.repeat(27);
+    t.shape = TextShape::Area {
+        path: Path::new(vec![
+            Subpath::polygon(&[(0.0, 0.0), (1350.0, 0.0), (1350.0, 80.0), (0.0, 80.0)]),
+            Subpath::polygon(&[(0.0, 100.0), (1350.0, 100.0), (1350.0, 540.0), (0.0, 540.0)]),
+        ]),
+    };
+    crate::layout::AREA_PASSES.with(|count| count.set(0));
+    crate::layout::CARRY_SETTLE_PASSES.with(|count| count.set(0));
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    let area_passes = crate::layout::AREA_PASSES.with(|count| count.get());
+    let carry_passes = crate::layout::CARRY_SETTLE_PASSES.with(|count| count.get());
+    assert!(area_passes > 32, "carry re-breaking must continue after the shared budget, got {area_passes}");
+    assert!(carry_passes >= 2, "the fixture must exercise a carry re-break");
+    assert_eq!(
+        l.lines.last().map(|line| line.range.end),
+        Some(t.text.len()),
+        "trailing area text was hidden after {area_passes} area and {carry_passes} carry passes: {:?}",
+        l.lines
+    );
+}
+
+/// Even when convergence and overflow exits are disabled, the settle loop stops after the
+/// largest line count it observed, three for this fixture.
+#[test]
+fn vertical_soft_wrap_settle_passes_are_bounded_by_the_largest_line_count() {
+    let first = "鈴".repeat(13);
+    let spaces = "  ";
+    let middle = "鈴".repeat(12);
+    let huge_space = " ";
+    let last = "鈴";
+    let mut t = vertical_soft_wrap_text("");
+    t.text = first.clone() + spaces + &middle + huge_space + last;
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 1000.0, height: 495.0 };
+    let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
+    t.runs = vec![
+        TextRun { len: first.len(), style: style.clone() },
+        TextRun { len: spaces.len(), style: style.clone() },
+        TextRun { len: middle.len(), style: style.clone() },
+        TextRun { len: huge_space.len(), style: CharStyle { tracking: 20_000.0, ..style.clone() } },
+        TextRun { len: last.len(), style },
+    ];
+    let mut e = TextEngine::new();
+    crate::layout::CARRY_SETTLE_PASSES.with(|count| count.set(0));
+    crate::layout::CARRY_SETTLE_FORCE_NONCONVERGING.with(|force| force.set(true));
+    let l = e.layout(&t, 72.0);
+    crate::layout::CARRY_SETTLE_FORCE_NONCONVERGING.with(|force| force.set(false));
+    let passes = crate::layout::CARRY_SETTLE_PASSES.with(|count| count.get());
+    assert_eq!(passes, 3, "{passes} settle passes for lines {:?}", l.lines);
+}
+
+/// A justified column that receives carried spaces spreads its own spaces over what remains of
+/// the width, so the carried space plus the justified content ends at the far edge of the box
+/// instead of past it. Justification must not move the breaks.
+#[test]
+fn vertical_soft_wrap_justified_columns_end_at_the_box_edge() {
+    let text = "担当：山田 太郎 佐藤 次郎君".to_string() + " " + "鈴鈴 鈴鈴 鈴鈴 鈴鈴 鈴鈴 鈴鈴" + &"鈴".repeat(24);
+    let mut e = TextEngine::new();
+    let breaks = |l: &crate::TextLayout| l.lines.iter().map(|ln| ln.range.clone()).collect::<Vec<_>>();
+    let mut left = vertical_soft_wrap_text("");
+    left.text = text.clone();
+    let left = with_para(left, ParagraphStyle { align: TextAlign::JustifyLeft, ..Default::default() });
+    let mut area = left.clone();
+    area.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (600.0, 0.0), (600.0, 480.0), (0.0, 480.0)]) };
+    for t in [left, area] {
+        let l = e.layout(&t, 72.0);
+        assert_eq!(l.lines.len(), 4, "{:?}", l.lines);
+        // The carried space plus the justified content of the receiving column reaches the far
+        // edge exactly; a full-width justification lands past it by the carried space.
+        let ink_end = l.clusters.iter().filter(|c| c.line == 1).map(|c| c.x + c.advance).fold(f32::MIN, f32::max);
+        assert!((ink_end - 480.0).abs() < 0.1, "receiving column ends at {ink_end}: {:?}", l.lines);
+        let mut plain = t.clone();
+        plain.paragraphs = vec![ParagraphRun { len: text.len(), style: ParagraphStyle { align: TextAlign::Left, ..Default::default() } }];
+        assert_eq!(breaks(&l), breaks(&e.layout(&plain, 72.0)), "justification must not change the breaks");
+    }
+}
+
+/// Every carry scan walks one line's own clusters: one shaped scan in the settle pass and one
+/// while placing the line. A paragraph that needs no re-break inspects each cluster at most twice.
+#[test]
+fn vertical_soft_wrap_single_pass_scans_each_cluster_at_most_twice() {
+    let mut t = vertical_soft_wrap_text("");
+    t.text = "君鈴  ".repeat(12);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 2000.0, height: 100.0 };
+    let mut e = TextEngine::new();
+    crate::layout::CARRY_SCANNED.with(|scanned| scanned.set(0));
+    let l = e.layout(&t, 72.0);
+    let scanned = crate::layout::CARRY_SCANNED.with(|scanned| scanned.get());
+    assert!(l.lines.len() > 4, "{:?}", l.lines);
+    assert!(scanned > 0, "the fixture must exercise carry scans: {:?}", l.lines.iter().map(|line| &t.text[line.range.clone()]).collect::<Vec<_>>());
+    assert!(scanned <= 2 * l.clusters.len(), "scanned {scanned} candidates for {} clusters", l.clusters.len());
+}
+
 /// #5565: paragraph text breaks at its horizontally scaled width. At 60% it breaks like 100%
 /// text in a box 1/0.6 as wide, and the lines fill the box instead of wrapping early.
 #[test]
