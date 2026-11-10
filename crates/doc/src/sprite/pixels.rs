@@ -25,7 +25,7 @@ pub fn render_indices(indices: &Surface, rect: Rect, palette: &[PaletteEntry], t
     let mut row = vec![0; rect.width() as usize * 4];
     for y in rect.y0..rect.y1 {
         let values = indices.to_interleaved(Rect::from_xywh(rect.x0, y, rect.width(), 1));
-        for (index, rgba) in values.iter().zip(row.chunks_exact_mut(4)) {
+        for (index, rgba) in values.iter().zip(row.as_chunks_mut::<4>().0) {
             let mut value = palette.get(usize::from(*index)).ok_or("sprite pixel refers to a missing palette entry")?.rgba;
             if transparent == Some(*index) {
                 value[3] = 0;
