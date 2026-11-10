@@ -93,3 +93,16 @@ fn with_a_saved_path_selected_a_click_on_the_active_shape_does_nothing() {
     assert_eq!(shape_path(&mut app, shape), before);
     assert_eq!(steps(&app), n);
 }
+
+#[test]
+fn with_the_work_path_selected_a_click_on_the_active_shape_does_nothing() {
+    let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
+    select_layer(&mut app, shape);
+    let path = json!({"subpaths": [{"closed": true, "knots": [[50, 450], [150, 450], [150, 550], [50, 550]]}]});
+    app.run("path.set", json!({"path": path})).unwrap();
+    app.ui.selected_path = Some("work".into());
+    let (before, n) = (shape_path(&mut app, shape), steps(&app));
+    click(&mut app, [650.0, 250.0]);
+    assert_eq!(shape_path(&mut app, shape), before);
+    assert_eq!(steps(&app), n);
+}
