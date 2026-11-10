@@ -4154,7 +4154,7 @@ curves	Smooth	Згладити
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Щоб продовжити, потрібно растеризувати цей текстовий шар. Після цього його текст більше не можна буде редагувати. Растеризувати текст?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Щоб продовжити, потрібно растеризувати цей шар фігури. Після цього його більше не можна буде редагувати як фігуру. Растеризувати фігуру?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Щоб продовжити, потрібно растеризувати цей смартоб’єкт. Після цього його вміст більше не можна буде редагувати. Растеризувати смартоб’єкт?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Щоб продовжити, потрібно растеризувати цей шар заливки. Після цього його заливку більше не можна буде редагувати. Растеризувати шар?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Щоб продовжити, потрібно растеризувати цей шар заливки. Після цього його заливку більше не можна буде редагувати. Растеризувати шар?
 	Demosaic	Демозаїк
 	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Як відновлюється мозаїка кольорового фільтра камери. Застосовується під час відкриття файлу; попередній перегляд показує метод, з яким файл було відкрито.
 	AHD (adaptive homogeneity)	AHD (адаптивна однорідність)
@@ -4339,3 +4339,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shrinkwrap Canvas on Save	Зменшувати полотно до вмісту під час збереження
 	Move Toolbar to the Right	Перемістити панель інструментів праворуч
 	Move Toolbar to the Left	Перемістити панель інструментів ліворуч
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Виберіть попередньо задане співвідношення сторін або розмір обрізання
+	Set the aspect ratio for the crop box	Задайте співвідношення сторін рамки обрізання
+	Clear aspect ratio values	Очистити значення співвідношення сторін
+	Set the overlay options for the Crop Tool	Налаштувати параметри накладення обрізання
+	Determines if pixel data outside the crop box is retained or deleted	Визначає, чи зберігаються або видаляються пікселі за межами рамки обрізання
+	How expanded crop area gets filled	Як заповнюється розширена область обрізання
+	Displays pop-up help for the fill methods	Показує спливаючу довідку про методи заповнення
+	Fill options	Параметри заповнення
+	Background (default):	Фон (типово):
+	Fill the expanded area with your background color or transparent pixels	Заповнити розширену область кольором фону або прозорими пікселями
+	Content-aware fill	Заповнення за вмістом
+	Sample content from part of the image and use it to fill a small area	Взяти вміст із частини зображення, щоб заповнити невелику область
+	Reset the crop box, image rotation, and aspect ratio settings	Скинути рамку обрізання, обертання зображення та співвідношення сторін

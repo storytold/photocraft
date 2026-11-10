@@ -4318,7 +4318,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Esta camada de texto precisa ser rasterizada antes de continuar. O texto não poderá mais ser editado. Rasterizar o texto?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Esta camada de forma precisa ser rasterizada antes de continuar. Ela não poderá mais ser editada como forma. Rasterizar a forma?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
 	Graphics adapter: {adapter}	Adaptador gráfico: {adapter}
 	Backend: {backend} ({type})	Backend: {backend} ({type})
 	Driver: {driver}	Driver: {driver}
@@ -4542,3 +4542,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shrinkwrap Canvas on Save	Reduzir a tela ao conteúdo ao salvar
 	Move Toolbar to the Right	Mover a barra de ferramentas para a direita
 	Move Toolbar to the Left	Mover a barra de ferramentas para a esquerda
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Escolher uma proporção ou um tamanho de corte predefinido
+	Set the aspect ratio for the crop box	Definir a proporção da moldura de corte
+	Clear aspect ratio values	Limpar os valores de proporção
+	Set the overlay options for the Crop Tool	Definir as opções de sobreposição do corte
+	Determines if pixel data outside the crop box is retained or deleted	Determina se os pixels fora da moldura de corte são mantidos ou excluídos
+	How expanded crop area gets filled	Como a área de corte expandida é preenchida
+	Displays pop-up help for the fill methods	Mostra a ajuda pop-up dos métodos de preenchimento
+	Fill options	Opções de preenchimento
+	Background (default):	Plano de fundo (padrão):
+	Fill the expanded area with your background color or transparent pixels	Preencher a área expandida com a cor de fundo ou pixels transparentes
+	Content-aware fill	Preenchimento com base no conteúdo
+	Sample content from part of the image and use it to fill a small area	Amostra o conteúdo de parte da imagem para preencher uma área pequena
+	Reset the crop box, image rotation, and aspect ratio settings	Redefinir a moldura de corte, a rotação da imagem e a proporção
