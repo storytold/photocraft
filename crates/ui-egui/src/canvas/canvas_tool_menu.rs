@@ -506,6 +506,25 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
 
+/// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
+/// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
+/// path at all. A path that exists but isn't active, and the Path Selection and Direct Selection
+/// menus, keep the table's label.
+pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
+    if command != "path.transform" || menu.tool != Tool::Pen {
+        return label;
+    }
+    if app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2) {
+        return "Free Transform Points";
+    }
+    let any_path = app.session.active().is_some_and(|st| {
+        st.doc.work_path.is_some()
+            || !st.doc.paths.is_empty()
+            || st.doc.walk().iter().any(|(_, _, l)| l.vector_mask.is_some() || matches!(l.content, LayerContent::Shape(_)))
+    });
+    if any_path { label } else { "Free Transform" }
+}
+
 /// The Color Sampler menu's Delete row: removes the sampler the menu opened on.
 pub const SAMPLER_DELETE: &str = "view.colorSamplers.delete";
 
@@ -1376,7 +1395,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         ui.separator();
                         continue;
                     };
-                    let item = egui::Button::selectable(mode_checked(app, &menu, command), tl!(label)).min_size(egui::vec2(200.0, 20.0));
+                    let text = match row_label(app, &menu, label, command) {
+                        // Spelled out so `cargo xtask i18n-coverage` lists the new label.
+                        "Free Transform Points" => tl!("Free Transform Points"),
+                        key => tl!(key),
+                    };
+                    let item = egui::Button::selectable(mode_checked(app, &menu, command), text).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
                         selected = Some((*command).to_string());
                     }
@@ -1412,3 +1436,6 @@ mod tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;
+
+#[cfg(test)]
+mod pen_free_transform_label_tests;
