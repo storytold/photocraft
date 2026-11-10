@@ -55,6 +55,17 @@ impl Default for ProofSetup {
     }
 }
 
+/// The `prefs.dialogs` key holding the last chosen View › Proof Setup (`profile`, `intent`,
+/// `bpc`, `simulatePaper`): the proof condition documents start from, across restarts (#12820).
+pub const PROOF_SETUP_PREF: &str = "view.proofSetup";
+
+impl ProofSetup {
+    /// What [`PROOF_SETUP_PREF`] remembers of this setup.
+    fn remembered(&self) -> Value {
+        json!({ "profile": self.name, "intent": self.intent.id(), "bpc": self.bpc, "simulatePaper": self.simulate_paper })
+    }
+}
+
 /// Per-document proofing state the UI reads (see [`ColorState::proof`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProofView {
@@ -207,6 +218,9 @@ pub struct ColorState {
     /// Edit › Color Settings (persisted with the preferences).
     pub settings: ColorSettings,
     proofs: HashMap<DocId, ProofView>,
+    /// The remembered Proof Setup ([`PROOF_SETUP_PREF`]) and the setup it resolved to: what a
+    /// document without its own proof state starts from. `None` = [`ProofSetup::default`].
+    default_proof: Option<(Value, ProofSetup)>,
     /// The displays and their ICC profiles as read by the platform, primary (menu-bar) display
     /// first (used when Color Settings › Monitor Profile is `auto`; none = sRGB display).
     pub displays: Vec<crate::display_color::Display>,
@@ -371,9 +385,43 @@ impl ColorState {
         }
     }
 
-    /// Proofing state of a document (defaults: coated CMYK, relative colorimetric + BPC, off).
+    /// Proofing state of a document. Without its own, the last chosen Proof Setup with Proof
+    /// Colors off (never chosen: coated CMYK, relative colorimetric + BPC).
     pub fn proof(&self, doc: DocId) -> ProofView {
-        self.proofs.get(&doc).cloned().unwrap_or_else(|| ProofView { gamut_threshold: photocraft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() })
+        self.proofs.get(&doc).cloned().unwrap_or_else(|| self.default_proof_view())
+    }
+
+    /// The proofing state a document starts with (see [`Self::proof`]).
+    fn default_proof_view(&self) -> ProofView {
+        let setup = self.default_proof.as_ref().map(|(_, setup)| setup.clone()).unwrap_or_default();
+        ProofView { setup, gamut_threshold: photocraft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() }
+    }
+
+    /// Take the proof condition documents start from out of the saved preferences
+    /// ([`PROOF_SETUP_PREF`]), so Proof Colors works with the last chosen setup right after a
+    /// restart (#12820). A missing key means the built-in default. A value that is no
+    /// object, or names a profile that no longer resolves (a deleted .icc file), falls back to
+    /// the built-in default rather than failing the load. Resolves only when the saved value
+    /// changed: this runs whenever preferences are applied.
+    pub(crate) fn sync_default_proof(&mut self, saved: Option<&Value>) {
+        if self.default_proof.as_ref().map(|(v, _)| v) == saved {
+            return;
+        }
+        self.default_proof = saved.and_then(|v| Some((v.clone(), self.remembered_proof(v)?)));
+    }
+
+    fn remembered_proof(&self, saved: &Value) -> Option<ProofSetup> {
+        let saved = saved.as_object()?;
+        let name = saved.get("profile").and_then(Value::as_str).unwrap_or("working-cmyk").to_string();
+        let profile = self.resolve(&name, None, Some(ColorMode::Cmyk)).ok()?;
+        Some(ProofSetup {
+            name,
+            profile,
+            intent: saved.get("intent").and_then(Value::as_str).and_then(Intent::parse).unwrap_or(Intent::RelativeColorimetric),
+            bpc: saved.get("bpc").and_then(Value::as_bool).unwrap_or(true),
+            simulate_paper: saved.get("simulatePaper").and_then(Value::as_bool).unwrap_or(false),
+            kind: crate::proof_sim::ProofKind::Profile,
+        })
     }
 
     /// Borrow the document's proofing state without cloning its profile or allocating defaults.
@@ -383,7 +431,11 @@ impl ColorState {
     }
 
     pub(crate) fn proof_mut(&mut self, doc: DocId) -> &mut ProofView {
-        self.proofs.entry(doc).or_insert_with(|| ProofView { gamut_threshold: photocraft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() })
+        if !self.proofs.contains_key(&doc) {
+            let start = self.default_proof_view();
+            self.proofs.insert(doc, start);
+        }
+        self.proofs.entry(doc).or_default()
     }
 
     /// Transform from the canvas texture values (the composite, `CanvasDisplay::source`) to
@@ -1129,6 +1181,12 @@ fn proof_setup(s: &mut Session, p: &Value) -> Result<Value> {
         simulate_paper: bool_param(p, "simulatePaper", false),
         kind: crate::proof_sim::ProofKind::Profile,
     };
+    // The chosen setup is also where other documents start, now and after a restart (#12820).
+    let remembered = setup.remembered();
+    s.color.default_proof = Some((remembered.clone(), setup.clone()));
+    s.prefs.edit(|prefs| {
+        prefs.dialogs.insert(PROOF_SETUP_PREF.into(), remembered);
+    });
     let pv = s.color.proof_mut(id);
     pv.setup = setup.clone();
     Ok(
@@ -1528,6 +1586,65 @@ mod tests {
         }
         s.execute("view.proofColors", json!({"on": false})).unwrap();
         assert!(s.color.gpu_canvas_matrix_shaper_for(&d, Some(1)).unwrap().is_some(), "disabled simulations do not block ordinary display conversion");
+    }
+
+    /// #12820: the Proof Setup chosen once is where other documents start, in this run and after
+    /// a restart, so Proof Colors toggles that proof straight away.
+    #[test]
+    fn chosen_proof_setup_starts_other_documents_and_survives_a_restart() {
+        let mut s = session("rgb", 8);
+        s.execute("view.proofSetup", json!({"profile": "gray-gamma-2.2", "intent": "perceptual", "bpc": false})).unwrap();
+        assert_eq!(
+            s.prefs().dialogs.get(PROOF_SETUP_PREF),
+            Some(&json!({"profile": "gray-gamma-2.2", "intent": "perceptual", "bpc": false, "simulatePaper": false}))
+        );
+        // A second document in the same run starts from it, Proof Colors still off.
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let second = s.color.proof(doc(&s).id);
+        assert_eq!((second.setup.name.as_str(), second.enabled), ("gray-gamma-2.2", false));
+
+        // After a restart: a new document proofs with the saved setup, and Proof Colors turns
+        // that proof on.
+        let mut restarted = Session::new();
+        restarted.load_prefs_json(&s.prefs_to_json()).unwrap();
+        restarted.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let id = doc(&restarted).id;
+        let pv = restarted.color.proof(id);
+        assert_eq!(pv.setup.name, "gray-gamma-2.2");
+        assert_eq!(pv.setup.profile.color_space, ColorSpace::Gray);
+        assert_eq!((pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper, pv.enabled), (Intent::Perceptual, false, false, false));
+        let on = restarted.execute("view.proofColors", json!({})).unwrap();
+        assert_eq!(on["on"], json!(true));
+        let pv = restarted.color.proof(id);
+        assert_eq!((pv.setup.name.as_str(), pv.enabled), ("gray-gamma-2.2", true));
+        assert_eq!(pv.gamut_threshold, photocraft_cms::gamut::DEFAULT_THRESHOLD);
+    }
+
+    /// #12820: preferences written before the setup was applied at launch hold what the dialog
+    /// remembered, sometimes only part of it; a profile that no longer resolves is not an error.
+    #[test]
+    fn saved_proof_setup_loads_leniently() {
+        let mut partial = Session::new();
+        partial.load_prefs_json(r#"{"dialogs": {"view.proofSetup": {"profile": "srgb"}}}"#).unwrap();
+        partial.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let pv = partial.color.proof(doc(&partial).id);
+        assert_eq!((pv.setup.name.as_str(), pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper), ("srgb", Intent::RelativeColorimetric, true, false));
+
+        for saved in [
+            r#"{"dialogs": {"view.proofSetup": {"profile": "/no/such/folder/gone.icc", "intent": "perceptual"}}}"#,
+            r#"{"dialogs": {"view.proofSetup": {"profile": "not-a-profile"}}}"#,
+            r#"{"dialogs": {"view.proofSetup": "gray-gamma-2.2"}}"#,
+        ] {
+            let mut s = Session::new();
+            s.load_prefs_json(saved).unwrap();
+            s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+            assert_eq!(s.color.proof(doc(&s).id).setup, ProofSetup::default(), "{saved}");
+        }
+
+        // Dropping the saved choice (a preferences reset) returns to the default proof.
+        partial.edit_prefs(|p| p.dialogs.remove(PROOF_SETUP_PREF));
+        partial.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        assert_eq!(partial.color.proof(doc(&partial).id).setup, ProofSetup::default());
     }
 
     #[test]

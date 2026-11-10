@@ -490,6 +490,34 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     assert_eq!(app.session.color.proof(doc2_id).setup.name, "display-p3");
 }
 
+/// #12820: OK in Custom Proof Setup saves the choice as the engine wrote it, so the next launch
+/// proofs with it: a new document there starts from Gray Gamma 2.2 and Proof Colors shows it.
+#[test]
+fn proof_setup_ok_is_the_proof_condition_after_a_restart() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let d = open(&mut app, "view.proofSetup").unwrap();
+    app.ui.dialog_mut(d).unwrap().fields.insert("profile".into(), json!("gray-gamma-2.2"));
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(
+        app.session.prefs().dialogs.get("view.proofSetup"),
+        Some(&json!({"profile": "gray-gamma-2.2", "intent": "relative", "bpc": true, "simulatePaper": false}))
+    );
+
+    let mut session = photocraft_engine::Session::new();
+    session.load_prefs_json(&app.session.prefs_to_json()).unwrap();
+    let mut restarted = PhotocraftApp::new(session, Default::default());
+    restarted.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let id = restarted.session.active().unwrap().doc.id;
+    assert_eq!(restarted.session.color.proof(id).setup.name, "gray-gamma-2.2");
+    restarted.run("view.proofColors", json!({})).unwrap();
+    let pv = restarted.session.color.proof(id);
+    assert_eq!((pv.setup.name.as_str(), pv.enabled), ("gray-gamma-2.2", true));
+    // The dialog opens on it too.
+    let d = open(&mut restarted, "view.proofSetup").unwrap();
+    assert_eq!(restarted.ui.dialog_mut(d).unwrap().fields["profile"], json!("gray-gamma-2.2"));
+}
+
 #[test]
 fn indexed_counts_are_integer_json_while_dither_amounts_keep_their_decimals() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
