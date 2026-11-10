@@ -140,7 +140,7 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
             }
             return true;
         }
-        // ⇧/⌥ on that click combine a Type Mask with the selection.
+        // A Type Mask replaces the selection with ⇧ or ⌥ on that click too (#12073).
         commit_with(app, mods);
         return true; // Photoshop: a click outside commits without starting new text
     }
@@ -152,6 +152,13 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     }
     if let Some(id) = hit_layer(app, x, y) {
         let _ = app.session.select_layer(id);
+        // Lock All (the layer's own or a group's) refuses the edit before it starts, as the engine
+        // would refuse the first keystroke; the reference application says so in an alert (#12040).
+        if app.session.active().is_some_and(|st| st.doc.effective_locks(id).all) {
+            let message = json!({"message": tl!("Could not use the type tool because the layer is locked.")});
+            app.ui.open_dialog(crate::state::DialogKind::Error, message.as_object().cloned().unwrap_or_default());
+            return true;
+        }
         let key = session_key(app);
         if begin_edit(app, id, &key).is_err() {
             return true;
@@ -310,9 +317,11 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
     // on the path on its outline. The Type Mask tools ignore paths.
     let target = if !mask && !makes_box(app, start, end) { path_target(app, start[0], start[1]) } else { None };
-    // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The Type
-    // Mask tools start empty, as Photoshop's do.
-    let text = if !mask && app.session.prefs().type_.fill_new_type_layers_with_placeholder { PLACEHOLDER } else { "" };
+    // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The
+    // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
+    // vertical mask's placeholder is not measured yet, so it keeps starting empty.
+    let placeholder = app.ui.tool != crate::state::Tool::VerticalTypeMask && app.session.prefs().type_.fill_new_type_layers_with_placeholder;
+    let text = if placeholder { PLACEHOLDER } else { "" };
     let mut p = default_style_params(app);
     p["text"] = json!(text);
     p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
@@ -460,3 +469,7 @@ pub fn multi_click(app: &mut PhotocraftApp, egui_count: u32, x: f64, y: f64) {
         (e.anchor, e.caret) = (a, b);
     }
 }
+
+#[cfg(test)]
+#[path = "mask_placeholder_tests.rs"]
+mod mask_placeholder_tests;

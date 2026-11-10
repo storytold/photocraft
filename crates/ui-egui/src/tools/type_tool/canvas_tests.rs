@@ -795,25 +795,26 @@ fn options_bar_t_icon_scrub_stops_at_the_size_limits() {
 }
 
 /// Rests the pointer on the widget named `label` past the tooltip delay; true when its tooltip
-/// (a second node with the same name) shows.
-fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, label: &str) -> bool {
+/// `tip` shows (one more node with that text).
+fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, label: &str, tip: &str) -> bool {
+    let before = h.query_all_by_label(tip).count();
     let at = h.get_by_role_and_label(role, label).rect().center();
     h.hover_at(at);
     h.run_steps(8);
-    h.query_all_by_label(label).count() == 2
+    h.query_all_by_label(tip).count() == before + 1
 }
 
-/// The scrubby "T" icon keeps its "Font size" tooltip: the size field's drag area, laid over the
-/// icon after it, must not take its hover.
+/// The scrubby "T" icon keeps its tooltip ("Set font size", #12057): the size field's drag area,
+/// laid over the icon after it, must not take its hover.
 #[test]
 fn options_bar_t_icon_shows_its_tooltip() {
     let mut app = new_app();
     app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap();
     let mut h = options_harness(app);
-    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Button, "Set the text color"), "the probe sees an ordinary tooltip");
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Button, "Set the text color", "Set text color"), "the probe sees an ordinary tooltip");
     h.hover_at(egui::pos2(890.0, 55.0));
     h.run_steps(4);
-    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Label, "Font size"), "hovering the \"T\" icon shows \"Font size\"");
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Label, "Font size", "Set font size"), "hovering the \"T\" icon shows \"Set font size\"");
 }
 
 /// A point inside glyph `i` of vertical type: `f` of the way down its advance, right of the
@@ -1382,7 +1383,9 @@ fn temporary_type_transform_free_scale_center_scale_move_skew_and_rotation() {
             }
             "rotate" | "snap" => {
                 let a = [frame.quad[1][0] + 20.0, frame.quad[1][1] - 10.0];
-                let da: f64 = 0.42;
+                // A snapped drag turns in 15° steps from where it started, so the first preview steps need a
+                // turn of at least half a step to change anything (#11099).
+                let da: f64 = if gesture == "snap" { 0.9 } else { 0.42 };
                 let (x, y) = (a[0] - frame.pivot[0], a[1] - frame.pivot[1]);
                 let b = [frame.pivot[0] + x * da.cos() - y * da.sin(), frame.pivot[1] + x * da.sin() + y * da.cos()];
                 (a, b, if gesture == "snap" { type_command() | Modifiers::SHIFT } else { type_command() })
@@ -1420,8 +1423,9 @@ fn temporary_type_transform_free_scale_center_scale_move_skew_and_rotation() {
                     .mul(&initial),
             );
         } else if gesture == "snap" {
-            let angle = after.transform.m[1].atan2(after.transform.m[0]).to_degrees();
-            assert!((angle / 15.0 - (angle / 15.0).round()).abs() < 1e-8);
+            // Shift snaps the turn made by the drag, not the absolute angle (#11099).
+            let turn = (after.transform.m[1].atan2(after.transform.m[0]) - initial.m[1].atan2(initial.m[0])).to_degrees();
+            assert!((turn / 15.0 - (turn / 15.0).round()).abs() < 1e-8);
         } else if gesture == "center" {
             let p = after.transform.apply(Point::new((frame.rect[0] + frame.rect[2]) / 2.0, (frame.rect[1] + frame.rect[3]) / 2.0));
             assert!((p.x - frame.pivot[0]).abs() < 1e-8 && (p.y - frame.pivot[1]).abs() < 1e-8);
@@ -1943,9 +1947,12 @@ mod multi_layer_formatting {
 
     fn controls(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
         // The lazily populated font popup introduces widgets in successive passes. egui 0.37
-        // styles each new widget on its following pass; keep a bounded settle assertion while
-        // allowing those additional passes (the loaded menu requires six under parallel tests).
-        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).with_max_steps(8).build_ui_state(
+        // styles each new widget on its following pass (`widget_style` requests a repaint for a
+        // widget it has not seen yet), so `run` settles only after the last batch of the font
+        // list has arrived. The loaded menu takes six passes alone, but under a loaded parallel
+        // run the list arrives in more batches and it took ten. Allow 16 passes; a UI that never
+        // settles still fails, because `run` errors on any pass past the cap.
+        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).with_max_steps(16).build_ui_state(
             move |ui, app| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     if properties {
@@ -2439,6 +2446,34 @@ mod multi_layer_formatting {
         assert_eq!(text(&app, ids[0]).antialias, AntiAlias::Sharp);
     }
 
+    /// Type > OpenType > Stylistic Sets (#10285): while editing, a set goes on for the selected
+    /// characters only, and its checkmark follows the style at the selection start.
+    #[test]
+    fn stylistic_set_menu_toggles_the_selection_and_checks_its_start() {
+        use photocraft_engine::type_extra_cmds::feature_on;
+        let (mut app, ids) = fixture();
+        let ctx = egui::Context::default();
+        let id = "type.openType.stylisticSets.set2";
+        let checked = |app: &PhotocraftApp| crate::menus::menu_items(app).into_iter().find(|i| i.id == id).and_then(|i| i.checked);
+        editing(&mut app, ids[0]);
+        assert_eq!(checked(&app), Some(false));
+        crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+        let on: Vec<bool> = (0..5).map(|ci| feature_on(&style(&app, ids[0], ci), "ss02")).collect();
+        assert_eq!(on, [false, true, true, false, false], "only the selected characters");
+        assert!((0..5).all(|ci| !feature_on(&style(&app, ids[1], ci), "ss02")), "the other layer is untouched");
+        assert_eq!(checked(&app), Some(true), "the selection start has the set");
+        // A selection starting after the styled characters shows it off.
+        if let Some(ed) = app.ui.text_edit.as_mut() {
+            ed.anchor = 3;
+            ed.caret = 5;
+        }
+        assert_eq!(checked(&app), Some(false));
+        crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+        let on: Vec<bool> = (0..5).map(|ci| feature_on(&style(&app, ids[0], ci), "ss02")).collect();
+        assert_eq!(on, [false, true, true, true, true]);
+        assert_eq!(checked(&app), Some(true));
+    }
+
     /// The Character panel's OpenType buttons (TYPE-218-5, #3752): Photoshop's eight, in its
     /// order; each shows pressed while its feature is on and toggles it on the selected type
     /// layers, or on the selected characters while typing.
@@ -2694,10 +2729,10 @@ fn type_mask_commits_the_glyphs_as_the_selection_in_one_step() {
     assert!(v.height() > 2 * v.width(), "{v:?}");
 }
 
-/// #1055: Escape cancels a Type Mask session whatever "Use Escape to Commit" says: the selection
-/// and the layers stay as they were.
+/// #1055: Cancel throws a Type Mask session away: the selection and the layers stay as they were.
+/// (Escape commits it, as in the reference application: #12070, `mask_escape_tests`.)
 #[test]
-fn type_mask_escape_leaves_the_selection_unchanged() {
+fn type_mask_cancel_leaves_the_selection_unchanged() {
     let mut app = new_app();
     app.run("select.all", json!({})).unwrap();
     let (before, layers) = (selection_bounds(&app), app.session.active().unwrap().doc.layers.len());
@@ -2707,7 +2742,7 @@ fn type_mask_escape_leaves_the_selection_unchanged() {
     click(&mut h, p);
     assert!(h.state().ui.text_edit.as_ref().is_some_and(|ed| ed.mask), "typing a mask");
     super::insert(h.state_mut(), "I");
-    h.key_press(egui::Key::Escape);
+    super::cancel(h.state_mut());
     h.run_steps(2);
     assert!(h.state().ui.text_edit.is_none());
     assert_eq!(selection_bounds(h.state()), before);
@@ -2971,19 +3006,18 @@ fn multi_click_without_a_session_does_nothing() {
     assert_eq!((ed.anchor, ed.caret), (5, 5));
 }
 
-/// #3036: ⇧ on the click that commits a Type Mask adds the glyphs to the selection and ⌥
-/// subtracts them, as in Photoshop; while typing, the working text has no Layers panel row.
+/// #3036: while typing, the working text has no Layers panel row. ⇧ or ⌥ on the click that
+/// commits a Type Mask no longer combine: the glyphs replace the selection (#12073,
+/// `mask_replace_selection_tests`).
 #[test]
-fn type_mask_shift_adds_and_alt_subtracts_without_a_layer_row() {
+fn type_mask_shift_and_alt_replace_without_a_layer_row() {
     use crate::canvas::{ToolEvent, tool_event};
     use crate::state::Tool;
-    use photocraft_geom::Rect;
     let mut app = new_app();
     type_with(&mut app, Tool::HorizontalTypeMask, "I");
     let glyphs = selection_bounds(&app).unwrap();
     let mut app = new_app();
     app.ui.extras.snap = false; // the second text would snap to the first one's selected edge
-    let rect = Rect::new(1000, 100, 1100, 200);
     app.run("select.rect", json!({"x": 1000, "y": 100, "width": 100, "height": 100})).unwrap();
     // Type, then commit with a click outside the text holding `m`.
     let type_and_commit = |app: &mut PhotocraftApp, m: Modifiers| {
@@ -2998,14 +3032,10 @@ fn type_mask_shift_adds_and_alt_subtracts_without_a_layer_row() {
         tool_event(app, ToolEvent::Up { x: 1500.0, y: 800.0 }, m);
         assert!(app.ui.text_edit.is_none());
     };
-    let at = |app: &PhotocraftApp, x: i32, y: i32| app.session.active().unwrap().doc.selection.as_ref().map_or(0.0, |s| s.sample_channel(x, y, 0));
-    let stem = ((glyphs.x0 + glyphs.x1) / 2, (glyphs.y0 + glyphs.y1) / 2);
     type_and_commit(&mut app, Modifiers::SHIFT);
-    assert_eq!(selection_bounds(&app), Some(rect.union(&glyphs)), "⇧ adds");
-    assert!(at(&app, stem.0, stem.1) > 0.99 && at(&app, 1050, 150) > 0.99);
+    assert_eq!(selection_bounds(&app), Some(glyphs), "⇧ replaces");
     type_and_commit(&mut app, Modifiers::ALT);
-    assert!(at(&app, stem.0, stem.1) < 0.01, "⌥ subtracts the glyphs");
-    assert!(at(&app, 1050, 150) > 0.99, "and keeps the rest");
+    assert_eq!(selection_bounds(&app), Some(glyphs), "⌥ replaces");
 }
 
 /// #7713: justification needs a paragraph box. On point text the Paragraph panel's four justify
