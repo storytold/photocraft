@@ -85,3 +85,14 @@ fn a_hidden_active_shape_is_not_edited() {
     assert_eq!(shape_path(&mut app, shape), before);
     assert_eq!(steps(&app), n);
 }
+
+#[test]
+fn the_pen_draft_is_still_edited_by_the_anchor_tools() {
+    let (mut app, _shape) = setup(Tool::Pen);
+    click(&mut app, [100.0, 500.0]);
+    click(&mut app, [300.0, 500.0]);
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(2));
+    app.ui.tool = Tool::AddAnchorPoint;
+    click(&mut app, [200.0, 500.0]);
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(3));
+}

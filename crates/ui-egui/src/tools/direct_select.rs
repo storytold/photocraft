@@ -353,7 +353,23 @@ pub(crate) fn hit_target(app: &PhotocraftApp, p: [f64; 2], handles: bool) -> Opt
 pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     let st = app.session.active()?;
-    active_paths(app)
+    // A path selected in the Paths panel is the only target; otherwise the Pen draft first (as
+    // `candidates` builds it), then the active paths. The draft's destination is private to
+    // `vector_ui`, so it is not filtered here.
+    let targets: Vec<(PathRef, Path)> = match crate::vector_ui::selected_saved_path_index(app) {
+        Some((i, path)) => Some((PathRef::Saved(i), path)).filter(|(r, _)| writable(app, r)).into_iter().collect(),
+        None => {
+            let pen = app
+                .ui
+                .pen
+                .as_ref()
+                .filter(|_| app.ui.pen_doc.is_none_or(|owner| Some(owner) == Some(st.doc.id)))
+                .filter(|p| !p.dragging && !p.knots.is_empty())
+                .map(|p| (PathRef::Pen, crate::vector_ui::pen_path(p)));
+            pen.into_iter().chain(active_paths(app)).collect()
+        }
+    };
+    targets
         .into_iter()
         .filter(|(r, _)| !matches!(r, PathRef::Layer(id) if !st.doc.layer(photocraft_doc::LayerId(*id)).is_some_and(|l| l.visible)))
         .find_map(|(r, path)| edit::hit(&path, Point::new(p[0], p[1]), tol, &[]).map(|h| (r, path, h)))

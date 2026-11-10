@@ -82,3 +82,14 @@ fn direct_selection_still_edits_a_shape_layer_that_is_not_active() {
     click(&mut app, [650.0, 250.0]);
     assert_eq!(app.ui.direct_selection.target, Some(PathRef::Layer(shape)));
 }
+
+#[test]
+fn with_a_saved_path_selected_a_click_on_the_active_shape_does_nothing() {
+    let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
+    select_layer(&mut app, shape);
+    select_saved_path(&mut app);
+    let (before, n) = (shape_path(&mut app, shape), steps(&app));
+    click(&mut app, [650.0, 250.0]);
+    assert_eq!(shape_path(&mut app, shape), before);
+    assert_eq!(steps(&app), n);
+}
