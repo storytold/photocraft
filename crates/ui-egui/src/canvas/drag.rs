@@ -5,6 +5,9 @@ use super::{PhotocraftApp, Pos2, Rect, Stroke, Tool, vec2};
 #[derive(Clone, Debug)]
 pub struct Drag {
     pub tool: Tool,
+    /// A History Brush or Erase to History stroke's options as at the press: a tool key during the
+    /// drag changes the tool and its brush, not the stroke (`retouch_ui::history_brush_params`).
+    pub history_params: Option<serde_json::Value>,
     pub start: [f64; 2],
     pub points: Vec<[f64; 3]>,
     pub modifiers: egui::Modifiers,
@@ -33,6 +36,9 @@ pub struct Drag {
     /// The pointer, before snapping, has been half a pixel or more from the press: the gesture is
     /// not a click even if it comes back there (`tool_input::selection_release`, #11392).
     pub left_press: bool,
+    /// Restore a pre-existing floating piece if this Move drag becomes a copy
+    /// into another document; a fresh float belongs only to this gesture.
+    pub transfer_floating_before: Option<photocraft_engine::float_cmds::Floating>,
     /// The last ⇧-locked offset of a selection-tool drag of the selection (`move_mods`, #6231);
     /// keeps the locked direction stable between events. The Move tool's own drags use `move_mods`.
     pub sel_axis: Option<[f64; 2]>,
@@ -52,6 +58,7 @@ impl Drag {
     pub fn new(tool: Tool, start: [f64; 2], points: Vec<[f64; 3]>, modifiers: egui::Modifiers, erase: bool) -> Self {
         Self {
             tool,
+            history_params: None,
             start,
             points,
             modifiers,
@@ -64,6 +71,7 @@ impl Drag {
             reposition: false,
             sel_move: None,
             left_press: false,
+            transfer_floating_before: None,
             sel_axis: None,
             lasso: None,
             vector_owner: None,

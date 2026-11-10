@@ -3326,3 +3326,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 # RAW Develop feature labels
 	RAW Develop	RAW 显影
 	RAW Develop Filter	RAW 显影滤镜
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	选择预设的宽高比或裁剪尺寸
+	Set the aspect ratio for the crop box	设置裁剪框的宽高比
+	Clear aspect ratio values	清除宽高比值
+	Set the overlay options for the Crop Tool	设置裁剪叠加选项
+	Determines if pixel data outside the crop box is retained or deleted	确定保留还是删除裁剪框外的像素
+	How expanded crop area gets filled	扩展裁剪区域的填充方式
+	Displays pop-up help for the fill methods	显示填充方法的弹出帮助
+	Fill options	填充选项
+	Background (default):	背景（默认）：
+	Fill the expanded area with your background color or transparent pixels	用背景色或透明像素填充扩展区域
+	Content-aware fill	内容识别填充
+	Sample content from part of the image and use it to fill a small area	从图像的一部分取样内容来填充小区域
+	Reset the crop box, image rotation, and aspect ratio settings	重置裁剪框、图像旋转和宽高比

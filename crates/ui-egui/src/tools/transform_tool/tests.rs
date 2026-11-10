@@ -939,7 +939,8 @@ fn split_of_a_grid_cuts_one_section_and_keeps_the_rest() {
 fn corner_drag_scales_proportionally_about_opposite_corner() {
     let mut s = session();
     drag(&mut s, [100.0, 50.0], [200.0, 60.0], egui::Modifiers::NONE);
-    assert!(close(s.quad, corners([0.0, 0.0, 200.0, 100.0])), "{:?}", s.quad);
+    // The pointer's projection onto the diagonal: (100·100 + 60·50) / (100² + 50²) = 1.84 (#11096).
+    assert!(close(s.quad, corners([0.0, 0.0, 184.0, 92.0])), "{:?}", s.quad);
     let mut s = session();
     drag(&mut s, [100.0, 50.0], [200.0, 60.0], egui::Modifiers::SHIFT);
     assert!(close(s.quad, corners([0.0, 0.0, 200.0, 60.0])), "shift = free: {:?}", s.quad);
@@ -2091,7 +2092,9 @@ fn the_aspect_link_decides_whether_handle_drags_keep_proportions() {
                 assert!((w - 32.0).abs() < 1e-6 && (h - 16.0).abs() < 1e-6, "{case}");
             } else {
                 assert_eq!((w - h).abs() < 1e-6, proportional, "{case}");
-                assert!((w - 32.0).abs() < 1e-6, "{case}");
+                // A proportional corner follows the projection onto its diagonal: (32·16 + 16·16) / (16² + 16²) = 1.5.
+                let want = if proportional && !at_edge { 24.0 } else { 32.0 };
+                assert!((w - want).abs() < 1e-6, "{case}");
             }
         }
     }
@@ -2144,7 +2147,7 @@ fn right_click_menu_offers_warp_for_a_path() {
     assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
 }
 
-fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
+pub(super) fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": size, "height": size})).unwrap();
     app.sync_views();
