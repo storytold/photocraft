@@ -363,6 +363,10 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         // instead, and committing turns it into the selection.
         if mask {
             let _ = app.run("layer.setProps", json!({"layer": id, "visible": false, "coalesce": key}));
+            // The session's one state is the mask's from the start, not a New Type Layer (#12071).
+            if let Some(st) = app.session.active_mut() {
+                st.history.set_current_label(photocraft_engine::type_mask_cmds::TYPE_MASK_LABEL);
+            }
         }
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();

@@ -102,7 +102,7 @@ fn create_selection(s: &mut Session, p: &Value) -> Result<Value> {
         t.antialias = aa;
     }
     let (mask, text_area) = coverage(&doc, &t);
-    let selected = s.edit("Type Mask", |doc, active| {
+    let selected = s.edit(TYPE_MASK_LABEL, |doc, active| {
         let old = doc.selection.as_ref().map(|o| o.content_bounds().intersect(&doc.bounds())).unwrap_or(Rect::EMPTY);
         // Replace and Intersect leave nothing outside the text; Add and Subtract keep the rest.
         let area = match mode {
@@ -130,10 +130,14 @@ fn create_selection(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     // The Type Mask tools' whole typing session is this one step.
     if let Some(st) = s.active_mut() {
-        st.history.set_current_label("Type Mask");
+        st.history.set_current_label(TYPE_MASK_LABEL);
     }
     Ok(json!({ "selected": selected.is_some(), "bounds": selected.map(|r| [r.x0, r.y0, r.x1, r.y1]) }))
 }
+
+/// The history state of a committed Type Mask, as the reference names it (#12071). The tools'
+/// working layer is relabelled to it as soon as it is made, so typing never lists New Type Layer.
+pub const TYPE_MASK_LABEL: &str = "Type Mask Tool";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec {
@@ -147,6 +151,10 @@ pub fn specs() -> Vec<CommandSpec> {
         run: create_selection,
     }]
 }
+
+#[cfg(test)]
+#[path = "type_mask_history_name_tests.rs"]
+mod type_mask_history_name_tests;
 
 #[cfg(test)]
 mod tests {

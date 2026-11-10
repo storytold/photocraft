@@ -2718,7 +2718,7 @@ fn type_mask_commits_the_glyphs_as_the_selection_in_one_step() {
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layers.len(), layers, "no layer is left behind");
     assert_eq!(st.history.entries().len(), steps + 1);
-    assert_eq!(st.history.entries().last().map(String::as_str), Some("Type Mask"));
+    assert_eq!(st.history.entries().last().map(String::as_str), Some("Type Mask Tool"), "#12071");
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(selection_bounds(&app), None, "one undo restores the selection");
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
@@ -2727,6 +2727,24 @@ fn type_mask_commits_the_glyphs_as_the_selection_in_one_step() {
     type_with(&mut app, Tool::VerticalTypeMask, "HELLO");
     let v = selection_bounds(&app).unwrap();
     assert!(v.height() > 2 * v.width(), "{v:?}");
+}
+
+/// #12071: while a Type Mask is being typed, History lists no "New Type Layer" for its hidden
+/// working layer; the session's one state is already the mask's.
+#[test]
+fn a_type_mask_being_typed_lists_no_new_type_layer() {
+    use crate::canvas::{ToolEvent, tool_event};
+    use crate::state::Tool;
+    for tool in [Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {
+        let mut app = new_app();
+        app.ui.tool = tool;
+        tool_event(&mut app, ToolEvent::Down { x: 200.0, y: 300.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 200.0, y: 300.0 }, Modifiers::NONE);
+        super::insert(&mut app, "Mask");
+        assert!(app.ui.text_edit.as_ref().is_some_and(|e| e.mask), "{tool:?}: editing a mask");
+        let entries = app.session.active().unwrap().history.entries();
+        assert!(!entries.iter().any(|e| e == "New Type Layer"), "{tool:?}: {entries:?}");
+    }
 }
 
 /// #1055: Cancel throws a Type Mask session away: the selection and the layers stay as they were.
