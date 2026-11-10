@@ -25,22 +25,27 @@ use photocraft_doc::{Document, LayerId, RevisionMarker};
 /// private 0x0BB7–0x0FFF range).
 pub const REVISION_MARKERS: u16 = 0x0F00;
 
+/// Append a big-endian `u16`, the width of the name and note length fields.
 fn put_u16(out: &mut Vec<u8>, v: u16) {
     out.extend_from_slice(&v.to_be_bytes());
 }
 
+/// Append a big-endian `u32`, the width of the count and snapshot fields.
 fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_be_bytes());
 }
 
+/// Append a big-endian `u64`, the width of a layer id.
 fn put_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_be_bytes());
 }
 
+/// Append an `f64` as its big-endian bit pattern, the width of a position or size.
 fn put_f64(out: &mut Vec<u8>, v: f64) {
     out.extend_from_slice(&v.to_bits().to_be_bytes());
 }
 
+/// Append a `u16` length and the UTF-8 bytes, truncated at the length field's limit.
 fn put_str(out: &mut Vec<u8>, s: &str) {
     let b = s.as_bytes();
     put_u16(out, b.len().min(u16::MAX as usize) as u16);
@@ -78,36 +83,45 @@ pub fn encode(doc: &Document) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// A cursor over the private resource's bytes; every reader returns `None` on a short block, so
+/// one damaged field rejects the whole resource instead of misreading what follows.
 struct R<'a> {
     d: &'a [u8],
     p: usize,
 }
 
 impl<'a> R<'a> {
+    /// The next `n` bytes, advancing the cursor, or `None` past the end.
     fn take(&mut self, n: usize) -> Option<&'a [u8]> {
         let s = self.d.get(self.p..self.p.checked_add(n)?)?;
         self.p += n;
         Some(s)
     }
+    /// The next big-endian `u16`.
     fn u16(&mut self) -> Option<u16> {
         self.take(2).map(|b| u16::from_be_bytes([b[0], b[1]]))
     }
+    /// The next big-endian `u32`.
     fn u32(&mut self) -> Option<u32> {
         self.take(4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
+    /// The next big-endian `u64` (a layer id).
     fn u64(&mut self) -> Option<u64> {
         let b = self.take(8)?;
         let a: [u8; 8] = b.try_into().ok()?;
         Some(u64::from_be_bytes(a))
     }
+    /// The next `f64`, read from its big-endian bit pattern.
     fn f64(&mut self) -> Option<f64> {
         let b = self.take(8)?;
         let a: [u8; 8] = b.try_into().ok()?;
         Some(f64::from_bits(u64::from_be_bytes(a)))
     }
+    /// The next single byte (the `has_layer` and `done` flags).
     fn u8(&mut self) -> Option<u8> {
         self.take(1).map(|b| b[0])
     }
+    /// A `u16` length followed by that many UTF-8 bytes, lossily decoded.
     fn str(&mut self) -> Option<String> {
         let n = usize::from(self.u16()?);
         let b = self.take(n)?;
@@ -170,6 +184,7 @@ pub fn keep_resource(doc: &Document, id: u16) -> bool {
 mod tests {
     use super::*;
 
+    /// A marker with known values, so a round trip can be compared field by field.
     fn marker(name: &str) -> RevisionMarker {
         RevisionMarker {
             name: name.into(),
@@ -183,6 +198,7 @@ mod tests {
         }
     }
 
+    /// Encoding then decoding gives back exactly the markers, flags included.
     #[test]
     fn roundtrip() {
         let mut d = Document::new("m", photocraft_geom::Size::new(100, 100), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
@@ -193,12 +209,14 @@ mod tests {
         assert_eq!(back, d.revision_markers);
     }
 
+    /// A document without markers writes no resource at all, so an imported copy is left alone.
     #[test]
     fn empty_is_none() {
         let d = Document::new("m", photocraft_geom::Size::new(10, 10), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
         assert!(encode(&d).is_none());
     }
 
+    /// Bytes that are not a marker block, and a truncated one, are rejected rather than panicking.
     #[test]
     fn garbage_is_rejected() {
         assert!(decode(b"not a marker block at all").is_none());

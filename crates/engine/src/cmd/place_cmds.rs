@@ -12,14 +12,18 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+/// A rejected argument, naming the command so the panel can show `edit.placeImage: …`.
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
+/// `edit.placeImage` needs an open document: placing goes into the active one.
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
+/// Place a screenshot (base64 `png`, or a file `path`) as a smart object, fitted into the
+/// selection when there is one and at 1:1 in the middle of the canvas when there is not.
 fn place(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "edit.placeImage";
     let (name, bytes) = if let Some(data) = p.get("png").and_then(Value::as_str) {
@@ -59,6 +63,7 @@ fn place(s: &mut Session, p: &Value) -> Result<Value> {
     crate::cmd::file_cmds::place_bytes(s, &name, bytes, None, &params)
 }
 
+/// The `edit.placeImage` command: no menu entry, the web preview's screenshot button calls it.
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: "edit.placeImage",
@@ -101,6 +106,7 @@ mod tests {
         (png, path)
     }
 
+    /// A drawn box takes the shot as a smart object, fitted inside it, in one undo step.
     #[test]
     fn places_the_shot_inside_the_selection_as_a_smart_object() {
         use base64::Engine as _;
@@ -129,6 +135,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// With nothing drawn the place still lands, centred, reading a file from disk.
     #[test]
     fn without_a_selection_the_shot_lands_in_the_middle() {
         // A path still works, for anything that places a file rather than live capture bytes.

@@ -36,6 +36,8 @@ pub fn capture_screen(x: i32, y: i32, w: u32, h: u32) -> Result<Shot, String> {
     Ok(Shot { width: cw, height: ch, rgba })
 }
 
+/// Screen capture is a Windows-only feature: everywhere else the preview reports why it cannot
+/// take a shot rather than failing silently.
 #[cfg(not(windows))]
 pub fn capture_screen(_x: i32, _y: i32, _w: u32, _h: u32) -> Result<Shot, String> {
     Err("screen capture is only supported on Windows".into())
@@ -181,6 +183,7 @@ pub fn strip_axes(shot: &mut Shot) {
 mod tests {
     use super::*;
 
+    /// A blank 4-channel shot filled with the page's off-white background.
     fn shot(w: u32, h: u32) -> Shot {
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         for px in rgba.chunks_exact_mut(4) {
@@ -192,11 +195,13 @@ mod tests {
         Shot { width: w, height: h, rgba }
     }
 
+    /// Colour one pixel of the shot.
     fn paint(shot: &mut Shot, x: u32, y: u32, rgb: [u8; 3]) {
         let o = ((y * shot.width + x) * 4) as usize;
         shot.rgba[o..o + 3].copy_from_slice(&rgb);
     }
 
+    /// A long blue axis crossing most of the shot is painted out with the surface behind it.
     #[test]
     fn removes_a_long_blue_axis() {
         // The axis has to cross a good share of the shot, and a shot shorter than 120 px has none
@@ -212,6 +217,7 @@ mod tests {
         assert_eq!(s.rgba[o], 240, "with the plate behind it");
     }
 
+    /// A short thick blue block is a plate number, not an axis, and is left untouched.
     #[test]
     fn keeps_blue_plate_numbers() {
         let mut s = shot(96, 96);

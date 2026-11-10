@@ -119,6 +119,7 @@ impl Page {
         true
     }
 
+    /// Set the page zoom factor (1.0 = 100%); a no-op where there is no webview.
     pub fn zoom(&self, zoom: f64) {
         #[cfg(windows)]
         {
@@ -130,6 +131,7 @@ impl Page {
         }
     }
 
+    /// Point the preview at `url` (the address the user typed).
     pub fn load(&self, url: &str) {
         #[cfg(windows)]
         {
@@ -148,6 +150,7 @@ struct HwndRef(isize);
 
 #[cfg(windows)]
 impl raw_window_handle::HasWindowHandle for HwndRef {
+    /// The Win32 handle `wry` builds its webview on.
     fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         let hwnd = std::num::NonZeroIsize::new(self.0).ok_or(raw_window_handle::HandleError::Unavailable)?;
         let mut handle = raw_window_handle::Win32WindowHandle::new(hwnd);
@@ -170,10 +173,12 @@ mod win {
         found: isize,
     }
 
+    /// Whether a UTF-16 window title contains the UTF-16 needle (a case-sensitive substring).
     fn contains(hay: &[u16], needle: &[u16]) -> bool {
         !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
     }
 
+    /// `EnumWindows` callback: stop at the first visible window whose title matches.
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> windows_sys::core::BOOL {
         let search = unsafe { &mut *(lparam as *mut Search) };
         if unsafe { IsWindowVisible(hwnd) } == 0 {
@@ -195,6 +200,7 @@ mod win {
         (search.found != 0).then_some(search.found)
     }
 
+    /// Whether `hwnd` still names a live window (the preview can be closed behind our back).
     pub fn is_window(hwnd: isize) -> bool {
         unsafe { IsWindow(hwnd as HWND) != 0 }
     }

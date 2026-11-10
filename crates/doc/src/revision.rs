@@ -58,6 +58,7 @@ impl RevisionMarker {
 }
 
 impl Default for RevisionMarker {
+    /// An unnamed 100 × 60 box at the canvas origin, unbound, red, with an empty snapshot.
     fn default() -> Self {
         Self {
             name: String::new(),

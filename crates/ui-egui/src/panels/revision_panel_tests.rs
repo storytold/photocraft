@@ -8,6 +8,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
+/// A 420 × 520 harness on a document with `markers` named markers, the panel already drawn.
 fn harness(markers: usize) -> Harness<'static, PhotocraftApp> {
     let mut ready = false;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -39,6 +40,7 @@ fn harness(markers: usize) -> Harness<'static, PhotocraftApp> {
     h
 }
 
+/// The markers' names, in document order.
 fn names(app: &PhotocraftApp) -> Vec<String> {
     app.session.active().map(|st| st.doc.revision_markers.iter().map(|m| m.name.clone()).collect()).unwrap_or_default()
 }

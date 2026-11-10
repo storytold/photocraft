@@ -10,6 +10,8 @@ use serde_json::json;
 use super::{PhotocraftApp, RichText, Tokens, empty};
 use crate::canvas::revision_overlay::{DONE, TODO};
 
+/// Draw the Revision panel: the toolbar (add from the selection, check all, reset) over one row
+/// per marker.
 pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
@@ -68,6 +70,8 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// Draw one marker: its state dot, the editable name, and the buttons that act on it (Delete,
+/// Reset, Bind/Unbind).
 fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens) {
     // Read the marker's row data up front and drop the document borrow, so the button closures
     // below can call `app.run` (which borrows the app mutably) without a conflict.
@@ -128,6 +132,7 @@ fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens) {
     ui.label(RichText::new(pos).size(10.5).color(t.text_dim));
 }
 
+/// A coordinate to one decimal, without a trailing `.0` when it is a whole number.
 fn round1(v: f64) -> String {
     let r = (v * 10.0).round() / 10.0;
     if r.fract().abs() < 1e-9 {

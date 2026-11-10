@@ -11,10 +11,12 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+/// A rejected argument, naming the command so the panel can show `qr.scan: …`.
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
+/// Scanning reads the pixels of the active document, so there has to be one.
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
@@ -75,6 +77,8 @@ fn scan_region(doc: &photocraft_doc::Document, r: Rect) -> Result<Vec<Value>> {
     Ok(codes)
 }
 
+/// The `qr.scan` command: pick the area (explicit `region`, the selection, or the whole canvas)
+/// and report the codes found in it.
 fn scan(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "qr.scan";
     let d = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
@@ -98,6 +102,7 @@ fn scan(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"codes": scan_region(&d, r)?}))
 }
 
+/// The `qr.scan` command spec: no menu entry, the UI reaches it from the QR dock panel.
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: "qr.scan",
@@ -148,6 +153,7 @@ mod tests {
         s
     }
 
+    /// A drawn code is found with its content and a box inside the canvas.
     #[test]
     fn scan_finds_the_code() {
         let mut s = session_with_qr();
@@ -163,6 +169,7 @@ mod tests {
         assert!(x >= 20.0 && y >= 20.0 && x + w as f64 <= 320.0 && y + h as f64 <= 320.0, "{codes:?}");
     }
 
+    /// `selectionOnly` scans just the drawn box, so a corner without finder patterns decodes nothing.
     #[test]
     fn selection_only_scans_the_selection() {
         let mut s = session_with_qr();
@@ -175,6 +182,7 @@ mod tests {
         assert_eq!(v["codes"].as_array().unwrap()[0]["content"], "https://example.com/qr?x=1");
     }
 
+    /// A blank canvas reports an empty list rather than an error.
     #[test]
     fn empty_document_finds_nothing() {
         let mut s = Session::new();
@@ -183,6 +191,7 @@ mod tests {
         assert!(v["codes"].as_array().unwrap().is_empty());
     }
 
+    /// An explicit `region` outside the canvas is empty, and a region missing its size is an error.
     #[test]
     fn explicit_region_is_clamped() {
         let mut s = session_with_qr();

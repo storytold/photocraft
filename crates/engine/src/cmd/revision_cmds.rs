@@ -14,14 +14,17 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+/// A rejected argument, naming the command so the panel can show `revision.add: …`.
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
+/// Every revision command works on the active document.
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
+/// Commands that edit or check markers need at least one in the document.
 fn has_markers(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if s.active().is_some_and(|d| !d.doc.revision_markers.is_empty()) {
@@ -31,6 +34,7 @@ fn has_markers(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// One marker as the JSON the panel rows and the command results use.
 pub fn marker_json(i: usize, m: &RevisionMarker) -> Value {
     json!({
         "index": i,
@@ -46,16 +50,19 @@ pub fn marker_json(i: usize, m: &RevisionMarker) -> Value {
     })
 }
 
+/// `{"markers": [...]}` for the whole document: what `revision.list` returns.
 fn list_json(d: &Document) -> Value {
     json!({"markers": d.revision_markers.iter().enumerate().map(|(i, m)| marker_json(i, m)).collect::<Vec<_>>()})
 }
 
+/// The `index` param as a position in the marker list, checked against the list's length.
 fn index_of(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
     let n = s.active().ok_or(EngineError::NoDocument)?.doc.revision_markers.len();
     let i = p.get("index").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "pass `index`"))? as usize;
     if i < n { Ok(i) } else { Err(bad(cmd, format!("no revision marker {i} (the document has {n})"))) }
 }
 
+/// An optional numeric param: `None` when absent, an error when present but not a finite number.
 fn f64_of(cmd: &str, p: &Value, key: &str) -> Result<Option<f64>> {
     match p.get(key) {
         None => Ok(None),
@@ -92,6 +99,7 @@ fn snapshot_at(doc: &Document, pos: [f64; 2], size: [f64; 2], grid: [u32; 2], na
     Ok(box_resample(&rgba, w, h, gw, gh))
 }
 
+/// The snapshot of one marker: its frame rendered to the marker's grid.
 fn snapshot_for(doc: &Document, m: &RevisionMarker) -> Result<Vec<u8>> {
     snapshot_at(doc, m.pos, m.size, m.snapshot_size, &m.name)
 }
@@ -148,6 +156,7 @@ fn changed(a: &[u8], b: &[u8]) -> bool {
     diff * 200 >= a.len() as u64 / 4
 }
 
+/// Add a marker over `x`/`y`/`width`/`height`, snapshotting the pixels it frames; one undo step.
 fn add(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "revision.add";
     let x = f64_of(CMD, p, "x")?.ok_or_else(|| bad(CMD, "pass `x` and `y`"))?;
@@ -183,6 +192,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"index": i, "marker": marker_json(i, &d.revision_markers[i])}))
 }
 
+/// Delete one marker by `index`; the panel's Delete button.
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "revision.remove";
     let i = index_of(s, p, CMD)?;
@@ -206,6 +216,7 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({ "removed": n }))
 }
 
+/// Rename, re-frame, re-check or rebind one marker; whatever it touches is one undo step.
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "revision.set";
     let i = index_of(s, p, CMD)?;
@@ -257,6 +268,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"index": i, "marker": out, "changed": true}))
 }
 
+/// Re-take the reference snapshot: the whole document, or one marker by `index`.
 fn snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "revision.snapshot";
     // The whole document, or one marker by `index`.
@@ -334,6 +346,8 @@ fn repair_bindings(d: &mut Document) -> bool {
     rebound
 }
 
+/// Re-render every marker's frame and turn it green when its pixels changed. Reads only: no
+/// history step is recorded, so undo still steps over the user's own edit.
 fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "revision.detect";
     let one = p.get("index").and_then(Value::as_u64).map(|i| i as usize);
@@ -369,6 +383,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list_json(&s.active().ok_or(EngineError::NoDocument)?.doc))
 }
 
+/// The revision commands: no menu entries, the Revision dock panel drives them all.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -444,6 +459,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// `revision.list`: every marker, without touching the document.
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     Ok(list_json(&d))
@@ -454,12 +470,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A 200×150 document, which the marker sizes below are written against.
     fn session() -> Session {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 200, "height": 150})).unwrap();
         s
     }
 
+    /// Freshly added and never painted over, a marker stays red.
     #[test]
     fn add_detect_unchanged() {
         let mut s = session();
@@ -470,6 +488,7 @@ mod tests {
         assert_eq!(markers[0]["done"], json!(false), "content unchanged → red");
     }
 
+    /// Painting over the framed area turns the marker green.
     #[test]
     fn changed_after_paint() {
         let mut s = session();
@@ -483,6 +502,7 @@ mod tests {
         assert_eq!(markers[0]["done"], json!(true), "content changed → green");
     }
 
+    /// A marker bound to a layer follows it when the layer is translated.
     #[test]
     fn move_with_layer() {
         let mut s = session();
@@ -500,6 +520,7 @@ mod tests {
         assert_eq!(v["markers"][0]["y"].as_f64().unwrap(), 10.0 + 8.0);
     }
 
+    /// Re-snapshotting accepts the new content as the baseline, so the marker goes back to red.
     #[test]
     fn snapshot_resets_done() {
         let mut s = session();
@@ -516,6 +537,7 @@ mod tests {
         assert_eq!(v["markers"][0]["done"], json!(false));
     }
 
+    /// A point inside a group resolves to the child layer, never to the folder above it.
     #[test]
     fn layer_at_point_skips_groups() {
         // A folder's bounds cover its children; the point hit must resolve to the child layer,
@@ -535,6 +557,7 @@ mod tests {
         assert!(hit.is_some_and(|id| !d.layer(id).unwrap().is_group()));
     }
 
+    /// Deleting the bound layer and putting a replacement over the frame re-binds the marker.
     #[test]
     fn rebind_after_layer_deleted() {
         // Deleting a bound layer and placing a replacement over the same area re-binds the marker
@@ -560,6 +583,8 @@ mod tests {
         assert_eq!(v["markers"][0]["done"], json!(true), "content changed vs the old snapshot → green");
     }
 
+    /// A check that runs before the replacement exists leaves the marker orphaned, so the
+    /// replacement placed afterwards still binds it.
     #[test]
     fn rebind_when_the_replacement_layer_arrives_after_a_check() {
         // The automatic check runs right after the bound layer is deleted, when nothing covers the
@@ -588,6 +613,7 @@ mod tests {
         assert_eq!(v["markers"][0]["done"], json!(true), "content changed vs the old snapshot → green");
     }
 
+    /// Undoing a reset restores the previous snapshot and the green state with it.
     #[test]
     fn undo_restores_done() {
         // Undoing a reset (re-snapshot) restores the previous snapshot and the green state.
@@ -609,6 +635,7 @@ mod tests {
         assert_eq!(v["markers"][0]["done"], json!(true), "undo restores green");
     }
 
+    /// Checking records no history step, so the first undo steps back over the user's edit.
     #[test]
     fn checking_records_no_history_step() {
         // Checking reads the pixels, it does not edit them: no "Check Revision Markers" row lands in
