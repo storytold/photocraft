@@ -42,7 +42,9 @@ fn wave(horizontal: f32, vertical: f32) -> FilterParams {
 fn displacement(params: &FilterParams) -> Vec<(f32, f32)> {
     let out = apply(&coordinates(), params, AREA, AREA, None).read_region(INNER);
     let w = INNER.width() as i32;
-    out.chunks_exact(4)
+    out.as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .map(|(i, px)| {
             let (x, y) = (INNER.x0 + i as i32 % w, INNER.y0 + i as i32 / w);
