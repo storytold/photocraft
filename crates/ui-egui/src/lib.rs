@@ -918,6 +918,9 @@ mod move_shift_click_tests;
 mod move_target_default_tests;
 
 #[cfg(test)]
+mod wand_press_inside_selection_tests;
+
+#[cfg(test)]
 mod move_history_names_tests;
 #[cfg(test)]
 mod move_shift_diagonal_tests;
