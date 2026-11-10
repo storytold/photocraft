@@ -909,7 +909,12 @@ fn main_workspace_file_loads_as_the_default_and_saves_as_a_workspace() {
     let layout = &workspace.layout;
     assert_eq!(
         root_groups(layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["history", "actions", "designTimelineList"], vec!["layers", "channels"]]
+        [
+            vec!["color", "swatches", "gradients", "patterns"],
+            vec!["properties", "adjustments"],
+            vec!["history", "actions", "designTimelineList"],
+            vec!["layers", "channels"]
+        ]
     );
     assert!(in_dock_column(layout, "layers") && panel_active(layout, "actions"));
     for (panel, _, _) in PANELS {

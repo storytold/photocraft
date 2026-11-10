@@ -316,7 +316,7 @@ fn replay(steps: &[Step], drop: Option<usize>, t: &mut Tally) -> (Session, Vec<S
             report.push(format!("  #{i} {}: MISSING layer made by removed step #{:?}", st.id, o.map(|r| r.0)));
             continue;
         }
-        match target.map(&resolve) {
+        match target.map(resolve) {
             Some(Some(t)) => {
                 // Multi-layer target: the others, then the active one last so it stays active.
                 for (n, &o) in others.iter().enumerate() {
