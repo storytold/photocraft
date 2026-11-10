@@ -233,6 +233,10 @@ fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
                 assert_eq!(fields["width"], json!(0));
                 assert_eq!(fields["height"], json!(0));
                 assert_eq!(fields["convertToSrgb"], json!(true));
+                h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Source").click();
+                h.run_steps(3);
+                h.get_by_label("Folder").click();
+                h.run_steps(3);
             }
             choose_webp(&mut h);
             edit_path(&mut h, "Input", &input);
