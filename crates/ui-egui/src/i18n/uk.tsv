@@ -213,6 +213,8 @@
 	Paper Height	Висота паперу
 	Rows	Рядки
 	Number	Кількість
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Щоб продовжити, потрібно растеризувати цей шар заливки. Після цього його заливку більше не можна буде редагувати. Растеризувати шар?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Щоб продовжити, потрібно растеризувати цей смартоб’єкт. Після цього його вміст більше не можна буде редагувати. Растеризувати смартоб’єкт?
 	Top:	Зверху:
 	Left:	Ліворуч:
 	Bottom:	Знизу:

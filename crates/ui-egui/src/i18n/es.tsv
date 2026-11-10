@@ -98,6 +98,8 @@
 	Rows	Filas
 	Number	Número
 	Margin	Margen
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Esta capa de relleno debe rasterizarse antes de continuar. Su contenido de relleno dejará de ser editable. ¿Rasterizar la capa?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Este objeto inteligente debe rasterizarse antes de continuar. Su contenido dejará de ser editable. ¿Rasterizar el objeto inteligente?
 	Top:	Superior:
 	Left:	Izquierda:
 	Bottom:	Inferior:

@@ -128,6 +128,8 @@
 	Rows	Linhas
 	Number	Número
 	Margin	Margem
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
 	Top:	Superior:
 	Left:	Esquerda:
 	Bottom:	Inferior:

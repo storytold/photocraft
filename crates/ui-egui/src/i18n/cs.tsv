@@ -162,6 +162,8 @@
 	Rows	Řádky
 	Number	Počet
 	Margin	Okraj
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Před pokračováním je nutné tuto vrstvu výplně rastrovat. Její výplň už nebude možné upravovat. Rastrovat vrstvu?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Před pokračováním je nutné tento chytrý objekt rastrovat. Jeho obsah už nebude možné upravovat. Rastrovat chytrý objekt?
 	Top:	Nahoře:
 	Left:	Vlevo:
 	Bottom:	Dole:

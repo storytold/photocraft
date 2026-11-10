@@ -145,6 +145,8 @@
 	Rows	Righe
 	Number	Numero
 	Margin	Margine
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Per procedere il livello di riempimento deve essere rasterizzato. Il riempimento non sarà più modificabile. Rasterizzare il livello?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Per procedere l'oggetto avanzato deve essere rasterizzato. Il contenuto non sarà più modificabile. Rasterizzare l'oggetto avanzato?
 	Top:	Alto:
 	Left:	Sinistra:
 	Bottom:	Basso:

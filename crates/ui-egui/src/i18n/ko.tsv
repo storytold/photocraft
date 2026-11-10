@@ -129,6 +129,8 @@
 	Columns	열
 	Rows	행
 	Number	개수
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	계속하려면 이 칠 레이어를 래스터화해야 합니다. 이후에는 칠 내용을 편집할 수 없습니다. 레이어를 래스터화할까요?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	계속하려면 이 고급 개체를 래스터화해야 합니다. 이후에는 내용을 편집할 수 없습니다. 고급 개체를 래스터화할까요?
 	Top:	위:
 	Left:	왼쪽:
 	Bottom:	아래:

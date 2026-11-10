@@ -230,6 +230,7 @@
 	Rows	Строки
 	Number	Количество
 	Margin	Поля
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Перед продолжением необходимо растрировать этот смарт-объект. Его содержимое перестанет быть редактируемым. Растрировать смарт-объект?
 	Top:	Сверху:
 	Left:	Слева:
 	Bottom:	Снизу:
