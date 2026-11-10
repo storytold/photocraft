@@ -454,10 +454,7 @@ pub fn update(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         let same_selection = want.as_ref().map(|w| w.committed.source);
         for e in [app.doc_hist.as_mut(), app.doc_hist_preview.as_mut()].into_iter().flatten() {
-            if e.key.doc == doc
-                && tone::pixels_kept_since(st, e.key.revision)
-                && same_selection.is_none_or(|s| e.key.source == s)
-            {
+            if e.key.doc == doc && tone::pixels_kept_since(st, e.key.revision) && same_selection.is_none_or(|s| e.key.source == s) {
                 e.key.revision = rev;
             }
         }
@@ -755,8 +752,18 @@ fn statistics(ui: &mut egui::Ui, h: &Histograms, mode: ColorMode, channel: HistC
     };
     let rows = [
         (tl!("Mean:"), if no_visible_samples { "--".into() } else { format!("{:.2}", s.mean) }, tl!("Level:"), level),
-        (tl!("Std Dev:"), if no_visible_samples { "--".into() } else { format!("{:.2}", s.std_dev) }, tl!("Count:"), s.count.map(|c| c.to_string()).unwrap_or_default()),
-        (tl!("Median:"), if no_visible_samples { "--".into() } else { s.median.to_string() }, tl!("Percentile:"), s.percentile.filter(|_| !no_visible_samples).map(|p| format!("{p:.2}")).unwrap_or_default()),
+        (
+            tl!("Std Dev:"),
+            if no_visible_samples { "--".into() } else { format!("{:.2}", s.std_dev) },
+            tl!("Count:"),
+            s.count.map(|c| c.to_string()).unwrap_or_default(),
+        ),
+        (
+            tl!("Median:"),
+            if no_visible_samples { "--".into() } else { s.median.to_string() },
+            tl!("Percentile:"),
+            s.percentile.filter(|_| !no_visible_samples).map(|p| format!("{p:.2}")).unwrap_or_default(),
+        ),
         (tl!("Pixels:"), s.pixels.to_string(), tl!("Cache Level:"), h.level.max(1).to_string()),
     ];
     let mono = crate::theme::mono(11.5);
