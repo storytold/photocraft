@@ -725,7 +725,7 @@ fn content_aware_move_transform_on_drop_turns_the_patch_on_enter() {
 }
 
 #[test]
-fn red_eye_click_corrects_a_pupil_and_errors_on_a_miss() {
+fn red_eye_click_corrects_a_pupil_and_a_miss_adds_an_unchanged_state() {
     let mut app = app();
     app.run("paint.pencil", json!({"points": [[50, 30]], "size": 18, "hardness": 100, "color": "#f21818"})).unwrap();
     let before = active(&app).surface().unwrap().rgba(50, 30);
@@ -739,10 +739,14 @@ fn red_eye_click_corrects_a_pupil_and_errors_on_a_miss() {
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.redEye"));
     let after = active(&app).surface().unwrap().rgba(50, 30);
     assert!(after[0] < before[0] - 0.15, "before {before:?} after {after:?}");
+    // A miss changes nothing but still adds a state, as in Photoshop (#12573).
+    let steps = app.session.active().unwrap().history.past_len();
     tool_event(&mut app, ToolEvent::Down { x: 8.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Up { x: 8.0, y: 8.0 }, egui::Modifiers::NONE);
-    assert!(app.ui.status_error);
-    assert!(app.ui.status.contains("no red-eye pixels"), "{}", app.ui.status);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let history = &app.session.active().unwrap().history;
+    assert_eq!(history.past_len(), steps + 1);
+    assert_eq!(history.entries().last().map(|e| e.to_string()).as_deref(), Some("Red Eye Removal Tool"));
 }
 
 #[test]
