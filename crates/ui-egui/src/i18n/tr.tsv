@@ -4359,3 +4359,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shrinkwrap Canvas on Save	Kaydederken Tuvali İçeriğe Göre Küçült
 	Move Toolbar to the Right	Araç çubuğunu sağa taşı
 	Move Toolbar to the Left	Araç çubuğunu sola taşı
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Ön ayarlı bir en-boy oranı veya kırpma boyutu seçin
+	Set the aspect ratio for the crop box	Kırpma çerçevesinin en-boy oranını ayarlayın
+	Clear aspect ratio values	En-boy oranı değerlerini temizleyin
+	Set the overlay options for the Crop Tool	Kırpma yer paylaşımı seçeneklerini ayarlayın
+	Determines if pixel data outside the crop box is retained or deleted	Kırpma çerçevesinin dışındaki piksellerin korunup silineceğini belirler
+	How expanded crop area gets filled	Genişletilmiş kırpma alanının nasıl doldurulacağı
+	Displays pop-up help for the fill methods	Dolgu yöntemleri için açılır yardımı gösterir
+	Fill options	Dolgu seçenekleri
+	Background (default):	Arka plan (varsayılan):
+	Fill the expanded area with your background color or transparent pixels	Genişletilmiş alanı arka plan rengiyle veya saydam piksellerle doldurun
+	Content-aware fill	İçeriğe göre doldurma
+	Sample content from part of the image and use it to fill a small area	Küçük bir alanı doldurmak için görüntünün bir bölümünden içerik örnekleyin
+	Reset the crop box, image rotation, and aspect ratio settings	Kırpma çerçevesini, görüntü döndürmesini ve en-boy oranını sıfırlayın
