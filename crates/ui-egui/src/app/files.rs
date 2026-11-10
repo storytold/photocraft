@@ -253,9 +253,16 @@ impl PhotocraftApp {
                 // Confirming the document's own file: ask first if another app changed it (#6596).
                 if plain_save
                     && own.as_deref() == Some(path.as_str())
-                    && let Some(r) = crate::disk_change_prompt::intercept(app, doc, &path, true, choices)
+                    && let Some(r) = crate::disk_change_prompt::intercept(app, doc, &path, true, choices.clone())
                 {
                     return r;
+                }
+                // A PDF picked in the dialog asks for PDF Options (plain, or PDF/X for print); a
+                // script naming a path writes a plain PDF without asking.
+                if choices.pdf.is_none() && crate::pdf_options_ui::is_pdf_path(&path) {
+                    let copy = app.saves_copy(&path, None)?;
+                    crate::pdf_options_ui::park(app, path.clone(), copy, "file.saveAs")?;
+                    return Ok(serde_json::json!({"path": path, "warnings": []}));
                 }
                 let from = app.session.journal.len();
                 let r = app.save_to(path.clone(), choices)?;
@@ -308,7 +315,7 @@ impl PhotocraftApp {
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
-        let r = self.write_save(path, None, choices)?;
+        let r = self.write_save(path, None, &choices)?;
         // JPEG Options are recorded only where they change something
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
@@ -321,7 +328,7 @@ impl PhotocraftApp {
     /// Targa, DDS or JPEG answer), so an action being recorded keeps it (#2032).
     fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
         let mut step = self.save_as_record(&path);
-        let r = self.write_save(path, tiff_layers, choices)?;
+        let r = self.write_save(path, tiff_layers, &choices)?;
         if let Some(layers) = tiff_layers {
             step["tiffLayers"] = layers.into();
         }
@@ -345,6 +352,26 @@ impl PhotocraftApp {
             }
             _ => serde_json::json!({"path": path}),
         }
+    }
+
+    /// `settings` for writing `doc` to `path` with the PDF/X answer in `choices` resolved against
+    /// the session's colour settings (unchanged for a plain PDF, no answer, or a destination that
+    /// isn't a PDF, whose exporter never reads it). Every save path that takes format choices goes
+    /// through this, so a scripted or replayed PDF/X save is never written as a plain PDF.
+    pub(crate) fn with_pdf_choice(
+        &self,
+        choices: &FormatChoices,
+        doc: &photocraft_doc::Document,
+        path: &str,
+        mut settings: ExportSettings,
+    ) -> Result<ExportSettings, String> {
+        if let Some(pdf) = &choices.pdf
+            && crate::pdf_options_ui::is_pdf_path(path)
+            && let Some(request) = photocraft_engine::file_cmds::PdfRequest::resolve(&self.session.color, pdf).map_err(|e| e.to_string())?
+        {
+            settings.pdf = request.options_for(doc);
+        }
+        Ok(settings)
     }
 
     /// `step` (a save answered in a format prompt, recorded with its `path`) as
@@ -521,9 +548,10 @@ impl PhotocraftApp {
     /// `Some(false)` discards the layers and saves a copy. `choices` are the Targa bits per pixel
     /// (`None`: 32 with an alpha channel or transparency, else 24), the DDS options and the JPEG
     /// Options.
-    fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
+    fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: &FormatChoices) -> Result<Value, String> {
         let copy = self.saves_copy(&path, tiff_layers)?;
         let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
+        let settings = self.with_pdf_choice(choices, &self.session.active().ok_or("no document")?.doc, &path, settings)?;
         match self.write_document(path.clone(), &settings, copy)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
@@ -710,9 +738,9 @@ impl PhotocraftApp {
         own == path && self.services.file_stamp.as_ref().and_then(|stamp| stamp(path)).is_some_and(|now| now != *then)
     }
 
-    /// TIFF, Targa, DDS or JPEG Options is waiting on an answer before a save is written.
+    /// TIFF, Targa, DDS, JPEG or PDF Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
+        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some() || self.pdf_options.is_some()
     }
 
     /// Writes a save that waited on a format prompt (Targa, DDS, JPEG or TIFF Options) once answered:
@@ -774,6 +802,19 @@ impl PhotocraftApp {
         // Only the target is granted: a linked smart object's stored path is document data, so
         // PSD export writes that layer as pixels instead of embedding the file.
         let settings = ExportSettings { read_linked_files: false, ..choices.apply(self.save_settings()) };
+        // Only the target is granted here too: an output profile named by its file would be read
+        // without the automation read authority and embedded in the PDF.
+        if let Some(spec) = choices
+            .pdf
+            .as_ref()
+            .and_then(|p| p.profile.as_deref())
+            .filter(|s| photocraft_engine::file_cmds::names_a_profile_file(s) && crate::pdf_options_ui::is_pdf_path(&target))
+        {
+            return Err(format!(
+                "`pdfOutputProfile` \"{spec}\": an automation save can't read a profile file; pass a built-in id, \"working-cmyk\" or \"document\" (set the working CMYK first to use another profile)"
+            ));
+        }
+        let settings = self.with_pdf_choice(&choices, &self.session.active().ok_or("no document")?.doc, &target, settings)?;
         // #2017: the File › Save worker path, so the encode doesn't block the frame loop.
         if self.background_jobs
             && let Some(save) = self.services.automation_save.clone()

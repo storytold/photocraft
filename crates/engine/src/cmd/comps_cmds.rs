@@ -463,7 +463,7 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         apply_comp(&mut one, c, false);
         one.last_applied_comp = Some(c.id);
         let path = join(&dir, &format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&c.name)));
-        save_doc(&one, &path, save)?;
+        save_doc(&one, &path, save.clone())?;
         files.push(path);
     }
     if files.is_empty() {

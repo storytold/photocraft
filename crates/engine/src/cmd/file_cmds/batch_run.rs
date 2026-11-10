@@ -247,7 +247,7 @@ fn process_outputs<'a>(
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
-        let r = process_one(raw_ppi, path, &out, save, ProcessOptions { format: None, written: Some(&written), ctx: None, input: None }, &run);
+        let r = process_one(raw_ppi, path, &out, &save, ProcessOptions { format: None, written: Some(&written), ctx: None, input: None }, &run);
         match r {
             Ok(()) => {
                 written.record(&out, path);
@@ -279,7 +279,7 @@ fn process_one(
     raw_ppi: f64,
     path: &str,
     out: &str,
-    save: SaveOpts,
+    save: &SaveOpts,
     options: ProcessOptions<'_>,
     f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
 ) -> std::result::Result<(), FileFailure> {
@@ -313,9 +313,9 @@ fn process_one(
         let d = scratch.active().ok_or(EngineError::NoDocument)?;
         let warnings = if let Some(format) = options.format {
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
-            if let Some(ctx) = options.ctx { save_batch_doc(&d.doc, out, &ext, save, ctx)? } else { save_doc_as(&d.doc, out, &ext, save)? }
+            if let Some(ctx) = options.ctx { save_batch_doc(&d.doc, out, &ext, save, ctx)? } else { save_doc_as(&d.doc, out, &ext, save.clone())? }
         } else {
-            save_doc(&d.doc, out, save)?
+            save_doc(&d.doc, out, save.clone())?
         };
         record_export_warnings(&mut scratch, out, warnings);
         Ok(())
@@ -328,8 +328,8 @@ fn process_one(
 
 /// Encode before the Batch write checkpoint. Esc accepted during an action or encode therefore
 /// leaves the current destination untouched; the worker owns the write once the checkpoint passes.
-fn save_batch_doc(doc: &Document, out: &str, format: &str, save: SaveOpts, ctx: &crate::jobs::JobCtx) -> Result<Vec<String>> {
-    let (bytes, warnings) = encode(doc, format, save)?;
+fn save_batch_doc(doc: &Document, out: &str, format: &str, save: &SaveOpts, ctx: &crate::jobs::JobCtx) -> Result<Vec<String>> {
+    let (bytes, warnings) = encode(doc, format, save.clone())?;
     ctx.batch_before_write()?;
     write_file(out, &bytes)?;
     Ok(warnings)
@@ -485,7 +485,7 @@ fn process_batch_outputs_with(
             raw_ppi,
             path,
             out,
-            save,
+            &save,
             ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input },
             f,
         );
@@ -999,7 +999,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     match saved {
                         Some(doc) if scratch.active().is_none_or(|d| d.doc.id != doc.id) => {
                             validate_result(scratch, &doc)?;
-                            let warnings = save_batch_doc(&doc, out, &encode_format, save, ctx)?;
+                            let warnings = save_batch_doc(&doc, out, &encode_format, &save, ctx)?;
                             record_export_warnings(scratch, out, warnings);
                             Ok(true)
                         }
@@ -1021,7 +1021,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 result
             };
             let mut result = process_batch_outputs_with(
-                BatchRun { raw_ppi, format: &format, save, policy: &policy, input: Some(&input), check_duplicates },
+                BatchRun { raw_ppi, format: &format, save: save.clone(), policy: &policy, input: Some(&input), check_duplicates },
                 outputs,
                 ctx,
                 &run,
@@ -1150,7 +1150,7 @@ fn batch_open_documents(
                 None => s.documents().iter().find(|state| state.doc.id.0 == *id).ok_or(EngineError::NoDocument)?.doc.clone(),
             };
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
-            save_doc_as(&doc, out, &ext, save)?;
+            save_doc_as(&doc, out, &ext, save.clone())?;
             written.record(out, path);
             files.push(out.clone());
             Ok(())

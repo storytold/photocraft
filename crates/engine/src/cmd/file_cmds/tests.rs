@@ -4192,6 +4192,150 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
     });
 }
 
+/// `file.saveACopy` writes PDF/X-1a:2001 when its params ask: the output profile by path, the
+/// bleed as the trim box, RGB converted to device CMYK; a v4 profile and bad params are refused
+/// and write nothing.
+#[test]
+fn save_a_copy_writes_pdf_x1a_from_its_params() {
+    let dir = tmp("pdfx");
+    let mut v2 = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes().to_vec();
+    v2[8] = 2;
+    v2[9] = 0x10;
+    let icc = join(&dir, "v2.icc");
+    std::fs::write(&icc, v2).unwrap();
+    let mut s = session(300, 150, 8);
+    s.edit("resolution", |doc, _| {
+        doc.resolution_dpi = 300.0;
+        Ok(())
+    })
+    .unwrap();
+    let out = join(&dir, "print.pdf");
+    s.execute("file.saveACopy", json!({"path": out, "pdfStandard": "x1a2001", "pdfOutputProfile": icc, "pdfBleedMm": 3})).unwrap();
+    let pdf = std::fs::read(&out).unwrap();
+    let has = |n: &str| pdf.windows(n.len()).any(|w| w == n.as_bytes());
+    assert!(pdf.starts_with(b"%PDF-1.3"));
+    assert!(has("/GTS_PDFXConformance (PDF/X-1a:2001)") && has("/S /GTS_PDFX"));
+    assert!(has("/TrimBox [8.50 8.50 63.50 27.50]"), "3 mm in from a 1 × 0.5 in page");
+    assert!(has("/ColorSpace /DeviceCMYK") && !has("/DeviceRGB"));
+
+    let plain = join(&dir, "plain.pdf");
+    s.execute("file.saveACopy", json!({"path": plain, "pdfStandard": "none"})).unwrap();
+    assert!(std::fs::read(&plain).unwrap().starts_with(b"%PDF-1.4"), "a plain PDF as before");
+
+    let refused = join(&dir, "refused.pdf");
+    for p in [
+        json!({"path": refused, "pdfStandard": "x1a2001", "pdfOutputProfile": "coated-cmyk"}),
+        json!({"path": refused, "pdfStandard": "x5"}),
+        json!({"path": refused, "pdfStandard": "x1a2001", "pdfConvert": false}),
+        json!({"path": refused, "pdfConvert": true}),
+        json!({"path": refused, "pdfStandard": "x3-2002", "pdfConvert": "no"}),
+        json!({"path": refused, "pdfBleedMm": 3}),
+        json!({"path": refused, "pdfStandard": "x1a2001", "pdfBleedMm": 99}),
+        json!({"path": refused, "pdfStandard": "x1a2001", "pdfOutputProfile": 7}),
+    ] {
+        assert!(s.execute("file.saveACopy", p.clone()).is_err(), "{p}");
+    }
+    assert!(std::fs::metadata(&refused).is_err(), "nothing written");
+}
+
+/// `file.saveACopy` writes PDF/X-3:2002 and PDF/X-4 from its params: X-4 takes the built-in ICC v4
+/// CMYK and carries XMP; both keep RGB tagged with the document's profile when `pdfConvert` is
+/// false, and X-3 refuses a v4 profile it would have to embed.
+#[test]
+fn save_a_copy_writes_pdf_x3_and_x4_from_its_params() {
+    let dir = tmp("pdfx34");
+    let mut s = session(72, 36, 8);
+    let x4 = join(&dir, "x4.pdf");
+    s.execute("file.saveACopy", json!({"path": x4, "pdfStandard": "x4-2008", "pdfOutputProfile": "coated-cmyk", "pdfConvert": false})).unwrap();
+    let pdf = std::fs::read(&x4).unwrap();
+    let has = |pdf: &[u8], n: &str| pdf.windows(n.len()).any(|w| w == n.as_bytes());
+    assert!(pdf.starts_with(b"%PDF-1.6"));
+    assert!(has(&pdf, "/GTS_PDFXVersion (PDF/X-4)") && has(&pdf, "<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"));
+    assert!(has(&pdf, "/ColorSpace [/ICCBased 8 0 R]"), "RGB stays tagged");
+
+    let converted = join(&dir, "x4c.pdf");
+    s.execute("file.saveACopy", json!({"path": converted, "pdfStandard": "x4", "pdfOutputProfile": "coated-cmyk"})).unwrap();
+    let pdf = std::fs::read(&converted).unwrap();
+    assert!(has(&pdf, "/ColorSpace /DeviceCMYK") && !has(&pdf, "/ICCBased"), "converted by default");
+
+    let x3 = join(&dir, "x3.pdf");
+    let e = s.execute("file.saveACopy", json!({"path": x3, "pdfStandard": "x3-2002", "pdfOutputProfile": "coated-cmyk"})).unwrap_err().to_string();
+    assert!(e.contains("PDF/X-3:2002") && e.contains("version 2"), "{e}");
+    assert!(std::fs::metadata(&x3).is_err(), "nothing written");
+}
+
+/// A CMYK document keeps its numbers only when its profile is the output profile by data: one
+/// with the same name and other data is converted. A gray document goes out as the black ink,
+/// unless No Conversion keeps a gray profile it carries.
+#[test]
+fn pdf_x_keeps_numbers_only_for_the_same_profile_data() {
+    use photocraft_cms::{Builtin, Intent, Profile};
+    use photocraft_io::PdfXStandard;
+    let coated = Builtin::CoatedCmyk.profile().to_bytes();
+    let mut other = coated.to_vec();
+    other[64] ^= 1; // the header's rendering intent: other data, the same description
+    let other = Profile::parse(&other).unwrap();
+    let dest = Profile::parse(&coated).unwrap();
+    assert_eq!(other.description, dest.description);
+    assert!(!same_profile(&other, &dest) && same_profile(&dest, &Profile::parse(&coated).unwrap()));
+
+    let mut s = session(4, 4, 8);
+    s.execute("image.mode.cmyk", json!({"profile": "coated-cmyk"})).unwrap();
+    let mut d = doc(&s).clone();
+    let x = |d: &Document, dest: &Profile, convert: bool| pdf_x_options(d, PdfXStandard::X4, dest, convert, Intent::RelativeColorimetric, true, 0.0).x.unwrap();
+    d.icc_profile = Some(coated.clone());
+    assert!(x(&d, &dest, true).source.is_none(), "the same profile keeps the numbers");
+    assert!(x(&d, &other, true).source.is_some(), "the same name with other data is converted");
+
+    let mut g = session(4, 4, 8);
+    g.execute("image.mode.grayscale", json!({})).unwrap();
+    let mut gray = doc(&g).clone();
+    gray.icc_profile = None;
+    assert!(x(&gray, &dest, false).source.is_none(), "untagged gray is the black ink");
+    gray.icc_profile = Some(Builtin::SGray.profile().to_bytes());
+    assert!(x(&gray, &dest, true).source.is_none(), "converting keeps gray as the black ink");
+    assert!(x(&gray, &dest, false).source.is_some(), "No Conversion keeps its gray profile");
+}
+
+#[test]
+fn profile_files_are_told_from_profile_ids() {
+    for file in ["C:/x/ISOcoated.icc", "/usr/share/color/icc/a.icm", r"C:\Windows\a.ICC", "printer.icc", "D:x"] {
+        assert!(names_a_profile_file(file), "{file}");
+    }
+    for id in ["coated-cmyk", "working-cmyk", "document", "srgb"] {
+        assert!(!names_a_profile_file(id), "{id}");
+    }
+}
+
+/// PDF answers are resolved for a PDF target only: a PNG save with an unknown output profile
+/// writes its PNG, while the same answers on a PDF save are refused.
+#[test]
+fn pdf_answers_matter_only_for_a_pdf_target() {
+    let dir = tmp("pdfonly");
+    let mut s = session(8, 8, 8);
+    let png = join(&dir, "a.png");
+    s.execute("file.saveACopy", json!({"path": png, "pdfStandard": "x4-2008", "pdfOutputProfile": "no-such-profile"})).unwrap();
+    assert!(std::fs::metadata(&png).is_ok(), "the PNG is written");
+    let pdf = join(&dir, "a.pdf");
+    let e = s.execute("file.saveACopy", json!({"path": pdf, "pdfStandard": "x4-2008", "pdfOutputProfile": "no-such-profile"})).unwrap_err().to_string();
+    assert!(e.contains("pdfOutputProfile"), "{e}");
+    assert!(std::fs::metadata(&pdf).is_err(), "nothing written");
+}
+
+/// Recording a PDF choice into a step that already holds one replaces it, so the step stays
+/// valid: no output profile, bleed or conversion is left beside a plain PDF.
+#[test]
+fn recording_a_pdf_choice_replaces_the_old_one() {
+    let mut step = json!({"path": "a.pdf", "pdfStandard": "x4-2008", "pdfOutputProfile": "coated-cmyk", "pdfBleedMm": 3.0, "pdfConvert": false});
+    PdfParams::PLAIN.record(&mut step);
+    assert_eq!(step, json!({"path": "a.pdf", "pdfStandard": "none"}));
+    assert!(pdf_params(&step, "file.saveACopy").is_ok(), "the step replays");
+    let x1a = PdfParams { standard: Some(photocraft_io::PdfXStandard::X1a2001), profile: None, bleed_mm: 0.0, convert: true };
+    let mut step = json!({"pdfStandard": "x4-2008", "pdfBleedMm": 3.0, "pdfConvert": false});
+    x1a.record(&mut step);
+    assert_eq!(step, json!({"pdfStandard": "x1a2001"}));
+}
+
 thread_local! { static REVIEW_CANCEL: std::cell::RefCell<Option<crate::jobs::JobCtx>> = const { std::cell::RefCell::new(None) }; }
 
 fn cancel_at_marker(id: &str, params: &Value) -> Result<()> {

@@ -64,11 +64,11 @@ pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join,
 pub(crate) use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 use save::save_a_copy;
-pub(crate) use save::{SaveOpts, encode, save_doc};
 pub use save::{
-    dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, maximize_compatibility_param, pcraft_full_composite_param, tga_bits_param, tiff_bool_param,
-    tiff_compression_param, tiff_would_write_layers,
+    PdfParams, PdfRequest, dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, maximize_compatibility_param, names_a_profile_file,
+    pcraft_full_composite_param, pdf_params, pdf_x_options, same_profile, tga_bits_param, tiff_bool_param, tiff_compression_param, tiff_would_write_layers,
 };
+pub(crate) use save::{SaveOpts, encode, save_doc};
 
 mod batch_naming;
 pub(crate) use batch_naming::COMPONENTS as BATCH_NAMING_COMPONENTS;
@@ -275,7 +275,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save a Copy…",
             &["File"],
             Some("Cmd+Alt+S"),
-            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"jpegFormat":"baseline|optimized|progressive"? (JPEG; default baseline),"layers":bool=true,"overwrite":bool=false (replace the document's own file),"tiffLayers":bool=false (TIFF: keep the layers; flat by default),"tiffCompression":"none|lzw|zip"? (TIFF: image compression; unset, none),"tiffTransparency":bool? (TIFF: Save Transparency; off composites over white; unset, kept unless the document has alpha or spot channels),"tiffPyramid":bool=false (TIFF: Save Image Pyramid, half-size copies after the image),"tgaBits":24|32? (TGA: 32 writes the alpha channel, or else the transparency, as the alpha; unset, 32 with an alpha channel or transparency, else 24),"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pcraftFullComposite":bool? (.pcraft: request the flattened document at its canvas size as composite/full.png; it may be omitted; check the manifest's full_composite member; unset, Preferences › File Handling)}"##,
+            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"jpegFormat":"baseline|optimized|progressive"? (JPEG; default baseline),"layers":bool=true,"overwrite":bool=false (replace the document's own file),"tiffLayers":bool=false (TIFF: keep the layers; flat by default),"tiffCompression":"none|lzw|zip"? (TIFF: image compression; unset, none),"tiffTransparency":bool? (TIFF: Save Transparency; off composites over white; unset, kept unless the document has alpha or spot channels),"tiffPyramid":bool=false (TIFF: Save Image Pyramid, half-size copies after the image),"tgaBits":24|32? (TGA: 32 writes the alpha channel, or else the transparency, as the alpha; unset, 32 with an alpha channel or transparency, else 24),"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"pcraftFullComposite":bool? (.pcraft: request the flattened document at its canvas size as composite/full.png; it may be omitted; check the manifest's full_composite member; unset, Preferences › File Handling),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pcraftFullComposite":bool? (.pcraft: request the flattened document at its canvas size as composite/full.png; it may be omitted; check the manifest's full_composite member; unset, Preferences › File Handling),"pdfStandard":"none|x1a2001|x3-2002|x4-2008"="none" (PDF: plain, or PDF/X for print: X-1a device CMYK only, X-3 and X-4 also ICC-tagged colour, X-4 PDF 1.6 with XMP and ICC v4 profiles),"pdfOutputProfile":"<builtin id>|working-cmyk|document|/path/to/profile.icc"? (PDF/X: the CMYK output condition, ICC v2 for X-1a and X-3; unset, the document's own CMYK profile, else the working CMYK),"pdfBleedMm":0..50=0 (PDF/X: the bleed inside the document; the trim box sits this far inside the page),"pdfConvert":bool=true (PDF/X-3 and X-4: convert colour to the output profile; false keeps it in the document's profile, embedded)}"##,
             native_doc,
             save_a_copy
         ),

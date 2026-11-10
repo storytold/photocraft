@@ -68,6 +68,7 @@ pub mod pdf;
 #[cfg(all(feature = "pdf-editable", not(target_arch = "wasm32")))]
 mod pdf_editable;
 mod pdf_import;
+pub use pdf::{PdfOptions, PdfX, PdfXStandard};
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -437,6 +438,8 @@ pub struct ExportOptions {
     /// omit it; check the manifest's `full_composite` member ([`photocraft_format::read_full_composite`]
     /// reads it). Off by default.
     pub pcraft_full_composite: bool,
+    /// PDF: plain, or PDF/X-1a:2001 for print (Save As asks in PDF Options).
+    pub pdf: pdf::PdfOptions,
 }
 
 impl Default for ExportOptions {
@@ -455,6 +458,7 @@ impl Default for ExportOptions {
             pcraft_cache: None,
             read_linked_files: true,
             pcraft_full_composite: false,
+            pdf: pdf::PdfOptions::default(),
         }
     }
 }
@@ -1205,7 +1209,7 @@ fn export_stages_with_renderer(
         return Ok(res.into());
     }
     if ext == "pdf" {
-        let mut res = pdf::export(doc, ctl)?;
+        let mut res = pdf::export_with_options(doc, &opts.pdf, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
             res.warnings.extend(r.drain_diagnostics());

@@ -677,6 +677,10 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
                 crate::dds_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
                 return Ok(true);
             }
+            if crate::pdf_options_ui::is_pdf_path(&path) {
+                crate::pdf_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                return Ok(true);
+            }
             if crate::jpeg_options_ui::wants_prompt(app, &path) {
                 crate::jpeg_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
                 return Ok(true);
@@ -700,7 +704,7 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// path and saved state are untouched. `choices` are the Targa, DDS and JPEG answers, when there
 /// are any.
 pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, path: &str, choices: crate::FormatChoices) -> Result<Value, String> {
-    let settings = choices.apply(app.save_settings());
+    let settings = app.with_pdf_choice(&choices, doc, path, choices.apply(app.save_settings()))?;
     crate::app::ensure_memory_to_save(doc, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(doc, path, &settings)?;

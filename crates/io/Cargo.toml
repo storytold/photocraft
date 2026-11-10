@@ -40,6 +40,9 @@ craft-docpath = { workspace = true }
 thiserror = { workspace = true }
 ttf-parser = "0.25.1"
 serde_json = { workspace = true }
+# PDF/X dates (Info and XMP) and the save time, also in the browser.
+chrono = { workspace = true }
+web-time = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # svg.rs inflates `.svgz` itself (with a size cap) so the XML can be checked before it is parsed;
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
