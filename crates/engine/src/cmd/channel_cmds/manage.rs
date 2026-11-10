@@ -346,10 +346,8 @@ pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
             if probe.spot.is_some() {
                 return Err(bad(cmd, "Quick Mask can't be a spot channel"));
             }
-            s.edit_prefs(|p| p.quick_mask_selected_areas = probe.indicates == ColorIndicates::SelectedAreas);
-            s.quick_mask_options = QuickMaskOptions { color: probe.color, opacity: probe.opacity, indicates: probe.indicates };
+            let o = QuickMaskOptions { color: probe.color, opacity: probe.opacity, indicates: probe.indicates };
             if s.active().is_some_and(|d| d.doc.quick_mask.is_some()) {
-                let o = s.quick_mask_options;
                 s.edit("Quick Mask Options", |doc, _| {
                     set_quick_mask_indication(doc, o.indicates);
                     if let Some(q) = &mut doc.quick_mask {
@@ -359,6 +357,8 @@ pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 })?;
             }
+            s.edit_prefs(|p| p.quick_mask_selected_areas = o.indicates == ColorIndicates::SelectedAreas);
+            s.quick_mask_options = o;
         }
         ChanRef::LayerMask => {
             // Layer Mask Display Options: only the rubylith's colour and opacity, for every mask.
