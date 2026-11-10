@@ -271,12 +271,17 @@ fn open_dropdown(h: &mut egui_kittest::Harness<'_, PhotocraftApp>) {
 
 /// One wheel notch down (the next mode) over the point `at`.
 fn wheel_down(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, at: egui::Pos2) {
+    wheel_notches_down(h, at, 1.0);
+}
+
+/// `notches` wheel notches down in one event over the point `at`.
+fn wheel_notches_down(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, at: egui::Pos2, notches: f32) {
     h.hover_at(at);
     h.run_steps(1);
     h.event(Event::MouseWheel {
         source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
-        delta: egui::vec2(0.0, -1.0),
+        delta: egui::vec2(0.0, -notches),
         phase: egui::TouchPhase::Move,
         modifiers: Default::default(),
     });
@@ -307,6 +312,11 @@ fn the_options_bar_dropdown_greys_behind_on_the_background() {
     wheel_down(&mut h, at);
     assert!(!h.state().session.tools.brush.behind, "the wheel steps past the greyed Behind");
     assert_eq!(h.state().session.tools.brush.mode, BlendMode::Darken);
+    // Several notches at once: the greyed entry costs none of them (Dissolve, Darken, Multiply).
+    let mut h = harness(false);
+    wheel_notches_down(&mut h, at, 3.0);
+    assert!(!h.state().session.tools.brush.behind);
+    assert_eq!(h.state().session.tools.brush.mode, BlendMode::Multiply);
 }
 
 /// On a pixel layer the dropdown's Behind is enabled and a click picks it.
