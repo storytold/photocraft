@@ -16,6 +16,20 @@ fn per_dab(e: f32, spacing: f32) -> f32 {
     1.0 - (1.0 - e.clamp(0.0, 1.0)).powf(spacing.clamp(0.01, 1.0))
 }
 
+/// The dab spacing, as a share of the tip's diameter, at which the reference's Sharpen drags
+/// with Protect Detail were measured: each point of a drag got 4 dabs (#12938).
+const PROTECT_DETAIL_SPACING: f32 = 0.25;
+
+/// The share of a full Protect Detail dab that a dab of `radius` at `moved` px from the previous
+/// one applies: the first dab of a stroke (a click) is a full dab, and a drag adds up to the
+/// reference's 4 full dabs over each point whatever the spacing, so many overlapping dabs don't
+/// compound into black and white bands. It scales the strength itself rather than `1 − k` like
+/// [`per_dab`], which stays 1 for a hard tip at 100 %.
+#[inline]
+fn protect_detail_share(moved: Option<f32>, radius: f32) -> f32 {
+    moved.map_or(1.0, |m| (m / (2.0 * radius.max(0.5) * PROTECT_DETAIL_SPACING)).clamp(0.0, 1.0))
+}
+
 /// Apply an RGB colour transform `f(rgb, strength)` to each covered pixel of a dab (through straight
 /// RGBA, so it works for Gray/CMYK/Lab too; untouched pixels are never round-tripped).
 fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32, spacing: f32, f: impl Fn([f32; 3], f32) -> [f32; 3]) {
@@ -226,9 +240,14 @@ impl DabTool {
             Self::Sponge { saturate, vibrance } => Box::new(move |work, fp| color_dab(&fmt, work, fp, 0.5, sp, |c, k| sponge(c, k, saturate, vibrance))),
             Self::Focus { sharpen, strength, protect, sigma } => {
                 let a = alpha_index(&fmt);
+                // Protect Detail: where the previous dab was, for `protect_detail_share`.
+                let mut last: Option<(f64, f64)> = None;
                 Box::new(move |work, fp| {
+                    let c = (fp.dab.center.x, fp.dab.center.y);
+                    let moved = last.replace(c).map(|(x, y)| (c.0 - x).hypot(c.1 - y) as f32);
+                    let share = protect_detail_share(moved, fp.dab.radius);
                     let r = fp.rect.intersect(&work.rect);
-                    if r.is_empty() {
+                    if r.is_empty() || (sharpen && protect && share <= 0.0) {
                         return;
                     }
                     let (w, h, n) = (work.width(), work.height(), work.ch);
@@ -243,10 +262,11 @@ impl DabTool {
                             return;
                         }
                         for x in r.x0..r.x1 {
-                            // Protect Detail applies Strength once per dab, so one click at 50 %
-                            // does half of what 100 % does (#12938). Spread over the overlapping
-                            // dabs (`per_dab`), it did 7 % of it at the default 10 % spacing.
-                            let k = if sharpen && protect { fp.at(x, y) * strength } else { per_dab(fp.at(x, y) * strength, sp) };
+                            // Protect Detail: one click at 50 % does half of what 100 % does, and
+                            // a drag over a point adds up to the reference's 4 dabs (#12938).
+                            // Spread over `1/spacing` dabs (`per_dab`), a click did 7 % of it at
+                            // the default 10 % spacing.
+                            let k = if sharpen && protect { fp.at(x, y) * strength * share } else { per_dab(fp.at(x, y) * strength, sp) };
                             if k <= 0.0 {
                                 continue;
                             }

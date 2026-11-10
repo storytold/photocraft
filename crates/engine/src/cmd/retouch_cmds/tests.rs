@@ -499,6 +499,44 @@ fn protect_detail_click_on_a_step_follows_strength() {
 }
 
 #[test]
+fn protect_detail_drags_at_the_default_spacing_widen_the_halo_without_banding() {
+    // #12938: three 40 px hard drags down a grey 96 | 160 step with the brush's own spacing. The
+    // reference gives a smooth halo that deepens and widens with every pass, with no 0/255
+    // pattern. Its drags put 4 dabs on each point (25 % spacing); at the default 10 % the drag
+    // must add up to the same, not to 10 full dabs.
+    let level = |s: &Session, x| (rgba(s, x, 80)[0] * 255.0).round() as i32;
+    let drag = |s: &mut Session, strength, spacing: Option<u32>| {
+        let mut p = json!({"points": [[40, 10], [40, 150]], "size": 40, "hardness": 100, "strength": strength});
+        if let Some(sp) = spacing {
+            p["spacing"] = json!(sp);
+        }
+        s.execute("paint.sharpen", p).unwrap();
+    };
+    let step = |x: i32, _| if x < 40 { [96.0 / 255.0, 96.0 / 255.0, 96.0 / 255.0, 1.0] } else { [160.0 / 255.0, 160.0 / 255.0, 160.0 / 255.0, 1.0] };
+    for strength in [50, 100] {
+        let (mut s, mut at25) = (session(80, 160, 8, "rgb"), session(80, 160, 8, "rgb"));
+        assert!((s.tools.brush.spacing - 0.1).abs() < 1e-6, "the default retouch spacing");
+        paint_layer(&mut s, step);
+        paint_layer(&mut at25, step);
+        let (mut depth, mut width) = (0, 0);
+        for pass in 1..=3 {
+            drag(&mut s, strength, None);
+            drag(&mut at25, strength, Some(25));
+            let row: Vec<i32> = (0..80).map(|x| level(&s, x)).collect();
+            assert!(row.iter().all(|v| (1..=254).contains(v)), "{strength} % pass {pass}: black and white bands {row:?}");
+            for x in [39, 40] {
+                let (got, want) = (level(&s, x), level(&at25, x));
+                assert!((got - want).abs() <= 4, "{strength} % pass {pass}: x {x} = {got} at the default spacing, {want} at 25 %");
+            }
+            let (d, w) = (96 - row[39], (20..40).filter(|&x| row[x] < 94).count());
+            assert!(d > depth && w >= width, "{strength} % pass {pass}: halo depth {d} (was {depth}), width {w} (was {width}): {row:?}");
+            (depth, width) = (d, w);
+        }
+        assert!(width >= 4, "{strength} %: the halo widens to {width} px");
+    }
+}
+
+#[test]
 fn smudge_moves_colour_along_the_stroke() {
     for depth in DEPTHS {
         let mut s = session(100, 30, depth, "rgb");
