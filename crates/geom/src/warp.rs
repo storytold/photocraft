@@ -1200,7 +1200,10 @@ impl Warp {
 
     /// A preset style.
     pub fn preset(style: WarpStyle, bend: f64, bounds: [f64; 4]) -> Warp {
-        let envelope = !matches!(style, WarpStyle::None | WarpStyle::Custom | WarpStyle::Cylinder | WarpStyle::Fisheye | WarpStyle::Twist | WarpStyle::ShellLower | WarpStyle::ShellUpper);
+        let envelope = !matches!(
+            style,
+            WarpStyle::None | WarpStyle::Custom | WarpStyle::Cylinder | WarpStyle::Fisheye | WarpStyle::Twist | WarpStyle::ShellLower | WarpStyle::ShellUpper
+        );
         Warp { style, bend, envelope, ..Warp::none(bounds) }
     }
 
