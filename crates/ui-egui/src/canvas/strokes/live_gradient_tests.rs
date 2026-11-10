@@ -102,3 +102,97 @@ fn actual_shared_live_damage_covers_initial_and_pushed_gradient_relayout() {
         same(&shown, &render(doc, doc.bounds()));
     }
 }
+/// Reproduce frame growth from a real Alt-reversed Eraser Retouch with a history-only Background.
+fn history_app(overlay: bool) -> PhotocraftApp {
+    let mut app = app(overlay);
+    let background = app.session.active().unwrap().doc.layers[0].id;
+    // State 0 is file.new: its only layer is the white Background. Keep it as the source while
+    // hiding it in the current document so the Retouch must restore white into the active raster.
+    app.session.execute("history.setSource", json!({"state":0})).unwrap();
+    app.session.execute("layer.setProps", json!({"layer":background.0,"visible":false})).unwrap();
+    app.ui.tool = Tool::Eraser;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.session.execute("tools.setBrush", json!({"brush":{"size":1,"hardness":1.0,"opacity":1.0,"flow":1.0,"smoothing":{"amount":0.0}}})).unwrap();
+    app.ui.tool_options.eraser_mode = "pencil".into();
+    assert!(!app.ui.tool_options.erase_to_history);
+    app.sync_views();
+    app
+}
+
+/// Alt at the real press routes Eraser pencil mode through Retouch and exposes its damage steps.
+#[test]
+fn actual_history_retouch_frame_growth_covers_gradient_damage() {
+    for (overlay, pushed) in [(false, false), (true, false), (true, true)] {
+        let mut app = history_app(overlay);
+        let active = app.session.active().unwrap();
+        let revision = active.revision;
+        let source = active.doc.clone();
+        let id = active.active_layer.unwrap();
+        assert_eq!(effects_frame(source.layer(id).unwrap(), source.bounds()), Rect::new(64, 8, 768, 56));
+        let mut shown = render(&source, source.bounds());
+        assert_eq!(source.layer(id).unwrap().surface().unwrap().rgba(896, 32), [0.0; 4]);
+        let start = if pushed { 744.5 } else { 896.5 };
+        tool_event(&mut app, ToolEvent::Down { x: start, y: 32.5, pressure: 1.0 }, egui::Modifiers::ALT);
+
+        let seen = {
+            let first = app.live_stroke.as_ref().expect("real Alt Down starts a live Retouch");
+            assert!(matches!(&first.stroke, super::EngineStroke::Retouch(_)));
+            assert_eq!(first.damage.len(), 1, "the real Down publishes one damage step");
+            if pushed {
+                assert_eq!(
+                    effects_frame(first.stroke.doc().layer(id).unwrap(), source.bounds()).x1,
+                    768,
+                    "the first Retouch remains inside the existing frame"
+                );
+                assert_eq!(
+                    first.stroke.doc().layer(id).unwrap().surface().unwrap().rgba(896, 32),
+                    [0.0; 4],
+                    "the later target is still transparent before Move"
+                );
+                shown = render(first.stroke.doc(), first.stroke.doc().bounds());
+                first.display_key()
+            } else {
+                0
+            }
+        };
+
+        if pushed {
+            tool_event(&mut app, ToolEvent::Move { x: 896.5, y: 32.5, pressure: 1.0 }, egui::Modifiers::NONE);
+            assert_eq!(app.live_stroke.as_ref().unwrap().damage.len(), 2);
+        }
+
+        let live = app.live_stroke.as_ref().expect("live Retouch remains active after the damage step");
+        assert!(matches!(&live.stroke, super::EngineStroke::Retouch(_)));
+        let doc = live.stroke.doc();
+        let pixel = doc.layer(id).unwrap().surface().unwrap().rgba(896, 32);
+        assert_eq!(pixel, [1.0; 4], "history paints the source Background into the raster");
+        assert_eq!(effects_frame(doc.layer(id).unwrap(), doc.bounds()), Rect::new(64, 8, 897, 56));
+        let cold = render(doc, doc.bounds());
+        if overlay {
+            assert!((shown.get(256, 32)[0] - 3.0 / 11.0).abs() < 2e-5);
+            assert!((cold.get(256, 32)[0] - 192.0 / 833.0).abs() < 2e-5);
+        } else {
+            assert_eq!(cold.get(896, 32), [1.0; 4]);
+            assert!((shown.get(256, 32)[0] - 0.5).abs() < 2e-5, "no-overlay control retains the gray raster");
+        }
+
+        // Use the adjacent live-damage fixture's cache-key convention for initial and pushed steps.
+        let display_key = 0x13ab;
+        let damage =
+            crate::canvas::textures::damage_since(&app, 0, (revision, seen ^ display_key), (revision, live.display_key()), display_key, (revision, None))
+                .expect("known Retouch damage, not an unknown/full-refresh fallback");
+        assert!(damage.contains_rect(&Rect::new(896, 32, 897, 33)), "damage includes the restored raster pixel");
+        assert_eq!(shown.get(256, 32)[3], 1.0);
+
+        if overlay {
+            if pushed {
+                assert!(!live.stroke.bounds().contains_rect(&Rect::new(256, 32, 257, 33)), "raw live stroke bounds exclude the distant gradient pixel");
+            }
+            assert!(damage.contains_rect(&Rect::new(256, 32, 257, 33)), "overlay damage includes the distant gradient pixel");
+        } else {
+            assert!(Rect::new(880, 16, 913, 49).contains_rect(&damage), "no-overlay Retouch damage stays local: {damage:?}");
+        }
+        patch(&mut shown, doc, damage);
+        same(&shown, &cold);
+    }
+}

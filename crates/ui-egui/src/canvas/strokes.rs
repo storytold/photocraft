@@ -207,10 +207,11 @@ impl EngineStroke {
             Self::Mixer(s) => s.bounds(),
         }
     }
-    /// Include Brush gradient relayout in the first update; other live tools use their bounds.
+    /// Include live gradient relayout in the first update; other live tools use their bounds.
     fn initial_damage(&self) -> DRect {
         match self {
             Self::Brush(stroke) => stroke.initial_damage(),
+            Self::Retouch(stroke) => stroke.initial_damage(),
             _ => self.bounds(),
         }
     }

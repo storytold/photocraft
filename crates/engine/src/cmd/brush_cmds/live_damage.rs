@@ -27,14 +27,14 @@ struct Watched {
     bounds: Rect,
 }
 
-pub(super) struct Tracker {
+pub(in crate::cmd) struct Tracker {
     layers: Vec<Watched>,
 }
 
 impl Tracker {
     /// Watch the target and visible ancestors with active gradients, keeping only layout metadata.
     /// Return `None` when the target is unavailable or no relevant gradient needs tracking.
-    pub(super) fn new(doc: &Document, layer: Option<LayerId>) -> Option<Self> {
+    pub(in crate::cmd) fn new(doc: &Document, layer: Option<LayerId>) -> Option<Self> {
         let path = doc.path_of(layer?)?;
         let mut layers = Vec::new();
         for depth in 1..=path.len() {
@@ -63,7 +63,7 @@ impl Tracker {
 
     /// Called once after a push batch, never by the dab renderer. Effects/tree are unchanged
     /// during a live stroke; target/ancestor paths and only their previous metadata are kept.
-    pub(super) fn damage(&mut self, doc: &Document) -> Rect {
+    pub(in crate::cmd) fn damage(&mut self, doc: &Document) -> Rect {
         let mut damage = Rect::EMPTY;
         for watched in &mut self.layers {
             let Some(layer) = doc.layer_at(&watched.path).filter(|layer| layer.id == watched.id).or_else(|| doc.layer(watched.id)) else { continue };

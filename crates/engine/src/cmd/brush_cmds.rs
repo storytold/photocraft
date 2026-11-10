@@ -782,7 +782,7 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
     num(p, k).unwrap_or(d).clamp(0.0, 100.0) / 100.0
 }
 
-mod live_damage;
+pub(in crate::cmd) mod live_damage;
 pub mod mixer_live;
 fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     mixer_live::run(s, p)
