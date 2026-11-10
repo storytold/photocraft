@@ -2,7 +2,7 @@
 
 This note goes with the Telugu catalog (`crates/ui-egui/src/i18n/te.tsv`). It covers every key
 `cargo xtask i18n-coverage` measures and the runtime labels the other complete catalogs carry
-(filter and adjustment parameters, Camera Raw, panels, dialogs, status messages). Translations are
+(filter and adjustment parameters, RAW Develop, panels, dialogs, status messages). Translations are
 written from the meaning of PhotoCraft's English labels; no proprietary translation resources,
 fonts, screenshots or user documents are included. The catalog was machine-translated with Claude
 for @tronicum against the terms below and has not yet been reviewed by a native speaker: review
@@ -11,14 +11,22 @@ corrections are welcome, and a changed term should change here and in every row 
 ## Choosing Telugu
 
 Open **Edit > Preferences > Interface > Language** (Telugu: **సవరణ › ప్రాధాన్యతలు › ఇంటర్‌ఫేస్ › భాష**) and choose
-**తెలుగు**. With `interface.language` set to `auto`, the system locales `te`, `te-IN` and
+**తెలుగు**. In the desktop app, with `interface.language` set to `auto`, the system locales `te`, `te-IN` and
 `te_IN.UTF-8` resolve to Telugu.
+The web build doesn't read the browser's language yet, so `auto` stays English there: choose
+**తెలుగు** yourself.
 
 ## Telugu script
 
-- UI font: PhotoCraft bundles no Telugu face. The fallback list in `crates/text/src/scripts.rs`
-  uses the system's Telugu fonts. The web build has no system fonts, so it needs a served `Telu`
-  font before Telugu can render there.
+- UI font: PhotoCraft bundles no Telugu face. The desktop app finds an installed Telugu font by its
+  file name (the list in `crates/text/src/scripts.rs`): Noto Sans Telugu (`NotoSansTelugu-Regular.ttf`),
+  Noto Serif Telugu, Nirmala UI (`Nirmala.ttc`, Windows), Gautami, Kohinoor Telugu, Telugu Sangam MN
+  and Telugu MN (macOS) or Lohit Telugu (`lohit-telugu.ttf`, Linux). A Telugu font with another file
+  name is not found. The font folders are read once per launch, so restart PhotoCraft after
+  installing one.
+- The web build has no system fonts, and its served-font loader (`crates/text/src/served.rs`) does
+  not handle the Telugu script (`Telu`) yet, so Telugu shows as boxes there. It needs both a
+  Telugu face in craft-fonts and `Telu` support in the loader.
 - Loanwords keep ZWNJ where Telugu software spells them that way (e.g. లేయర్‌లు).
 - Digits stay Western Arabic (0–9).
 
@@ -45,7 +53,7 @@ Open **Edit > Preferences > Interface > Language** (Telugu: **సవరణ › �
   where Telugu grammar needs them; add case suffixes after them with no space only when unavoidable
   (prefer rephrasing: "{file} ఫైల్‌ను" rather than "{file}ను").
 - **Latin letters stay Latin:** product and company names (PhotoCraft, ArtCraft, Photoshop, Adobe,
-  Camera Raw, GIMP), file formats and tech names (PSD, PSB, TIFF, PNG, JPEG, PDF, SVG, ICC, CMYK,
+  RAW, Camera Raw in the names of its .xmp files, GIMP), file formats and tech names (PSD, PSB, TIFF, PNG, JPEG, PDF, SVG, ICC, CMYK,
   RGB, Lab, sRGB, OpenType, MCP, GPU, LUT, HDR, 3D), key names (Ctrl, Alt, Shift, Cmd, Option,
   Tab, Esc, Enter, Space), units and symbols (px, pt, %, °, dpi, ppi, fps), numbers.
 - **Escapes** `\n`, `\t`, `\\` are kept exactly where they are in the source.

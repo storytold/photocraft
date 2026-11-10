@@ -2463,7 +2463,6 @@
 	Pixel	పిక్సెల్
 	Adjustment	సర్దుబాటు
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	లాగండి (లాసో) లేదా బిందువులను క్లిక్ చేయండి (బహుభుజి) · {add} జోడించు · {sub} తీసివేయి
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	క్రాప్ పెట్టెను లాగండి · కదిలించడానికి లోపల లాగండి · అంచులు పరిమాణం మారుస్తాయి ({ratio} నిష్పత్తి, {centre} మధ్య) · గీస్తున్నప్పుడు Space కదిలిస్తుంది · బాణాలు కొద్దిగా జరుపుతాయి · X దిశను మారుస్తుంది · {commit} నిర్ధారిస్తుంది · Esc రద్దు చేస్తుంది
 	{mode} Color · {bits} bit	{mode} రంగు · {bits} బిట్
 	Drag to move the layer	లేయర్‌ను కదిలించడానికి లాగండి
 	Scrubby Zoom	స్క్రబ్బీ జూమ్
@@ -3899,7 +3898,6 @@ curves	Smooth	నునుపు చేయి
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	కొనసాగడానికి ముందు ఈ టైప్ లేయర్‌ను రాస్టరైజ్ చేయాలి. దాని టెక్స్ట్ ఇకపై సవరించడానికి వీలుపడదు. టైప్‌ను రాస్టరైజ్ చేయాలా?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	కొనసాగడానికి ముందు ఈ ఆకార లేయర్‌ను రాస్టరైజ్ చేయాలి. ఇది ఇకపై ఆకారంగా సవరించడానికి వీలుపడదు. ఆకారాన్ని రాస్టరైజ్ చేయాలా?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	కొనసాగడానికి ముందు ఈ స్మార్ట్ ఆబ్జెక్ట్‌ను రాస్టరైజ్ చేయాలి. “కంటెంట్‌లను సవరించు” ఇకపై అందుబాటులో ఉండదు. స్మార్ట్ ఆబ్జెక్ట్‌ను రాస్టరైజ్ చేయాలా?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	కొనసాగడానికి ముందు ఈ నింపు లేయర్‌ను రాస్టరైజ్ చేయాలి. దాని నింపు కంటెంట్ ఇకపై సవరించడానికి వీలుపడదు. లేయర్‌ను రాస్టరైజ్ చేయాలా?
 	This layer must be rasterized before proceeding.	కొనసాగడానికి ముందు ఈ లేయర్‌ను రాస్టరైజ్ చేయాలి.
 	Color Picker (Background Color)	రంగు ఎంపిక సాధనం (నేపథ్య రంగు)
 	Color Picker (Foreground Color)	రంగు ఎంపిక సాధనం (ముందుభాగ రంగు)
@@ -4059,7 +4057,6 @@ shape	Appearance	రూపం
 	Color Indicates:	రంగు సూచించేది:
 	Copy Texture to Other Tools	టెక్స్చర్‌ను ఇతర సాధనాలకు కాపీ చేయి
 	Create Smart Object after Loading Layers	లేయర్‌లను లోడ్ చేసిన తర్వాత స్మార్ట్ ఆబ్జెక్ట్ సృష్టించు
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	క్రాప్ పెట్టెను లాగండి · కదిలించడానికి లోపల లాగండి · అంచులు పరిమాణం మారుస్తాయి ({ratio} నిష్పత్తి, {centre} మధ్య) · గీసేటప్పుడు Space కదిలిస్తుంది · {commit} నిర్ధారిస్తుంది · Esc రద్దు చేస్తుంది
 	Drag to pan · Scroll to zoom · Double-click to fit	ప్యాన్ చేయడానికి లాగండి · జూమ్ చేయడానికి స్క్రోల్ చేయండి · సరిపోయేలా చేయడానికి డబుల్-క్లిక్ చేయండి
 	Drag: draw freehand · Release on the start point: close	లాగండి: స్వేచ్ఛగా గీయండి · ప్రారంభ బిందువుపై వదలండి: మూసివేయండి
 	Enter a name for the brush preset	బ్రష్ ప్రీసెట్‌కు ఒక పేరు నమోదు చేయండి
@@ -4872,3 +4869,44 @@ cameraRaw	Loaded RAW Develop settings from {file}	{file} నుండి RAW డ
 	Move Toolbar to the Right	టూల్‌బార్‌ను కుడికి కదిలించు
 	Select Pixels	పిక్సెల్‌లను ఎంచుకో
 	The document changed. Please choose Clear All again.	పత్రం మారింది. దయచేసి "అన్నీ తుడిచివేయి"ని మళ్ళీ ఎంచుకోండి.
+# Runtime labels the other complete catalogs carry: crop options and hints, artboard options, RAW demosaic, fill prompts
+	Background (default):	నేపథ్యం (డిఫాల్ట్):
+	Clear aspect ratio values	కారక నిష్పత్తి విలువలను తుడిచివేయి
+	Content-aware fill	కంటెంట్-అవేర్ నింపు
+	Determines if pixel data outside the crop box is retained or deleted	క్రాప్ బాక్స్ వెలుపలి పిక్సెల్ డేటా ఉంచబడుతుందా లేదా తొలగించబడుతుందా అని నిర్ణయిస్తుంది
+	Displays pop-up help for the fill methods	నింపే పద్ధతుల కోసం పాప్-అప్ సహాయాన్ని చూపిస్తుంది
+	Fill options	నింపు ఐచ్ఛికాలు
+	Fill the expanded area with your background color or transparent pixels	విస్తరించిన ప్రాంతాన్ని నేపథ్య రంగుతో లేదా పారదర్శక పిక్సెల్‌లతో నింపండి
+	How expanded crop area gets filled	విస్తరించిన క్రాప్ ప్రాంతం ఎలా నింపబడుతుంది
+	Reset the crop box, image rotation, and aspect ratio settings	క్రాప్ బాక్స్, చిత్ర భ్రమణం మరియు కారక నిష్పత్తి సెట్టింగ్‌లను రీసెట్ చేయి
+	Sample content from part of the image and use it to fill a small area	చిత్రంలోని ఒక భాగం నుండి కంటెంట్‌ను తీసుకుని చిన్న ప్రాంతాన్ని నింపండి
+	Select a preset aspect ratio or crop size	ప్రీసెట్ కారక నిష్పత్తి లేదా క్రాప్ పరిమాణాన్ని ఎంచుకోండి
+	Set the aspect ratio for the crop box	క్రాప్ బాక్స్ కోసం కారక నిష్పత్తిని సెట్ చేయండి
+	Set the overlay options for the Crop Tool	క్రాప్ సాధనం కోసం ఓవర్‌లే ఐచ్ఛికాలను సెట్ చేయండి
+	Auto-nest Layers	లేయర్‌లను ఆటోగా నెస్ట్ చేయి
+	Auto-size Canvas	కాన్వాస్ పరిమాణాన్ని ఆటోగా సరిచేయి
+	Distribute Heights	ఎత్తులను పంపిణీ చేయి
+	Distribute Widths	వెడల్పులను పంపిణీ చేయి
+	Keep Relative Position During Layer Reordering	లేయర్‌ల క్రమం మార్చేటప్పుడు సాపేక్ష స్థానాన్ని ఉంచు
+	Shrinkwrap Canvas on Save	సేవ్ చేసేటప్పుడు కాన్వాస్‌ను కంటెంట్‌కు కుదించు
+	Click to fill similar colors	సారూప్య రంగులను నింపడానికి క్లిక్ చేయండి
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	క్రాప్ బాక్స్‌ను లాగండి · లోపల లాగితే కదులుతుంది · అంచులు పరిమాణం మారుస్తాయి ({ratio} నిష్పత్తి, {centre} మధ్య) · గీస్తున్నప్పుడు Space కదిలిస్తుంది · బాణాలు కొద్దిగా జరుపుతాయి · X దిశను మారుస్తుంది · {commit} వర్తింపజేస్తుంది · Esc రద్దు చేస్తుంది
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	గ్రేడియంట్-సరిదిద్దిన ఇంటర్‌పోలేషన్: పదునైనది, వేగవంతమైనది, సూక్ష్మ వివరాలపై కొంత రంగు అంచుతో.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: అత్యంత శుభ్రమైన అంచులు, అతి తక్కువ రంగు అంచు, అత్యంత నెమ్మది.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	కెమెరా రంగు ఫిల్టర్ మొజాయిక్ ఎలా నింపబడుతుంది. ఫైల్ తెరిచినప్పుడు ఇది వర్తిస్తుంది; ప్రివ్యూ ఫైల్ తెరిచిన పద్ధతిని చూపిస్తుంది.
+	The fastest and the softest, with color fringing on fine detail.	అత్యంత వేగవంతమైనది, అత్యంత మృదువైనది, సూక్ష్మ వివరాలపై రంగు అంచుతో.
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	కొనసాగే ముందు ఈ లేయర్ నింపును రాస్టరైజ్ చేయాలి. ఆ తర్వాత దాన్ని నింపుగా సవరించలేరు. నింపును రాస్టరైజ్ చేయాలా?
+	Skip transform when placing	ఉంచేటప్పుడు రూపాంతరం దాటవేయి
+cameraRaw	Canceled opening {name}	{name} తెరవడం రద్దు చేయబడింది
+cameraRaw	Canceled {label}	{label} రద్దు చేయబడింది
+# Burn/Dodge, Eraser, Mixer Brush and Color Replacement options; anchor point tools
+	Anti-alias brush application	బ్రష్ అప్లికేషన్‌ను యాంటీ-ఏలియాస్ చేయి
+	Determines the spread of replaced color	భర్తీ చేసిన రంగు వ్యాప్తిని నిర్ణయిస్తుంది
+	Erase to History	చరిత్రకు తుడిచివేయి
+	Load Solid Colors Only	ఘన రంగులను మాత్రమే లోడ్ చేయి
+	Minimizes clipping in shadows and highlights, and keeps colors from shifting hue	నీడలు మరియు హైలైట్‌లలో క్లిప్పింగ్‌ను తగ్గిస్తుంది, రంగుల వర్ణం మారకుండా ఉంచుతుంది
+	No options for the Add Anchor Point Tool.	యాంకర్ పాయింట్ జోడించే సాధనానికి ఐచ్ఛికాలు లేవు.
+	No options for the Delete Anchor Point Tool.	యాంకర్ పాయింట్ తొలగించే సాధనానికి ఐచ్ఛికాలు లేవు.
+	Set exposure for stroke	స్ట్రోక్ కోసం ఎక్స్‌పోజర్ సెట్ చేయండి
+	Tolerance for choosing related colors	సంబంధిత రంగులను ఎంచుకోవడానికి సహనం
+	dodge tool	డాడ్జ్ సాధనం

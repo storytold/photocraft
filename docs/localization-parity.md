@@ -24,7 +24,7 @@ Vietnamese UI; Arabic and Hebrew users get English "Middle East" builds with the
 composer, and its text engine handles RTL, Devanagari and Indic scripts.
 
 **Summary.** 7 of the 12 key languages at 100% of measured keys (status `partial` because of the
-engine messages), 2 absent (Hindi, Vietnamese), plus 18 other registered languages. Weighted by
+engine messages), 2 absent (Hindi, Vietnamese), plus 24 other registered languages. Weighted by
 speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorded only for Italian,
 2026-10-12).
 
@@ -47,7 +47,7 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 
 ## Other shipped languages
 
-18 registered languages are outside the twelve-language table. The following nine have
+24 registered languages are outside the twelve-language table. The following nine have
 1,608 / 1,608 measured keys, status `partial` for the same reason: Traditional
 Chinese `zh-hant` (2,329 rows), Russian `ru` (4,227 keys; also every dynamic label the
 other catalogs translate, [notes](localization-ru.md)), Ukrainian `uk` (3,375), Czech `cs` (3,522),
@@ -75,7 +75,7 @@ Complete menu keys, regional locale matching and English fallback are covered by
 Native-speaker review remains pending; validation results and limits are recorded in the
 [language notes](localization-az.md). Readiness estimates and G13 remain unchanged.
 
-Telugu `te` (Telugu script, 4,849 rows, added 2026-11-08) covers every measured key (2,462 / 2,462) and the
+Telugu `te` (Telugu script, 4,885 rows, added 2026-11-08) covers every measured key (2,481 / 2,481) and the
 dynamic-label key union of the Georgian, Urdu and Tamil catalogs. It uses one/other plurals (one is n = 1).
 UI font: PhotoCraft bundles no Telugu face, so it uses the system fallback in `crates/text/src/scripts.rs`; on the web the first served font for `Telu`, so Telugu shows as boxes on a host that serves none. It was machine-translated with Claude for @tronicum against one
 term glossary and has not had a native-speaker review yet.
@@ -104,7 +104,7 @@ engine localization or native review is complete.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-08 | minor | Telugu (`te`) UI catalog: 4,849 rows, every measured key (2,462); one/other plurals; machine-translated, native review pending |
+| 2026-11-08 | minor | Telugu (`te`) UI catalog: 4,885 rows, every measured key (2,481); one/other plurals; machine-translated, native review pending |
 | 2026-11-06 | minor | Azerbaijani/Turkish UI search, dropdown prefixes and access keys use locale-aware I casing; 4,606 Azerbaijani entries and current menu coverage; native review requested and pending |
 | 2026-11-05 | minor | Preserved Bosnian while merging current main; 29 registered languages, 17 outside the table; Azerbaijani has 4,606 entries, including 29 current OpenType menu keys and checks for all eight command-ID overrides; native review pending |
 | 2026-11-01 | minor | Azerbaijani UI catalog, 4,566 entries; regional tags and one/other plurals; PR narrowed to Azerbaijani, 28 registered languages and 16 outside the table; native review pending; validation limits in the language notes; readiness estimates unchanged |
