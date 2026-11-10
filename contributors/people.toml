@@ -329,3 +329,8 @@ sync_github_name = false
 [people.tomgardenart]
 display_name = "Nostella"
 sync_github_name = false
+
+[people.TheConfax]
+real_name = "Carlo Confalonieri"
+display_name = "TheConfax"
+sync_github_name = false
