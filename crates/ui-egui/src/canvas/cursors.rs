@@ -313,3 +313,7 @@ mod color_replacement_alt_click_tests;
 #[cfg(test)]
 #[path = "../background_eraser_alt_click_tests.rs"]
 mod background_eraser_alt_click_tests;
+
+#[cfg(test)]
+#[path = "remove_cursor_tests.rs"]
+mod remove_cursor_tests;
