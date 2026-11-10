@@ -327,8 +327,9 @@ pub fn convert_target(doc: &Document, active: Option<LayerId>) -> Option<LayerId
     (plain && l.frame.is_none() && pixels.content_bounds().is_empty()).then_some(l.id)
 }
 
-/// `new` takes the place of the empty pixel layer `old`: the id, name, label and clipping stay, and
-/// the layer is revealed by a white mask unless the selection already masks it.
+/// `new` takes the place of the empty pixel layer `old`: the id, name, label, clipping, link,
+/// effects and blending options stay (the mode and opacity are the Gradient tool's), and the
+/// layer is revealed by a white mask unless the selection already masks it.
 pub fn convert_in_place(doc: &mut Document, old: LayerId, mut new: Layer) -> Result<LayerId> {
     let depth = doc.depth;
     let mask = match new.mask.take() {
@@ -340,6 +341,12 @@ pub fn convert_in_place(doc: &mut Document, old: LayerId, mut new: Layer) -> Res
     new.name = slot.name.clone();
     new.label = slot.label;
     new.clipped = slot.clipped;
+    new.link_group = slot.link_group;
+    new.effects = slot.effects.clone();
+    new.fill_opacity = slot.fill_opacity;
+    new.excluded_channels = slot.excluded_channels;
+    new.blend_if = slot.blend_if.clone();
+    new.advanced = slot.advanced;
     new.mask = Some(mask);
     *slot = new;
     Ok(old)
