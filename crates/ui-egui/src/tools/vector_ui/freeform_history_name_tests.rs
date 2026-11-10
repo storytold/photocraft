@@ -152,7 +152,17 @@ fn history_name_is_validated_before_mutation_and_defaults_are_preserved() {
     let path = json!({"subpaths": [{"knots": [[20, 20], [80, 80]]}]});
     for cmd in ["path.set", "shape.create"] {
         let mut app = app("path");
-        for bad in [json!(""), json!("Work Path"), json!("Freeform Pen\n"), json!("\u{202e}Freeform Pen"), json!("x".repeat(1000)), json!(42), json!(true), json!([]), json!({})] {
+        for bad in [
+            json!(""),
+            json!("Work Path"),
+            json!("Freeform Pen\n"),
+            json!("\u{202e}Freeform Pen"),
+            json!("x".repeat(1000)),
+            json!(42),
+            json!(true),
+            json!([]),
+            json!({}),
+        ] {
             let before = app.session.active().unwrap().doc.clone();
             let n = steps(&app);
             assert!(app.run(cmd, json!({"kind": "path", "path": path, "historyName": bad})).is_err(), "{cmd}: {bad}");
@@ -167,8 +177,35 @@ fn history_name_is_validated_before_mutation_and_defaults_are_preserved() {
             app.ui.status_error = false;
             let n = steps(&app);
             app.run(cmd, p).unwrap();
-            let expected = if label == Some(json!("Freeform Pen")) { "Freeform Pen" } else if cmd == "path.set" { "Work Path" } else { "New Shape Layer" };
+            let expected = if label == Some(json!("Freeform Pen")) {
+                "Freeform Pen"
+            } else if cmd == "path.set" {
+                "Work Path"
+            } else {
+                "New Shape Layer"
+            };
             assert_step(&app, n, expected);
+        }
+    }
+}
+
+#[test]
+fn control_pointer_strokes_commit_only_on_release_with_the_freeform_label() {
+    use crate::control::{ControlRequest, Outcome, handle};
+    let ctx = egui::Context::default();
+    for mode in ["path", "shape"] {
+        let mut app = app(mode);
+        let call = |app: &mut PhotocraftApp, params| {
+            let (req, _rx) = ControlRequest::new("ui.pointer", params);
+            let Outcome::Done(reply) = handle(app, &ctx, &req) else { panic!("expected pointer reply") };
+            assert_eq!(reply["ok"], true, "{reply}");
+        };
+        for offset in [0.0, 90.0] {
+            let n = steps(&app);
+            call(&mut app, json!({"events": [{"kind": "down", "x": 20.0 + offset, "y": 20.0}, {"kind": "move", "x": 80.0 + offset, "y": 40.0}]}));
+            assert_eq!(steps(&app), n, "the preview makes no History step");
+            call(&mut app, json!({"events": [{"kind": "move", "x": 60.0 + offset, "y": 80.0}, {"kind": "up", "x": 20.0 + offset, "y": 100.0}]}));
+            assert_step(&app, n, "Freeform Pen");
         }
     }
 }
