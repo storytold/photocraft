@@ -60,7 +60,7 @@ impl Kind {
             Kind::SmartObject => {
                 "This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?"
             }
-            Kind::Fill => "This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?",
+            Kind::Fill => "The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?",
         }
     }
 
@@ -243,3 +243,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../rasterize_prompt_text_tests.rs"]
 mod rasterize_prompt_text_tests;
+
+#[cfg(test)]
+#[path = "rasterize_prompt_fill_text_tests.rs"]
+mod rasterize_prompt_fill_text_tests;

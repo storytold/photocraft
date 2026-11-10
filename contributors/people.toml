@@ -325,3 +325,7 @@ sync_github_name = true
 [people.rmsff]
 real_name = "Serikov Roman"
 sync_github_name = false
+
+[people.tomgardenart]
+display_name = "Nostella"
+sync_github_name = false

@@ -4140,7 +4140,7 @@ layerLabel	No Color	Bez boje
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Ovaj tekstualni sloj mora da se rasterizuje pre nastavka. Njegov tekst više neće moći da se uređuje. Rasterizovati tekst?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Ovaj sloj oblika mora da se rasterizuje pre nastavka. Više neće moći da se uređuje kao oblik. Rasterizovati oblik?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Ovaj pametni objekat mora da se rasterizuje pre nastavka. Njegov sadržaj više neće moći da se uređuje. Rasterizovati pametni objekat?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Ovaj sloj popune mora da se rasterizuje pre nastavka. Njegov sadržaj popune više neće moći da se uređuje. Rasterizovati sloj?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Ovaj sloj popune mora da se rasterizuje pre nastavka. Njegov sadržaj popune više neće moći da se uređuje. Rasterizovati sloj?
 	This layer must be rasterized before proceeding.	Ovaj sloj mora da se rasterizuje pre nastavka.
 	Color Picker (Background Color)	Birač boja (boja pozadine)
 	Color Picker (Foreground Color)	Birač boja (boja prednjeg plana)

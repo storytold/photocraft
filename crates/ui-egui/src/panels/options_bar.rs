@@ -213,6 +213,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 range_alert(&mut app.ui, ZERO_TO_100);
             }
             smoothing_options(ui, b, brush);
+            if app.ui.tool == Tool::Eraser {
+                widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
+            }
             widgets::vline(ui, 22.0);
             let pressure = pressure_button(ui, b.pressure_size, tl!("Always use pressure for size"), brush);
             if tip(pressure, tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
@@ -293,6 +296,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             tip(flow, tl!("Set flow rate for stroke"));
             opt_label(ui, tl!("Smoothing"));
             tip(smoothing_field(ui, b, 66.0), tl!("Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"));
+            if app.ui.tool == Tool::Eraser {
+                widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
+            }
             widgets::vline(ui, 22.0);
             tip(
                 widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size")),
@@ -928,3 +934,7 @@ fn hint(ui: &mut egui::Ui, s: &str) {
 #[cfg(test)]
 #[path = "../eraser_range_alert_tests.rs"]
 mod eraser_range_alert_tests;
+
+#[cfg(test)]
+#[path = "../blur_strength_alert_tests.rs"]
+mod blur_strength_alert_tests;

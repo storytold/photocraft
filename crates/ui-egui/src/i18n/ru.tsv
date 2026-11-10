@@ -4492,7 +4492,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	This Layer:	Этот слой:
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Перед продолжением необходимо растрировать этот смарт-объект. Его содержимое перестанет быть редактируемым. Растрировать смарт-объект?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Эта коррекция ({key}) сохраняется в импортированном виде и пока не может быть изменена.
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Перед продолжением необходимо растрировать этот слой заливки. Содержимое заливки перестанет быть редактируемым. Растрировать слой?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Перед продолжением необходимо растрировать этот слой заливки. Содержимое заливки перестанет быть редактируемым. Растрировать слой?
 	This layer must be rasterized before proceeding.	Перед продолжением необходимо растрировать этот слой.
 	This session: {reason}	Этот сеанс: {reason}
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Перед продолжением необходимо растрировать этот слой фигуры. Он перестанет быть редактируемым как фигура. Растрировать фигуру?

@@ -348,7 +348,11 @@ fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&St
 /// The Pencil's brush: the session brush made aliased (every pixel fully painted or untouched,
 /// dabs on the pixel grid), hard and at full flow, with the options-bar mode.
 fn pencil_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
-    let mut brush = with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p);
+    pencil_shape(with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p), p)
+}
+
+/// `brush` with the Pencil's hard, aliased tip, or the Eraser's Block (`"block": true`).
+pub(crate) fn pencil_shape(mut brush: BrushSettings, p: &Value) -> Result<BrushSettings> {
     if flag(p, "block", false) {
         return block_brush(brush, p);
     }

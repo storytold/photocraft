@@ -4027,7 +4027,7 @@ layerLabel	No Color	색상 없음
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	계속하려면 이 문자 레이어를 래스터화해야 합니다. 이후에는 텍스트를 편집할 수 없습니다. 문자를 래스터화할까요?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	계속하려면 이 도형 레이어를 래스터화해야 합니다. 이후에는 도형으로 편집할 수 없습니다. 도형을 래스터화할까요?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	계속하려면 이 고급 개체를 래스터화해야 합니다. 이후에는 내용을 편집할 수 없습니다. 고급 개체를 래스터화할까요?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	계속하려면 이 칠 레이어를 래스터화해야 합니다. 이후에는 칠 내용을 편집할 수 없습니다. 레이어를 래스터화할까요?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	계속하려면 이 칠 레이어를 래스터화해야 합니다. 이후에는 칠 내용을 편집할 수 없습니다. 레이어를 래스터화할까요?
 	This layer must be rasterized before proceeding.	계속하려면 이 레이어를 래스터화해야 합니다.
 	Color Picker (Background Color)	색상 선택기(배경색)
 	Color Picker (Foreground Color)	색상 선택기(전경색)

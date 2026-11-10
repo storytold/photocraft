@@ -98,8 +98,13 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
         if let ToolEvent::Down { x, y, pressure } = ev {
             app.mixer_sampling = true;
             let pen = app.stylus.sample().unwrap_or_default();
-            let p = json!({"points":[[x,y,pressure,pen.tilt_x,pen.tilt_y,pen.rotation]],"target":paint_target(app)});
-            if let Err(e) = app.run("brush.mixer.sample", p) {
+            // Load Solid Colors Only loads the one colour under the hotspot (#11952).
+            let (id, p) = if app.session.tools.brush.mixer.solid_colors_only {
+                ("paint.mixerLoad", json!({"x": x, "y": y}))
+            } else {
+                ("brush.mixer.sample", json!({"points":[[x,y,pressure,pen.tilt_x,pen.tilt_y,pen.rotation]],"target":paint_target(app)}))
+            };
+            if let Err(e) = app.run(id, p) {
                 app.ui.status = e;
                 app.ui.status_error = true;
             }
@@ -306,9 +311,11 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
             // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating
             // piece, from anywhere, as a marquee ⌘-drag does.
             if crate::move_ui::moves_selected_pixels_with(app, tool) {
+                let before = app.session.active().and_then(photocraft_engine::float_cmds::floating).cloned();
                 if crate::move_ui::float_selected_for_drag(app, mods.alt) {
                     let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
                     d.sel_move = Some(true);
+                    d.transfer_floating_before = before;
                     app.drag = Some(d);
                 }
                 return true;
@@ -578,8 +585,12 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
+            // Erase to History (or ⌥ for this stroke): the Eraser's brush stroke paints the History
+            // panel's source back.
+            let tool = crate::eraser_ui::drag_tool(app, tool, mods.alt);
             let mut drag = Drag { clear, line: from.is_some(), ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
+            drag.history_params = crate::retouch_ui::history_params_at_press(app, tool, mods.alt);
             drag.capture_selection_at_press(app);
             drag.document = super::drag::DragDocument::capture(app);
             app.drag = Some(drag);
@@ -816,3 +827,7 @@ pub(crate) fn command_guide_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mod
     let idle = app.ui.polygon.is_empty() && !crate::lasso_ui::active(app) && app.ui.transform.is_none() && app.ui.text_edit.is_none() && app.drag.is_none();
     (moves && mods.command && idle).then(|| crate::rulers::guide_at(app, p[0], p[1])).flatten()
 }
+
+#[cfg(test)]
+#[path = "art_history_shift_click_tests.rs"]
+mod art_history_shift_click_tests;
