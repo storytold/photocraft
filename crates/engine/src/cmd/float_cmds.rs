@@ -256,8 +256,8 @@ fn piece_outline(piece: &Surface, sample: photocraft_color::SampleType) -> Resul
     if bpp == 0 || obpp == 0 || obpp > 8 {
         return Ok(o);
     }
-    let solid = o.solid_tile(&[1.0]);
     let oom = |e| EngineError::Other(format!("not enough memory while floating selection ({e}); the document was not changed"));
+    let solid = o.try_solid_tile(&[1.0]).map_err(oom)?;
     let mut src = crate::allocation::capacity(piece.tiles().count(), "floating selection")?;
     src.extend(piece.tiles().map(|(&tc, t)| (tc, t.clone())));
     let blank = &o;
