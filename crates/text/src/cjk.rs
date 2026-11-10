@@ -360,10 +360,8 @@ fn fontconfig_match(script: CjkScript) -> Option<FontFile> {
 
 /// Whether face `family` in font `bytes` genuinely covers representative sample glyphs
 /// for `script` with drawable outlines.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 fn fontconfig_font_covers_sample(bytes: &[u8], family: &str, script: CjkScript) -> bool {
-    use skrifa::MetadataProvider;
-
     let Some(index) = face_index_for_family_checked(bytes, family) else { return false };
     if !font_face_is_readable(bytes, index) {
         return false;
@@ -456,33 +454,57 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
         match script {
             Japanese => v.extend([
                 f("/usr/share/fonts/noto-cjk/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf", ""),
                 f("/usr/share/fonts/noto/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansCJKjp-Regular.otf", ""),
                 f("/usr/share/fonts/opentype/noto/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf", ""),
                 f("/usr/share/fonts/truetype/noto/NotoSansJP-Regular.ttf", ""),
+                f("/usr/share/fonts/opentype/NotoSansCJKjp-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/NotoSansCJKjp-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKjp-Regular.otf", ""),
             ]),
             SimplifiedChinese => v.extend([
                 f("/usr/share/fonts/noto-cjk/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf", ""),
                 f("/usr/share/fonts/noto/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansCJKsc-Regular.otf", ""),
                 f("/usr/share/fonts/opentype/noto/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf", ""),
                 f("/usr/share/fonts/truetype/noto/NotoSansSC-Regular.ttf", ""),
+                f("/usr/share/fonts/opentype/NotoSansCJKsc-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/NotoSansCJKsc-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKsc-Regular.otf", ""),
             ]),
             TraditionalChinese => v.extend([
                 f("/usr/share/fonts/noto-cjk/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/noto-cjk/NotoSansCJKtc-Regular.otf", ""),
                 f("/usr/share/fonts/noto/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansCJKtc-Regular.otf", ""),
                 f("/usr/share/fonts/opentype/noto/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf", ""),
                 f("/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf", ""),
+                f("/usr/share/fonts/opentype/NotoSansCJKtc-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/NotoSansCJKtc-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKtc-Regular.otf", ""),
             ]),
             Korean => v.extend([
                 f("/usr/share/fonts/noto-cjk/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/noto-cjk/NotoSansCJKkr-Regular.otf", ""),
                 f("/usr/share/fonts/noto/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansCJKkr-Regular.otf", ""),
                 f("/usr/share/fonts/opentype/noto/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansCJKkr-Regular.otf", ""),
                 f("/usr/share/fonts/truetype/noto/NotoSansKR-Regular.ttf", ""),
                 f("/usr/share/fonts/opentype/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/NotoSansCJKkr-Regular.otf", ""),
                 f("/usr/share/fonts/truetype/NotoSansKR-Regular.ttf", ""),
+                f("/usr/share/fonts/truetype/NotoSansCJKkr-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKkr-Regular.otf", ""),
             ]),
         }
         v.extend(match script {
@@ -491,6 +513,8 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf", ""),
                 f("/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf", ""),
                 // VL-Gothic: documented package paths for Arch Linux (vlgothic), openSUSE (vlgothic-fonts), Debian/Ubuntu (fonts-vlgothic).
+                f("/usr/share/fonts/TTF/VL-PGothic-Regular.ttf", ""),
+                f("/usr/share/fonts/TTF/VL-Gothic-Regular.ttf", ""),
                 f("/usr/share/fonts/vlgothic/VL-PGothic-Regular.ttf", ""),
                 f("/usr/share/fonts/vlgothic/VL-Gothic-Regular.ttf", ""),
                 f("/usr/share/fonts/VL-Gothic/VL-PGothic-Regular.ttf", ""),
@@ -512,6 +536,7 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/TTF/UnDotum.ttf", ""),
                 f("/usr/share/fonts/truetype/unfonts-core/UnDotum.ttf", ""),
                 f("/usr/share/fonts/un-core/UnDotum.ttf", ""),
+                f("/usr/share/fonts/TTF/gulim.ttf", ""),
                 f("/usr/share/fonts/truetype/baekmuk/gulim.ttf", ""),
                 f("/usr/share/fonts/baekmuk-ttf/gulim.ttf", ""),
             ],
@@ -968,6 +993,107 @@ mod tests {
         assert_eq!(face_index_for_family(inter, ""), 0);
     }
 
+    /// Minimal SFNT font mapping `"图层"` (`U+56FE`, `U+5C42`) under `family`; when
+    /// `second_has_outline` is `false`, `U+5C42` has an empty `glyf` entry (0 contours).
+    fn synthetic_sample_font(family: &str, second_has_outline: bool) -> Vec<u8> {
+        let be16 = |v: &mut Vec<u8>, x: i32| v.extend((x as u16).to_be_bytes());
+        let be32 = |v: &mut Vec<u8>, x: u32| v.extend(x.to_be_bytes());
+        let mut boxed = Vec::new();
+        for x in [1, 50, 0, 550, 700, 3, 0] {
+            be16(&mut boxed, x);
+        }
+        boxed.extend([1u8; 4]);
+        for x in [50, 0, 500, 0, 0, 700, 0, -700] {
+            be16(&mut boxed, x);
+        }
+        boxed.extend([0, 0]);
+        let box_len = boxed.len() as u32;
+        let mut glyf = boxed.clone();
+        let end = if second_has_outline {
+            glyf.extend(&boxed);
+            2 * box_len
+        } else {
+            box_len
+        };
+        let mut loca = Vec::new();
+        for off in [0, 0, box_len, end] {
+            be32(&mut loca, off);
+        }
+        let mut head = Vec::new();
+        for x in [0x0001_0000, 0x0001_0000, 0, 0x5F0F_3CF5] {
+            be32(&mut head, x);
+        }
+        for x in [0x000B, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, -200, 600, 800, 0, 8, 2, 1, 0] {
+            be16(&mut head, x);
+        }
+        let mut hhea = Vec::new();
+        be32(&mut hhea, 0x0001_0000);
+        for x in [800, -200, 0, 600, 0, 0, 550, 1, 0, 0, 0, 0, 0, 0, 0, 3] {
+            be16(&mut hhea, x);
+        }
+        let mut maxp = Vec::new();
+        be32(&mut maxp, 0x0001_0000);
+        for x in [3, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] {
+            be16(&mut maxp, x);
+        }
+        let mut hmtx = Vec::new();
+        for _ in 0..3 {
+            be16(&mut hmtx, 600);
+            be16(&mut hmtx, 50);
+        }
+        let mut cmap = Vec::new();
+        for x in [0, 1, 3, 10] {
+            be16(&mut cmap, x);
+        }
+        be32(&mut cmap, 12);
+        for x in [12, 0] {
+            be16(&mut cmap, x);
+        }
+        for x in [16 + 12 * 2, 0, 2, 0x56FE, 0x56FE, 1, 0x5C42, 0x5C42, 2] {
+            be32(&mut cmap, x);
+        }
+        let utf16: Vec<u8> = family.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let mut name = Vec::new();
+        for x in [0, 1, 18, 3, 1, 0x0409, 1, utf16.len() as i32, 0] {
+            be16(&mut name, x);
+        }
+        name.extend(utf16);
+        let tables: [(&[u8; 4], Vec<u8>); 8] =
+            [(b"cmap", cmap), (b"glyf", glyf), (b"head", head), (b"hhea", hhea), (b"hmtx", hmtx), (b"loca", loca), (b"maxp", maxp), (b"name", name)];
+        let mut font = Vec::new();
+        be32(&mut font, 0x0001_0000);
+        for x in [8, 128, 3, 0] {
+            be16(&mut font, x);
+        }
+        let mut offset = 12 + 16 * tables.len() as u32;
+        for (tag, data) in &tables {
+            font.extend(*tag);
+            be32(&mut font, 0);
+            be32(&mut font, offset);
+            be32(&mut font, data.len() as u32);
+            offset += (data.len() as u32).next_multiple_of(4);
+        }
+        for (_, data) in &tables {
+            font.extend(data);
+            font.resize(font.len().next_multiple_of(4), 0);
+        }
+        font
+    }
+
+    #[test]
+    fn fontconfig_sample_rejects_empty_glyph_outline() {
+        use skrifa::MetadataProvider;
+
+        let partial = synthetic_sample_font("SampleTest", false);
+        let font = skrifa::FontRef::from_index(&partial, 0).expect("valid synthetic font");
+        assert!(font.charmap().map('图').is_some());
+        assert!(font.charmap().map('层').is_some());
+        assert!(!fontconfig_font_covers_sample(&partial, "SampleTest", SimplifiedChinese));
+
+        let full = synthetic_sample_font("SampleTest", true);
+        assert!(fontconfig_font_covers_sample(&full, "SampleTest", SimplifiedChinese));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn fontconfig_candidates_must_cover_the_requested_script() {
@@ -1018,6 +1144,21 @@ mod flatpak_tests {
                     assert_eq!(pair[1].family, pair[0].family);
                 }
             }
+        }
+        let ja = font_files(CjkScript::Japanese);
+        for expected in [
+            "/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
+            "/run/host/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
+            "/usr/share/fonts/TTF/VL-PGothic-Regular.ttf",
+            "/run/host/fonts/TTF/VL-PGothic-Regular.ttf",
+            "/usr/share/fonts/TTF/VL-Gothic-Regular.ttf",
+            "/run/host/fonts/TTF/VL-Gothic-Regular.ttf",
+        ] {
+            assert!(ja.iter().any(|file| file.path == std::path::Path::new(expected) && file.family.is_empty()), "missing {expected}");
+        }
+        let ko = font_files(CjkScript::Korean);
+        for expected in ["/usr/share/fonts/TTF/gulim.ttf", "/run/host/fonts/TTF/gulim.ttf"] {
+            assert!(ko.iter().any(|file| file.path == std::path::Path::new(expected) && file.family.is_empty()), "missing {expected}");
         }
     }
 
