@@ -12,7 +12,9 @@
 //!   spacing; the same test on its two columns splits it down (`v`);
 //! * for a mesh that is cubic in one direction, a cell whose control net twists (the largest
 //!   `P00 − P10 − P01 + P11` of its stored-degree net) by more than [`TWIST_TOL`] splits along its
-//!   longer side (a square cell: down the document);
+//!   longer side (a square cell: down the document); for an envelope, a split across counts only
+//!   the quads of the net's left column (the reference splits Arc Lower's top-left corner cell,
+//!   not its mirror image on the right);
 //! * a first-level cell that splits across also splits down, and a down split anywhere on the
 //!   first level splits every first-level cell down;
 //! * for a mesh that is cubic in one direction, a cell split down for its columns' curvature splits
@@ -96,6 +98,18 @@ impl Net {
         Net { nu: self.nu, nv: self.nv, p }
     }
     /// The largest `P00 − P10 − P01 + P11` (euclidean) of the net.
+    /// The largest twist of the net's first column of quads (the cell's left edge).
+    fn twist_left(&self) -> f64 {
+        let mut m = 0.0f64;
+        for j in 0..self.nv.saturating_sub(1) {
+            let (a, b, c, d) = (self.at(0, j), self.at(1, j), self.at(0, j + 1), self.at(1, j + 1));
+            let t = (a[0] - b[0] - c[0] + d[0]).hypot(a[1] - b[1] - c[1] + d[1]);
+            if t.is_finite() {
+                m = m.max(t);
+            }
+        }
+        m
+    }
     fn twist(&self) -> f64 {
         let mut m = 0.0f64;
         for j in 0..self.nv.saturating_sub(1) {
@@ -316,9 +330,19 @@ pub(crate) fn envelope_mesh(at: &dyn Fn(f64, f64) -> P, full: bool) -> Option<En
             curved_makers: false,
             cut_sides: false,
             across_twist: ACROSS_TWIST_TOL,
+            twist_across_left: false,
         }
     } else {
-        Rules { start: START, force_down: true, twist_spreads: false, fixed_level: 2, curved_makers: true, cut_sides: true, across_twist: TWIST_TOL }
+        Rules {
+            start: START,
+            force_down: true,
+            twist_spreads: false,
+            fixed_level: 2,
+            curved_makers: true,
+            cut_sides: true,
+            across_twist: TWIST_TOL,
+            twist_across_left: true,
+        }
     };
     let (leaves, log) = cells(&net, twisty, swap, &rules);
     let mesh = triangulate(&net, &surf, &leaves, &log, &rules);
@@ -345,7 +369,16 @@ pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMes
         return None;
     }
     let net = cubic_net(at);
-    let rules = Rules { start: 1, force_down: false, twist_spreads: true, fixed_level: 0, curved_makers: false, cut_sides: false, across_twist: TWIST_TOL };
+    let rules = Rules {
+        start: 1,
+        force_down: false,
+        twist_spreads: true,
+        fixed_level: 0,
+        curved_makers: false,
+        cut_sides: false,
+        across_twist: TWIST_TOL,
+        twist_across_left: false,
+    };
     let (leaves, log) = cells(&net, true, false, &rules);
     Some(triangulate(&net, at, &leaves, &log, &rules))
 }
@@ -371,6 +404,10 @@ struct Rules {
     /// The twist past which a cell that already splits across splits down too: [`TWIST_TOL`],
     /// as for any cell, but [`ACROSS_TWIST_TOL`] in a one-patch full mesh.
     across_twist: f64,
+    /// A twist split across is measured on the cell's left column of control-net quads only (the
+    /// reference's envelopes: Arc Lower's mirror-image corner cells split on the left, not on the
+    /// right); a twist split down on the whole net.
+    twist_across_left: bool,
 }
 
 /// The parent cell of `c` (one halving up both ways), as a comparable key.
@@ -430,10 +467,12 @@ fn cells(net: &Net, twisty: bool, swap: bool, rules: &Rules) -> (Vec<Cell>, Vec<
                 curved_rows.push((v0, v1, column(&c), u1 - u0));
             }
             if twisty {
-                let tw = net.sub(c).twist();
+                let (lu, lv) = (u1 - u0, v1 - v0);
+                let goes_across = lu > lv + EPS || (lu > lv - EPS && swap);
+                let sub = net.sub(c);
+                let tw = if goes_across && rules.twist_across_left { sub.twist_left() } else { sub.twist() };
                 if tw > TWIST_TOL + EPS && (!across || tw > rules.across_twist + EPS) {
-                    let (lu, lv) = (u1 - u0, v1 - v0);
-                    if lu > lv + EPS || (lu > lv - EPS && swap) {
+                    if goes_across {
                         across = true;
                     } else {
                         twist_down = !down;
@@ -739,6 +778,7 @@ mod tests {
                 curved_makers: false,
                 cut_sides: false,
                 across_twist: ACROSS_TWIST_TOL,
+                twist_across_left: false,
             },
         );
         assert!(log.iter().any(|s| s.cell == [0.0, 0.25, 0.0, 0.25]), "the corner cell splits");
@@ -900,7 +940,16 @@ mod tests {
             let (leaves, _) = cells(&cubic_net(&wave), true, false, rules);
             leaves.iter().filter(|c| c[2] >= 0.5 - 1e-9).map(|c| c[3] - c[2]).fold(0.0, f64::max)
         };
-        let quilt = Rules { start: 1, force_down: false, twist_spreads: true, fixed_level: 0, curved_makers: false, cut_sides: false, across_twist: TWIST_TOL };
+        let quilt = Rules {
+            start: 1,
+            force_down: false,
+            twist_spreads: true,
+            fixed_level: 0,
+            curved_makers: false,
+            cut_sides: false,
+            across_twist: TWIST_TOL,
+            twist_across_left: false,
+        };
         assert!(tallest(&quilt) <= 0.25 + 1e-9, "bottom cells {}", tallest(&quilt));
         let alone = Rules { twist_spreads: false, ..quilt };
         assert!(tallest(&alone) >= 0.5 - 1e-9, "without the rule the bottom cells stay half the patch");
@@ -1012,6 +1061,38 @@ mod tests {
         assert!((along(p) - len / 2.0).abs() > 0.08, "slid only {} from the chord's middle", along(p) - len / 2.0);
     }
 
+    /// An envelope's twist split across counts the cell's left column only: Arc Lower 50's top
+    /// corner cells are mirror images (largest twist 1.126 each), but the reference splits the
+    /// left one only, whose left column holds that twist (the right one's holds 0.55).
+    #[test]
+    fn an_envelope_twist_split_across_counts_the_left_column() {
+        use photocraft_geom::warp::{Warp, WarpStyle};
+        let b = [96.0, 96.0, 224.0, 224.0];
+        let w = Warp::preset(WarpStyle::ArcLower, 50.0, b);
+        let at = |u: f64, v: f64| {
+            let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * v);
+            [x, y]
+        };
+        let net = net_of(&at, false);
+        assert_eq!((net.nu, net.nv), (4, 2));
+        let rules = Rules {
+            start: START,
+            force_down: true,
+            twist_spreads: false,
+            fixed_level: 2,
+            curved_makers: true,
+            cut_sides: true,
+            across_twist: TWIST_TOL,
+            twist_across_left: true,
+        };
+        let (_, log) = cells(&net, true, false, &rules);
+        let split = |c: Cell| log.iter().any(|s| s.cell == c && s.across);
+        assert!(split([0.0, 0.25, 0.0, 0.125]), "the top-left corner cell splits across");
+        assert!(!split([0.75, 1.0, 0.0, 0.125]), "its mirror image on the right stays whole");
+        let (_, sym) = cells(&net, true, false, &Rules { twist_across_left: false, ..rules });
+        assert!(sym.iter().any(|s| s.cell == [0.75, 1.0, 0.0, 0.125] && s.across), "the whole net's twist would split it");
+    }
+
     /// The 128 px square with its top-left corner pulled out to (48, 48), as a full mesh.
     fn corner_out() -> impl Fn(f64, f64) -> P {
         corner_out_by(48.0)
@@ -1053,6 +1134,7 @@ mod tests {
             curved_makers: false,
             cut_sides: false,
             across_twist: ACROSS_TWIST_TOL,
+            twist_across_left: false,
         };
         let (leaves, _) = cells(&net, true, false, &full);
         let tall = |ls: &[Cell]| ls.iter().any(|c| c[0] >= 0.5 - 1e-9 && c[1] <= 0.75 + 1e-9 && c[2].abs() < 1e-9 && (c[3] - 0.25).abs() < 1e-9);
@@ -1080,6 +1162,7 @@ mod tests {
             curved_makers: false,
             cut_sides: false,
             across_twist: ACROSS_TWIST_TOL,
+            twist_across_left: false,
         };
         let (leaves, _) = cells(&net, true, false, &full);
         assert_eq!(m.quads.len(), leaves.len(), "no leaf is cut across");
