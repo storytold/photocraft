@@ -5,9 +5,8 @@ use crate::FormatError;
 
 pub(crate) type Step = craft_pcraft_format::Step<FormatError>;
 
-/// `STEPS[i]` upgrades version `i + 1` to `i + 2`. Empty while version 1 is
-/// the only version. `craft_pcraft_format::read_manifest_with` runs them on load.
-pub(crate) const STEPS: &[Step] = &[];
+/// Version 2 is a schema superset: accepting version 1 requires no data conversion.
+pub(crate) const STEPS: &[Step] = &[|_| Ok(())];
 
 #[cfg(test)]
 mod tests {
