@@ -273,6 +273,10 @@ impl Session {
 #[cfg(not(target_arch = "wasm32"))]
 type Closed = (DocState, Releasing);
 
+/// How many release threads were started ([`release_elsewhere`]): one, unless one stopped.
+#[cfg(not(target_arch = "wasm32"))]
+static RELEASE_THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Where closed documents go to be freed ([`release_elsewhere`]); `None` until the first close.
 #[cfg(not(target_arch = "wasm32"))]
 static RELEASER: std::sync::Mutex<Option<std::sync::mpsc::Sender<Closed>>> = std::sync::Mutex::new(None);
@@ -304,6 +308,9 @@ fn release_elsewhere(closed: DocState) {
             photocraft_raster::scratch::release();
         }
     });
+    if spawned.is_ok() {
+        RELEASE_THREADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
     let item = match spawned {
         Ok(_) => match tx.send(item) {
             Ok(()) => {
@@ -314,10 +321,13 @@ fn release_elsewhere(closed: DocState) {
         },
         Err(_) => item,
     };
-    // No release thread: the document, with its count, is freed here instead, as before.
+    // No release thread: the document is freed here instead, as before, and counted out only
+    // once its memory is back too.
     *releaser = None;
-    drop(item);
+    let (closed, releasing) = item;
+    drop(closed);
     photocraft_raster::scratch::release();
+    drop(releasing);
 }
 
 pub(super) fn fix_active(st: &mut DocState) {
@@ -351,5 +361,30 @@ mod close_tests {
             assert!(t.elapsed() < std::time::Duration::from_secs(10), "the closed document was never freed");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+    }
+
+    /// Closing many documents at once (Close All) starts at most one release thread, however
+    /// many documents it closes: they queue for the same thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn closing_many_documents_starts_at_most_one_release_thread() {
+        let mut s = Session::new();
+        let docs: Vec<_> = (0..24)
+            .map(|_| {
+                s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+                std::sync::Arc::downgrade(&s.documents().last().unwrap().doc)
+            })
+            .collect();
+        let before = super::RELEASE_THREADS.load(std::sync::atomic::Ordering::SeqCst);
+        s.execute("file.closeAll", json!({})).unwrap();
+        assert!(s.documents().is_empty());
+        let t = std::time::Instant::now();
+        while docs.iter().any(|d| d.upgrade().is_some()) {
+            assert!(t.elapsed() < std::time::Duration::from_secs(10), "the closed documents were never freed");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // Other tests close documents on the same thread meanwhile; none starts another.
+        let started = super::RELEASE_THREADS.load(std::sync::atomic::Ordering::SeqCst) - before;
+        assert!(started <= 1, "{started} release threads for one Close All");
     }
 }
