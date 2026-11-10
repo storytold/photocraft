@@ -584,6 +584,53 @@ impl GpuCanvas {
         r.callback_resources.get::<Resources>().and_then(|res| res.docs.get(&doc)).is_some_and(|d| d.size == size)
     }
 
+    /// A copy of document rect `rect` of document `key`'s display texture, as it shows now (a
+    /// storyboard about to be hidden), to put back with [`Self::restore_rect`]. `None` without a
+    /// whole-document texture set, or for a rect larger than one texture holds.
+    pub fn snapshot_rect(&self, key: u64, rect: photocraft_geom::Rect) -> Option<CanvasSnapshot> {
+        let (device, queue) = (&self.rs.device, &self.rs.queue);
+        let renderer = self.rs.renderer.read();
+        let d = renderer.callback_resources.get::<Resources>()?.docs.get(&key)?;
+        let max = device.limits().max_texture_dimension_2d;
+        let inside = rect.x0 >= 0 && rect.y0 >= 0 && rect.x1 as u32 <= d.size[0] && rect.y1 as u32 <= d.size[1];
+        if rect.is_empty() || !inside || rect.width() > max || rect.height() > max || d.tiles.iter().any(|t| t.page.is_some()) {
+            return None;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pc_canvas_snapshot"),
+            size: wgpu::Extent3d { width: rect.width(), height: rect.height(), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: d.format,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_canvas_snapshot") });
+        copy_between(&mut enc, d, rect, &texture, true);
+        queue.submit([enc.finish()]);
+        let bytes = rect.size().area() * u64::from(d.format.block_copy_size(None).unwrap_or(8));
+        Some(CanvasSnapshot { rect, format: d.format, texture, bytes })
+    }
+
+    /// Put a [`Self::snapshot_rect`] copy back into document `key`'s display texture (and its
+    /// reduced levels). False when the texture set changed format or is gone.
+    pub fn restore_rect(&self, key: u64, snap: &CanvasSnapshot) -> bool {
+        let (device, queue) = (&self.rs.device, &self.rs.queue);
+        let renderer = self.rs.renderer.read();
+        let Some(res) = renderer.callback_resources.get::<Resources>() else { return false };
+        let Some(d) = res.docs.get(&key) else { return false };
+        let r = snap.rect;
+        if d.format != snap.format || r.x1 as u32 > d.size[0] || r.y1 as u32 > d.size[1] || d.tiles.iter().any(|t| t.page.is_some()) {
+            return false;
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_canvas_restore") });
+        copy_between(&mut enc, d, r, &snap.texture, false);
+        queue.submit([enc.finish()]);
+        d.regenerate_mips(device, queue, res, [r.x0 as u32, r.y0 as u32, r.x1 as u32, r.y1 as u32]);
+        true
+    }
+
     /// Whether [`GpuCanvas::composite`] would draw `doc` with the wgpu compositor (rather than
     /// fall back to the CPU compositor).
     pub fn supports(&self, doc: &photocraft_doc::Document) -> bool {
@@ -1133,3 +1180,43 @@ mod mip_tests;
 
 #[cfg(test)]
 mod tests;
+
+/// Part of a document's display texture kept aside ([`GpuCanvas::snapshot_rect`]).
+pub struct CanvasSnapshot {
+    pub rect: photocraft_geom::Rect,
+    format: wgpu::TextureFormat,
+    texture: wgpu::Texture,
+    /// GPU memory it holds.
+    pub bytes: u64,
+}
+
+/// Copy document rect `rect` between the display tiles of `d` and `snap` (whose origin is the
+/// rect's corner): out of the tiles with `to_snapshot`, into them otherwise. Level 0 only.
+fn copy_between(enc: &mut wgpu::CommandEncoder, d: &DocTextures, rect: photocraft_geom::Rect, snap: &wgpu::Texture, to_snapshot: bool) {
+    let (x0, y0, x1, y1) = (rect.x0 as u32, rect.y0 as u32, rect.x1 as u32, rect.y1 as u32);
+    for t in &d.tiles {
+        let [tx, ty, tw, th] = t.rect;
+        let (ix0, iy0, ix1, iy1) = (x0.max(tx), y0.max(ty), x1.min(tx + tw), y1.min(ty + th));
+        if ix0 >= ix1 || iy0 >= iy1 {
+            continue;
+        }
+        let tile = wgpu::TexelCopyTextureInfo {
+            texture: &t.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: ix0 - tx, y: iy0 - ty, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        };
+        let kept = wgpu::TexelCopyTextureInfo {
+            texture: snap,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: ix0 - x0, y: iy0 - y0, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        };
+        let extent = wgpu::Extent3d { width: ix1 - ix0, height: iy1 - iy0, depth_or_array_layers: 1 };
+        if to_snapshot {
+            enc.copy_texture_to_texture(tile, kept, extent);
+        } else {
+            enc.copy_texture_to_texture(kept, tile, extent);
+        }
+    }
+}

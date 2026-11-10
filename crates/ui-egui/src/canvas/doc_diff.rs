@@ -63,6 +63,21 @@ impl Changed {
     }
 }
 
+/// Whether `new` composites exactly as `old` does, as far as this comparison can tell: the same
+/// document, or one whose only differences are view state (the selection, groups opened or
+/// closed). Lets a picture of `old` stand for `new` (`board_cache`).
+pub(crate) fn same_pixels(old: &Document, new: &Document) -> bool {
+    if std::ptr::eq(old, new) {
+        return true;
+    }
+    if old.size != new.size || !same_outside_layers(old, new) {
+        return false;
+    }
+    let mut area = Changed::Nothing;
+    diff_list(&old.layers, &new.layers, old.bounds(), &mut area, &mut false);
+    area == Changed::Nothing
+}
+
 fn same_outside_layers(old: &Document, new: &Document) -> bool {
     let strip = |d: &Document| Document { layers: Vec::new(), selection: None, ..d.clone() };
     strip(old) == strip(new)

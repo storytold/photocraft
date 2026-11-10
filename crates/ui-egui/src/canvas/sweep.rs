@@ -67,6 +67,11 @@ pub(crate) fn eligible(app: &PhotocraftApp, doc: &Document) -> bool {
     app.background_jobs && doc.bounds().size().area() >= SWEEP_MIN_PX && !app.canvas_states.get(&doc.id).is_some_and(|s| s.failed)
 }
 
+/// The blocks of `doc`'s canvas not redrawn yet.
+pub(crate) fn pending(app: &PhotocraftApp, doc: DocId) -> Vec<Rect> {
+    app.canvas_states.get(&doc).map(|s| s.pending.clone()).unwrap_or_default()
+}
+
 /// Whether a sweep of `doc` still has blocks to draw.
 pub(crate) fn running(app: &PhotocraftApp, doc: DocId) -> bool {
     app.canvas_states.get(&doc).is_some_and(|s| !s.pending.is_empty())

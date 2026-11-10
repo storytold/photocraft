@@ -15,6 +15,7 @@ use crate::state::{Tool, View};
 pub(super) mod ants;
 pub mod artboard_ui;
 pub(crate) mod background_redraw;
+pub(crate) mod board_cache;
 pub(crate) mod cam_preview;
 pub mod canvas_autoscroll;
 pub(super) mod canvas_popup;
