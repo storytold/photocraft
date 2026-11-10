@@ -280,7 +280,25 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
     Ok(out)
 }
 
+/// The reference application's Object Selection alert in the modes it refuses (#12867).
+/// Multichannel and Duotone weren't measured and keep selecting.
+pub fn object_mode_refusal(mode: photocraft_color::ColorMode) -> Option<&'static str> {
+    use photocraft_color::ColorMode;
+    match mode {
+        ColorMode::Indexed => Some(
+            "Could not complete your request because the tool does not work with Indexed Color images. Please convert the image to RGB or another supported mode before using..",
+        ),
+        ColorMode::Bitmap => Some(
+            "Could not complete your request because the tool does not work with Bitmap images. Please convert the image to RGB or another supported mode before using..",
+        ),
+        _ => None,
+    }
+}
+
 fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(why) = s.active().and_then(|d| object_mode_refusal(d.doc.mode)) {
+        return Err(EngineError::Other(why.into()));
+    }
     if p.get("rect").is_none()
         && let Some(pt) = point_param(p)
     {
@@ -575,3 +593,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod object_mode_refusal_tests;
