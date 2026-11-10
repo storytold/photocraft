@@ -272,8 +272,15 @@ pub(crate) enum SaveKind {
     Automation,
 }
 
-/// Read bytes through the desktop control session's authorized read root.
-pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
+/// Bytes and save provenance selected together by the automation read capability.
+pub struct AutomationReadResult {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    /// None means an explicit Save As is required, even for a layered document.
+    pub save_path: Option<String>,
+}
+/// Read bytes through the desktop control session's authorized read roots.
+pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<AutomationReadResult, String>>;
 
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
@@ -429,6 +436,10 @@ pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
 /// whether the app window is focused (to re-assert WinTab overlap priority on activation).
 pub type TabletPollFn = Box<dyn FnMut(bool)>;
 
+/// What the last self-update came to: `Ok` with the version it installed, `Err` with the reason it
+/// could not be installed, `None` when there is nothing to report ([`Services::last_update`]).
+pub type LastUpdateFn = fn() -> Option<Result<String, String>>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -486,6 +497,9 @@ pub struct Services {
     pub alert: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// What the last self-update came to, read once at the first frame: `Ok` with the version it
+    /// installed, `Err` with the reason it could not be installed (desktop).
+    pub last_update: Option<LastUpdateFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,

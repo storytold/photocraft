@@ -230,7 +230,7 @@ Upstream main integrated was `e6ba4aca4293093dc803d6db8ad899ba3beea681`. The Lev
 
 ## Main integration (2026-11-08)
 
-Current upstream main integrated is `7acc57a25ff4c58097f421962f16e6b37e1a1bb2`. The dialog conflicts retain Photo Filter's last-confirmed Preserve Luminosity and fresh Filter/Color choice, recorded Smart Filter settings, and the distinction between interactive and programmatic Action playback.
+Upstream main integrated was `7acc57a25ff4c58097f421962f16e6b37e1a1bb2`. The dialog conflicts retain Photo Filter's last-confirmed Preserve Luminosity and fresh Filter/Color choice, recorded Smart Filter settings, and the distinction between interactive and programmatic Action playback.
 
 Record Again now shares recorded-editor initialization with Action playback. Its newly added upstream path previously seeded defaults from the current channel before inserting a different recorded target. The regression first failed with that initializer because recorded colour records overrode the neutral scalar records. It passes with shared target-aware initialization across six U16 RGB/CMYK/Lab Levels/Curves cases, checking the named alpha controls, preview/commit agreement, expected samples, retained Action target and exact preservation of layer data.
 
@@ -238,6 +238,15 @@ Record Again now shares recorded-editor initialization with Action playback. Its
 - The final snapshot at `7acc57a25` passed **363 focused tests, 0 failures, 0 ignored**, covering the incoming blend-mode keys and rasterize wording plus tone dialogs, Smart Filters, Actions, Record Again and localization.
 - Strict all-target Clippy, formatting, layering, panel-command validation and wasm passed on the final snapshot. Changed-corpus checking skipped because the PR diff contains no corpus-critical paths.
 - Seven offscreen captures were inspected for addressed and unavailable tone targets, Equalize, Photo Filter reopening and Levels clipping. All seven were byte-identical when rendered from the final snapshot.
+
+## Main integration (2026-11-10)
+
+Current upstream main integrated is `609e2aa72705ae8a43823f192d2aac9b51aa1620`. The channel-command export conflict retains upstream's vector-mask routing helper alongside this PR's grayscale discriminator and shared tone-target resolver.
+
+- Full Linux engine/UI `cargo test`, using the full serial sweep and pinned CI fonts, passed **10,872 tests, 0 failures, 49 normally ignored**, including doctest builds. The ignored full-registry adversarial command test passed separately.
+- The focused channel, adjustment-dialog, Action, Record Again and Smart Filter suite passed **257 tests, 0 failures, 0 ignored**.
+- Strict all-target Clippy, formatting, layering, panel-command validation and wasm passed. Changed-corpus checking skipped because the PR diff contains no corpus-critical paths.
+- Seven fresh offscreen captures were inspected for addressed and unavailable Levels/Curves targets, Equalize, Photo Filter reopening and Levels clipping.
 
 ## 24 MP release comparison
 
