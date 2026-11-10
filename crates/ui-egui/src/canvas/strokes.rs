@@ -217,15 +217,16 @@ pub(super) struct StrokeWorker {
 
 /// Whether the Brush (and Pencil and Eraser) render their live stroke on a worker, so the window
 /// never waits for a step: one dab of a very large brush on a gigapixel storyboard took most of a
-/// second, and a stalled window is dropped by Wayland. Off in tests (steps land at once there) and
-/// with `PHOTOCRAFT_STROKE_ON_UI_THREAD` set.
-pub(super) fn stroke_worker_enabled() -> bool {
+/// second, and a stalled window is dropped by Wayland. With background jobs, as the desktop app
+/// runs (steps land at once without them, as tests expect), and not with
+/// `PHOTOCRAFT_STROKE_ON_UI_THREAD` set. Decided once per stroke (`LiveStroke::on_worker`).
+pub(super) fn stroke_worker_enabled(app: &PhotocraftApp) -> bool {
     #[cfg(test)]
     if TEST_WORKER.with(std::cell::Cell::get) {
         return true;
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| !cfg!(target_arch = "wasm32") && !cfg!(test) && std::env::var_os("PHOTOCRAFT_STROKE_ON_UI_THREAD").is_none())
+    app.background_jobs && *ON.get_or_init(|| !cfg!(target_arch = "wasm32") && std::env::var_os("PHOTOCRAFT_STROKE_ON_UI_THREAD").is_none())
 }
 
 #[cfg(test)]
@@ -433,7 +434,9 @@ pub(crate) struct LiveStroke {
     /// UI-thread time a point has taken to render (ms, moving average): how many points a
     /// frame's budget holds ([`STROKE_FRAME_MS`]).
     ms_per_point: Option<f64>,
-    /// The Brush step a worker is rendering ([`stroke_worker_enabled`]).
+    /// Whether this Brush stroke renders on a worker ([`stroke_worker_enabled`]).
+    on_worker: bool,
+    /// The Brush step a worker is rendering.
     worker: Option<StrokeWorker>,
     /// The commit being taken from the finished stroke on a worker ([`prepare_commit`]), then
     /// taken.
@@ -487,8 +490,8 @@ pub(crate) fn continue_finishing_stroke(app: &mut PhotocraftApp) -> bool {
             return true;
         }
         // Caught up: the commit is taken on a worker too.
-        if stroke_worker_enabled()
-            && let Some(l) = app.live_stroke.as_mut()
+        if let Some(l) = app.live_stroke.as_mut()
+            && l.on_worker
             && matches!(prepare_commit(l), Prep::Running)
         {
             app.finishing_stroke = Some(d);
@@ -509,10 +512,8 @@ pub(crate) fn flush_finishing_stroke(app: &mut PhotocraftApp) -> bool {
     if app.finishing_stroke.is_none() {
         return true;
     }
-    let on_worker = app
-        .live_stroke
-        .as_ref()
-        .is_some_and(|l| l.worker.is_some() || l.preparing.is_some() || (stroke_worker_enabled() && matches!(l.stroke, EngineStroke::Brush(_))));
+    let on_worker =
+        app.live_stroke.as_ref().is_some_and(|l| l.worker.is_some() || l.preparing.is_some() || (l.on_worker && matches!(l.stroke, EngineStroke::Brush(_))));
     if !on_worker {
         if let Some(d) = app.finishing_stroke.take() {
             commit_brush_stroke_now(app, &d);
@@ -717,7 +718,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     } else {
         let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
         let cmd = stroke_command(app, d.tool);
-        if stroke_worker_enabled() {
+        if stroke_worker_enabled(app) {
             // The first dabs render on the worker too.
             let (s, pts) = photocraft_engine::brush_cmds::LiveStroke::begin_unrendered(&app.session, cmd, &p).ok()?;
             first = Some(pts);
@@ -736,6 +737,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         damage,
         fed: if d.tool == Tool::MixerBrush { 1 } else { d.points.len() },
         ms_per_point: None,
+        on_worker: first.is_some(),
         worker: None,
         preparing: None,
         prepared: None,
@@ -792,7 +794,7 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
     // Mixer Brush: its release commits what was fed, with no catch-up.
     // On a worker, every point waiting goes in the next step: a step redraws the smoothing tail
     // whatever its points, so fewer, larger steps cost less.
-    let on_worker = stroke_worker_enabled() && matches!(l.stroke, EngineStroke::Brush(_));
+    let on_worker = l.on_worker && matches!(l.stroke, EngineStroke::Brush(_));
     let budget = match l.ms_per_point {
         Some(k) if !on_worker && !matches!(l.stroke, EngineStroke::Mixer(_)) => ((STROKE_FRAME_MS / k.max(0.01)).floor() as usize).max(1),
         _ => usize::MAX,
@@ -1029,7 +1031,7 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
 fn release_backlog(l: &LiveStroke, d: &Drag) -> bool {
     let left = d.points.len().saturating_sub(l.fed);
     // On the worker the commit is taken there too (`prepare_commit`), even with nothing left.
-    if l.worker.is_some() || (stroke_worker_enabled() && matches!(l.stroke, EngineStroke::Brush(_) | EngineStroke::Busy(_))) {
+    if l.worker.is_some() || (l.on_worker && matches!(l.stroke, EngineStroke::Brush(_) | EngineStroke::Busy(_))) {
         return true;
     }
     l.ms_per_point.is_some_and(|k| left as f64 * k > STROKE_RELEASE_MS)
