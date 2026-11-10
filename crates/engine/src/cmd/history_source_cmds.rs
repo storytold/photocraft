@@ -395,3 +395,7 @@ mod tests {
         assert_eq!(s.execute(CMD, json!({"snapshot": 0})).unwrap()["snapshot"], 0);
     }
 }
+
+#[cfg(test)]
+#[path = "history_brush_format_mismatch_tests.rs"]
+mod history_brush_format_mismatch_tests;
