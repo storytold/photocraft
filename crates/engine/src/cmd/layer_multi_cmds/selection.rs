@@ -156,7 +156,8 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
             return recorded_transform(s, p, pre_selected);
         }
     }
-    // A visibility gesture names its layer for replay instead (`actions_cmds::recorded_params`).
+    // A visibility step keeps its `layers`. `actions_cmds::recorded_params` already names the layer
+    // for replay, and dropping `layers` here would replay a multi-layer hide on one layer.
     if id == "layer.setProps" && p.get("visible").is_none() && p.get("layers").is_some_and(Value::is_array) {
         return recorded_set_props(s, p, pre_selected);
     }
@@ -217,7 +218,9 @@ fn recorded_transform(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]
 }
 
 /// `layer.setProps` on the layers that were selected plays on the selection at replay, not on
-/// this document's ids. Any other list stays as recorded.
+/// this document's ids. The two lists are compared as sets, so order and repeats don't matter.
+/// Any other list stays as recorded with this document's ids, so replaying it in another
+/// document fails with "no layer" or reaches the wrong layers.
 fn recorded_set_props(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]>) -> Value {
     let Some(st) = s.active() else { return p };
     let Some(listed) = p.get("layers").and_then(Value::as_array) else { return p };
