@@ -987,6 +987,8 @@ struct CanvasToolInput<'a> {
     under_dialog: bool,
     menu_dismiss_press: bool,
     zoom_out: &'a dyn Fn(bool) -> bool,
+    /// The Animated Zoom direction for ⌥ held or not: `zoom_out` without the Zoom Out mode.
+    hold_zoom_out: &'a dyn Fn(bool) -> bool,
     display_zoom: f32,
 }
 
@@ -1188,7 +1190,7 @@ fn handle_canvas_tool_navigation(
     // it owns the press: no scrub, and its release is no click step. A menu-dismissal press
     // must not arm it: holding the dismissal click would zoom (CodeRabbit, #9841).
     if tool == Tool::Zoom && !transform_owns_pointer {
-        let out = zoom_out(ui.input(|i| i.modifiers.alt));
+        let out = (input.hold_zoom_out)(ui.input(|i| i.modifiers.alt));
         let on_canvas = !input.menu_dismiss_press && !input.under_dialog && !over_compass && response.is_pointer_button_down_on();
         let hold = crate::zoom_hold::hold_id(idx, primary, ctx.viewport_id());
         if crate::zoom_hold::update(ctx, view, xf, app.session.prefs().general.animated_zoom, out, ppp, on_canvas, hold) {
@@ -2335,6 +2337,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         Some(crate::hold_keys::Temporary::ZoomIn) => false,
         _ => (alt || sticky_alt) != out_mode,
     };
+    // Animated Zoom (press and hold) keeps its direction in either mode: in, out with ⌥. Zoom
+    // Out mode was not measured for it (#12066).
+    let hold_zoom_out = |alt: bool| match temporary {
+        Some(crate::hold_keys::Temporary::ZoomOut) => true,
+        Some(crate::hold_keys::Temporary::ZoomIn) => false,
+        _ => alt || sticky_alt,
+    };
 
     if under_dialog {
         handle_dialog_canvas_input(
@@ -2448,6 +2457,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             under_dialog,
             menu_dismiss_press,
             zoom_out: &zoom_out,
+            hold_zoom_out: &hold_zoom_out,
             display_zoom: display_view.zoom,
         };
         handle_primary_canvas_input(app, ui, &mut view, &input);
