@@ -520,9 +520,8 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 /// Object Selection: the dragged rectangle. A click (or a sub-2 px nudge) cannot be a
 /// rectangle: with Object Finder on it selects the object under the pointer, the one hovering
 /// highlighted (#4087; ⇧ adds, ⌥ subtracts, ⇧⌥ intersects, otherwise replaces). With it off it
-/// falls back to a Quick Selection dab at
-/// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
-/// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
+/// does nothing: a click or sub-2 px drag selects nothing, adds no history step and shows no
+/// message (#12864). Larger drags run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
@@ -540,11 +539,9 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
         report_smart_result(app, r, tl!("No object found there — drag a rectangle around it"));
         return;
     }
+    // Object Finder off: a click or sub-2 px drag selects nothing, adds no history step and
+    // shows no message — the reference application does nothing here.
     if w < 2.0 || h < 2.0 {
-        let size = app.session.tools.brush.size;
-        let mode = if mods.alt { "subtract" } else { "add" };
-        let r = app.run("select.quick", json!({"points": [[end[0], end[1]]], "size": size, "mode": mode, "sampleAllLayers": sample_all}));
-        report_smart_result(app, r, tl!("Quick Selection found nothing there"));
         return;
     }
     let mode = if mods.alt {

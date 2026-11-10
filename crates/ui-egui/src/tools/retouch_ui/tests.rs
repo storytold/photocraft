@@ -304,29 +304,78 @@ fn sample_all_layers_is_each_tools_own() {
 }
 
 #[test]
-fn object_selection_click_falls_back_to_quick_selection() {
-    // A click cannot be a rectangle: it selects at the cursor instead of looking dead.
+fn object_selection_click_with_finder_off_selects_nothing() {
+    // #12864: Object Finder off: a click selects nothing, adds no history step and shows no
+    // message — the reference application does nothing here.
+    for mods in [egui::Modifiers::NONE, egui::Modifiers::SHIFT, egui::Modifiers::ALT] {
+        let mut app = app();
+        app.ui.tool = Tool::ObjectSelection;
+        app.ui.tool_options.object_finder = false;
+        let journal_before = app.session.journal.len();
+        let status_before = app.ui.status.clone();
+        tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, mods);
+        tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, mods);
+        assert!(!app.ui.status_error, "{mods:?}: {}", app.ui.status);
+        assert_eq!(app.session.journal.len(), journal_before, "{mods:?}: no command ran");
+        assert_eq!(app.ui.status, status_before, "{mods:?}: no status message");
+    }
+}
+
+#[test]
+fn object_selection_click_with_finder_on_runs_object_selection() {
+    // Object Finder on: a click runs select.object at the point.
     let mut app = app();
     app.ui.tool = Tool::ObjectSelection;
-    app.ui.tool_options.object_finder = false;
+    app.ui.tool_options.object_finder = true;
+    let journal_before = app.session.journal.len();
     let m = egui::Modifiers::NONE;
     tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, m);
     tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, m);
     assert!(!app.ui.status_error, "{}", app.ui.status);
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.quick"));
+    assert_eq!(
+        app.session.journal[journal_before..].last().map(|(id, _)| id.as_str()),
+        Some("select.object"),
+        "select.object ran with Object Finder on"
+    );
 }
 
 #[test]
-fn object_selection_rect_runs_object_selection_and_reports() {
+fn object_selection_sub_2px_drag_with_finder_off_selects_nothing() {
+    // #12864: Object Finder off: a drag under 2 px selects nothing.
+    let mut app = app();
+    app.ui.tool = Tool::ObjectSelection;
+    app.ui.tool_options.object_finder = false;
+    let journal_before = app.session.journal.len();
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, m);
+    tool_event(&mut app, ToolEvent::Move { x: 50.5, y: 30.0, pressure: 1.0 }, m);
+    tool_event(&mut app, ToolEvent::Up { x: 50.5, y: 30.0 }, m);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(
+        app.session.journal.len(),
+        journal_before,
+        "no command ran for sub-2px drag with finder off"
+    );
+}
+
+#[test]
+fn object_selection_rect_with_finder_off_runs_object_selection() {
+    // Object Finder off: a rectangle drag still runs select.object.
     let mut app = app();
     app.run("paint.pencil", json!({"points": [[20, 10], [20, 50]], "size": 8, "color": "#ff0000"})).unwrap();
     app.ui.tool = Tool::ObjectSelection;
+    app.ui.tool_options.object_finder = false;
+    let journal_before = app.session.journal.len();
     let m = egui::Modifiers::NONE;
     tool_event(&mut app, ToolEvent::Down { x: 5.0, y: 5.0, pressure: 1.0 }, m);
     tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 55.0, pressure: 1.0 }, m);
     tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 55.0 }, m);
     assert!(!app.ui.status_error, "{}", app.ui.status);
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.object"));
+    assert_eq!(
+        app.session.journal[journal_before..].last().map(|(id, _)| id.as_str()),
+        Some("select.object"),
+        "rectangle drag runs select.object"
+    );
 }
 
 #[test]

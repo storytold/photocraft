@@ -4,7 +4,7 @@ use super::history::fix_selection;
 use super::{DocState, Document, LayerId, Session, channel_cmds, smart_cmds};
 
 use photocraft_color::ColorMode;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
 /// `i` is out of range.
@@ -200,7 +200,7 @@ impl Session {
             pv.setup.name = name;
             pv.setup.bpc = bpc;
             pv.setup.simulate_paper = simulate_paper;
-            pv.setup.intent = photocraft_cms::Intent::parse(&intent).unwrap_or(photocraft_cms::Intent::RelativeColorimetric);
+            pv.setup.intent = photocraft_cms::Intent::parse(intent).unwrap_or(photocraft_cms::Intent::RelativeColorimetric);
             if let Some(profile) = profile {
                 pv.setup.profile = profile;
             }
