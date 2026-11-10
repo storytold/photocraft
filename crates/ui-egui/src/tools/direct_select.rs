@@ -7,7 +7,8 @@
 //!   canvas to marquee-select anchors, click empty canvas to deselect.
 //! * Drag selected anchors to move them, a direction handle to turn it (a smooth point keeps its
 //!   handles collinear; ⌥ breaks them apart), or a segment to bend it (straight segments move).
-//!   The arrow keys nudge the selected anchors 1 px (⇧ 10 px), one history step per press.
+//!   The arrow keys nudge selected anchors or a segment 1 document pixel (⇧ 10), one history step per press.
+//!   A segment nudge translates its two anchors with all their handles, preserving its curve.
 //! * Convert Point (the tool, or Pen + ⌥): click an anchor to make it a corner, drag from it to
 //!   pull out smooth handles, drag a handle to move it alone. The tool selects the anchor it
 //!   converts, so its handles show; a press on empty canvas or a segment does nothing, and ⌘/Ctrl
@@ -668,49 +669,121 @@ fn marquee(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], add: bool) {
     ds.owner = owner;
 }
 
-/// Arrow keys with Direct Selection and selected anchors (#4486), as in Photoshop: nudge them
-/// 1 px (⇧ 10 px) through `path.moveAnchors`, one history step per press. Not while a drag is
-/// in progress. Returns true when a key was used.
+/// Resolves a selected segment to its two endpoint knots for rigid keyboard translation.
+/// Both handles travel with each endpoint; the other knots stay put. Invalid indices and the
+/// last knot of an open subpath have no segment, and must never wrap onto another knot.
+fn segment_anchors(path: &Path, [s, k]: [usize; 2]) -> Option<Vec<[usize; 2]>> {
+    let sp = path.subpaths.get(s)?;
+    sp.knots.get(k)?;
+    let next = k.checked_add(1)?;
+    let end = if next < sp.knots.len() {
+        next
+    } else if sp.closed && sp.knots.len() > 1 {
+        0
+    } else {
+        return None;
+    };
+    Some(vec![[s, k], [s, end]])
+}
+
+/// Translate a press or repeat using that event's modifiers. Anchors retain their existing
+/// logical-key matching; a segment only claims plain and Shift arrows.
+fn nudge_delta(event: &egui::Event, segment: bool) -> Option<[f64; 2]> {
+    use egui::{Event, Key};
+    let Event::Key { key, pressed: true, modifiers, .. } = event else { return None };
+    let allowed = if segment { *modifiers == Modifiers::NONE || *modifiers == Modifiers::SHIFT } else { modifiers.matches_logically(Modifiers::NONE) };
+    if !allowed {
+        return None;
+    }
+    let step = if modifiers.shift { 10.0 } else { 1.0 };
+    match key {
+        Key::ArrowLeft => Some([-step, 0.0]),
+        Key::ArrowRight => Some([step, 0.0]),
+        Key::ArrowUp => Some([0.0, -step]),
+        Key::ArrowDown => Some([0.0, step]),
+        _ => None,
+    }
+}
+
+/// Arrow keys with Direct Selection: nudge selected anchors or a segment 1 document pixel
+/// (⇧ 10) through `path.moveAnchors`, one history step per press. A segment translates with its
+/// endpoints and their handles, unlike the curved-segment pointer drag, which bends the curve.
+/// Active drags and unfinished Pen paths never dispatch an engine nudge.
+/// Returns true when a key was used.
 pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     cancel_stale(app);
     let ds = &app.ui.direct_selection;
-    let Some(target) = ds.target.filter(|_| app.ui.tool == Tool::DirectSelection && !ds.anchors.is_empty() && ds.drag.is_none()) else {
+    let Some(target) = ds
+        .target
+        .filter(|t| *t != PathRef::Pen && app.ui.tool == Tool::DirectSelection && (!ds.anchors.is_empty() || ds.segment.is_some()) && ds.drag.is_none())
+    else {
         return false;
     };
-    // The anchors belong to a path the canvas no longer offers (another saved path picked in the
-    // Paths panel, the path deleted): drop them rather than nudge that path, or another one that
-    // took its index.
-    if !candidates(app).iter().any(|(r, _)| *r == target) {
-        app.ui.direct_selection = DirectSelection::default();
+    let segment = ds.anchors.is_empty();
+    // This handler runs every frame. Clone path geometry only for eligible arrow presses.
+    if !ctx.input(|i| i.events.iter().any(|event| nudge_delta(event, segment).is_some())) {
         return false;
     }
-    let anchors = app.ui.direct_selection.anchors.clone();
-    use egui::Key;
-    let keys = [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)];
-    for (key, ux, uy) in keys {
-        // ⇧ first: `consume_key` ignores an extra ⇧.
-        for mods in [Modifiers::SHIFT, Modifiers::NONE] {
-            if ctx.input_mut(|i| i.consume_key(mods, key)) {
-                let k = if mods.shift { 10.0 } else { 1.0 };
-                let mut params = json!({"anchors": anchors, "move": [ux * k, uy * k]});
-                if let (Some(p), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
-                    p.extend(t.clone());
+    let mut params = target.params(app);
+    // Imported saved paths can have names reserved by the engine's name-based command.
+    // Never let such a selection redirect the edit to the Work Path or the active layer.
+    let name = params.get("name").and_then(Value::as_str);
+    if matches!(target, PathRef::Saved(_))
+        && name.is_none_or(|name| name.is_empty() || name.eq_ignore_ascii_case("work") || matches!(name, "Work Path" | "layer"))
+    {
+        return false;
+    }
+    // Resolve against the current offered, writable path. A stale or locked target must not
+    // edit another path that took its index, or leak an arrow into a rejected document edit.
+    let Some((_, path)) = candidates(app).into_iter().find(|(r, _)| *r == target && writable(app, r)) else {
+        app.ui.direct_selection = DirectSelection::default();
+        return false;
+    };
+    let anchors = if segment {
+        let Some(anchors) = ds.segment.and_then(|segment| segment_anchors(&path, segment)) else {
+            app.ui.direct_selection = DirectSelection::default();
+            return false;
+        };
+        anchors
+    } else {
+        ds.anchors.clone()
+    };
+    params["anchors"] = json!(anchors);
+    // Egui's consume_key groups all matching presses. Keep their order and modifiers so each
+    // press, including a repeat in the same frame, gets its own history entry.
+    let deltas = ctx.input_mut(|i| {
+        let mut deltas = Vec::new();
+        i.events.retain(|event| {
+            if let Some(delta) = nudge_delta(event, segment) {
+                deltas.push(delta);
+                false
+            } else {
+                true
+            }
+        });
+        deltas
+    });
+    let used = !deltas.is_empty();
+    for delta in deltas {
+        params["move"] = json!(delta);
+        // The nudge makes a new revision: the selection follows it, as after a drag.
+        let selection = std::mem::take(&mut app.ui.direct_selection);
+        match app.run("path.moveAnchors", params.clone()) {
+            Ok(_) => {
+                keep_after_command(app, selection);
+                if app.ui.direct_selection.target != Some(target) {
+                    break;
                 }
-                // The nudge makes a new revision: the selection follows it, as after a drag.
-                let selection = std::mem::take(&mut app.ui.direct_selection);
-                match app.run("path.moveAnchors", params) {
-                    Ok(_) => keep_after_command(app, selection),
-                    Err(e) => {
-                        app.ui.direct_selection = selection;
-                        app.ui.status = e;
-                        app.ui.status_error = true;
-                    }
-                }
-                return true;
+            }
+            Err(e) => {
+                app.ui.direct_selection = selection;
+                app.ui.status = e;
+                app.ui.status_error = true;
+                break;
             }
         }
     }
-    false
+    used
 }
 
 /// Paths with their anchors (selected ones filled), the shown handles, the drag's preview in
@@ -753,6 +826,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod segment_nudge_tests;
 
 #[cfg(test)]
 mod freeform_command_tests {
