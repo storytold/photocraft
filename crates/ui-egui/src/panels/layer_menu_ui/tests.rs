@@ -142,6 +142,8 @@ fn smart_object_context_menu_edits_the_clicked_layer() {
         let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
         crate::control::handle(h.state_mut(), &ctx, &req);
         h.run_steps(8);
+        h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+        h.run_steps(8);
         let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == smart).expect("layer row drawn").row;
         // Top-level Pro row: 6 pt padding, 28 pt eye column, 24 pt layer thumbnail.
         let at = pos2(row.left() + 6.0 + 28.0 + 12.0, row.center().y);
@@ -190,6 +192,8 @@ fn mask_thumbnail_context_menu_acts_on_the_clicked_mask() {
     let ctx = h.ctx.clone();
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &req);
+    h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
     h.run_steps(8);
     let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, masked.0).expect("mask thumbnail drawn");
     let at = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
@@ -367,6 +371,8 @@ fn open_multi_selection_menu() -> (egui_kittest::Harness<'static, crate::Photocr
     let ctx = h.ctx.clone();
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &req);
+    h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
     h.run_steps(8);
     let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == text).expect("layer row drawn").row;
     click(&mut h, pos2(row.left() + 6.0 + 28.0 + 12.0, row.center().y), PointerButton::Secondary);
