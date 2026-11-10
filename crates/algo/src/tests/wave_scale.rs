@@ -53,6 +53,8 @@ fn displacement(params: &FilterParams) -> Vec<(f32, f32)> {
         .collect()
 }
 
+/// At every pixel a scaled wave's displacement is the unscaled wave's, times Scale Horiz. along
+/// x and times Scale Vert. along y: neither scale reaches the other axis.
 #[test]
 fn each_scale_multiplies_only_its_own_axis() {
     let full = displacement(&wave(100.0, 100.0));
@@ -96,6 +98,8 @@ fn a_square_wave_moves_pixels_by_exactly_the_scaled_amplitude() {
     }
 }
 
+/// A scale below 1 % renders as 1 % and one above 100 % as 100 %, the dialog's limits, so a
+/// stored value outside them can neither flip nor amplify the wave.
 #[test]
 fn scales_outside_photoshops_range_render_at_its_limits() {
     let same = |a: f32, b: f32, c: f32, d: f32| assert_eq!(displacement(&wave(a, b)), displacement(&wave(c, d)), "{a}/{b} vs {c}/{d}");
@@ -105,6 +109,8 @@ fn scales_outside_photoshops_range_render_at_its_limits() {
     same(f32::NAN, f32::INFINITY, 100.0, 100.0);
 }
 
+/// Stored Wave parameters without the two scales (smart filters and actions saved before they
+/// existed) decode as 100 %, and the scales are written under their camel-case names.
 #[test]
 fn wave_parameters_saved_before_the_scales_existed_are_unscaled() {
     let params = serde_json::json!({
