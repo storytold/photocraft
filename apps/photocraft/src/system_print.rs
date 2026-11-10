@@ -10,7 +10,8 @@ use photocraft_engine::print_cmds::{SystemPrintDialog, SystemPrintOutcome, Syste
 #[cfg(target_os = "macos")]
 const MAC_PRINT_SCRIPT: &str = r#"
 on run argv
-  tell application "Preview"
+  with timeout of 86400 seconds
+    tell application "Preview"
     activate
     set printName to item 1 of argv
     set printDocument to missing value
@@ -33,7 +34,8 @@ on run argv
       end if
       error errorMessage number errorNumber
     end try
-  end tell
+    end tell
+  end timeout
 end run
 "#;
 
@@ -48,12 +50,15 @@ fn show(pdf: &[u8], settings: &SystemPrintSettings) -> Result<SystemPrintOutcome
     let mut file = tempfile::Builder::new().prefix("photocraft-print-").suffix(".pdf").tempfile().map_err(|e| e.to_string())?;
     file.write_all(pdf).map_err(|e| e.to_string())?;
     file.flush().map_err(|e| e.to_string())?;
-    let path = file.path().to_path_buf();
-    platform(file.as_file_mut(), &path, settings)
+    // Close the writer before the OS opens the document. In particular, WinRT's StorageFile can
+    // reject a path whose temporary-file writer is still open. TempPath keeps the file alive until
+    // the synchronous platform dialog has finished.
+    let path = file.into_temp_path();
+    platform(path.as_ref(), settings)
 }
 
 #[cfg(target_os = "macos")]
-fn platform(_file: &mut std::fs::File, path: &std::path::Path, _settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
+fn platform(path: &std::path::Path, _settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     // Opening through Launch Services gives sandboxed Preview a file-access extension. Asking
     // Preview to open a private tempfile directly through AppleScript instead produces a
     // misleading "you don't have permission" alert before the print sheet appears.
@@ -81,15 +86,12 @@ fn platform(_file: &mut std::fs::File, path: &std::path::Path, _settings: &Syste
 }
 
 #[cfg(target_os = "linux")]
-fn platform(file: &mut std::fs::File, path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
-    use std::io::{Seek as _, SeekFrom};
-
-    file.seek(SeekFrom::Start(0)).map_err(|e| format!("could not rewind the print document: {e}"))?;
+fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     crate::print_portal::confirm(path, settings)
 }
 
 #[cfg(target_os = "windows")]
-fn platform(_file: &mut std::fs::File, path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
+fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     let script = include_str!("system_print_windows.ps1");
     let result = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
