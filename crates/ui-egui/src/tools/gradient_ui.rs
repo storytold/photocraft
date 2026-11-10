@@ -97,13 +97,15 @@ pub fn live_mode(app: &PhotocraftApp) -> bool {
     }
 }
 
-/// Whether the active layer is a visible, unlocked gradient fill layer the tool paints into (its
+/// Whether the active layer is a shown, unlocked gradient fill layer the tool paints into (its
 /// pixels or its mask). The Gradient tool then edits it live whatever the stored Gradient / Classic
 /// gradient choice, and the options bar greys that choice out (#12008). Hidden and locked fill
-/// layers, and the Quick Mask or an alpha channel as the target, were not measured and keep the choice.
+/// layers (or ones in a hidden or locked group), and the Quick Mask or an alpha channel as the
+/// target, were not measured and keep the choice.
 pub(crate) fn fill_layer_active(app: &PhotocraftApp) -> bool {
     let Some((l, ..)) = active_gradient(app) else { return false };
-    matches!(crate::canvas::paint_target(app).as_str(), Some("pixels" | "mask")) && app.session.active().is_some_and(|st| !st.doc.effective_locks(l.id).any())
+    matches!(crate::canvas::paint_target(app).as_str(), Some("pixels" | "mask"))
+        && app.session.active().is_some_and(|st| st.doc.path_of(l.id).is_some_and(|p| st.doc.shown_at(&p) && !st.doc.locks_at(&p).any()))
 }
 
 /// The active layer when it is a gradient fill layer: (layer, its frame, the canvas).
