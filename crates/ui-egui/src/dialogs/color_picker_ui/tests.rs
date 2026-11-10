@@ -72,9 +72,12 @@ fn float_picker_rgb_fields_accept_fractional_hdr_and_negative_values() {
     assert_eq!(current(h.state()).rgb, opening, "drawing does not quantize");
     for channel in 0..3 {
         h.query_all_by_role(Role::SpinButton).nth(channel + 3).unwrap().click();
-        h.run_steps(1);
+        // DragValue creates its keyboard editor on an idle frame after the click requests focus.
+        h.run_steps(2);
+        assert!(h.query_all_by_role(Role::SpinButton).nth(channel + 3).unwrap().is_focused(), "RGB channel {channel} field receives focus");
         h.key_press(egui::Key::Tab);
         h.run_steps(2);
+        assert!(!h.query_all_by_role(Role::SpinButton).nth(channel + 3).unwrap().is_focused(), "RGB channel {channel} field loses focus after Tab");
         assert_eq!(current(h.state()).rgb, opening, "leaving channel {channel} without editing");
     }
     for (channel, text, value) in [(0, "0.54321", 0.54321), (1, "3.25", 3.25), (2, "-0.125", -0.125)] {
