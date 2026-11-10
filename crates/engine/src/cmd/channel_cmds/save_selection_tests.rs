@@ -55,10 +55,13 @@ fn save_to_a_new_document_makes_a_multichannel_image_of_the_selection() {
         for (k, (a, b)) in ink.iter().zip(&selection).enumerate() {
             assert!((a - (1.0 - b)).abs() <= tol, "{depth}-bit pixel {k}: ink {a} for selection {b}");
         }
+        // The image shows the selection: white where selected, black where not, grays between.
         let shown = photocraft_compose::flatten(d);
-        let at = |x: usize, y: usize| shown.px[y * 24 + x];
-        assert!(at(10, 8)[0] > 0.99 && at(10, 8)[2] > 0.99, "selected: white, {:?}", at(10, 8));
-        assert!(at(0, 0)[0] < 0.01, "unselected: black, {:?}", at(0, 0));
+        assert_eq!(shown.px.len(), selection.len());
+        for (k, (p, v)) in shown.px.iter().zip(&selection).enumerate() {
+            assert!(p[..3].iter().all(|c| (c - v).abs() <= 1.5 / 255.0) && (p[3] - 1.0).abs() < 1e-6, "{depth}-bit pixel {k}: shown {p:?} for selection {v}");
+        }
+        assert!(selection[8 * 24 + 10] > 0.9 && selection[0] == 0.0, "the middle is selected, the corner is not");
         // The source keeps its selection and gets no channel or history step.
         let src = &s.documents()[0];
         assert!(src.doc.channels.is_empty());
