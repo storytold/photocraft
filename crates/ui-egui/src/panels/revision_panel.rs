@@ -47,9 +47,23 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
-        for i in 0..n {
+        // The rows are drawn from the live list, not to the length read before the buttons ran:
+        // Delete and Clear All shrink the list while these rows are being laid out, and asking for
+        // the marker at the old index after that ran off the end of the list and took PhotoCraft
+        // down with it.
+        let mut i = 0;
+        loop {
+            let len = app.session.active().map_or(0, |st| st.doc.revision_markers.len());
+            if i >= len {
+                break;
+            }
             row(app, ui, i, &t);
             ui.add_space(2.0);
+            // The row's own Delete removed this marker, so the next one slid down into its place:
+            // draw it as the same index rather than stepping over it.
+            if app.session.active().map_or(0, |st| st.doc.revision_markers.len()) == len {
+                i += 1;
+            }
         }
     });
 }

@@ -56,6 +56,8 @@ pub mod preset_panels;
 mod properties;
 pub mod props_layout;
 pub(super) mod revision_panel;
+#[cfg(test)]
+mod revision_panel_tests;
 pub mod smart_ui;
 mod status_bar;
 pub mod swatches_ui;
