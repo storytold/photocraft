@@ -326,6 +326,6 @@ sync_github_name = true
 real_name = "Serikov Roman"
 sync_github_name = false
 
-[people.marcwgls]
-real_name = "Marc"
-sync_github_name = true
+[people.tomgardenart]
+display_name = "Nostella"
+sync_github_name = false

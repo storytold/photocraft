@@ -284,6 +284,25 @@ fn develop_fitted(bytes: &[u8], opts: &DevelopOptions) -> Result<photocraft_raw:
     photocraft_raw::develop_sensor(&sensor, &opts)
 }
 
+/// The camera's embedded JPEG, upright, for opening in place of sensor data that can't be
+/// developed. A preview without an ICC profile of its own is tagged with the colour space the
+/// raw's EXIF states (a Sony body set to Adobe RGB writes no profile into the JPEG), as the colour
+/// fit reads it ([`preview_profile`]); otherwise it opens as untagged sRGB.
+fn preview_image(raw: &[u8], jpeg: &[u8], limits: &photocraft_raw::Limits) -> Result<Image, IoError> {
+    let mut img = upright_preview(raw, jpeg, limits)?;
+    if img.icc.is_none() && photocraft_raw::embedded_preview_color_space(raw) == Some(PreviewColorSpace::AdobeRgb) {
+        img.icc = Some(Builtin::AdobeRgbCompat.profile().to_bytes().to_vec());
+    }
+    Ok(img)
+}
+
+/// A preview opened in place of the raw, with `note` saying why first among the warnings.
+fn preview_document(name: &str, img: &Image, note: String) -> Result<ImportResult, IoError> {
+    let mut r = image_to_document(name, img)?;
+    r.warnings.insert(0, note);
+    Ok(r)
+}
+
 /// In the import note of a raw developed from its sensor data with the default settings (not of
 /// a preview fallback): what the open-time Camera Raw dialog looks for.
 pub const DEVELOPED_NOTE: &str = "developed with default settings";
@@ -318,18 +337,26 @@ pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Resul
                     let size = (p.width, p.height);
                     (jxl_preview_image(bytes, p)?, "JPEG XL", size)
                 }
-                (None, Some(p)) => (upright_preview(bytes, p.jpeg, &opts.limits)?, "JPEG", (p.width, p.height)),
+                (None, Some(p)) => (preview_image(bytes, p.jpeg, &opts.limits)?, "JPEG", (p.width, p.height)),
                 (None, None) => return Err(IoError::Raw(RawError::Unsupported(reason))),
             };
-            let mut r = image_to_document(name, &img)?;
             let depth = if img.sample_type() == SampleType::U8 { "8-bit" } else { "16-bit" };
-            r.warnings.insert(
-                0,
-                format!(
-                    "{format}: {reason} is not supported yet; opened the camera's embedded {w}x{h} {kind} preview instead ({depth}, not the raw sensor data)"
-                ),
+            let note = format!(
+                "{format}: {reason} is not supported yet; opened the camera's embedded {w}x{h} {kind} preview instead ({depth}, not the raw sensor data)"
             );
-            Ok(r)
+            preview_document(name, &img, note)
+        }
+        // Damaged sensor data: the camera's JPEG is often still intact, so the photo opens.
+        Err(RawError::Malformed(reason)) => {
+            match photocraft_raw::embedded_preview(bytes).map(|p| (p.width, p.height, preview_image(bytes, p.jpeg, &opts.limits))) {
+                Some((w, h, Ok(img))) => {
+                    let note = format!(
+                        "{format}: the raw sensor data is damaged ({reason}); opened the camera's embedded {w}x{h} JPEG preview instead (8-bit, not the raw sensor data)"
+                    );
+                    preview_document(name, &img, note)
+                }
+                _ => Err(IoError::Raw(RawError::Malformed(reason))),
+            }
         }
         Err(e) => Err(IoError::Raw(e)),
     }

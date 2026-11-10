@@ -1577,12 +1577,17 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
         Some(read) => read(path),
         None => Err("automation read authority is not configured".into()),
     };
-    wrap(opened.and_then(|(name, bytes)| {
+    wrap(opened.and_then(|crate::AutomationReadResult { name, bytes, save_path }| {
         let name = app.open_name(&name);
         let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);
+            if let Some(state) = app.session.active_mut()
+                && state.path.is_some()
+            {
+                state.path = save_path;
+            }
         }
         Ok(json!({"path": path, "name": name, "warnings": warnings}))
     }))
