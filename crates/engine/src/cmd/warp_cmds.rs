@@ -756,3 +756,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "warp_split_default_grid_tests.rs"]
+mod warp_split_default_grid_tests;
