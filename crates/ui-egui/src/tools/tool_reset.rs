@@ -15,7 +15,7 @@
 //! [`reset_options`] lists the fields of each tool. The selection tools also go back to New
 //! Selection, and the painting tools (the ones with a brush in the options bar) get their starting
 //! brush (`paint_mouse::fresh_brush`: the Brush tool's 13 px soft round, the default brush for the
-//! others), keeping the colours. Tools without options (Hand, Rotate View, Ruler, Note, …) have
+//! others), keeping the colours. Tools without options (Rotate View, Ruler, Note, …) have
 //! nothing to reset.
 
 use serde_json::{Map, Value, json};
@@ -216,7 +216,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Eyedropper => reset!(eyedropper_size, eyedropper_sample, eyedropper_ring),
         Tool::Brush => reset!(brush_clear),
         Tool::Pencil => reset!(pencil_auto_erase, pencil_clear),
-        Tool::Eraser => reset!(eraser_mode),
+        Tool::Eraser => reset!(eraser_mode, erase_to_history),
         Tool::Remove => reset!(remove_new_layer, remove_after_each_stroke),
         Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg, bg_tolerance_control),
         Tool::ColorReplacement => reset!(cr_mode, cr_sampling, cr_limits, cr_tolerance, cr_anti_alias),
@@ -227,6 +227,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             reset!(type_font, type_style, type_size, type_aa, type_align, type_direction, type_style_defaults)
         }
         Tool::Zoom => reset!(zoom_scrubby),
+        Tool::Hand => reset!(hand_scroll_all),
         Tool::SpotHealing => reset!(spot_type),
         Tool::Healing => reset!(clone_aligned, clone_sample),
         Tool::Patch => reset!(patch_mode, patch_content_aware, patch_structure, patch_color),
@@ -267,7 +268,6 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         | Tool::Ruler
         | Tool::Note
         | Tool::Count
-        | Tool::Hand
         | Tool::RotateView
         | Tool::HistoryBrush
         | Tool::PathSelection
