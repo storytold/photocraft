@@ -167,6 +167,18 @@ pub fn follows_filter_mask(id: &str) -> bool {
         )
 }
 
+/// Edit › Transform's Rotate/Flip presets can turn a targeted vector mask's path (#12283).
+pub fn follows_vector_mask_target(id: &str) -> bool {
+    matches!(
+        id,
+        "edit.transform.rotate180"
+            | "edit.transform.rotate90Cw"
+            | "edit.transform.rotate90Ccw"
+            | "edit.transform.flipHorizontal"
+            | "edit.transform.flipVertical"
+    )
+}
+
 /// The paint and retouch tools that follow the targeted channel or mask.
 const PAINT_IDS: &[&str] = &[
     "paint.stroke",
@@ -251,6 +263,8 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
             json!("filterMask")
         }
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
+        // Edit › Transform's Rotate/Flip presets turn the targeted vector mask's path (#12283).
+        ChannelTarget::VectorMask if follows_vector_mask_target(id) => json!("vectorMask"),
         _ => return params,
     };
     match params {
@@ -269,7 +283,7 @@ pub(crate) fn filter_mask_layer(s: &Session, id: &str, params: &Value) -> Option
     if target_of(params) != Target::FilterMask || !follows_filter_mask(id) {
         return None;
     }
-    params.get("layer").and_then(Value::as_u64).map(LayerId).or_else(|| s.active()?.active_layer)
+    crate::commands::layer_param(s, params).ok()
 }
 
 /// The colour channel pixel commands are limited to, if a single colour channel is targeted.
