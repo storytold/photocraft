@@ -605,6 +605,46 @@ fn multi_sample_replace_color_is_refused_on_a_smart_object() {
     assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
 }
 
+/// Localized Replace Color is refused only for the smart object's own pixels: an alpha channel,
+/// or an explicit `layer` that is not a smart object, edits as usual while a smart object is active.
+#[test]
+fn localized_replace_color_is_refused_only_for_the_smart_objects_pixels() {
+    let mut s = smart_session();
+    let (filters, steps) = (smart_filters_of(&s).len(), s.active().unwrap().history.past_len());
+    let own = json!({"localized": true, "points": [[3, 3]]});
+    let e = s.execute("image.adjustments.replaceColor", own).unwrap_err();
+    assert!(e.to_string().contains("smart filter"), "{e}");
+    assert_eq!(smart_filters_of(&s).len(), filters);
+    s.execute("channel.new", json!({"name": "Alpha", "fill": "white"})).unwrap();
+    let channel = json!({"localized": true, "points": [[3, 3]], "target": {"channel": 0}});
+    s.execute("image.adjustments.replaceColor", channel).expect("a channel under a smart object is not refused");
+    assert_eq!(smart_filters_of(&s).len(), filters, "no smart filter for a channel edit");
+    assert!(s.active().unwrap().history.past_len() > steps);
+    // The smart object is active, but the command names the Background.
+    let background = doc(&s).layers.iter().find(|l| !matches!(l.content, LayerContent::Smart(_))).unwrap().id;
+    let other = json!({"localized": true, "points": [[3, 3]], "layer": background.0});
+    s.execute("image.adjustments.replaceColor", other).expect("an explicit pixel layer is not refused");
+    assert_eq!(smart_filters_of(&s).len(), filters);
+}
+
+/// Equalize Entire Image Based On Selected Area needs the selection for the histogram only, which
+/// a smart filter's output mask cannot express: refused rather than recorded as "selected area only".
+#[test]
+fn equalize_entire_image_is_refused_on_a_smart_object_with_a_selection() {
+    let mut s = smart_session();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 24, "height": 32})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    let e = s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": false})).unwrap_err();
+    assert!(e.to_string().contains("smart object"), "{e}");
+    assert!(smart_filters_of(&s).is_empty(), "nothing recorded");
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": true})).unwrap();
+    assert_eq!(smart_filters_of(&s).len(), 1, "the selected area itself still records a filter");
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": false})).unwrap();
+    assert_eq!(smart_filters_of(&s).len(), 2, "without a selection it is plain Equalize");
+}
+
 /// #780: a targeted mask enables Invert (and filters) on layers without pixels, such as an
 /// adjustment layer; viewing the mask (⌥-click) targets it too.
 #[test]

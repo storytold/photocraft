@@ -245,6 +245,14 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(only)) => !only,
         Some(_) => return Err(EngineError::BadParams { cmd: "image.adjustments.equalize".into(), msg: "selectedAreaOnly must be true or false".into() }),
     };
+    // A smart filter's selection is its output mask, so it cannot also stand for "histogram from
+    // the selection, applied to everything": refuse instead of quietly leaving the rest unchanged.
+    if whole && s.active().is_some_and(|d| d.doc.selection.is_some()) && crate::adjust_cmds::smart_pixel_target(s, p)?.is_some() {
+        return Err(EngineError::BadParams {
+            cmd: "image.adjustments.equalize".into(),
+            msg: "Equalize Entire Image Based On Selected Area is not available on a smart object yet".into(),
+        });
+    }
     if crate::adjust_cmds::adjust_as_smart_filter(s, "equalize", "Equalize", p)? {
         return Ok(Value::Null);
     }

@@ -331,20 +331,25 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
+/// active one by default), when the command edits its pixels and that layer is a smart object.
+/// `None` for a mask or channel target, or a layer that is not a smart object.
+pub(crate) fn smart_pixel_target(s: &Session, p: &Value) -> Result<Option<photocraft_doc::LayerId>> {
+    if crate::commands::is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some() {
+        return Ok(None);
+    }
+    let Ok(id) = crate::commands::layer_param(s, p) else { return Ok(None) };
+    let smart = s.active().is_some_and(|d| matches!(d.doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(_))));
+    Ok(smart.then_some(id))
+}
+
 /// Image › Adjustments on a smart object record `image.adjustments.<kind>` as a smart filter
 /// (Photoshop): the adjustment re-runs from the source whenever the object re-renders, through
 /// [`adjust_as_filter`]. `Ok(true)` when it was recorded (one history step, the selection becomes
 /// the filter mask); `Ok(false)` when the command should edit pixels instead (a mask or channel
 /// target, or the active layer is not a smart object).
 pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p: &Value) -> Result<bool> {
-    if crate::commands::is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some() {
-        return Ok(false);
-    }
-    let Ok(id) = crate::commands::layer_param(s, p) else { return Ok(false) };
-    let smart = s.active().is_some_and(|d| matches!(d.doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(_))));
-    if !smart {
-        return Ok(false);
-    }
+    let Some(id) = smart_pixel_target(s, p)? else { return Ok(false) };
     // A pixel or full lock refuses the smart filter, as for `filter.*` on a smart object.
     crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     // The recorded params are the command's own, minus the engine's private `__kind` key.
@@ -453,7 +458,9 @@ fn replace_color_params(cmd: &str, p: &Value, default_color: [f32; 4]) -> Result
 fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.adjustments.replaceColor";
     let localized_requested = p.get("localized").and_then(Value::as_bool).unwrap_or(false);
-    let on_smart = s.active().is_some_and(|d| matches!(d.active_layer.and_then(|id| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Smart(_))));
+    // Only the smart object's own pixels are restricted: a mask, alpha channel or Quick Mask over
+    // it edits as for any layer.
+    let on_smart = smart_pixel_target(s, p)?.is_some();
     // Recorded Lab bounds use native profile matching and edit pixels in place; ordinary RGB
     // samples keep their existing path. A smart object has no pixels to edit that way.
     if on_smart && (p.get("labMinimum").is_some() || p.get("labMaximum").is_some()) {
