@@ -139,13 +139,25 @@ pub(super) fn plain(text: &str) -> Option<f64> {
 /// #10729). Where the separator can't be read (macOS, Linux, the web) the field takes both, as
 /// `zoom_field` does.
 fn clean(text: &str) -> String {
-    let comma_is_decimal = !text.contains('.') && crate::i18n::decimal_separator() != Some('.');
-    text.chars()
-        .filter(|c| !c.is_whitespace())
-        .map(|c| match c {
-            '−' => '-',
-            ',' if comma_is_decimal => '.',
-            c => c,
-        })
-        .collect()
+    let bare: String = text.chars().filter(|c| !c.is_whitespace()).map(|c| if c == '−' { '-' } else { c }).collect();
+    if crate::i18n::decimal_separator() == Some('.') {
+        return bare;
+    }
+    // Each number decides for itself, so `1,5+2.0` commits 3.5 rather than being refused for a
+    // point the other operand carries (CodeRabbit on #10729). A number holding both stays as it
+    // is, so `1.234,5` is still invalid rather than guessed at.
+    let mut out = String::with_capacity(bare.len());
+    for part in bare.split_inclusive(|c: char| !matches!(c, '0'..='9' | ',' | '.')) {
+        let (number, tail) = match part.chars().next_back().filter(|c| !matches!(c, '0'..='9' | ',' | '.')) {
+            Some(end) => (&part[..part.len() - end.len_utf8()], Some(end)),
+            None => (part, None),
+        };
+        if number.contains(',') && !number.contains('.') {
+            out.extend(number.chars().map(|c| if c == ',' { '.' } else { c }));
+        } else {
+            out.push_str(number);
+        }
+        out.extend(tail);
+    }
+    out
 }

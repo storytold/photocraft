@@ -1329,6 +1329,35 @@ fn a_decimal_comma_is_read_only_where_the_system_uses_one() {
     });
 }
 
+/// Review on #10729: each number in an expression decides for itself, so a comma in one operand
+/// and a point in another still computes. A single number holding both separators stays invalid
+/// rather than being guessed at.
+#[test]
+fn a_decimal_comma_is_read_per_operand_not_per_entry() {
+    let close = |got: Option<f64>, want: f64, what: &str| {
+        let v = got.unwrap_or_else(|| panic!("{what}: refused"));
+        assert!((v - want).abs() < 1e-9, "{what}: {v} is not {want}");
+    };
+    for sep in [Some(','), None] {
+        crate::i18n::with_decimal_separator(sep, || {
+            close(super::parse_num("1,5+2.0"), 3.5, "a comma and a point in one expression");
+            close(super::parse_num("2.0+1,5"), 3.5, "and the other way round");
+            close(super::parse_num("1,5*2"), 3.0, "a comma against a whole number");
+            close(super::parse_num("1,5"), 1.5, "a comma on its own");
+            close(super::parse_num("1.5"), 1.5, "a point on its own");
+            // One number carrying both is not guessed at, whichever side it sits on.
+            for text in ["1.234,5", "1,2,3", "1.234,5+1", "1+1.234,5"] {
+                assert_eq!(super::parse_num(text), None, "{text} stays invalid");
+            }
+        });
+    }
+    // A point system reads no comma at all, in an expression either: 1,5 is a thousands group.
+    crate::i18n::with_decimal_separator(Some('.'), || {
+        assert_eq!(super::parse_num("1,5+2.0"), None, "a point system refuses the comma operand");
+        close(super::parse_num("1.5+2.0"), 3.5, "its own separator computes");
+    });
+}
+
 #[test]
 fn numbers_drop_trailing_zero() {
     // #2434: the unit keys map to Photoshop's places, and the shared formatter trims zeros.
