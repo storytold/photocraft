@@ -400,7 +400,7 @@ fn build() -> Vec<CommandSpec> {
                 s.edit("Clear", |doc, _| {
                     let sel = doc.selection.clone();
                     let area = sel.as_ref().map(|m| m.content_bounds()).unwrap_or(doc.bounds());
-                    crate::edit_cmds::clear_area(doc, id, area, sel.as_ref(), bg)
+                    crate::edit_cmds::clear_coverage(doc, id, area, sel.as_ref(), bg)
                 })?;
                 Ok(Value::Null)
             }
