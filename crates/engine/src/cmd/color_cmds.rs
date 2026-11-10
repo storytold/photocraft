@@ -1131,6 +1131,13 @@ fn proof_setup(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let pv = s.color.proof_mut(id);
     pv.setup = setup.clone();
+    // Remember the chosen Proof Setup so it survives a restart (#12820).
+    s.prefs.edit(|prefs| {
+        prefs.dialogs.insert(
+            "view.proofSetup".into(),
+            json!({ "profile": setup.profile.description, "intent": setup.intent.id(), "bpc": setup.bpc, "simulatePaper": setup.simulate_paper }),
+        );
+    });
     Ok(
         json!({ "profile": setup.profile.description, "intent": setup.intent.id(), "bpc": setup.bpc, "simulatePaper": setup.simulate_paper, "proofColors": pv.enabled }),
     )

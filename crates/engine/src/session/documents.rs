@@ -3,6 +3,9 @@ use crate::{EngineError, Result};
 use super::history::fix_selection;
 use super::{DocState, Document, LayerId, Session, channel_cmds, smart_cmds};
 
+use photocraft_color::ColorMode;
+use serde_json::{Value, json};
+
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
 /// `i` is out of range.
 pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
@@ -169,6 +172,7 @@ impl Session {
         while self.docs.iter().any(|st| st.doc.id == doc.id) {
             doc.id = photocraft_doc::DocId::fresh();
         }
+        let doc_id = doc.id;
         self.open_document_order.push(doc.id);
         let mut st = DocState::new(doc, path);
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
@@ -183,6 +187,24 @@ impl Session {
         let i = self.docs.len() - 1;
         self.active = Some(i);
         self.note_active_change();
+        // Remembered Proof Setup (View › Proof Setup) survives restarts (#12820): apply it to
+        // each newly created document.
+        let params = self.prefs().dialogs.get("view.proofSetup").cloned();
+        if let Some(params) = params {
+            let name = params.get("profile").and_then(Value::as_str).unwrap_or("working-cmyk").to_string();
+            let intent = params.get("intent").and_then(Value::as_str).unwrap_or("relative");
+            let bpc = params.get("bpc").and_then(Value::as_bool).unwrap_or(true);
+            let simulate_paper = params.get("simulatePaper").and_then(Value::as_bool).unwrap_or(false);
+            let profile = self.color.resolve(&name, None, Some(ColorMode::Cmyk)).ok();
+            let pv = self.color.proof_mut(doc_id);
+            pv.setup.name = name;
+            pv.setup.bpc = bpc;
+            pv.setup.simulate_paper = simulate_paper;
+            pv.setup.intent = photocraft_cms::Intent::parse(&intent).unwrap_or(photocraft_cms::Intent::RelativeColorimetric);
+            if let Some(profile) = profile {
+                pv.setup.profile = profile;
+            }
+        }
         i
     }
 
