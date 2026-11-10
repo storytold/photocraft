@@ -264,7 +264,9 @@ fn piece_outline(piece: &Surface, sample: photocraft_color::SampleType) -> Resul
     let tiles = src
         .into_par_iter()
         .map(|(tc, t): (TileCoord, Arc<Tile>)| -> Result<Option<(TileCoord, Arc<Tile>)>> {
-            let tb = t.bytes();
+            // A tile that can't be read back fails the float, rather than leave its part of the
+            // outline out.
+            let tb = t.try_bytes().map_err(|e| oom(photocraft_raster::AllocationError::ScratchRead(e)))?;
             let mut out = blank.try_default_tile().map_err(oom)?;
             let (mut any, mut full) = (false, true);
             {
