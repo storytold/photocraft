@@ -4168,6 +4168,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	Kształty nie mogą jeszcze używać wzorków
 	Edit Brush…	Edytuj pędzel…
 
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Układ:
+	Open Files	Otwarte pliki
+	Cylindrical	Cylindryczny
+	Spherical	Sferyczny
+	Collage	Kolaż
+	Reposition	Zmiana położenia
+	Blend Images Together	Mieszaj obrazy ze sobą
+	Vignette Removal	Usuwanie winietowania
+	Geometric Distortion Correction	Korekcja zniekształceń geometrycznych
+	Content Aware Fill Transparent Areas	Wypełnij przezroczyste obszary z uwzględnieniem zawartości
+	A folder is not answering. Still waiting…	Folder nie odpowiada. Nadal trwa oczekiwanie…
 # Action Stop message (#8386)
 	Message	Komunikat
 # Playback Options (#5212)

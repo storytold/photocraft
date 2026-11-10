@@ -4305,6 +4305,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken
 	Edit Brush…	Penseel bewerken…
 
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Indeling:
+	Open Files	Geopende bestanden
+	Cylindrical	Cilindrisch
+	Spherical	Bolvormig
+	Collage	Collage
+	Reposition	Herpositioneren
+	Blend Images Together	Afbeeldingen samen overvloeien
+	Vignette Removal	Vignettering verwijderen
+	Geometric Distortion Correction	Geometrische vervorming corrigeren
+	Content Aware Fill Transparent Areas	Transparante gebieden inhoudsbewust vullen
+	A folder is not answering. Still waiting…	Een map reageert niet. Nog steeds aan het wachten…
 # Action Stop message (#8386)
 	Message	Bericht
 # Playback Options (#5212)
