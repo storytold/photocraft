@@ -276,7 +276,7 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
 const TRANSFORM_TARGET: &str = r#"{"layer":id?,"target":"pixels"|"mask"|"vectorMask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry; scalar channels and explicitly targeted masks turn alone regardless of linking; an explicit layer without target transforms the layer)}"#;
 
-/// The active layer's vector mask when the target names it, with its path's control bounds.
+/// The targeted layer's vector mask, with its path's control bounds.
 /// The path tools' Free Transform and `path.transform` reuse those bounds, so a flip mirrors
 /// anchors and Bézier handles about the same box (#12283).
 fn targeted_vector_mask(s: &Session, p: &Value) -> Result<Option<(LayerId, [f64; 4])>> {

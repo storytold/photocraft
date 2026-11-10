@@ -741,7 +741,7 @@ fn an_explicit_colour_preset_wins_over_the_vector_mask_panel_target() {
     let after = active(&s).surface().unwrap().read_region(bounds);
     assert_eq!(mask_path(&s, id), path);
     assert_ne!(after, before, "the colour component did move");
-    for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+    for (a, b) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0) {
         assert_eq!(&a[1..], &b[1..], "untargeted components and alpha stay exact");
     }
     let before = s.active().unwrap().doc.clone();
