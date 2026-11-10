@@ -410,6 +410,9 @@ impl ColorState {
         self.default_proof = saved.and_then(|v| Some((v.clone(), self.remembered_proof(v)?)));
     }
 
+    /// The setup a saved [`PROOF_SETUP_PREF`] value names: missing fields take the defaults (Working
+    /// CMYK, relative colorimetric, Black Point Compensation on). `None` when the value is no
+    /// object or its profile no longer resolves.
     fn remembered_proof(&self, saved: &Value) -> Option<ProofSetup> {
         let saved = saved.as_object()?;
         let name = saved.get("profile").and_then(Value::as_str).unwrap_or("working-cmyk").to_string();
@@ -430,6 +433,8 @@ impl ColorState {
         self.proofs.get(&doc)
     }
 
+    /// A document's proofing state to edit; one without its own starts from [`Self::proof`]'s
+    /// default first.
     pub(crate) fn proof_mut(&mut self, doc: DocId) -> &mut ProofView {
         if !self.proofs.contains_key(&doc) {
             let start = self.default_proof_view();
@@ -1167,6 +1172,8 @@ fn profile_info(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "profile": info, "builtins": builtins }))
 }
 
+/// `view.proofSetup`: set the active document's proof condition (profile, intent, Black Point
+/// Compensation, Simulate Paper Color) and remember it as the one other documents start from.
 fn proof_setup(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let (id, doc) = (st.doc.id, st.doc.clone());
