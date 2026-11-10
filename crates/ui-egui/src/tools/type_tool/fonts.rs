@@ -31,14 +31,14 @@ pub fn families() -> Arc<Vec<String>> {
     type Cached = Option<((u64, u64), Arc<Vec<String>>)>;
     static FAMILIES: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
     let key = (photocraft_text::fonts::shared_generation(), photocraft_text::served::generation());
-    let mut cached = FAMILIES.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((k, v)) = cached.as_ref()
-        && *k == key
-    {
-        return v.clone();
-    }
+    // The cache is locked only to read and to write it, not while waiting for the engine, so other
+    // callers read it meanwhile.
+    let last = match FAMILIES.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        Some((k, v)) if *k == key => return v.clone(),
+        last => last.map(|(_, v)| v.clone()),
+    };
     // Busy: the last list (if any) until the engine is free; nothing is cached meanwhile.
-    let Some(mut engine) = engine_unless_busy() else { return cached.as_ref().map(|(_, v)| v.clone()).unwrap_or_default() };
+    let Some(mut engine) = engine_unless_busy() else { return last.unwrap_or_default() };
     let mut v = engine.fonts.families();
     drop(engine);
     for f in photocraft_text::served::families() {
@@ -48,7 +48,7 @@ pub fn families() -> Arc<Vec<String>> {
     }
     v.sort_by_key(|s| s.to_lowercase());
     let v = Arc::new(v);
-    *cached = Some((key, v.clone()));
+    *FAMILIES.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, v.clone()));
     v
 }
 
@@ -76,15 +76,15 @@ fn localized_families() -> Arc<HashMap<String, String>> {
     type Cached = Option<(u64, Arc<HashMap<String, String>>)>;
     static LOCALIZED: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
     let key = photocraft_text::fonts::shared_generation();
-    let mut cached = LOCALIZED.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((k, v)) = cached.as_ref()
-        && *k == key
-    {
-        return v.clone();
-    }
-    let Some(mut engine) = engine_unless_busy() else { return cached.as_ref().map(|(_, v)| v.clone()).unwrap_or_default() };
+    // As in `families`: the cache isn't held while waiting for the engine.
+    let last = match LOCALIZED.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        Some((k, v)) if *k == key => return v.clone(),
+        last => last.map(|(_, v)| v.clone()),
+    };
+    let Some(mut engine) = engine_unless_busy() else { return last.unwrap_or_default() };
     let v = Arc::new(engine.fonts.localized_family_names());
-    *cached = Some((key, v.clone()));
+    drop(engine);
+    *LOCALIZED.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, v.clone()));
     v
 }
 
