@@ -197,7 +197,7 @@ impl std::fmt::Debug for RawDecode {
 impl RawDecode {
     /// Decodes `bytes` and fits its look, as a default open does.
     pub fn new(bytes: &[u8]) -> Result<RawDecode, IoError> {
-        let sensor = decode_sensor(bytes)?;
+        let sensor = decode_sensor(bytes, &limits())?;
         let look = default_look(bytes, &sensor);
         Ok(RawDecode::from_parts(bytes, sensor, look))
     }
@@ -221,10 +221,10 @@ impl RawDecode {
     }
 }
 
-/// The sensor data of `bytes` under the shared limits.
-fn decode_sensor(bytes: &[u8]) -> Result<Sensor, IoError> {
+/// The sensor data of `bytes` under `limits`.
+fn decode_sensor(bytes: &[u8], limits: &Limits) -> Result<Sensor, IoError> {
     DECODES.with(|n| n.set(n.get() + 1));
-    photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)
+    photocraft_raw::decode(bytes, limits).map_err(IoError::Raw)
 }
 
 thread_local! {
@@ -405,7 +405,7 @@ type Kept = (Sensor, Option<CameraLook>);
 /// With `keep`, also hands back the sensor and the look it fitted (the default look, when
 /// `opts` named none) instead of freeing them.
 fn develop_fitted(bytes: &[u8], opts: &DevelopOptions, keep: bool) -> Result<(photocraft_raw::Developed, Option<Kept>), RawError> {
-    let sensor = decode_sensor(bytes).map_err(|e| match e {
+    let sensor = decode_sensor(bytes, &opts.limits).map_err(|e| match e {
         IoError::Raw(e) => e,
         e => RawError::Malformed(e.to_string()),
     })?;
@@ -506,6 +506,18 @@ fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Im
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A caller's tighter limits hold for the sensor decode, not only for the develop after it (#9462).
+    #[test]
+    fn import_raw_with_keeps_the_callers_decode_limits() {
+        use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+        let (w, h) = (40, 24);
+        let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
+        assert!(import_raw_with("a.dng", &bytes, &DevelopOptions::default()).is_ok());
+        let mut tight = DevelopOptions::default();
+        tight.limits = Limits { max_width: 8, max_height: 8, max_pixels: 64, max_alloc: 1 << 20 };
+        assert!(matches!(import_raw_with("a.dng", &bytes, &tight), Err(IoError::Raw(RawError::LimitExceeded(_)))));
+    }
 
     #[test]
     fn the_developed_note_says_which_demosaic_method_was_used() {
