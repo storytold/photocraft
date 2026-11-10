@@ -80,7 +80,7 @@ fn structure_and_color_default_to_whole_numbers_and_open_a_slider() {
     assert_eq!(h.state().ui.tool_options.cam_structure.fract(), 0.0);
     assert_eq!(alert(&h), None, "the slider does not alert");
     assert_eq!(steps(&h), before, "the slider is not a history state");
-    h.get_by_role_and_label(Role::Button, "Color").click();
+    h.query_all_by_role_and_label(Role::Button, "Color").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).expect("options bar Color button").click();
     h.run_steps(4);
     let color = h.get_by_role_and_label(Role::Slider, "Color").rect();
     click_at(&mut h, egui::pos2(color.right() - 3.0, color.center().y));

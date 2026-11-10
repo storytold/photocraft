@@ -313,9 +313,10 @@ fn common_shortcuts_work_after_clicking_panels() {
         let rulers = h.state().ui.extras.rulers;
         press(&mut h, "Cmd+R");
         assert_ne!(h.state().ui.extras.rulers, rulers, "{place:?}: ⌘R toggles rulers");
-        let layers = h.state().ui.panels.layers;
+        let layers_shown = |h: &Harness<'_, PhotocraftApp>| h.state().ui.docking.as_ref().map_or(h.state().ui.panels.layers, |w| w.layout.contains(&"layers".to_owned()));
+        let layers = layers_shown(&h);
         press(&mut h, "F7");
-        assert_ne!(h.state().ui.panels.layers, layers, "{place:?}: F7 toggles Layers");
+        assert_ne!(layers_shown(&h), layers, "{place:?}: F7 toggles the Layers tab");
         press(&mut h, "F7");
         // Dialogs: Image Size (⌥⌘I, shown in the menu but unbound before #127) and Levels (⌘L).
         for (sc, what) in [("Cmd+Alt+I", "Image Size"), ("Cmd+Alt+C", "Canvas Size"), ("Cmd+L", "Levels"), ("Cmd+M", "Curves")] {
