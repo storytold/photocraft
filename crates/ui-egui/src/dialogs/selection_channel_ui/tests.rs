@@ -33,6 +33,13 @@ fn set(app: &mut PhotocraftApp, d: u64, key: &str, v: Value) {
     app.ui.dialog_mut(d).unwrap().fields = f;
 }
 
+/// Chooses open document `i` in dialog `d`'s Document list.
+fn set_document(app: &mut PhotocraftApp, d: u64, i: usize) {
+    let document = id(app, i);
+    set(app, d, "document", json!(document));
+}
+
+/// The fields of dialog `d` as they stand.
 fn fields(app: &mut PhotocraftApp, d: u64) -> Map<String, Value> {
     app.ui.dialog_mut(d).unwrap().fields.clone()
 }
@@ -66,7 +73,8 @@ fn new_saves_the_selection_into_a_new_multichannel_document() {
     let d = menu(&mut app, SAVE);
     set(&mut app, d, "document", json!("new"));
     set(&mut app, d, "name", json!("Keep"));
-    assert_eq!(channels(&app, &fields(&mut app, d)), [("new".to_string(), "New".to_string())], "a new image has only New");
+    let f = fields(&mut app, d);
+    assert_eq!(channels(&app, &f), [("new".to_string(), "New".to_string())], "a new image has only New");
     crate::dialogs::confirm(&mut app, d).unwrap();
     assert_eq!(app.session.documents().len(), 4);
     assert_eq!(app.session.active_index(), Some(3));
@@ -92,13 +100,14 @@ fn another_document_lists_its_channels_and_the_operation_follows_the_channel() {
     app.run("select.saveSelection", json!({"name": "Old"})).unwrap();
     app.session.set_active(0);
     let d = menu(&mut app, SAVE);
-    set(&mut app, d, "document", json!(id(&app, 1)));
+    set_document(&mut app, d, 1);
     let f = fields(&mut app, d);
     assert_eq!(channels(&app, &f), [("new".to_string(), "New".to_string()), ("Old".to_string(), "Old".to_string())]);
     set(&mut app, d, "channel", json!("Old"));
     assert_eq!(fields(&mut app, d)["operation"], "replace", "New Channel reads Replace Channel for an existing channel");
     set(&mut app, d, "operation", json!("add"));
-    assert_eq!(params(&app, &fields(&mut app, d)).unwrap(), json!({"document": 1, "channel": "Old", "operation": "add"}));
+    let f = fields(&mut app, d);
+    assert_eq!(params(&app, &f).unwrap(), json!({"document": 1, "channel": "Old", "operation": "add"}));
     set(&mut app, d, "name", json!("Typed before"));
     crate::dialogs::confirm(&mut app, d).unwrap();
     assert_eq!(app.session.active_index(), Some(0), "A stays active");
@@ -108,7 +117,7 @@ fn another_document_lists_its_channels_and_the_operation_follows_the_channel() {
     assert_eq!((old[5], old[15], old[25]), (1.0, 0.0, 1.0), "A's selection added to B's channel");
     // Back to New: the operation is New Channel again.
     let d = menu(&mut app, SAVE);
-    set(&mut app, d, "document", json!(id(&app, 1)));
+    set_document(&mut app, d, 1);
     set(&mut app, d, "channel", json!("Old"));
     set(&mut app, d, "operation", json!("intersect"));
     set(&mut app, d, "channel", json!("new"));
@@ -122,16 +131,16 @@ fn a_channel_the_chosen_document_lacks_goes_back_to_its_first() {
     let d = menu(&mut app, SAVE);
     set(&mut app, d, "channel", json!("Mine"));
     set(&mut app, d, "operation", json!("subtract"));
-    set(&mut app, d, "document", json!(id(&app, 1)));
+    set_document(&mut app, d, 1);
     let f = fields(&mut app, d);
     assert_eq!((f["channel"].clone(), f["operation"].clone()), (json!("new"), json!("new")));
     // A size the list doesn't hold falls back to A.
-    set(&mut app, d, "document", json!(id(&app, 2)));
+    set_document(&mut app, d, 2);
     assert_eq!(fields(&mut app, d)["document"], json!(id(&app, 0)));
     app.ui.close_dialog(d);
     let d = menu(&mut app, LOAD);
     assert_eq!(fields(&mut app, d)["channel"], "Mine");
-    set(&mut app, d, "document", json!(id(&app, 1)));
+    set_document(&mut app, d, 1);
     assert_eq!(fields(&mut app, d)["channel"], "RGB", "B has no alpha channel");
 }
 
@@ -144,7 +153,7 @@ fn load_selection_reads_the_chosen_documents_channels() {
     app.session.set_active(0);
     app.run("select.deselect", json!({})).unwrap();
     let d = menu(&mut app, LOAD);
-    set(&mut app, d, "document", json!(id(&app, 1)));
+    set_document(&mut app, d, 1);
     let f = fields(&mut app, d);
     assert_eq!(f["channel"], "Edge");
     let list = channels(&app, &f);
@@ -162,11 +171,29 @@ fn load_selection_reads_the_chosen_documents_channels() {
     assert!(app.session.documents()[1].doc.selection.is_some(), "B keeps its own selection");
 }
 
+/// Choosing another document starts from that document's first channel (above); a channel set
+/// together with the document, as automation sets fields, is kept.
+#[test]
+fn a_channel_chosen_together_with_its_document_is_kept() {
+    let mut app = app();
+    let d = menu(&mut app, LOAD);
+    let b = id(&app, 1);
+    let f = &mut app.ui.dialog_mut(d).unwrap().fields;
+    assert_eq!(f["channel"], "RGB");
+    f.insert("document".into(), json!(b));
+    f.insert("channel".into(), json!("Blue"));
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(
+        app.session.journal.last().map(|(c, p)| (c.as_str(), p.clone())),
+        Some((LOAD, json!({"document": 1, "channel": "Blue", "invert": false, "operation": "new"})))
+    );
+}
+
 #[test]
 fn a_document_closed_or_switched_before_ok_is_refused() {
     let mut app = app();
     let d = menu(&mut app, SAVE);
-    set(&mut app, d, "document", json!(id(&app, 1)));
+    set_document(&mut app, d, 1);
     app.session.set_active(1);
     app.run("file.close", json!({"save": false})).unwrap();
     app.session.set_active(0);
@@ -182,7 +209,8 @@ fn a_document_closed_or_switched_before_ok_is_refused() {
 fn the_active_document_is_not_named_in_the_step() {
     let mut app = app();
     let d = menu(&mut app, SAVE);
-    assert_eq!(params(&app, &fields(&mut app, d)).unwrap(), json!({"channel": "new", "name": "", "operation": "new"}));
+    let f = fields(&mut app, d);
+    assert_eq!(params(&app, &f).unwrap(), json!({"channel": "new", "name": "", "operation": "new"}));
 }
 
 /// The dialog draws Photoshop's fields; the first operation reads Replace Channel once an

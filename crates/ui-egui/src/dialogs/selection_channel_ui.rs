@@ -18,6 +18,9 @@ const MARK: &str = "__selectionChannel";
 /// The id of the document the dialog was opened on: the selection is saved from it or loaded
 /// into it.
 const TARGET: &str = "__document";
+/// The document and channel as last made consistent, `[document, channel]`: how a change of
+/// the Document is told from a change of the Channel.
+const SEEN: &str = "__seen";
 /// The value of a New document or New channel.
 const NEW: &str = "new";
 const SAVE_OPERATIONS: [&str; 4] = ["replace", "add", "subtract", "intersect"];
@@ -52,6 +55,7 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<Value, String> {
         f.insert("invert".into(), json!(false));
         f.insert("operation".into(), json!(NEW));
     }
+    f.insert(SEEN.into(), json!([f.get("document"), f.get("channel")]));
     Ok(json!({"dialog": app.ui.open_dialog(crate::state::DialogKind::Command, f)}))
 }
 
@@ -122,9 +126,11 @@ fn default_load_channel(st: &DocState) -> String {
 }
 
 /// Keeps the fields consistent with the chosen document: a document that closed or no longer
-/// has the target's size falls back to the target; a channel the document lacks goes back to
-/// New (Save) or the document's first channel (Load); Save Selection's operation is New
-/// Channel for a new channel and Replace Channel instead of it for an existing one.
+/// has the target's size falls back to the target; the Channel list is the chosen document's,
+/// so choosing another document starts from New (Save) or that document's first channel (Load),
+/// unless a channel of it was chosen along with it, and so does a channel the document lacks;
+/// Save Selection's operation is New Channel for a new channel and Replace Channel instead of
+/// it for an existing one.
 pub fn normalize(app: &PhotocraftApp, f: &mut Map<String, Value>) {
     let new_document = saving(f) && f.get("document").and_then(Value::as_str) == Some(NEW);
     if !new_document && chosen(app, f).is_none() {
@@ -132,8 +138,13 @@ pub fn normalize(app: &PhotocraftApp, f: &mut Map<String, Value>) {
         f.insert("document".into(), id);
     }
     let channel = f.get("channel").and_then(Value::as_str).unwrap_or_default().to_string();
+    // Another document with the channel left as it was: the channel was the old document's.
+    let moved = f
+        .get(SEEN)
+        .and_then(Value::as_array)
+        .is_some_and(|seen| seen.first() != f.get("document") && seen.get(1).and_then(Value::as_str) == Some(channel.as_str()));
     let list = channels(app, f);
-    if !list.iter().any(|(v, _)| *v == channel) {
+    if moved || !list.iter().any(|(v, _)| *v == channel) {
         let first = if saving(f) { Some(NEW.to_string()) } else { chosen(app, f).map(default_load_channel) };
         if let Some(first) = first {
             f.insert("channel".into(), json!(first));
@@ -151,6 +162,7 @@ pub fn normalize(app: &PhotocraftApp, f: &mut Map<String, Value>) {
     } else if !f.get("operation").and_then(Value::as_str).is_some_and(|op| LOAD_OPERATIONS.contains(&op)) {
         f.insert("operation".into(), json!(NEW));
     }
+    f.insert(SEEN.into(), json!([f.get("document"), f.get("channel")]));
 }
 
 /// The message for OK after the document the dialog saves to or loads from was closed.
