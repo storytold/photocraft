@@ -104,6 +104,8 @@ fn alt_click_on_a_layer_thumbnail_fits_the_layer() {
     let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &r);
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(8);
     let before = h.state().ui.views[0].clone();
     let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == small).unwrap().row;
     let at = pos2(row.left() + 46.0, row.center().y);
@@ -144,6 +146,8 @@ fn command_click_on_a_thumbnail_loads_transparency_except_on_the_background() {
     let ctx = h.ctx.clone();
     let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &r);
+    h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
     h.run_steps(8);
     let click = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, layer: u64, modifiers: Modifiers| {
         let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == layer).unwrap().row;
@@ -225,6 +229,8 @@ fn a_click_below_the_layers_deselects_them() {
     let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &r);
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(8);
     let click = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, at: egui::Pos2| {
         h.hover_at(at);
         h.run_steps(1);
@@ -272,6 +278,8 @@ fn command_over_a_thumbnail_shows_the_load_cursor() {
     let ctx = h.ctx.clone();
     let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &r);
+    h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
     h.run_steps(8);
     let cursor = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, layer: u64, modifiers: Modifiers| {
         let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == layer).unwrap().row;

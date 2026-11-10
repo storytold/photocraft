@@ -164,6 +164,7 @@ fn full_bars(left: bool, scale: f32) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_pixels_per_point(scale).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ProMedium);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
         app.run("prefs.set", json!({"path":"interface.theme","value":crate::theme::ThemeKind::ProMedium.id()})).unwrap();
         for panel in ["history", "navigator"] {
             app.run("window.panel.edge", json!({"panel":panel,"edge":"top","individual":true,"collapsed":true})).unwrap();
@@ -324,6 +325,7 @@ fn capture_desktop_review_matrix() {
                 let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_pixels_per_point(scale).wgpu().build_eframe(|cc| {
                     PhotocraftApp::setup_context(&cc.egui_ctx, theme);
                     let mut app = app;
+                    app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
                     app.run("prefs.set", json!({"path":"interface.theme","value":theme.id()})).unwrap();
                     app
                 });

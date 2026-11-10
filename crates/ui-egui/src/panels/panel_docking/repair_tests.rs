@@ -300,6 +300,7 @@ fn floating_tools_outline_keeps_one_physical_pixel_at_all_scales() {
         let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_pixels_per_point(scale).with_max_steps(64).build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ProMedium);
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
             app.run("window.tools.float", json!({"x":600,"y":100})).unwrap();
             app
         });
@@ -430,6 +431,7 @@ fn repair_audit_captures() {
             let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_pixels_per_point(scale).with_max_steps(64).wgpu().build_eframe(|cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, theme);
                 let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
                 crate::dock::apply(&mut app, &saved["panelLayout"]);
                 if let Some(workspace) = saved.get("workspace").and_then(Value::as_object) {
                     for (key, value) in workspace {

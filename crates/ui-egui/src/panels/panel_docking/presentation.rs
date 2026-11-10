@@ -936,21 +936,6 @@ struct Landing {
     marker: Rect,
     compact: bool,
 }
-fn horizontal_landing(ctx: &egui::Context, p: Pos2) -> Option<Landing> {
-    let canvas = super::last_bodies(ctx).into_iter().find(|(id, _)| id == super::CANVAS)?.1;
-    for bottom in [false, true] {
-        let y = if bottom { canvas.bottom() } else { canvas.top() };
-        if canvas.x_range().contains(p.x) && (p.y - y).abs() <= 12.0 {
-            let pixel = ctx.pixels_per_point().recip();
-            return Some(Landing {
-                target: Target::At { anchor: super::CANVAS.into(), placement: Placement::Edge(if bottom { Zone::Bottom } else { Zone::Top }) },
-                marker: Rect::from_min_max(pos2(canvas.left(), y - pixel * 0.5), pos2(canvas.right(), y + pixel * 0.5)),
-                compact: false,
-            });
-        }
-    }
-    None
-}
 
 fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2) -> Option<Landing> {
     let strips = ctx.data(|d| d.get_temp::<Vec<Strip>>(key("strips"))).unwrap_or_default();
@@ -958,9 +943,6 @@ fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2) -> Option<La
     let covered_by_float = strips.iter().any(|s| !s.attached && !s.panels().any(|id| id == source) && s.rect.contains(p));
     // Both full/stock and compact sources resolve against these exact fitted boundaries.
     let columns = ctx.data(|d| d.get_temp::<Vec<(String, Rect, Side)>>(key("columns"))).unwrap_or_default();
-    if !covered_by_float && let Some(target) = horizontal_landing(ctx, p) {
-        return Some(target);
-    }
     let mut edges = Vec::new();
     for (anchor, rect, side) in &columns {
         if covered_by_float || anchor == source || whole && strips.iter().any(|s| s.first == *anchor && s.panels().any(|id| id == source)) {
@@ -1171,10 +1153,7 @@ fn resolved_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, 
     if exclusive || full.is_some() {
         return full;
     }
-    super::document_header::landing(ctx, p)
-        .map(|(target, marker)| Landing { target, marker, compact: false })
-        .or_else(|| landing(ctx, source, whole, p))
-        .or(full)
+    landing(ctx, source, whole, p).or(full)
 }
 fn detached_target(app: &PhotocraftApp, layout: &Layout<String>, panel: &str, rect: Rect, bounds: Rect, pointer: Pos2) -> Target<String> {
     let mut action = Action::MoveGroup { panel: panel.into(), to: Target::Float { rect: Some([rect.left(), rect.top(), rect.width(), rect.height()]) } };
@@ -1549,10 +1528,6 @@ fn column_height_handles(app: &PhotocraftApp, ui: &mut egui::Ui, layout: &Layout
 }
 
 #[cfg(test)]
-#[path = "presentation_demo.rs"]
-mod demo;
-
-#[cfg(test)]
 #[path = "repair_tests.rs"]
 mod repair_tests;
 
@@ -1692,38 +1667,7 @@ mod tests {
             assert_eq!(crate::dock::snapshot(&app), saved);
         }
     }
-    #[test]
-    fn legacy_column_migration_keeps_tabs_active_row_weights_and_presentation() {
-        let saved = json!({
-            "docking":{"root":{"Tabs":{"panels":["layers"],"active":0}},"floating":[{"panels":["properties","actions","channels"],"active":2,"rect":[100,100,320,400]}]},
-            "dockingColumns":[{"members":["properties","actions","channels"],"rows":[{"panels":["properties","channels"],"active":1,"weight":3},{"panels":["actions"],"active":0,"weight":1}],"height":600,"attachment":{"side":"rightInner","order":0,"width":320,"expanded":true}}],
-            "dockingStripWidths":{"properties":120},"dockingCollapsed":["properties","actions","channels"]
-        });
-        let workspace = compat::migrate(&saved).unwrap();
-        assert!(valid_workspace(&workspace));
-        let c = compat::columns(&workspace.layout).into_iter().find(|(_, c)| c.groups.iter().any(|g| g.panels.iter().any(|p| p == "properties"))).unwrap().1;
-        assert_eq!(c.groups[0].panels, ["properties", "channels"]);
-        assert_eq!(c.groups[0].active, 1);
-        assert_eq!(c.groups[0].height, Some(450.0));
-        assert_eq!(c.groups[1].height, Some(150.0));
-        let p = compat::presentation(&saved);
-        assert_eq!(p.widths.get("properties"), Some(&120.0));
-        assert_eq!(p.heights.get("actions"), Some(&600.0));
-    }
-    #[test]
-    fn legacy_horizontal_root_keeps_its_split_geometry() {
-        let root = Node::Split {
-            axis: super::super::SplitAxis::Horizontal,
-            size: super::super::SplitSize::Ratio(0.37),
-            first: Box::new(Node::Tabs { panels: vec!["layers".into()], active: 0 }),
-            second: Box::new(Node::Tabs { panels: vec!["color".into(), "swatches".into()], active: 1 }),
-        };
-        let saved = json!({"docking":{"root":root,"floating":[]},"dockingColumns":[]});
-        let workspace = compat::migrate(&saved).unwrap();
-        let Node::Split { second, .. } = workspace.layout.root.as_ref().unwrap() else { panic!("canvas split") };
-        assert_eq!(second.as_ref(), &root);
-        assert!(valid_workspace(&workspace));
-    }
+
     #[test]
     fn floating_stack_accepts_fractional_row_weights_and_rejects_invalid_ones_atomically() {
         let mut app = compact_pair();
@@ -1772,20 +1716,7 @@ mod tests {
             assert_eq!(app.ui.dock_tabs.layers, selected);
         }
     }
-    #[test]
-    fn migrating_multiple_hidden_panels_keeps_their_return_anchor_without_duplicates() {
-        let at = json!({"floating":null,"anchor":"layers","placement":{"Tab":{"before":null}},"size":null,"stack":null});
-        let saved = json!({"docking":{"root":{"Tabs":{"panels":["layers"],"active":0}},"floating":[]},"dockingColumns":[],"dockingHidden":{"properties":at,"actions":at}});
-        let mut workspace = compat::migrate(&saved).unwrap();
-        assert_eq!(workspace.hidden.len(), 2);
-        for id in ["properties", "actions"] {
-            let at = workspace.hidden.iter().find(|(p, _)| p == id).unwrap().1.clone();
-            assert_eq!(at.anchor.as_deref(), Some("layers"));
-            workspace.set_visible(id.into(), true, None, permissions).unwrap();
-        }
-        assert!(valid_workspace(&workspace));
-        assert_eq!(group_members(&workspace.layout, "layers").len(), 3);
-    }
+
     #[test]
     fn ctrl_drag_and_escape_do_not_commit_a_new_layout() {
         let mut h = harness(compact_pair());

@@ -1,6 +1,5 @@
-//! A protected document-tab surface in the existing shared workspace, created on demand.
-use super::{CANVAS, Layout, Node, Placement, SplitAxis, SplitSize, Target, Zone};
-use egui::{Context, Pos2, Rect, pos2};
+//! Compatibility for the protected document-tab surface in previously saved workspaces.
+use super::{CANVAS, Layout, Node, SplitAxis, SplitSize};
 
 pub(super) const ID: &str = "__photocraft_document_tabs__";
 
@@ -50,20 +49,4 @@ pub(super) fn valid(layout: &Layout<String>) -> bool {
         }
     }
     layout.root.as_ref().is_some_and(|node| shape(node, 0))
-}
-
-pub(super) fn landing(ctx: &Context, pointer: Pos2) -> Option<(Target<String>, Rect)> {
-    let rect = crate::canvas::document_header_rect(ctx)?;
-    if !rect.x_range().contains(pointer.x) {
-        return None;
-    }
-    let (y, anchor, placement) = if (pointer.y - rect.bottom()).abs() <= 6.0 {
-        (rect.bottom(), ID, Placement::Split(Zone::Bottom))
-    } else if (pointer.y - rect.top()).abs() <= 6.0 {
-        (rect.top(), CANVAS, Placement::Edge(Zone::Top))
-    } else {
-        return None;
-    };
-    let half = ctx.pixels_per_point().recip() * 0.5;
-    Some((Target::At { anchor: anchor.to_owned(), placement }, Rect::from_min_max(pos2(rect.left(), y - half), pos2(rect.right(), y + half))))
 }

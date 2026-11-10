@@ -43,9 +43,13 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Resu
         }
         size = Some([width, height]);
     }
+    let changed = app.ui.toolbar_floating != position || app.ui.panel_presentation.tools_size != size;
     app.ui.toolbar_floating = position;
     app.ui.panel_presentation.tools_size = size;
     app.ui.panels.toolbar = true;
+    if changed {
+        crate::dock::discard_retained_layout(app);
+    }
     Ok(json!({"toolbarFloating":position,"toolbarSize":size}))
 }
 pub(crate) fn header_drag(app: &PhotocraftApp, ui: &egui::Ui, response: &egui::Response) {
@@ -105,7 +109,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
     if !ctx.input(|i| i.pointer.primary_down()) {
         ctx.data_mut(|d| d.remove::<bool>(key("suppressed")));
     }
-    let dock_x = if crate::direction::is_rtl() { bounds.right() } else { bounds.left() };
+    let dock_x = if app.ui.panels.toolbar_side.resolve() == crate::state::ToolbarSide::Right { bounds.right() } else { bounds.left() };
     let pointer = ctx.pointer_interact_pos().unwrap_or(bounds.min);
     let docking =
         !ctx.input(|i| i.modifiers.ctrl || i.modifiers.command) && drag.is_some() && (pointer.x - dock_x).abs() <= 18.0 && bounds.y_range().contains(pointer.y);
@@ -113,34 +117,27 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
     let frame = egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(margin, 3));
     if let Some(position) = position {
         if app.ui.toolbar_floating.is_none() {
-            crate::direction::start_panel("toolbar")
+            if app.ui.panels.toolbar_side.resolve() == crate::state::ToolbarSide::Right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") }
                 .exact_size(width)
                 .resizable(false)
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(t.chrome))
                 .show(ui, |_| {});
         }
-        let size = app.ui.panel_presentation.tools_size.unwrap_or([width, (bounds.bottom() - position.y).clamp(160.0, bounds.height().max(160.0))]);
-        let width = size[0].max(width).min(240.0).min(bounds.width().max(width));
-        let height = size[1].clamp(160.0, bounds.height().max(160.0));
-        let position = egui::pos2(
-            position.x.clamp(ctx.content_rect().left(), (ctx.content_rect().right() - width).max(ctx.content_rect().left())),
-            position.y.clamp(ctx.content_rect().top(), (ctx.content_rect().bottom() - height).max(ctx.content_rect().top())),
-        );
+        // Serialized free-resize dimensions from earlier versions are retained but no longer
+        // determine the palette geometry. The header's column toggle owns its dimensions.
+        let height = super::toolbar::floating_height(app, &t).min(bounds.height().max(1.0));
+        let rect = craft_ui::docking::chrome::clamp(Rect::from_min_size(position, vec2(width, height)), bounds);
+        let position = rect.min;
         ctx.data_mut(|d| d.insert_temp(key("origin"), position));
         let mut chrome = craft_ui::docking::chrome::ChromeStyle::from_ui(ui);
         chrome.background = t.chrome;
         chrome.stroke = egui::Stroke::new(ctx.pixels_per_point().recip(), t.card_border);
-        let rect = Rect::from_min_size(position, vec2(width, height));
         let blocked = crate::panel_docking::modal_open(app, &ctx);
-        let response = craft_ui::docking::chrome::FloatingFrame::new(key("floating"), rect)
+        let _response = craft_ui::docking::chrome::FloatingFrame::new(key("floating"), rect)
             .bounds(bounds)
-            .limits(craft_ui::docking::PanelLimits {
-                min: vec2(crate::panel_docking::COMPACT_COLUMN_WIDTH + if app.ui.panels.toolbar_double { 32.0 } else { 0.0 }, 160.0),
-                max: vec2(240.0, bounds.height().max(160.0)),
-            })
             .reserve_top_resize_band(false)
-            .resizable(!app.session.prefs().workspace_locked && !blocked)
+            .resizable(false)
             .opacity(if drag.is_some() { 0.85 } else { 1.0 })
             .show(&ctx, &chrome, |ui, body| {
                 if blocked {
@@ -149,17 +146,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
                 child.set_clip_rect(body.intersect(ui.clip_rect()));
                 frame.show(&mut child, |ui| {
-                    ui.set_width((width - 2.0 * f32::from(margin)).max(20.0));
-                    ui.set_height((height - 6.0).max(100.0));
+                    ui.set_width((body.width() - 2.0 * f32::from(margin)).max(20.0));
+                    ui.set_height((body.height() - 6.0).max(100.0));
                     contents(app, ui);
                 });
                 crate::panel_visibility::chrome(ui.ctx(), "tools", rect);
             });
-        if let Some(resized) = response.resized
-            && let Err(error) = app.run("window.tools.float", json!({"x":resized.left(),"y":resized.top(),"width":resized.width(),"height":resized.height()}))
-        {
-            app.ui.status = error;
-        }
         if let Some(drag) = drag {
             if docking {
                 let rect = Rect::from_min_max(egui::pos2(dock_x - 2.0, bounds.top()), egui::pos2(dock_x + 2.0, bounds.bottom()));
@@ -178,10 +170,16 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
     } else {
         let frame_nr = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(key("docked-frame"), frame_nr));
-        let result = crate::direction::start_panel("toolbar").resizable(false).show_separator_line(false).exact_size(width).frame(frame).show(ui, |ui| {
-            ctx.data_mut(|d| d.insert_temp(key("origin"), egui::pos2(ui.max_rect().left() - f32::from(margin), bounds.top())));
-            contents(app, ui);
-        });
+        let result =
+            if app.ui.panels.toolbar_side.resolve() == crate::state::ToolbarSide::Right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") }
+                .resizable(false)
+                .show_separator_line(false)
+                .exact_size(width)
+                .frame(frame)
+                .show(ui, |ui| {
+                    ctx.data_mut(|d| d.insert_temp(key("origin"), egui::pos2(ui.max_rect().left() - f32::from(margin), bounds.top())));
+                    contents(app, ui);
+                });
         crate::panel_visibility::chrome(&ctx, "tools", result.response.rect);
     }
     crate::dock::persist(app, &ctx);
@@ -189,4 +187,61 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
 
 pub(crate) fn docked_this_frame(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(key("docked-frame"))) == Some(ctx.cumulative_frame_nr())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn invalid_tools_coordinates_sizes_and_unknown_operations_are_atomic() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        command(&mut app, "window.tools.float", &json!({"x":120,"y":150,"width":74,"height":320})).unwrap();
+        let before = crate::dock::snapshot(&app);
+        for params in
+            [json!({"x":"bad"}), json!({"x":1e20}), json!({"y":{}}), json!({"width":12}), json!({"width":null}), json!({"height":0}), json!({"height":1e20})]
+        {
+            assert!(command(&mut app, "window.tools.float", &params).is_err(), "{params}");
+            assert_eq!(crate::dock::snapshot(&app), before);
+        }
+        assert!(command(&mut app, "window.tools.unknown", &json!({})).is_err());
+        assert_eq!(crate::dock::snapshot(&app), before);
+    }
+    #[test]
+    fn workspace_lock_blocks_both_tools_commands_without_changing_the_palette() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        command(&mut app, "window.tools.float", &json!({"x":120,"y":150})).unwrap();
+        app.session.prefs.edit(|p| p.workspace_locked = true);
+        let before = crate::dock::snapshot(&app);
+        for id in ["window.tools.float", "window.tools.dock"] {
+            assert!(command(&mut app, id, &json!({})).is_err());
+            assert_eq!(crate::dock::snapshot(&app), before);
+        }
+    }
+    #[test]
+    fn tools_layout_changes_replace_retained_fallback_but_noops_and_invalid_requests_keep_it() {
+        for operation in ["float", "dock", "resize"] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let pose = json!({"x":120,"y":150,"width":74,"height":320});
+            if operation != "float" {
+                command(&mut app, "window.tools.float", &pose).unwrap();
+            }
+            let mut saved = crate::dock::snapshot(&app);
+            saved["docking"] = json!({"version":2,"layout":{"kind":"unreadable"}});
+            crate::dock::apply(&mut app, &saved);
+            assert!(app.ui.docking_kept.is_some());
+            let before = crate::dock::snapshot(&app);
+            command(&mut app, if operation == "float" { "window.tools.dock" } else { "window.tools.float" }, &pose).unwrap();
+            assert_eq!(crate::dock::snapshot(&app), before, "no-op {operation}");
+            assert!(command(&mut app, "window.tools.float", &json!({"width":0})).is_err());
+            assert_eq!(crate::dock::snapshot(&app), before, "invalid {operation}");
+            let params = if operation == "resize" { json!({"x":120,"y":150,"width":84,"height":420}) } else { pose };
+            command(&mut app, if operation == "dock" { "window.tools.dock" } else { "window.tools.float" }, &params).unwrap();
+            assert!(app.ui.docking_kept.is_none(), "{operation}");
+            assert!(crate::panel_docking::load(&crate::dock::snapshot(&app)).is_some(), "{operation}");
+            assert_eq!(app.ui.toolbar_floating.is_none(), operation == "dock");
+            if operation == "resize" {
+                assert_eq!(app.ui.panel_presentation.tools_size, Some([84.0, 420.0]));
+            }
+        }
+    }
 }

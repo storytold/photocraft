@@ -21,6 +21,8 @@ fn harness(ppp: f32) -> (Harness<'static, PhotocraftApp>, LayerId) {
     let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &r);
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(8);
     (h, id)
 }
 

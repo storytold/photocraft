@@ -408,6 +408,7 @@ impl<'a> Planner<'a> {
         let clip_base_adjusts = !visible_clipped.is_empty()
             && matches!(&layer.content, LayerContent::Group(g) if g.children.iter().any(|c| c.visible && matches!(c.content, LayerContent::Adjustment(_))));
         if let LayerContent::Group(g) = &layer.content
+            && layer.frame.is_none()
             && layer.blend == BlendMode::PassThrough
             && layer.fill_opacity >= 1.0
             && !has_effects(layer)
@@ -805,6 +806,10 @@ impl<'a> Planner<'a> {
         }
         for c in clipped {
             content = self.atop(c, content)?;
+        }
+        // Stroke Emboss shades the stroke's band, which only the CPU compositor builds (#8639).
+        if layer.effects.items.iter().any(|e| matches!(e, Effect::BevelEmboss(b) if e.enabled() && b.style == photocraft_doc::BevelStyle::StrokeEmboss)) {
+            return Err(Unsupported(format!("Stroke Emboss on `{}` (composited on the CPU)", layer.name)));
         }
         let fx = self.fx.len();
         self.fx.push(FxLayer { layer, region, bounds: sb });

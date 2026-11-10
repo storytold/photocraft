@@ -207,7 +207,7 @@ fn horizontal_docks_restore_their_normal_floating_size_and_visible_position() {
     }
 }
 #[test]
-fn mouse_reaches_top_and_bottom_from_compact_and_expanded_sources() {
+fn mouse_drops_at_canvas_edges_float_compact_and_expanded_sources() {
     for expanded in [false, true] {
         for bottom in [false, true] {
             let mut app = single();
@@ -230,12 +230,9 @@ fn mouse_reaches_top_and_bottom_from_compact_and_expanded_sources() {
             let to = pos2(bounds.center().x, if bottom { bounds.bottom() - 2.0 } else { bounds.top() + 2.0 });
             press(&mut h, from, to);
             release(&mut h, to);
-            assert!(!layout(h.state()).floating.iter().any(|w| w.contains(&"properties".to_owned())));
-            let frame = h.ctx.data(|d| d.get_temp::<Vec<(String, Rect)>>(key("group-rects"))).unwrap().into_iter().find(|(p, _)| p == "properties").unwrap().1;
-            assert!(frame.width() > 900.0);
-            if !expanded {
-                assert!((frame.height() - super::super::contract::FULL_HEADER_HEIGHT).abs() < 1.1);
-            }
+            assert!(layout(h.state()).floating.iter().any(|w| w.contains(&"properties".to_owned())));
+            let frame = layout(h.state()).floating.iter().find(|w| w.contains(&"properties".to_owned())).unwrap().rect;
+            assert!(frame[2] < 400.0, "the panel must not stretch across the canvas: {frame:?}");
         }
     }
 }
@@ -264,40 +261,42 @@ fn control_drag_of_an_expanded_source_bypasses_all_dock_targets() {
 pub(super) fn full_app(ctx: &egui::Context) -> PhotocraftApp {
     PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ProMedium);
     let mut app = single();
+    app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
     app.run("prefs.set", json!({"path":"interface.theme","value":crate::theme::ThemeKind::ProMedium.id()})).unwrap();
     app
 }
 #[test]
-fn floating_tools_resize_both_axes_and_restore_through_workspace() {
+fn floating_tools_have_no_resize_handles_and_columns_define_size() {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(|cc| {
         let mut app = full_app(&cc.egui_ctx);
         app.run("file.new", json!({"width":64,"height":64})).unwrap();
-        app.run("window.tools.float", json!({"x":650,"y":120,"width":60,"height":500})).unwrap();
+        app.run("window.tools.float", json!({"x":650,"y":120,"width":200,"height":300})).unwrap();
         app
     });
     h.run_steps(8);
     let frame = egui::Id::unique("tools-palette").with("floating");
-    let at = h.ctx.read_response(frame.with("resize-right")).unwrap().rect.center();
-    press(&mut h, at, at + vec2(50.0, 0.0));
-    release(&mut h, at + vec2(50.0, 0.0));
-    let size = h.state().ui.panel_presentation.tools_size.unwrap();
-    assert!((size[0] - 110.0).abs() < 1.0);
-    assert_eq!(size[1], 500.0);
-    let at = h.ctx.read_response(frame.with("resize-bottom")).unwrap().rect.center();
-    press(&mut h, at, at - vec2(0.0, 180.0));
-    release(&mut h, at - vec2(0.0, 180.0));
-    let size = h.state().ui.panel_presentation.tools_size.unwrap();
-    assert!((size[1] - 320.0).abs() < 1.0);
-    assert!((size[0] - 110.0).abs() < 1.0);
+    for side in craft_ui::docking::chrome::RESIZE_HANDLES {
+        assert!(h.ctx.read_response(frame.with(side)).is_none(), "{side}");
+    }
+    let key = egui::Id::unique("hidden-panels-hover").with("tools");
+    let first = h.ctx.data(|d| d.get_temp::<Rect>(key)).unwrap();
+    assert!(first.width() < 100.0, "legacy free width must not determine geometry: {first:?}");
+    let before = h.state().ui.panels.toolbar_double;
+    let at = h.ctx.read_response(egui::Id::unique("tools-palette").with("columns")).unwrap().rect.center();
+    h.event(Event::PointerMoved(at));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert_ne!(h.state().ui.panels.toolbar_double, before);
+    h.run_steps(4);
+    let second = h.ctx.data(|d| d.get_temp::<Rect>(key)).unwrap();
+    assert!((first.width() - second.width()).abs() > 20.0);
+    assert!((first.height() - second.height()).abs() > 30.0);
     assert_eq!(h.state().session.active().unwrap().history.past_len(), 0);
-    let saved = crate::dock::snapshot(h.state());
-    let mut restored = single();
-    crate::dock::apply(&mut restored, &saved);
-    assert_eq!(restored.ui.panel_presentation.tools_size, Some(size));
-    let before = crate::dock::snapshot(h.state());
-    assert!(h.state_mut().run("window.tools.float", json!({"x":10,"width":12})).is_err());
-    assert_eq!(crate::dock::snapshot(h.state()), before);
 }
+
 #[test]
 fn capture_followup_twelve_scenarios() {
     let Some(root) = std::env::var_os("PHOTOCRAFT_FOLLOWUP_CAPTURES").map(std::path::PathBuf::from) else { return };

@@ -34,14 +34,18 @@ fn harness(session: photocraft_engine::Session, ppp: f32, dock_width: f32) -> Ha
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         PhotocraftApp::new(session, crate::Services::default())
     });
-    set(&mut h, json!({"dockWidth": dock_width, "dock": {"collapsed": ["color", "navigator", "history", "layers"]}}));
+    set(&mut h, json!({"dockWidth": dock_width, "panels": {"character": false}, "dock": {"collapsed": ["color", "navigator", "history", "layers"]}}));
+    h.state_mut().run("window.panel.properties", json!({"show": true})).unwrap();
+    h.run_steps(8);
     h
 }
 
 fn set(h: &mut Harness<'static, PhotocraftApp>, p: serde_json::Value) {
     let ctx = h.ctx.clone();
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", p);
-    crate::control::handle(h.state_mut(), &ctx, &req);
+    let result = crate::control::handle(h.state_mut(), &ctx, &req);
+    let crate::control::Outcome::Done(value) = result else { panic!("ui.set must reply synchronously") };
+    assert_eq!(value["ok"], true, "ui.set failed: {value}");
     h.run_steps(8);
 }
 
@@ -153,7 +157,8 @@ fn type_controls_fill_the_panel_at_every_width_and_scale() {
                 .map(|n| n.rect())
                 .find(|r| r.top() >= header.bottom() && r.left() >= header.left() - 1.0)
                 .expect("editable family field");
-            let mut family = name.expand2(egui::vec2(6.0, 2.0));
+            // The editor covers the field's box but the popup arrow's space (#12302).
+            let mut family = name;
             family.max.x += crate::widgets::POPUP_ARROW_W;
             assert!((family.left() - header.left()).abs() <= 2.0 && (family.right() - header.right()).abs() <= 2.0, "{what}: {family:?} vs {header:?}");
             let combos: Vec<Rect> = h
@@ -232,7 +237,7 @@ fn character_and_paragraph_dock_panels_share_the_headers_without_type_options() 
     let (ty, px) = (layers.iter().find(|(k, _)| *k == "type").unwrap().1, layers[0].1);
     let mut h = harness(s, 1.0, 320.0);
     // Only the Window › Character group, expanded.
-    set(&mut h, json!({"panels": {"character": true}, "dock": {"collapsed": ["color", "navigator", "history", "layers", "properties"]}}));
+    set(&mut h, json!({"panels": {"character": true, "properties": false}}));
     select(&mut h, ty);
     for (tab, want) in [(0, "Character"), (1, "Paragraph")] {
         set(&mut h, json!({"dockTabs": {"character": tab}}));
