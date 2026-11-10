@@ -43,6 +43,7 @@ pub(super) fn options_bar_height(pro: bool, narrow: bool) -> f32 {
 
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::vector_ui::track_arrow_default_selection(app, ui.ctx());
+    crate::eraser_ui::alert_for_a_field_gone(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
     let narrow = app.session.prefs().workspace.narrow_options_bar();
     egui::Panel::top("options_bar")
@@ -232,11 +233,32 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             let held = app.held_erase;
             paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held);
             whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, if t.pro { 62.0 } else { 66.0 });
+            if t.pro {
+                // Between Opacity and Smoothing, as measured (#11962).
+                let pressure = pressure_button(ui, b.pressure_opacity, tl!("Always use pressure for opacity"), true);
+                if pressure.on_hover_text(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure")).clicked() {
+                    b.pressure_opacity = !b.pressure_opacity;
+                }
+            }
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
             widgets::vline(ui, 22.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"))
                 .on_hover_text(tl!("Draws background color over foreground colors"));
+            widgets::vline(ui, 22.0);
+            if t.pro {
+                // Between Auto Erase and the Symmetry button the bar adds after this arm (#11962).
+                let pressure = pressure_button(ui, b.pressure_size, tl!("Always use pressure for size"), true);
+                if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
+                    b.pressure_size = !b.pressure_size;
+                }
+            } else {
+                // The other themes show the Brush's labelled switches; the Pencil gets them too.
+                widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size"))
+                    .on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure"));
+                widgets::toggle(ui, &mut b.pressure_opacity, tl!("Pressure for Opacity"))
+                    .on_hover_text(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure"));
+            }
         }
         Tool::Brush | Tool::Eraser => {
             brush_preset_chip(ui, b, &mut app.ui);
@@ -488,24 +510,18 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 }
             }
             ui.spacing_mut().item_spacing.x = 8.0;
-            widgets::vline(ui, 22.0);
-            opt_label(ui, tl!("Mode"));
-            let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
-            // The wheel over it steps the mode, as over the Layers panel's (#2061).
-            widgets::dropdown_wheel_grouped(ui, "gradient-blend-mode", tl!("Blend Mode"), &mut app.ui.tool_options.gradient_blend_mode, &opts, 96.0, |m| {
-                starts_blend_group(*m)
-            });
-            opt_label(ui, tl!("Opacity"));
-            let r = widgets::value_field(ui, &mut app.ui.tool_options.fill_opacity, 1.0..=100.0, "%", 62.0);
-            // Live while scrubbed, one undo step per scrub (#5012).
-            let drag_key = r.id.with("gradient-opacity-drag");
-            if r.drag_started() {
-                let n = ui.ctx().cumulative_pass_nr();
-                ui.data_mut(|d| d.insert_temp(drag_key, n));
-            }
-            if r.changed() {
-                let drag = if r.dragged() { ui.data(|d| d.get_temp::<u64>(drag_key)) } else { None };
-                crate::gradient_ui::opacity_changed(app, drag);
+            // Only the Classic gradient paints pixels with a blend Mode and Opacity; the live
+            // Gradient makes a Normal, 100 % fill layer, changed in the Layers panel (#12007).
+            if classic {
+                widgets::vline(ui, 22.0);
+                opt_label(ui, tl!("Mode"));
+                let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
+                // The wheel over it steps the mode, as over the Layers panel's (#2061).
+                widgets::dropdown_wheel_grouped(ui, "gradient-blend-mode", tl!("Blend Mode"), &mut app.ui.tool_options.gradient_blend_mode, &opts, 96.0, |m| {
+                    starts_blend_group(*m)
+                });
+                opt_label(ui, tl!("Opacity"));
+                widgets::value_field(ui, &mut app.ui.tool_options.fill_opacity, 1.0..=100.0, "%", 62.0);
             }
             widgets::checkbox(ui, &mut app.ui.tool_options.gradient_reverse, tl!("Reverse"));
             widgets::checkbox(ui, &mut app.ui.tool_options.gradient_dither, tl!("Dither"));
@@ -720,8 +736,8 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
         Tool::Hand => {
             widgets::checkbox(ui, &mut app.ui.tool_options.hand_scroll_all, tl!("Scroll All Windows"))
                 .on_hover_text(tl!("Scroll all open document windows when using the hand tool"));
-            hint(ui, tl!("Drag to pan  ·  hold Space with any tool"));
-            if widgets::secondary_button(ui, "100%", 0.0).clicked()
+            // The reference tooltips and no hint text, as on the Zoom bar (#12026).
+            if widgets::secondary_button(ui, "100%", 0.0).on_hover_text(tl!("Zoom current window to 1:1")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].zoom = 1.0;
@@ -730,7 +746,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 app.ui.views[i].fit_pending = false;
                 app.ui.views[i].fill_pending = false;
             }
-            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).clicked()
+            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).on_hover_text(tl!("Zoom current window to screen size")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].fit_pending = true;
@@ -738,7 +754,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 app.ui.views[i].zoom_anchor = None;
                 app.ui.views[i].fill_pending = false;
             }
-            if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).clicked()
+            if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).on_hover_text(tl!("Zoom current window to fill the screen")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].fill_pending = true;
@@ -754,6 +770,9 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
 
 #[cfg(test)]
 mod zoom_buttons_tests;
+
+#[cfg(test)]
+mod hand_tooltips_tests;
 
 /// Width of the Layers panel's Opacity and Fill fields, with room for their pop-up slider's ▾.
 pub(super) const LAYER_PCT_W: f32 = 66.0 + widgets::POPUP_ARROW_W;

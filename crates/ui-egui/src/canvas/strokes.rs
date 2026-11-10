@@ -293,10 +293,12 @@ pub(super) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke
 }
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
-/// stroke smoothing is the session brush's (the options bar's Smoothing %).
+/// stroke smoothing is the session brush's (the options bar's Smoothing %), except on a ⇧-click
+/// line, which isn't smoothed (#11887).
 pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
     let tool = d.tool;
     let mut p = json!({ "points": points, "erase": d.erase, "zoom": app.point_zoom(), "target": paint_target(app) });
+    unsmoothed_line(&mut p, d.line);
     if d.clear {
         p["mode"] = json!("clear");
     }
@@ -308,6 +310,15 @@ pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) 
         p["block"] = json!(true);
     }
     p
+}
+
+/// A ⇧-click line isn't smoothed, so it ends at the click whatever Catch-up on Stroke End is set
+/// to (#11887). Applied to the params of every painting tool's live preview and commit alike, so
+/// a retouching stroke's commit still takes the pixels its preview drew.
+pub(crate) fn unsmoothed_line(p: &mut serde_json::Value, line: bool) {
+    if line && let Some(o) = p.as_object_mut() {
+        o.insert("smoothing".into(), json!(0.0));
+    }
 }
 
 /// Tools whose strokes the engine renders while they are drawn (`LiveStroke`).
@@ -364,17 +375,20 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::color_replacement_params(app);
         p["points"] = json!(d.points);
+        unsmoothed_line(&mut p, d.line);
         EngineStroke::Dab(Box::new(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?))
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
+        unsmoothed_line(&mut p, d.line);
         EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?))
     } else if d.tool == Tool::PatternStamp {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::pattern_stamp_params(app, &d.points);
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
+        unsmoothed_line(&mut p, d.line);
         if app.ui.tool_options.pattern_stamp_impressionist {
             EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::live_pattern_impressionist(&app.session, &p).ok()?))
         } else {
@@ -382,13 +396,15 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         }
     } else if d.tool == Tool::BackgroundEraser {
         // The params `eraser_ui::finish_stroke` commits (layer pixels only).
-        let p = crate::eraser_ui::background_eraser_params(app, &d.points);
+        let mut p = crate::eraser_ui::background_eraser_params(app, &d.points);
+        unsmoothed_line(&mut p, d.line);
         EngineStroke::Dab(Box::new(photocraft_engine::eraser_cmds::live_background_eraser(&app.session, &p).ok()?))
     } else if let Some(cmd) = live_retouch_command(d.tool) {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = if d.tool == Tool::HistoryBrush { crate::retouch_ui::history_brush_params(app) } else { crate::retouch_ui::clone_params(app)? };
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
+        unsmoothed_line(&mut p, d.line);
         EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
         let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
@@ -611,7 +627,7 @@ pub(super) fn press_alt_id(idx: usize) -> egui::Id {
     egui::Id::unique(("tool-pointer-press-alt", idx))
 }
 
-type PressAlt = Option<(Tool, bool)>;
+type PressAlt = Option<(Tool, egui::Modifiers)>;
 
 /// The last released press belongs to the click egui reports; retain a later press for the next frame.
 pub(super) fn press_alt_events(events: &[egui::Event], rect: egui::Rect, tool: Tool, mut held: PressAlt) -> (PressAlt, PressAlt) {
@@ -619,7 +635,7 @@ pub(super) fn press_alt_events(events: &[egui::Event], rect: egui::Rect, tool: T
     for event in events {
         match event {
             egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers } => {
-                held = rect.contains(*pos).then_some((tool, modifiers.alt));
+                held = rect.contains(*pos).then_some((tool, *modifiers));
             }
             egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => {
                 released = held.take();
@@ -633,8 +649,8 @@ pub(super) fn press_alt_events(events: &[egui::Event], rect: egui::Rect, tool: T
 /// The Alt stored at the press, for the click's tool only: a press that started under one tool (the
 /// Brush) must not make the click replayed under another (the Clone Stamp, whose ⌥ sets the source)
 /// an ⌥-click.
-pub(super) fn press_alt_for(tool: Tool, stored: Option<(Tool, bool)>) -> bool {
-    stored.is_some_and(|(at_press, alt)| at_press == tool && alt)
+pub(super) fn press_alt_for(tool: Tool, stored: PressAlt) -> egui::Modifiers {
+    stored.filter(|(at_press, _)| *at_press == tool).map_or(egui::Modifiers::NONE, |(_, mods)| mods)
 }
 
 /// The modifiers a click replays its tool events with. They are the release's, except that for
@@ -642,9 +658,15 @@ pub(super) fn press_alt_for(tool: Tool, stored: Option<(Tool, bool)>) -> bool {
 /// Mixer Brush's paint load) Alt is what it was at the press: a click is decided by the Alt held
 /// when the button went down, so letting Alt go together with the button (or a platform that
 /// stamps the release without it) neither paints a dab nor drops the sample (#10544).
-pub(super) fn click_modifiers(tool: Tool, release: egui::Modifiers, press_alt: bool) -> egui::Modifiers {
+pub(super) fn click_modifiers(tool: Tool, release: egui::Modifiers, press: egui::Modifiers) -> egui::Modifiers {
     let alt_click = super::cursors::alt_samples(tool, egui::Modifiers::ALT) || matches!(tool, Tool::CloneStamp | Tool::Healing | Tool::MixerBrush);
-    egui::Modifiers { alt: release.alt || (alt_click && press_alt), ..release }
+    if alt_click && press.alt {
+        // Ctrl+Alt is a resize gesture. Losing Ctrl on release must not turn it into a sample.
+        let ctrl = release.ctrl || (press.ctrl && crate::brush_resize::applies(tool));
+        egui::Modifiers { alt: true, ctrl, ..release }
+    } else {
+        release
+    }
 }
 
 /// The line from the brush to the pointer while stroke smoothing lags (Pulled String Mode and

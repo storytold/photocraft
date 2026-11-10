@@ -111,6 +111,31 @@ fn alt_click_with_the_brush_samples_the_foreground() {
     assert_eq!(h.state().session.tools.foreground, [0.0, 1.0, 0.0, 1.0], "⌥-click sampled green");
 }
 
+#[test]
+fn releasing_ctrl_after_a_resize_press_does_not_sample_or_paint() {
+    for split_frames in [false, true] {
+        for release in [Modifiers::NONE, Modifiers::ALT] {
+            let mut h = harness(two_colours());
+            h.state_mut().ui.tool = Tool::Brush;
+            let blue = [0.0, 0.0, 1.0, 1.0];
+            h.state_mut().run("tools.setColors", json!({"foreground": blue})).unwrap();
+            let rev = h.state().session.active().unwrap().revision;
+            let p = screen(&h, 50.0, 50.0);
+            frame(&mut h, vec![egui::Event::PointerMoved(p)], false);
+            let down = pointer(p, true, Modifiers::ALT | Modifiers::CTRL);
+            let up = pointer(p, false, release);
+            if split_frames {
+                frame(&mut h, vec![down], false);
+                frame(&mut h, vec![up], false);
+            } else {
+                frame(&mut h, vec![down, up], false);
+            }
+            assert_eq!(h.state().session.tools.foreground, blue, "split={split_frames}, release={release:?}");
+            assert_eq!(h.state().session.active().unwrap().revision, rev, "a resize tap does not paint");
+        }
+    }
+}
+
 /// Alt-click sampling respects the canvas view transform without changing document pixels.
 #[test]
 fn mixer_alt_click_samples_the_tip_through_zoomed_rotated_canvas_input() {

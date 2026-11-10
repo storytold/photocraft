@@ -100,7 +100,9 @@ pub(crate) use selection::{floating_outline, selection_drag_delta};
 pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
-pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
+pub(crate) use strokes::{
+    ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live, unsmoothed_line,
+};
 use strokes::{
     HOLD_REPEAT_MS, click_modifiers, draw_clone_preview, feed_live_stroke, pointer_button_modifiers, pointer_moves, press_alt_events, press_alt_for,
     press_alt_id, stroke_wants_time, tap_at_peak_pressure,
@@ -952,14 +954,14 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     // Eyedropper (`alt_sampling`): the click replayed on release, in a later frame than the
     // press, must not paint because Alt was let go with the button (#10544).
     let press_alt = press_alt_id(idx);
-    let held = ctx.data(|d| d.get_temp::<(Tool, bool)>(press_alt));
+    let held = ctx.data(|d| d.get_temp::<(Tool, egui::Modifiers)>(press_alt));
     let (released, held) = ui.input(|i| press_alt_events(&i.events, rect, tool, held));
 
     ctx.data_mut(|d| {
         if let Some(released) = released {
             d.insert_temp(press_alt, released);
         } else {
-            d.remove::<(Tool, bool)>(press_alt);
+            d.remove::<(Tool, egui::Modifiers)>(press_alt);
         }
     });
     handle_canvas_tool_menus(app, input, mods, &mut buttons);
@@ -970,7 +972,7 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
         if let Some(held) = held {
             d.insert_temp(press_alt, held);
         } else {
-            d.remove::<(Tool, bool)>(press_alt);
+            d.remove::<(Tool, egui::Modifiers)>(press_alt);
         }
     });
     // Clear the menu-dismissal flag on the gesture's pointer release, even when the release
@@ -1339,7 +1341,11 @@ fn handle_canvas_tool_clicks(
             } else {
                 click_mods
             };
-            let press_alt = click_button == PointerButton::Primary && press_alt_for(tool, ctx.data(|d| d.get_temp::<(Tool, bool)>(press_alt_id(input.idx))));
+            let press_alt = if click_button == PointerButton::Primary {
+                press_alt_for(tool, ctx.data(|d| d.get_temp(press_alt_id(input.idx))))
+            } else {
+                egui::Modifiers::NONE
+            };
             let click_mods = click_modifiers(tool, click_mods, press_alt);
             let d = xf.to_doc(p);
             match tool {

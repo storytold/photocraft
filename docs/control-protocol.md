@@ -176,6 +176,7 @@ heading instead targets the whole action. Step deletion also works during record
 and does not undo the document edit. The control equivalent is
 `actions.delete {"action": "Name", "step": 0}` (zero-based). Omitting `step` deletes
 the whole action, which still requires recording to be stopped.
+A step or action row dragged onto the trash is deleted without a confirmation, and one dragged onto the plus button is duplicated right after itself (`actions.duplicate`), as in Photoshop.
 
 Desktop actions also record and replay View › Fit on Screen (`view.fitOnScreen`),
 100% (`view.actualPixels`), Zoom In and Zoom Out through their menu commands or shortcuts.

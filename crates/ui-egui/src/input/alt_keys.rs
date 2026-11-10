@@ -9,14 +9,15 @@
 //! Brush paints, the Clone Stamp paints from a stale source, and every now and then a click gets it
 //! right (#8049 saw the same state on the wheel).
 //!
-//! The Alt key's own press and release always arrive, in order with the pointer events, so this
+//! The Alt key's own press and release arrive in order with the pointer events, so this
 //! folds them into the modifiers of the events after them: from an Alt key press to its release,
 //! pointer buttons, wheel notches and keys carry `alt`, and the modifier state egui keeps for the
 //! frame (`ModifiersChanged`) follows the key. It runs on the frame's raw input, before anything
 //! reads it, so every consumer (the canvas tools, the shortcuts, the panels) sees the same Alt.
 //!
-//! A lost key release cannot leave Alt stuck across a focus change: egui forgets its held keys
-//! when the window loses focus, and so does this.
+//! A missing release can leave Alt held until the next Alt press and release or a focus loss.
+//! A modifier update without Alt also occurs during the stale touchpad resync above, so it
+//! cannot reliably clear the held key. Focus loss clears egui's held keys.
 
 use egui::{Context, Event, Key, Modifiers, RawInput};
 
