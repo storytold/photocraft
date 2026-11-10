@@ -12,10 +12,12 @@ use photocraft_geom::Affine;
 use photocraft_text::engine_data::{self, Value as E};
 use serde_json::json;
 
+/// Build a small EngineData dictionary for the synthetic rendered-line fixture.
 fn dict(items: Vec<(&str, E)>) -> E {
     E::Dict(items.into_iter().map(|(k, v)| (k.into(), v)).collect())
 }
 
+/// Create a paragraph PSD whose cached text baseline differs from the default font metrics.
 fn synthetic_psd() -> Vec<u8> {
     let mut doc = Document::new("baseline", Size::new(500, 300), ColorMode::Rgb, SampleType::U8);
     let mut t = TextLayer {
@@ -61,11 +63,40 @@ fn synthetic_psd() -> Vec<u8> {
     photocraft_io::export(&doc, "baseline.psd", &Default::default()).unwrap().bytes
 }
 
+/// Read the active text layer after a command or history operation.
 fn text(session: &Session, id: photocraft_doc::LayerId) -> &TextLayer {
     let LayerContent::Text(t) = &session.active().unwrap().doc.layer(id).unwrap().content else { panic!("type layer") };
     t
 }
 
+/// A malformed rendered line must not override the font-based paragraph baseline.
+#[test]
+fn nonfinite_txt2_line_coordinates_do_not_create_a_baseline_hint() {
+    let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
+    let LayerContent::Text(source) = &imported.layers[0].content else { panic!("type layer") };
+    let tysh = source.psd_raw.as_ref().unwrap();
+    let raw = &imported.metadata.psd_global_blocks.iter().find(|(_, key, _)| key == b"Txt2").unwrap().2;
+    let tree = photocraft_text::psd::parse_txt2(raw).unwrap();
+    for (baseline, origin) in [(40.0, f64::NAN), (40.0, f64::INFINITY), (f64::NAN, 40.0), (f64::INFINITY, f64::INFINITY)] {
+        let mut layer = source.clone();
+        layer.psd_first_baseline = None;
+        let mut malformed = tree.clone();
+        let E::Array(objects) = malformed.get_mut("1").unwrap().get_mut("1").unwrap() else { panic!("text objects") };
+        let E::Array(rendered) = objects[0].get_mut("1").unwrap().get_mut("2").unwrap() else { panic!("rendered tree") };
+        let mut line = &mut rendered[0];
+        for _ in 0..4 {
+            let E::Array(children) = line.get_mut("6").unwrap() else { panic!("rendered children") };
+            line = &mut children[0];
+        }
+        assert_eq!(line.get("99").and_then(E::as_str), Some("L"));
+        line.set("10", E::Real(baseline));
+        line.get_mut("0").unwrap().set("0", E::Array(vec![E::Real(0.0), E::Real(origin)]));
+        photocraft_text::psd::apply_txt2_baseline(&mut layer, tysh, &malformed);
+        assert!(layer.psd_first_baseline.is_none(), "baseline={baseline}, origin={origin}");
+    }
+}
+
+/// Keep imported text aligned through edit entry, typing, undo/redo and native/PSD saves.
 #[test]
 fn entering_psd_type_edit_without_typing_keeps_the_recorded_baseline() {
     let bytes = synthetic_psd();
@@ -112,6 +143,7 @@ fn entering_psd_type_edit_without_typing_keeps_the_recorded_baseline() {
     assert!((resized.lines[0].baseline - recorded).abs() > 1.0, "a changed font size invalidates the PSD baseline");
 }
 
+/// Reject out-of-box baseline hints restored from native files without hiding paragraph text.
 #[test]
 fn invalid_native_psd_baseline_does_not_hide_the_first_line() {
     let mut imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
@@ -133,6 +165,7 @@ fn invalid_native_psd_baseline_does_not_hide_the_first_line() {
     }
 }
 
+/// Scale the hint with the paragraph box and retain the resulting baseline after PSD save/reopen.
 #[test]
 fn resolution_change_scales_imported_psd_baseline_with_its_box() {
     let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;

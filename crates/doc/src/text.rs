@@ -122,6 +122,7 @@ pub struct PsdFirstBaseline {
 }
 
 impl PsdFirstBaseline {
+    /// Accept the imported offset only while the first run retains its source font metrics.
     pub fn matches(&self, style: &CharStyle) -> bool {
         self.offset_px.is_finite()
             && self.style.font_family == style.font_family
