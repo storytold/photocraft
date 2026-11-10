@@ -13,6 +13,22 @@ fn styled(text: &str, style: CharStyle) -> TextLayer {
     TextLayer { text: text.into(), runs: vec![TextRun { len: text.len(), style }], ..Default::default() }
 }
 
+#[test]
+fn glyph_source_ranges_follow_shaped_clusters() {
+    let mut engine = TextEngine::new();
+    for text in ["office", "Aé B", "First\nSecond"] {
+        let layer = point(text, 24.0);
+        let layout = engine.layout(&layer, 72.0);
+        assert!(!layout.glyphs.is_empty());
+        assert_eq!(layout.glyphs.len(), layout.glyph_ranges.len());
+        for range in &layout.glyph_ranges {
+            assert!(range.start < range.end, "empty range in {text:?}");
+            assert!(text.get(range.clone()).is_some(), "invalid range {range:?} in {text:?}");
+            assert!(layout.clusters.iter().any(|cluster| cluster.range == *range), "missing cluster for {range:?}");
+        }
+    }
+}
+
 /// The rasteriser's pixel stages — composing one colour's coverage, unpremultiplying it, and
 /// converting the tiles — are per pixel: no pixel reads a slot another pixel wrote. Spreading them
 /// over threads therefore has to leave every byte as it was, which a one-thread pool checks.
@@ -557,12 +573,66 @@ fn faux_bold_keeps_antialiased_edges_at_small_sizes() {
     let (plain_ink, plain_partial) = stats(&mut e, base.clone());
     let (bold_ink, bold_partial) = stats(&mut e, CharStyle { faux_bold: true, ..base });
     assert!(bold_ink > plain_ink, "bold must add ink");
-    // Weight: the old summed-coverage faux bold (before #4130) measured 282.7 total ink for this
-    // text at 12 px (plain 138.0). The antialiased version must stay close to that weight.
-    const MAIN_BOLD_INK: f64 = 282.7;
-    assert!(bold_ink >= MAIN_BOLD_INK * 0.85, "stems too thin: {bold_ink} vs old {MAIN_BOLD_INK}");
-    assert!(bold_ink <= MAIN_BOLD_INK * 1.15, "stems too heavy: {bold_ink} vs old {MAIN_BOLD_INK}");
+    // Weight: the ring is now `size/72` with a pixel floor (#9008), which is Photoshop's weight,
+    // so this guards the antialiased edges rather than the old, heavier 3.6% of the size.
+    const MAIN_BOLD_INK: f64 = 222.2;
+    assert!(bold_ink >= MAIN_BOLD_INK * 0.9, "stems too thin: {bold_ink} vs {MAIN_BOLD_INK}");
+    assert!(bold_ink <= MAIN_BOLD_INK * 1.1, "stems too heavy: {bold_ink} vs {MAIN_BOLD_INK}");
     assert!(bold_partial * 10 >= plain_partial * 8, "edges stay antialiased: {plain_partial} -> {bold_partial}");
+}
+
+/// #9008: the faux-bold ring is Photoshop's `size/72`, with a pixel floor that fades in below
+/// ~32 px (Photoshop's small type reads heavier than that) and a cap so a glyph smaller than a
+/// pixel does not grow into a blob.
+#[test]
+fn faux_bold_radius_has_a_pixel_floor_that_fades_for_tiny_type() {
+    let r = crate::render::faux_bold_radius;
+    assert!((r(300.0) - 300.0 / 72.0).abs() < 1e-3, "large type: {}", r(300.0));
+    assert!((r(72.0) - 1.0).abs() < 1e-3, "72 px: {}", r(72.0));
+    assert!((r(24.0) - 0.45).abs() < 1e-3, "the floor takes over below 32 px: {}", r(24.0));
+    assert!((r(4.0) - 0.1).abs() < 1e-3, "and fades out for tiny type: {}", r(4.0));
+    assert!(r(0.5) < 0.02, "sub-pixel type keeps a sub-pixel ring: {}", r(0.5));
+    // Monotonic: heavier text never grows a thinner ring as it gets larger.
+    assert!((1..400).all(|px| r(px as f32) <= r(px as f32 + 1.0)));
+}
+
+/// #9008: at display sizes the ring is `size/72`, so the extra ink is the outline's perimeter times
+/// `2 * size/72` — not the flat 7.2% of the size that made a PSD's faux-bold layer jump heavier as
+/// soon as clicking it re-rendered the text.
+#[test]
+fn faux_bold_at_display_sizes_grows_the_outline_by_size_over_72() {
+    let mut e = TextEngine::new();
+    // Display sizes, including the two ends the issue reported on (75-125 px layers) and the
+    // sizes where the pixel floor hands over to `size/72` (32 px) and where the ring is 1 px
+    // (72 px). The flat 3.6% ring this replaces grew the outline by 0.072 * size instead, so a
+    // regression to it fails the width check at every size but 12 px.
+    let mut ratios = Vec::new();
+    for px in [12.0f32, 32.0, 72.0, 120.0, 200.0] {
+        let ink = |e: &mut TextEngine, s: CharStyle| {
+            let (_, r) = e.render(&TextLayer { transform: Affine::translate(10.0, f64::from(px) * 1.4), ..styled("Hi", s) }, 72.0, PixelFormat::RGBA8);
+            (alpha_sum(&r.surface, r.rect), r.rect)
+        };
+        let base = CharStyle { size_pt: px, ..Default::default() };
+        let (plain, prect) = ink(&mut e, base.clone());
+        let (bold, brect) = ink(&mut e, CharStyle { faux_bold: true, ..base });
+        // The outline grows by the ring on every side, so the ink rectangle grows by twice it.
+        let ring = crate::render::faux_bold_radius(px);
+        let grew = (brect.width() - prect.width()) as f32;
+        assert!((grew - 2.0 * ring).abs() <= 1.5, "{px} px: width grew {grew}, expected about {}", 2.0 * ring);
+        // Heavier by the perimeter's worth of ink. Pinned per size, because a thicker ring here is
+        // exactly the jump a PSD's faux-bold layer shows when a click re-renders it.
+        ratios.push(bold / plain);
+    }
+    // Plain text's ink grows with the size, so the bold/plain ratio falls as the ring does relative
+    // to the stems: 1.9x at 12 px (the floor), about 1.35x at 120 px, 1.24x at 200 px.
+    // The ring is a fixed fraction of the size above the pixel floor, so the ratio does not move
+    // with the size: 1.35x at 32, 72, 120 and 200 px (the flat 3.6% ring measured 1.95x). At 12 px
+    // the floor is 3.75% of the size, so the type reads a little heavier, as Photoshop's does.
+    for (px, r) in [32.0f32, 72.0, 120.0, 200.0].iter().zip(&ratios[1..]) {
+        assert!((1.30..=1.40).contains(r), "{px} px: {r:.2}x, expected about 1.35x");
+    }
+    assert!((1.55..=1.75).contains(&ratios[0]), "12 px: {:.2}x, expected about 1.64x", ratios[0]);
+    assert!(ratios[0] > ratios[4], "the pixel floor fades out: {:.2}x at 12 px, {:.2}x at 200 px", ratios[0], ratios[4]);
 }
 
 /// #3705: Faux bold dilation must scale with horizontal and vertical glyph scaling.
@@ -1062,12 +1132,12 @@ fn build_txt2_round_trips_kerning_modes() {
     assert_eq!(modes, vec![(1, Kerning::Off), (1, Kerning::Metrics)]);
 }
 
-/// #3514: the document `Txt2` is only needed for a non-Metrics (`Optical`) auto-kern mode. A fresh
-/// document of ordinary Metrics (or EngineData-carried Off) text must not write Photoshop's empty
-/// stub, which some readers (Photopea) reject.
+/// #3514 / #10308: the document `Txt2` is needed for Optical kerning and for OpenType settings
+/// EngineData can't carry (stylistic sets, swashes, …). A fresh document of ordinary Metrics text
+/// must not write Photoshop's empty stub, which some readers (Photopea) reject.
 #[test]
-fn needs_txt2_only_for_optical() {
-    use photocraft_doc::text::Kerning;
+fn needs_txt2_for_optical_and_txt2_only_opentype() {
+    use photocraft_doc::text::{FontFeature, Kerning};
     let style = |kerning: Kerning| CharStyle { kerning, ..Default::default() };
     let metrics = runs_of("AV", &[(2, style(Kerning::Metrics))]);
     assert!(!crate::psd::needs_txt2(&[(0, &metrics)]));
@@ -1076,6 +1146,57 @@ fn needs_txt2_only_for_optical() {
     let optical = runs_of("AV", &[(1, style(Kerning::Optical)), (1, CharStyle::default())]);
     assert!(crate::psd::needs_txt2(&[(0, &optical)]));
     assert!(!crate::psd::needs_txt2(&[]));
+    let with_ss = |tag: &str, value: u16| {
+        let mut s = style(Kerning::Metrics);
+        s.features = vec![FontFeature { tag: tag.into(), value }];
+        runs_of("AV", &[(2, s)])
+    };
+    assert!(crate::psd::needs_txt2(&[(0, &with_ss("ss01", 1))]), "stylistic set 1 lives only in Txt2");
+    assert!(crate::psd::needs_txt2(&[(0, &with_ss("ss05", 1))]), "stylistic set 5 lives only in Txt2");
+    assert!(!crate::psd::needs_txt2(&[(0, &with_ss("ss01", 0))]), "an off set is the default");
+    assert!(crate::psd::needs_txt2(&[(0, &with_ss("swsh", 1))]), "swash lives only in Txt2");
+    assert!(crate::psd::needs_txt2(&[(0, &with_ss("calt", 0))]), "calt off is Txt2-only");
+    assert!(!crate::psd::needs_txt2(&[(0, &with_ss("calt", 1))]), "calt on is the default");
+}
+
+/// #10308: the fresh objects, minimal style runs, seeded font list and frame list are only for a
+/// PhotoCraft-native block. A file's own block — here the older Photoshop's, with an empty
+/// numbered `/0` or none at all — gets no `/0` key, frame list or font list it didn't have, and
+/// a layer without a template object gets the stub it always got.
+#[test]
+fn photoshop_blocks_get_no_native_txt2_scaffolding() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::FontFeature;
+    let style = CharStyle { font_family: "Inter".into(), features: vec![FontFeature { tag: "ss01".into(), value: 1 }], ..Default::default() };
+    let t = styled("Hi", style);
+    let with_doc = photoshop_era_txt2(&["Line 1"]);
+    let without_doc = crate::engine_data::write_bare(&[
+        ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+        ("DocumentObjects".into(), photoshop_era_objects(&["Line 1"])),
+    ]);
+    for (label, prev, doc) in [("empty /0", with_doc, Some(E::dict())), ("no /0", without_doc, None)] {
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        assert_eq!(out.get("0").cloned(), doc, "{label}: the file's /0 is left as it was");
+        let object = out.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.first()).expect("the numbered object");
+        assert!(object.get("1").is_none(), "{label}: no fresh view naming a frame the file has no list for");
+        assert!(object.path(&["0", "5"]).is_none(), "{label}: no fresh paragraph runs");
+    }
+}
+
+/// #10308: a fresh native object has one paragraph run per paragraph, each its UTF-16 length.
+#[test]
+fn fresh_native_txt2_object_has_a_paragraph_run_per_paragraph() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::FontFeature;
+    let style = CharStyle { features: vec![FontFeature { tag: "ss02".into(), value: 1 }], ..Default::default() };
+    let t = styled("Hi\nBy\u{e9}e", style);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], None)).unwrap();
+    let object = out.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.first()).expect("the object");
+    assert_eq!(object.path(&["0", "0"]).and_then(E::as_str), Some("Hi\rBy\u{e9}e\r"));
+    let lens: Vec<i64> =
+        object.path(&["0", "5", "0"]).and_then(E::as_array).expect("paragraph runs").iter().filter_map(|r| r.get("1").and_then(E::as_i64)).collect();
+    assert_eq!(lens, vec![3, 5]);
+    assert_eq!(out.path(&["0", "8", "0"]).and_then(E::as_array).map(<[E]>::len), Some(1), "a native block names one frame");
 }
 
 /// A kept `Txt2` object — same text, so its extras are still true — keeps everything the file
@@ -1436,6 +1557,56 @@ fn edited_text_keeps_the_files_txt2_object() {
     }
 }
 
+/// #8415: a style-only edit (`type.setStyle` with no text change) reaches the file's `Txt2`.
+/// Photoshop reads the character style from the object's style runs, and an object whose text
+/// still matched kept the file's runs, so Photoshop reopened the layer in its old font with faux
+/// bold still on. A layer whose style agrees with the runs still gets the block back byte for
+/// byte (#2374); one whose font or faux bold changed is restyled like an edited object, and the
+/// glyph pen positions laid out in the old style are dropped.
+#[test]
+fn style_only_edit_restyles_the_kept_txt2_object() {
+    use crate::engine_data::Value as E;
+    // Strings in the block are UTF-16 with a BOM; every character here is below U+0100.
+    let utf16 = |s: &str| format!("(\u{fe}\u{ff}{})", s.chars().map(|c| format!("\0{c}")).collect::<String>());
+    let font = |name: &str| format!("<< /0 << /99 /CoolTypeFont /0 << /0 {} /2 1 >> >> >> ", utf16(name));
+    // One object as Photoshop writes it: paragraph runs, style runs, a view and pen positions.
+    let prev = format!(
+        "\n\n/98 << /0 14 >> /0 << /1 << /0 [ {}{}] >> >> /1 << /1 [ << /0 << /0 {} /5 << /0 [ << /0 << /0 << /0 (\u{fe}\u{ff}) /5 << /7 1.2 >> >> >> /1 3 >> ] >> /6 << /0 [ << /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 /2 true /3 false /11 1 >> >> >> /1 3 >> ] >> >> /1 << /0 [ << /0 0 >> ] >> /21 << /1 [ 1.25 2.5 ] >> >> ] >>",
+        font("Arial-Black"),
+        font("ArialMT"),
+        utf16("AV\r"),
+    );
+    let prev: Vec<u8> = prev.chars().map(|c| c as u32 as u8).collect();
+    let style = CharStyle { postscript_name: Some("Arial-Black".into()), size_pt: 12.0, faux_bold: true, ..Default::default() };
+    let t = styled("AV", style.clone());
+    assert_eq!(crate::psd::build_txt2(&[(0, &t)], Some(&prev)), prev, "an unedited style keeps the file's block");
+
+    let font_name = |out: &E, run: &E| {
+        let i = run.path(&["0", "0", "6", "0"]).and_then(E::as_i64).and_then(|i| usize::try_from(i).ok()).expect("a font index");
+        out.path(&["0", "1", "0"]).and_then(E::as_array).and_then(|f| f.get(i)).and_then(|f| f.path(&["0", "0", "0"])).and_then(E::as_str).map(str::to_owned)
+    };
+    for (what, edited, want_font) in [
+        ("faux bold off", CharStyle { faux_bold: false, ..style.clone() }, "Arial-Black"),
+        (
+            "font and faux bold",
+            CharStyle { postscript_name: Some("AppleSDGothicNeo-Heavy".into()), faux_bold: false, ..style.clone() },
+            "AppleSDGothicNeo-Heavy",
+        ),
+    ] {
+        let t = styled("AV", edited);
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let object = &out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0];
+        assert_eq!(object.path(&["0", "0"]).and_then(E::as_str), Some("AV\r"), "{what}: the text is unchanged");
+        let runs = object.path(&["0", "6", "0"]).and_then(E::as_array).unwrap();
+        assert!(!runs.is_empty(), "{what}: the object has style runs");
+        for run in runs {
+            assert_eq!(run.path(&["0", "0", "6", "2"]).and_then(E::as_bool), Some(false), "{what}: faux bold is off in Txt2");
+            assert_eq!(font_name(&out, run).as_deref(), Some(want_font), "{what}: Txt2 names the layer's font");
+        }
+        assert!(object.get("21").is_none(), "{what}: pen positions of the old style are dropped");
+    }
+}
+
 /// A type layer the file's `Txt2` has no object for (one added before the save, #7698) gets an
 /// object shaped like the file's own, with a view naming its own frame and a frame in `/0 /8 /0`,
 /// instead of a bare stub: Photoshop and Photopea refused the file when the frames ran out.
@@ -1680,6 +1851,26 @@ fn psd_round_trips_antialias_opentype_and_warp() {
         tags.sort_unstable();
         assert_eq!(tags, ["frac", "swsh"]);
     }
+}
+
+/// EngineData only maps Photoshop's `OldStyle` bool to `onum`. Other Numerals tags (`lnum` /
+/// `pnum` / `tnum`) stay in `.pcraft` until a Photoshop-authored PSD oracle exists — we do not
+/// invent EngineData keys or copy figure-style tables from GPL editors (AGENTS.md clean-room).
+#[test]
+fn psd_engine_data_keeps_only_oldstyle_among_numeral_tags() {
+    let style = CharStyle {
+        font_family: "Inter".into(),
+        size_pt: 20.0,
+        features: ["lnum", "onum", "pnum", "tnum"].iter().map(|t| FontFeature { tag: (*t).into(), value: 1 }).collect(),
+        ..Default::default()
+    };
+    let t = styled("0123456789", style);
+    let bytes = crate::psd::build_tysh(&t, 72.0, None);
+    let back = crate::psd::text_layer_from_tysh(&bytes, 72.0).expect("tysh");
+    let runs = back.char_runs();
+    let mut got: Vec<&str> = runs[0].style.features.iter().map(|f| f.tag.as_str()).collect();
+    got.sort_unstable();
+    assert_eq!(got, ["onum"]);
 }
 
 /// A legacy-signature `TySh` (#1469): zero PointBase, `bounds` (the layout box) and `boundingBox`
@@ -2613,6 +2804,53 @@ fn hyphenless_postscript_names_split_trailing_styles() {
     }
 }
 
+/// Thickening moves each outline point along its bisector; this guards that curves stay as smooth
+/// as the regular glyph's at a large size (the bend of a bold "O"'s edge between rows matches the
+/// regular one's). See also `faux_bold_keeps_square_corners_square`.
+#[test]
+fn faux_bold_curves_stay_smooth_at_large_sizes() {
+    let mut e = TextEngine::new();
+    // The largest bend of the left edge between consecutive rows, in pixels (second difference
+    // of its sub-pixel position), over the middle of the glyph's height.
+    let bumpiness = |e: &mut TextEngine, bold: bool| -> f64 {
+        let style = CharStyle { size_pt: 600.0, faux_bold: bold, ..Default::default() };
+        let (_, r) = e.render(&TextLayer { transform: Affine::translate(60.0, 640.0), ..styled("O", style) }, 72.0, PixelFormat::RGBA8);
+        let alpha = |x: i32, y: i32| alpha_sum(&r.surface, photocraft_geom::Rect::new(x, y, x + 1, y + 1));
+        let h = r.rect.height() as i32;
+        let mut edges = Vec::new();
+        for y in (r.rect.y0 + h * 15 / 100)..(r.rect.y0 + h * 85 / 100) {
+            if let Some(x) = (r.rect.x0..r.rect.x1).find(|&x| alpha(x, y) > 0.01) {
+                edges.push(f64::from(x) + 1.0 - alpha(x, y));
+            }
+        }
+        edges.windows(3).map(|w| (w[2] - 2.0 * w[1] + w[0]).abs()).fold(0.0, f64::max)
+    };
+    let plain = bumpiness(&mut e, false);
+    let bold = bumpiness(&mut e, true);
+    eprintln!("bumpiness plain {plain} bold {bold}");
+    assert!(bold < plain + 0.5, "faux bold's edge is notched: bends {bold} px vs {plain} px regular");
+}
+
+/// The notches showed most at corners and stroke ends: eight stamped copies leave a stepped bite
+/// out of a square corner. Thickened outlines keep corners square, as a bold "l" shows.
+#[test]
+fn faux_bold_keeps_square_corners_square() {
+    let mut e = TextEngine::new();
+    for bold in [false, true] {
+        let style = CharStyle { size_pt: 600.0, faux_bold: bold, ..Default::default() };
+        let (_, r) = e.render(&TextLayer { transform: Affine::translate(60.0, 640.0), ..styled("l", style) }, 72.0, PixelFormat::RGBA8);
+        let alpha = |x: i32, y: i32| alpha_sum(&r.surface, photocraft_geom::Rect::new(x, y, x + 1, y + 1));
+        // The ink's own top-left and top-right corners (the raster rect pads the ink by a pixel).
+        let top = (r.rect.y0..r.rect.y1).find(|&y| (r.rect.x0..r.rect.x1).any(|x| alpha(x, y) > 0.5)).unwrap();
+        let left = (r.rect.x0..r.rect.x1).find(|&x| (r.rect.y0..r.rect.y1).any(|y| alpha(x, y) > 0.5)).unwrap();
+        let right = (r.rect.x0..r.rect.x1).rev().find(|&x| (r.rect.y0..r.rect.y1).any(|y| alpha(x, y) > 0.5)).unwrap();
+        for (x, corner) in [(left + 1, "top-left"), (right - 1, "top-right")] {
+            let a = alpha(x, top + 1);
+            assert!(a > 0.9, "bold {bold}: the {corner} corner is cut away (alpha {a})");
+        }
+    }
+}
+
 #[test]
 fn text_rebuild_preserves_imported_font_metadata() {
     use crate::engine_data::Value as E;
@@ -2712,6 +2950,25 @@ fn font_metadata_large_nameless_lists_rebuild_after_edit() {
     }
 }
 
+#[test]
+fn font_metadata_reordered_duplicates_keep_distinct_dictionary_records() {
+    use crate::engine_data::Value as E;
+    let record = |name: &str, marker| E::Dict(vec![("Name".into(), E::String(name.into())), ("PrivateFontFlag".into(), E::Int(marker))]);
+    let mut layer = point("Original", 24.0);
+    let mut template = crate::psd::build_engine_data(&layer, None, 72.0);
+    let resource = vec![record("A", 1), record("A", 2), record("B", 3)];
+    let document = vec![record("B", 30), record("A", 10), record("A", 20)];
+    template.get_mut("ResourceDict").unwrap().set("FontSet", E::Array(resource.clone()));
+    template.get_mut("DocumentResources").unwrap().set("FontSet", E::Array(document.clone()));
+    layer.text = "Edited".into();
+    let rebuilt = crate::psd::build_engine_data(&layer, Some(template), 72.0);
+    assert_eq!(&rebuilt.path(&["ResourceDict", "FontSet"]).unwrap().as_array().unwrap()[..3], resource.as_slice());
+    let fonts = rebuilt.path(&["DocumentResources", "FontSet"]).unwrap().as_array().unwrap();
+    assert_eq!(&fonts[..3], &[document[1].clone(), document[2].clone(), document[0].clone()], "reordered duplicates must keep distinct metadata");
+    let repeated = crate::psd::font_set(&["A", "A", "A", "A"].map(str::to_string), Some(&E::Array(resource.clone())));
+    assert_eq!(repeated, E::Array(vec![resource[0].clone(), resource[1].clone(), resource[0].clone(), resource[0].clone()]));
+}
+
 /// Same-runner release probe: compare the original and repaired source, not a wall-clock CI limit.
 #[test]
 #[ignore = "release performance measurement for large imported FontSets"]
@@ -2775,6 +3032,39 @@ fn a_word_wider_than_the_paragraph_box_breaks_at_the_box_edge() {
     let l = e.layout(&spaced, 72.0);
     assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
     assert_eq!(l.lines[1].range.start, 3, "{:?}", l.lines);
+}
+
+/// [`TextLayout::overflows`] reads dropped lines off the layout: text that fits covers its end
+/// through trailing empty paragraphs; a taller text's lines stop short of the text's end; an
+/// empty uncovered tail of pure trailing breaks that fit is not an overflow.
+#[test]
+fn overflows_says_whether_a_box_holds_its_text() {
+    let mut e = TextEngine::new();
+    let tall_box = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 900.0 };
+    // Everything fits, trailing breaks included: the trailing empty paragraphs cover the
+    // text's end.
+    for text in ["a", "a\n", "a\n\n", "", "Lorem ipsum dolor sit amet"] {
+        let l = e.layout(&TextLayer { shape: tall_box.clone(), ..point(text, 24.0) }, 72.0);
+        assert!(!l.overflows(text), "{text:?}: {} lines", l.lines.len());
+    }
+    // The box holds one line of 24 pt type — additional lines are dropped, and the last line
+    // stops short of the text.
+    let short_box = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 34.0 };
+    let text = "ab\ncd\nef";
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point(text, 24.0) }, 72.0);
+    assert!(l.overflows(text), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // A trailing break whose empty paragraph doesn't fit is an overflow as well.
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point("ab\n\n", 24.0) }, 72.0);
+    assert!(l.overflows("ab\n\n"), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // A box holding one full line plus exactly one more empty paragraph is not.
+    let exact = point("ab\n", 24.0);
+    let l = e.layout(&TextLayer { shape: tall_box.clone(), ..exact }, 72.0);
+    assert!(!l.overflows("ab\n"), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // Empty text never overflows: even a box too short for its paragraph (no lines laid out)
+    // has nothing to lose, so no overflow mark.
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point("", 24.0) }, 72.0);
+    assert!(!l.overflows(""), "{} lines", l.lines.len());
+    let _ = &mut e;
 }
 
 /// Closed polygon in text space.
@@ -3107,7 +3397,334 @@ fn per_colour_passes_match_full_size_passes() {
                 px.chunks_exact(ch).flat_map(|p| p[..ch - 1].iter().map(|c| c * p[ch - 1]).chain([p[ch - 1]]).collect::<Vec<_>>()).collect::<Vec<_>>()
             };
             let worst = shown(&a).iter().zip(&shown(&b)).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
-            assert!(worst <= 1.0 / 255.0, "case {k} {format:?}: largest difference {worst}");
+            // Colour channels are 8-bit samples, so one step is 1/255. Coverage is accumulated in
+            // f32 from a buffer whose origin differs between the two paths, and a pixel sitting on
+            // a rounding tie then lands a step further out (measured 1.65/255 on the warped
+            // faux-bold case), so allow two steps.
+            assert!(worst <= 2.0 / 255.0, "case {k} {format:?}: largest difference {worst}");
         }
+    }
+}
+
+/// A legacy (Photoshop-era) `Txt2` block shaped like a real one (psd-tools' `text.psd`): the
+/// fonts in `DocumentResources /FontSet /Resources`, and each object's `Model /StyleRun` runs
+/// holding their style under `RunData /StyleSheet /Features` (named keys) beside `Length`.
+fn styled_era_txt2(text: &str, font: &str, size: f64, auto_kern: i64) -> Vec<u8> {
+    use crate::engine_data::Value as E;
+    let font_entry = |name: &str| {
+        E::Dict(vec![(
+            "Resource".into(),
+            E::Dict(vec![
+                ("StreamTag".into(), E::Name("CoolTypeFont".into())),
+                ("Identifier".into(), E::Dict(vec![("Name".into(), E::String(name.into())), ("Type".into(), E::Int(1))])),
+            ]),
+        )])
+    };
+    let features = E::Dict(vec![
+        ("Font".into(), E::Int(0)),
+        ("FontSize".into(), E::Real(size)),
+        ("FauxBold".into(), E::Bool(false)),
+        ("FauxItalic".into(), E::Bool(false)),
+        ("AutoLeading".into(), E::Bool(true)),
+        ("Leading".into(), E::Real(0.01)),
+        ("HorizontalScale".into(), E::Real(1.0)),
+        ("VerticalScale".into(), E::Real(1.0)),
+        ("Tracking".into(), E::Int(0)),
+        ("AutoKern".into(), E::Int(auto_kern)),
+        ("BaselineShift".into(), E::Real(0.0)),
+        ("FontCaps".into(), E::Int(0)),
+        ("FontBaseline".into(), E::Int(0)),
+        ("UnderlinePosition".into(), E::Int(0)),
+        ("StrikethroughPosition".into(), E::Int(0)),
+        ("Ligatures".into(), E::Bool(true)),
+        ("DiscretionaryLigatures".into(), E::Bool(false)),
+        ("ContextualLigatures".into(), E::Bool(true)),
+        ("StylisticSets".into(), E::Int(0)),
+        (
+            "FillColor".into(),
+            E::Dict(vec![
+                ("StreamTag".into(), E::Name("SimplePaint".into())),
+                (
+                    "Color".into(),
+                    E::Dict(vec![("Type".into(), E::Int(1)), ("Values".into(), E::Array(vec![E::Real(1.0), E::Real(0.0), E::Real(0.0), E::Real(0.0)]))]),
+                ),
+            ]),
+        ),
+    ]);
+    let total = format!("{text}\r").encode_utf16().count() as i64;
+    let run = |len: i64, data: E| E::Dict(vec![("RunData".into(), data), ("Length".into(), E::Int(len))]);
+    let placeholder = || E::Dict(vec![("0".into(), E::String(String::new()))]);
+    let style_data = E::Dict(vec![(
+        "StyleSheet".into(),
+        E::Dict(vec![("Name".into(), E::String(String::new())), ("Parent".into(), E::Int(0)), ("Features".into(), features)]),
+    )]);
+    let entry = E::Dict(vec![
+        (
+            "Model".into(),
+            E::Dict(vec![
+                ("Text".into(), E::String(format!("{text}\r"))),
+                ("ParagraphRun".into(), E::Dict(vec![("RunArray".into(), E::Array(vec![run(total, placeholder())]))])),
+                ("StyleRun".into(), E::Dict(vec![("RunArray".into(), E::Array(vec![run(total, style_data)]))])),
+                ("KernRun".into(), E::Dict(vec![("RunArray".into(), E::Array(vec![run(total, placeholder())]))])),
+            ]),
+        ),
+        ("View".into(), E::Dict(vec![("0".into(), E::Array(vec![E::Dict(vec![("0".into(), E::Int(0))])]))])),
+    ]);
+    crate::engine_data::write_bare(&[
+        ("DocumentResources".into(), E::Dict(vec![("FontSet".into(), E::Dict(vec![("Resources".into(), E::Array(vec![font_entry(font)]))]))])),
+        ("DocumentObjects".into(), E::Dict(vec![("TextObjects".into(), E::Array(vec![entry]))])),
+    ])
+}
+
+/// The length and `Features` of each style run of the first legacy object.
+fn era_runs(block: &crate::engine_data::Value) -> Vec<(i64, crate::engine_data::Value)> {
+    use crate::engine_data::Value as E;
+    block
+        .path(&["DocumentObjects", "TextObjects"])
+        .and_then(E::as_array)
+        .and_then(<[E]>::first)
+        .and_then(|e| e.path(&["Model", "StyleRun", "RunArray"]))
+        .and_then(E::as_array)
+        .map(|rs| {
+            rs.iter()
+                .map(|r| (r.get("Length").and_then(E::as_i64).unwrap_or(-1), r.path(&["RunData", "StyleSheet", "Features"]).cloned().unwrap_or(E::Int(0))))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Review of #8888 (CodeRabbit, psd.rs): a style-only edit (no text change) restyles the older
+/// Photoshop's copy too, which Photoshop re-renders from. Its font list gains the new font, the
+/// run keeps every key Photoshop wrote, and the lengths still cover the text.
+#[test]
+fn a_style_only_edit_restyles_the_photoshop_era_objects() {
+    use crate::engine_data::Value as E;
+    let prev = styled_era_txt2("Line 1", "ArialMT", 13.0, 1);
+    let style = CharStyle {
+        postscript_name: Some("Courier".into()),
+        size_pt: 20.0,
+        faux_bold: true,
+        color: Color::rgb(0.0, 0.5, 1.0),
+        tracking: 25.0,
+        ..Default::default()
+    };
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &styled("Line 1", style))], Some(&prev))).unwrap();
+    let runs = era_runs(&out);
+    assert_eq!(runs.len(), 1);
+    let (length, f) = &runs[0];
+    assert_eq!(*length, 7, "the run covers the text and its trailing return");
+    assert_eq!(f.get("FontSize").and_then(E::as_f64), Some(20.0));
+    assert_eq!(f.get("FauxBold").and_then(E::as_bool), Some(true));
+    assert_eq!(f.get("Tracking").and_then(E::as_i64), Some(25));
+    assert_eq!(f.get("Leading").and_then(E::as_f64), Some(0.01), "an automatic leading keeps Photoshop's own value");
+    assert_eq!(f.path(&["FillColor", "Color", "Type"]).and_then(E::as_i64), Some(1));
+    assert_eq!(f.path(&["FillColor", "Color", "Values"]).and_then(E::as_array).map(<[E]>::len), Some(4));
+    assert_eq!(f.path(&["FillColor", "StreamTag"]).and_then(E::as_str), Some("SimplePaint"), "a key the file held is kept");
+    // The font went into the block's list and the run names it.
+    let fonts = out.path(&["DocumentResources", "FontSet", "Resources"]).and_then(E::as_array).expect("the font list");
+    let index = f.get("Font").and_then(E::as_i64).and_then(|i| usize::try_from(i).ok()).expect("the font index");
+    let name = |i: usize| fonts.get(i).and_then(|r| r.path(&["Resource", "Identifier", "Name"])).and_then(E::as_str);
+    assert_eq!(name(index), Some("Courier"));
+    assert_eq!(name(0), Some("ArialMT"), "the file's font stays first");
+    // The text did not change.
+    let text =
+        out.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).and_then(<[E]>::first).and_then(|e| e.path(&["Model", "Text"])).and_then(E::as_str);
+    assert_eq!(text, Some("Line 1\r"));
+}
+
+/// A layer whose style already agrees with the file's run leaves the legacy objects as they are.
+#[test]
+fn an_unedited_style_leaves_the_photoshop_era_objects_alone() {
+    let prev = styled_era_txt2("Line 1", "ArialMT", 13.0, 1);
+    let same = CharStyle { postscript_name: Some("ArialMT".into()), size_pt: 13.0, ..Default::default() };
+    let out = crate::psd::build_txt2(&[(0, &styled("Line 1", same))], Some(&prev));
+    assert_eq!(era_runs(&crate::psd::parse_txt2(&prev).unwrap()), era_runs(&crate::psd::parse_txt2(&out).unwrap()));
+}
+
+/// Both object lists, as CodeRabbit asked: the numbered object and the older copy are restyled by
+/// the same style-only edit.
+#[test]
+fn a_style_only_edit_restyles_both_object_lists() {
+    use crate::engine_data::Value as E;
+    let mut prev = photoshop_txt2(&[(4, 1)]);
+    prev.extend_from_slice(&styled_era_txt2("AVA", "ArialMT", 13.0, 1));
+    let style = CharStyle { postscript_name: Some("ArialMT".into()), size_pt: 31.0, faux_italic: true, ..Default::default() };
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &styled("AVA", style))], Some(&prev))).unwrap();
+    let legacy = era_runs(&out);
+    let first = legacy.first().map(|(l, f)| (*l, f.get("FontSize").and_then(E::as_f64), f.get("FauxItalic").and_then(E::as_bool)));
+    assert_eq!(first, Some((4, Some(31.0), Some(true))));
+    let numbered = out
+        .path(&["1", "1"])
+        .and_then(E::as_array)
+        .and_then(<[E]>::first)
+        .and_then(|o| o.path(&["0", "6", "0"]))
+        .and_then(E::as_array)
+        .and_then(<[E]>::first)
+        .and_then(|r| r.path(&["0", "0", "6"]));
+    assert_eq!(numbered.and_then(|s| s.get("1")).and_then(E::as_f64), Some(31.0), "the numbered object is restyled too");
+}
+
+/// Two character runs give two style runs in the legacy copy, with the lengths of the runs.
+#[test]
+fn a_two_run_layer_gives_the_photoshop_era_copy_two_style_runs() {
+    use crate::engine_data::Value as E;
+    let prev = styled_era_txt2("Hello", "ArialMT", 13.0, 1);
+    let small = CharStyle { postscript_name: Some("ArialMT".into()), size_pt: 10.0, ..Default::default() };
+    let big = CharStyle { postscript_name: Some("ArialMT".into()), size_pt: 40.0, ..Default::default() };
+    let t = runs_of("Hello", &[(2, small), (3, big)]);
+    let runs = era_runs(&crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap());
+    let seen: Vec<(i64, Option<f64>)> = runs.iter().map(|(l, f)| (*l, f.get("FontSize").and_then(E::as_f64))).collect();
+    assert_eq!(seen, vec![(2, Some(10.0)), (4, Some(40.0))], "the last run takes the trailing return");
+}
+
+/// Review of #8888: every key the legacy restyle writes is written per run, so a multi-run edit
+/// does not copy the first run's baseline shift, case, underline or strikethrough to the others.
+#[test]
+fn each_photoshop_era_style_run_gets_its_own_values() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::{Caps, FontBaseline};
+    let prev = styled_era_txt2("Hello", "ArialMT", 13.0, 1);
+    let base = CharStyle { postscript_name: Some("ArialMT".into()), size_pt: 13.0, ..Default::default() };
+    let decorated = CharStyle { baseline_shift_pt: 3.0, caps: Caps::SmallCaps, baseline: FontBaseline::Superscript, underline: true, ..base.clone() };
+    let struck = CharStyle { strikethrough: true, caps: Caps::AllCaps, ligatures: false, discretionary_ligatures: true, ..base.clone() };
+    let t = runs_of("Hello", &[(2, decorated), (2, base.clone()), (1, struck)]);
+    let runs = era_runs(&crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap());
+    let key = |i: usize, k: &str| runs.get(i).and_then(|(_, f)| f.get(k)).cloned();
+    assert_eq!(runs.iter().map(|r| r.0).collect::<Vec<_>>(), vec![2, 2, 2]);
+    assert_eq!(key(0, "BaselineShift").and_then(|v| v.as_f64()), Some(3.0));
+    assert_eq!(key(1, "BaselineShift").and_then(|v| v.as_f64()), Some(0.0), "the second run is not the first");
+    assert_eq!([0, 1, 2].map(|i| key(i, "FontCaps").and_then(|v| v.as_i64())), [Some(1), Some(0), Some(2)]);
+    assert_eq!([0, 1, 2].map(|i| key(i, "FontBaseline").and_then(|v| v.as_i64())), [Some(1), Some(0), Some(0)]);
+    assert_eq!([0, 1, 2].map(|i| key(i, "UnderlinePosition").and_then(|v| v.as_i64()).map(|v| v != 0)), [Some(true), Some(false), Some(false)]);
+    assert_eq!([0, 1, 2].map(|i| key(i, "StrikethroughPosition").and_then(|v| v.as_i64()).map(|v| v != 0)), [Some(false), Some(false), Some(true)]);
+    assert_eq!([0, 1, 2].map(|i| key(i, "Ligatures").and_then(|v| v.as_bool())), [Some(true), Some(true), Some(false)]);
+    assert_eq!([0, 1, 2].map(|i| key(i, "DiscretionaryLigatures").and_then(|v| v.as_bool())), [Some(false), Some(false), Some(true)]);
+    let _ = E::Int(0);
+}
+
+/// Each of those keys alone is enough to restyle the legacy copy (an edit of only that key), and
+/// a layer that agrees on all of them leaves the block's bytes alone.
+#[test]
+fn every_legacy_style_key_is_compared() {
+    use photocraft_doc::text::{Caps, FontBaseline, Kerning};
+    let prev = styled_era_txt2("Hello", "ArialMT", 13.0, 1);
+    let base = CharStyle { postscript_name: Some("ArialMT".into()), size_pt: 13.0, ..Default::default() };
+    let unedited = crate::psd::build_txt2(&[(0, &styled("Hello", base.clone()))], Some(&prev));
+    assert!(
+        era_runs(&crate::psd::parse_txt2(&unedited).unwrap()) == era_runs(&crate::psd::parse_txt2(&prev).unwrap()),
+        "an agreeing layer leaves the legacy copy as it is"
+    );
+    let edits = [
+        CharStyle { baseline_shift_pt: 2.0, ..base.clone() },
+        CharStyle { caps: Caps::AllCaps, ..base.clone() },
+        CharStyle { baseline: FontBaseline::Subscript, ..base.clone() },
+        CharStyle { underline: true, ..base.clone() },
+        CharStyle { strikethrough: true, ..base.clone() },
+        CharStyle { ligatures: false, ..base.clone() },
+        CharStyle { discretionary_ligatures: true, ..base.clone() },
+        CharStyle { kerning: Kerning::Optical, ..base.clone() },
+    ];
+    for (i, edit) in edits.into_iter().enumerate() {
+        let out = crate::psd::build_txt2(&[(0, &styled("Hello", edit))], Some(&prev));
+        assert!(era_runs(&crate::psd::parse_txt2(&out).unwrap()) != era_runs(&crate::psd::parse_txt2(&prev).unwrap()), "edit {i} restyles the legacy copy");
+    }
+}
+
+/// Review of #8888: the legacy `AutoKern` mode is read on import, as `/11` is for the numbered
+/// objects, so the layer a legacy file opens as agrees with its legacy copy.
+#[test]
+fn legacy_auto_kern_is_read_on_import() {
+    use photocraft_doc::text::Kerning;
+    let t = styled("AVA", CharStyle::default());
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), 0);
+    for (mode, want) in [(0, Kerning::Off), (1, Kerning::Metrics), (2, Kerning::Optical)] {
+        let txt2 = crate::psd::parse_txt2(&styled_era_txt2("AVA", "ArialMT", 13.0, mode)).unwrap();
+        let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+        crate::psd::apply_txt2(&mut back, &tysh, &txt2);
+        assert!(
+            back.char_runs().iter().all(|r| r.style.kerning == want),
+            "AutoKern {mode}: {:?}",
+            back.char_runs().iter().map(|r| r.style.kerning).collect::<Vec<_>>()
+        );
+    }
+    // Other text, or another object, changes nothing.
+    let txt2 = crate::psd::parse_txt2(&styled_era_txt2("AVX", "ArialMT", 13.0, 2)).unwrap();
+    let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2(&mut back, &tysh, &txt2);
+    assert!(back.char_runs().iter().all(|r| r.style.kerning == Kerning::Metrics));
+}
+
+/// Review of the batch (FredApps, with #9104): a style-only save rewrites `Txt2`, and the raw
+/// (non-BOM) strings Photoshop wrote in it, `/2 (0100)` and `/3 (01110)` under `/98`, must come
+/// back as the same bytes: re-encoded as `FE FF` UTF-16 they make Photoshop refuse the file.
+#[test]
+fn a_style_only_save_keeps_the_raw_strings_of_the_file() {
+    let mut prev = photoshop_txt2(&[(4, 1)]);
+    let version = b"/98 << /0 14 >>";
+    let at = prev.windows(version.len()).position(|w| w == version).expect("the version key");
+    prev.splice(at..at + version.len(), b"/98 << /0 14 /2 (0100) /3 (01110) >>".iter().copied());
+    // A size the file's runs do not have: the block is rewritten.
+    let style = CharStyle { size_pt: 31.0, faux_bold: false, ..Default::default() };
+    let out = crate::psd::build_txt2(&[(0, &styled("AVA", style))], Some(&prev));
+    assert_ne!(out, prev, "the style edit rewrites the block");
+    let has = |needle: &[u8]| out.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"(0100)") && has(b"(01110)"), "the raw strings come back as the same bytes: {:?}", String::from_utf8_lossy(&out));
+    assert!(!has(b"(\xfe\xff\x000\x001\x000\x000)"), "and not as UTF-16");
+}
+
+/// The same for the older Photoshop's objects: restyling the legacy copy leaves a raw string
+/// elsewhere in the block as the file wrote it.
+#[test]
+fn restyling_the_photoshop_era_objects_keeps_the_raw_strings_of_the_file() {
+    use crate::engine_data::Value as E;
+    let era = crate::psd::parse_txt2(&styled_era_txt2("Line 1", "ArialMT", 13.0, 1)).unwrap();
+    let E::Dict(mut items) = era else { panic!("a dictionary") };
+    items.push(("98".into(), E::Dict(vec![("0".into(), E::Int(14)), ("2".into(), E::RawString("0100".into()))])));
+    let prev = crate::engine_data::write_bare(&items);
+    let style = CharStyle { postscript_name: Some("ArialMT".into()), size_pt: 24.0, ..Default::default() };
+    let out = crate::psd::build_txt2(&[(0, &styled("Line 1", style))], Some(&prev));
+    assert!(out.windows(6).any(|w| w == b"(0100)"), "{:?}", String::from_utf8_lossy(&out));
+    let runs = era_runs(&crate::psd::parse_txt2(&out).unwrap());
+    assert_eq!(runs.first().and_then(|(_, f)| f.get("FontSize")).and_then(E::as_f64), Some(24.0), "and the legacy copy was restyled");
+}
+
+#[test]
+fn glyph_outlines_preserves_style_indices() {
+    let mut e = TextEngine::new();
+    let t = TextLayer {
+        text: "AB".into(),
+        transform: Affine::translate(10.0, 30.0),
+        runs: vec![
+            photocraft_doc::text::TextRun { len: 1, style: CharStyle { color: Color::rgb(1.0, 0.0, 0.0), ..Default::default() } },
+            photocraft_doc::text::TextRun { len: 1, style: CharStyle { color: Color::rgb(0.0, 1.0, 0.0), ..Default::default() } },
+        ],
+        ..Default::default()
+    };
+    let layout = e.layout(&t, 72.0);
+    let glyphs = crate::render::glyph_outlines(&layout, &t.transform, None);
+    assert!(glyphs.len() >= 2);
+    assert_eq!(glyphs[0].style, 0);
+    assert_eq!(glyphs[1].style, 1);
+}
+
+/// Colour passes are grouped in one walk of the glyphs: with a colour per letter, every placed
+/// glyph lands in exactly one pass and each pass holds only its own glyphs.
+#[test]
+fn colour_passes_hold_each_glyph_once() {
+    let mut e = TextEngine::new();
+    let text = "abcdeghjkm".repeat(200);
+    let runs = text
+        .char_indices()
+        .map(|(i, ch)| TextRun { len: ch.len_utf8(), style: CharStyle { size_pt: 12.0, color: Color::rgb(i as f32 / 2000.0, 0.5, 0.5), ..Default::default() } })
+        .collect();
+    let t = TextLayer { text, runs, ..Default::default() };
+    let l = e.layout(&t, 72.0);
+    let passes = crate::render::visible_color_passes(&l, None);
+    assert!(passes.len() > 1000, "{} passes", passes.len());
+    let mut seen: Vec<usize> = passes.iter().flat_map(|(_, _, p)| p.glyphs.iter().copied()).collect();
+    seen.sort_unstable();
+    assert_eq!(seen, (0..l.glyphs.len()).collect::<Vec<_>>());
+    for (c, _, p) in &passes {
+        assert!(p.glyphs.iter().all(|&i| l.styles[l.glyphs[i].style as usize].color == *c));
     }
 }

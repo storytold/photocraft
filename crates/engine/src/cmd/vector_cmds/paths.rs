@@ -1,6 +1,9 @@
 use super::params::{color, f64p, layer_id, op_from, parse_path, path_json};
 use super::shape::{map_path, map_shape, transform_shape, with_shape};
-use super::*;
+use super::{
+    Affine, BlendMode, ClippingPath, Color, Document, EngineError, LayerContent, LayerId, NamedPath, Path, Rect, Result, SelectionMode, Session, Value, bad,
+    blend_from_str, json, sel, vector,
+};
 
 // ---------------------------------------------------------------------------
 // Document paths
@@ -49,7 +52,8 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = &d.doc;
     let knots = |p: &Path| p.subpaths.iter().map(|s| s.knots.len()).sum::<usize>();
-    let layer = d.active_layer.and_then(|id| doc.layer(id)).and_then(|l| match &l.content {
+    let active = d.active_layer.and_then(|id| doc.layer(id));
+    let layer = active.and_then(|l| match &l.content {
         LayerContent::Shape(sh) => Some(json!({ "kind": "shape", "layer": l.id.0, "name": format!("{} Shape Path", l.name), "knots": knots(&sh.path) })),
         _ => {
             l.vector_mask.as_ref().map(|v| json!({ "kind": "vectorMask", "layer": l.id.0, "name": format!("{} Vector Mask", l.name), "knots": knots(&v.path) }))
@@ -60,6 +64,12 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
         "workPath": doc.work_path.as_ref().map(|p| json!({ "knots": knots(p), "subpaths": p.subpaths.len() })),
         "clippingPath": doc.clipping_path.as_ref().map(|c| json!({ "name": c.name, "flatness": c.flatness })),
         "layerPath": layer,
+        // Type on a path: Photoshop's Type Path, which Direct Selection edits (#9114).
+        "typePath": active.and_then(|l| match &l.content {
+            LayerContent::Text(t) => crate::type_extra_cmds::type_path(t)
+                .map(|p| json!({ "kind": "typePath", "layer": l.id.0, "name": format!("{} Type Path", l.name), "knots": knots(&p) })),
+            _ => None,
+        }),
     }))
 }
 
@@ -69,26 +79,32 @@ pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
     s.edit(if is_work(name.as_deref()) { "Work Path" } else { "Save Path" }, |doc, _| {
-        let merge = |old: Option<&Path>, new: Path| match (old, append) {
-            (Some(o), Some(op)) => {
-                let mut o = o.clone();
-                o.subpaths.extend(new.subpaths.into_iter().map(|mut sp| {
-                    sp.op = op;
-                    sp
-                }));
-                o
-            }
-            _ => new,
+        let merge = |old: Option<&Path>, new: Path| -> Result<Path> {
+            let merged = match (old, append) {
+                (Some(o), Some(op)) => {
+                    let mut o = o.clone();
+                    o.subpaths.extend(new.subpaths.into_iter().map(|mut sp| {
+                        sp.op = op;
+                        sp
+                    }));
+                    o
+                }
+                _ => new,
+            };
+            // Appending small Pen components must not bypass the complete path's bounds and
+            // tessellation budget. Validate before changing the document or its history.
+            vector::flatten::validate_path(&merged).map_err(|e| bad(CMD, e))?;
+            Ok(merged)
         };
         if is_work(name.as_deref()) {
-            doc.work_path = Some(merge(doc.work_path.as_ref(), path));
+            doc.work_path = Some(merge(doc.work_path.as_ref(), path)?);
         } else {
             let n = name.clone().unwrap_or_default();
             match doc.paths.iter_mut().find(|q| q.name == n) {
                 Some(q) => {
-                    q.path = merge(Some(&q.path), path);
+                    q.path = merge(Some(&q.path), path)?;
                 }
-                None => doc.paths.push(NamedPath { name: n, path, psd_raw: None }),
+                None => doc.paths.push(NamedPath { name: n, path: merge(None, path)?, psd_raw: None }),
             }
         }
         Ok(())
@@ -355,6 +371,18 @@ pub(super) fn path_to_selection(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "selected": selected }))
 }
 
+/// `path.toSelection` with the combine mode fixed by the command (⌘⇧↩ adds, ⌘⌥↩ subtracts,
+/// ⇧⌥⌘↩ intersects);
+/// a `mode` in the params is overridden, the rest is forwarded and validated as usual.
+pub(super) fn path_to_selection_with_mode(s: &mut Session, p: &Value, mode: &str) -> Result<Value> {
+    let mut q = match p {
+        Value::Object(_) => p.clone(),
+        _ => json!({}),
+    };
+    q["mode"] = json!(mode);
+    path_to_selection(s, &q)
+}
+
 pub(super) fn select_to_work_path(s: &mut Session, p: &Value) -> Result<Value> {
     let tol = f64p(p, "tolerance").unwrap_or(2.0).clamp(0.5, 10.0);
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -505,9 +533,8 @@ fn stroke_with_command(s: &mut Session, p: &Value, cmd: &str, lines: &[vector::P
         params.remove(k);
     }
     let journal = s.journal.len();
+    let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let r = crate::analysis_cmds::compound(s, "Stroke Path", |s| {
-        // The union of what each subpath's command changed; None when one of them didn't say.
-        let mut dmg = Some(Rect::EMPTY);
         for pl in lines {
             let pts = stroke_points(&pl.pts, pl.closed, simulate);
             if pts.is_empty() {
@@ -516,25 +543,14 @@ fn stroke_with_command(s: &mut Session, p: &Value, cmd: &str, lines: &[vector::P
             let mut call = params.clone();
             call.insert("points".into(), Value::Array(pts.iter().map(|q| json!([q.x, q.y, q.pressure])).collect()));
             s.execute(cmd, Value::Object(call))?;
-            let r = s.active().and_then(|d| d.last_damage);
-            dmg = dmg.zip(r).map(|(a, b)| {
-                if a.is_empty() {
-                    b
-                } else if b.is_empty() {
-                    a
-                } else {
-                    a.union(&b)
-                }
-            });
         }
-        Ok(dmg)
+        Ok(())
     });
     s.journal.truncate(journal);
-    let dmg = r?;
-    if let Some(st) = s.active_mut() {
-        st.last_damage = dmg;
-    }
-    let dmg = dmg.unwrap_or_else(|| s.active().map_or(Rect::EMPTY, |d| d.doc.bounds()));
+    r?;
+    // One subpath keeps its command's damage; several are one span, which `Session::dispatch`
+    // reports. The result says what changed either way.
+    let dmg = s.active().and_then(|st| crate::layer_multi_cmds::step_damage(&before, &st.doc).or(Some(st.doc.bounds()))).unwrap_or(Rect::EMPTY);
     Ok(json!({ "damage": [dmg.x0, dmg.y0, dmg.width(), dmg.height()] }))
 }
 
@@ -576,6 +592,7 @@ pub(super) fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let lines = vector::flatten_path(&path, 0.1);
     let id = layer_id(s, p)?;
     let bg = s.tools.background;
+    let channels = crate::color_channels::target(s, p)?.is_some();
     let dmg = s.edit("Stroke Path", |doc, _| {
         let sel = doc.selection.clone();
         let locks = doc.effective_locks(id);
@@ -587,7 +604,7 @@ pub(super) fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let lock = locks.transparency;
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Stroke Path needs a pixel layer".into()))?;
         let mut brush = brush.clone();
-        if brush.erase && lock {
+        if brush.erase && (lock || channels) {
             // Locked transparency (e.g. the Background): the Eraser paints the background colour (#76).
             brush.erase = false;
             brush.color = bg;

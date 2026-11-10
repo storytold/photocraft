@@ -225,6 +225,7 @@ fn pencil_1px_line_is_the_same_whichever_way_and_however_smoothed() {
     let pixels = |a: (f64, f64), e: (f64, f64), amount: f32| {
         let mut b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
         b.smoothing.amount = amount;
+        b.smoothing.catch_up_on_end = true;
         let s = paint(&b, &[StrokePoint::new(a.0, a.1, 1.0), StrokePoint::new(e.0, e.1, 1.0)], 24, 24);
         (0..24).flat_map(|y| (0..24).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect::<Vec<_>>()
     };
@@ -246,6 +247,43 @@ fn pencil_1px_line_is_the_same_whichever_way_and_however_smoothed() {
     assert_eq!(sampled, pixels((1.5, 1.5), (20.5, 9.5), 0.0));
 }
 
+#[test]
+fn pencil_1px_freehand_line_never_breaks_where_it_turns() {
+    // #8040: each segment of a freehand stroke samples its own line, so where the stroke turned
+    // the last pixel of one segment and the first of the next could sit two pixels apart.
+    let b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut rnd = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for _ in 0..300 {
+        let mut pts = vec![StrokePoint::new(20.0 + rnd() * 8.0, 20.0 + rnd() * 8.0, 1.0)];
+        for _ in 0..6 {
+            let l = *pts.last().unwrap();
+            let (dx, dy) = ((rnd() - 0.5) * 6.0, (rnd() - 0.5) * 6.0);
+            pts.push(StrokePoint::new((l.x + dx).clamp(1.0, 46.0), (l.y + dy).clamp(1.0, 46.0), 1.0));
+        }
+        let s = paint(&b, &pts, 48, 48);
+        let painted: Vec<(i32, i32)> = (0..48).flat_map(|y| (0..48).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect();
+        // Every painted pixel is reachable from the first through 8-connected neighbours.
+        let mut reached = vec![painted[0]];
+        let mut i = 0;
+        while i < reached.len() {
+            let (x, y) = reached[i];
+            for &q in &painted {
+                if (q.0 - x).abs() <= 1 && (q.1 - y).abs() <= 1 && !reached.contains(&q) {
+                    reached.push(q);
+                }
+            }
+            i += 1;
+        }
+        let path: Vec<(f64, f64)> = pts.iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(reached.len(), painted.len(), "the line breaks along {path:?}");
+    }
+}
 // ---------- spacing ----------
 
 #[test]
@@ -288,6 +326,7 @@ fn hard_round_presets_have_smooth_large_stroke_outlines() {
                 let mut b = preset.brush.clone();
                 b.size = 150.0;
                 b.smoothing.amount = smoothing;
+                b.smoothing.catch_up_on_end = true;
                 let mut s = Surface::new(fmt);
                 render_stroke(&mut s, &b, &line(100.0, 800.0, 120.0), None, false, 1.0);
                 let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -832,7 +871,7 @@ fn smoothing_modes() {
     let zig: Vec<StrokePoint> = (0..40).map(|i| StrokePoint::new(i as f64 * 5.0, if i % 2 == 0 { 0.0 } else { 6.0 }, 1.0)).collect();
     let dev = |pts: &[StrokePoint]| pts.iter().map(|p| (p.y - 3.0).abs()).sum::<f64>() / pts.len() as f64;
     // Exponential smoothing reduces the zig-zag.
-    let cfg = Smoothing { amount: 0.8, ..Default::default() };
+    let cfg = Smoothing { amount: 0.8, catch_up_on_end: true, ..Default::default() };
     let sm = smooth_points(&cfg, 1.0, &zig);
     assert!(dev(&sm[5..sm.len() - 1]) < dev(&zig) * 0.5);
     // Catch-up on end finishes at the last input point; without it, the stroke ends short.
@@ -871,7 +910,7 @@ fn smoothing_modes() {
 fn disabled_smoothing_keeps_its_settings_and_paints_unsmoothed_at_every_depth() {
     let pts = vec![StrokePoint::new(10.0, 20.0, 1.0), StrokePoint::new(30.0, 8.0, 0.5), StrokePoint::new(50.0, 20.0, 0.8)];
     for pulled_string in [false, true] {
-        let smoothing = Smoothing { enabled: false, amount: 0.8, pulled_string, ..Default::default() };
+        let smoothing = Smoothing { enabled: false, amount: 0.8, pulled_string, catch_up_on_end: true, ..Default::default() };
         let got = smooth_points(&smoothing, 1.0, &pts);
         assert_eq!(got.len(), pts.len());
         for (a, b) in got.iter().zip(&pts) {
@@ -903,7 +942,7 @@ fn disabled_smoothing_keeps_its_settings_and_paints_unsmoothed_at_every_depth() 
 #[test]
 fn smoothing_string_runs_from_the_lagging_brush_to_the_pointer() {
     // #3479: the canvas draws the line between the brush and the pointer.
-    let cfg = Smoothing { amount: 0.8, ..Default::default() };
+    let cfg = Smoothing { amount: 0.8, catch_up_on_end: true, ..Default::default() };
     let mut s = Smoother::new(&cfg, 1.0);
     let mut out = Vec::new();
     assert_eq!(s.string(), None, "no stroke yet");
@@ -968,7 +1007,7 @@ fn a_smoothed_brush_keeps_the_pressure_of_where_it_is_when_the_pen_lifts() {
     // a hairline from the trailing brush to the pointer.
     let pts: Vec<StrokePoint> =
         (0..=20).map(|i| StrokePoint { time: f64::from(i) * 4.0, ..StrokePoint::new(f64::from(i) * 10.0, 0.0, if i < 20 { 1.0 } else { 0.05 }) }).collect();
-    let out = smooth_points(&Smoothing { amount: 0.8, ..Default::default() }, 1.0, &pts);
+    let out = smooth_points(&Smoothing { amount: 0.8, catch_up_on_end: true, ..Default::default() }, 1.0, &pts);
     let (last, rest) = out.split_last().unwrap();
     assert_eq!((last.x, last.pressure), (200.0, 0.05), "the catch-up still ends at the pen's last sample");
     let lifted = rest.last().unwrap();
@@ -997,7 +1036,7 @@ fn a_pulled_string_brush_takes_the_pose_along_the_string() {
 fn a_smoothed_brush_catches_up_with_a_pen_lifted_in_place() {
     // #7747: only the pressure changes while the pointer stands still. The brush lags in pose,
     // so catch-up must keep running and the stroke end at the pen's last pressure.
-    let cfg = Smoothing { amount: 0.8, ..Default::default() };
+    let cfg = Smoothing { amount: 0.8, catch_up_on_end: true, ..Default::default() };
     let mut s = Smoother::new(&cfg, 1.0);
     let mut out = Vec::new();
     s.push(StrokePoint::new(50.0, 50.0, 1.0), &mut out);
@@ -1016,7 +1055,7 @@ fn a_smoothed_brush_catches_up_with_a_pen_lifted_in_place() {
 #[test]
 fn catch_up_on_stroke_end_finishes_the_pose_of_a_still_pen() {
     // #7747: tilt, rotation and wheel changed in place; the end catch-up lands on all of them.
-    let cfg = Smoothing { amount: 0.8, ..Default::default() };
+    let cfg = Smoothing { amount: 0.8, catch_up_on_end: true, ..Default::default() };
     let a = StrokePoint { rotation: 350.0, ..StrokePoint::new(50.0, 50.0, 1.0) };
     let b = StrokePoint { time: 16.0, tilt_x: 40.0, tilt_y: -20.0, rotation: 10.0, wheel: 0.5, ..StrokePoint::new(50.0, 50.0, 1.0) };
     let mut s = Smoother::new(&cfg, 1.0);
@@ -1205,6 +1244,41 @@ fn blend_mode_and_dissolve() {
 }
 
 #[test]
+fn behind_preserves_native_channels_and_respects_alpha_selection_and_locks() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let fmt = PixelFormat::new(mode, sample, true);
+            let b = BrushSettings { size: 12.0, behind: true, opacity: 0.5, color: [0.1, 0.3, 0.8, 1.0], ..brush() };
+            let mut s = Surface::new(fmt);
+            let native = photocraft_raster::from_rgba(&fmt, [0.8, 0.2, 0.1, 0.5]);
+            s.fill_rect(Rect::new(0, 0, 12, 12), &native);
+            let before = s.pixel(6, 6);
+            let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+            selection.fill_rect(Rect::new(0, 0, 8, 12), &[0.5]);
+            render_stroke(&mut s, &b, &[StrokePoint::new(6.0, 6.0, 1.0)], Some(&selection), false, 1.0);
+            let source = photocraft_raster::from_rgba(&fmt, b.color);
+            let a = fmt.channels() - 1;
+            let under = 0.25 * (1.0 - before[a]);
+            let alpha = before[a] + under;
+            let got = s.pixel(6, 6);
+            assert!((got[a] - alpha).abs() < 0.005, "{fmt:?}: {got:?}");
+            for c in 0..a {
+                let expected = (before[c] * before[a] + source[c] * under) / alpha;
+                assert!((got[c] - expected).abs() < 0.005, "{fmt:?} channel {c}: {got:?}, expected {expected}");
+            }
+            assert_eq!(s.pixel(9, 6), before, "outside selection");
+            let locked = s.clone();
+            render_stroke(&mut s, &b, &[StrokePoint::new(6.0, 6.0, 1.0)], None, true, 1.0);
+            assert_eq!(s.read_region(Rect::new(0, 0, 12, 12)), locked.read_region(Rect::new(0, 0, 12, 12)), "locked transparency");
+            s.fill_rect(Rect::new(0, 0, 12, 12), &photocraft_raster::from_rgba(&fmt, [0.8, 0.2, 0.1, 1.0]));
+            let opaque = s.pixel(6, 6);
+            render_stroke(&mut s, &b, &[StrokePoint::new(6.0, 6.0, 1.0)], None, false, 1.0);
+            assert_eq!(s.pixel(6, 6), opaque, "opaque pixels");
+        }
+    }
+}
+
+#[test]
 fn presets_render_and_round_trip() {
     let presets = crate::presets::builtin();
     assert!(presets.len() >= 12);
@@ -1242,7 +1316,7 @@ fn tail_preview_shows_the_stroke_as_finishing_it_would() {
     // Live previews draw the smoothing catch-up tail before the stroke ends: compositing the
     // tail preview over the incremental composite gives exactly the finished stroke.
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U16, true);
-    let b = BrushSettings { size: 9.0, smoothing: Smoothing { amount: 0.7, ..Default::default() }, ..brush() };
+    let b = BrushSettings { size: 9.0, smoothing: Smoothing { amount: 0.7, catch_up_on_end: true, ..Default::default() }, ..brush() };
     let pts: Vec<StrokePoint> = (0..12).map(|i| StrokePoint::new(5.0 + i as f64 * 9.0, 20.0 + (i % 3) as f64 * 7.0, 1.0)).collect();
     let pre = Surface::new(fmt);
     let mut live = pre.clone();
@@ -1267,7 +1341,7 @@ fn live_union_of_passes_matches_merging_the_finished_passes_after_every_chunk() 
     // every pass and merging them with `composite_union_many` gives (the commit takes these pixels).
     let base = BrushSettings { size: 14.0, hardness: 0.6, opacity: 0.6, ..brush() };
     let mut brushes = vec![base.clone()];
-    brushes.push(BrushSettings { smoothing: Smoothing { amount: 0.7, ..Default::default() }, ..base.clone() });
+    brushes.push(BrushSettings { smoothing: Smoothing { amount: 0.7, catch_up_on_end: true, ..Default::default() }, ..base.clone() });
     let mut b = base.clone();
     b.dual_brush.enabled = true;
     b.dual_brush.size = 6.0;
@@ -1279,6 +1353,7 @@ fn live_union_of_passes_matches_merging_the_finished_passes_after_every_chunk() 
     brushes.push(b);
     brushes.push(BrushSettings { wet_edges: true, ..base.clone() });
     brushes.push(BrushSettings { mode: BlendMode::Dissolve, ..base.clone() });
+    brushes.push(BrushSettings { behind: true, ..base.clone() });
     brushes.push(BrushSettings { erase: true, ..base.clone() });
     let mut b = base.clone();
     b.texture.enabled = true;
@@ -1801,6 +1876,44 @@ fn large_tips_render_the_same_in_parallel_and_serially() {
     }
 }
 
+/// The general loop (sampled tips, per-tip textures) paints the same pixels on the thread pool
+/// and serially, at 8-bit, 16-bit and float depth.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn general_loop_strokes_render_the_same_in_parallel_and_serially_at_every_depth() {
+    let tip = GrayTile::from_fn(16, 16, |x, y| if (x + y) % 3 == 0 { 1.0 } else { 0.4 });
+    let mut textured = BrushSettings { size: 120.0, hardness: 0.3, ..brush() };
+    textured.texture = Texture { enabled: true, pattern: Pattern::Tile(tip.clone()), each_tip: true, ..Default::default() };
+    let strokes = [BrushSettings { size: 120.0, tip: TipShape::Sampled(tip), color: [0.9, 0.2, 0.1, 1.0], ..brush() }, textured];
+    let full = Rect::new(0, 0, 400, 200);
+    let formats = [PixelFormat::RGBA8, PixelFormat::RGBA8.with_sample(SampleType::U16), PixelFormat::RGBA32F];
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::render::set_parallel_min_pixels(crate::render::DEFAULT_PARALLEL_MIN_PIXELS);
+        }
+    }
+    let _restore = Restore;
+    for fmt in formats {
+        for (i, b) in strokes.iter().enumerate() {
+            let render = |parallel_from: usize| -> Vec<f32> {
+                crate::render::set_parallel_min_pixels(parallel_from);
+                let mut s = Surface::new(fmt);
+                s.fill_rect(full, &[0.5, 0.5, 0.5, 1.0]);
+                render_stroke(&mut s, b, &line(80.0, 320.0, 100.0), None, false, 1.0);
+                s.read_region(full)
+            };
+            let parallel = render(0);
+            let serial = render(usize::MAX);
+            assert_eq!(parallel.len(), serial.len());
+            let diff = parallel.iter().zip(&serial).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+            assert_eq!(diff, 0, "stroke {i} at {fmt:?}: {diff} pixels differ between the parallel and the serial render");
+            // Colour channels only: the opaque background's alpha (1.0) is always 0.5 away from 0.5.
+            assert!(parallel.as_chunks::<4>().0.iter().any(|px| px[..3].iter().any(|v| (*v - 0.5).abs() > 0.1)), "stroke {i} at {fmt:?} painted something");
+        }
+    }
+}
+
 /// A CMYK document with its own profile: blend modes other than Normal convert each pixel through
 /// that profile, which is active per thread, so a stroke composited in parallel gives the pixels the
 /// serial path gives (the workers enter the caller's CMYK space too).
@@ -1886,4 +1999,39 @@ fn resizing_with_bad_sizes_leaves_the_dual_tip_alone() {
     b.size = 100.0;
     b.resize_with_dual_brush(50.0);
     assert_eq!(b.dual_brush.size, 20.0);
+}
+
+/// `touches` is true wherever `coverage_at` can be above 0, false only where it is 0 for sure.
+#[test]
+fn touches_covers_every_pixel_with_coverage() {
+    let b = BrushSettings { size: 6.0, ..brush() };
+    let mut r = StrokeRenderer::new(&b, None, 1.0);
+    r.push(&line(100.0, 300.0, 200.0));
+    r.finish();
+    for y in (0..400).step_by(3) {
+        for x in (0..500).step_by(3) {
+            if r.coverage_at(x, y) > 0.0 {
+                assert!(r.touches(Rect::new(x, y, x + 1, y + 1)), "({x}, {y})");
+            }
+        }
+    }
+    // Across the origin and tile edges (64 px): every pixel, both sides of each edge.
+    let mut o = StrokeRenderer::new(&b, None, 1.0);
+    o.push(&[StrokePoint::new(-70.0, -70.0, 1.0), StrokePoint::new(70.0, 70.0, 1.0)]);
+    o.finish();
+    for y in -140..140 {
+        for x in -140..140 {
+            if o.coverage_at(x, y) > 0.0 {
+                assert!(o.touches(Rect::new(x, y, x + 1, y + 1)), "({x}, {y})");
+            }
+        }
+    }
+    assert!(!o.touches(Rect::new(-128, 64, -64, 128)), "a tile the diagonal misses");
+    assert!(!o.touches(Rect::new(-200, -200, -128, -128)), "ends exactly at a tile edge");
+    assert!(o.touches(Rect::new(-200, -200, -127, -127)), "one pixel into the next tile");
+    assert!(r.touches(Rect::new(150, 199, 151, 201)));
+    assert!(!r.touches(Rect::new(0, 0, 50, 50)), "far from the stroke");
+    assert!(!r.touches(Rect::new(400, 400, 400, 400)), "empty");
+    assert!(r.touches(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX)), "huge, without a huge scan");
+    assert!(!r.touches(Rect::new(1_000_000, 1_000_000, i32::MAX, i32::MAX)));
 }

@@ -441,19 +441,23 @@ pub fn update(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
     }
-    // A revision that changed no pixels (selecting a layer, say) keeps the histogram of the one
-    // before (#125), and an Uncached Refresh with it — but only for the same selection: a
-    // selection change moves no pixels yet changes what the panel counts.
-    if let Some(st) = app.session.active()
-        && tone::view_only(st)
-    {
+    // Revisions that changed no pixels since the histogram's (selecting a layer, say) keep it
+    // (#125), and an Uncached Refresh with it — but only for the same selection: a selection
+    // change moves no pixels yet changes what the panel counts.
+    if let Some(st) = app.session.active() {
         let (doc, rev) = (st.doc.id, st.revision);
-        if app.hist_uncached == Some((doc, rev.wrapping_sub(1))) {
+        if let Some((d, r)) = app.hist_uncached
+            && d == doc
+            && tone::pixels_kept_since(st, r)
+        {
             app.hist_uncached = Some((doc, rev));
         }
         let same_selection = want.as_ref().map(|w| w.committed.source);
         for e in [app.doc_hist.as_mut(), app.doc_hist_preview.as_mut()].into_iter().flatten() {
-            if e.key.doc == doc && e.key.revision.wrapping_add(1) == rev && same_selection.is_none_or(|s| e.key.source == s) {
+            if e.key.doc == doc
+                && tone::pixels_kept_since(st, e.key.revision)
+                && same_selection.is_none_or(|s| e.key.source == s)
+            {
                 e.key.revision = rev;
             }
         }

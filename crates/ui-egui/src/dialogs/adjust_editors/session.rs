@@ -1,6 +1,6 @@
 use super::basic::reset_color_balance;
 use super::gradient_map::{gradient_presets, is_gray, swatches};
-use super::*;
+use super::{Adjustment, EditorCx, HistSource, LayerId, PhotocraftApp, RichText, Tokens, Value, adjust_params, editor, json, needs_histogram, space_of, tone};
 
 /// Root of an adjustment layer's Properties editor view state in egui memory.
 pub fn layer_mem(id: LayerId) -> egui::Id {
@@ -85,7 +85,6 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     let t = Tokens::get(ui.ctx());
     let kind = photocraft_engine::commands::adjustment_kind(adj);
     match adj {
-        Adjustment::SelectiveColor { .. } => return crate::adjust_ui::selective_color_editor(app, ui, id, adj),
         Adjustment::ColorLookup { .. } => return crate::adjust_ui::color_lookup_editor(app, ui, id, adj),
         Adjustment::Invert => {
             ui.label(RichText::new(tl!("Invert has no settings.")).color(t.text_faint));
