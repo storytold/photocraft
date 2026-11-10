@@ -640,6 +640,8 @@ pub struct PhotocraftApp {
     pub(crate) after_transform_commit: Option<(String, serde_json::Value)>,
     /// Last mirrored or imported OS image; this can predate the current internal copy.
     os_clip_sig: Option<u64>,
+    /// Full pixel data of the last mirrored or imported OS image or SVG surface.
+    os_clip_pixels: Option<app::clipboard::OsClipPixels>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.
     os_clip_svg: Option<std::sync::Arc<Vec<u8>>>,
     /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept
@@ -651,6 +653,29 @@ pub struct PhotocraftApp {
     /// The OS clipboard was already read for the paste in flight (Edit › Paste positions it first),
     /// so `run` doesn't read it a second time.
     pub(crate) clip_read_for_paste: bool,
+    /// Signature of the last internal copy after `egui::ColorImage` premultiplied alpha round-trip.
+    pub(crate) os_clip_wayland_sig: Option<u64>,
+    /// Whether `OutputCommand::CopyImage` was flushed on Wayland and may still own the selection.
+    pub(crate) wayland_copy_flushed: bool,
+    /// Image delivered by `egui::Event::PasteImage` waiting for the paste command to consume it.
+    pub(crate) pending_paste_image: Option<std::sync::Arc<egui::ColorImage>>,
+    /// FIFO queue of `Event::PasteImage` payloads paired with the active document when initiated.
+    pub(crate) pending_paste_images: std::collections::VecDeque<(std::sync::Arc<egui::ColorImage>, Option<photocraft_doc::DocId>)>,
+    /// Active document when a Wayland keyboard paste (`Ctrl+V` / `Shift+Insert`) was initiated.
+    pub(crate) wayland_paste_doc: Option<Option<photocraft_doc::DocId>>,
+    /// Menu paste commands waiting for `ViewportCommand::RequestPaste` to deliver `Event::PasteImage`,
+    /// paired with the active document id when each request was issued.
+    pub(crate) pending_paste_cmd: std::collections::VecDeque<(String, Option<photocraft_doc::DocId>)>,
+    /// Pass number and focused widget id for each entry in `pending_paste_cmd`.
+    pub(crate) pending_paste_cmd_meta: std::collections::VecDeque<(u64, Option<egui::Id>)>,
+    /// Pending asynchronous Wayland clipboard read for `File › New`'s `Clipboard` preset.
+    pub(crate) pending_new_doc_clipboard: Option<app::clipboard::PendingNewDocClipboard>,
+    /// Whether the last `Event::PasteImage` payload was rejected during validation.
+    pub(crate) clip_paste_rejected: bool,
+    /// Image copied this frame waiting to be sent as `egui::OutputCommand::CopyImage` on Wayland.
+    pub(crate) pending_copy_image: Option<egui::ColorImage>,
+    /// Working-memory reservations held while `pending_copy_image` or flushed `OutputCommand::CopyImage` buffers remain live.
+    os_clip_wayland_res: Vec<photocraft_raster::memory::Reservation>,
     pub(crate) smart_svg: smart_svg_ui::State,
     /// Pointer position over the canvas (document px), for the Info panel and status bar.
     pub(crate) hover_doc: Option<[f64; 2]>,
