@@ -237,6 +237,17 @@ impl Session {
 /// Closed documents still being freed on their own thread ([`Session::close_and_release`]).
 static RELEASING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// One document counted in [`RELEASING`] until this is dropped.
+#[cfg(not(target_arch = "wasm32"))]
+struct Releasing;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Releasing {
+    fn drop(&mut self) {
+        RELEASING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 impl Session {
     /// How many closed documents are still being freed off the calling thread
     /// ([`Session::close_and_release`]): tests wait for none before checking the scratch pool.
@@ -252,19 +263,19 @@ impl Session {
         let Some(closed) = self.close(index) else { return false };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use std::sync::atomic::Ordering::SeqCst;
-            RELEASING.fetch_add(1, SeqCst);
+            RELEASING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Counts the document back out however the release ends, a panic included.
+            let releasing = Releasing;
             let spawned = std::thread::Builder::new().name("photocraft-close".into()).spawn(move || {
+                let _releasing = releasing;
                 drop(closed);
                 // Its tiles went back to the scratch pool as they dropped, after the command's own
                 // release: give that memory back too.
                 photocraft_raster::scratch::release();
-                RELEASING.fetch_sub(1, SeqCst);
             });
             if spawned.is_err() {
-                // The closure, and the document with it, dropped here instead.
+                // The closure, with the document and the count, dropped here instead.
                 photocraft_raster::scratch::release();
-                RELEASING.fetch_sub(1, SeqCst);
             }
         }
         #[cfg(target_arch = "wasm32")]
