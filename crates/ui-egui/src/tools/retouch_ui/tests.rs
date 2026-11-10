@@ -72,6 +72,9 @@ fn clone_stamp_in_pattern_preview_wraps_a_dab_across_the_right_edge() {
         let mut app = app();
         app.run("paint.pencil", json!({"points": [[10, 10]], "size": 24, "color": "#ff0000"})).unwrap();
         app.ui.tool = Tool::CloneStamp;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        // A hard tip, so the wrapped part of the dab is fully painted.
+        app.run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 1}})).unwrap();
         app.ui.clone_source = Some([10.0, 10.0]);
         app.ui.view.pattern_preview = pattern_preview;
         let modifiers = egui::Modifiers::NONE;
@@ -96,6 +99,8 @@ fn clone_stamp_in_pattern_preview_wraps_a_dab_across_the_right_edge() {
 fn clone_stamp_paints_with_the_brush_hardness() {
     let rim = |hardness: f32| {
         let mut app = app();
+        app.ui.tool = Tool::CloneStamp;
+        crate::paint_mouse::sync_tool_brush(&mut app);
         app.run("tools.setBrush", json!({"brush": {"size": 24, "hardness": hardness}})).unwrap();
         app.run("paint.pencil", json!({"points": [[15, 30]], "size": 40, "color": "#ff0000"})).unwrap();
         app.ui.tool = Tool::CloneStamp;
