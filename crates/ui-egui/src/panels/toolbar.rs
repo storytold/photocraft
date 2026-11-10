@@ -1,7 +1,19 @@
 use super::options_bar::reveal_focused_control;
 use super::{Align2, Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, Tool, c32, icons, json, pos2, vec2};
+use crate::state::ToolbarSide;
 
 // ----------------------------------------------------------------------------- toolbar
+
+/// The toolbar's single-column width and its second column's button width, in points.
+pub(crate) fn toolbar_columns(pro: bool) -> (f32, f32) {
+    if pro { (40.0, 30.0) } else { (50.0, 36.0) }
+}
+
+/// The toolbar panel's width in points: one column, or two when the header chevron asks for them.
+pub(crate) fn toolbar_width(pro: bool, double: bool) -> f32 {
+    let (w1, bx) = toolbar_columns(pro);
+    if double { w1 + bx + 2.0 } else { w1 }
+}
 
 /// Tool groups separated by hairlines, Photoshop order.
 /// Photoshop toolbar: divider-separated sections of slots; each slot is a flyout group whose button
@@ -105,7 +117,7 @@ pub(crate) fn more_flyout_open(ctx: &egui::Context) -> bool {
 /// Right-click on the "…" button opens a flyout with one row, "Edit Toolbar…", drawn like a tool
 /// flyout. The row runs `edit.toolbar` and closes the flyout; Escape or a press outside closes it
 /// without running anything.
-fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::Response, t: &Tokens) {
+fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::Response, t: &Tokens, side: ToolbarSide) {
     let open_id = more_flyout_id();
     let open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
     if button.secondary_clicked() {
@@ -116,7 +128,7 @@ fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::R
     if !open {
         return;
     }
-    let (pivot, pos) = if crate::direction::is_rtl() {
+    let (pivot, pos) = if side == ToolbarSide::Right {
         (egui::Align2::RIGHT_BOTTOM, button.rect.left_bottom() - vec2(6.0, 0.0))
     } else {
         (egui::Align2::LEFT_BOTTOM, button.rect.right_bottom() + vec2(6.0, 0.0))
@@ -150,14 +162,14 @@ fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::R
     }
 }
 
+/// The tool palette panel, on the side `panels.toolbar_side` resolves to, with its width
+/// toggle and Move Toolbar header buttons.
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
-    let width = if app.ui.panels.toolbar_double { w1 + bx + 2.0 } else { w1 };
-    crate::toolbar_docking::show(app, ui, width, m, toolbar_content);
+    let margin = if t.pro { 5 } else { 7 };
+    crate::toolbar_docking::show(app, ui, toolbar_width(t.pro, app.ui.panels.toolbar_double), margin, toolbar_content);
 }
 
-/// Content-driven floating palette height, using the same rows and footer as the docked toolbar.
 pub(super) fn floating_height(app: &PhotocraftApp, t: &Tokens) -> f32 {
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
     let double = app.ui.panels.toolbar_double;
@@ -176,21 +188,38 @@ pub(super) fn floating_height(app: &PhotocraftApp, t: &Tokens) -> f32 {
 
 fn toolbar_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let bx = if t.pro { 30.0 } else { 36.0 };
+    let (_, bx) = toolbar_columns(t.pro);
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
     let double = app.ui.panels.toolbar_double;
+    let side = app.ui.panels.toolbar_side.resolve();
 
-    // Toolbar width is a user preference, not a Pro-only feature.
-    // Keep the same hit target in every theme (including RTL layouts).
-    let (cr, _) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::hover());
-    let resp = ui.interact(cr, egui::Id::unique("tools-palette").with("columns"), Sense::click_and_drag());
-    let (shrink, grow) = if crate::direction::is_rtl() { ("chevrons-right", "chevrons-left") } else { ("chevrons-left", "chevrons-right") };
-    icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Toolbar")));
-    if resp.clicked() {
-        app.ui.panels.toolbar_double = !double;
-    }
-    crate::toolbar_docking::header_drag(app, ui, &resp);
+    // Toolbar width is a user preference, not a Pro-only feature. The two header buttons share
+    // the narrow toolbar column (14-point targets in every theme, including RTL layouts), so
+    // their tooltips carry the full names.
+    ui.allocate_ui_with_layout(vec2(bx, 14.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let (cr, resp) = ui.allocate_exact_size(vec2(bx.min(14.0), 14.0), Sense::click_and_drag());
+        let (shrink, grow) = if side == ToolbarSide::Right { ("chevrons-right", "chevrons-left") } else { ("chevrons-left", "chevrons-right") };
+        icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Toolbar")));
+        if resp.clicked() {
+            app.ui.panels.toolbar_double = !double;
+        }
+        crate::toolbar_docking::header_drag(app, ui, &resp);
+        let other = side.other();
+        let (dock_tip, dock_icon) = match other {
+            ToolbarSide::Right => (tl!("Move Toolbar to the Right"), "panel-right"),
+            _ => (tl!("Move Toolbar to the Left"), "panel-left"),
+        };
+        let (dr, dock) = ui.allocate_exact_size(vec2((bx - 16.0).max(14.0), 14.0), Sense::click());
+        icons::paint(ui, dr, dock_icon, 11.0, if dock.hovered() { t.text } else { t.text_faint });
+        dock.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, dock_tip));
+        if dock.on_hover_text(dock_tip).clicked() {
+            app.ui.panels.toolbar_side = other;
+            // Persist the side as a discrete change; the dock may not be drawn this frame.
+            crate::dock::persist_panels(app, ui.ctx());
+        }
+    });
     crate::toolbar_docking::grip(app, ui);
     ui.add_space(4.0);
     // Subtle violet wash at the bottom of the toolbar.
@@ -252,7 +281,7 @@ fn toolbar_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             };
                             let resp = icons::button_with_icon_size_tip(ui, icons::tool_icon(tool), bx, toolbar_icon_size(bx, t.pro), sel, &tip, tool_tips);
                             if slot.len() > 1 {
-                                paint_toolbar_flyout_indicator(ui, &t, &resp);
+                                paint_toolbar_flyout_indicator(ui, &t, &resp, side);
                             }
                             // Plain click selects the shown tool; Alt/Option-click cycles the
                             // flyout slot to the next tool, as Shift+letter does for the key group.
@@ -343,7 +372,7 @@ fn toolbar_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 && open_key == key
                             {
                                 // Beside the tool, towards the canvas.
-                                let (pivot, pos) = if crate::direction::is_rtl() {
+                                let (pivot, pos) = if side == ToolbarSide::Right {
                                     (egui::Align2::RIGHT_TOP, anchor.left_top() - vec2(6.0, 0.0))
                                 } else {
                                     (egui::Align2::LEFT_TOP, anchor.right_top() + vec2(6.0, 0.0))
@@ -427,7 +456,7 @@ fn toolbar_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 app.ui.status = e;
                 app.ui.status_error = true;
             }
-            more_slot_flyout(app, ui, &more, &t);
+            more_slot_flyout(app, ui, &more, &t, side);
             reveal_focused_control(ui);
         });
     ui.add_space(if t.pro { 8.0 } else { 14.0 });
@@ -461,7 +490,7 @@ fn toolbar_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 icons::button_with_icon_size_tip(ui, "app-window", bx, (bx * 0.52).round(), false, tl!("Change Screen Mode  (F)"), tool_tips)
             })
             .inner;
-        paint_toolbar_flyout_indicator(ui, &t, &sm);
+        paint_toolbar_flyout_indicator(ui, &t, &sm, side);
 
         // Right-click, or click and hold like the tool flyouts (#4444), lists the modes,
         // like Photoshop's flyout. The release that ends a hold doesn't cycle the mode.
@@ -518,9 +547,10 @@ pub(super) fn toolbar_icon_size(box_size: f32, pro: bool) -> f32 {
 
 /// Paints a triangle on the bottom corner of an icon button that faces the canvas (bottom right,
 /// bottom left in a right-to-left UI) to indicate that a toolbar item has a submenu.
-pub fn paint_toolbar_flyout_indicator(ui: &mut egui::Ui, tokens: &Tokens, resp: &egui::Response) {
+pub fn paint_toolbar_flyout_indicator(ui: &mut egui::Ui, tokens: &Tokens, resp: &egui::Response, side: ToolbarSide) {
     let r = resp.rect;
-    let tri = if crate::direction::is_rtl() {
+    // The corner nearest the canvas, so the triangle faces the flyout.
+    let tri = if side == ToolbarSide::Right {
         vec![r.left_bottom() + vec2(2.0, -2.0), r.left_bottom() + vec2(6.0, -2.0), r.left_bottom() + vec2(2.0, -6.0)]
     } else {
         vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)]

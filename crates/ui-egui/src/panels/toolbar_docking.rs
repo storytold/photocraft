@@ -109,7 +109,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
     if !ctx.input(|i| i.pointer.primary_down()) {
         ctx.data_mut(|d| d.remove::<bool>(key("suppressed")));
     }
-    let dock_x = if crate::direction::is_rtl() { bounds.right() } else { bounds.left() };
+    let dock_x = if app.ui.panels.toolbar_side.resolve() == crate::state::ToolbarSide::Right { bounds.right() } else { bounds.left() };
     let pointer = ctx.pointer_interact_pos().unwrap_or(bounds.min);
     let docking =
         !ctx.input(|i| i.modifiers.ctrl || i.modifiers.command) && drag.is_some() && (pointer.x - dock_x).abs() <= 18.0 && bounds.y_range().contains(pointer.y);
@@ -117,7 +117,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
     let frame = egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(margin, 3));
     if let Some(position) = position {
         if app.ui.toolbar_floating.is_none() {
-            crate::direction::start_panel("toolbar")
+            if app.ui.panels.toolbar_side.resolve() == crate::state::ToolbarSide::Right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") }
                 .exact_size(width)
                 .resizable(false)
                 .show_separator_line(false)
@@ -170,10 +170,16 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
     } else {
         let frame_nr = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(key("docked-frame"), frame_nr));
-        let result = crate::direction::start_panel("toolbar").resizable(false).show_separator_line(false).exact_size(width).frame(frame).show(ui, |ui| {
-            ctx.data_mut(|d| d.insert_temp(key("origin"), egui::pos2(ui.max_rect().left() - f32::from(margin), bounds.top())));
-            contents(app, ui);
-        });
+        let result =
+            if app.ui.panels.toolbar_side.resolve() == crate::state::ToolbarSide::Right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") }
+                .resizable(false)
+                .show_separator_line(false)
+                .exact_size(width)
+                .frame(frame)
+                .show(ui, |ui| {
+                    ctx.data_mut(|d| d.insert_temp(key("origin"), egui::pos2(ui.max_rect().left() - f32::from(margin), bounds.top())));
+                    contents(app, ui);
+                });
         crate::panel_visibility::chrome(&ctx, "tools", result.response.rect);
     }
     crate::dock::persist(app, &ctx);

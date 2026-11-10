@@ -39,12 +39,40 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
     })
 }
 
+/// Whether command `id` leaves a Type box-handle drag going: only the ones that change what is
+/// on screen and nothing else. `UI_COMMANDS` is every command the shell carries out itself, so it
+/// can't tell them apart: it holds `edit.freeTransform` and `file.save`, which must see the dragged
+/// box, `view.clearSelectedGuides`, which edits the document, and `window.nextDocument`, which
+/// switches to another one mid-drag. So the commands that cannot touch either are listed one by
+/// one, and the panel ones (open, close, arrange: `window.panel.*`, `window.toggle.*` and
+/// `type.panels.*`, the Character panel's Cmd+T among them) by prefix, since they only lay out
+/// windows. Everything else applies the box first, which is harmless when no drag is going.
+fn keeps_box_drag(id: &str) -> bool {
+    const VIEW: &[&str] = &[
+        "view.zoomIn",
+        "view.zoomOut",
+        "view.fitOnScreen",
+        "view.actualPixels",
+        "view.rotateView",
+        "view.resetView",
+        "view.screenMode.cycle",
+        "view.darkenInterface",
+        "view.lightenInterface",
+    ];
+    VIEW.contains(&id) || ["window.panel.", "window.toggle.", "type.panels."].iter().any(|prefix| id.starts_with(prefix))
+}
+
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
     {
         authorize(id, &params)?;
+    }
+    // A held Type box handle applies its box before any command that may read or edit the
+    // document runs; a command that edits it first would make the drag's box stale and lose it.
+    if !keeps_box_drag(id) {
+        crate::type_box_preview::end_drag(app);
     }
     if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
@@ -211,6 +239,8 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     None
 }
 
+/// The commands the shell answers itself before the engine (File › Open and Save with the
+/// dialogs they ask, loading a path as a selection, …); `Ok(None)` for any other.
 fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Result<Option<Value>, String> {
     let result = match id {
         // ⌘↩ / Ctrl+Enter (#306): load the path selected in the Paths panel (or the one being
@@ -292,7 +322,19 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                             crate::notices::post(app, title, lines, false, None);
                             app.save_as_with(None, choices)
                         }
-                        // A flat file asks for its name; confirming its own file records a
+                        // Its own flat file, while it still keeps the whole document (one plain
+                        // layer it can store): written back, as Photoshop's Save does (#5733),
+                        // asking first if another app changed it (#6596), then JPEG Options for a
+                        // JPEG (#2223), or TIFF, Targa or DDS Options for those. Cancel in either writes
+                        // nothing.
+                        Some((false, path, d)) if crate::saves_flat_in_place(&d.doc, &path) => {
+                            let doc = d.doc.id;
+                            if app.save_options_open() {
+                                return Err(crate::SAVE_OPTIONS_OPEN.into());
+                            }
+                            crate::disk_change_prompt::intercept(app, doc, &path, false, choices).unwrap_or_else(|| app.save_flat_in_place(path, choices))
+                        }
+                        // Any other flat file asks for its name; confirming its own file records a
                         // plain Save that writes the file an action is played on (#3531).
                         _ => app.save_dialog_flow(None, choices, true),
                     }
