@@ -88,7 +88,7 @@ fn drag(h: &mut Harness<'static, PhotocraftApp>, pts: &[[f32; 2]], alt_from: Opt
     h.run_steps(1);
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, p: [f32; 2]) {
+pub(super) fn click(h: &mut Harness<'static, PhotocraftApp>, p: [f32; 2]) {
     drag(h, &[p], None);
 }
 
