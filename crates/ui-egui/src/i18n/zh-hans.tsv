@@ -3320,6 +3320,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	自动调整画布大小
 	Keep Relative Position During Layer Reordering	重新排列图层时保持相对位置
 	Shrinkwrap Canvas on Save	保存时将画布缩至内容大小
+	Move Toolbar to the Right	将工具栏移到右侧
+	Move Toolbar to the Left	将工具栏移到左侧
 
 # RAW Develop feature labels
 	RAW Develop	RAW 显影

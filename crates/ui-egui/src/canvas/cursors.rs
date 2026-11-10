@@ -121,7 +121,7 @@ pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
 
 /// Preferences › Cursors › Other Cursors asks for the precise crosshair, or Caps Lock swaps the
 /// standard cursor for it (and back), as in Photoshop (#4639).
-pub(super) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
+pub(crate) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
     (app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise) != app.caps_lock
 }
 
