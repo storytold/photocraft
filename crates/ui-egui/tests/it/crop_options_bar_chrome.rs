@@ -133,6 +133,73 @@ fn crop_controls_carry_the_reference_tooltips() {
 }
 
 #[test]
+fn clearing_a_blank_zero_field_commits_zero() {
+    let mut h = Harness::builder().with_size(egui::vec2(120.0, 60.0)).with_max_steps(4).with_accessibility_check(false).build_ui_state(
+        |ui, v: &mut f32| {
+            photocraft_ui_egui::widgets::value_field_prec_blank(ui, v, 0.0..=99_999.0, "", 54.0, 3);
+        },
+        1.5f32,
+    );
+    h.run();
+    h.get_by_role(egui::accesskit::Role::SpinButton).click();
+    h.run_steps(2);
+    // Select all and delete, as a user clearing a ratio side does.
+    for (key, pressed, modifiers) in [
+        (egui::Key::A, true, egui::Modifiers::COMMAND),
+        (egui::Key::A, false, egui::Modifiers::COMMAND),
+        (egui::Key::Backspace, true, egui::Modifiers::NONE),
+        (egui::Key::Backspace, false, egui::Modifiers::NONE),
+    ] {
+        h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+    }
+    h.run_steps(2);
+    assert_eq!(*h.state(), 0.0, "a cleared side is zero, not the value it had");
+}
+
+#[test]
+fn hiding_the_options_bar_releases_the_fill_help() {
+    let mut h = app();
+    h.run_steps(4);
+    photocraft_ui_egui::crop_ui::ensure_frame(h.state_mut());
+    photocraft_ui_egui::crop_ui::nudge(h.state_mut(), 1.0, 0.0);
+    h.run_steps(2);
+    h.get_by_label("Displays pop-up help for the fill methods").click();
+    h.run_steps(2);
+    assert!(drawn(&h).iter().any(|t| t == "Fill options"), "the help opened");
+
+    // F hides the chrome and with it the bar; the help goes too and must not keep the crop's keys.
+    h.state_mut().ui.panels.options_bar = false;
+    h.run_steps(2);
+    assert!(!drawn(&h).iter().any(|t| t == "Fill options"), "the modal goes with the bar");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().ui.crop_rect.is_none(), "Enter commits the crop again");
+}
+
+#[test]
+fn esc_in_the_frame_the_fill_help_opens_leaves_the_crop() {
+    let mut h = app();
+    h.run_steps(4);
+    photocraft_ui_egui::crop_ui::ensure_frame(h.state_mut());
+    photocraft_ui_egui::crop_ui::nudge(h.state_mut(), 1.0, 0.0);
+    h.run_steps(2);
+    let before = h.state().ui.crop_rect;
+
+    // Esc and the click on the Fill ⓘ land in one frame: the shortcut pass runs first, so the click
+    // must claim Esc before it cancels the crop underneath.
+    let at = h.get_by_label("Displays pop-up help for the fill methods").rect().center();
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(at),
+        egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+        button(true),
+        button(false),
+    ]);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.crop_rect, before, "the crop frame and its history survive");
+}
+
+#[test]
 fn the_free_ratio_sides_draw_nothing_at_zero() {
     fn field(value: f32) -> Vec<String> {
         let mut h = Harness::builder().with_size(egui::vec2(120.0, 60.0)).with_max_steps(4).with_accessibility_check(false).build_ui_state(

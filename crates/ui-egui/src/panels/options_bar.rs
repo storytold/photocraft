@@ -15,6 +15,28 @@ pub(crate) fn fill_help_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(fill_help_id())).unwrap_or(false)
 }
 
+/// Where the Fill ⓘ was last drawn, so a click on it can take Escape in the frame the help opens
+/// (the shortcut pass runs before the options bar draws, #10888).
+fn fill_help_rect_id() -> egui::Id {
+    egui::Id::NULL.with("crop-fill-help-rect")
+}
+
+/// Whether the Fill help wants this frame's Enter and Escape: it is open, or its ⓘ is clicked in
+/// the frame the help opens, where Esc must not cancel the crop underneath.
+pub(crate) fn fill_help_takes_keys(ctx: &egui::Context) -> bool {
+    if fill_help_open(ctx) {
+        return true;
+    }
+    ctx.data(|d| d.get_temp::<egui::Rect>(fill_help_rect_id()))
+        .is_some_and(|r| ctx.input(|i| i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| r.contains(p))))
+}
+
+/// Closes the Fill help when the options bar stops drawing: its flag would otherwise keep Enter and
+/// Escape away from the crop (#10888).
+pub(crate) fn close_fill_help(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(fill_help_id(), false));
+}
+
 // Custom controls also need to bring keyboard focus into a scroll viewport.
 pub(super) fn reveal_focused_control(ui: &egui::Ui) {
     // read_response reprocesses pointer events. Reading a popup's newly focused field
@@ -631,7 +653,9 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
 /// The Fill ⓘ button and the "Fill options" help modal it opens (#10888).
 fn crop_fill_help(ui: &mut egui::Ui) {
     let help_id = fill_help_id();
-    if icons::button(ui, "info", 24.0, false, tl!("Displays pop-up help for the fill methods")).clicked() {
+    let button = icons::button(ui, "info", 24.0, false, tl!("Displays pop-up help for the fill methods"));
+    ui.data_mut(|d| d.insert_temp(fill_help_rect_id(), button.rect));
+    if button.clicked() {
         ui.data_mut(|d| d.insert_temp(help_id, true));
     }
     if !ui.data(|d| d.get_temp::<bool>(help_id)).unwrap_or(false) {

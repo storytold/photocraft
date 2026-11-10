@@ -543,10 +543,18 @@ fn number_edit(
                     s.to_owned()
                 };
                 let s = ready.as_str();
-                let v = if hold_typed { zoom_number(s, units) } else { parse_num_in(s, units) };
+                // A cleared field that draws its zero blank means zero, not "keep what was there" (#10888).
+                let blank = blank_when_zero && s.trim().is_empty();
+                let v = if hold_typed {
+                    zoom_number(s, units)
+                } else if blank {
+                    Some(0.0)
+                } else {
+                    parse_num_in(s, units)
+                };
                 // Whether the text being typed is a number at all, for [`typed_text_parses`].
                 ctx.data_mut(|d| d.insert_temp(id.with("parses"), v.is_some()));
-                if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
+                if ctx.memory(|m| m.has_focus(id)) && !blank && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
                     return None;
