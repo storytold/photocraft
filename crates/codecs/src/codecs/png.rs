@@ -766,10 +766,12 @@ const MAX_ICC_BYTES: u64 = 255 * 65_519;
 
 /// The ICC profile of the `iCCP` chunk before the image data, inflated to at most
 /// [`MAX_ICC_BYTES`] or `max_alloc`, whichever is smaller (png kept profiles within the
-/// allocation limit too). `None` when there is none, or the one there has a broken CRC, name or
+/// allocation limit too). `None` when there is none, or the first sound one has a bad name or
 /// zlib stream, or inflates past the cap: the image then opens untagged, as png left a broken
-/// profile out. A PNG carries at most one `iCCP` (spec 11.3.3.3), so the first one decides and
-/// no later chunk is looked for.
+/// profile out. A chunk whose CRC does not match is skipped and the walk goes on, because png
+/// tolerates a CRC failure in an ancillary chunk and still reports a later valid profile — a PNG
+/// carries at most one `iCCP` (spec 11.3.3.3), so this only decides what happens to a file that
+/// is already malformed, and there it answers as png does.
 fn read_iccp(bytes: &[u8], max_alloc: u64) -> Option<Vec<u8>> {
     let cap = MAX_ICC_BYTES.min(max_alloc);
     use std::io::Read;
@@ -791,7 +793,11 @@ fn read_iccp(bytes: &[u8], max_alloc: u64) -> Option<Vec<u8>> {
         crc.update(kind);
         crc.update(data);
         if crc.sum() != u32::from_be_bytes(*checksum) {
-            return None;
+            // A broken chunk is skipped, not the end of the walk: png tolerates a CRC failure in
+            // an ancillary chunk and still reports a later valid profile, so stopping here would
+            // drop one it would have kept (measured in
+            // `a_broken_iccp_crc_does_not_hide_a_later_valid_profile`, CodeRabbit on #10300).
+            continue;
         }
         let (name, value) = split_nul(data)?;
         let (&0, deflated) = value.split_first()? else { return None };
@@ -2137,6 +2143,40 @@ mod streamed_tests {
         assert_eq!(read_iccp(&lying, u64::from(u32::MAX)), None, "a length past the end of the file");
     }
 
+    /// CodeRabbit on #10300: `read_iccp` promises the first CRC-valid `iCCP` before the image
+    /// data, but returned None as soon as one had a broken CRC. What png itself does with such a
+    /// file decides the right answer, so this test measures that rather than assuming it: the
+    /// chunk is corrupted in place, and png is let read it (no `set_ignore_iccp_chunk`).
+    #[test]
+    fn a_broken_iccp_crc_does_not_hide_a_later_valid_profile() {
+        let profile: Vec<u8> = (0..2048u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8).collect();
+        let img = Image::from_raw(2, 2, ChannelLayout::Rgb, SampleType::U8, vec![9; 12]).unwrap().with_icc(Some(profile.clone()));
+        let png = crate::encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
+        let at = png.windows(4).position(|w| w == b"iCCP").expect("the file carries an iCCP chunk");
+        let len = u32::from_be_bytes(png[at - 4..at].try_into().expect("four length bytes")) as usize;
+        // A second iCCP, byte for byte the first, inserted before it with its CRC broken. The
+        // file then holds a broken chunk followed by the valid one.
+        let chunk = png[at - 4..at + 4 + len + 4].to_vec();
+        let mut broken = chunk.clone();
+        let crc_at = chunk.len() - 4;
+        broken[crc_at] ^= 0xff;
+        let mut two = png[..at - 4].to_vec();
+        two.extend_from_slice(&broken);
+        two.extend_from_slice(&png[at - 4..]);
+
+        // What png makes of it, reading the chunk itself: the reference behaviour.
+        let mut decoder = png::Decoder::new_with_limits(Cursor::new(&two[..]), png::Limits { bytes: Limits::default().alloc_usize() });
+        decoder.set_ignore_text_chunk(true);
+        let pngs_own = decoder.read_info().ok().and_then(|r| r.info().icc_profile.as_ref().map(|c| c.len()));
+
+        // And what this file's reader makes of it. The two must agree: a reader that is stricter
+        // than png loses a profile png would have kept, and one that is looser invents one.
+        let ours = read_iccp(&two, u64::from(u32::MAX)).map(|p| p.len());
+        assert_eq!(ours, pngs_own, "read_iccp must answer the broken-then-valid file as png does");
+        // Whichever way that falls, the image itself still opens with its pixels.
+        assert_eq!(decode(&two, &Limits::default()).unwrap().data(), &[9u8; 12][..]);
+    }
+
     /// CodeRabbit on #10300: every decoder built in this file skips `iCCP`, not just the one
     /// `decode` uses. `palette` and `has_additional_images` read headers from untrusted bytes
     /// too, so a profile that inflates to gigabytes must not be unpacked there either — they
@@ -2153,11 +2193,14 @@ mod streamed_tests {
         assert_eq!(palette(&png).unwrap(), None, "not a palette image");
         // Every decoder in this file is told to skip it, so none of them can be the one that
         // inflates it: the count is the guard against a new one being added without the flag.
+        // Counted over the production half only: the tests below build a decoder on purpose
+        // without the flag, to measure what png does with a chunk this one skips.
         let source = include_str!("png.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
         assert_eq!(
-            source.matches("png::Decoder::new_with_limits").count(),
-            source.matches("set_ignore_iccp_chunk(true)").count(),
-            "every png::Decoder in this file skips iCCP"
+            production.matches("png::Decoder::new_with_limits").count(),
+            production.matches("set_ignore_iccp_chunk(true)").count(),
+            "every png::Decoder in this file's production code skips iCCP"
         );
     }
 }
