@@ -59,7 +59,7 @@ fn the_document_list_holds_the_open_images_of_the_same_size() {
     assert!(owns(&f));
     assert_eq!(documents(&app, &f), [(id(&app, 0), "A".to_string()), (id(&app, 1), "B".to_string())], "C is another size");
     assert_eq!((f["document"].clone(), f["channel"].clone(), f["operation"].clone()), (json!(id(&app, 0)), json!("new"), json!("new")));
-    assert_eq!(channels(&app, &f), [("new".to_string(), "New".to_string())]);
+    assert_eq!(channels(&app, &f), [(json!("new"), "New".to_string())]);
     app.ui.close_dialog(d);
     let d = menu(&mut app, LOAD);
     let f = fields(&mut app, d);
@@ -74,7 +74,7 @@ fn new_saves_the_selection_into_a_new_multichannel_document() {
     set(&mut app, d, "document", json!("new"));
     set(&mut app, d, "name", json!("Keep"));
     let f = fields(&mut app, d);
-    assert_eq!(channels(&app, &f), [("new".to_string(), "New".to_string())], "a new image has only New");
+    assert_eq!(channels(&app, &f), [(json!("new"), "New".to_string())], "a new image has only New");
     crate::dialogs::confirm(&mut app, d).unwrap();
     assert_eq!(app.session.documents().len(), 4);
     assert_eq!(app.session.active_index(), Some(3));
@@ -102,8 +102,8 @@ fn another_document_lists_its_channels_and_the_operation_follows_the_channel() {
     let d = menu(&mut app, SAVE);
     set_document(&mut app, d, 1);
     let f = fields(&mut app, d);
-    assert_eq!(channels(&app, &f), [("new".to_string(), "New".to_string()), ("Old".to_string(), "Old".to_string())]);
-    set(&mut app, d, "channel", json!("Old"));
+    assert_eq!(channels(&app, &f), [(json!("new"), "New".to_string()), (json!(0), "Old".to_string())]);
+    set(&mut app, d, "channel", json!(0));
     assert_eq!(fields(&mut app, d)["operation"], "replace", "New Channel reads Replace Channel for an existing channel");
     set(&mut app, d, "operation", json!("add"));
     let f = fields(&mut app, d);
@@ -129,7 +129,9 @@ fn a_channel_the_chosen_document_lacks_goes_back_to_its_first() {
     let mut app = app();
     app.run("select.saveSelection", json!({"name": "Mine"})).unwrap();
     let d = menu(&mut app, SAVE);
+    // A channel given by its name is that channel of the list.
     set(&mut app, d, "channel", json!("Mine"));
+    assert_eq!(fields(&mut app, d)["channel"], json!(0));
     set(&mut app, d, "operation", json!("subtract"));
     set_document(&mut app, d, 1);
     let f = fields(&mut app, d);
@@ -139,7 +141,7 @@ fn a_channel_the_chosen_document_lacks_goes_back_to_its_first() {
     assert_eq!(fields(&mut app, d)["document"], json!(id(&app, 0)));
     app.ui.close_dialog(d);
     let d = menu(&mut app, LOAD);
-    assert_eq!(fields(&mut app, d)["channel"], "Mine");
+    assert_eq!(fields(&mut app, d)["channel"], json!(0), "A's first alpha channel");
     set_document(&mut app, d, 1);
     assert_eq!(fields(&mut app, d)["channel"], "RGB", "B has no alpha channel");
 }
@@ -155,13 +157,15 @@ fn load_selection_reads_the_chosen_documents_channels() {
     let d = menu(&mut app, LOAD);
     set_document(&mut app, d, 1);
     let f = fields(&mut app, d);
-    assert_eq!(f["channel"], "Edge");
+    assert_eq!(f["channel"], json!(0), "B's first alpha channel, Edge");
     let list = channels(&app, &f);
     let layer = {
         let st = &app.session.documents()[1];
         st.doc.layer(st.active_layer.unwrap()).unwrap().name.clone()
     };
-    assert_eq!(list.iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["RGB", "Red", "Green", "Blue", "Edge", "transparency", "selection"]);
+    let values: Vec<Value> = list.iter().map(|(v, _)| v.clone()).collect();
+    assert_eq!(values, [json!("RGB"), json!("Red"), json!("Green"), json!("Blue"), json!(0), json!("transparency"), json!("selection")]);
+    assert_eq!(list[4].1, "Edge");
     assert_eq!(list[5].1, format!("{layer} Transparency"), "named after B's active layer");
     set(&mut app, d, "invert", json!(true));
     crate::dialogs::confirm(&mut app, d).unwrap();
@@ -187,6 +191,42 @@ fn a_channel_chosen_together_with_its_document_is_kept() {
         app.session.journal.last().map(|(c, p)| (c.as_str(), p.clone())),
         Some((LOAD, json!({"document": 1, "channel": "Blue", "invert": false, "operation": "new"})))
     );
+}
+
+/// Channels the commands would read as something else by name go by their index: one named
+/// like a built-in source ("Mask", "Red"), and the second of two with one name. A channel with
+/// a name of its own still goes by that name, as recorded steps name it.
+#[test]
+fn channels_with_reserved_or_repeated_names_are_the_ones_chosen() {
+    let mut app = app();
+    for name in ["Mask", "Twin", "Twin", "Red", "Plain"] {
+        app.run("select.saveSelection", json!({"name": name})).unwrap();
+    }
+    // A's selection is its left 10 columns; every channel holds it. Save the right half into each.
+    app.run("select.rect", json!({"x": 20, "y": 0, "width": 20, "height": 20, "mode": "replace"})).unwrap();
+    for (i, sent) in [json!(0), json!("Twin"), json!(2), json!(3), json!("Plain")].into_iter().enumerate() {
+        let d = menu(&mut app, SAVE);
+        set(&mut app, d, "channel", json!(i));
+        let f = fields(&mut app, d);
+        assert_eq!(f["operation"], "replace", "channel {i}");
+        assert_eq!(params(&app, &f).unwrap(), json!({"channel": sent, "operation": "replace"}), "channel {i}");
+        crate::dialogs::confirm(&mut app, d).unwrap();
+        // Exactly the first i + 1 channels hold the right half now.
+        let doc = &app.session.documents()[0].doc;
+        let replaced: Vec<bool> = doc.channels.iter().map(|c| c.surface.read_region(doc.bounds())[25] == 1.0).collect();
+        assert_eq!(replaced, (0..5).map(|k| k <= i).collect::<Vec<_>>(), "after saving into channel {i}");
+    }
+    // Load Selection reads the channel chosen, not the layer mask or the red channel.
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 5, "height": 20, "mode": "replace"})).unwrap();
+    app.run("select.saveSelection", json!({"channel": 3, "operation": "replace"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    let d = menu(&mut app, LOAD);
+    set(&mut app, d, "channel", json!(3));
+    let f = fields(&mut app, d);
+    assert_eq!(params(&app, &f).unwrap(), json!({"channel": 3, "invert": false, "operation": "new"}));
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+    assert_eq!((sel.sample_channel(2, 5, 0), sel.sample_channel(8, 5, 0), sel.sample_channel(25, 5, 0)), (1.0, 0.0, 0.0), "the channel named Red");
 }
 
 #[test]

@@ -5,9 +5,15 @@
 //! channel only, and its Operation reads New Channel for a new channel and Replace / Add to /
 //! Subtract from / Intersect with Channel for an existing one. OK runs `select.saveSelection` or
 //! `select.loadSelection`, which agents can also call directly with params.
+//!
+//! The `channel` field is `"new"`, one of Load Selection's built-in sources (the composite, a
+//! colour channel, `"transparency"`, `"mask"`, `"selection"`), or the index of an alpha or spot
+//! channel of the chosen document, so two channels of one name, or a channel named like a
+//! built-in source ("Mask", "Red"), are told apart. A name set there is taken as that channel.
 
+use photocraft_doc::Document;
 use photocraft_engine::DocState;
-use photocraft_engine::channel_cmds::{color_names, composite_name};
+use photocraft_engine::channel_cmds::{ChanRef, color_names, composite_name, parse_ref};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -51,7 +57,7 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<Value, String> {
     } else {
         f.insert("__command".into(), json!(LOAD));
         f.insert("__label".into(), json!("Load Selection…"));
-        f.insert("channel".into(), json!(default_load_channel(st)));
+        f.insert("channel".into(), default_load_channel(st));
         f.insert("invert".into(), json!(false));
         f.insert("operation".into(), json!(NEW));
     }
@@ -83,12 +89,13 @@ fn chosen<'a>(app: &'a PhotocraftApp, f: &Map<String, Value>) -> Option<&'a DocS
 /// document's alpha and spot channels (only New for a new document). Load Selection: the
 /// composite and colour channels (loaded by their luminosity, as ⌘-clicking them does), the
 /// alpha and spot channels, the active layer's transparency and its mask when it has one, and
-/// the document's selection.
-pub fn channels(app: &PhotocraftApp, f: &Map<String, Value>) -> Vec<(String, String)> {
+/// the document's selection. An alpha or spot channel's value is its index.
+pub fn channels(app: &PhotocraftApp, f: &Map<String, Value>) -> Vec<(Value, String)> {
     let doc = chosen(app, f);
+    let alphas = |d: &DocState| d.doc.channels.iter().enumerate().map(|(i, c)| (json!(i), c.name.clone())).collect::<Vec<_>>();
     if saving(f) {
-        let mut out = vec![(NEW.to_string(), tl!("New").to_string())];
-        out.extend(doc.into_iter().flat_map(|d| d.doc.channels.iter().map(|c| (c.name.clone(), c.name.clone()))));
+        let mut out = vec![(json!(NEW), tl!("New").to_string())];
+        out.extend(doc.map(alphas).unwrap_or_default());
         return out;
     }
     let Some(st) = doc else { return Vec::new() };
@@ -97,31 +104,42 @@ pub fn channels(app: &PhotocraftApp, f: &Map<String, Value>) -> Vec<(String, Str
     let mut out = Vec::new();
     // A Multichannel image is its channels: it has no composite or colour channels of its own.
     if mode != photocraft_color::ColorMode::Multichannel {
-        out.push((composite_name(mode).to_string(), composite_name(mode).to_string()));
+        out.push((json!(composite_name(mode)), composite_name(mode).to_string()));
         if mode.color_channels() > 1 {
-            out.extend(color_names(mode).iter().map(|n| (n.to_string(), n.to_string())));
+            out.extend(color_names(mode).iter().map(|n| (json!(n), n.to_string())));
         }
     }
-    out.extend(d.channels.iter().map(|c| (c.name.clone(), c.name.clone())));
+    out.extend(alphas(st));
     // Photoshop names the layer: "Layer 1 Transparency", "Layer 1 Mask".
     if let Some(layer) = st.active_layer.and_then(|l| d.layer(l)) {
-        out.push(("transparency".into(), format!("{} {}", layer.name, tl!("Transparency"))));
+        out.push((json!("transparency"), format!("{} {}", layer.name, tl!("Transparency"))));
         if layer.mask.is_some() {
-            out.push(("mask".into(), format!("{} {}", layer.name, tl!("Mask"))));
+            out.push((json!("mask"), format!("{} {}", layer.name, tl!("Mask"))));
         }
     }
-    out.push(("selection".into(), tl!("Selection").to_string()));
+    out.push((json!("selection"), tl!("Selection").to_string()));
     out
 }
 
 /// Load Selection's first channel: the first alpha channel, else the composite (a Multichannel
 /// image's first channel).
-fn default_load_channel(st: &DocState) -> String {
+fn default_load_channel(st: &DocState) -> Value {
     let mode = st.doc.pixel_format().mode;
     match st.doc.channels.first() {
-        Some(c) => c.name.clone(),
-        None if mode == photocraft_color::ColorMode::Multichannel => "selection".into(),
-        None => composite_name(mode).to_string(),
+        Some(_) => json!(0),
+        None if mode == photocraft_color::ColorMode::Multichannel => json!("selection"),
+        None => json!(composite_name(mode)),
+    }
+}
+
+/// How a step names alpha or spot channel `i` of `doc`: by its name, as steps always have, when
+/// the commands read that name as this channel; else by its index. The commands read "Mask",
+/// "Selection", a colour channel's name and the like as those sources, "new" and "targeted" as
+/// their keywords, and a name two channels share as the first of them.
+fn channel_reference(doc: &Document, i: usize) -> Value {
+    match doc.channels.get(i) {
+        Some(c) if !matches!(c.name.as_str(), NEW | "targeted") && parse_ref(&json!(c.name), doc) == Some(ChanRef::Alpha(i)) => json!(c.name),
+        _ => json!(i),
     }
 }
 
@@ -137,17 +155,21 @@ pub fn normalize(app: &PhotocraftApp, f: &mut Map<String, Value>) {
         let Some(id) = f.get(TARGET).cloned() else { return };
         f.insert("document".into(), id);
     }
-    let channel = f.get("channel").and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut channel = f.get("channel").cloned().unwrap_or(Value::Null);
     // Another document with the channel left as it was: the channel was the old document's.
-    let moved = f
-        .get(SEEN)
-        .and_then(Value::as_array)
-        .is_some_and(|seen| seen.first() != f.get("document") && seen.get(1).and_then(Value::as_str) == Some(channel.as_str()));
+    let moved = f.get(SEEN).and_then(Value::as_array).is_some_and(|seen| seen.first() != f.get("document") && seen.get(1) == Some(&channel));
     let list = channels(app, f);
+    // A channel given by its name is that channel of the list.
+    if !list.iter().any(|(v, _)| *v == channel)
+        && let Some(i) = channel.as_str().and_then(|name| chosen(app, f)?.doc.channels.iter().position(|c| c.name == name))
+    {
+        channel = json!(i);
+        f.insert("channel".into(), channel.clone());
+    }
     if moved || !list.iter().any(|(v, _)| *v == channel) {
-        let first = if saving(f) { Some(NEW.to_string()) } else { chosen(app, f).map(default_load_channel) };
+        let first = if saving(f) { Some(json!(NEW)) } else { chosen(app, f).map(default_load_channel) };
         if let Some(first) = first {
-            f.insert("channel".into(), json!(first));
+            f.insert("channel".into(), first);
         }
     }
     if saving(f) {
@@ -202,6 +224,9 @@ pub fn params(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<Value, Stri
             p.insert((*k).into(), v.clone());
         }
     }
+    if let (Some(i), Some(st)) = (f.get("channel").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()), chosen(app, f)) {
+        p.insert("channel".into(), channel_reference(&st.doc, i));
+    }
     Ok(Value::Object(p))
 }
 
@@ -244,10 +269,14 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
         ui.end_row();
         ui.label(tl!("Channel:"));
         let list = channels(app, f);
-        let mut channel = f.get("channel").and_then(Value::as_str).unwrap_or_default().to_string();
-        let chans: Vec<(String, &str)> = list.iter().map(|(k, n)| (k.clone(), n.as_str())).collect();
-        if crate::widgets::dropdown_literal(ui, "selection-channel-channel", tl!("Channel"), &mut channel, &chans, 220.0) {
-            f.insert("channel".into(), json!(channel));
+        // The dropdown's keys: a built-in entry's word, an alpha or spot channel's index.
+        let key = |v: &Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
+        let mut channel = f.get("channel").map(key).unwrap_or_default();
+        let chans: Vec<(String, &str)> = list.iter().map(|(v, n)| (key(v), n.as_str())).collect();
+        if crate::widgets::dropdown_literal(ui, "selection-channel-channel", tl!("Channel"), &mut channel, &chans, 220.0)
+            && let Some((v, _)) = list.iter().find(|(v, _)| key(v) == channel)
+        {
+            f.insert("channel".into(), v.clone());
             normalize(app, f);
         }
         ui.end_row();
