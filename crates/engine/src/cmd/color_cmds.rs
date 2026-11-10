@@ -218,9 +218,10 @@ pub struct ColorState {
     /// Edit › Color Settings (persisted with the preferences).
     pub settings: ColorSettings,
     proofs: HashMap<DocId, ProofView>,
-    /// The remembered Proof Setup ([`PROOF_SETUP_PREF`]) and the setup it resolved to: what a
-    /// document without its own proof state starts from. `None` = [`ProofSetup::default`].
-    default_proof: Option<(Value, ProofSetup)>,
+    /// The remembered Proof Setup ([`PROOF_SETUP_PREF`]), the Working CMYK spec it was resolved
+    /// under and the setup it resolved to: what a document without its own proof state starts
+    /// from. `None` = [`ProofSetup::default`].
+    default_proof: Option<(Value, String, ProofSetup)>,
     /// The displays and their ICC profiles as read by the platform, primary (menu-bar) display
     /// first (used when Color Settings › Monitor Profile is `auto`; none = sRGB display).
     pub displays: Vec<crate::display_color::Display>,
@@ -391,17 +392,10 @@ impl ColorState {
         self.proofs.get(&doc).cloned().unwrap_or_else(|| self.default_proof_view())
     }
 
-    /// The proofing state a document starts with (see [`Self::proof`]). A remembered Working CMYK
-    /// is resolved now, not when the preferences loaded, so it follows the working profile chosen
-    /// since; a named profile stays the one that was chosen.
+    /// The proofing state a document starts with (see [`Self::proof`]): the setup
+    /// [`Self::sync_default_proof`] resolved, so a query reads no profile file.
     fn default_proof_view(&self) -> ProofView {
-        let setup = match &self.default_proof {
-            Some((_, remembered)) if matches!(remembered.name.as_str(), "working-cmyk" | "workingCmyk") => {
-                ProofSetup { profile: self.working(ColorMode::Cmyk), ..remembered.clone() }
-            }
-            Some((_, remembered)) => remembered.clone(),
-            None => ProofSetup::default(),
-        };
+        let setup = self.default_proof.as_ref().map(|(_, _, setup)| setup.clone()).unwrap_or_default();
         ProofView { setup, gamut_threshold: photocraft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() }
     }
 
@@ -409,13 +403,15 @@ impl ColorState {
     /// ([`PROOF_SETUP_PREF`]), so Proof Colors works with the last chosen setup right after a
     /// restart (#12820). A missing key means the built-in default. A value that is no
     /// object, or names a profile that no longer resolves (a deleted .icc file), falls back to
-    /// the built-in default rather than failing the load. Resolves only when the saved value
-    /// changed: this runs whenever preferences are applied.
+    /// the built-in default rather than failing the load. Resolves only when the saved value or
+    /// the Working CMYK of Color Settings changed (a remembered "working" proof follows it): this
+    /// runs whenever preferences are applied and when Color Settings change.
     pub(crate) fn sync_default_proof(&mut self, saved: Option<&Value>) {
-        if self.default_proof.as_ref().map(|(v, _)| v) == saved {
+        let resolved = self.default_proof.as_ref().map(|(v, working, _)| (v, working.as_str()));
+        if resolved == saved.map(|v| (v, self.settings.working_cmyk.as_str())) {
             return;
         }
-        self.default_proof = saved.and_then(|v| Some((v.clone(), self.remembered_proof(v)?)));
+        self.default_proof = saved.and_then(|v| Some((v.clone(), self.settings.working_cmyk.clone(), self.remembered_proof(v)?)));
     }
 
     /// The setup a saved [`PROOF_SETUP_PREF`] value names: missing fields take the defaults (Working
@@ -1198,7 +1194,7 @@ fn proof_setup(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // The chosen setup is also where other documents start, now and after a restart (#12820).
     let remembered = setup.remembered();
-    s.color.default_proof = Some((remembered.clone(), setup.clone()));
+    s.color.default_proof = Some((remembered.clone(), s.color.settings.working_cmyk.clone(), setup.clone()));
     s.prefs.edit(|prefs| {
         prefs.dialogs.insert(PROOF_SETUP_PREF.into(), remembered);
     });
@@ -1291,6 +1287,9 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
         s.color.settings = next;
         // Persisted with the preferences.
         s.prefs.edit(|_| ());
+        // A remembered Working CMYK proof follows the working profile just chosen.
+        let proof = s.prefs().dialogs.get(PROOF_SETUP_PREF).cloned();
+        s.color.sync_default_proof(proof.as_ref());
     }
     let c = &s.color.settings;
     let desc = |m: ColorMode| s.color.working(m).description.clone();
@@ -1637,6 +1636,24 @@ mod tests {
 
     /// #12820: preferences written before the setup was applied at launch hold what the dialog
     /// remembered, sometimes only part of it; a profile that no longer resolves is not an error.
+    /// A remembered Working CMYK proof ("working" and its aliases) is resolved again when Color
+    /// Settings name another working CMYK profile, and only then.
+    #[test]
+    fn remembered_working_proof_follows_the_working_cmyk_setting() {
+        let mut s = session("rgb", 8);
+        s.execute("view.proofSetup", json!({"profile": "working"})).unwrap();
+        let resolved_under = |s: &Session| s.color.default_proof.as_ref().map(|(_, working, setup)| (working.clone(), setup.name.clone()));
+        assert_eq!(resolved_under(&s), Some((s.color.settings.working_cmyk.clone(), "working".to_string())));
+
+        let saved = s.prefs().dialogs.get(PROOF_SETUP_PREF).cloned();
+        s.color.settings.working_cmyk = "another-cmyk.icc".into();
+        s.color.sync_default_proof(saved.as_ref());
+        assert_eq!(resolved_under(&s), Some(("another-cmyk.icc".to_string(), "working".to_string())));
+        // New documents take the working profile of the moment.
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        assert_eq!(s.color.proof(doc(&s).id).setup.profile, s.color.working(ColorMode::Cmyk));
+    }
+
     #[test]
     fn saved_proof_setup_loads_leniently() {
         let mut partial = Session::new();
