@@ -11,7 +11,7 @@ fn a_warp_box_holding_the_whole_layer_gives_what_compositing_over_the_cleared_la
         let w = Warp::preset(WarpStyle::Flag, 35.0, rect_f(rect));
         // What the warp built before the shortcut: the warp composited over the cleared layer.
         let map = |x: f64, y: f64| w.map(x, y);
-        let warped = warp_mesh_surface_with(&surf, rect, &map, Interp::Bicubic, &Interrupt::NONE).unwrap();
+        let warped = warp_mesh_surface_with(&surf, rect, &map, Fold::IN_PLACE, Interp::Bicubic, &Interrupt::NONE).unwrap();
         let mut want = surf.clone();
         crate::pixels::try_clear_surface(&mut want, rect, None).unwrap();
         crate::transform_cmds::composite_over(&mut want, &warped);
