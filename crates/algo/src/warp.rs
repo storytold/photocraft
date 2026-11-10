@@ -938,7 +938,10 @@ struct Fringe {
 /// `owner` past a border edge from the nearest such triangle. With `strips` (a warp that reads
 /// mip levels) a pixel is drawn where one of that triangle's [`strip`]s reaches it, the one it
 /// lies least far out along; otherwise within [`FRINGE`] px of the edge, from the triangle's map
-/// carried past it, with an alpha cap.
+/// carried past it, with an alpha cap. With `flaps` (a warp that folds) a strip also lies over a
+/// covered pixel whose top triangle ranks below its own, as a flap folded back over the picture
+/// shows in the reference application: the nearest such triangle's strip becomes the pixel's top
+/// and what it covers goes on the pixel's list of fold layers.
 #[allow(clippy::too_many_arguments)]
 fn fringe(
     tris: &[[usize; 3]],
@@ -949,7 +952,11 @@ fn fringe(
     uv: &mut [[f64; 2]],
     owner: &mut [u32],
     strips: bool,
+    flaps: Option<Flaps>,
 ) -> Fringe {
+    // Per pixel a flap's strip lies over: its distance from the edge, the source position and
+    // the triangle of the strip, and its mip level (allocated when the first one turns up).
+    let mut over: Vec<(f64, [f64; 2], u32, u32)> = Vec::new();
     let mut cover = vec![1.0f64; uv.len()];
     let mut level = vec![None; uv.len()];
     let (sx0, sy0, sx1, sy1) = (f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1));
@@ -998,7 +1005,8 @@ fn fringe(
             let py = f64::from(y) + 0.5;
             for x in bx0..bx1 {
                 let o = (y - t.y0) as usize * w + (x - t.x0) as usize;
-                if !uv.get(o).is_some_and(|q| q[0].is_nan()) {
+                let covered = !uv.get(o).is_some_and(|q| q[0].is_nan());
+                if covered && (flaps.is_none() || fwd.is_none()) {
                     continue;
                 }
                 let px = f64::from(x) + 0.5;
@@ -1011,6 +1019,23 @@ fn fringe(
                         (px - a[0] - s * ab[0]).hypot(py - a[1] - s * ab[1])
                     })
                     .fold(f64::INFINITY, f64::min);
+                if covered {
+                    // The ranks are asked last: only a strip that reaches a covered pixel needs them.
+                    if let (Some(fl), Some(fwd), Some(&top)) = (&flaps, &fwd, owner.get(o))
+                        && !d.is_nan()
+                        && over.get(o).is_none_or(|s| d < s.0)
+                        && let Some((_, q, l)) = border.iter().filter_map(|e| strip([px, py], e, fwd)).min_by(|a, b| a.0.total_cmp(&b.0))
+                        && (fl.rank)(k as u32) > (fl.rank)(top)
+                    {
+                        if over.is_empty() {
+                            over.resize(uv.len(), (f64::INFINITY, [f64::NAN; 2], 0, 0));
+                        }
+                        if let Some(slot) = over.get_mut(o) {
+                            *slot = (d, q, k as u32, l);
+                        }
+                    }
+                    continue;
+                }
                 let Some(slot) = near.get_mut(o) else { continue };
                 if d >= slot.0 || d.is_nan() {
                     continue;
@@ -1042,7 +1067,32 @@ fn fringe(
             }
         }
     }
+    if let Some(fl) = flaps {
+        for (o, (_, q, k, l)) in over.into_iter().enumerate() {
+            if q[0].is_nan() {
+                continue;
+            }
+            if fl.under_at.is_empty() {
+                *fl.under_at = vec![u32::MAX; uv.len()];
+            }
+            if let (Some(u), Some(ow), Some(head), Some(lv)) = (uv.get_mut(o), owner.get_mut(o), fl.under_at.get_mut(o), level.get_mut(o)) {
+                stack_layer(fl.under, head, (*u, *ow), &|_| false);
+                *u = q;
+                *ow = k;
+                *lv = Some(l);
+            }
+        }
+    }
     Fringe { cover, level }
+}
+
+/// What [`fringe`] lays a flap's strip over the layer under it with: the rank of a triangle of
+/// its `tris` in the order a fold stacks them (see [`Draw::stack`]) and the tile's fold layers
+/// (`under` and `under_at` of the tile pass; `under_at` may still be empty).
+struct Flaps<'a> {
+    rank: &'a dyn Fn(u32) -> u32,
+    under: &'a mut Vec<([f64; 2], u32, u32)>,
+    under_at: &'a mut Vec<u32>,
 }
 
 /// Scales premultiplied `px` (alpha last) down so its alpha is at most `cap` (none: unchanged).
@@ -1336,6 +1386,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         // point-sampled) and the subsamples along each.
         // The tile's triangles, first in `tris`' order, then, if a fold shows here, by rank.
         let mut order: Vec<[usize; 3]> = bin.iter().filter_map(|&k| tris.get(k as usize).copied()).collect();
+        let mut order_rank: Vec<u32> = Vec::new();
         let mut stacked = false;
         let mut uv = vec![[f64::NAN; 2]; w * h];
         let mut owner = vec![0u32; w * h];
@@ -1400,7 +1451,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                             // A fold shows in this tile: draw it again in the fold's order.
                             let mut ranked: Vec<(u32, [usize; 3])> = bin.iter().filter_map(|&k| tris.get(k as usize).map(|&t| (rank_of(k), t))).collect();
                             ranked.sort_by_key(|e| e.0);
-                            order = ranked.into_iter().map(|e| e.1).collect();
+                            (order_rank, order) = ranked.into_iter().unzip();
                             stacked = true;
                             uv.fill([f64::NAN; 2]);
                             under_at = vec![u32::MAX; w * h];
@@ -1426,8 +1477,14 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         }
         // The fringe (see `Draw::fringe`): per uncovered pixel past a border edge, the source
         // position it reads, with its alpha cap or, in a strip, its own mip level.
-        let Fringe { cover, level: strip_level } =
-            if draw.fringe { fringe(&order, verts, src_rect, t, w, &mut uv, &mut owner, single && interp == Interp::Bilinear) } else { Fringe::default() };
+        let Fringe { cover, level: strip_level } = if draw.fringe {
+            // The rank of a triangle of `order`.
+            let rank_at = |i: u32| if stacked { order_rank.get(i as usize).copied() } else { bin.get(i as usize).map(|&k| rank_of(k)) }.unwrap_or(u32::MAX);
+            let flaps = folds.then_some(Flaps { rank: &rank_at, under: &mut under, under_at: &mut under_at });
+            fringe(&order, verts, src_rect, t, w, &mut uv, &mut owner, single && interp == Interp::Bilinear, flaps)
+        } else {
+            Fringe::default()
+        };
         let strip_level = |o: usize| strip_level.get(o).copied().flatten();
         // Where the covered pixels sample the source, with the spread of their subsamples (a mip
         // level's taps reach up to 1.5 texels of 2^level pixels from the sample), in regions read
@@ -1568,9 +1625,17 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                         }
                         return;
                     }
+                    // At the source's edge the colour is the edge texels' own (taps past the edge
+                    // read the nearest texel inside), and how much of the tap lies inside is
+                    // blended apart and scales it, as the reference's edges show: blending in
+                    // transparent texels instead rounds the colour twice.
+                    let inside = |x: i32, y: i32| if x >= src_rect.x0 && y >= src_rect.y0 && x < src_rect.x1 && y < src_rect.y1 { 1.0 } else { 0.0 };
+                    let near = |x: i32, y: i32, c: usize| {
+                        at(win, x.clamp(src_rect.x0, src_rect.x1.saturating_sub(1)), y.clamp(src_rect.y0, src_rect.y1.saturating_sub(1)), c)
+                    };
+                    let cov = blend([inside(ix, iy), inside(ix + 1, iy), inside(ix, iy + 1), inside(ix + 1, iy + 1)], fx, fy, steps);
                     for (c, s) in acc.iter_mut().enumerate().take(n) {
-                        let t = [at(win, ix, iy, c), at(win, ix + 1, iy, c), at(win, ix, iy + 1, c), at(win, ix + 1, iy + 1, c)];
-                        *s = blend(t, fx, fy, steps);
+                        *s = blend([near(ix, iy, c), near(ix + 1, iy, c), near(ix, iy + 1, c), near(ix + 1, iy + 1, c)], fx, fy, steps) * cov;
                     }
                 }
                 Interp::Bicubic => {
@@ -1636,7 +1701,8 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             }
         };
         // One premultiplied bilinear tap of `win`'s mip level `l` (>= 1) at source position `q`,
-        // with the reference's 1/256-step weights; texels past the source are transparent.
+        // with the reference's 1/256-step weights. Past the source the colour is the nearest
+        // texel's and the part of the tap inside scales it, as in the level-0 blend.
         let mip_tap = |win: &Win, l: u32, q: [f64; 2], acc: &mut [f64; 8]| {
             acc[..n].fill(0.0);
             let Some((m, mw, mh)) = win.mips.get(l as usize - 1) else { return };
@@ -1650,8 +1716,17 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 }
                 m.get((y as usize * mw + x as usize) * n + c).map_or(0.0, |v| f64::from(*v))
             };
+            if *mw == 0 || *mh == 0 {
+                return;
+            }
+            let inside = |x: f64, y: f64| if x < 0.0 || y < 0.0 || x >= *mw as f64 || y >= *mh as f64 { 0.0 } else { 1.0 };
+            let near = |x: f64, y: f64, c: usize| tap(x.clamp(0.0, (*mw - 1) as f64), y.clamp(0.0, (*mh - 1) as f64), c);
+            let cov = blend([inside(ix, iy), inside(ix + 1.0, iy), inside(ix, iy + 1.0), inside(ix + 1.0, iy + 1.0)], fx, fy, steps);
+            if cov == 0.0 {
+                return;
+            }
             for (c, s) in acc.iter_mut().enumerate().take(n) {
-                *s = blend([tap(ix, iy, c), tap(ix + 1.0, iy, c), tap(ix, iy + 1.0, c), tap(ix + 1.0, iy + 1.0, c)], fx, fy, steps);
+                *s = blend([near(ix, iy, c), near(ix + 1.0, iy, c), near(ix, iy + 1.0, c), near(ix + 1.0, iy + 1.0, c)], fx, fy, steps) * cov;
             }
         };
         // A premultiplied sample of triangle `k`'s source at (u, v): a mip level's tap (the
@@ -1713,6 +1788,13 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 let keep = 1.0 - acc[a].clamp(0.0, 1.0);
                 for c in 0..n {
                     acc[c] += under_top[c] * keep;
+                }
+            }
+            // An 8-bit pixel of a single bilinear sample (whose blends are in 8-bit steps) is
+            // rounded once, after its edge coverage and any fold layers under it are in.
+            if let Some(st) = steps.filter(|_| single && interp == Interp::Bilinear) {
+                for c in acc.iter_mut().take(n) {
+                    *c = (*c * f64::from(st)).round() / f64::from(st);
                 }
             }
             // A fringe pixel's alpha is capped by its distance out (a strip's by its tap alone).
@@ -2418,6 +2500,79 @@ mod tests {
         let px = out.read_region(Rect::new(1, 1, 2, 2));
         let got = f64::from(px[0]) / f64::from(px[1]);
         assert!((got - 128.0 / 255.0).abs() < 1e-5, "weight {got}");
+    }
+
+    /// At the source's corner an 8-bit pixel keeps the source's colour: the colour is blended from
+    /// the texels inside and the part of the tap inside scales it, rounded once. (Blending in the
+    /// transparent texels rounds the colour per row and again per column, which drifts: 198 here.)
+    #[test]
+    fn a_corner_pixel_keeps_the_sources_colour() {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, true);
+        let mut src = Surface::new(fmt);
+        src.fill_rect(Rect::new(0, 0, 16, 16), &[200.0 / 255.0, 1.0]);
+        let shift = |x: f64, y: f64| (x + 0.3, y + 0.3);
+        let out = warp_mesh_surface(&src, Rect::new(0, 0, 16, 16), &shift, Interp::Bilinear);
+        let px = out.read_region(Rect::new(0, 0, 1, 1));
+        // The corner's tap lies 179/255 inside each way: 126 of 255 steps of coverage.
+        assert!((f64::from(px[1]) * 255.0 - 126.0).abs() < 1e-3, "coverage {}", px[1] * 255.0);
+        assert!((f64::from(px[0]) * 255.0 - 200.0).abs() < 1e-3, "colour {}", px[0] * 255.0);
+        // Deeper sources aren't rounded: the colour is exact and the coverage is the weights' product.
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true);
+        let mut src = Surface::new(fmt);
+        src.fill_rect(Rect::new(0, 0, 16, 16), &[0.3, 1.0]);
+        let out = warp_mesh_surface(&src, Rect::new(0, 0, 16, 16), &shift, Interp::Bilinear);
+        let px = out.read_region(Rect::new(0, 0, 1, 1));
+        let cover = (179.0f64 / 255.0).powi(2);
+        assert!((f64::from(px[1]) - cover).abs() < 1e-5, "coverage {}", px[1]);
+        assert!((f64::from(px[0]) - 0.3).abs() < 1e-5, "colour {}", px[0]);
+    }
+    /// A flap folded back over the picture ends in a strip of its own past its edge: the strip
+    /// lies over the layer under the flap, which shows through its fade, also where the strip's
+    /// column is the last of a tile the flap itself doesn't reach.
+    #[test]
+    fn a_flaps_edge_strip_lies_over_the_layer_under_it() {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, true);
+        let ts = photocraft_geom::TILE_SIZE;
+        for (width, col) in [(100, 20), (ts + 80, ts - 1)] {
+            // The picture, dark with a white right end, folds back at `fold`, so its right edge
+            // lands 0.2 px right of column `col`'s centre: the flap covers the columns after it.
+            let mut src = Surface::new(fmt);
+            src.fill_rect(Rect::new(0, 0, width - 8, 16), &[0.2, 1.0]);
+            src.fill_rect(Rect::new(width - 8, 0, width, 16), &[1.0, 1.0]);
+            let (w, edge) = (f64::from(width), f64::from(col) + 0.7);
+            let fold = (w + edge) / 2.0;
+            let verts = [
+                ([0.0, 0.0], [0.0, 0.0]),
+                ([fold, 0.0], [fold, 0.0]),
+                ([fold, 16.0], [fold, 16.0]),
+                ([0.0, 16.0], [0.0, 16.0]),
+                ([edge, 0.0], [w, 0.0]),
+                ([edge, 16.0], [w, 16.0]),
+            ];
+            let tris = [[0, 1, 2], [0, 2, 3], [1, 4, 5], [1, 5, 2]];
+            let rank = || vec![0, 0, 1, 1];
+            let draw = Draw { single: true, fringe: true, stack: Some(&rank) };
+            let out = triangles(&src, Rect::new(0, 0, width, 16), &verts, &tris, Interp::Bilinear, &Interrupt::NONE, draw);
+            let px = out.read_region(Rect::new(col, 8, col + 2, 9));
+            // The strip's tap lies 76/255 inside the white end: 76 steps of white over the dark
+            // layer's 51 (0.2) at the 179 left, 112 in all.
+            assert!((f64::from(px[0]) * 255.0 - 112.0).abs() < 1e-3, "width {width}: the strip over the layer under it: {}", px[0] * 255.0);
+            assert!((f64::from(px[1]) - 1.0).abs() < 1e-6, "width {width}: opaque: {}", px[1]);
+            // Inside the flap, its own white.
+            assert!((f64::from(px[2]) - 1.0).abs() < 1e-6, "width {width}: the flap: {}", px[2]);
+            // Without a fold order the picture is drawn as before: the strip leaves covered pixels alone.
+            let plain = triangles(
+                &src,
+                Rect::new(0, 0, width, 16),
+                &verts,
+                &tris,
+                Interp::Bilinear,
+                &Interrupt::NONE,
+                Draw { single: true, fringe: true, stack: None },
+            );
+            let px = plain.read_region(Rect::new(col, 8, col + 1, 9));
+            assert!((f64::from(px[0]) * 255.0 - 51.0).abs() < 1e-3, "width {width}: no fold order: {}", px[0] * 255.0);
+        }
     }
 
     /// Edit › Transform › Warp folding the picture over itself (#8927): the layers stack as the

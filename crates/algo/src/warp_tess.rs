@@ -56,6 +56,12 @@ type P = [f64; 2];
 const PERP_TOL: f64 = 1.0;
 /// Mean deviation along the chord (document px) of the inner control points that splits it.
 const TANG_TOL: f64 = 0.5;
+/// Distance (document px) of an inner control point before its chord's start that splits a
+/// segment, as the reference application's creases show (rows pulled back over themselves split
+/// later there than past the chord's end).
+const BEFORE_TOL: f64 = 1.35;
+/// Distance (document px) of an inner control point past its chord's end that splits a segment.
+const AFTER_TOL: f64 = 1.0;
 /// Twist of a cell's control net (document px) past which it splits.
 const TWIST_TOL: f64 = 1.0;
 /// The twist past which a one-patch full mesh's cell that already splits across splits down too:
@@ -204,6 +210,10 @@ fn segment(c: &[P], t0: f64, t1: f64) -> Vec<P> {
 /// sideways deviation from the chord over [`PERP_TOL`] and their mean deviation along it over
 /// [`TANG_TOL`] (each against its even spacing on the chord); `>= 1` splits. A straight segment
 /// (two points) never splits.
+///
+/// An inner control point that lies before the chord's start or past its end (the curve turns back
+/// on itself there, as a row does in a crease) counts by its distance from that end instead, over
+/// [`BEFORE_TOL`] or [`AFTER_TOL`], and is left out of the mean along the chord.
 fn need(c: &[P]) -> f64 {
     let n = c.len().saturating_sub(1);
     let (Some(&a), Some(&b)) = (c.first(), c.last()) else { return 0.0 };
@@ -222,9 +232,25 @@ fn need(c: &[P]) -> f64 {
     let len = ch[0].hypot(ch[1]);
     let v = if len > 0.0 {
         let (tx, ty) = (ch[0] / len, ch[1] / len);
-        let perp = d.iter().map(|x| (x[0] * ty - x[1] * tx).abs()).fold(0.0, f64::max);
-        let tang = (d.iter().map(|x| x[0] * tx + x[1] * ty).sum::<f64>() / d.len().max(1) as f64).abs();
-        (perp / PERP_TOL).max(tang / TANG_TOL)
+        let mut far = 0.0f64;
+        let (mut sum, mut inside) = (0.0f64, 0usize);
+        for (k, p) in (1..n).filter_map(|k| c.get(k).map(|p| (k, p))) {
+            let r = [p[0] - a[0], p[1] - a[1]];
+            // Where the point lies along the chord (0 at its start, 1 at its end) and how far off it.
+            let along = (r[0] * tx + r[1] * ty) / len;
+            let side = (r[0] * ty - r[1] * tx).abs();
+            far = far.max(side / PERP_TOL);
+            if along < 0.0 {
+                far = far.max(side.hypot(-along * len) / BEFORE_TOL);
+            } else if along > 1.0 {
+                far = far.max(side.hypot((along - 1.0) * len) / AFTER_TOL);
+            } else if along >= 0.0 {
+                sum += (along - k as f64 / n as f64) * len;
+                inside += 1;
+            }
+        }
+        let tang = if inside > 0 { (sum / inside as f64).abs() } else { 0.0 };
+        far.max(tang / TANG_TOL)
     } else {
         d.iter().map(|x| x[0].hypot(x[1])).fold(0.0, f64::max) / PERP_TOL
     };
@@ -959,6 +985,27 @@ mod tests {
         // Both inner points half a px along the chord split; a quarter doesn't.
         assert!(need(&[[0.0, 0.0], [1.5, 0.0], [2.5, 0.0], [3.0, 0.0]]) >= 1.0);
         assert!(need(&[[0.0, 0.0], [1.25, 0.0], [2.25, 0.0], [3.0, 0.0]]) < 1.0);
+    }
+
+    /// A control point outside its chord's span (a row turning back on itself in a crease) counts
+    /// by its distance from that end, not in the mean along the chord.
+    #[test]
+    fn need_measures_a_point_past_the_chord_from_that_end() {
+        // 1 px before the start, the other point in its even place: whole (the mean along the
+        // chord would be 1 px and split it); 1.4 px before splits.
+        assert!(need(&[[0.0, 0.0], [-1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [-1.4, 0.0], [2.0, 0.0], [3.0, 0.0]]) >= 1.0);
+        // Past the end the tolerance is 1 px.
+        assert!(need(&[[0.0, 0.0], [1.0, 0.0], [3.9, 0.0], [3.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [1.0, 0.0], [4.1, 0.0], [3.0, 0.0]]) >= 1.0);
+        // The distance is from the end itself, sideways included: 1.2 px before and 0.7 px off.
+        assert!(need(&[[0.0, 0.0], [-1.2, 0.0], [2.0, 0.0], [3.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [-1.2, 0.7], [2.0, 0.0], [3.0, 0.0]]) >= 1.0);
+        // The points left inside still split by their own mean: half a px along.
+        assert!(need(&[[0.0, 0.0], [-1.0, 0.0], [2.5, 0.0], [3.0, 0.0]]) >= 1.0);
+        // Both points outside and close to the ends: nothing to split; non-finite points neither.
+        assert!(need(&[[0.0, 0.0], [-0.5, 0.0], [3.5, 0.0], [3.0, 0.0]]) < 1.0);
+        assert_eq!(need(&[[0.0, 0.0], [f64::NAN, 0.0], [2.0, f64::INFINITY], [3.0, 0.0]]), 0.0);
     }
 
     /// The preset envelopes are polynomial patches at the degrees the reference stores them at, so
