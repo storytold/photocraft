@@ -258,15 +258,13 @@ fn make_shape_still_turns_a_work_path_into_a_shape_layer_in_rgb() {
 // ---------------------------------------------------------------------------------------------
 // Not measured cases keep today's behaviour: the other pens and the other tools
 
-/// The Freeform Pen and the Curvature Pen in Indexed Color were not measured: Shape is still chosen
-/// in the dropdown they share with the Pen.
+/// The Curvature Pen in Indexed Color was not measured: Shape is still chosen in the dropdown it
+/// shares with the Pen. The Freeform Pen stays in Path mode there (#12840).
 #[test]
 fn another_pen_still_chooses_shape_in_an_indexed_document() {
-    for tool in [Tool::FreeformPen, Tool::CurvaturePen] {
-        let mut h = indexed_bar(tool);
-        pick_mode(&mut h, "Shape");
-        assert_eq!(h.state().ui.tool_options.vector_mode, VectorMode::Shape, "{tool:?}: not measured, today's behaviour");
-    }
+    let mut h = indexed_bar(Tool::CurvaturePen);
+    pick_mode(&mut h, "Shape");
+    assert_eq!(h.state().ui.tool_options.vector_mode, VectorMode::Shape, "not measured, today's behaviour");
 }
 
 /// Make: Shape with the Curvature Pen and with the Rectangle tool in an Indexed Color document still
