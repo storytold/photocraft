@@ -4330,3 +4330,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shrinkwrap Canvas on Save	Σμίκρυνση καμβά στο περιεχόμενο κατά την αποθήκευση
 	Move Toolbar to the Right	Μετακίνηση γραμμής εργαλείων δεξιά
 	Move Toolbar to the Left	Μετακίνηση γραμμής εργαλείων αριστερά
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Επιλογή προκαθορισμένης αναλογίας ή μεγέθους περικοπής
+	Set the aspect ratio for the crop box	Ορισμός αναλογίας για το πλαίσιο περικοπής
+	Clear aspect ratio values	Εκκαθάριση τιμών αναλογίας
+	Set the overlay options for the Crop Tool	Ορισμός επιλογών επικάλυψης περικοπής
+	Determines if pixel data outside the crop box is retained or deleted	Καθορίζει αν τα εικονοστοιχεία εκτός του πλαισίου περικοπής διατηρούνται ή διαγράφονται
+	How expanded crop area gets filled	Πώς γεμίζει η εκτεταμένη περιοχή περικοπής
+	Displays pop-up help for the fill methods	Εμφανίζει αναδυόμενη βοήθεια για τις μεθόδους γεμίσματος
+	Fill options	Επιλογές γεμίσματος
+	Background (default):	Φόντο (προεπιλογή):
+	Fill the expanded area with your background color or transparent pixels	Γέμισε την εκτεταμένη περιοχή με το χρώμα φόντου ή διαφανή εικονοστοιχεία
+	Content-aware fill	Γέμισμα βάσει περιεχομένου
+	Sample content from part of the image and use it to fill a small area	Δειγματοληψία περιεχομένου από μέρος της εικόνας για γέμισμα μικρής περιοχής
+	Reset the crop box, image rotation, and aspect ratio settings	Επαναφορά πλαισίου περικοπής, περιστροφής εικόνας και αναλογίας
