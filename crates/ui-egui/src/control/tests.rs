@@ -2560,7 +2560,13 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
     let writes = written.clone();
     let services = crate::Services {
         import: Some(Box::new(|name: &str, _: &[u8], _: &photocraft_io::ImportOptions| {
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+            Ok(photocraft_io::ImportResult {
+                document: Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
+                warnings: Vec::new(),
+                source_read_only: false,
+                preview_only: false,
+                initial_view: None,
+            })
         })),
         export: Some(Box::new(|_: &Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new())))),
         automation_read: Some(Box::new(|path: &str| {
