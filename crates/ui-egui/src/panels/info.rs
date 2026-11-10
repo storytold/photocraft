@@ -246,7 +246,8 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let read: Option<Vec<ChannelReadout>> = serde_json::from_value(s["channels"].clone()).ok();
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(format!("#{n}")).color(t.text_dim).size(11.5)));
-                cell(ui, format!("X: {}  Y: {}", fx(at.0), fy(at.1)));
+                // The point sits on its pixel's centre (#11725); the row names the pixel, as the pointer row does.
+                cell(ui, format!("X: {}  Y: {}", fx(at.0.floor()), fy(at.1.floor())));
             });
             for line in shown.iter().flat_map(|r| sampler_lines(mode, *r, values.as_ref(), &channels, read.as_deref())) {
                 ui.horizontal(|ui| {

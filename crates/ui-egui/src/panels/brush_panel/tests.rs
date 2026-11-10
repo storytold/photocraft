@@ -656,7 +656,7 @@ fn mixer_brush_clean_brush_and_the_automatic_load_keep_the_foreground_out() {
     assert_eq!(h.state().session.tools.mixer.reservoir, None);
 
     // The stroke the canvas commits on release lays down only the red it picks up.
-    crate::retouch_ui::finish_stroke(h.state_mut(), crate::state::Tool::MixerBrush, &[[5.0, 20.0, 1.0], [195.0, 20.0, 1.0]], egui::Modifiers::NONE);
+    crate::retouch_ui::finish_stroke(h.state_mut(), crate::state::Tool::MixerBrush, &[[5.0, 20.0, 1.0], [195.0, 20.0, 1.0]], egui::Modifiers::NONE, false);
     let d = h.state().session.active().unwrap();
     let c = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(100, 20);
     assert!(c[3] > 0.1 && c[0] > 0.99 && c[2] < 0.01, "the stroke carries no foreground: {c:?}");
