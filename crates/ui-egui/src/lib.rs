@@ -327,7 +327,9 @@ use tools::tool_reset;
 pub use tools::transform_fx;
 pub use tools::transform_tex;
 pub use tools::transform_tool;
+use tools::type_box_preview;
 use tools::type_font_preview;
+use tools::type_path_placement;
 pub use tools::type_tool;
 use tools::type_transform;
 pub use tools::vector_ui;
@@ -671,6 +673,9 @@ pub struct PhotocraftApp {
     /// Type tool: (layer, clicks in the current run) for word / line / paragraph / all selection.
     pub(crate) type_clicks: Option<(u64, u32)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
+    pub(crate) type_path_damage: Option<type_path_placement::Damage>,
+    /// A paragraph-box handle drag rendered in the background (`type_box_preview`).
+    pub(crate) type_box_preview: Option<type_box_preview::TypeBoxPreview>,
     /// A font hovered in the Type tool's font picker, shown live (`type_font_preview`).
     pub(crate) type_font_preview: Option<type_font_preview::TypeFontPreview>,
     /// The colour under a text or gradient stop Color Picker, shown live before OK (`color_picker_preview`).
