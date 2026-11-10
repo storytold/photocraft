@@ -1321,3 +1321,64 @@ fn merge_channels_waits_for_three_grayscale_documents() {
     s.execute("channel.merge", json!({"mode": "lab"})).unwrap();
     assert_eq!(s.documents().len(), 2, "the three of one size merged; the other is left");
 }
+
+/// A document with an empty spot channel (no ink anywhere), targeted in the Channels panel.
+fn spot_session() -> Session {
+    let mut s = session();
+    let r = s.execute("channel.newSpot", json!({"color": "#ff0000", "solidity": 100})).unwrap();
+    let spot = r["channel"].as_u64().unwrap();
+    s.execute("channel.target", json!({"channel": spot})).unwrap();
+    assert_eq!(chan(&s, 0, 5, 5), 0.0, "no ink yet");
+    s
+}
+
+/// CodeRabbit on #10217: a spot channel takes the Paint Bucket as the tone it shows. Black lays
+/// solid ink, white takes it away; the paper around the selection keeps none.
+#[test]
+fn the_paint_bucket_fills_a_spot_channel_by_its_tone() {
+    let mut s = spot_session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("paint.bucket", json!({"x": 5, "y": 5, "color": "#000000", "antiAlias": false})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "black is solid ink, inside the selection only");
+    s.execute("paint.bucket", json!({"x": 5, "y": 5, "color": "#ffffff", "antiAlias": false})).unwrap();
+    assert_eq!(chan(&s, 0, 5, 5), 0.0, "white takes the ink away");
+}
+
+/// CodeRabbit on #10217: a black-to-white gradient on a spot channel is solid ink at black and
+/// none at white, a gradient of the tone the channel shows.
+#[test]
+fn a_gradient_on_a_spot_channel_lays_ink_where_it_is_dark() {
+    let mut s = spot_session();
+    s.execute("paint.gradient", json!({"from": [0, 10], "to": [39, 10], "colors": ["#000000", "#ffffff"], "dither": false})).unwrap();
+    let (left, mid, right) = (chan(&s, 0, 0, 10), chan(&s, 0, 20, 10), chan(&s, 0, 39, 10));
+    assert!(left > 0.95 && right < 0.05, "ink at the black end, none at the white end: {left} {right}");
+    assert!((mid - 0.5).abs() < 0.05, "half ink halfway: {mid}");
+}
+
+/// CodeRabbit on #10217: Edit › Fill on a spot channel fills its tone: black is solid ink, 50 %
+/// gray half ink, white none. History Fill brings back the ink the channel stored.
+#[test]
+fn edit_fill_fills_a_spot_channel_by_its_tone() {
+    let mut s = spot_session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("edit.fill", json!({"contents": "black"})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "black is solid ink, inside the selection only");
+    let inked = s.execute("history.newSnapshot", json!({})).unwrap()["snapshot"].clone();
+    s.execute("edit.fill", json!({"contents": "gray"})).unwrap();
+    assert!((chan(&s, 0, 5, 5) - 0.5).abs() < 0.01, "gray is half ink: {}", chan(&s, 0, 5, 5));
+    s.execute("edit.fill", json!({"contents": "color", "color": "#ffffff"})).unwrap();
+    assert_eq!(chan(&s, 0, 5, 5), 0.0, "white is no ink");
+    s.execute("edit.fill", json!({"contents": "history", "snapshot": inked})).unwrap();
+    assert_eq!(chan(&s, 0, 5, 5), 1.0, "History Fill brings the stored ink back as ink");
+}
+
+/// The review on #10217: the Brush paints a spot channel by its tone: a black stroke is solid
+/// ink, a white one over it takes the ink away.
+#[test]
+fn the_brush_paints_a_spot_channel_by_its_tone() {
+    let mut s = spot_session();
+    s.execute("paint.stroke", json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#000000"})).unwrap();
+    assert_eq!((chan(&s, 0, 10, 10), chan(&s, 0, 30, 10)), (1.0, 0.0), "black is solid ink where the brush went");
+    s.execute("paint.stroke", json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#ffffff"})).unwrap();
+    assert_eq!(chan(&s, 0, 10, 10), 0.0, "white takes it away");
+}

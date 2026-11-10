@@ -250,6 +250,16 @@ fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option
     let gray = is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some();
     let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
     let brush = if gray && brush.erase { BrushSettings { erase: false, color: s.tools.background, ..brush } } else { brush };
+    // A spot channel stores ink and takes paint as the tone it shows (CodeRabbit and the review
+    // on #10217): black paints solid ink, white takes it away. Laying the colour's complement
+    // into the ink is the same as laying the colour into the tone, exactly so in Normal mode.
+    let spot = s.active().is_some_and(|d| crate::channel_cmds::is_spot_target(&d.doc, p));
+    let brush = if spot {
+        let c = brush.color;
+        BrushSettings { color: [1.0 - c[0], 1.0 - c[1], 1.0 - c[2], c[3]], color_cmyk: None, ..brush }
+    } else {
+        brush
+    };
     Ok((id, brush, num(p, "zoom").unwrap_or(1.0)))
 }
 
