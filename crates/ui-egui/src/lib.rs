@@ -1055,3 +1055,6 @@ mod background_eraser_digit_keys_tests;
 
 #[cfg(test)]
 mod pattern_stamp_reset_defaults_tests;
+
+#[cfg(test)]
+mod pattern_stamp_refusal_alert_tests;

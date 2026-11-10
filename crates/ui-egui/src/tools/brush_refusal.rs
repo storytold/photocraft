@@ -13,10 +13,12 @@ pub const HIDDEN: &str = "Could not use the {tool} because the target layer is h
 pub const LOCKED: &str = "Could not use the {tool} because the layer is locked.";
 pub const GROUP: &str = "Could not use the {tool} because the pixels in a group cannot be edited without merging the group.";
 
-/// The tool's name in the alerts, for the tools whose wording was measured: the Brush.
+/// The tool's name in the alerts, for the tools whose wording was measured: the Brush and the
+/// Pattern Stamp.
 pub fn tool_name(tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
+        Tool::PatternStamp => Some(tl!("pattern stamp")),
         _ => None,
     }
 }
