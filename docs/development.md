@@ -305,10 +305,25 @@ At startup the desktop lists recovery metadata, then decodes one document at a t
 
 `photocraft-cli mcp` serves MCP on stdio using `crates/automation`, which is built on `rmcp`:
 
-- **Headless:** `photocraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>`. It drives an in-process engine session and has no file authority when a root is omitted.
-- **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <dir> --automation-write-root <dir>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots. See `docs/control-protocol.md#mcp-bridge`.
+- **Headless:** `photocraft-cli mcp --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`. It drives an in-process engine session with ordered read directories and one write directory.
+- **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots; root flags on the bridging CLI are a usage error. See `docs/control-protocol.md#mcp-bridge`.
 
 For headless MCP clients, pass absolute paths to deliberately chosen trusted workspace directories in the launch arguments. Desktop `PHOTOCRAFT_AUTOMATION_READ_ROOT` and `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` environment variables do **not** grant headless CLI access. Omitting a root flag deliberately denies that direction of access.
+
+Read flags accumulate in order, including mixed `--automation-read-root <dir>` and
+`--automation-read-root=<dir>` syntax; duplicate read roots are allowed. A headless relative read
+uses the first existing regular file. Only a missing file falls through to the next root;
+directory, permission, path-escape and decoding errors stop the request. Desktop `app.open`
+(and bridged `doc_open`) also accepts native directory `.pcraft` through the selected read
+capability. An earlier root's ZIP file wins over a later root's directory, and loading errors
+in a selected directory are terminal. Directory opens never establish an implicit save target;
+use explicit layered Save As beneath the write root, even when both capabilities match.
+Every root must be an existing directory, and empty or missing values fail startup. There is still only one write root;
+repeating its flag is a usage error even for identical values. Write authority does not imply
+read authority. A read-only library document needs an explicit Save As into the write root before
+it has an implicit save target; aliases and nested roots also require explicit Save As.
+These roots do not enable additional ambient asset reads or headless directory-bundle access;
+desktop directory `.pcraft` reads use only the granted read capabilities.
 
 Tools:
 
@@ -335,7 +350,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
   "mcpServers": {
     "photocraft": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
+      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
     },
     "photocraft-live": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
@@ -367,7 +382,7 @@ capability-scoped export, resize/crop, CMYK + native save) driven purely over MC
 Without MCP, `photocraft-cli serve [--port N]` keeps a headless session open and answers JSON lines
 (see `docs/control-protocol.md#headless-server`).
 
-A typical agent loop (place inputs under the configured read root and outputs under the write root):
+A typical agent loop (place inputs under a configured read root and outputs under the write root):
 
 1. `doc_open {path}`
 2. `command_list {filter:"blur"}`
@@ -403,6 +418,25 @@ counts it lists, per language, the source keys the catalog lacks (one line for a
 none). A missing translation shows in English and fails nothing: `cargo xtask ci` runs the report
 as its last step so the list appears in the log, and only prints a warning if the report itself
 can't run.
+
+## Panel command routing
+
+Every panel button must dispatch an engine command by id (AGENTS.md rule 1), so the UI, CLI,
+control channel and MCP stay equivalent. `cargo xtask panel-commands` (also a step of
+`cargo xtask ci` and of CI) scans `crates/ui-egui/src` outside test code for click handlers: the
+block of an `if` whose condition calls `.clicked()`, `.changed()`, `.dragged()` and friends, or a
+widget function that takes a `Ui` and returns `bool`. Inside one it fails, with file:line, on a
+direct document or session change: `active_mut()`, `Arc::make_mut` on a doc,
+`session.undo/redo/select_layer/add_document/close(…)` or an assignment to a session field
+(`app.session.tools.foreground = …`). Dispatch the command instead (`app.run`, `menus::invoke`).
+A passing scan is not complete coverage. The scanner is lexical: it does not follow calls into
+helpers, and it only recognises an `if` block (a `match` arm guard with a block counts) or a
+`let` local holding a response, so a `match` on a response without such a guard, a response kept
+in a struct field and tested later, or a closure callback is not checked. Preferences
+(`edit_prefs`), shell view state (`app.ui`, the `UI_COMMANDS`) and switching the active document
+are out of scope. Existing violations are listed in
+`ALLOWLIST` in `xtask/src/panel_commands.rs` by file and function, each with its reason; an entry
+that matches nothing any more is an error, so the list only shrinks.
 
 ## Testing strategy
 
@@ -661,6 +695,25 @@ except Place, which is a job that `poll_jobs` steps on the UI thread (a *coopera
 
 ## Indexed Color timings
 
+The stock Indexed Color dialog exposes Matte: None, Foreground Color, Background Color,
+White, Black, 50% Gray, Netscape Gray and Other… (the shared Color Picker). Choosing Other…
+opens the picker without replacing the current matte; Cancel leaves that choice unchanged, and
+OK commits the picked `#rrggbb` in document RGB coordinates. Automation accepts `matte` as
+`none`, `foreground`, `background`, `white`, `black`, `gray` (50% Gray, encoded
+`#808080`), `netscapeGray` (Netscape Gray, encoded `#c0c0c0`) or `#rrggbb`. Foreground/background
+tool colours are converted from the working RGB profile into the document profile and clipped
+to its encodable RGB range before blending. A selected matte blends all
+partially transparent edges; with Transparency on, fully clear pixels stay transparent.
+With Transparency off, the selected matte also fills clear pixels. None retains the existing
+hard-edged transparency/default flattening behavior. Indexed conversion retains the document's
+ICC profile and encoded RGB sample representation; matte colours are interpreted in the document
+RGB coordinate space. Default Indexed → RGB expands the stored RGB samples without converting
+them to the working profile; an explicitly supplied destination profile still requests a CMS
+conversion. Inline and worker dialog previews inherit the current foreground/background tool
+colors, and changing those colors invalidates both cached frames and pending worker results,
+including when the preview proxy factor changes. A same-color frame at the old factor can
+remain visible during a drag until the new result arrives. This follows Adobe's documented
+[Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

@@ -7,7 +7,7 @@
 //!
 //! It's an overlay only: nothing changes in the document and there is no command or History
 //! state. The hovered layer is the one a click there would Auto-Select
-//! (`pick_cmds::auto_select_target`), cached per document revision, selection and pointer pixel,
+//! (`pick_cmds::move_auto_select_target`), cached per document revision, selection and pointer pixel,
 //! so a pointer resting on the canvas costs nothing per frame.
 
 use egui::{Color32, Pos2, Stroke, pos2, vec2};
@@ -117,7 +117,7 @@ fn boxes(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<([f64; 4], [f64; 4])> 
     let d = &st.doc;
     let a = union(selected.iter().filter(|id| !d.is_background(**id)).filter_map(|id| tree_rect(d, *id)));
     let canvas = [0.0, 0.0, d.size.width as f64, d.size.height as f64];
-    let hovered = photocraft_engine::pick_cmds::auto_select_target(d, at[0], at[1], group).filter(|id| {
+    let hovered = photocraft_engine::pick_cmds::move_auto_select_target(d, at[0], at[1], group).filter(|id| {
         // The selection itself (or a layer in a selected group) isn't another layer.
         !d.is_background(*id) && !selected.iter().any(|s| *s == *id || d.path_of(*id).zip(d.path_of(*s)).is_some_and(|(p, q)| p.starts_with(&q)))
     });
@@ -279,6 +279,10 @@ mod tests {
         assert_eq!(current(&mut app, Some([60.0, 60.0]), true, false).unwrap().measures.len(), 4);
         // Only an overlay: the document didn't change.
         assert_eq!(app.session.active().unwrap().revision, revision);
+        let target = app.session.active().unwrap().doc.layers.iter().find(|l| l.name == "target").unwrap().id;
+        app.run("layer.setProps", json!({"layer": target.0, "locks": {"position": true}})).unwrap();
+        let locked = current(&mut app, Some([320.5, 230.0]), true, false).unwrap();
+        assert_eq!(locked.measures, o.measures, "a position-locked target measures to the canvas");
     }
 
     #[test]

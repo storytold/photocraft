@@ -268,7 +268,7 @@ fn saved_path_context_menu_offers_rename() {
 }
 
 /// How many shapes the path overlay paints for `app` this frame.
-fn overlay_shapes(app: &PhotocraftApp, ctx: &egui::Context) -> usize {
+pub(super) fn overlay_shapes(app: &PhotocraftApp, ctx: &egui::Context) -> usize {
     let doc = app.session.active().unwrap().doc.clone();
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));

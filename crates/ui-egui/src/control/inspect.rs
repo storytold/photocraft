@@ -3,7 +3,7 @@ use super::*;
 /// The open canvas context menu's rows for `ui.state`: the spelling suggestions first (type edit
 /// menu over a misspelled word), then the menu's own rows.
 fn context_entries(app: &PhotocraftApp, menu: &crate::canvas_tool_menu::CanvasToolMenu) -> Vec<Value> {
-    use crate::canvas_tool_menu::{crop_rows, entry_enabled, rows, spelling_rows};
+    use crate::canvas_tool_menu::{crop_rows, entry_enabled, row_label, rows, spelling_rows};
     let spelling = spelling_rows(menu);
     let mut entries: Vec<Value> = spelling.iter().map(|(label, id)| json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)})).collect();
     if !spelling.is_empty() {
@@ -14,7 +14,7 @@ fn context_entries(app: &PhotocraftApp, menu: &crate::canvas_tool_menu::CanvasTo
         None => json!({"separator": true}),
     }));
     entries.extend(rows(menu).iter().map(|row| match row {
-        Some((label, id)) => json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)}),
+        Some((label, id)) => json!({"label": row_label(app, menu, label, id), "id": id, "enabled": entry_enabled(app, menu, id)}),
         None => json!({"separator": true}),
     }));
     entries

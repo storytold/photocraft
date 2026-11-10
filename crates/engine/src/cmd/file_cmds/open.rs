@@ -74,9 +74,15 @@ fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult
 /// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
 /// dispatch through `photocraft_io::import_with_options`, typed memory refusals, and the
 /// preview-only refusal wherever the import came from.
-fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
+pub(super) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
+    import_result_for_open(name, bytes, opts).map(|(r, _)| r)
+}
+
+/// [`import_result_with`], also telling whether a PSD/PSB had damaged data it recovered from, as
+/// File › Open's job learns it (`photocraft_io::import_for_open`), so an interactive caller can ask.
+pub(super) fn import_result_for_open(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(photocraft_io::ImportResult, bool)> {
     crate::allocation::checkpoint("importing document")?;
-    let r = photocraft_io::import_with_options(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
+    let (r, damaged) = photocraft_io::import_for_open(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
     if r.preview_only {
@@ -84,7 +90,7 @@ fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOpti
             "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
         )));
     }
-    Ok(r)
+    Ok((r, damaged))
 }
 
 // ---------- close / revert / save a copy / open as ----------

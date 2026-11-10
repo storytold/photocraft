@@ -28,9 +28,10 @@
 //!   least significant bit first (X-Trans I, X100, XF1, X-A1…); 14-bit
 //!   samples packed into little-endian 32-bit words, most significant bit
 //!   first (X-A3/5/7, X-T100/200, XF10). A shorter strip is Fujifilm's own
-//!   lossless compression (it starts with `IS`), which has no public
-//!   description and is reported as unsupported, as are the pre-2010
-//!   FinePix / SuperCCD files without the CFA TIFF.
+//!   striped compression (it starts with `IS`; header byte 108 holds the
+//!   mode: 0 uncompressed, 2 lossless, 3 lossy), decoded by `rafc`. The
+//!   pre-2010 FinePix / SuperCCD files without the CFA TIFF are reported as
+//!   unsupported.
 //! * XTransLayout lists the 6×6 X-Trans pattern (0 = R, 1 = G, 2 = B) in
 //!   reverse order: its last byte is the colour at data (0, 0), its first
 //!   the colour at (5, 5).
@@ -47,7 +48,7 @@ use crate::cr2::clip_level;
 use crate::error::{RawError, Result};
 use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
 use crate::tiff::{Tiff, tag};
-use crate::{Limits, RawFormat, par};
+use crate::{Limits, RawFormat, par, rafc};
 
 pub(crate) const MAGIC: &[u8] = b"FUJIFILMCCD-RAW";
 
@@ -57,6 +58,8 @@ const FUJI_LAYOUT: u16 = 0x0130;
 const XTRANS_LAYOUT: u16 = 0x0131;
 const WB_GRGB_LEVELS: u16 = 0x2FF0;
 const RAW_EXPOSURE_BIAS: u16 = 0x9650;
+/// Header byte offset of the big-endian compression mode: 0 uncompressed, 2 lossless, 3 lossy.
+const COMPRESSION: usize = 108;
 
 const FUJI_IFD: u16 = 0xF000;
 const RAW_WIDTH: u16 = 0xF001;
@@ -195,6 +198,31 @@ fn header_model(bytes: &[u8]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// A strip shorter than the samples it holds: Fujifilm's striped compression (`rafc`).
+fn decode_compressed(bytes: &[u8], src: &[u8], width: usize, height: usize, bits: u32, cfa: &Cfa) -> Result<Vec<u16>> {
+    let flag =
+        rafc::stream_flag(src).ok_or_else(|| RawError::unsupported("Fujifilm RAF with an unknown sample storage (short strip without the IS signature)"))?;
+    // The header's compression mode (0 uncompressed, 2 lossless, 3 lossy) must agree with the stream.
+    match be32(bytes, COMPRESSION) {
+        Some(2) if flag == 1 => {}
+        Some(3) if flag == 0 => {}
+        Some(m @ (2 | 3)) => return Err(RawError::malformed(format!("RAF compression mode {m} disagrees with the compressed stream"))),
+        _ => {}
+    }
+    // The stream assumes a fixed arrangement: the X-Trans pattern of `rafc::XTRANS`, or
+    // greens off the diagonal of a 2×2 Bayer tile.
+    let xtrans = cfa.width == 6;
+    let fits = if xtrans {
+        (0..36).all(|i| rafc::XTRANS.get(i / 6).and_then(|r| r.get(i % 6)).is_some_and(|&c| usize::from(cfa.color(i % 6, i / 6)) == c))
+    } else {
+        cfa.color(1, 0) == 1 && cfa.color(0, 1) == 1 && cfa.color(0, 0) != 1
+    };
+    if !fits {
+        return Err(RawError::unsupported("Fujifilm compressed RAF with an unknown CFA layout"));
+    }
+    rafc::decode(src, width, height, bits, xtrans)
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor> {
     let cfa_at = be32(bytes, 100).ok_or_else(|| RawError::malformed("RAF header is truncated"))?;
     let cfa_len = be32(bytes, 104).unwrap_or(0);
@@ -220,25 +248,27 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor> {
     let src = if count > 0 { src.get(..count).unwrap_or(src) } else { src };
     let pixels = width * height;
     let packed = pixels.saturating_mul(bits as usize).div_ceil(8);
-    let packing = if count >= pixels * 2 {
-        Packing::U16 { le: t.le }
-    } else if count >= packed && bits == 12 {
-        Packing::LsbFirst
-    } else if count >= packed && bits == 14 {
-        Packing::Words32MsbFirst
-    } else if count >= packed {
-        return Err(RawError::unsupported(format!("Fujifilm RAF with packed {bits}-bit samples")));
-    } else {
-        return Err(RawError::unsupported("Fujifilm compressed RAF is not decoded (no public description of the format)"));
-    };
-    let need = if matches!(packing, Packing::U16 { .. }) { pixels * 2 } else { packed };
-    if src.len() < need {
-        return Err(RawError::malformed("RAF raw data is truncated"));
-    }
-    let data = unpack(src, width, height, bits, packing);
-
     let recs = records(bytes);
     let cfa = layout_cfa(&recs).ok_or_else(|| RawError::unsupported("Fujifilm RAF without a recognised CFA layout"))?;
+    let data = if count >= pixels * 2 || count >= packed {
+        let packing = if count >= pixels * 2 {
+            Packing::U16 { le: t.le }
+        } else if bits == 12 {
+            Packing::LsbFirst
+        } else if bits == 14 {
+            Packing::Words32MsbFirst
+        } else {
+            return Err(RawError::unsupported(format!("Fujifilm RAF with packed {bits}-bit samples")));
+        };
+        let need = if matches!(packing, Packing::U16 { .. }) { pixels * 2 } else { packed };
+        if src.len() < need {
+            return Err(RawError::malformed("RAF raw data is truncated"));
+        }
+        unpack(src, width, height, bits, packing)
+    } else {
+        decode_compressed(bytes, src, width, height, bits, &cfa)?
+    };
+
     let full = Rect::new(0, 0, width, height);
     let mut warnings = Vec::new();
 

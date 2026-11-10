@@ -237,7 +237,8 @@ impl FlatBuilder {
     }
 
     /// The document, after copying and pruning whatever is left: the one-shot result and the last
-    /// step of a stepped one.
+    /// step of a stepped one. Like the one-shot import, it records how many images the file holds
+    /// when the decoder read only the first, so Save doesn't write over the rest (#5733).
     pub(crate) fn finish(mut self, bytes: &[u8], format: Option<Format>) -> Result<ImportResult, IoError> {
         let copied = self.copy_done();
         while !self.copy_done() {
@@ -251,6 +252,7 @@ impl FlatBuilder {
         let Self { name, img, mode, depth, surface, warnings, .. } = self;
         let (w, h) = img.dimensions();
         let mut r = flat_document(&name, (w, h, img.layout(), mode, depth), surface, img.icc.clone(), &img.meta, warnings, Some(&img))?;
+        r.document.file_encoding.source_images = source_images(&img.warnings);
         apply_flat_format(&mut r, bytes, format, Some(&img))?;
         Ok(r)
     }
@@ -274,7 +276,9 @@ pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Opti
         r.document.mode = ColorMode::Indexed;
         r.document.color_table = Some(photocraft_doc::ColorTable { colors, transparent });
     }
-    r.document.file_encoding = file_encoding_as(format, bytes);
+    // The decoder's count of frames or pages left out (set above) stays alongside the encoding.
+    let encoding = file_encoding_as(format, bytes);
+    r.document.file_encoding = photocraft_doc::FileEncoding { source_images: r.document.file_encoding.source_images.or(encoding.source_images), ..encoding };
     if format == Some(Format::Tga) && img.is_some_and(|i| i.layout() == ChannelLayout::Rgba) {
         tga_alpha_to_channel(&mut r.document)?;
     }
@@ -370,6 +374,11 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
             }
             None => {}
         },
+        // An icon file's directory count (ICONDIR: reserved, type, count, little-endian); the
+        // decoder opens one of its sizes.
+        Some(Format::Ico) => {
+            e.source_images = bytes.get(4..6).and_then(|c| <[u8; 2]>::try_from(c).ok()).map(|c| u32::from(u16::from_le_bytes(c))).filter(|&n| n > 1);
+        }
         _ => {}
     }
     e
@@ -539,6 +548,7 @@ fn import_tiff_layered(
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut r = crate::tiff_layers::import_layered(name, &img, plan, ctl)?;
+    r.document.file_encoding.source_images = r.document.file_encoding.source_images.or(source_images(&img.warnings));
     if orientation != 1 {
         r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
     }
@@ -663,7 +673,9 @@ fn tiff_to_document(
     let mut warnings: Vec<String> = bands.warnings.iter().map(ToString::to_string).collect();
     warnings.extend(f.warning.clone());
     let meta = std::mem::take(&mut bands.meta);
-    Ok(single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings))
+    let mut r = single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings);
+    r.document.file_encoding.source_images = source_images(&bands.warnings);
+    Ok(r)
 }
 
 /// The bytes of a layer's tiles holding a `w` × `h` image of `bpp` bytes a pixel: tiles are whole
@@ -798,7 +810,22 @@ fn image_to_document_with_memory(name: &str, img: &Image, ctl: &Interrupt, avail
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.95);
-    flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))
+    let mut r = flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))?;
+    r.document.file_encoding.source_images = source_images(&img.warnings);
+    Ok(r)
+}
+
+/// How many frames, pages, parts or entries the file holds when the decoder read only one of
+/// them (`u32::MAX` when it couldn't count them), so Save doesn't write the document back over
+/// all of them (#5733).
+fn source_images(warnings: &[codecs::DecodeWarning]) -> Option<u32> {
+    warnings.iter().find_map(|w| match *w {
+        codecs::DecodeWarning::MoreFrames { total } | codecs::DecodeWarning::MorePages { total } | codecs::DecodeWarning::MoreParts { total } => {
+            Some(total.unwrap_or(u32::MAX))
+        }
+        codecs::DecodeWarning::MoreElements { total } => Some(total),
+        _ => None,
+    })
 }
 
 /// What the decoder noticed (frames or pages left out, data ending early) and the conversion
@@ -972,12 +999,16 @@ impl PngStream {
         self.surface.prune_cursor()
     }
 
-    /// The document of the layer, with the profile and metadata the file ended with.
+    /// The document of the layer, with the profile and metadata the file ended with, and the
+    /// count of images the file holds when the decoder read only the first (an animated PNG's
+    /// frames), so Save doesn't write one image over all of them (#5733).
     pub(crate) fn into_document(self, name: &str, extras: codecs::PngExtras) -> Result<ImportResult, IoError> {
         let Self { surface, header, .. } = self;
         let (mode, _, depth, _) = flat_target(header.layout, header.sample);
         let warnings = extras.warnings.iter().map(ToString::to_string).collect();
-        flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)
+        let mut r = flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)?;
+        r.document.file_encoding.source_images = source_images(&extras.warnings);
+        Ok(r)
     }
 }
 
@@ -1622,8 +1653,9 @@ fn compact_alpha(data: &mut Vec<u8>, color: usize, alpha: usize) {
     data.truncate(n * color);
 }
 
-/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy).
-pub(crate) fn opaque_surface(s: &Surface, r: Rect) -> bool {
+/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy). `s` must
+/// have an alpha channel.
+pub fn opaque_surface(s: &Surface, r: Rect) -> bool {
     let fmt = s.format();
     let (ch, bps) = (fmt.channels(), fmt.sample.bytes());
     let a = ch - 1;

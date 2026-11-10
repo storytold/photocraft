@@ -44,6 +44,16 @@ pub struct CutParts {
 }
 
 impl CutParts {
+    /// Selected pixels in source-document coordinates, including soft coverage.
+    pub(crate) fn selected_pixels(&self) -> &Surface {
+        &self.piece
+    }
+
+    /// Whether the floating piece contains a layer mask rather than layer pixels.
+    pub(crate) fn is_mask(&self) -> bool {
+        self.mask
+    }
+
     /// Split `layer` of `doc` by its selection. With `copy` the selected pixels stay in the layer
     /// too (the piece is a duplicate). Without, they leave a transparent hole, or on the Background,
     /// which can't hold transparency, one filled with `background` (Photoshop). Errors without a
@@ -340,7 +350,7 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
 
 /// Commands that leave a floating piece floating: its own, and ones that don't touch documents.
 fn keeps_floating(id: &str) -> bool {
-    matches!(id, "select.float" | "select.drop" | "brush.mixer.sample" | "brush.mixer.load" | "brush.mixer.clean")
+    matches!(id, "select.float" | "select.drop" | "layer.copyToDocument" | "brush.mixer.sample" | "brush.mixer.load" | "brush.mixer.clean")
         || ["view.", "window.", "help.", "prefs."].iter().any(|p| id.starts_with(p))
 }
 

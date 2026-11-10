@@ -43,6 +43,9 @@ pub struct Held {
     /// The Color Settings policy was already applied (a background open added it before it had
     /// to wait); otherwise opening applies it.
     pub policy_applied: bool,
+    /// Held by Open as Smart Object: the document holds the smart object layer already, and is
+    /// admitted by [`photocraft_engine::file_cmds::admit_as_smart_object`].
+    pub smart_object: bool,
 }
 
 /// Dialog field for the high-memory confirmation prompt.
@@ -323,9 +326,10 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
-    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied } = held;
-    // A raw opens in the Camera Raw dialog first and becomes a document only on its Open.
-    if crate::camera_raw_ui::wants_open_dialog(app, &warnings) {
+    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
+    // A raw opens in the Camera Raw dialog first and becomes a document only on its Open (not
+    // when it is opened as a smart object, which the dialog's Open can't admit).
+    if !smart_object && crate::camera_raw_ui::wants_open_dialog(app, &warnings) {
         crate::camera_raw_ui::hold_for_dialog(app, doc, &name, path.as_deref(), bytes.as_deref().map(Vec::as_slice), &warnings)?;
         return Ok(json!({"cameraRaw": true, "name": name}));
     }
@@ -336,7 +340,13 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
             app.open_failed(&name, &e.to_string());
             return Err(e.to_string());
         }
-        app.session.add_document(doc, None)
+        if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc) } else { app.session.add_document(doc, None) }
+    } else if smart_object {
+        // A damage-only hold has no colour question: apply the policy as the engine's open does,
+        // then admit it as the smart object document it is (name, history label, snapshot).
+        let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
+        app.session.color.open_policy(&mut doc, ignore_exif);
+        photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc)
     } else {
         app.session.open_document(doc, None).0
     };

@@ -33,7 +33,7 @@ required-features = ["gpu"]
 photocraft-automation = { path = "../../crates/automation" }
 photocraft-doc = { workspace = true }
 photocraft-engine = { workspace = true }
-photocraft-io = { workspace = true }
+photocraft-io = { workspace = true, features = ["pdf-editable"] }
 photocraft-raster = { workspace = true }
 photocraft-format = { path = "../../crates/format" }
 photocraft-codecs = { workspace = true }
@@ -47,6 +47,8 @@ serde = { workspace = true }
 tempfile = "3"
 # Reading back a saved PSD's merged-image flag (#8064).
 photocraft-psd = { workspace = true }
+# A real ICC profile for the --metadata test (#9466).
+photocraft-cms = { workspace = true }
 # Synthetic camera raws (#7789).
 photocraft-raw = { workspace = true, features = ["testgen"] }
 # Shell completions and man pages (examples/man-and-completions.rs, for the packages); not in

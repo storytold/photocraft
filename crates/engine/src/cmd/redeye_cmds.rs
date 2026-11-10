@@ -4,6 +4,8 @@
 //! runs on a window around each click plus the mask-filter halo.
 
 use photocraft_algo::redeye::{self, MAX_POINTS, MAX_WINDOW};
+use photocraft_color::ColorMode;
+use photocraft_doc::{Document, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde_json::{Value, json};
@@ -198,6 +200,17 @@ fn apply_click(surf: &mut Surface, sel: Option<&Surface>, lock: bool, click: (i3
     Ok((area, changed))
 }
 
+/// Whether a click that changed no pixel still ran the tool, leaving one unchanged history state
+/// as in Photoshop. Photoshop refuses non-RGB/Lab images, hidden layers and a click that starts
+/// outside the selection; alpha-channel, Quick Mask and layer/filter-mask targets, off-canvas
+/// clicks and clicks on locked transparency were not measured and keep the miss.
+fn runs_unchanged(doc: &Document, id: Option<LayerId>, p: &Value, first: (i32, i32)) -> bool {
+    let pixels = crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
+    let shown = id.and_then(|id| doc.path_of(id)).is_some_and(|path| doc.shown_at(&path));
+    let selected = doc.selection.as_ref().is_none_or(|m| m.sample_channel(first.0, first.1, 0) > 0.0);
+    matches!(doc.mode, ColorMode::Rgb | ColorMode::Lab) && pixels && shown && selected && doc.bounds().contains(first.0, first.1)
+}
+
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     crate::commands::has_paintable(s)?;
     if crate::channel_cmds::edits_channel(s) {
@@ -223,10 +236,14 @@ fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
     let pupil = pupil_raw.clamp(1.0, 100.0);
     let darken = darken.clamp(0.0, 100.0);
     let id = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|d| d.active_layer) };
-    let (damage, total) = s.edit("Red Eye", |doc, active| {
+    let (damage, total) = s.edit("Red Eye Removal Tool", |doc, active| {
         let canvas = doc.bounds();
         let sel = doc.selection.clone();
-        let (surf, lock) = crate::channel_cmds::target_surface(doc, id.or(*active), p)?;
+        let layer = id.or(*active);
+        let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
+        let Some(&first) = pts.first() else { return Err(EngineError::Other(MISS.into())) };
+        // The Background always locks transparency, so only a click on a clear pixel counts.
+        let on_locked_clear = lock && surf.rgba(first.0, first.1)[3] <= 1.0e-5;
         let mut total = 0u32;
         let mut damage = Rect::EMPTY;
         for click in &pts {
@@ -235,7 +252,7 @@ fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
             damage = if damage.is_empty() { area } else { damage.union(&area) };
         }
         if total == 0 {
-            return Err(EngineError::Other(MISS.into()));
+            return if !on_locked_clear && runs_unchanged(doc, layer, p, first) { Ok((Rect::EMPTY, 0)) } else { Err(EngineError::Other(MISS.into())) };
         }
         Ok((damage, total))
     })?;
@@ -337,8 +354,8 @@ mod tests {
     fn miss_and_bad_params_are_errors() {
         let mut s = session(32, 32, 8, "rgb");
         paint_layer(&mut s, |_, _| [0.1, 0.2, 0.8, 1.0]);
-        let err = s.execute("paint.redEye", json!({"x": 16, "y": 16})).unwrap_err().to_string();
-        assert!(err.contains(MISS), "{err}");
+        let r = s.execute("paint.redEye", json!({"x": 16, "y": 16})).unwrap();
+        assert_eq!(r["pixels"], 0, "a miss runs without changing a pixel: {r}");
         assert!(s.execute("paint.redEye", json!({})).is_err());
         assert!(s.execute("paint.redEye", json!({"x": null, "y": 1})).is_err());
         let pts: Vec<[i32; 2]> = (0..65).map(|i| [i, 0]).collect();
@@ -439,3 +456,7 @@ mod tests {
         assert!(s.execute("paint.redEye", json!({"x": 12, "y": 12})).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "redeye_history_state_tests.rs"]
+mod redeye_history_state_tests;

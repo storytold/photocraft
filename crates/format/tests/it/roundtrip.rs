@@ -682,7 +682,7 @@ fn text_kerning_roundtrips_and_defaults() {
     assert!(s.contains("\"kern\":0.0"), "kern defaults to 0");
 }
 
-/// Type on a path (#218): the path, start offset and flip survive .pcraft.
+/// Type on a path (#218): the path, start and end offsets, and flip survive .pcraft.
 #[test]
 fn path_text_shape_roundtrips() {
     use photocraft_doc::text::TextShape;
@@ -692,7 +692,7 @@ fn path_text_shape_roundtrips() {
     let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
     for id in ids {
         if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
-            t.shape = TextShape::Path { path: path.clone(), start: 12.5, flip: true };
+            t.shape = TextShape::Path { path: path.clone(), start: 12.5, end: Some(83.0), flip: true };
         }
     }
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
@@ -700,7 +700,7 @@ fn path_text_shape_roundtrips() {
         LayerContent::Text(t) => Some(t.shape.clone()),
         _ => None,
     });
-    assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, flip: true }));
+    assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, end: Some(83.0), flip: true }));
 }
 
 /// Area type (#218): the whole path, ops and fill rule included, survives .pcraft.
@@ -1090,4 +1090,27 @@ fn arrow_document_is_backward_compatible() {
     // The new reader restores full parametric editability.
     let loaded = load_from_bytes(&bytes).unwrap();
     assert_eq!(loaded, doc);
+}
+
+/// `FileEncoding::source_images` is kept in `.pcraft` with the other encoder settings (#5733):
+/// the crash-recovery autosave is a `.pcraft` bundle reopened at the document's original path, so
+/// dropping the count would let Save write one frame over a multi-image file. A manifest written
+/// before the key existed loads with no count.
+#[test]
+fn file_encoding_source_images_roundtrips_and_defaults_when_absent() {
+    for count in [3, u32::MAX] {
+        let mut doc = Document::new("anim", photocraft_doc::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+        doc.file_encoding = photocraft_doc::FileEncoding { jpeg_quality: Some(80), source_images: Some(count), ..Default::default() };
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        let loaded = load_from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.file_encoding.source_images, Some(count));
+        assert_eq!(loaded, doc);
+
+        // The same manifest without the key, as an older build wrote it.
+        let mut json = serde_json::to_value(read_manifest(&bytes).unwrap().document).unwrap();
+        let encoding = json["file_encoding"].as_object_mut().unwrap();
+        assert_eq!(encoding.remove("sourceImages"), Some(serde_json::json!(count)));
+        let old: photocraft_format::manifest::DocM = serde_json::from_value(json).unwrap();
+        assert_eq!(old.file_encoding, photocraft_doc::FileEncoding { jpeg_quality: Some(80), ..Default::default() });
+    }
 }

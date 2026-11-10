@@ -3,7 +3,7 @@ use super::overlay::path_lines;
 use super::{Affine, Color32, PhotocraftApp, Tokens, Tool, ToolOptions, Value, ViewXform, json, paint_param};
 
 pub fn is_shape_tool(t: Tool) -> bool {
-    matches!(t, Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape)
+    matches!(t, Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape)
 }
 
 fn rgb32(c: [f32; 4]) -> Color32 {
@@ -80,6 +80,8 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             Tool::Rectangle | Tool::CustomShape => json!({"kind": "rect", "rect": rect}),
             Tool::EllipseShape => json!({"kind": "ellipse", "rect": rect}),
             Tool::Triangle => json!({"kind": "polygon", "rect": rect, "sides": 3}),
+            // PhotoCraft's star defaults; the Star Tool's own options are not measured yet (#11377).
+            Tool::Star => json!({"kind": "star", "rect": rect, "sides": 5, "starRatio": 0.5}),
             _ => json!({"kind": "polygon", "rect": rect, "sides": o.polygon_sides.max(3)}),
         }
     })

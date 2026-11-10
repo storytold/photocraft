@@ -19,6 +19,8 @@ pub enum Badge {
     Intersect,
     /// Four arrows: a press drags the point under the pointer (the Curvature Pen over an anchor).
     Move,
+    /// One right-pointing arrow: a press drags the patch (the Patch tool over the selection).
+    Arrow,
 }
 
 impl Badge {
@@ -122,9 +124,12 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     // Patch and Content-Aware Move lasso their area in the Lasso's mode (⇧ adds, ⌥ subtracts,
     // #11024). Over the selection without them a press drags the patch, which combines nothing.
     if matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
-        let at = app.drag.as_ref().filter(|d| d.tool == tool).map(|d| d.start).or(app.hover_doc);
+        // A drag in progress keeps what its press decided (the release reads `drag.modifiers`).
+        let drag = app.drag.as_ref().filter(|d| d.tool == tool);
+        let at = drag.map(|d| d.start).or(app.hover_doc);
+        let m = drag.map_or(m, |d| d.modifiers);
         if at.is_some_and(|p| crate::retouch_ui::patch_drags_selection(app, p, m)) {
-            return None;
+            return (tool == Tool::Patch).then_some(Badge::Arrow);
         }
         return Badge::from_mode(document_selection_mode(app, Tool::Lasso, m));
     }
@@ -158,6 +163,10 @@ pub fn badge_glyph(b: Badge, c: Pos2, h: f32) -> Vec<[Pos2; 2]> {
                 v.push([tip, tip - d * a - side]);
             }
             v
+        }
+        Badge::Arrow => {
+            let a = h * 0.6;
+            vec![[c - vec2(h, 0.0), c + vec2(h, 0.0)], [c + vec2(h, 0.0), c + vec2(h - a, a)], [c + vec2(h, 0.0), c + vec2(h - a, -a)]]
         }
         Badge::Intersect => {
             let d = h * 0.8;
@@ -319,3 +328,7 @@ mod tests {
         assert!(e.len() >= 16 && e.iter().all(|p| p.x >= -0.01 && p.x <= 100.01 && p.y >= -0.01 && p.y <= 50.01));
     }
 }
+
+#[cfg(test)]
+#[path = "../patch_cursor_badge_tests.rs"]
+mod patch_cursor_badge_tests;

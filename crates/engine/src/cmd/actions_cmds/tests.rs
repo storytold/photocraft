@@ -334,11 +334,11 @@ fn record_drops_the_steps_of_a_command_that_failed_and_was_taken_back() {
     assert_eq!(s.execute("actions.stop", json!({})).unwrap()["steps"], 0, "no Duplicate step for a copy that was taken back");
 
     // Straighten rolls back when its crop is refused after the rotation ran.
-    ruled_background(&mut s, 8);
+    ruled_layer(&mut s, 8);
     s.execute("image.analysis.rulerTool", json!({"start": [10, 30], "end": [70, 25]})).unwrap();
     s.authorize = Some(|id, _| if id == "image.crop" { Err(EngineError::Other("refused".into())) } else { Ok(()) });
     s.execute("actions.record", json!({"name": "Refused"})).unwrap();
-    assert!(s.execute("image.analysis.straightenLayer", json!({})).is_err());
+    assert!(s.execute("image.analysis.straightenLayer", json!({"crop": true})).is_err());
     assert_eq!(s.active().unwrap().doc.size.width, 80, "the rotation was taken back");
     assert_eq!(s.execute("actions.stop", json!({})).unwrap()["steps"], 0, "no rotation step for a rotation that was taken back");
 }
@@ -500,23 +500,32 @@ fn ruled_background(s: &mut Session, depth: u32) {
     .unwrap();
 }
 
+/// The same, with a pixel layer on top: since #12033 the Background alone greys Straighten Layer
+/// out, so the tests that run the command target a layer and pass `crop` explicitly.
+fn ruled_layer(s: &mut Session, depth: u32) {
+    ruled_background(s, depth);
+    s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+}
+
 #[test]
 fn record_command_that_runs_commands_replays_it_once() {
     // Straighten Layer runs Image Rotation and Crop itself: only its own call is recorded,
     // so playback rotates once, not three times (rotate, crop, then straighten again).
     for depth in [8, 16] {
         let mut s = Session::new();
-        ruled_background(&mut s, depth);
+        ruled_layer(&mut s, depth);
         s.execute("actions.record", json!({"name": "Level"})).unwrap();
         s.execute("image.analysis.rulerTool", json!({"start": [10, 30], "end": [70, 25]})).unwrap();
-        s.execute("image.analysis.straightenLayer", json!({})).unwrap();
+        // #12033: the crop is asked for, as automation does; the Background it used to default to
+        // now greys the command out.
+        s.execute("image.analysis.straightenLayer", json!({"crop": true})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
         let got = s.execute("actions.get", json!({"action": "Level"})).unwrap();
         let ids: Vec<&str> = got["steps"].as_array().unwrap().iter().map(|st| st[0].as_str().unwrap()).collect();
         assert_eq!(ids, ["image.analysis.rulerTool", "image.analysis.straightenLayer"], "depth {depth}");
         let direct = s.active().unwrap().doc.clone();
 
-        ruled_background(&mut s, depth);
+        ruled_layer(&mut s, depth);
         let before = s.active().unwrap().history.past_len();
         let played = s.execute("actions.play", json!({"action": "Level"})).unwrap();
         assert!(played.get("failed").is_none(), "depth {depth}: {played}");

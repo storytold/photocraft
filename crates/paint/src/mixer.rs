@@ -31,11 +31,15 @@ pub struct MixerSettings {
     pub load_after_stroke: bool,
     /// Empty the brush after each stroke (the automatic Clean option).
     pub clean_after_stroke: bool,
+    /// Load Solid Colors Only (the load menu's checkable entry, `solidColorsOnly` in
+    /// `tools.setBrush`): ⌥-click loads the one colour under the hotspot instead of the sampled tip
+    /// image (#11952). Off by default. Load Brush and the load after each stroke ignore it.
+    pub solid_colors_only: bool,
 }
 
 impl Default for MixerSettings {
     fn default() -> Self {
-        Self { wet: 0.5, load: 0.5, mix: 0.5, flow: 1.0, sample_all_layers: false, clean_after_stroke: true, load_after_stroke: true }
+        Self { wet: 0.5, load: 0.5, mix: 0.5, flow: 1.0, sample_all_layers: false, clean_after_stroke: true, load_after_stroke: true, solid_colors_only: false }
     }
 }
 
