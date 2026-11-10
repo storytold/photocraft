@@ -233,6 +233,7 @@ pub use panels::comps_ui;
 pub use panels::doc_props_ui;
 pub use panels::histogram_panel;
 pub use panels::history_menu_ui;
+pub use panels::info_panel_options;
 pub use panels::layer_filter_ui;
 pub use panels::layer_menu_ui;
 pub use panels::layer_props_ui;
@@ -369,6 +370,8 @@ pub struct PhotocraftApp {
     streams: HashMap<DocId, canvas::viewport_pages::Stream>,
     /// The Info panel's Color Sampler readouts for (document, revision) (`panels::sampler_readouts`).
     info_samplers: Option<panels::SamplerReadouts>,
+    /// The Info panel's extra-channel readings under the pointer (`panels::pointer_channels`).
+    info_channels: Option<panels::PointerChannels>,
     /// Display profile readings (#569).
     monitors: monitor_status::State,
     pub(crate) thumbnail_cache: std::sync::Arc<std::sync::Mutex<crate::home_recent_ui::ThumbnailCache>>,
