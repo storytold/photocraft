@@ -14,8 +14,8 @@ use crate::state::Tool;
 /// The brush is a tool option, kept per tool like Photoshop's options bar: switching from the
 /// Brush to the Eraser saves the session brush for the old tool and loads the new tool's, so each
 /// keeps its own size, hardness, mode, opacity, dynamics and smoothing. A tool seen for the
-/// first time takes what the brush already has, at Photoshop's 10 % smoothing. Other tools leave
-/// the brush alone.
+/// first time takes what the brush already has, at Photoshop's 10 % smoothing, unless it has its
+/// own starting tip in [`fresh_brush`]. Other tools leave the brush alone.
 ///
 /// The foreground and background colours, the erase flag and the stroke seed belong to the
 /// session rather than to the tool, so a swap never carries them between tools: picking a colour
@@ -41,9 +41,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
-        // The Background Eraser, the Healing Brush and the Burn tool start with their own measured
-        // tips instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn) => fresh_brush(tool, &current),
+        // The Background Eraser, Healing Brush, Burn and History Brush start with their own tips
+        // instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671, #12847).
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::HistoryBrush) => fresh_brush(tool, &current),
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
             BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, ..current }
@@ -79,12 +79,14 @@ const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
 /// The Burn tool's tip after Reset Tool (#12671): a 65 px soft round at 25 % spacing.
 const BURN_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
+/// The History Brush's tip after Reset Tool (#12847): a 21 px soft round at 25 % spacing.
+const HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`], the Burn tool's [`BURN_TOOL_TIP`]; the other tools keep the default
-/// tip.
+/// [`HEALING_BRUSH_TIP`], the Burn tool's [`BURN_TOOL_TIP`], the History Brush's
+/// [`HISTORY_BRUSH_TIP`] with zero smoothing; the other tools keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -92,6 +94,10 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
         Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
         Tool::Burn => (brush.size, brush.hardness, brush.spacing) = BURN_TOOL_TIP,
+        Tool::HistoryBrush => {
+            (brush.size, brush.hardness, brush.spacing) = HISTORY_BRUSH_TIP;
+            brush.smoothing.amount = 0.0;
+        }
         _ => {}
     }
     session_fields(current, &brush)
@@ -101,6 +107,10 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
 fn first_smoothing() -> photocraft_engine::paint::brush::Smoothing {
     photocraft_engine::paint::brush::Smoothing { amount: 0.1, ..Default::default() }
 }
+
+#[cfg(test)]
+#[path = "../history_brush_reset_tip_tests.rs"]
+mod history_brush_reset_tip_tests;
 
 /// Does a stroke with `tool` starting now paint in Photoshop's Clear mode, erasing with its own
 /// brush (#3439)? Clear chosen in its Mode dropdown, or `~` held (`hold_keys::erase_held`).
