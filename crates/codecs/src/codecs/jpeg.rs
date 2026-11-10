@@ -40,6 +40,9 @@ pub(crate) struct JpegMeta {
     pub adobe_transform: Option<u8>,
     /// (width, height, components) from the first SOFn.
     pub frame: Option<(u32, u32, u8)>,
+    /// Whether a component after the first in that frame has a larger horizontal or vertical
+    /// sampling factor than the first (#12588).
+    pub later_component_sampled_larger: bool,
 }
 
 /// Walk the marker segments up to SOS and collect metadata.
@@ -100,6 +103,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 let h = u16::from_be_bytes([seg[1], seg[2]]) as u32;
                 let w = u16::from_be_bytes([seg[3], seg[4]]) as u32;
                 m.frame = Some((w, h, seg[5]));
+                m.later_component_sampled_larger = later_component_sampled_larger(seg);
             }
             0xEE if seg.len() >= 12 && seg.starts_with(b"Adobe") => {
                 m.adobe_transform = Some(seg[11]);
@@ -244,16 +248,43 @@ fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Whether a frame header's component list (`seg`, the SOFn segment after its length) gives a
+/// component after the first a larger H or V sampling factor than the first. `false` when the
+/// list is cut short.
+fn later_component_sampled_larger(seg: &[u8]) -> bool {
+    let n = usize::from(seg.get(5).copied().unwrap_or(0));
+    let Some(list) = seg.get(6..6 + 3 * n) else {
+        return false;
+    };
+    let mut factors = list.as_chunks::<3>().0.iter().map(|&[_, hv, _]| (hv >> 4, hv & 0x0F));
+    let Some((h0, v0)) = factors.next() else {
+        return false;
+    };
+    factors.any(|(h, v)| h > h0 || v > v0)
+}
+
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
 /// (SOF9–SOF11) or a DCT frame whose precision isn't 8 bits (#4934, #5003). Lossless (SOF3) and
 /// 12-bit progressive Huffman (SOF2) go there too: craft-jpeg reports them unsupported, where
-/// zune-jpeg's failure would read as a damaged file.
-fn uses_craft_jpeg(bytes: &[u8]) -> bool {
-    match craft_jpeg::frame(bytes) {
+/// zune-jpeg's failure would read as a damaged file. So do the 8-bit sequential frames of
+/// [`sampled_larger_than_first`], which zune-jpeg 0.5.15 decodes with wrong colours (#12588).
+/// `frame` is the file's [`craft_jpeg::frame`].
+fn uses_craft_jpeg(frame: Option<craft_jpeg::FrameKind>, meta: &JpegMeta) -> bool {
+    match frame {
         Some(f) if (0xC9..=0xCB).contains(&f.marker) || f.marker == 0xC3 => true,
-        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8,
-        _ => false,
+        Some(f) if matches!(f.marker, 0xC0..=0xC2) && f.precision != 8 => true,
+        Some(f) => sampled_larger_than_first(f, meta),
+        None => false,
     }
+}
+
+/// An 8-bit Huffman sequential frame (SOF0, SOF1) of 3 or 4 components whose largest sampling
+/// factor isn't on the first component. zune-jpeg 0.5.15 opens these with wrong colours (#12588;
+/// fixed on its 0.5.16 line, not yet released), so craft-jpeg decodes them until zune-jpeg is
+/// updated. Progressive (SOF2) stays on zune-jpeg, which craft-jpeg doesn't decode at 8 bits, and
+/// so do other component counts, which craft-jpeg doesn't decode at all.
+fn sampled_larger_than_first(f: craft_jpeg::FrameKind, meta: &JpegMeta) -> bool {
+    matches!(f.marker, 0xC0 | 0xC1) && f.precision == 8 && matches!(meta.frame, Some((_, _, 3 | 4))) && meta.later_component_sampled_larger
 }
 
 fn craft_jpeg_error(e: craft_jpeg::Error) -> CodecError {
@@ -299,18 +330,22 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     if let Some((w, h, nc)) = meta.frame {
         limits.check_bytes(w, h, u64::from(nc.max(1)))?;
     }
-    if uses_craft_jpeg(bytes) {
+    let frame = craft_jpeg::frame(bytes);
+    if uses_craft_jpeg(frame, &meta) {
         // craft-jpeg sizes its buffers from the frame header before it reads a scan.
         if scan_bytes == 0 {
             return Err(err("the file has no scan data"));
         }
+        // Files routed here only for #12588 are 8-bit Huffman, which zune-jpeg checked whole.
+        let huffman_8 = frame.is_some_and(|f| sampled_larger_than_first(f, &meta));
         if let Some((w, h, _)) = meta.frame
-            && end == DataEnd::Truncated
-            // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
-            // a flat block, so a complete scan may be shorter than this bound.
+            // Otherwise only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under
+            // a bit on a flat block, so a complete scan may be shorter than this bound.
+            && (end == DataEnd::Truncated || huffman_8)
             && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
         {
-            return Err(err("the truncated scan is too short for the frame it declares"));
+            let what = if end == DataEnd::Truncated { "the truncated scan" } else { "the scan data" };
+            return Err(err(format!("{what} is too short for the frame it declares")));
         }
         let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform)?;
         img.icc = meta.icc;
@@ -804,17 +839,76 @@ mod tests {
         (v * 65535.0 / 4095.0).round() as u16
     }
 
+    fn routes(b: &[u8]) -> bool {
+        uses_craft_jpeg(craft_jpeg::frame(b), &scan_metadata(b))
+    }
+
     #[test]
     fn routing() {
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8]));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC3, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        assert!(!routes(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        assert!(!routes(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        assert!(routes(&[0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        assert!(routes(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        assert!(routes(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        assert!(!routes(&[0xFF, 0xD8]));
+        assert!(!routes(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        assert!(routes(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        assert!(routes(&[0xFF, 0xD8, 0xFF, 0xC3, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+    }
+
+    /// A frame header with one component per (H, V) sampling factor pair.
+    fn sof_with_sampling(marker: u8, precision: u8, factors: &[(u8, u8)]) -> Vec<u8> {
+        let n = u8::try_from(factors.len()).unwrap();
+        let mut b = vec![0xFF, 0xD8, 0xFF, marker, 0, 8 + 3 * n, precision, 0, 8, 0, 8, n];
+        for (i, (h, v)) in factors.iter().enumerate() {
+            b.extend([u8::try_from(i).unwrap() + 1, (h << 4) | v, 0]);
+        }
+        b
+    }
+
+    #[test]
+    fn routes_a_later_component_with_the_largest_sampling_to_craft_jpeg() {
+        // #12588: zune-jpeg 0.5.15 decodes these with wrong colours.
+        assert!(routes(&sof_with_sampling(0xC0, 8, &[(1, 1), (2, 2), (1, 1)])));
+        assert!(routes(&sof_with_sampling(0xC1, 8, &[(1, 1), (1, 1), (1, 1), (2, 1)])));
+        assert!(routes(&sof_with_sampling(0xC0, 8, &[(2, 1), (1, 2), (1, 1)])));
+        // The first component has the largest factors: zune-jpeg is right.
+        assert!(!routes(&sof_with_sampling(0xC0, 8, &[(2, 2), (1, 1), (1, 1)])));
+        assert!(!routes(&sof_with_sampling(0xC0, 8, &[(1, 1), (1, 1), (1, 1)])));
+        assert!(!routes(&sof_with_sampling(0xC0, 8, &[(1, 1)])));
+        // craft-jpeg decodes 1, 3 or 4 components; zune-jpeg opens 2 as gray.
+        assert!(!routes(&sof_with_sampling(0xC0, 8, &[(1, 1), (2, 1)])));
+        // craft-jpeg doesn't decode 8-bit progressive, so it stays on zune-jpeg.
+        assert!(!routes(&sof_with_sampling(0xC2, 8, &[(1, 1), (2, 2), (1, 1)])));
+        // A frame header whose segment ends inside the component list it declares.
+        let mut cut = sof_with_sampling(0xC0, 8, &[(1, 1), (2, 2), (1, 1)]);
+        cut.truncate(cut.len() - 3);
+        cut[5] -= 3;
+        assert_eq!(scan_metadata(&cut).frame, Some((8, 8, 3)));
+        assert!(!routes(&cut));
+    }
+
+    /// #12588: CMYK 4:2:2 from jpeg-encoder gives K the 2×1 factor, and zune-jpeg 0.5.15 opened it
+    /// about 41 levels off the inks encoded.
+    #[test]
+    fn cmyk_with_k_sampled_largest_opens_with_the_inks_encoded() {
+        let (w, h) = (64u16, 48u16);
+        let mut inks = Vec::with_capacity(usize::from(w) * usize::from(h) * 4);
+        for y in 0..h {
+            for x in 0..w {
+                inks.extend([(x * 4) as u8, (y * 5) as u8, ((x + y) * 2) as u8, (255 - x * 3) as u8]);
+            }
+        }
+        let mut bytes = Vec::new();
+        let mut enc = jpeg_encoder::Encoder::new(&mut bytes, 95);
+        enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_2);
+        enc.encode(&inks, w, h, jpeg_encoder::ColorType::Cmyk).unwrap();
+        assert!(routes(&bytes), "the test file needs K sampled largest");
+        let img = crate::decode_as(Format::Jpeg, &bytes).unwrap();
+        assert_eq!(img.layout(), ChannelLayout::Cmyk);
+        let total: u64 = img.data().iter().zip(&inks).map(|(a, b)| u64::from(a.abs_diff(*b))).sum();
+        let mean = total as f64 / inks.len() as f64;
+        assert!(mean < 2.0, "mean {mean} levels off the inks encoded");
     }
 
     #[test]
@@ -871,7 +965,7 @@ mod tests {
         let mut with = stream[..2].to_vec();
         segment(&mut with, 0xED, &app13);
         with.extend_from_slice(&stream[2..]);
-        assert!(uses_craft_jpeg(&with));
+        assert!(routes(&with));
         let img = crate::decode(&with).unwrap();
         assert_eq!(img.meta.photoshop_resources.as_deref(), Some(resources.as_slice()));
     }
