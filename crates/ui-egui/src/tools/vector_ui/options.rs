@@ -44,12 +44,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         );
         return true;
     }
-    if matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint) {
-        let hint = if tool == Tool::AddAnchorPoint {
-            tl!("Click a segment to add an anchor point · {alt}-click an anchor to delete it")
-        } else {
-            tl!("Click an anchor point to delete it · {alt}-click a segment to add one")
-        };
+    if tool == Tool::AddAnchorPoint {
+        // Photoshop centres this in the rest of the bar after the preset picker (#12731).
+        let text = egui::RichText::new(tl!("No options for the Add Anchor Point Tool.")).color(t.text_dim).size(12.0);
+        ui.add_sized([ui.available_width(), ui.available_height()], egui::Label::new(text));
+        return true;
+    }
+    if tool == Tool::DeleteAnchorPoint {
+        let hint = tl!("Click an anchor point to delete it · {alt}-click a segment to add one");
         lbl(ui, &crate::i18n::fmt(hint, &[("alt", &crate::shortcuts::pretty("Alt"))]));
         return true;
     }
