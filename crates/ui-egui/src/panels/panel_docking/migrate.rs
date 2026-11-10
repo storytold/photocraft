@@ -1,64 +1,23 @@
 //! The native dock state as a craft-ui workspace: the one conversion.
 //!
 //! `crate::dock`'s state is the workspace while nothing has customized it, and `ui.set`,
-//! the menus and the saved workspaces all carry its shape. [`legacy_layout`] reads that
-//! state as the craft-ui layout it is drawn as; [`materialize`] commits it as a
+//! the menus and the saved workspaces all carry its shape. [`default_layout::layout`] reads
+//! that state as the craft-ui layout it is drawn as; [`materialize`] commits it as a
 //! [`Workspace`] once the shell is ready to draw from the workspace alone. Everything
 //! downstream, the dispatcher included, then reads and writes the workspace; the native
-//! state stays app-owned input the conversion must keep accepting.
+//! state stays app-owned input the conversion must keep accepting, so a theme change or a
+//! still-settling canvas re-derives it until the first real change fixes the workspace.
 
-use crate::dock::Group;
-use craft_ui::docking::{Column, Floating, Layout, Location, Node, Side, Workspace};
+use craft_ui::docking::{Layout, Location, Workspace};
 
-use super::{PANELS, PROPERTIES_WINDOW, Returns, commit, default_width, normalize, with_canvas};
+use super::{PANELS, Returns, commit};
 use crate::PhotocraftApp;
-use craft_ui::docking::Group as CraftGroup;
+
+pub(crate) use super::default_layout::layout as legacy_layout;
 
 /// The layout drawn while the workspace has not been materialized yet.
 pub(crate) fn legacy(app: &PhotocraftApp) -> Layout<String> {
     legacy_layout(app, false)
-}
-
-/// The native dock's arrangement as a craft-ui layout: the canvas beside one dock column of the
-/// shown groups, top to bottom, with their tab order, selected tab, user-set heights and
-/// collapsed (minimized) groups. The Studio themes float Properties over the canvas's top right
-/// corner. `all` includes the groups that are not shown, with every tab.
-pub(crate) fn legacy_layout(app: &PhotocraftApp, all: bool) -> Layout<String> {
-    let pro = app.ui.theme.is_pro();
-    let mut groups = Vec::new();
-    let mut floating = Vec::new();
-    for group in app.ui.dock.order().into_iter().filter(|g| all || g.shown(&app.ui.panels)) {
-        let labels = group.tabs(pro);
-        let visible = if all { group.tabs(pro).iter().copied().enumerate().collect() } else { app.ui.dock.visible_tabs(group, pro) };
-        let panels: Vec<String> = visible.iter().filter_map(|(_, label)| normalize(label).map(str::to_owned)).collect();
-        if panels.is_empty() {
-            continue;
-        }
-        let selected = *group.tab_mut(&mut app.ui.dock_tabs.clone());
-        let active = labels.get(selected).and_then(|label| normalize(label)).and_then(|id| panels.iter().position(|p| p == id)).unwrap_or(0);
-        if group == Group::Properties && !pro {
-            floating.push(Floating::single(panels, active, studio_properties_rect(app)).with_id(PROPERTIES_WINDOW));
-            continue;
-        }
-        let height = app.ui.dock.heights.contains_key(&group).then(|| app.ui.dock.height(group));
-        // The native collapse flag is the group's in-place tab-strip minimize; the workspace
-        // carries it as `minimized`, so the conversion needs no per-frame remap.
-        let minimized = app.ui.dock.is_collapsed(group);
-        groups.push(CraftGroup { minimized, height, ..CraftGroup::new(panels, active) });
-    }
-    let (columns, width) = if groups.is_empty() { (Vec::new(), 0.0) } else { (vec![Column::new(groups, default_width(pro))], default_width(pro)) };
-    Layout { root: Some(with_canvas(Node::Dock { side: Side::End, columns }, width)), floating }
-}
-
-/// Where the Studio themes' Properties card floats: inside the canvas's top right corner.
-fn studio_properties_rect(app: &PhotocraftApp) -> [f32; 4] {
-    let (width, height) = (320.0, 440.0);
-    let canvas = app.last_canvas_rect;
-    if canvas.is_positive() && canvas.width() > width + 24.0 {
-        [canvas.right() - width - 12.0, canvas.top() + 44.0, width, height]
-    } else {
-        [120.0, 160.0, width, height]
-    }
 }
 
 /// The native dock as a workspace: its shown panels, and where each hidden one goes back.

@@ -247,14 +247,9 @@ fn tiny_windows_do_not_panic() {
 }
 
 #[test]
-fn the_rail_and_window_menu_never_lose_a_panel() {
+fn the_window_menu_never_loses_a_panel() {
     let (mut app, _, _) = app_with_layers();
     let ctx = egui::Context::default();
-    // The rail collapses and expands a docked group; it never hides it (#129).
-    rail_click(&mut app, Group::Layers, true);
-    assert!(app.ui.panels.layers && app.ui.dock.is_collapsed(Group::Layers));
-    rail_click(&mut app, Group::Layers, true);
-    assert!(app.ui.panels.layers && !app.ui.dock.is_collapsed(Group::Layers));
     // Window › Layers on a collapsed group expands it instead of hiding it.
     app.ui.dock.set_collapsed(Group::Layers, true);
     crate::menus::invoke(&mut app, &ctx, "window.panel.layers", json!({})).unwrap();
@@ -691,13 +686,19 @@ fn navigator_preview_fills_its_group_and_keeps_aspect() {
                 PhotocraftApp::setup_context(&cc.egui_ctx, theme);
                 let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
                 app.ui.theme = theme;
-                app.ui.panels.navigator = true;
+                // Navigator keeps its saved height only while another open group sits below
+                // it: the last open group of a column always fills the rest.
                 app.ui.dock.heights.insert(Group::Navigator, tall);
                 app.run("file.new", json!({"width": 200, "height": 300})).unwrap();
                 app.sync_views();
                 app
             });
-            h.run_steps(8);
+            // One frame materializes the default layout: Navigator's group lives in the icon
+            // column. Expanding it draws actual panel bodies, whose heights the native state's
+            // stored navigator height (set above) carries into the converted group.
+            h.run_steps(1);
+            h.state_mut().run("window.panel.layout", json!({"action": {"SetIconic": {"panel": "navigator", "iconic": false}}})).unwrap();
+            h.run_steps(7);
             let group = rect_of(&h, Group::Navigator);
             let preview = crate::panels::last_navigator_preview(&h.ctx).unwrap_or_else(|| panic!("{theme:?} {tall}: no preview drawn"));
             assert!((group.height() - tall).abs() < 1.0, "{theme:?}: group {group:?}");

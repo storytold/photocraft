@@ -12,7 +12,7 @@ pub fn panel_state_id(ctx: &egui::Context, salt: impl egui::AsIdSalt) -> egui::I
 }
 
 /// The panels whose saved sizes moved to a parent-scoped key in 0.37.
-const PANEL_STATE_KEYS: &[&str] = &["dock", "title_bar", "options_bar", "status_bar", "toolbar", "rail", "shared-panel-dock"];
+const PANEL_STATE_KEYS: &[&str] = &["dock", "title_bar", "options_bar", "status_bar", "toolbar", "shared-panel-dock"];
 
 /// What the two keys held when this build last looked at a panel, so a later startup can tell
 /// which one a 0.36 rollback or a 0.37 session wrote last.

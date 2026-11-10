@@ -125,7 +125,8 @@ file-resource hot reload are not implemented.
 
 Arabic, Hebrew, Persian, Urdu and the other right-to-left languages listed in
 `i18n::dir_for_code` mirror the window's chrome when chosen: the menu bar starts at the right
-with File, the toolbox docks on the right and the panel dock and its rail on the left, and the
+with File, the toolbox docks on the right and the panel dock on the left, its icon column nearest the
+canvas, and the
 title, options and status bars read from the right (`crates/ui-egui/src/direction.rs`). The
 direction follows the language code, so a catalog needs no extra setting.
 

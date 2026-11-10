@@ -1633,14 +1633,13 @@ mod embedding_tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
 
-    fn whole_app(rail: bool, menu_bar: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    fn whole_app(menu_bar: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut session = photocraft_engine::Session::new();
             // An empty workspace with its docks, not the Home screen.
             session.edit_prefs(|p| p.general.auto_show_home_screen = false);
             let mut app = PhotocraftApp::new(session, crate::Services::default());
-            app.ui.panels.rail = rail;
             app.ui.panels.menu_bar = menu_bar;
             app
         });
@@ -1652,38 +1651,30 @@ mod embedding_tests {
         egui::containers::panel::PanelState::load(&h.ctx, panel_state_id(&h.ctx, panel)).is_some()
     }
 
-    /// The rail is drawn inside the canvas panel, so its panel state is keyed under that panel's
-    /// scope: find it by a button only the rail has.
-    fn rail_drawn(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> bool {
-        h.query_by_label("Color & Swatches").is_some()
-    }
-
-    /// An app that embeds the UI can hide the icon rail and the menu bar; both are on by default.
+    /// An app that embeds the UI can hide the menu bar; it is on by default.
     #[test]
-    fn rail_and_menu_bar_follow_their_panel_flags() {
+    fn menu_bar_follows_its_panel_flag() {
         let panels = crate::state::Panels::default();
-        assert!(panels.rail && panels.menu_bar);
+        assert!(panels.menu_bar);
 
-        let h = whole_app(true, true);
-        assert!(rail_drawn(&h) && drawn(&h, "title_bar"));
+        let h = whole_app(true);
+        assert!(drawn(&h, "title_bar"));
         assert!(h.query_by_label("File").is_some());
 
-        let h = whole_app(false, false);
-        assert!(!rail_drawn(&h), "the icon rail is drawn");
+        let h = whole_app(false);
         assert!(!drawn(&h, "title_bar"), "the title bar is drawn");
         assert!(h.query_by_label("File").is_none(), "the menus are drawn");
         assert!(crate::panel_docking::last_bodies(&h.ctx).iter().any(|(id, _)| id == "layers"), "the dock itself stays");
     }
 
-    /// Settings saved before the flags existed load with both on.
+    /// Settings saved before the flag existed load with it on.
     #[test]
-    fn panels_without_the_flags_deserialize_with_both_on() {
+    fn panels_without_the_flag_deserializes_with_menu_bar_on() {
         let mut v = serde_json::to_value(crate::state::Panels::default()).unwrap();
         let m = v.as_object_mut().unwrap();
-        m.remove("rail");
         m.remove("menu_bar");
         let p: crate::state::Panels = serde_json::from_value(v).unwrap();
-        assert!(p.rail && p.menu_bar);
+        assert!(p.menu_bar);
     }
 }
 

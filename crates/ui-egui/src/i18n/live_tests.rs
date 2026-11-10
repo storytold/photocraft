@@ -479,6 +479,7 @@ fn czech_status_notices_and_navigator_draw_translated_text() {
         let mut h = harness();
         h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "cs"})).expect("language");
         h.state_mut().ui.panels.navigator = true;
+        h.state_mut().run("window.panel.layout", json!({"action": {"SetIconic": {"panel": "navigator", "iconic": false}}})).unwrap();
         h.run_steps(4);
         with_language(lang("cs"), || {
             h.state_mut().open_failed("English file.psd", "disk full");

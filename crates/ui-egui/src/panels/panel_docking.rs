@@ -330,6 +330,7 @@ pub(crate) fn newer(saved: &Value) -> bool {
     saved.get("docking").and_then(|docking| docking.get("version")).and_then(Value::as_u64).is_some_and(|version| version > u64::from(Workspace::VERSION))
 }
 
+mod default_layout;
 mod migrate;
 
 pub(crate) use migrate::{legacy, legacy_workspace};
@@ -442,7 +443,7 @@ fn default_place(app: &PhotocraftApp, layout: &Layout<String>, panel: &str) -> A
     }
     let order = app.ui.dock.order();
     let Some(at) = order.iter().position(|g| *g == group) else { return open };
-    let docked = |g: &Group| PANELS.iter().filter(|p| p.2 == *g).map(|p| p.0).find(|id| in_dock_column(layout, id));
+    let docked = |g: &Group| PANELS.iter().filter(|p| p.2 == *g).map(|p| p.0).find(|id| in_main_column(layout, id));
     let new_group =
         |anchor: &str, below: bool| Action::OpenAt { panel: panel.to_owned(), anchor: anchor.to_owned(), placement: Placement::Group { below, height: None } };
     if let Some(anchor) = order[at + 1..].iter().find_map(docked) {
@@ -1282,6 +1283,26 @@ fn in_dock_column(layout: &Layout<String>, panel: &str) -> bool {
     layout.root.iter().flat_map(tree_groups).any(|group| group.dock && group.panels.iter().any(|id| id == panel))
 }
 
+/// Is `panel` in a group of the dock's main (expanded) column? The icon column counts as a dock
+/// column to craft-ui, but a panel Window shows its group beside the regular panels.
+fn in_main_column(layout: &Layout<String>, panel: &str) -> bool {
+    let iconic: Vec<Vec<String>> = layout
+        .root
+        .iter()
+        .flat_map(|node| end_dock_node(node).into_iter())
+        .filter_map(|dock| match dock {
+            Node::Dock { columns, .. } => Some(columns),
+            _ => None,
+        })
+        .flatten()
+        .filter(|column| column.iconic)
+        .flat_map(|column| &column.groups)
+        .map(|group| group.panels.clone())
+        .collect();
+    let docked = in_dock_column(layout, panel);
+    docked && !iconic.iter().any(|panels| panels.iter().any(|id| id == panel))
+}
+
 fn group_members(layout: &Layout<String>, panel: &str) -> Vec<String> {
     layout.root.iter().chain(layout.floating.iter().map(|window| &window.root)).find_map(|root| tree_group(root, panel)).unwrap_or_default()
 }
@@ -1294,36 +1315,6 @@ fn reveal_group(app: &mut PhotocraftApp, panel: &str) {
             if let Some((_, _, group)) = PANELS.iter().find(|p| p.0 == id) {
                 app.ui.dock.set_collapsed(*group, false);
             }
-        }
-    }
-}
-
-pub(crate) fn rail_on(app: &PhotocraftApp, group: Group) -> bool {
-    app.ui.docking.as_ref().is_some_and(|workspace| {
-        let layout = &workspace.layout;
-        let collapsed = collapsed_members(app, layout);
-        PANELS.iter().filter(|p| p.2 == group).any(|p| layout.contains(&p.0.to_owned()) && !collapsed.contains(p.0))
-    })
-}
-
-pub(crate) fn rail_click(app: &mut PhotocraftApp, group: Group) {
-    let Some(workspace) = app.ui.docking.as_ref() else { return };
-    let layout = &workspace.layout;
-    let floating = PANELS.iter().filter(|p| p.2 == group).any(|p| floats(layout, p.0));
-    let existing = PANELS.iter().find(|p| p.2 == group && layout.contains(&p.0.to_owned())).map(|p| p.0);
-    let panel = existing.or_else(|| group.tabs(app.ui.theme.is_pro()).get(*group.tab_mut(&mut app.ui.dock_tabs)).and_then(|label| normalize(label)));
-    if let Some(panel) = panel {
-        let result = if existing.is_some() && rail_on(app, group) {
-            if floating {
-                group_command(app, &json!({"panel": panel, "operation":"close"}))
-            } else {
-                group_command(app, &json!({"panel": panel, "operation":"collapse"}))
-            }
-        } else {
-            dock_command(app, "window.panel.activate", &json!({"panel":panel}))
-        };
-        if let Err(error) = result {
-            app.ui.status = error;
         }
     }
 }

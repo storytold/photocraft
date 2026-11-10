@@ -783,6 +783,14 @@ updates a floating group's position and size; `{"action":{"ResizeSplit":{"path":
 resizes the root divider (`false`/`true` path entries select first/second children).
 `Move` with `placement: {"Tab":{"before":"swatches"}}` reorders tabs, and
 `SetStackOpen {panel,open}` / `ResizeStack {panel,height}` control accordion entries.
+`{"action":{"SetIconic":{"panel":"navigator","iconic":true}}}` collapses the panel's whole
+column to icons — the «/» button on the column bar does the same — and keeps the width its
+bodies need for `iconic: false`, which expands the column again. A column with `iconic: true`
+draws its groups as icons and names, and a click on one opens that panel as the column's
+flyout. The default layout puts Navigator, Histogram, Info, History, Actions, Layer Comps and
+Brushes between the panel column and the canvas, `docking.layout` reports each column's
+`iconic` and `iconic_width`, and `window.panel.<id>` on a panel the icon column does not show
+opens its column's flyout.
 The UI dispatches these same commands. Unknown panel IDs, invalid geometry, and stale
 split paths return an error without changing the workspace.
 
@@ -810,7 +818,7 @@ or `down` to the panel's entire current group. With `operation:"move"`, provide
 to transfer all members atomically while preserving their order and selecting the
 requested `panel`.
 A floating group's drag bar or title bar also transfers the whole group when dropped on a
-dock target. The panel menu and icon rail remain
+dock target. The panel menu and the dock's icon column remain
 available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
 and expands the panel, including when another tab is selected. Workspace snapshots
 retain custom collapse settings and Timeline visibility.

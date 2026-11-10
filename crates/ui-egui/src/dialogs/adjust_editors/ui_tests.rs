@@ -220,7 +220,7 @@ fn curves_graph_grows_with_the_properties_panel() {
     let (id, _) = layer(&h);
     let narrow = curves_graph(&h, id);
     assert!(narrow.width() < 300.0, "{narrow:?}");
-    crate::panels::request_dock_width(&h.ctx, 760.0);
+    crate::panels::request_dock_width(&h.ctx, 796.0);
     h.run_steps(8);
     let wide = curves_graph(&h, id);
     // 760 points of panel, but the 900-point window leaves room for 540 beside the other rows.

@@ -510,6 +510,8 @@ fn tall_menu_scrolls_with_mouse_wheel_on_short_display() {
 fn window_panel_and_workspace_ids_drive_the_shell() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();
+    // History lives in the default's icon column; hide it first, then reveal it like the menu does.
+    invoke(&mut app, &ctx, "window.panel.history", json!({"show": false})).unwrap();
     assert!(!app.ui.panels.history);
     invoke(&mut app, &ctx, "window.panel.history", Value::Null).unwrap();
     assert!(app.ui.panels.history);

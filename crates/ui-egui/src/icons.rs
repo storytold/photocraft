@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
 use craft_ui::icons::{SvgIconSet, SvgStyle};
-use egui::{Color32, Rect, Response, Sense, Vec2};
+use egui::{Color32, Rect, Response, Vec2};
 
 use crate::icon_data::ICONS;
 use crate::state::Tool;
@@ -232,22 +232,6 @@ pub fn button_with_icon_size_tip(ui: &mut egui::Ui, name: &str, box_size: f32, i
     if tooltip.is_empty() || !show_tip { resp } else { resp.on_hover_text(label) }
 }
 
-/// Rail toggle: "on" gets a quiet filled background and full-strength icon (no accent).
-pub fn rail_button(ui: &mut egui::Ui, name: &str, box_size: f32, on: bool, tooltip: &str) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
-    if on {
-        ui.painter().rect_filled(rect, t.radius_sm, t.card);
-        ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
-    }
-    let tint = if on || resp.hovered() { t.text } else { t.text_faint };
-    paint(ui, rect, name, (box_size * 0.52).round(), tint);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tl!(tooltip)));
-    resp.on_hover_text(tl!(tooltip))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,7 +394,7 @@ mod tests {
                 response = Some(
                     ui.add_enabled_ui(enabled, |ui| {
                         if legacy {
-                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::click());
                             let tint = button_chrome(ui, rect, selected, response.hovered());
                             paint(ui, rect, "square", (28.0_f32 * 0.52).round(), tint);
                             response

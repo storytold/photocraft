@@ -862,13 +862,17 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
         // Color includes Swatches; Navigator keeps the pixel canvas easy to inspect.
         "Pixel Art" => (true, true, true, false, false),
         "Motion" => (false, false, true, false, true),
-        _ => (false, true, true, false, true),
+        // The default carries Photoshop's icon column: Navigator · History · Brushes (plan B1).
+        _ => (true, true, true, true, true),
     };
     p.navigator = nav;
     p.color = color;
     p.layers = layers;
     p.history = history;
     p.properties = props;
+    // Only the default shows the icon column (Navigator · History · Brushes); the presets keep
+    // their own panels, so Brushes must not leak in from an earlier switch.
+    p.brushes = matches!(app.ui.workspace.as_str(), "" | "Essentials");
     p.character = app.ui.workspace == "Graphic and Web";
     // Presets return to the untouched conversion: the next frame re-derives the layout the
     // per-frame native dock state describes.
