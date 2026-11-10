@@ -4711,6 +4711,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	თითოეული არხისთვის სხვა დოკუმენტი აირჩიეთ.
 	A picked document is no longer open.	ერთ-ერთი არჩეული დოკუმენტი აღარ არის გახსნილი.
 	A picked document is no longer a grayscale document of the same size.	ერთ-ერთი არჩეული დოკუმენტი აღარ არის იმავე ზომის ნაცრისფერი ტონების დოკუმენტი.
+	HSL Color	HSL ფერი
+	Spot Channels	სპოტ-ფერის არხები
+	Alpha Channels	ალფა არხები
+	Info Panel Options	ინფორმაციის პანელის პარამეტრები
+	Readouts	მაჩვენებლები
+	Total Spot Ink	სპოტ-ფერის საღებავის ჯამი
 	Move Toolbar to the Right	ხელსაწყოების პანელის მარჯვნივ გადატანა
 	Move Toolbar to the Left	ხელსაწყოების პანელის მარცხნივ გადატანა
 
@@ -4730,3 +4736,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	შიგთავსზე დაფუძნებული შევსება
 	Sample content from part of the image and use it to fill a small area	აიღეთ შიგთავსი სურათის ნაწილიდან პატარა არის შესავსებად
 	Reset the crop box, image rotation, and aspect ratio settings	ჩამოჭრის ჩარჩოს, სურათის ბრუნვისა და ასპექტის თანაფარდობის აღდგენა
+	Include in Total Spot Ink	სპოტ-ფერის საღებავის ჯამში ჩართვა

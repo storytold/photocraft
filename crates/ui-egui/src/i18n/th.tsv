@@ -4767,6 +4767,12 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 	Transparent (default)	โปร่งใส (ค่าเริ่มต้น)
 	The path was kept as the Work Path	เก็บเส้นทางไว้เป็นเส้นทางการทำงานแล้ว
 	The path was discarded	ทิ้งเส้นทางแล้ว
+	HSL Color	สี HSL
+	Spot Channels	ช่องสปอต
+	Alpha Channels	ช่องอัลฟ่า
+	Info Panel Options	ตัวเลือกแผงข้อมูล
+	Readouts	ค่าที่อ่านได้
+	Total Spot Ink	หมึกสปอตทั้งหมด
 	Move Toolbar to the Right	ย้ายแถบเครื่องมือไปทางขวา
 	Move Toolbar to the Left	ย้ายแถบเครื่องมือไปทางซ้าย
 
@@ -4786,3 +4792,4 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 	Content-aware fill	เติมตามเนื้อหา
 	Sample content from part of the image and use it to fill a small area	สุ่มเนื้อหาจากส่วนหนึ่งของภาพเพื่อเติมพื้นที่เล็ก ๆ
 	Reset the crop box, image rotation, and aspect ratio settings	รีเซ็ตกรอบครอป การหมุนภาพ และอัตราส่วน
+	Include in Total Spot Ink	รวมในหมึกสปอตทั้งหมด

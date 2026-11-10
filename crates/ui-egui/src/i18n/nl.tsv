@@ -4304,6 +4304,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kleur van het punt
 	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken
 	Edit Brush…	Penseel bewerken…
+	HSL Color	HSL-kleur
+	Spot Channels	Steunkleurkanalen
+	Alpha Channels	Alfakanalen
+	Info Panel Options	Opties van het deelvenster Info
+	Readouts	Uitlezingen
+	Total Spot Ink	Totale steunkleurinkt
 
 # Action Stop message (#8386)
 	Message	Bericht
@@ -4396,3 +4402,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	Op inhoud gebaseerd vullen
 	Sample content from part of the image and use it to fill a small area	Inhoud uit een deel van de afbeelding halen om een klein gebied te vullen
 	Reset the crop box, image rotation, and aspect ratio settings	Het uitsnijkader, de beeldrotatie en de beeldverhouding resetten
+	Include in Total Spot Ink	Meetellen in Totale steunkleurinkt

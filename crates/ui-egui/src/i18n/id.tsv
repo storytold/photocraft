@@ -3571,6 +3571,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+	HSL Color	Warna HSL
+	Spot Channels	Channel Spot
+	Alpha Channels	Channel Alfa
+	Info Panel Options	Opsi Panel Info
+	Readouts	Pembacaan
+	Total Spot Ink	Total Tinta Spot
 
 # Action Stop message (#8386)
 	Message	Pesan
@@ -3669,3 +3675,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	Pengisian berdasarkan konten
 	Sample content from part of the image and use it to fill a small area	Ambil konten dari sebagian gambar untuk mengisi area kecil
 	Reset the crop box, image rotation, and aspect ratio settings	Atur ulang bingkai pangkas, rotasi gambar, dan rasio aspek
+	Include in Total Spot Ink	Sertakan dalam Total Tinta Spot

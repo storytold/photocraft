@@ -4622,6 +4622,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+	HSL Color	HSL boja
+	Spot Channels	Kanali spot boja
+	Alpha Channels	Alfa kanali
+	Info Panel Options	Opcije panela Informacije
+	Readouts	Očitavanja
+	Total Spot Ink	Ukupno spot mastilo
 
 # Action Stop message (#8386)
 	Message	Poruka
@@ -4706,3 +4712,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	Popunjavanje prema sadržaju
 	Sample content from part of the image and use it to fill a small area	Uzmite sadržaj iz dela slike da popunite malu oblast
 	Reset the crop box, image rotation, and aspect ratio settings	Vratite okvir za isecanje, rotaciju slike i razmeru
+	Include in Total Spot Ink	Uključi u ukupno spot mastilo

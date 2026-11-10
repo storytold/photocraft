@@ -4655,6 +4655,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Colore del punto
 	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…
+	HSL Color	Colore HSL
+	Spot Channels	Canali tinta piatta
+	Alpha Channels	Canali alfa
+	Info Panel Options	Opzioni pannello Info
+	Readouts	Letture
+	Total Spot Ink	Inchiostro tinta piatta totale
 
 # Action Stop message (#8386)
 	Message	Messaggio
@@ -4739,3 +4745,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	Riempimento in base al contenuto
 	Sample content from part of the image and use it to fill a small area	Preleva contenuto da una parte dell'immagine per riempire una piccola area
 	Reset the crop box, image rotation, and aspect ratio settings	Reimposta il riquadro di ritaglio, la rotazione dell'immagine e le proporzioni
+	Include in Total Spot Ink	Includi in Inchiostro tinta piatta totale

@@ -4740,6 +4740,12 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+	HSL Color	HSL
+	Spot Channels	Плашечные каналы
+	Alpha Channels	Альфа-каналы
+	Info Panel Options	Параметры панели «Инфо»
+	Readouts	Показания
+	Total Spot Ink	Суммарное покрытие плашечными красками
 
 # Action Stop message (#8386)
 	Message	Сообщение
@@ -4825,3 +4831,4 @@ shape	Appearance	Оформление
 	Content-aware fill	Заполнение с учётом содержимого
 	Sample content from part of the image and use it to fill a small area	Взять содержимое из части изображения для заполнения небольшой области
 	Reset the crop box, image rotation, and aspect ratio settings	Сбросить рамку кадрирования, поворот изображения и соотношение сторон
+	Include in Total Spot Ink	Учитывать в суммарном покрытии плашечными красками

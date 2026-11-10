@@ -3197,6 +3197,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	純色
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
+	Actual Color	實際色彩
+	Web Color	Web 色彩
+	HSB Color	HSB 色彩
+	HSL Color	HSL 色彩
+	Total Ink	總油墨量
+	Spot Channels	特別色色版
+	Alpha Channels	Alpha 色版
+	Info Panel Options	資訊面板選項
+	Readouts	讀數
+	Total Spot Ink	特別色油墨總量
 
 # Action Stop message (#8386)
 	Message	訊息
@@ -3298,3 +3308,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	內容感知填滿
 	Sample content from part of the image and use it to fill a small area	從影像的一部分取樣內容來填滿小區域
 	Reset the crop box, image rotation, and aspect ratio settings	重設裁切框、影像旋轉和寬高比
+	Include in Total Spot Ink	計入特別色油墨總量

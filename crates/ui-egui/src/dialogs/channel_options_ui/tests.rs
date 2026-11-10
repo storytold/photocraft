@@ -228,3 +228,39 @@ fn new_spot_body_renders_and_bad_saved_prefs_fall_back() {
     ctx.run_ui(Default::default(), |ui| new_spot_body(ui, &mut f)).textures_delta.clear();
     assert!(owns_new_spot(&f));
 }
+
+/// Include in Total Spot Ink: a spot channel's Channel Options show the checkbox (alpha and Quick
+/// Mask don't), its field reaches `channel.options` as `totalInk`, and OK takes a substrate out
+/// of the Info panel's Total Spot Ink.
+#[test]
+fn include_in_total_spot_ink_checkbox() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app();
+    app.run("channel.options", json!({"channel": 0, "indicates": "spot", "name": "Shirt"})).unwrap();
+    let f = fields(&app, &json!(0)).unwrap();
+    assert_eq!(f.get("totalInk"), Some(&json!(true)), "a new spot channel counts");
+    assert_eq!(params(&f)["totalInk"], json!(true));
+    assert!(fields(&app, &json!("quickMask")).unwrap().get("totalInk").is_none(), "Quick Mask has no ink");
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(520.0, 320.0))
+        .with_context_setup(|ctx| crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+        .build_ui_state(|ui, f: &mut Map<String, Value>| body(ui, f), f);
+    h.run_steps(2);
+    h.get_by_label("Include in Total Spot Ink").click();
+    h.run_steps(2);
+    assert_eq!(h.state().get("totalInk"), Some(&json!(false)), "the click flips the field");
+    let f = h.state().clone();
+    assert_eq!(params(&f)["totalInk"], json!(false));
+    confirm(&mut app, &f).unwrap();
+    assert!(!app.session.active().unwrap().doc.channels[0].total_ink, "OK applied it");
+    // An alpha channel shows no checkbox.
+    let mut f = fields(&app, &json!(0)).unwrap();
+    f.insert("indicates".into(), json!("masked"));
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(520.0, 320.0))
+        .with_context_setup(|ctx| crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+        .build_ui_state(|ui, f: &mut Map<String, Value>| body(ui, f), f);
+    h.run_steps(2);
+    assert!(h.query_by_label("Include in Total Spot Ink").is_none());
+}

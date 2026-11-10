@@ -4788,6 +4788,12 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
+	HSL Color	HSL-farve
+	Spot Channels	Spotkanaler
+	Alpha Channels	Alfakanaler
+	Info Panel Options	Indstillinger for panelet Info
+	Readouts	Aflæsninger
+	Total Spot Ink	Samlet spotfarve
 
 # Action Stop message (#8386)
 	Message	Meddelelse
@@ -4844,3 +4850,4 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Content-aware fill	Indholdsbaseret udfyldning
 	Sample content from part of the image and use it to fill a small area	Hent indhold fra en del af billedet for at fylde et lille område
 	Reset the crop box, image rotation, and aspect ratio settings	Nulstil beskæringsrammen, billedrotationen og billedformatet
+	Include in Total Spot Ink	Medtag i samlet spotfarve
