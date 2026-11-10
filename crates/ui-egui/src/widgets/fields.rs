@@ -12,6 +12,11 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
 }
 
+/// Numeric field whose displayed text round-trips through its f32 value without rounding.
+pub(crate) fn value_field_exact(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> Response {
+    value_field_in(ui, value, range, "", width, 0.0, FieldOpts { round_trip: true, ..Default::default() }, None).0
+}
+
 /// A [`value_field_named`] for whole numbers that says when a typed value was past `range`
 /// (Photoshop's "Closest value inserted" alerts, #11938): it stores the closest whole number in
 /// range, and returns true once the field is left after such a value was typed, so the caller
@@ -106,6 +111,7 @@ pub(crate) fn compact_wrapping_value_field(ui: &mut Ui, value: &mut f32, range: 
 pub(super) struct FieldOpts {
     /// Decimal places shown (default: one, or two for a small range).
     pub(super) decimals: Option<u32>,
+    pub(super) round_trip: bool,
     /// Arrow-key and scrub step follow `decimals` (adjustment rows via [`slider_row_prec`], #5914).
     pub(super) step_from_decimals: bool,
     /// The unit typed units convert into (default: the suffix's, at [`set_field_resolution`]).
@@ -446,7 +452,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, .. } = opts;
+    let FieldOpts { decimals, round_trip, wrap_drag, hold_typed, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -462,10 +468,16 @@ fn number_edit(
     // A zoom field shows its number with the system's decimal separator (`12,5` on a German
     // Windows), as Photoshop does, so the text it shows is one that can be typed.
     let format = move |v: f64| {
-        let text = match decimals {
-            Some(d) => fmt_num_prec(v, d),
-            None if fine => fmt_num2(v),
-            None => fmt_num(v),
+        let text = if round_trip {
+            let v = v as f32;
+            let magnitude = v.abs();
+            if magnitude >= 1.0e7 || (magnitude > 0.0 && magnitude < 1.0e-4) { format!("{v:e}") } else { v.to_string() }
+        } else {
+            match decimals {
+                Some(d) => fmt_num_prec(v, d),
+                None if fine => fmt_num2(v),
+                None => fmt_num(v),
+            }
         };
         if hold_typed { crate::zoom_field::localize(text) } else { text }
     };

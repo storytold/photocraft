@@ -806,7 +806,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                     let mut v = if float_channel { rgb[i - 3] } else { vals[i].round() };
                     let response = if float_channel {
                         let range = if bounded { 0.0..=1.0 } else { f32::MIN..=f32::MAX };
-                        widgets::value_field_prec(ui, &mut v, range, "", FLOAT_VALUE_W, 7)
+                        widgets::value_field_exact(ui, &mut v, range, FLOAT_VALUE_W)
                     } else {
                         widgets::value_field(ui, &mut v, ranges[i].clone(), "", VALUE_W)
                     };

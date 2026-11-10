@@ -55,7 +55,8 @@ fn float_picker_samples_resets_and_cancels_without_changing_the_document() {
 fn float_picker_rgb_fields_accept_fractional_hdr_and_negative_values() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 8, "height": 8, "depth": 32})).unwrap();
-    app.run("tools.setColors", json!({"foreground": [0.12345, 2.0, -0.25]})).unwrap();
+    let opening = [1.0e-8, 2.1234567, -1.0e-8];
+    app.run("tools.setColors", json!({"foreground": opening})).unwrap();
     let id = open(&mut app, "foreground");
     let f = app.ui.dialog_mut(id).unwrap().fields.clone();
     let mut h = Harness::builder().with_size(vec2(700.0, 500.0)).build_ui_state(
@@ -68,7 +69,14 @@ fn float_picker_rgb_fields_accept_fractional_hdr_and_negative_values() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(3);
-    assert_eq!(current(h.state()).rgb, [0.12345, 2.0, -0.25], "drawing does not quantize");
+    assert_eq!(current(h.state()).rgb, opening, "drawing does not quantize");
+    for channel in 0..3 {
+        h.query_all_by_role(Role::SpinButton).nth(channel + 3).unwrap().click();
+        h.run_steps(1);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(current(h.state()).rgb, opening, "leaving channel {channel} without editing");
+    }
     for (channel, text, value) in [(0, "0.54321", 0.54321), (1, "3.25", 3.25), (2, "-0.125", -0.125)] {
         h.query_all_by_role(Role::SpinButton).nth(channel + 3).unwrap().click();
         h.run_steps(1);
