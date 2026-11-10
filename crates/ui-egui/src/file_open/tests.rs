@@ -1063,6 +1063,7 @@ fn web_drops_go_to_the_document_they_were_dropped_on() {
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
 }
 
+/// Each browser drop keeps its original document even when a later drop finishes reading first.
 #[test]
 fn overlapping_web_drop_deliveries_keep_each_target() {
     let ctx = egui::Context::default();

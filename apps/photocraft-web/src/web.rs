@@ -425,6 +425,7 @@ impl eframe::App for WebShell {
         eframe::App::raw_input_hook(&mut self.app, ctx, raw_input);
     }
 
+    /// Capture drop destinations before asynchronously reading files in drop order.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         if !dropped.is_empty() {
