@@ -3,8 +3,11 @@ use super::dialogs::front;
 use super::options::{panel_state, panel_tab, pixel_aspect_ratio, screen_mode_commands, show_slot, snap_slot, was_maximized_id};
 use super::{FONT_PREVIEW, LANGUAGE, LAYOUTS, PIXEL_ASPECTS, PhotocraftApp, SCREEN_MODES, Show, SnapTo, Value, json};
 
-/// Ids handled here (live menu items).
+/// Identify shell-owned commands so menus and automation share one view-state owner outside document history.
 pub fn handles(id: &str) -> bool {
+    if crate::composition_guides::handles(id) {
+        return true;
+    }
     if let Some(k) = id.strip_prefix("view.show.") {
         return show_slot(&mut Show::default(), k).is_some() || k == "all";
     }
@@ -75,8 +78,11 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
     is_enabled_with_engine(app, id, || app.session.is_enabled(id))
 }
 
-/// Keep picker enablement testable with the engine's native filesystem check disabled.
+/// Keep picker enablement testable without native filesystem access and composition configuration available without a document.
 pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabled: impl FnOnce() -> bool) -> Option<bool> {
+    if let Some(on) = crate::composition_guides::enabled(app, id) {
+        return Some(on);
+    }
     if !handles(id) && !wraps(id) {
         return None;
     }
@@ -118,7 +124,11 @@ pub fn leave_full_screen_without_document(app: &mut PhotocraftApp, ctx: &egui::C
     }
 }
 
+/// Expose shell checkmarks without equating composition Show with effective visibility under Crop or Extras.
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
+    if crate::composition_guides::handles(id) {
+        return crate::composition_guides::checked(app, id);
+    }
     let o = &app.ui.view;
     if let Some(k) = id.strip_prefix("view.show.") {
         let mut s = o.show;
@@ -267,9 +277,12 @@ pub(super) fn no_params(p: &Value) -> bool {
     p.as_object().is_none_or(|o| o.is_empty())
 }
 
-/// Run a View/Window/Type shell command, or front an engine command with its dialog. `None` when
-/// `id` isn't ours.
+/// Route composition actions through validated view-only state, or front other shell/engine commands with their dialog.
+/// Unowned IDs return `None` so the next command owner can handle them.
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if crate::composition_guides::handles(id) {
+        return Some(crate::composition_guides::invoke(app, id, params));
+    }
     if wraps(id) {
         return front(app, ctx, id, params);
     }

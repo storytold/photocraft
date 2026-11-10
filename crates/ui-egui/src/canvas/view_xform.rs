@@ -1,5 +1,8 @@
 use super::{DRect, Document, PhotocraftApp, Pos2, Rect, Vec2, View, pos2, vec2};
 
+/// Angles below this cutoff use the axis-aligned view mapping and image path.
+pub(super) const ROTATION_EPSILON: f32 = 1e-8;
+
 /// Document ↔ screen mapping for a canvas rect and a view.
 #[derive(Clone, Copy, Debug)]
 pub struct ViewXform {
@@ -45,7 +48,8 @@ impl ViewXform {
     /// At integer physical magnifications, texel edges must land on display pixel edges.
     /// Keep this derived camera shared by images, overlays and input without changing the saved pan.
     pub(super) fn pixel_aligned(mut self, ppp: f32) -> Self {
-        if !ppp.is_finite() || ppp <= 0.0 || !self.zoom.is_finite() || self.zoom <= 0.0 || !self.rotation.is_finite() || self.rotation.abs() >= 1e-8 {
+        if !ppp.is_finite() || ppp <= 0.0 || !self.zoom.is_finite() || self.zoom <= 0.0 || !self.rotation.is_finite() || self.rotation.abs() >= ROTATION_EPSILON
+        {
             return self;
         }
         let scale = vec2(self.zoom_x(), self.zoom) * ppp;
@@ -71,8 +75,9 @@ impl ViewXform {
         self
     }
 
+    /// Keep the identity shortcut consistent with the CPU image path.
     fn sincos(self) -> (f32, f32) {
-        if self.rotation.abs() < 1e-8 {
+        if self.rotation.abs() < ROTATION_EPSILON {
             (1.0, 0.0)
         } else {
             let r = self.rotation.to_radians();

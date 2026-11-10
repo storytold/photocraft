@@ -95,6 +95,8 @@ pub struct ViewOptions {
     pub screen_mode: String,
     /// View › Extras (⌘H): master switch for guides, grid, edges and other overlays.
     pub extras: bool,
+    /// Full-canvas composition overlay, independent of the Crop tool.
+    pub composition_guides: crate::composition_guides::CompositionGuides,
     pub show: Show,
     pub snap_to: SnapTo,
     /// View › Flip Horizontal: mirror the view only (the document is untouched).
@@ -128,10 +130,12 @@ pub(crate) fn default_guide_layout() -> Value {
 }
 
 impl Default for ViewOptions {
+    /// Retain established navigation defaults and require an explicit opt-in to composition guides.
     fn default() -> Self {
         Self {
             screen_mode: "standard".into(),
             extras: true,
+            composition_guides: Default::default(),
             show: Show::default(),
             snap_to: SnapTo::default(),
             flip_horizontal: false,

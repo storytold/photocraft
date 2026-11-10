@@ -122,7 +122,7 @@ fn changed_flags<T: Copy>(now: T, def: T, keys: &[&str], slot: impl for<'a> Fn(&
     (!diff.is_empty()).then_some(Value::Object(diff))
 }
 
-/// View › Extras, Show and Snap To as remembered across restarts (`Preferences::view_extras`):
+/// View › Extras, Show, Snap To and composition guides as remembered across restarts (`Preferences::view_extras`):
 /// only what differs from the defaults, so a default changed in a later release still reaches
 /// users who never touched that item. `Null` when nothing differs.
 fn remembered(app: &PhotocraftApp) -> Value {
@@ -147,10 +147,13 @@ fn remembered(app: &PhotocraftApp) -> Value {
     if let Some(snap) = changed_flags(v.snap_to, SnapTo::default(), &SNAP_KEYS, snap_slot) {
         m.insert("snapTo".into(), snap);
     }
+    if v.composition_guides != Default::default() {
+        m.insert("compositionGuides".into(), serde_json::json!(v.composition_guides));
+    }
     if m.is_empty() { Value::Null } else { Value::Object(m) }
 }
 
-/// Remember View › Extras, Show and Snap To in the preferences once the user lets go of the
+/// Remember View extras and composition choices in the preferences once the user lets go of the
 /// pointer (#3762). Cheap: a small JSON compare per frame. Run every frame, so items set by the
 /// control channel or the Show Extras Options dialog are remembered too.
 pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -163,14 +166,15 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Restore the remembered View › Extras, Show and Snap To items at launch. A hand-edited file
-/// can't break them: an unknown key or a value that isn't a boolean keeps its default.
+/// Restore remembered View extras and composition choices at launch. Unknown keys are ignored;
+/// invalid flags or guide fields retain their own defaults without discarding other valid choices.
 pub fn restore(app: &mut PhotocraftApp) {
     let saved = app.session.prefs().view_extras.clone();
     if !saved.is_null() && !saved.is_object() {
         log::warn!("Preferences: the remembered View › Show items are not an object; using the defaults");
         return;
     }
+    app.ui.view.composition_guides = crate::composition_guides::CompositionGuides::from_saved(&saved["compositionGuides"]);
     let flag = |k: &str| saved.get(k).and_then(Value::as_bool);
     if let Some(on) = flag("extras") {
         app.ui.view.extras = on;

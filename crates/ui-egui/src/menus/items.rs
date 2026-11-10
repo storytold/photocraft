@@ -45,6 +45,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.other.colorToAlpha", "filter.other.offset"),
 ];
 
+/// Combine the catalog and extension commands with live state, retaining submenu paths and explicit placement anchors.
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
     let known = is_live;
@@ -96,7 +97,14 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             if let Some(path) = after.and_then(|a| items.get(a)).map(|i| i.path.clone()) {
                 e.path = path;
             }
-            let at = after.or_else(|| items.iter().rposition(|i| i.path.first() == top.as_ref())).map_or(items.len(), |p| p + 1);
+            // Composition aids belong beside Extras/Show, keeping their own submenu path.
+            // Keep successive guide actions together and in their declared order.
+            let guide_after = if crate::composition_guides::handles(&e.id) {
+                items.iter().rposition(|i| i.path == e.path).or_else(|| items.iter().position(|i| i.id == "view.extras"))
+            } else {
+                None
+            };
+            let at = guide_after.or(after).or_else(|| items.iter().rposition(|i| i.path.first() == top.as_ref())).map_or(items.len(), |p| p + 1);
             items.insert(at, e);
         }
     }

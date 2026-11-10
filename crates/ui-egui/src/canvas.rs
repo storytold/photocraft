@@ -348,6 +348,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
 
 /// Paints the document, and returns whether the pixels past the canvas show, the Layer Edges slot,
 /// the canvas edge on screen, and the selection's ants still to be painted ([`paint_selection_outline`]).
+/// The CPU image and channel overlay share the camera's rotation cutoff with mapped guides.
 fn paint_canvas(
     app: &mut PhotocraftApp,
     ui: &egui::Ui,
@@ -370,6 +371,7 @@ fn paint_canvas(
     let render_zoom = input.render_zoom;
     let target_xf = input.target_xf;
     let pixel_grid = input.pixel_grid;
+    let rotated = xf.rotation.abs() >= view_xform::ROTATION_EPSILON;
 
     let point_zoom = view.zoom / ppp;
     let drop_shadow = border == photocraft_engine::prefs::CanvasBorder::DropShadow;
@@ -503,7 +505,6 @@ fn paint_canvas(
             let shadow_rect = edge_rect;
             painter.add(egui::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(150) }.as_shape(shadow_rect, 0));
         }
-        let rotated = view.rotation.abs() > 0.05;
         let checkerboard = app.session.prefs().transparency_and_gamut.square().map(|square| (checker(app, ctx), square));
         // Repeated-quad coverage is not proven identical on all Pattern Preview adapters.
         // Retain its legacy checker submissions, including the central document's.
@@ -528,7 +529,7 @@ fn paint_canvas(
     if let Some(tex) = crate::channel_view::ensure(app, ctx, idx, output) {
         // Rendered from the live preview, so over the area the preview is shown in.
         let a = shown_area;
-        if view.rotation.abs() > 0.05 {
+        if rotated {
             paint_mapped_image_at(
                 painter,
                 &xf,
@@ -1430,8 +1431,10 @@ struct CanvasOverlayInput<'a> {
     edge_rect: Rect,
     panning: bool,
     zoom_out: &'a dyn Fn(bool) -> bool,
+    composition_doc: Option<&'a Document>,
 }
 
+/// Keep opaque tool previews below document/composition guides, and selection ants, handles and cursors above them.
 fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>, ants: Vec<egui::Shape>) {
     let ctx = input.ctx;
     let painter = input.painter;
@@ -1456,6 +1459,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     {
         crate::rulers::draw_guides(app, painter, xf, doc);
     }
+    crate::composition_guides::paint(app, painter, xf, input.composition_doc);
     // The selection's ants go over the grid and guides, as in Photoshop (#10671).
     painter.extend(ants);
     // The pending crop frame shows on its own document only, not on the other tiles (#1918).
@@ -1987,6 +1991,7 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
     }
 }
 
+/// Paint one document view with its shared image camera, keeping composition aids above content previews in primary and secondary views.
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     // The Frame tool starts transforms from pointer events, which carry no context; the options
@@ -2099,7 +2104,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         target_xf,
         pixel_grid,
     };
-    let painted = if paint_after_input { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
+    let painted = if paint_after_input {
+        None
+    } else {
+        let content = paint_canvas(app, ui, &display_view, xf, &paint_input);
+        // Capture the displayed bounds before ordinary Move can change the preview.
+        // Live strokes and default-mode Crop capture them after input with their image below.
+        Some((content, crate::composition_guides::snapshot(app, idx)))
+    };
     let img_rect = xf.doc_rect(doc.bounds());
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
@@ -2306,7 +2318,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     } else {
         xf
     };
-    let (beyond, layer_edges, edge_rect, ants) = painted.unwrap_or_else(|| paint_canvas(app, ui, &display_view, xf, &paint_input));
+    let ((beyond, layer_edges, edge_rect, ants), composition_doc) = painted.unwrap_or_else(|| {
+        let content = paint_canvas(app, ui, &display_view, xf, &paint_input);
+        (content, crate::composition_guides::snapshot(app, idx))
+    });
     // A Hand drag (the tool, Space or the middle button) keeps every overlay on screen, as in
     // Photoshop: the Pen path being drawn, paths, guides, grid, transform box (#6592). Only the
     // tool cursors below give way to the fist.
@@ -2326,9 +2341,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             edge_rect,
             panning,
             zoom_out: &zoom_out,
+            composition_doc: composition_doc.as_deref(),
         };
         paint_primary_overlays(app, ui, &mut view, &input, ants);
     } else {
+        crate::composition_guides::paint(app, &painter, &xf, composition_doc.as_deref());
         painter.extend(ants);
     }
     let tail = CanvasTailInput {

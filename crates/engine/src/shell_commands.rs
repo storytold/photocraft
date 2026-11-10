@@ -46,6 +46,14 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.editSelectedGuides", "Edit Selected Guides", &["View", "Guides"], None),
     ("view.clearSelectedGuides", "Clear Selected Guides", &["View", "Guides"], None),
     ("view.extras", "Extras", &["View"], Some("Cmd+H")),
+    // View-only composition aids (#5193); no document/history command or default shortcut.
+    ("view.compositionGuides.show", "Show Composition Guides", &["View", "Composition Guides"], None),
+    ("view.compositionGuides.thirds", "Rule of Thirds", &["View", "Composition Guides"], None),
+    ("view.compositionGuides.goldenRatio", "Golden Ratio", &["View", "Composition Guides"], None),
+    ("view.compositionGuides.goldenSpiral", "Golden Spiral", &["View", "Composition Guides"], None),
+    ("view.compositionGuides.rotate", "Rotate Spiral 90°", &["View", "Composition Guides"], None),
+    ("view.compositionGuides.flipHorizontal", "Flip Spiral Horizontally", &["View", "Composition Guides"], None),
+    ("view.compositionGuides.flipVertical", "Flip Spiral Vertically", &["View", "Composition Guides"], None),
     ("view.show.targetPath", "Target Path", &["View", "Show"], Some("Cmd+Shift+H")),
     ("view.screenMode.cycle", "Cycle Screen Mode", &[], Some("F")),
     // Photoshop's interface brightness shortcuts: step through the four Pro themes.

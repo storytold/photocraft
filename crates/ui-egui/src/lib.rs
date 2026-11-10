@@ -26,6 +26,7 @@ macro_rules! tl {
 }
 mod brush_mode_menu;
 pub mod canvas;
+mod composition_guides;
 pub mod control;
 pub mod dialogs;
 pub mod dock;

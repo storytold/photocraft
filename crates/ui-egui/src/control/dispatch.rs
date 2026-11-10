@@ -235,6 +235,7 @@ fn screenshot(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcom
 
 // ---- ui.set: every field is validated and materialized into a `UiSet` before the first one is applied ----
 
+/// Materialize the entire patch before applying it so rejected view/tool settings cannot partially commit.
 fn ui_set(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
     if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
         return err(format!("unknown field `{field}` (fields: {})", UI_SET_FIELDS.join(", ")));
@@ -250,12 +251,14 @@ struct UiSet {
     crop: CropSet,
     panels: PanelSet,
     view: ViewSet,
+    composition_guides: Option<crate::composition_guides::CompositionGuides>,
     theme: Option<crate::theme::ThemeKind>,
     brush: BrushSet,
     legacy_update: Option<crate::panel_docking::LegacyUpdate>,
 }
 
 impl UiSet {
+    /// Build validated tool, panel and view updates without mutating the session or committing legacy dock changes.
     fn parse(app: &PhotocraftApp, p: &Value) -> std::result::Result<Self, String> {
         let tools = ToolSet::parse(app, p)?;
         let crop = CropSet::parse(app, p)?;
@@ -266,10 +269,12 @@ impl UiSet {
         let bridge_pro = matches!(theme.unwrap_or(app.ui.theme), crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
         let legacy_update =
             crate::panel_docking::prepare_legacy_update(app, p, panels.panels.as_ref(), panels.dock_tabs.as_ref(), panels.dock.as_ref(), bridge_pro)?;
-        Ok(Self { tools, crop, panels, view, theme, brush, legacy_update })
+        let composition_guides = p.get("compositionGuides").map(|v| app.ui.view.composition_guides.patched(v)).transpose()?;
+        Ok(Self { tools, crop, panels, view, composition_guides, theme, brush, legacy_update })
     }
 
-    /// Apply (nothing but the final `brushSize` command can fail).
+    /// Select a requested frame target before other changes; apply composition state only after the brush command succeeds.
+    /// Parsing has already rejected invalid fields, including numbers that overflow the brush's f32 representation.
     fn apply(mut self, app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> std::result::Result<Value, String> {
         // All fields are validated. Select the requested frame thumbnail before applying the
         // remaining view state, so a denied selection leaves the other fields intact.
@@ -287,6 +292,13 @@ impl UiSet {
         self.panels.apply_color_and_width(app, ctx);
         self.view.apply(app);
         self.brush.apply(app)?;
+        if let Some(guides) = self.composition_guides {
+            app.ui.view.composition_guides = guides;
+            // An empty/appearance-only patch is a merge, not a request to reveal Extras.
+            if p.get("compositionGuides").and_then(|g| g.get("enabled")).and_then(Value::as_bool) == Some(true) {
+                app.ui.view.extras = true;
+            }
+        }
         Ok(Value::Null)
     }
 }
@@ -942,13 +954,13 @@ fn picker_param(p: &Value) -> std::result::Result<Option<Option<[f32; 2]>>, Stri
     Ok(Some(at))
 }
 
-/// brushSize rides the journaled `tools.setBrush` command (#744). Numeric values
-/// are validated here so the command cannot fail after other fields were
-/// applied; non-numeric values keep the API's historical silent no-op.
+/// Validate the brush's f32-representable range before any other field changes (#744).
+/// A finite f64 can overflow f32. Ordinary negative values retain the command's existing acceptance,
+/// and nonnumeric values retain the API's historical silent no-op.
 fn brush_size_param(p: &Value) -> std::result::Result<Option<f64>, String> {
     let Some(size) = p.get("brushSize").and_then(Value::as_f64) else { return Ok(None) };
-    if !size.is_finite() || size > f64::from(photocraft_paint::MAX_BRUSH_SIZE) {
-        return Err(format!("brushSize must be finite and at most {} px", photocraft_paint::MAX_BRUSH_SIZE));
+    if !f32_range(&size) || size > f64::from(photocraft_paint::MAX_BRUSH_SIZE) {
+        return Err(format!("brushSize must be finite, within f32 range and at most {} px", photocraft_paint::MAX_BRUSH_SIZE));
     }
     Ok(Some(size))
 }
