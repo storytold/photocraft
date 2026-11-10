@@ -379,7 +379,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
         f.remove("__driverPageInitialized");
         f.remove("printable");
     }
-    let p = params(f);
+    let p = print_params(f);
     let mut browse = false;
     ui.horizontal_top(|ui| {
         // Page preview.
@@ -410,7 +410,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                         && let Some(pointer) = response.interact_pointer_pos()
                         && drag_print_position(f, start, pointer - origin, scale)
                     {
-                        if let Ok(updated) = photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print") {
+                        if let Ok(updated) = photocraft_engine::print_cmds::layout(&doc, &print_params(f), "file.print") {
                             l = updated;
                             img = print_preview_image(l, page, k);
                         }
@@ -638,7 +638,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             let units = s(f, "units", "cm");
             check(ui, f, "center", tl!("Center"), true);
             let centered = b(f, "center", true);
-            let centered_layout = centered.then(|| photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print").ok()).flatten();
+            let centered_layout = centered.then(|| photocraft_engine::print_cmds::layout(&doc, &print_params(f), "file.print").ok()).flatten();
             // Revealing this row during a drag resizes the centered modal and moves the paper.
             // Keep it present, showing the resolved position while Center owns the offsets.
             ui.add_enabled_ui(!centered, |ui| {
@@ -657,7 +657,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             });
             check(ui, f, "scaleToFit", tl!("Scale to Fit Media"), false);
             // Scaled Print Size: Scale, Height and Width move together; Print Resolution follows.
-            if let Ok(l) = photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print") {
+            if let Ok(l) = photocraft_engine::print_cmds::layout(&doc, &print_params(f), "file.print") {
                 let (_, _, w, h) = l.rect;
                 let (mut w2, mut h2) = (w, h);
                 let fit = b(f, "scaleToFit", false);
@@ -686,7 +686,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     }
                 });
                 if w > 0.0 {
-                    let ppi = f64::from(doc.size.width) / (w / 72.0);
+                    let ppi = l.resolution_ppi(&doc);
                     ui.label(egui::RichText::new(format!("{} {ppi:.0} PPI", tl!("Print Resolution:"))).color(t.text_dim).size(11.0));
                 }
             }
@@ -744,7 +744,8 @@ pub(super) fn print_params(f: &Map<String, Value>) -> Value {
 /// Updates the status for completed results only; pending jobs report completion later.
 pub(super) fn print_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let mut p = print_params(f);
-    p["systemDialog"] = json!(app.session.system_print_dialog.is_some());
+    let saves_pdf = p.get("output").and_then(Value::as_str).is_some_and(|path| !path.is_empty());
+    p["systemDialog"] = json!(app.session.system_print_dialog.is_some() && !saves_pdf && !b(f, "dryRun", false));
     let r = app.run("file.print", p)?;
     if r["pending"] != json!(true) {
         print_status(app, &r);

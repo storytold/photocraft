@@ -1017,6 +1017,7 @@ fn palette_draft_survives_navigation_and_resets_when_colors_change() {
 #[test]
 fn print_dialog_and_toggles() {
     let (mut app, ctx) = app();
+    app.session.system_print_dialog = Some(Arc::new(|_, _| Err("Save as PDF must not open the system print dialog".into())));
     let r = crate::menus::invoke(&mut app, &ctx, "file.print", json!({})).unwrap();
     let id = r["dialog"].as_u64().unwrap();
     let out = std::env::temp_dir().join(format!("pc-printui-{}.pdf", std::process::id())).to_string_lossy().into_owned();

@@ -3,14 +3,17 @@ name: Desktop printing
 on:
   pull_request:
     paths:
-      - 'crates/engine/src/print_cmds.rs'
-      - 'crates/engine/src/print_cmds/**'
-      - 'crates/ui-egui/src/file_ui.rs'
-      - 'crates/ui-egui/tests/custom_print_paper.rs'
+      - 'crates/engine/src/cmd/print_cmds.rs'
+      - 'crates/engine/src/cmd/print_cmds/**'
+      - 'crates/ui-egui/src/dialogs/file_ui/**'
+      - 'crates/ui-egui/tests/it/custom_print_paper.rs'
+      - 'apps/photocraft/src/print_portal.rs'
       - 'apps/photocraft/src/system_print.rs'
       - 'apps/photocraft/src/system_print_windows.ps1'
       - 'apps/photocraft/src/main.rs'
       - 'apps/photocraft/Cargo.toml'
+      - 'packaging/macos/Info.plist.in'
+      - 'packaging/macos/entitlements.plist'
       - 'crates/engine/Cargo.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -18,14 +21,17 @@ on:
   push:
     branches: [main]
     paths:
-      - 'crates/engine/src/print_cmds.rs'
-      - 'crates/engine/src/print_cmds/**'
-      - 'crates/ui-egui/src/file_ui.rs'
-      - 'crates/ui-egui/tests/custom_print_paper.rs'
+      - 'crates/engine/src/cmd/print_cmds.rs'
+      - 'crates/engine/src/cmd/print_cmds/**'
+      - 'crates/ui-egui/src/dialogs/file_ui/**'
+      - 'crates/ui-egui/tests/it/custom_print_paper.rs'
+      - 'apps/photocraft/src/print_portal.rs'
       - 'apps/photocraft/src/system_print.rs'
       - 'apps/photocraft/src/system_print_windows.ps1'
       - 'apps/photocraft/src/main.rs'
       - 'apps/photocraft/Cargo.toml'
+      - 'packaging/macos/Info.plist.in'
+      - 'packaging/macos/entitlements.plist'
       - 'crates/engine/Cargo.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -71,6 +77,8 @@ jobs:
       - name: Print dialog controls
         run: cargo test -p photocraft-ui-egui --locked --lib file_ui::tests::print
       - name: Print controls and PDF output
-        run: cargo test -p photocraft-ui-egui --locked --test custom_print_paper
-      - name: Print crates and desktop adapters clippy
-        run: cargo clippy -p photocraft-engine -p photocraft-ui-egui -p photocraft --locked --all-targets -- -D warnings
+        run: cargo test -p photocraft-ui-egui --locked --test it custom_print_paper
+      - name: Print engine and UI clippy
+        run: cargo clippy -p photocraft-engine -p photocraft-ui-egui --locked --all-targets -- -D warnings
+      - name: Desktop print adapter clippy
+        run: cargo clippy -p photocraft --locked --bin photocraft -- -D warnings

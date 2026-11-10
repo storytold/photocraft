@@ -55,7 +55,9 @@ fn print(job: &PrintJob) -> Result<String, String> {
 #[cfg(target_os = "linux")]
 pub(crate) fn confirm(pdf: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     let conn = zbus::blocking::connection::Builder::session()
-        .and_then(|builder| builder.method_timeout(std::time::Duration::from_secs(600)).build())
+        // Portal methods return request handles immediately; the separate Response signal owns
+        // the long user-interaction wait. Keep calls (including Request.Close on timeout) short.
+        .and_then(|builder| builder.method_timeout(std::time::Duration::from_secs(5)).build())
         .map_err(|e| format!("no session bus for the print portal ({e})"))?;
     let values = system_settings(settings);
     let page_setup = page_setup_for(settings.paper, settings.landscape);
@@ -68,6 +70,45 @@ fn portal(conn: &zbus::blocking::Connection) -> Result<zbus::blocking::Proxy<'st
         .map_err(|e| e.to_string())
 }
 
+#[cfg(target_os = "linux")]
+type PortalSignal = (zbus::blocking::Proxy<'static>, zbus::proxy::SignalStream<'static>);
+
+/// Subscribes before the portal method is called, so an immediate response cannot be missed.
+#[cfg(target_os = "linux")]
+fn wait(conn: &zbus::blocking::Connection, sender: &str, token: &str) -> Result<PortalSignal, String> {
+    let path = request_path(sender, token);
+    let request = zbus::blocking::Proxy::new(conn, "org.freedesktop.portal.Desktop", path, "org.freedesktop.portal.Request").map_err(|e| e.to_string())?;
+    let signals = futures_lite::future::block_on(request.inner().receive_signal("Response")).map_err(|e| e.to_string())?;
+    Ok((request, signals))
+}
+
+/// Waits at most ten minutes for a portal request and closes it when that deadline expires.
+#[cfg(target_os = "linux")]
+fn response(
+    request: zbus::blocking::Proxy<'static>,
+    mut signals: zbus::proxy::SignalStream<'static>,
+) -> Result<Option<std::collections::HashMap<String, zbus::zvariant::OwnedValue>>, String> {
+    use futures_lite::StreamExt;
+    let next = futures_lite::future::block_on(futures_lite::future::race(async { Some(signals.next().await) }, async {
+        async_io::Timer::after(std::time::Duration::from_secs(600)).await;
+        None
+    }));
+    let message = match next {
+        Some(Some(message)) => message,
+        Some(None) => return Err("the print portal went away".into()),
+        None => {
+            let _: Result<(), _> = request.call("Close", &());
+            return Err("the print portal did not respond within 10 minutes".into());
+        }
+    };
+    let (code, results) = message.body().deserialize().map_err(|e| format!("odd portal reply: {e}"))?;
+    match code {
+        0 => Ok(Some(results)),
+        1 => Ok(None),
+        _ => Err("the print dialog failed".into()),
+    }
+}
+
 /// `PreparePrint` then `Print`, each waited for on its request's `Response` signal.
 #[cfg(target_os = "linux")]
 fn dialog(
@@ -78,7 +119,7 @@ fn dialog(
     pdf: &std::path::Path,
 ) -> Result<SystemPrintOutcome, String> {
     use std::collections::HashMap;
-    use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+    use zbus::zvariant::{OwnedObjectPath, Value};
     type Dict<'a> = HashMap<&'a str, Value<'a>>;
     fn as_dict(pairs: &[(String, Seed)]) -> HashMap<String, Value<'static>> {
         pairs
@@ -94,39 +135,25 @@ fn dialog(
     }
     let proxy = portal(conn)?;
     let sender = conn.unique_name().map(|n| n.as_str().to_string()).ok_or("the bus connection has no name")?;
-    let wait = |token: &str| -> Result<zbus::blocking::proxy::SignalIterator<'static>, String> {
-        let path = request_path(&sender, token);
-        let request = zbus::blocking::Proxy::new(conn, "org.freedesktop.portal.Desktop", path, "org.freedesktop.portal.Request").map_err(|e| e.to_string())?;
-        request.receive_signal("Response").map_err(|e| e.to_string())
-    };
-    let response = |mut signals: zbus::blocking::proxy::SignalIterator<'static>| -> Result<Option<HashMap<String, OwnedValue>>, String> {
-        let message = signals.next().ok_or("the print portal went away")?;
-        let (code, results): (u32, HashMap<String, OwnedValue>) = message.body().deserialize().map_err(|e| format!("odd portal reply: {e}"))?;
-        match code {
-            0 => Ok(Some(results)),
-            1 => Ok(None),
-            _ => Err("the print dialog failed".into()),
-        }
-    };
 
     let token = format!("photocraft_prepare_{}", nonce());
-    let signals = wait(&token)?;
+    let (request, signals) = wait(conn, &sender, &token)?;
     let mut options: Dict<'_> = HashMap::new();
     options.insert("handle_token", Value::from(token.as_str()));
     let _: OwnedObjectPath =
         proxy.call("PreparePrint", &("", title, as_dict(settings), as_dict(page_setup), options)).map_err(|e| format!("PreparePrint failed: {e}"))?;
-    let Some(results) = response(signals)? else { return Ok(SystemPrintOutcome::Cancelled) };
+    let Some(results) = response(request, signals)? else { return Ok(SystemPrintOutcome::Cancelled) };
     let prepared = results.get("token").and_then(|v| u32::try_from(v.clone()).ok()).ok_or("the print dialog gave no token")?;
 
     let file = std::fs::File::open(pdf).map_err(|e| format!("cannot reopen the print file: {e}"))?;
     let token = format!("photocraft_print_{}", nonce());
-    let signals = wait(&token)?;
+    let (request, signals) = wait(conn, &sender, &token)?;
     let mut options: Dict<'_> = HashMap::new();
     options.insert("handle_token", Value::from(token.as_str()));
     options.insert("token", Value::from(prepared));
     let fd = zbus::zvariant::Fd::from(std::os::fd::AsFd::as_fd(&file));
     let _: OwnedObjectPath = proxy.call("Print", &("", title, fd, options)).map_err(|e| format!("Print failed: {e}"))?;
-    if response(signals)?.is_none() {
+    if response(request, signals)?.is_none() {
         return Ok(SystemPrintOutcome::Cancelled);
     }
     Ok(SystemPrintOutcome::Printed)
@@ -161,7 +188,7 @@ fn text(s: &str) -> Seed {
 
 /// The standard paper sizes, as (PWG name, PPD name, width mm, height mm), portrait. GTK's
 /// print settings take the PWG name; its page setup finds the size by the PPD name.
-const PAPERS: [(&str, &str, f64, f64); 8] = [
+const PAPERS: [(&str, &str, f64, f64); 9] = [
     ("na_letter", "Letter", 215.9, 279.4),
     ("na_legal", "Legal", 215.9, 355.6),
     ("na_ledger", "Ledger", 279.4, 431.8),
@@ -170,6 +197,7 @@ const PAPERS: [(&str, &str, f64, f64); 8] = [
     ("iso_a5", "A5", 148.0, 210.0),
     ("na_index-4x6", "4x6", 101.6, 152.4),
     ("na_5x7", "5x7", 127.0, 177.8),
+    ("iso_c5", "EnvC5", 162.0, 229.0),
 ];
 
 const MM_PER_PT: f64 = 25.4 / 72.0;
@@ -270,6 +298,8 @@ mod tests {
         assert_eq!(settings_for(1, (612.0, 792.0), false)[2], ("paper-format".into(), text("na_letter")));
         assert_eq!(page_setup_for((612.0, 792.0), false)[3], ("PPDName".into(), text("Letter")));
         assert_eq!(settings_for(1, (288.0, 432.0), false)[2], ("paper-format".into(), text("na_index-4x6")));
+        assert_eq!(settings_for(1, (459.21, 649.13), false)[2], ("paper-format".into(), text("iso_c5")));
+        assert_eq!(page_setup_for((459.21, 649.13), false)[3], ("PPDName".into(), text("EnvC5")));
         // 100 x 200 mm is nobody's standard.
         let custom = settings_for(1, (283.46, 566.93), false);
         assert_eq!(&custom[2..], &[("paper-width".into(), text("100.00")), ("paper-height".into(), text("200.00"))]);
