@@ -41,6 +41,8 @@ fn shape_thumbnail_double_click_picks_the_fill_colour() {
     let (r, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &r);
     h.run_steps(8);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(8);
     let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == id.0).unwrap().row;
     double_click(&mut h, pos2(row.left() + 46.0, row.center().y));
 
