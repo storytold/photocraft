@@ -33,7 +33,7 @@ struct RootCapability {
 /// before I/O.
 #[derive(Clone, Default)]
 pub struct AuthorizedWorkspace {
-    read: Option<RootCapability>,
+    read: Vec<RootCapability>,
     write: Option<RootCapability>,
 }
 
@@ -41,34 +41,90 @@ impl AuthorizedWorkspace {
     /// Open the configured roots as capabilities. Either authority may be
     /// omitted; omitted authority fails closed.
     pub fn new(read_root: Option<&Path>, write_root: Option<&Path>) -> Result<Self, AutomationError> {
-        Ok(Self { read: open_root(read_root, "read")?, write: open_root(write_root, "write")? })
+        Self::with_read_roots(read_root, write_root)
     }
 
-    /// Read one regular file below the configured read root.
+    /// Open ordered read capabilities and an independent, optional write capability.
+    /// Every configured root must be valid; a write root does not also grant reads.
+    pub fn with_read_roots<'a>(read_roots: impl IntoIterator<Item = &'a Path>, write_root: Option<&Path>) -> Result<Self, AutomationError> {
+        let mut read = Vec::new();
+        for path in read_roots {
+            let root = open_root(path, "read", &read)?;
+            read.push(root);
+        }
+        let write = write_root.map(|path| open_root(path, "write", &read)).transpose()?;
+        Ok(Self { read, write })
+    }
+
+    /// Read the first matching regular file, trying roots in their configured order.
+    /// Only an open that reports NotFound tries the next root. Once opened, errors
+    /// (including a non-regular file or a failed bounded read) never select another file.
     pub fn read(&self, path: &str) -> Result<Vec<u8>, AutomationError> {
-        let relative = request_path(path, self.read.as_ref())?;
-        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
-        let mut file = root.dir.open(&relative).map_err(|e| file_error("read", path, e))?;
+        self.read_with_save_path(path).map(|(bytes, _)| bytes)
+    }
+
+    /// Read bytes and derive a conservative implicit-save request from the same
+    /// selected capability. A different read root must never redirect an implicit
+    /// save to a same-named file in the write root. Aliases and nested roots need an
+    /// explicit Save As; this is not canonical desktop document identity.
+    pub fn read_with_save_path(&self, path: &str) -> Result<(Vec<u8>, Option<String>), AutomationError> {
+        let (mut file, root) = self.open_read(path)?;
         let metadata = file.metadata().map_err(|e| file_error("read", path, e))?;
         if !metadata.is_file() {
             return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
         }
-        read_to_observed_length(&mut file, metadata.len())
+        // Retain main's bounded, growth-checked reads while keeping save provenance.
+        let bytes = read_to_observed_length(&mut file, metadata.len())?;
+        let save_path = self.write.as_ref().filter(|write| Arc::ptr_eq(&root.dir, &write.dir)).map(|_| path.to_owned());
+        Ok((bytes, save_path))
+    }
+
+    fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, &RootCapability), AutomationError> {
+        if self.read.is_empty() {
+            return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));
+        }
+        let mut not_found = None;
+        for root in &self.read {
+            let Some(relative) = scoped_path(path, root)? else { continue };
+            match root.dir.open(&relative) {
+                Ok(file) => return Ok((file, root)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => not_found = Some(error),
+                Err(error) => return Err(file_error("read", path, error)),
+            }
+        }
+        match not_found {
+            Some(error) => Err(file_error("read", path, error)),
+            None => Err(path_error(path, "absolute paths must be inside an automation read root")),
+        }
     }
 
     /// Load one `.pcraft` document in directory form — the native on-disk layout — below the
-    /// read root. `read` serves regular files only (the zip form), so a regular file at the
+    /// first matching read root. Directory opens never establish an implicit save target.
+    /// `read` serves regular files only (the zip form), so a regular file at the
     /// path is reported as `Ok(None)` for the caller to fall back to.
     pub fn open_pcraft(&self, path: &str) -> Result<Option<photocraft_doc::Document>, AutomationError> {
-        let relative = request_path(path, self.read.as_ref())?;
-        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
-        let dir = match root.dir.open_dir(&relative) {
-            Ok(dir) => dir,
-            Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => return Ok(None),
-            Err(e) => return Err(file_error("read", path, e)),
-        };
-        let source = DirHandle { dir };
-        Ok(Some(photocraft_format::load_bytes_source(&source, &photocraft_format::LoadOptions::default())?))
+        if self.read.is_empty() {
+            return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));
+        }
+        let mut not_found = None;
+        for root in &self.read {
+            let Some(relative) = scoped_path(path, root)? else { continue };
+            let dir = match root.dir.open_dir(&relative) {
+                Ok(dir) => dir,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    not_found = Some(error);
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => return Ok(None),
+                Err(error) => return Err(file_error("read", path, error)),
+            };
+            let source = DirHandle { dir };
+            return Ok(Some(photocraft_format::load_bytes_source(&source, &photocraft_format::LoadOptions::default())?));
+        }
+        match not_found {
+            Some(error) => Err(file_error("read", path, error)),
+            None => Err(path_error(path, "absolute paths must be inside an automation read root")),
+        }
     }
 
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
@@ -87,6 +143,13 @@ impl AuthorizedWorkspace {
     /// resolution and file creation relative to the held directory handle, so
     /// a non-existent final target is supported without ambient path access.
     pub fn write(&self, path: &str, bytes: &[u8]) -> Result<(), AutomationError> {
+        self.write_stream(path, &mut |w| w.write_all(bytes))
+    }
+
+    /// [`Self::write`] with the file's bytes produced by `write` straight into the temporary
+    /// file (it may seek back to patch lengths), so a large PSD/PSB is never held in memory
+    /// whole (#5333). The same refusals, the same atomic replace.
+    pub fn write_stream(&self, path: &str, write: &mut photocraft_format::atomic::StreamWriter<'_>) -> Result<(), AutomationError> {
         let relative = request_path(path, self.write.as_ref())?;
         let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
         let leaf = relative.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -110,9 +173,13 @@ impl AuthorizedWorkspace {
         let tmp = parent.join(photocraft_format::atomic::temp_name(&leaf));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
-        let written = root.dir.open_with(&tmp, &options).and_then(|file| {
+        let opened = root.dir.open_with(&tmp, &options);
+        // Removes the temporary file on every way out but a rename, a panicking writer included
+        // (unwinding closes the handle inside the closure first), and only one this call made.
+        let mut cleanup = TempRemoval { dir: &root.dir, path: &tmp, armed: opened.is_ok() };
+        let written = opened.and_then(|file| {
             let mut file = file.into_std();
-            file.write_all(bytes)?;
+            write(&mut file)?;
             #[cfg(unix)]
             {
                 use std::os::fd::AsFd;
@@ -130,9 +197,9 @@ impl AuthorizedWorkspace {
         });
         let renamed = written.and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
         if let Err(e) = renamed {
-            let _ = root.dir.remove_file(&tmp);
             return Err(file_error("write", path, e));
         }
+        cleanup.armed = false;
         // Flush the directory entry (Unix); best effort, the new bytes are already in place.
         #[cfg(unix)]
         {
@@ -142,6 +209,21 @@ impl AuthorizedWorkspace {
             }
         }
         Ok(())
+    }
+}
+
+/// Removes a temporary file on drop unless `armed` was cleared after its rename.
+struct TempRemoval<'a> {
+    dir: &'a Dir,
+    path: &'a Path,
+    armed: bool,
+}
+
+impl Drop for TempRemoval<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.dir.remove_file(self.path);
+        }
     }
 }
 
@@ -190,8 +272,7 @@ fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Resu
     }
 }
 
-fn open_root(path: Option<&Path>, authority: &str) -> Result<Option<RootCapability>, AutomationError> {
-    let Some(path) = path else { return Ok(None) };
+fn open_root(path: &Path, authority: &str, opened: &[RootCapability]) -> Result<RootCapability, AutomationError> {
     if path.as_os_str().is_empty() {
         return Err(AutomationError::BadRequest(format!("automation {authority} root is empty")));
     }
@@ -202,27 +283,42 @@ fn open_root(path: Option<&Path>, authority: &str) -> Result<Option<RootCapabili
     } else {
         std::path::absolute(path).map_err(|e| AutomationError::Io(format!("cannot resolve automation {authority} root `{}`: {e}", path.display())))?
     };
+    // Reuse the held handle for the same launch spelling, not a second open of it: a root
+    // symlink could otherwise change between the two opens. Only a shared handle lets an
+    // implicit save write where the bytes were read (`read_with_save_path`); aliases do not.
+    if let Some(root) = opened.iter().find(|root| root.configured_path == configured_path) {
+        return Ok(root.clone());
+    }
     // Resolve trusted configuration once, before opening that exact directory as a capability.
     let absolute =
         std::fs::canonicalize(path).map_err(|e| AutomationError::Io(format!("cannot resolve automation {authority} root `{}`: {e}", path.display())))?;
     let dir = Dir::open_ambient_dir(&absolute, ambient_authority())
         .map_err(|e| AutomationError::Io(format!("cannot open automation {authority} root `{}`: {e}", path.display())))?;
-    Ok(Some(RootCapability { dir: Arc::new(dir), path: absolute, configured_path }))
+    Ok(RootCapability { dir: Arc::new(dir), path: absolute, configured_path })
 }
 
 /// Both root spellings refer to the capability opened at startup. Do not resolve an untrusted
 /// absolute request using ambient filesystem access: strip a known root first and let cap-std
 /// resolve the remaining name. New targets and nested export directories need not exist yet.
 fn request_path(raw: &str, root: Option<&RootCapability>) -> Result<PathBuf, AutomationError> {
+    let Some(root) = root else { return relative_path(raw) };
+    scoped_path(raw, root)?.ok_or_else(|| path_error(raw, "absolute paths must be inside the automation root"))
+}
+
+/// An absolute prefix mismatch is a noncandidate, whereas a malformed path
+/// beneath a matching root is an error. Never turn either into a relative lookup.
+fn scoped_path(raw: &str, root: &RootCapability) -> Result<Option<PathBuf>, AutomationError> {
     let path = Path::new(raw);
-    let Some(root) = root.filter(|_| path.is_absolute()) else { return relative_path(raw) };
+    if !path.is_absolute() {
+        return relative_path(raw).map(Some);
+    }
     // Prefer the trusted launch spelling: it can itself contain `..`. Only that
     // exact granted prefix is exempt; traversal in the remaining request still fails below.
-    let request = path_beneath_root(path, &root.configured_path)
-        .or_else(|| path_beneath_root(path, &root.path))
-        .ok_or_else(|| path_error(raw, "absolute paths must be inside the automation root"))?;
+    let Some(request) = path_beneath_root(path, &root.configured_path).or_else(|| path_beneath_root(path, &root.path)) else {
+        return Ok(None);
+    };
     let rest = request.map(|c| c.as_os_str().to_str().ok_or_else(|| path_error(raw, "path is not UTF-8"))).collect::<Result<Vec<_>, _>>()?;
-    relative_path(&rest.join("/"))
+    relative_path(&rest.join("/")).map(Some)
 }
 
 /// Strip a granted root prefix without resolving the client path with ambient authority.
@@ -468,6 +564,7 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
         | "brush.presets.importAbr"
         | "brush.presets.importImage"
         | "gradient.presets.importGrd"
+        | "shape.presets.importCsh"
         | "plugin.install"
         | "swatches.import"
         | "style.presets.importAsl"
