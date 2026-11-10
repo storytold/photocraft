@@ -514,8 +514,7 @@ mod tests {
         let (w, h) = (40, 24);
         let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
         assert!(import_raw_with("a.dng", &bytes, &DevelopOptions::default()).is_ok());
-        let mut tight = DevelopOptions::default();
-        tight.limits = Limits { max_width: 8, max_height: 8, max_pixels: 64, max_alloc: 1 << 20 };
+        let tight = DevelopOptions { limits: Limits { max_width: 8, max_height: 8, max_pixels: 64, max_alloc: 1 << 20 }, ..DevelopOptions::default() };
         assert!(matches!(import_raw_with("a.dng", &bytes, &tight), Err(IoError::Raw(RawError::LimitExceeded(_)))));
     }
 
