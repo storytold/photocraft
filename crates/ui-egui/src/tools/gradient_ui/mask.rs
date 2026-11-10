@@ -246,6 +246,15 @@ pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str, params: &Value) 
     if pending_in_active(app).is_none() || STEPPING.contains(&id) || !COMMITTING.iter().any(|p| id.starts_with(p)) {
         return Ok(());
     }
+    // Paste reads the OS clipboard before it runs, and that read can empty an engine clipboard
+    // that was mirrored from outside and is no longer there (`import_os_clipboard`). Without this
+    // the precheck below would see the stale copy, pass, and paint the gradient for a paste that
+    // then does nothing. The menu path makes the same call just before `app.run`, so for a paste
+    // reached directly (automation, a script) this only brings it to the same starting point
+    // (CodeRabbit on #10722).
+    if id.starts_with("edit.paste") || id == "file.newFromClipboard" {
+        let _ = app.import_os_clipboard();
+    }
     if photocraft_engine::commands::find(id).is_some() {
         app.session.precheck(id, params).map_err(|e| e.to_string())?;
     }

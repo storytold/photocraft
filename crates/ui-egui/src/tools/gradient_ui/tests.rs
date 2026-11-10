@@ -752,7 +752,7 @@ fn an_open_popup_takes_escape_before_the_pending_mask_gradient() {
     let pending = mask::pending(&app);
     assert!(pending.is_some(), "a gradient is pending");
     let ctx = egui::Context::default();
-    egui::Popup::open_id(&ctx, egui::Id::new("a-list-in-the-options-bar"));
+    egui::Popup::open_id(&ctx, egui::Id::unique("a-list-in-the-options-bar"));
     assert!(egui::Popup::is_any_open(&ctx), "the popup is open in egui's memory");
     let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
     let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
@@ -807,4 +807,50 @@ fn a_mask_drag_ends_when_the_tool_changes_under_it() {
     app.ui.tool = Tool::Gradient;
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 60.0 }, mods());
     assert_eq!(mask::pending(&app), None, "the release stores nothing for a drag that ended");
+}
+
+/// CodeRabbit on #10722, the narrower case its first finding was reaching for: the engine
+/// clipboard holds an image mirrored from outside, the OS clipboard no longer does, and paste is
+/// reached directly rather than through the menu. The OS read then empties the stale copy and the
+/// paste does nothing, so the pending gradient must not have been painted for it.
+#[test]
+fn a_paste_whose_mirrored_clipboard_has_gone_leaves_the_pending_mask_gradient_alone() {
+    // An OS clipboard that holds an image for the copy and nothing afterwards.
+    type OsClip = std::sync::Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
+    let os: OsClip = std::sync::Arc::default();
+    let (set, get) = (os.clone(), os.clone());
+    let services = crate::Services {
+        clipboard_set_image: Some(Box::new(move |w: u32, h: u32, px: &[u8]| {
+            *set.lock().unwrap() = Some((w, h, px.to_vec()));
+            Ok(())
+        })),
+        clipboard_get_image: Some(Box::new(move || Ok(get.lock().unwrap().clone()))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+    app.ui.tool = Tool::Gradient;
+    app.ui.tool_options.gradient_style = "linear".into();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.tool_options.gradient_dither = false;
+    app.ui.tool_options.gradient_classic = false;
+    app.sync_views();
+    assert_eq!(crate::canvas::paint_target(&app), json!("mask"));
+
+    // An image from outside: imported, so mirrored and external.
+    *os.lock().unwrap() = Some((2, 1, vec![255; 8]));
+    assert!(app.import_os_clipboard().unwrap(), "the outside image is imported");
+    assert!(app.session.clipboard.is_some() && app.clip_external, "mirrored from outside");
+
+    // It is gone from the OS clipboard, and a gradient waits on the mask.
+    *os.lock().unwrap() = None;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app).expect("a gradient is pending");
+    let revision = app.session.active().unwrap().revision;
+
+    // Paste reached directly, as automation or a script does.
+    let refused = app.run("edit.paste", json!({})).is_err();
+    assert!(refused, "the paste is refused: the mirrored copy is gone");
+    assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (Some(pending), revision), "nothing was painted for it");
 }
