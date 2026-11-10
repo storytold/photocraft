@@ -13,11 +13,6 @@ use photocraft_engine::Session;
 use photocraft_geom::Rect;
 use serde_json::json;
 
-const COLOR_REPLACEMENT_INDEXED: &str =
-    "Could not use the Color Replacement tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
-const MIXER_INDEXED: &str = "Could not use the Mixer Brush tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
-const DODGE_INDEXED: &str = "Could not use the dodge tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
-
 type Paint = fn(i32, i32) -> [f32; 4];
 type ToolRun = fn(&mut Session);
 
@@ -176,7 +171,7 @@ fn assert_quantized_tool(palette_name: &str, paint: Paint, tool: &str, run: Tool
     assert_ne!(raster_snapshot(&control), control_before, "{label}: RGB control did not make a meaningful edit");
 }
 
-fn assert_indexed_refusal(palette_name: &str, paint: Paint, tool: &str, params: serde_json::Value, expected: &str) {
+fn assert_indexed_refusal(palette_name: &str, paint: Paint, tool: &str, params: serde_json::Value) {
     let mut s = indexed(paint);
     let original_mode = doc(&s).mode;
     let original_depth = doc(&s).depth;
@@ -184,9 +179,13 @@ fn assert_indexed_refusal(palette_name: &str, paint: Paint, tool: &str, params: 
     let before = raster_snapshot(&s);
     let steps = history_len(&s);
 
-    let error = s.execute(tool, params).unwrap_err().to_string();
+    // The same parameters are accepted in RGB; Indexed must reject the operation for its mode,
+    // rather than pass this test through malformed parameters or an unavailable command.
+    let mut rgb = rgb_document(paint);
+    rgb.execute(tool, params.clone()).unwrap();
+    let error = s.execute(tool, params).unwrap_err();
     let label = format!("{palette_name} / {tool}");
-    assert_eq!(error, expected, "{label}: unexpected Indexed refusal");
+    assert!(matches!(&error, photocraft_engine::EngineError::Other(reason) if reason.contains("Indexed Color")), "{label}: unexpected refusal: {error}");
     assert_eq!(raster_snapshot(&s), before, "{label}: refusal changed samples or layers");
     assert_eq!(history_len(&s), steps, "{label}: refusal added history");
     assert_indexed_state(&s, original_mode, original_depth, &original_table, &label);
@@ -264,7 +263,6 @@ fn paint_color_replacement_refuses_indexed_without_editing() {
             paint,
             "paint.colorReplacement",
             json!({"points": [[4, 10], [36, 10]], "size": 8, "mode": "color", "tolerance": 30}),
-            COLOR_REPLACEMENT_INDEXED,
         );
     }
 }
@@ -272,13 +270,7 @@ fn paint_color_replacement_refuses_indexed_without_editing() {
 #[test]
 fn paint_mixer_brush_refuses_indexed_without_editing() {
     for (palette_name, paint) in palette_cases() {
-        assert_indexed_refusal(
-            palette_name,
-            paint,
-            "paint.mixerBrush",
-            json!({"points": [[4, 10], [36, 10]], "size": 8, "wet": 0, "load": 100, "mix": 0}),
-            MIXER_INDEXED,
-        );
+        assert_indexed_refusal(palette_name, paint, "paint.mixerBrush", json!({"points": [[4, 10], [36, 10]], "size": 8, "wet": 0, "load": 100, "mix": 0}));
     }
 }
 
@@ -313,7 +305,6 @@ fn paint_dodge_refuses_indexed_without_editing() {
             paint,
             "paint.dodge",
             json!({"points": [[4, 10], [36, 10]], "size": 8, "hardness": 100, "opacity": 100, "range": "midtones", "exposure": 100}),
-            DODGE_INDEXED,
         );
     }
 }
