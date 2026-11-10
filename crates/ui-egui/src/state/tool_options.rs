@@ -84,6 +84,9 @@ pub struct ToolOptions {
     pub protect_tones: bool,
     /// Sponge: desaturate | saturate, vibrance.
     pub sponge_mode: String,
+    /// Sponge: Flow %, whole numbers 1..100 (#12976). Settings saved before it load as 50.
+    #[serde(default = "fifty")]
+    pub sponge_flow: f32,
     pub vibrance: bool,
     /// Blur/Sharpen/Smudge strength %, Sharpen protect detail, Smudge finger painting.
     pub strength: f32,
@@ -480,6 +483,7 @@ impl Default for ToolOptions {
             exposure: 50.0,
             protect_tones: true,
             sponge_mode: "desaturate".into(),
+            sponge_flow: 50.0,
             vibrance: true,
             strength: 50.0,
             protect_detail: true,
