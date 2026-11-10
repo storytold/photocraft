@@ -153,7 +153,7 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
             .with_app_id(APP_ID)
             .with_title("PhotoCraft")
             .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([760.0, 480.0])
+            .with_min_inner_size(photocraft_ui_egui::MIN_WINDOW_SIZE)
             .with_drag_and_drop(true)
             .with_decorations(!custom_titlebar)
             .with_fullsize_content_view(true)

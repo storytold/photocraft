@@ -1,5 +1,5 @@
 use super::*;
-use egui::{Event, Pos2, RawInput, ViewportId};
+use egui::{Event, Pos2, RawInput, Vec2, ViewportId};
 use photocraft_engine::Session;
 
 /// #5826: the drag overlay under a dialog doesn't depend on the custom title bar. On macOS
@@ -24,6 +24,10 @@ struct Win {
     ctx: egui::Context,
     app: PhotocraftApp,
     width: f32,
+    height: f32,
+    /// Where the window's content is on the screen, and its outer rect's offset from that.
+    at: Pos2,
+    frame_offset: Vec2,
     time: f64,
     maximized: bool,
 }
@@ -34,7 +38,7 @@ impl Win {
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
         app.custom_titlebar = true;
-        Self { ctx, app, width, time: 0.0, maximized: false }
+        Self { ctx, app, width, height: 600.0, at: pos2(200.0, 100.0), frame_offset: vec2(-7.0, 0.0), time: 0.0, maximized: false }
     }
 
     fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
@@ -44,9 +48,12 @@ impl Win {
     fn frame_with_modal(&mut self, events: Vec<Event>, modal: bool) -> egui::FullOutput {
         self.time += 0.05;
         let mut input =
-            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(self.width, 600.0))), time: Some(self.time), events, ..Default::default() };
+            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(self.width, self.height))), time: Some(self.time), events, ..Default::default() };
         if let Some(v) = input.viewports.get_mut(&ViewportId::ROOT) {
             v.maximized = Some(self.maximized);
+            let inner = Rect::from_min_size(self.at, vec2(self.width, self.height));
+            v.inner_rect = Some(inner);
+            v.outer_rect = Some(Rect::from_min_max(inner.min + self.frame_offset, inner.max - self.frame_offset));
         }
         // What `PhotocraftApp::raw_input_hook` does.
         release_after_os_resize(&self.ctx, &mut input);
@@ -83,6 +90,49 @@ impl Win {
             .into_iter()
             .flat_map(|e| self.frame_with_modal(e, modal).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default())
             .collect()
+    }
+
+    /// A pen stroke along `path`, in screen points, as winit and egui-winit deliver it on Windows:
+    /// `Touch` events with an emulated pointer at the pen's spot in the window. The window obeys
+    /// the move, size and restore commands the frames send, as the OS would, so a window that
+    /// moves under the pen moves the pen's spot in it. The commands the frames sent.
+    fn pen(&mut self, path: &[Pos2]) -> Vec<ViewportCommand> {
+        let touch = |phase, pos| Event::Touch { device_id: egui::TouchDeviceId(7), id: egui::TouchId(1), phase, pos, force: Some(0.5) };
+        let mut all = vec![];
+        let last = path.len() - 1;
+        // The pen hovers first: winit reports that as touch moves, egui-winit as pointer moves.
+        let hover = path[0] - self.at.to_vec2();
+        all.extend(self.obey(vec![Event::PointerMoved(hover)]));
+        for (i, p) in path.iter().enumerate() {
+            let local = *p - self.at.to_vec2();
+            let events = match i {
+                0 => vec![touch(egui::TouchPhase::Start, local), Event::PointerMoved(local), button(local, true, egui::PointerButton::Primary)],
+                _ => vec![touch(egui::TouchPhase::Move, local), Event::PointerMoved(local)],
+            };
+            all.extend(self.obey(events));
+            if i == last {
+                let events = vec![touch(egui::TouchPhase::End, local), button(local, false, egui::PointerButton::Primary), Event::PointerGone];
+                all.extend(self.obey(events));
+            }
+        }
+        all
+    }
+
+    /// One frame; the window then moves, resizes and restores as its commands say.
+    fn obey(&mut self, events: Vec<Event>) -> Vec<ViewportCommand> {
+        let cmds = self.frame(events).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        for c in &cmds {
+            match c {
+                ViewportCommand::OuterPosition(p) => self.at = *p - self.frame_offset,
+                ViewportCommand::InnerSize(s) => (self.width, self.height) = (s.x, s.y),
+                ViewportCommand::Maximized(false) => {
+                    self.maximized = false;
+                    (self.at, self.width, self.height) = (pos2(300.0, 200.0), 1000.0, 700.0);
+                }
+                _ => {}
+            }
+        }
+        cmds
     }
 
     fn click(&mut self, p: Pos2) -> Vec<ViewportCommand> {
@@ -488,4 +538,74 @@ fn theme_icons_are_cached_and_fall_back() {
     });
     out.textures_delta.clear();
     assert_eq!(calls.load(Ordering::Relaxed), 3, "each icon and size rendered once; absurd sizes never");
+}
+
+/// #7967, #11840: a pen on the title bar's gap moves the window itself. Windows' move loop follows
+/// the mouse button, which a pen never presses (winit reads it as `WM_POINTER`), and winit's
+/// unfinished `drag_window` then stopped the mouse moving the window too.
+#[test]
+fn a_pen_moves_the_window_and_the_mouse_still_can_after() {
+    let mut w = Win::new(1440.0);
+    w.frame(vec![]);
+    let empty = pos2(980.0, 16.0);
+    assert!(w.bar_widgets().iter().all(|r| !r.contains(empty)), "the probe point must be empty bar space");
+    let start = w.at;
+    let on_screen = start + empty.to_vec2();
+    let path: Vec<Pos2> = (0..=10).map(|i| on_screen + vec2(-30.0, 12.0) * i as f32).collect();
+    let cmds = w.pen(&path);
+    assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag | ViewportCommand::BeginResize(_))), "no OS move for a pen: {cmds:?}");
+    assert_eq!(w.at, start + vec2(-300.0, 120.0), "the window followed the pen: {cmds:?}");
+    // Lifting the pen ends it: a move of the pointer moves nothing.
+    let cmds = w.obey(vec![Event::PointerMoved(pos2(500.0, 300.0))]);
+    assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::OuterPosition(_))), "{cmds:?}");
+    // The mouse still hands the move to the OS.
+    let cmds = w.gesture(&[empty, empty + vec2(12.0, 4.0), empty + vec2(30.0, 8.0)]);
+    assert_eq!(cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count(), 1, "{cmds:?}");
+    assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::OuterPosition(_))), "{cmds:?}");
+}
+
+/// A pen on an edge or a corner resizes the window itself, down to the minimum size, the left
+/// and top edges without pushing the window along once it is that small.
+#[test]
+fn a_pen_resizes_the_window_from_its_edges() {
+    let mut w = Win::new(1000.0);
+    w.frame(vec![]);
+    let screen = |w: &Win, p: Pos2| w.at + p.to_vec2();
+    // South-east corner: 60 wider, 40 taller.
+    let p = screen(&w, pos2(998.0, 598.0));
+    let cmds = w.pen(&[p, p + vec2(30.0, 20.0), p + vec2(60.0, 40.0)]);
+    assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::BeginResize(_))), "{cmds:?}");
+    assert_eq!((w.width, w.height), (1060.0, 640.0));
+    let at = w.at;
+    // West edge, 100 in: the window narrows and its left edge follows the pen.
+    let p = screen(&w, pos2(2.0, 300.0));
+    w.pen(&[p, p + vec2(50.0, 0.0), p + vec2(100.0, 0.0)]);
+    assert_eq!((w.width, w.at), (960.0, at + vec2(100.0, 0.0)));
+    // North edge, far down: stops at the minimum height with the bottom edge kept.
+    let bottom = w.at.y + w.height;
+    let p = screen(&w, pos2(480.0, 1.0));
+    w.pen(&[p, p + vec2(0.0, 200.0), p + vec2(0.0, 900.0)]);
+    assert_eq!((w.height, w.at.y + w.height), (MIN_WINDOW_SIZE.y, bottom));
+    // The mouse still resizes through the OS.
+    let cmds = w.gesture(&[pos2(1.0, 300.0), pos2(8.0, 300.0)]);
+    assert_eq!(cmds, vec![ViewportCommand::BeginResize(ResizeDirection::West)]);
+}
+
+/// A pen dragging a maximized window's title bar restores it and carries it, held where the pen
+/// took it, as Windows does for the mouse.
+#[test]
+fn a_pen_drags_a_maximized_window_out_restored() {
+    let mut w = Win::new(1920.0);
+    w.maximized = true;
+    w.at = Pos2::ZERO;
+    w.frame(vec![]);
+    let grab = pos2(1200.0, 16.0);
+    assert!(w.bar_widgets().iter().all(|r| !r.contains(grab)), "the probe point must be empty bar space");
+    let path: Vec<Pos2> = (0..=6).map(|i| grab + vec2(10.0, 20.0) * i as f32).collect();
+    let cmds = w.pen(&path);
+    assert!(cmds.contains(&ViewportCommand::Maximized(false)), "{cmds:?}");
+    assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
+    let pen = *path.last().unwrap();
+    let held = pen - w.at;
+    assert!((held.x - 1000.0 * 1200.0 / 1920.0).abs() < 0.01 && (held.y - 16.0).abs() < 0.01, "held at {held:?}, window at {:?}", w.at);
 }
