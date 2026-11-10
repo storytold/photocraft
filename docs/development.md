@@ -695,9 +695,10 @@ except Place, which is a job that `poll_jobs` steps on the UI thread (a *coopera
 
 ## Indexed painting
 
-An Indexed document keeps its fixed `ColorTable` beside an expanded RGB/RGBA raster. Painting
-does not append colours to that table. After the brush or retouch operation has applied opacity,
-flow, blending, selection coverage and transparency rules, every changed pixel is mapped to the
+An Indexed document keeps its fixed `ColorTable` beside an expanded RGB/RGBA raster. Pixel
+edits do not append colours to that table. The `Session::edit` transaction boundary constrains
+accepted brush/retouch, fill, gradient, paste and interpolating transform edits after opacity,
+flow, blending, selection coverage and transparency rules have run. Every changed pixel maps to the
 nearest existing opaque table entry by squared encoded-RGB distance; equal distances keep the
 earlier table entry. The mapping is nearest-only: it does not add palette construction or
 dithering to painting.
@@ -715,6 +716,13 @@ use the same constraint, including offered/clone previews, symmetry, wrapped ret
 partitioned pointer batches. Changed tiles are constrained without densifying untouched sparse
 tiles; entering Indexed mode, changing the table, or changing depth performs its own explicit
 remap and is not remapped a second time.
+
+Current Indexed-mode tool refusals remain in force: Color Replacement, Mixer Brush and Dodge
+are not re-enabled by this constraint. `indexed_tool_matrix` adapts @squintdev's two-palette,
+12-operation matrix: it captures the original table before each operation, checks accepted
+operations through undo/redo, uses meaningful RGB or guaranteed-change controls, and verifies
+that refused operations leave pixels, layers and history untouched. The matrix keeps its
+immutable source attribution in the test header.
 
 ## Indexed Color timings
 

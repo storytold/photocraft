@@ -2255,7 +2255,7 @@ fn live_dab_offers_are_refused_or_dropped_when_they_dont_match() {
 fn indexed_live_dab_matches_cold_without_work_surface_feedback() {
     let indexed_blur_levels = || {
         let mut s = session(96, 64, 8, "rgb");
-        paint_layer(&mut s, |x, _| if (42..54).contains(&x) { [0.25, 0.25, 0.25, 1.0] } else { [0.5, 0.5, 0.5, 1.0] });
+        paint_layer(&mut s, |x, _| if x == 48 { [0.25, 0.25, 0.25, 1.0] } else { [0.5, 0.5, 0.5, 1.0] });
         s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
         s
     };
