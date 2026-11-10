@@ -39,6 +39,17 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
+/// Why the reference application refuses the Dodge tool in `doc`'s colour mode, in its alert's
+/// words (#12686); other modes (Multichannel and Duotone were not measured) tone as before. The
+/// canvas asks this too, so its "no" cursor and the alert cannot disagree (#12817).
+pub fn dodge_refusal(doc: &Document) -> Option<&'static str> {
+    match doc.mode {
+        photocraft_color::ColorMode::Indexed => Some("it does not work with Indexed Color images (convert image to RGB Color mode to edit)."),
+        photocraft_color::ColorMode::Bitmap => Some("it does not work with Bitmap images (convert image to Grayscale mode to edit)."),
+        _ => None,
+    }
+}
+
 /// A single stroke's accumulated coverage must stay at or under this many pixels (8192², so a
 /// stroke corner to corner across a 24–36 MP canvas fits). Larger footprints return an error
 /// instead of allocating.

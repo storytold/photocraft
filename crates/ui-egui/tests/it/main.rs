@@ -30,6 +30,7 @@ mod crop_turn_grid;
 mod crop_turn_keeps_frame_inside;
 mod custom_print_paper;
 mod display_shadows;
+mod dodge_no_cursor;
 mod drag_preview_canvas;
 mod export_as_scaling;
 mod eyedropper_ring;

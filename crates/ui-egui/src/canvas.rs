@@ -65,6 +65,7 @@ pub mod zoom_window_fit;
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{
     alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor, precise_other_cursor,
+    refused,
 };
 use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
@@ -1702,6 +1703,10 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     } else if crate::tool_cursor::pointer_elsewhere(ctx, &crate::panel_docking::native_viewports(app, ctx)) {
         // The pointer is over a floating panel's own window; this window's last position of
         // it is stale, so no tool cursor or brush outline is painted at it.
+    } else if refused(app, tool) && response.hover_pos().is_some() {
+        // The document's colour mode refuses this tool: the no cursor, before the brush outline
+        // it would otherwise draw (#12817).
+        ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
     } else if let Some((vertical, _)) = guide_hover {
         ui.ctx().set_cursor_icon(crate::rulers::guide_cursor(xf, vertical));
     } else if let Some((p, mods, c)) = response.hover_pos().and_then(|p| {

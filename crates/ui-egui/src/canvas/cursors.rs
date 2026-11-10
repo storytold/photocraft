@@ -126,6 +126,13 @@ pub(crate) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
     (app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise) != app.caps_lock
 }
 
+/// Whether the document's colour mode refuses this tool, so the canvas shows the "no" cursor
+/// before a press would open the alert: the Dodge tool in Indexed Color and Bitmap documents
+/// (#12817). Both the alert and this read the engine's one predicate.
+pub(crate) fn refused(app: &PhotocraftApp, tool: Tool) -> bool {
+    tool == Tool::Dodge && app.session.active().is_some_and(|st| photocraft_engine::retouch_cmds::dodge_refusal(&st.doc).is_some())
+}
+
 /// A pen tool's standard cursor: its toolbar icon with the nib (the Convert Point tool: the
 /// anchor) on `p`. Uses an OS cursor bitmap where supported so its movement tracks hardware
 /// pointer input without waiting for canvas frames (#9122); falls back to drawing the tooltip icon.

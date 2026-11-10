@@ -66,3 +66,18 @@ fn other_modes_keep_dodging_at_every_depth() {
         assert!(LiveDab::begin(&s, "paint.dodge", &stroke()).is_ok(), "{mode:?}/{depth:?}: live");
     }
 }
+
+/// The predicate the canvas asks for its "no" cursor (#12817): exactly the two refused modes, with
+/// the same words the alert uses, and nothing for the modes the tool tones.
+#[test]
+fn dodge_refusal_names_only_indexed_and_bitmap() {
+    let doc = |mode: ColorMode| Document::with_background("t", Size::new(8, 8), mode, SampleType::U8, Color::rgb(0.5, 0.5, 0.5));
+    assert_eq!(
+        super::super::dodge_refusal(&doc(ColorMode::Indexed)),
+        Some("it does not work with Indexed Color images (convert image to RGB Color mode to edit).")
+    );
+    assert_eq!(super::super::dodge_refusal(&doc(ColorMode::Bitmap)), Some("it does not work with Bitmap images (convert image to Grayscale mode to edit)."));
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel, ColorMode::Duotone] {
+        assert!(super::super::dodge_refusal(&doc(mode)).is_none(), "{mode:?} keeps dodging");
+    }
+}
