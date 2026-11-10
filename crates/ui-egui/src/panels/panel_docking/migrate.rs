@@ -10,7 +10,7 @@
 use crate::dock::Group;
 use craft_ui::docking::{Column, Floating, Layout, Location, Node, Side, Workspace};
 
-use super::{PROPERTIES_WINDOW, PANELS, Returns, commit, default_width, normalize, with_canvas};
+use super::{PANELS, PROPERTIES_WINDOW, Returns, commit, default_width, normalize, with_canvas};
 use crate::PhotocraftApp;
 use craft_ui::docking::Group as CraftGroup;
 
@@ -103,12 +103,7 @@ pub(crate) fn materialize(app: &mut PhotocraftApp) {
     }
     let theme = app.ui.theme;
     let workspace = legacy_workspace(app);
-    let returns: Returns = workspace
-        .hidden
-        .iter()
-        .filter(|(_, at)| at.floating.is_none())
-        .map(|(id, at)| (id.clone(), at.clone()))
-        .collect();
+    let returns: Returns = workspace.hidden.iter().filter(|(_, at)| at.floating.is_none()).map(|(id, at)| (id.clone(), at.clone())).collect();
     // The conversion puts the dock up: a workspace exists, so the dock column must draw, the
     // way the native state always had. Later commits don't force it (a `ui.set` may hide it).
     app.ui.panels.dock = true;

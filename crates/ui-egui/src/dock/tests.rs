@@ -160,9 +160,7 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     let default = drawn(&h).0;
     let default_workspace = h.state().ui.docking.clone().unwrap();
     // One group resized and one minimized: the workspace keeps both under its own name.
-    h.state_mut()
-        .run("window.panel.layout", json!({"action": {"ResizeGroup": {"panel": "properties", "height": 120.0}}}))
-        .unwrap();
+    h.state_mut().run("window.panel.layout", json!({"action": {"ResizeGroup": {"panel": "properties", "height": 120.0}}})).unwrap();
     h.run_steps(1);
     crate::menus::invoke(h.state_mut(), &ctx, "window.panel.group", json!({"panel": "color", "operation": "collapse"})).unwrap();
     h.run_steps(2);
@@ -173,9 +171,7 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     h.run_steps(3);
     assert_eq!(drawn(&h).0, default);
     assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default_workspace.layout, "the preset drops the tweaks");
-    h.state_mut()
-        .run("window.panel.layout", json!({"action": {"ResizeGroup": {"panel": "color", "height": 300.0}}}))
-        .unwrap();
+    h.state_mut().run("window.panel.layout", json!({"action": {"ResizeGroup": {"panel": "color", "height": 300.0}}})).unwrap();
     h.run_steps(1);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
     h.run_steps(3);

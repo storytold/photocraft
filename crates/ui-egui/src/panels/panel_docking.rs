@@ -9,9 +9,7 @@
 //! groups and where a floated panel docks back.
 
 use crate::dock::Group;
-use craft_ui::docking::{
-    Action, Column, DockCommand, DockHeights, FloatSpace, Layout, Location, Node, PanelState, Permissions, Placement, Target, Zone,
-};
+use craft_ui::docking::{Action, Column, DockCommand, DockHeights, FloatSpace, Layout, Location, Node, PanelState, Permissions, Placement, Target, Zone};
 #[cfg(test)]
 use craft_ui::docking::{Floating, Side};
 use craft_ui::layout::{SplitAxis, SplitSize};
@@ -370,12 +368,7 @@ pub(crate) fn group_minimized(app: &PhotocraftApp, group: Group) -> bool {
     let Some(workspace) = app.ui.docking.as_ref() else { return app.ui.dock.is_collapsed(group) };
     let layout = &workspace.layout;
     let collapsed = collapsed_members(app, layout);
-    let members: Vec<String> = PANELS
-        .iter()
-        .filter(|p| p.2 == group)
-        .map(|p| p.0.to_owned())
-        .filter(|id| layout.contains(id))
-        .collect();
+    let members: Vec<String> = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0.to_owned()).filter(|id| layout.contains(id)).collect();
     !members.is_empty() && members.iter().all(|id| collapsed.contains(id))
 }
 
@@ -399,9 +392,7 @@ fn ensure(app: &PhotocraftApp, workspace: &mut Workspace, panel: &str) -> Result
     }
     if workspace.hidden.iter().any(|(id, _)| id == panel) {
         let anchor = first_root(&workspace.layout, panel);
-        if hidden_restorable(workspace, panel)
-            && workspace.set_visible(panel.to_owned(), true, anchor, permissions).is_ok()
-        {
+        if hidden_restorable(workspace, panel) && workspace.set_visible(panel.to_owned(), true, anchor, permissions).is_ok() {
             return Ok(());
         }
         // A hidden group's whole tab list is hidden (Character with Paragraph): no member
@@ -1250,7 +1241,6 @@ mod tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_tests;
 
-
 /// A tab group of a layout tree.
 struct TabGroup {
     panels: Vec<String>,
@@ -1482,7 +1472,10 @@ pub(crate) fn prepare_legacy_update(
             if group_minimized(app, group) == want {
                 continue;
             }
-            let Some(panel) = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).find(|id| workspace.layout.contains(&id.to_string())).map(str::to_owned) else { continue };
+            let Some(panel) = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).find(|id| workspace.layout.contains(&id.to_string())).map(str::to_owned)
+            else {
+                continue;
+            };
             workspace.apply(Action::SetMinimized { panel, minimized: want }, permissions).map_err(|e| e.to_string())?;
         }
     }
