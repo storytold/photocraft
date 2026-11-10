@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use super::{close_document, close_documents, closes_document};
+use super::{close_document, close_documents, closes_document, left_without_a_window};
 use crate::PhotocraftApp;
 use crate::state::DocWindow;
 
@@ -106,4 +106,24 @@ fn closing_waits_while_unsaved_changes_are_asked_about() {
     close_documents(&mut app, &egui::Context::default(), ids);
     assert!(app.discard.is_some(), "the unsaved document asks first");
     assert_eq!(app.session.documents().len(), 2, "the other document waits: nothing closes unasked");
+}
+
+/// A floating window and a second view of the same document both closed in one frame: the
+/// document closes, whichever window was drawn first (eliets2's review of #11665). When the
+/// floating window is drawn first it sees the second view still open and closes only itself; once
+/// every window has been drawn, the document is left without one.
+#[test]
+fn a_document_whose_every_window_closed_in_one_frame_closes() {
+    let (mut app, floating) = app_with_floating();
+    let second = crate::view_cmds::float_window(&mut app, 0, 0, false);
+    let id = app.session.documents()[0].doc.id;
+    assert!(!closes_document(&app, &floating), "drawn first, the floating window sees the second view open");
+    // The second view is still open: the document stays.
+    assert!(left_without_a_window(&app, vec![id]).is_empty());
+    // Both windows closed in the frame.
+    app.ui.windows.retain(|w| w.id != floating.id && w.id != second);
+    assert_eq!(left_without_a_window(&app, vec![id]), [id], "no window shows the document any more: it closes");
+    let orphaned = left_without_a_window(&app, vec![id]);
+    close_documents(&mut app, &egui::Context::default(), orphaned);
+    assert_eq!(app.session.documents().len(), 1, "the document is closed, not put back in a tab");
 }

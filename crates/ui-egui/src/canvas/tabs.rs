@@ -766,6 +766,8 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
     // The documents whose last window was closed this frame, by id: closing one renumbers the rest.
     let mut closing = Vec::new();
+    // Floating windows closed this frame while another window of their document was open.
+    let mut floating_closed = Vec::new();
     for w in wins.into_iter().filter(|w| w.open) {
         let Some(st) = app.session.documents().get(w.document) else { continue };
         let title = format!("{} — window {}", st.doc.name, w.id);
@@ -795,6 +797,10 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if close && closes_document(app, &w) {
             close = false;
             closing.extend(app.session.documents().get(w.document).map(|d| d.doc.id));
+        } else if close && w.floating {
+            // Another window of the document was still open when this one was drawn; it may be
+            // closing in this frame too (checked after the loop).
+            floating_closed.extend(app.session.documents().get(w.document).map(|d| d.doc.id));
         }
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
             win.view = view;
@@ -805,8 +811,24 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     app.ui.windows.retain(|w| w.open);
+    // A floating document whose every window was closed in this frame closes, whichever of its
+    // windows was drawn first.
+    for id in left_without_a_window(app, floating_closed) {
+        if !closing.contains(&id) {
+            closing.push(id);
+        }
+    }
     // After the loop: closing a document renumbers the documents the other windows show.
     close_documents(app, ctx, closing);
+}
+
+/// The documents of `ids` that no open window shows any more.
+fn left_without_a_window(app: &PhotocraftApp, ids: Vec<photocraft_doc::DocId>) -> Vec<photocraft_doc::DocId> {
+    ids.into_iter()
+        .filter(|id| {
+            app.session.documents().iter().position(|d| d.doc.id == *id).is_some_and(|index| !app.ui.windows.iter().any(|w| w.open && w.document == index))
+        })
+        .collect()
 }
 
 /// Close the documents whose last window was closed (`ids`), each resolved by id against the
