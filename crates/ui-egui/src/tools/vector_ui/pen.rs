@@ -331,6 +331,27 @@ pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) -> bool {
     try_pen_commit(app, closed).is_ok()
 }
 
+/// ↩ with a Pen path in progress: finish it as an open path. Photoshop then deselects the Work
+/// Path it went into: still listed in the Paths panel, but not drawn, and the next path replaces
+/// it instead of joining it (#12892). Esc ([`pen_end`]) keeps it selected. The Curvature Pen,
+/// which shares the draft, keeps today's behaviour (not measured).
+pub fn pen_enter(app: &mut PhotocraftApp) {
+    let work_path = |app: &PhotocraftApp| app.session.active().and_then(|st| st.doc.work_path.clone());
+    let curvature = app.ui.pen.as_ref().is_some_and(|p| p.curvature);
+    let before = work_path(app);
+    if pen_commit(app, false) && !curvature && work_path(app) != before {
+        deselect_finished_work_path(app);
+    }
+}
+
+/// Deselect and hide the Work Path a finished path just went into. Callers check that it did: a
+/// draft drawn into a vector mask leaves the Work Path selected without changing it.
+fn deselect_finished_work_path(app: &mut PhotocraftApp) {
+    if app.ui.selected_path.as_deref() == Some("work") {
+        super::deselect_loaded_path(app, "work");
+    }
+}
+
 /// Finish the draft as [`pen_commit`] does. On failure the draft stays as it was, marked
 /// `commit_failed`, and the error is shown and returned.
 pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<(), String> {

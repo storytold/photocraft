@@ -5,6 +5,38 @@ use super::properties::{select_and_mask_button, selection_mode_buttons};
 use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Value, icons, json, starts_blend_group, vec2, widgets};
 use photocraft_paint::BrushSettings;
 
+/// The "Fill options" modal's open flag (temporary UI data, per context).
+fn fill_help_id() -> egui::Id {
+    egui::Id::NULL.with("crop-fill-help")
+}
+
+/// The Crop options bar's "Fill options" modal is open: canvas keys (Esc, Enter) belong to it.
+pub(crate) fn fill_help_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(fill_help_id())).unwrap_or(false)
+}
+
+/// Where the Fill ⓘ was last drawn, so a click on it can take Escape in the frame the help opens
+/// (the shortcut pass runs before the options bar draws, #10888).
+fn fill_help_rect_id() -> egui::Id {
+    egui::Id::NULL.with("crop-fill-help-rect")
+}
+
+/// Whether the Fill help wants this frame's Enter and Escape: it is open, or its ⓘ is clicked in
+/// the frame the help opens, where Esc must not cancel the crop underneath.
+pub(crate) fn fill_help_takes_keys(ctx: &egui::Context) -> bool {
+    if fill_help_open(ctx) {
+        return true;
+    }
+    ctx.data(|d| d.get_temp::<egui::Rect>(fill_help_rect_id()))
+        .is_some_and(|r| ctx.input(|i| i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| r.contains(p))))
+}
+
+/// Closes the Fill help when the options bar stops drawing: its flag would otherwise keep Enter and
+/// Escape away from the crop (#10888).
+pub(crate) fn close_fill_help(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(fill_help_id(), false));
+}
+
 // Custom controls also need to bring keyboard focus into a scroll viewport.
 pub(super) fn reveal_focused_control(ui: &egui::Ui) {
     // read_response reprocesses pointer events. Reading a popup's newly focused field
@@ -213,6 +245,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 range_alert(&mut app.ui, ZERO_TO_100);
             }
             smoothing_options(ui, b, brush);
+            if app.ui.tool == Tool::Eraser {
+                widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
+            }
             widgets::vline(ui, 22.0);
             let pressure = pressure_button(ui, b.pressure_size, tl!("Always use pressure for size"), brush);
             if tip(pressure, tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
@@ -293,6 +328,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             tip(flow, tl!("Set flow rate for stroke"));
             opt_label(ui, tl!("Smoothing"));
             tip(smoothing_field(ui, b, 66.0), tl!("Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"));
+            if app.ui.tool == Tool::Eraser {
+                widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
+            }
             widgets::vline(ui, 22.0);
             tip(
                 widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size")),
@@ -533,7 +571,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             let before_ratio = crate::crop_ui::preset_ratio(app);
             let doc_size = app.session.active().map_or((0.0, 0.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
             // Ratios, sizes, saved presets, New / Delete Crop Preset… (#2443, #1919).
-            crate::crop_presets::dropdown(app, ui);
+            ui.scope(|ui| crate::crop_presets::dropdown(app, ui)).response.on_hover_text(tl!("Select a preset aspect ratio or crop size"));
             let o = &mut app.ui.tool_options;
             let mut turn = false;
             let mut ratio_base = None;
@@ -545,9 +583,11 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 // Original Ratio shows the document's numbers, as Photoshop does.
                 let (mut rw, mut rh) = crate::crop_size::custom_ratio_fields(o, doc_size);
                 let decimals = crate::crop_size::RATIO_DECIMALS;
-                let fw = widgets::value_field_prec(ui, &mut rw, 0.0..=99_999.0, "", 54.0, decimals);
+                let fw = widgets::value_field_prec_blank(ui, &mut rw, 0.0..=99_999.0, "", 54.0, decimals)
+                    .on_hover_text(tl!("Set the aspect ratio for the crop box"));
                 let swap = icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked();
-                let fh = widgets::value_field_prec(ui, &mut rh, 0.0..=99_999.0, "", 54.0, decimals);
+                let fh = widgets::value_field_prec_blank(ui, &mut rh, 0.0..=99_999.0, "", 54.0, decimals)
+                    .on_hover_text(tl!("Set the aspect ratio for the crop box"));
                 let (cw, ch) = (fw.changed(), fh.changed());
                 if swap {
                     std::mem::swap(&mut rw, &mut rh);
@@ -569,27 +609,33 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 }
             }
             widgets::vline(ui, 22.0);
-            if widgets::secondary_button(ui, tl!("Clear"), 0.0).clicked() {
+            if widgets::secondary_button(ui, tl!("Clear"), 0.0).on_hover_text(tl!("Clear aspect ratio values")).clicked() {
                 crate::crop_size::clear_ratio(o);
             }
             crate::crop_straighten::options_button(&mut app.crop.straighten, ui);
             crate::crop_overlay::options_button(o, ui);
             let pick_shield_color = crate::crop_shield::options_button(&mut o.crop_shield, ui);
-            widgets::checkbox(ui, &mut o.crop_delete, tl!("Delete Cropped Pixels"));
+            widgets::checkbox(ui, &mut o.crop_delete, tl!("Delete Cropped Pixels"))
+                .on_hover_text(tl!("Determines if pixel data outside the crop box is retained or deleted"));
             // Fill: what a turned or extending crop puts where the image doesn't reach
             // (#3823). Generative Expand is not offered. The first entry names the outcome as in
             // Photoshop: the background colour, or transparency with Delete Cropped Pixels off
             // (#10872); both store `crop_content_aware: false`.
             ui.label(tl!("Fill:"));
             let delete_cropped_pixels = o.crop_delete;
-            widgets::dropdown(
-                ui,
-                "crop-fill",
-                tl!("Fill:"),
-                &mut o.crop_content_aware,
-                &[(false, crate::crop_ui::fill_label(delete_cropped_pixels)), (true, tl!("Content-Aware Fill"))],
-                150.0,
-            );
+            ui.scope(|ui| {
+                widgets::dropdown(
+                    ui,
+                    "crop-fill",
+                    tl!("Fill:"),
+                    &mut o.crop_content_aware,
+                    &[(false, crate::crop_ui::fill_label(delete_cropped_pixels)), (true, tl!("Content-Aware Fill"))],
+                    150.0,
+                );
+            })
+            .response
+            .on_hover_text(tl!("How expanded crop area gets filled"));
+            crop_fill_help(ui);
             if turn {
                 crate::crop_ui::turn_frame(app);
             }
@@ -602,31 +648,71 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             if pick_shield_color {
                 crate::crop_shield::pick_custom_color(app);
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icons::button(
-                    ui,
-                    "check",
-                    26.0,
-                    false,
-                    &crate::i18n::fmt(tl!("Commit current crop operation  ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]),
-                )
-                .clicked()
-                {
-                    crate::canvas::commit_crop(app);
-                }
-                if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
-                    crate::crop_ui::dismiss(app);
-                }
-                // Resets the box to its first frame; nothing to reset until it is changed.
-                let changed = crate::crop_ui::modified(app);
-                if ui.add_enabled_ui(changed, |ui| icons::button(ui, "undo-2", 26.0, false, tl!("Reset"))).inner.clicked() {
-                    crate::crop_ui::reset(app);
-                }
-            });
+            crop_commit_controls(app, ui);
         }
         // Every theme gets the font, style and size controls (#1387), as with Auto-Select (#1275).
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::options_bar(app, ui),
         _ => {}
+    }
+}
+
+/// The Fill ⓘ button and the "Fill options" help modal it opens (#10888).
+fn crop_fill_help(ui: &mut egui::Ui) {
+    let help_id = fill_help_id();
+    let button = icons::button(ui, "info", 24.0, false, tl!("Displays pop-up help for the fill methods"));
+    ui.data_mut(|d| d.insert_temp(fill_help_rect_id(), button.rect));
+    if button.clicked() {
+        ui.data_mut(|d| d.insert_temp(help_id, true));
+    }
+    if !ui.data(|d| d.get_temp::<bool>(help_id)).unwrap_or(false) {
+        return;
+    }
+    let mut close = false;
+    let modal = egui::Modal::new(help_id.with("modal")).show(ui.ctx(), |ui| {
+        ui.set_max_width(380.0);
+        ui.heading(tl!("Fill options"));
+        ui.add_space(4.0);
+        ui.label(tl!("Background (default):"));
+        ui.label(tl!("Fill the expanded area with your background color or transparent pixels"));
+        ui.add_space(6.0);
+        ui.label(tl!("Content-aware fill"));
+        ui.label(tl!("Sample content from part of the image and use it to fill a small area"));
+        ui.add_space(10.0);
+        if widgets::primary_button(ui, tl!("OK"), 0.0).clicked() {
+            close = true;
+        }
+        // Esc closes the help only; `input/shortcuts.rs` leaves it to the modal (`fill_help_open`).
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            close = true;
+        }
+    });
+    close |= modal.should_close();
+    if close {
+        ui.data_mut(|d| d.insert_temp(help_id, false));
+    }
+}
+
+/// Reset (always, disabled while the frame is untouched), then Cancel and Commit only while the
+/// crop is live, beside each other rather than at the far right of the bar (#10888).
+fn crop_commit_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let changed = crate::crop_ui::modified(app);
+    if ui
+        .add_enabled_ui(changed, |ui| icons::button(ui, "undo-2", 26.0, false, tl!("Reset the crop box, image rotation, and aspect ratio settings")))
+        .inner
+        .clicked()
+    {
+        crate::crop_ui::reset(app);
+    }
+    if !crate::crop_ui::pending(app) && !changed {
+        return;
+    }
+    if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
+        crate::crop_ui::dismiss(app);
+    }
+    if icons::button(ui, "check", 26.0, false, &crate::i18n::fmt(tl!("Commit current crop operation  ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
+        .clicked()
+    {
+        crate::canvas::commit_crop(app);
     }
 }
 
@@ -928,3 +1014,15 @@ fn hint(ui: &mut egui::Ui, s: &str) {
 #[cfg(test)]
 #[path = "../eraser_range_alert_tests.rs"]
 mod eraser_range_alert_tests;
+
+#[cfg(test)]
+#[path = "../blur_strength_alert_tests.rs"]
+mod blur_strength_alert_tests;
+
+#[cfg(test)]
+#[path = "../sharpen_strength_alert_tests.rs"]
+mod sharpen_strength_alert_tests;
+
+#[cfg(test)]
+#[path = "../smudge_strength_alert_tests.rs"]
+mod smudge_strength_alert_tests;
