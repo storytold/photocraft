@@ -13,10 +13,10 @@ const KA: fn() -> Lang = || Lang::from_code("ka").expect("ka registered");
 fn hindi_has_the_reveal_and_camera_raw_rows() {
     assert_eq!(tr(HI(), "Reveal in Explorer"), "Explorer में दिखाएँ");
     assert_eq!(tr(HI(), "Reveal in Finder"), "Finder में दिखाएँ");
-    assert_eq!(tr(HI(), "Camera Raw…"), "Camera Raw…");
+    assert_eq!(tr(HI(), "RAW Defaults…"), "RAW डिफ़ॉल्ट…");
     let (rows, errors) = parse_entries(include_str!("hi.tsv"));
     assert!(errors.is_empty(), "{errors:?}");
-    assert!(rows.iter().any(|(ctx, src, _)| ctx.is_empty() && src == "Camera Raw…"), "Camera Raw… is a catalog row, not a fallback");
+    assert!(rows.iter().any(|(ctx, src, _)| ctx.is_empty() && src == "RAW Defaults…"), "RAW Defaults… is a catalog row, not a fallback");
 }
 
 #[test]
@@ -565,6 +565,17 @@ fn bundled_catalogs_are_consistent() {
             if ctx == "@id" {
                 assert!(crate::menus::is_live(src) || crate::menu_catalog::CATALOG.iter().any(|m| m.3 == src), "{}: unknown command id {src:?}", l.code);
             }
+        }
+    }
+}
+
+#[test]
+fn raw_develop_labels_are_translated_in_every_shipped_catalog() {
+    for language in LANGUAGES.iter().skip(1) {
+        let (entries, errors) = parse_entries(&language.text());
+        assert!(errors.is_empty(), "{}: {errors:?}", language.code);
+        for source in ["RAW Develop", "RAW Develop Filter", "RAW Develop Filter…", "RAW Defaults", "RAW Defaults…"] {
+            assert!(entries.iter().any(|(_, key, value)| key == source && !value.is_empty()), "{}: {source}", language.code);
         }
     }
 }
