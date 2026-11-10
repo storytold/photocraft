@@ -55,6 +55,7 @@ fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harn
     h.run_steps(8);
     // The session fixture creates its layer without dispatching through the app. Open its
     // Properties explicitly, as creating the layer in the app does.
+    h.state_mut().run("window.panel.group", json!({"panel": "properties", "operation": "flyout-size", "width": 280, "height": 760})).unwrap();
     h.state_mut().run("window.panel.properties", json!({"show": true})).unwrap();
     h.run_steps(8);
     h
@@ -137,8 +138,8 @@ fn every_adjustment_layer_edits_through_properties() {
                 }
                 "levels" => {
                     // The output black handle sits below the output gradient bar.
-                    let r = label_rect(&h, "Output Levels:").unwrap_or_else(|| panic!("{kind} {mode}: Output Levels"));
-                    let y = r.bottom() + 17.0;
+                    let r: Rect = h.ctx.data(|d| d.get_temp(crate::adjust_editors::layer_mem(id).with("levels-output-handles"))).expect("output handles drawn");
+                    let y = r.center().y;
                     drag(&mut h, Pos2::new(r.left() + 6.0, y), Pos2::new(r.left() + 60.0, y));
                 }
                 "gradientMap" => {
@@ -224,7 +225,7 @@ fn curves_graph_grows_with_the_properties_panel() {
     let (id, _) = layer(&h);
     let narrow = curves_graph(&h, id);
     assert!(narrow.width() < 300.0, "{narrow:?}");
-    crate::panels::request_dock_width(&h.ctx, 760.0);
+    h.state_mut().run("window.panel.group", json!({"panel": "properties", "operation": "flyout-size", "width": 760, "height": 760})).unwrap();
     h.run_steps(8);
     let wide = curves_graph(&h, id);
     // 760 points of panel, but the 900-point window leaves room for 540 beside the other rows.

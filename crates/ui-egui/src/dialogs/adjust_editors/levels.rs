@@ -169,6 +169,8 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let (ob_r, _) = ui.allocate_exact_size(vec2(w, 10.0), Sense::hover());
     gradient_bar(ui.painter(), ob_r.shrink2(vec2(6.0, 0.0)), Color32::BLACK, bar_color(&chan, &t), false);
     let (or, oresp) = ui.allocate_exact_size(vec2(w, 14.0), Sense::click_and_drag());
+    #[cfg(test)]
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("levels-output-handles"), or));
     let otrack = or.shrink2(vec2(6.0, 0.0));
     let oxpos = |val: f32| otrack.left() + val / 255.0 * otrack.width();
     let oval = |x: f32| ((x - otrack.left()) / otrack.width() * 255.0).clamp(0.0, 255.0);
