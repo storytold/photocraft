@@ -79,8 +79,14 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
 /// the commit would have made (with a vector mask targeted, only the drawn path, and the mask
 /// stays), see [`super::pen::make_shape_from_draft`]. A shape layer's own path or vector mask
 /// isn't copied. The Work Path becomes the shape's path, so it is no longer selected in the Paths
-/// panel.
+/// panel. With the Freeform Pen in an Indexed Color document Photoshop refuses with an alert and
+/// changes nothing (#12840); the Pen and the Curvature Pen there weren't measured.
 pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
+    if app.ui.tool == Tool::FreeformPen && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed) {
+        const INDEXED: &str = "Could not fill because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+        crate::brush_refusal::prompt(app, tl!(INDEXED));
+        return Ok(Value::Null);
+    }
     super::cancel_stale_pen(app);
     if let Some(mut pen) = app.ui.pen.clone().filter(|p| p.knots.len() >= 2) {
         if pen.curvature {
