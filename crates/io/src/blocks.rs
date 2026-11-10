@@ -749,6 +749,61 @@ pub(crate) fn placed_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h
     if ok { b } else { rect }
 }
 
+/// [`placed_frame`] for a `SoLd` / `SoLE` record's `Trnf`: a bend preset (Arc, Inflate, …) is
+/// framed by its control points as the reference stores them, at the degree it has along each
+/// side (Arc 4 × 2, Inflate 3 × 3), not the 4 × 4 patch they are raised to, whose box is smaller
+/// wherever a side has 3 points. The reference fits a preset into its corners that way, so the
+/// source rect brought it back much smaller there. (`PlLd` keeps the source rect: unmeasured.)
+pub(crate) fn sold_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
+    if let Some(wp) = warp.filter(|wp| wp.style.is_preset() && !wp.is_identity())
+        && let Some(b) = stored_degree_box(&wp.to_mesh(1, 1).points).filter(|b| b[2] - b[0] > 1e-9 && b[3] - b[1] > 1e-9)
+    {
+        return b;
+    }
+    placed_frame(warp, w, h)
+}
+
+/// The box of a one-patch 4 × 4 control net (`points`, row-major) brought down to the lowest
+/// degree it has exactly along each side: a row or column that is a raised quadratic counts its
+/// 3 points, a raised line its 2. `None` for anything but 16 finite points.
+fn stored_degree_box(points: &[[f64; 2]]) -> Option<[f64; 4]> {
+    type Cubic = [[f64; 2]; 4];
+    let net: [Cubic; 4] = std::array::from_fn(|j| std::array::from_fn(|i| points.get(j * 4 + i).copied().unwrap_or([f64::NAN; 2])));
+    if points.len() != 16 || net.iter().flatten().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let scale = net.iter().flatten().flatten().fold(1.0f64, |m, v| m.max(v.abs()));
+    let tol = 1e-9 * scale;
+    let near = |a: [f64; 2]| a[0].abs() <= tol && a[1].abs() <= tol;
+    // The degree a cubic's control points `c` really have: 1, 2 or 3.
+    let degree = |c: &Cubic| -> usize {
+        let [p0, p1, p2, p3] = *c;
+        let third = [p0[0] - 3.0 * p1[0] + 3.0 * p2[0] - p3[0], p0[1] - 3.0 * p1[1] + 3.0 * p2[1] - p3[1]];
+        if !near(third) {
+            return 3;
+        }
+        let off = |p: [f64; 2], k: f64| [p[0] - (p0[0] + (p3[0] - p0[0]) * k), p[1] - (p0[1] + (p3[1] - p0[1]) * k)];
+        if near(off(p1, 1.0 / 3.0)) && near(off(p2, 2.0 / 3.0)) { 1 } else { 2 }
+    };
+    // The control points of the cubic `c` at degree `d`.
+    let reduce = |c: &Cubic, d: usize| -> Vec<[f64; 2]> {
+        let [p0, p1, p2, p3] = *c;
+        match d {
+            1 => vec![p0, p3],
+            2 => vec![p0, [(3.0 * p1[0] - p0[0]) / 2.0, (3.0 * p1[1] - p0[1]) / 2.0], p3],
+            _ => vec![p0, p1, p2, p3],
+        }
+    };
+    let du = net.iter().map(degree).max().unwrap_or(3);
+    let rows: [Vec<[f64; 2]>; 4] = std::array::from_fn(|j| reduce(&net[j], du));
+    // The columns of the reduced rows, each 4 points down.
+    let cols: Vec<Cubic> = (0..rows[0].len()).map(|i| std::array::from_fn(|j| rows[j].get(i).copied().unwrap_or([f64::NAN; 2]))).collect();
+    let dv = cols.iter().map(degree).max().unwrap_or(3);
+    let inf = f64::INFINITY;
+    let b = cols.iter().flat_map(|c| reduce(c, dv)).fold([inf, inf, -inf, -inf], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    b.iter().all(|v| v.is_finite()).then_some(b)
+}
+
 /// The source-space box a projective (Distort / Perspective) placement maps onto its corners: a
 /// cylinder's control-point box, as for an affine placement (#4112), else the source rect. A
 /// custom warp keeps the source rect here: there is no Photoshop reference for that combination.
@@ -774,7 +829,7 @@ pub fn parse_smart(key: &[u8; 4], data: &[u8]) -> (String, Affine) {
         let p: Vec<f64> = pts.iter().filter_map(|v| num(Some(v))).collect();
         let (w, h) = (num(sz.get("Wdth")).unwrap_or(0.0), num(sz.get("Hght")).unwrap_or(0.0));
         if let (Ok(p), true) = (<[f64; 8]>::try_from(p), w > 0.0 && h > 0.0) {
-            affine = corners_affine(&p, placed_frame(parse_placed_warp(key, data).as_ref(), w, h)).unwrap_or(Affine::IDENTITY);
+            affine = corners_affine(&p, sold_frame(parse_placed_warp(key, data).as_ref(), w, h)).unwrap_or(Affine::IDENTITY);
         }
     }
     (id, affine)

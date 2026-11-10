@@ -2313,3 +2313,25 @@ fn render_filters_made_in_photocraft_are_written() {
     assert!(item_for_filter(&sf("filter.render.lensFlare", json!({"lens": "fisheye"}))).unwrap_err().contains("fisheye"));
     assert!(item_for_filter(&sf("filter.render.clouds", json!({"foreground": "red"}))).is_err());
 }
+
+/// A smart object warped by a bend preset reopens where it was, and its `Trnf` corners frame the
+/// preset's control points at their stored degree (where the reference fits the preset), not the
+/// source rect: an Inflate 50 reaches past the 50 × 25 source on every side.
+#[test]
+fn a_bend_preset_keeps_its_placement_and_frames_its_control_points() {
+    let warp = Warp::preset(photocraft_geom::warp::WarpStyle::Inflate, 50.0, [0.0, 0.0, 50.0, 25.0]);
+    let transform = Affine { m: [2.0, 0.0, 0.0, 2.0, 120.0, 210.0] };
+    let mut warnings = Vec::new();
+    let sold = sold_bytes(None, &placed(transform, Some(&warp)), &mut warnings);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(crate::blocks::parse_smart(b"SoLd", &sold).1, transform);
+    let back = crate::blocks::parse_placed_warp(b"SoLd", &sold).expect("the warp");
+    assert_eq!((back.style, back.bend), (warp.style, warp.bend));
+    let d = sold_descriptor(&sold).expect("a descriptor");
+    let Some(Value::List(q)) = d.get("Trnf") else { panic!("Trnf") };
+    let q: Vec<f64> = q.iter().filter_map(|v| crate::blocks::num(Some(v))).collect();
+    let f = crate::blocks::sold_frame(Some(&warp), 50.0, 25.0);
+    assert!(f[0] < 0.0 && f[1] < 0.0 && f[2] > 50.0 && f[3] > 25.0, "{f:?}");
+    let want = [120.0 + 2.0 * f[0], 210.0 + 2.0 * f[1], 120.0 + 2.0 * f[2], 210.0 + 2.0 * f[1]];
+    assert!(q.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{q:?} vs {want:?}");
+}
