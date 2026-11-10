@@ -252,6 +252,41 @@ pub fn pen_grab_handle(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     true
 }
 
+/// ⌥/Alt-press with the Pen on a straight segment of the active path while no path is being drawn
+/// (#12899), as in Photoshop: an anchor is added where the segment was pressed (`path.addAnchor`)
+/// and the drag pulls out its handles, the outgoing one under the pointer and the incoming one
+/// opposite it (`path.convertPoint` on release, through Direct Selection's drag). Both are one
+/// History step, Add Anchor Point. False when the press is not that, so ⌥ stays Convert Point.
+pub fn pen_alt_segment_press(app: &mut PhotocraftApp, mods: egui::Modifiers, p: [f64; 2]) -> bool {
+    use crate::direct_select::{DirectSelection, Drag, Edit, Owner, active_paths};
+    use photocraft_vector::edit::Hit;
+    if !mods.alt {
+        return false;
+    }
+    let Some((_, target, _, Hit::Segment([s, k], t))) = crate::anchor_tools::pen_auto(app, app.ui.tool, mods, p) else { return false };
+    let key = format!("pen-alt-add-{}", app.ui.alloc_id());
+    let mut params = json!({"subpath": s, "knot": k, "t": t, "coalesce": key});
+    if let (Some(o), Some(tp)) = (params.as_object_mut(), target.params(app).as_object()) {
+        o.extend(tp.clone());
+    }
+    let added = match app.run("path.addAnchor", params) {
+        Ok(v) => v,
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+            return true;
+        }
+    };
+    let n = |f: &str| added["anchor"][f].as_u64().and_then(|v| usize::try_from(v).ok());
+    let (Some(s), Some(k), Some(base)) = (n("subpath"), n("knot"), active_paths(app).into_iter().find(|(r, _)| *r == target).map(|(_, path)| path)) else {
+        return true;
+    };
+    app.ui.direct_selection =
+        DirectSelection { target: Some(target), anchors: vec![[s, k]], coalesce: Some(key), owner: Owner::current(app), ..Default::default() };
+    app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Convert([s, k]), start: p, end: p, preview: None });
+    true
+}
+
 /// Would a press at `at` close the Pen path: is the pointer on the first anchor of a path that
 /// already has a segment, and no drag is under way? The canvas then shows the close cue (#4193).
 pub(crate) fn over_first_anchor(pen: &PenPath, at: [f64; 2], tol: f64) -> bool {

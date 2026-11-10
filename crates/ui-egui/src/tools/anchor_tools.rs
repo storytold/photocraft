@@ -50,17 +50,21 @@ fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path
 /// starting a new one, as the anchor tool that does it (Add Anchor Point on a segment, Delete
 /// Anchor Point on an anchor), the path and the hit. While a path is being drawn it edits that
 /// path only (#6140): a click anywhere else places the next anchor. `None` when the option is off,
-/// ⇧, ⌥ or ⌘ is held, an anchor's handles are being pulled out, or the click hits nothing it edits.
+/// ⇧ or ⌘ is held, an anchor's handles are being pulled out, or the click hits nothing it edits.
+/// With ⌥ it takes only a straight segment of the active path while no path is being drawn
+/// (#12899): the press adds an anchor there and the drag pulls out its handles
+/// (`vector_ui::pen_alt_segment_press`).
 /// The end points of an open subpath are left to the Pen, as in Photoshop: on the path being
 /// drawn, the first closes it and the last breaks its handle.
 pub fn pen_auto(app: &PhotocraftApp, tool: Tool, mods: Modifiers, p: [f64; 2]) -> Option<(Tool, PathRef, Path, Hit)> {
-    if tool != Tool::Pen || !app.ui.tool_options.pen_auto_add_delete || mods.shift || mods.alt || mods.command {
+    if tool != Tool::Pen || !app.ui.tool_options.pen_auto_add_delete || mods.shift || mods.command {
         return None;
     }
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     let at = Point::new(p[0], p[1]);
     let (r, path, hit) = match app.ui.pen.as_ref() {
-        Some(pen) if pen.dragging || pen.curvature => return None,
+        // ⌥ while drawing stays the last anchor's handle grab and break.
+        Some(pen) if pen.dragging || pen.curvature || mods.alt => return None,
         Some(pen) => {
             let path = crate::vector_ui::pen_path(pen);
             let hit = edit::hit(&path, at, tol, &[])?;
@@ -69,7 +73,10 @@ pub fn pen_auto(app: &PhotocraftApp, tool: Tool, mods: Modifiers, p: [f64; 2]) -
         None => crate::direct_select::active_paths(app).into_iter().find_map(|(r, path)| edit::hit(&path, at, tol, &[]).map(|h| (r, path, h)))?,
     };
     let tool = match hit {
+        Hit::Segment(k, _) if mods.alt && !straight(&path, k) => return None,
         Hit::Segment(..) => Tool::AddAnchorPoint,
+        // ⌥ on an anchor is Convert Point (`direct_select`).
+        Hit::Anchor(_) if mods.alt => return None,
         Hit::Anchor([s, k]) => {
             let sp = path.subpaths.get(s)?;
             if !sp.closed && (k == 0 || k + 1 == sp.knots.len()) {
@@ -80,6 +87,12 @@ pub fn pen_auto(app: &PhotocraftApp, tool: Tool, mods: Modifiers, p: [f64; 2]) -
         Hit::Handle(..) => return None,
     };
     Some((tool, r, path, hit))
+}
+
+/// Is the segment leaving knot `k` (`[subpath, knot]`) straight: both of its handles retracted?
+fn straight(path: &Path, [s, k]: [usize; 2]) -> bool {
+    let on = |a: Point, b: Point| (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9;
+    path.subpaths.get(s).and_then(|sp| sp.segments().get(k).copied()).is_some_and(|seg| on(seg[0], seg[1]) && on(seg[2], seg[3]))
 }
 
 /// Canvas pointer events for the anchor tools, and a Pen press that Auto Add/Delete takes; false
