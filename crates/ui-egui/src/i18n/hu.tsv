@@ -3086,7 +3086,7 @@ cameraRaw	Yellow	Sárga
 	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	A dokumentum beágyazott színprofilja eltér a munkaszíntértől.\nBeágyazott: {embedded}\nMunkaszíntér: {working}
 	The keyboard shortcut set was not imported: {error}	A billentyűparancs-készlet importálása nem sikerült: {error}
 	These settings aren't available in PhotoCraft yet.	Ezek a beállítások a PhotoCraftban még nem érhetők el.
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	A folytatáshoz a kitöltőréteget raszterizálni kell. A kitöltés tartalma ezután nem lesz szerkeszthető. Raszterizálod a réteget?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	A folytatáshoz a kitöltőréteget raszterizálni kell. A kitöltés tartalma ezután nem lesz szerkeszthető. Raszterizálod a réteget?
 	This layer must be rasterized before proceeding.	A folytatáshoz a réteget raszterizálni kell.
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	A folytatáshoz az alakzatréteget raszterizálni kell. Ezután alakzatként nem lesz szerkeszthető. Raszterizálod az alakzatot?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	A folytatáshoz az intelligens objektumot raszterizálni kell. A tartalma ezután nem lesz szerkeszthető. Raszterizálod az intelligens objektumot?
@@ -4535,3 +4535,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shrinkwrap Canvas on Save	Vászon összehúzása a tartalomra mentéskor
 	Move Toolbar to the Right	Eszköztár áthelyezése jobbra
 	Move Toolbar to the Left	Eszköztár áthelyezése balra
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Előre beállított képarány vagy kivágási méret kiválasztása
+	Set the aspect ratio for the crop box	A kivágási keret képarányának beállítása
+	Clear aspect ratio values	A képarány értékeinek törlése
+	Set the overlay options for the Crop Tool	A kivágási fedvény beállításainak megadása
+	Determines if pixel data outside the crop box is retained or deleted	Meghatározza, hogy a kivágási kereten kívüli képpontok megmaradnak vagy törlődnek
+	How expanded crop area gets filled	Hogyan töltődik ki a kibővített kivágási terület
+	Displays pop-up help for the fill methods	Felugró súgó a kitöltési módokhoz
+	Fill options	Kitöltési beállítások
+	Background (default):	Háttér (alapértelmezett):
+	Fill the expanded area with your background color or transparent pixels	A kibővített terület kitöltése a háttérszínnel vagy átlátszó képpontokkal
+	Content-aware fill	Tartalom alapú kitöltés
+	Sample content from part of the image and use it to fill a small area	Tartalom mintavétele a kép egy részéből egy kis terület kitöltéséhez
+	Reset the crop box, image rotation, and aspect ratio settings	A kivágási keret, a képelforgatás és a képarány visszaállítása
