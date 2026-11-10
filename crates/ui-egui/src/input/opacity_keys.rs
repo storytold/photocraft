@@ -1,6 +1,7 @@
 //! Number keys set opacity (#352): 1 = 10% … 9 = 90%, 0 = 100%; two digits
 //! typed quickly set an exact value (4 then 5 = 45%; 0 then 0 = 100% for the Brush and the Pencil, #11812). With the Brush, Pencil or
-//! Eraser they set the brush's Opacity (⇧: Flow; swapped while airbrush build-up is on); with the Gradient or Paint Bucket their
+//! Eraser they set the brush's Opacity (⇧: Flow, swapped while airbrush build-up is on; the Pencil has no Flow, so its ⇧
+//! digits set Opacity too, #11967); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
 //! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907). Tools whose
 //! number is a strength or exposure are left alone.
@@ -110,7 +111,8 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
     let build_up = app.session.tools.brush.build_up && !crate::eraser_ui::pencil_mode(app, tool) && !crate::eraser_ui::block_mode(app, tool);
     let shift = shift ^ (build_up && matches!(target(tool), Target::Brush { flow: true }));
     match (target(app.ui.tool), shift) {
-        (Target::Brush { .. }, false) => {
+        // The Pencil has no Flow: its ⇧ digits set Opacity like the plain ones (#11967).
+        (Target::Brush { flow: false }, _) | (Target::Brush { flow: true }, false) => {
             // The painting tools' Opacity fields (and `tools.setBrush`) start at 1%, so `00` sets the
             // 1% they actually paint with rather than a 0% they can't do. The Brush's and the
             // Pencil's `00` is 100%, as in Photoshop (#11812); only `00` gives 0 here.

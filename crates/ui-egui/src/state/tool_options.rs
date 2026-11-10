@@ -74,7 +74,9 @@ pub struct ToolOptions {
     pub cam_mode: String,
     pub cam_structure: f32,
     pub cam_color: f32,
-    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch).
+    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch). On by
+    /// default (#12185); a saved `false` stays off.
+    #[serde(default = "yes")]
     pub cam_transform_on_drop: bool,
     /// Dodge/Burn: shadows | midtones | highlights, exposure %, protect tones.
     pub tone_range: String,
@@ -240,6 +242,10 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
+    /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
+    #[serde(default)]
+    pub hand_scroll_all: bool,
     /// Pencil › Auto Erase: a stroke that starts on the foreground colour paints the background colour.
     #[serde(default)]
     pub pencil_auto_erase: bool,
@@ -465,7 +471,7 @@ impl Default for ToolOptions {
             cam_mode: "move".into(),
             cam_structure: 4.0,
             cam_color: 0.0,
-            cam_transform_on_drop: false,
+            cam_transform_on_drop: true,
             tone_range: "midtones".into(),
             exposure: 50.0,
             protect_tones: true,
@@ -535,6 +541,7 @@ impl Default for ToolOptions {
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,
             pencil_clear: false,
@@ -555,3 +562,7 @@ impl Default for ToolOptions {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../cam_transform_on_drop_default_tests.rs"]
+mod cam_transform_on_drop_default_tests;
