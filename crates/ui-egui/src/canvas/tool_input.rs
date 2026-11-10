@@ -425,6 +425,32 @@ fn mixer_press_failed(app: &mut PhotocraftApp, message: String) {
     }
 }
 
+/// A Red Eye click. CMYK, Grayscale and Indexed Color documents get the reference's alert
+/// (#12575), once even if more clicks arrive while it is open (`ui.pointer` can send them).
+fn red_eye_click(app: &mut PhotocraftApp, x: f64, y: f64) {
+    use photocraft_engine::redeye_cmds::MODE_REFUSAL;
+    let o = app.ui.tool_options.clone();
+    let r = app.run(
+        "paint.redEye",
+        json!({
+            "x": x.floor(),
+            "y": y.floor(),
+            "pupilSize": o.red_eye_pupil_size.clamp(1.0, 100.0),
+            "darken": o.red_eye_darken.clamp(0.0, 100.0),
+            "target": paint_target(app),
+        }),
+    );
+    if r.is_err_and(|e| e == MODE_REFUSAL) {
+        app.ui.status.clear();
+        app.ui.status_error = false;
+        let message = tl!(MODE_REFUSAL);
+        let kind = crate::state::DialogKind::Error;
+        if !app.ui.dialogs.iter().any(|d| d.kind == kind && d.fields.get("message").and_then(|m| m.as_str()) == Some(message)) {
+            app.ui.open_dialog(kind, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+        }
+    }
+}
+
 /// The Brush's chosen Clear paints as Normal on the Background, and its Mode then reads Normal
 /// (#11897): at the press of a Brush stroke on the Background's own pixels, Clear (chosen in the
 /// options bar, not a held `~`) is turned off, so the stroke is sent as Normal. A Background whose
@@ -581,17 +607,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     return;
                 }
                 Tool::RedEye => {
-                    let o = app.ui.tool_options.clone();
-                    let _ = app.run(
-                        "paint.redEye",
-                        json!({
-                            "x": x.floor(),
-                            "y": y.floor(),
-                            "pupilSize": o.red_eye_pupil_size.clamp(1.0, 100.0),
-                            "darken": o.red_eye_darken.clamp(0.0, 100.0),
-                            "target": paint_target(app),
-                        }),
-                    );
+                    red_eye_click(app, x, y);
                     return;
                 }
                 Tool::PolygonLasso => {
