@@ -404,6 +404,25 @@ none). A missing translation shows in English and fails nothing: `cargo xtask ci
 as its last step so the list appears in the log, and only prints a warning if the report itself
 can't run.
 
+## Panel command routing
+
+Every panel button must dispatch an engine command by id (AGENTS.md rule 1), so the UI, CLI,
+control channel and MCP stay equivalent. `cargo xtask panel-commands` (also a step of
+`cargo xtask ci` and of CI) scans `crates/ui-egui/src` outside test code for click handlers: the
+block of an `if` whose condition calls `.clicked()`, `.changed()`, `.dragged()` and friends, or a
+widget function that takes a `Ui` and returns `bool`. Inside one it fails, with file:line, on a
+direct document or session change: `active_mut()`, `Arc::make_mut` on a doc,
+`session.undo/redo/select_layer/add_document/close(…)` or an assignment to a session field
+(`app.session.tools.foreground = …`). Dispatch the command instead (`app.run`, `menus::invoke`).
+A passing scan is not complete coverage. The scanner is lexical: it does not follow calls into
+helpers, and it only recognises an `if` block (a `match` arm guard with a block counts) or a
+`let` local holding a response, so a `match` on a response without such a guard, a response kept
+in a struct field and tested later, or a closure callback is not checked. Preferences
+(`edit_prefs`), shell view state (`app.ui`, the `UI_COMMANDS`) and switching the active document
+are out of scope. Existing violations are listed in
+`ALLOWLIST` in `xtask/src/panel_commands.rs` by file and function, each with its reason; an entry
+that matches nothing any more is an error, so the list only shrinks.
+
 ## Testing strategy
 
 - **Unit and property tests** in every crate. proptest is used for tile COW, regions and codecs.
@@ -661,6 +680,25 @@ except Place, which is a job that `poll_jobs` steps on the UI thread (a *coopera
 
 ## Indexed Color timings
 
+The stock Indexed Color dialog exposes Matte: None, Foreground Color, Background Color,
+White, Black, 50% Gray, Netscape Gray and Other… (the shared Color Picker). Choosing Other…
+opens the picker without replacing the current matte; Cancel leaves that choice unchanged, and
+OK commits the picked `#rrggbb` in document RGB coordinates. Automation accepts `matte` as
+`none`, `foreground`, `background`, `white`, `black`, `gray` (50% Gray, encoded
+`#808080`), `netscapeGray` (Netscape Gray, encoded `#c0c0c0`) or `#rrggbb`. Foreground/background
+tool colours are converted from the working RGB profile into the document profile and clipped
+to its encodable RGB range before blending. A selected matte blends all
+partially transparent edges; with Transparency on, fully clear pixels stay transparent.
+With Transparency off, the selected matte also fills clear pixels. None retains the existing
+hard-edged transparency/default flattening behavior. Indexed conversion retains the document's
+ICC profile and encoded RGB sample representation; matte colours are interpreted in the document
+RGB coordinate space. Default Indexed → RGB expands the stored RGB samples without converting
+them to the working profile; an explicitly supplied destination profile still requests a CMS
+conversion. Inline and worker dialog previews inherit the current foreground/background tool
+colors, and changing those colors invalidates both cached frames and pending worker results,
+including when the preview proxy factor changes. A same-color frame at the old factor can
+remain visible during a drag until the new result arrives. This follows Adobe's documented
+[Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

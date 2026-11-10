@@ -1,8 +1,13 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod actions_duplicate;
+mod actions_panel_menu;
+mod actions_record_again;
 mod adjust_preview_gpu;
 mod arbitrary_rotation_preview;
+mod background_eraser_reset_tip;
 mod batch_export_options;
+mod brush_reset_defaults;
 mod camera_raw_histogram;
 mod camera_raw_localization;
 mod camera_raw_scope;
@@ -29,6 +34,7 @@ mod export_as_scaling;
 mod eyedropper_ring;
 mod full_res_preview;
 mod gpu_device_loss;
+mod healing_reset_tip;
 mod layout_perf;
 mod live_stroke_canvas;
 mod magnetic_lasso_right_click;

@@ -1,5 +1,8 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod actions_duplicate;
+mod actions_panel_menu;
+mod actions_record_again;
 mod actions_single_history;
 mod affinity;
 mod artboard_export_names;
@@ -25,6 +28,7 @@ mod atn_stroke_width;
 mod atn_type_path;
 mod atn_v12;
 mod atn_video_frames;
+mod average_smart;
 mod background_and_mask_depth;
 mod background_layer_consistency;
 mod brush_smoothing;

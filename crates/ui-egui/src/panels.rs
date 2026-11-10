@@ -72,13 +72,18 @@ pub(crate) use color::{color_field, color_field_fill_id, field_chips, field_hsva
 pub(crate) use color::{hsva_color32, hsva_srgb, srgb_bytes};
 #[cfg(test)]
 pub(crate) use dock::DOCK_MIN_WIDTH;
+#[cfg(test)]
+pub(crate) use dock::dock_panel_width;
 pub(crate) use dock::{canvas_panel, dock_body, dock_width_id, dock_width_range};
-pub use dock::{dock_area, request_dock_width};
+pub(crate) use dock::{clear_dock_edge_drag, dock_edge_drag_active};
+pub use dock::{dock_area, dock_panel, request_dock_width};
 #[cfg(test)]
 use history::history;
 #[cfg(test)]
 pub(crate) use history::select_snapshot;
 pub(crate) use history::selected_snapshot;
+#[cfg(test)]
+pub(crate) use history::step_icon as history_step_icon;
 #[cfg(test)]
 use info::info_panel;
 pub(crate) use info::{SamplerReadouts, sampler_readouts};
@@ -104,6 +109,7 @@ use options_bar::options_bar_height;
 pub(crate) use options_bar::{FIXED_SIZE_MAX_PX, opt_label};
 pub use panel_state::{migrate_panel_state, panel_state_id, remember_panel_state};
 pub use properties::properties_window;
+pub(crate) use properties::selection_mode_buttons;
 #[cfg(test)]
 use properties::{adjustments_grid, properties_body};
 pub use status_bar::{status_bar, status_bar_heights};

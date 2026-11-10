@@ -422,9 +422,16 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Which end of the pen is in use, `Some(true)` = eraser, `None` = no pen ([`Services::pen_end`]).
+pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
+
 /// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
 /// whether the app window is focused (to re-assert WinTab overlap priority on activation).
 pub type TabletPollFn = Box<dyn FnMut(bool)>;
+
+/// What the last self-update came to: `Ok` with the version it installed, `Err` with the reason it
+/// could not be installed, `None` when there is nothing to report ([`Services::last_update`]).
+pub type LastUpdateFn = fn() -> Option<Result<String, String>>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -483,6 +490,9 @@ pub struct Services {
     pub alert: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// What the last self-update came to, read once at the first frame: `Ok` with the version it
+    /// installed, `Err` with the reason it could not be installed (desktop).
+    pub last_update: Option<LastUpdateFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,
@@ -548,6 +558,9 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// Which end of the pen is in use, where the platform reports it outside the stylus feed
+    /// (Windows: the feed carries no pen samples there). Read for the eraser-end tool switch.
+    pub pen_end: Option<PenEndFn>,
     /// WinTab packet poll (Windows with Windows Ink disabled; see `photocraft_tablet::wintab`).
     pub tablet_poll: Option<TabletPollFn>,
     /// The persistent brush preset store, loading in the background (desktop; see

@@ -191,7 +191,10 @@ fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     }
     let kind = d.fields.get("__adjust")?.as_str()?.to_string();
     let preview = d.fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
-    Some((kind, crate::filter_dialog::params_of(&d.fields), preview))
+    let params = crate::filter_dialog::params_of(&d.fields);
+    let command = format!("image.adjustments.{kind}");
+    crate::actions::authorize_panel_preview(app, d.id, &d.fields, &command, &params).ok()?;
+    Some((kind, params, preview))
 }
 
 /// Whether Image › Adjustments `kind` on document `idx` would edit a channel (the Channels panel's

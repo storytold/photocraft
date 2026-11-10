@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -35,15 +35,15 @@ HDR display to verify.
 | Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622), KDE (#2297) | yes |
 | Tilt | yes | yes | **no** (WinTab: with orientation axes, opt-in) | yes | no | yes |
 | Barrel rotation | yes | yes (not applied to tip angle, #1301) | no (WinTab: with a twist-reporting pen and driver, opt-in) | partial | no | yes (twist) |
-| Eraser end | yes | yes | no (#2285); WinTab: yes (opt-in) | partial | no | partial |
+| Eraser end | yes | yes | yes with Windows Ink, not yet confirmed on hardware (#2285); WinTab: yes (opt-in) | partial | no | partial |
 | WinTab driver mode | yes | – | yes (opt-in; Windows Ink off) | – | – | – |
 | Pressure curve | Windows Ink / driver | global curve in Preferences (#2195) | same | same | same | same |
 
 Windows: the opt-in WinTab backend (`tools.tabletInput = "winTab"`, with Windows Ink turned off
 in the tablet utility) supplies pressure and the eraser end, tilt only on devices that report
 orientation axes, and rotation only when the pen and driver report twist (pressure-only devices
-get neutral tilt and rotation). The default Windows Ink path is unchanged and still lacks tilt,
-rotation and the eraser.
+get neutral tilt and rotation). The default Windows Ink path still lacks tilt and
+rotation; its eraser end comes from the pointer hooks (#2285).
 
 ## Displays and colour
 
@@ -71,6 +71,7 @@ rotation and the eraser.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Windows eraser end: the pointer hooks read `PEN_FLAG_INVERTED` and the Eraser switch follows it (Windows Ink on; #2285) |
 | 2026-11-05 | minor | Optional WinTab driver mode on Windows: pressure and eraser; tilt with orientation axes; rotation with a twist-reporting pen, with Windows Ink off |
 | 2026-10-28 | minor | Build GPU compositor pipelines in the background; benchmark baseline pending (#9157) |
 | 2026-10-10 | major | First version |
