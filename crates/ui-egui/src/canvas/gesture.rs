@@ -157,6 +157,10 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                     params["historyName"] = json!("Patch Tool");
                 }
                 let made = app.run("select.lasso", params);
+                // A pulse on a haptic mouse as the lasso closes into a selection, as in Photoshop.
+                if d.tool == Tool::Lasso && crate::haptics::selected(&made) {
+                    crate::haptics::play(app, crate::haptics::Waveform::Success);
+                }
                 // The lasso only outlines the patch; say that it is dragged next (#1715).
                 if made.is_ok() && d.tool != Tool::Lasso {
                     crate::retouch_ui::patch_hint(app);
@@ -348,7 +352,11 @@ pub fn commit_polygon(app: &mut PhotocraftApp) {
     if pts.len() >= 3 {
         let mode = if mode.is_empty() { selection_mode(app, egui::Modifiers::NONE).to_owned() } else { mode };
         let o = &app.ui.tool_options;
-        let _ = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": o.feather, "polygonal": true}));
+        let made = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": o.feather, "polygonal": true}));
+        // A pulse on a haptic mouse as the outline closes into a selection, as in Photoshop.
+        if crate::haptics::selected(&made) {
+            crate::haptics::play(app, crate::haptics::Waveform::Success);
+        }
     }
 }
 

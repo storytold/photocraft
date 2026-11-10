@@ -488,6 +488,9 @@ pub struct Services {
     /// (Tab, Alt; see `zoom_field`). No platform sets it yet, so the alert falls back to
     /// [`Self::beep`].
     pub alert: Option<fn()>,
+    /// Plays pulses on a haptic mouse (desktop, Windows; see [`crate::haptics`]). `None` in the
+    /// web build and in tests.
+    pub haptics: Option<photocraft_haptics::Haptics>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
     /// What the last self-update came to, read once at the first frame: `Ok` with the version it

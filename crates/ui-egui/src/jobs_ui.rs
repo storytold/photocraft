@@ -607,6 +607,8 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             true
         }
     });
+    // Content-Aware Move and the selections pulse on a haptic mouse when their result lands.
+    crate::haptics::on_job_event(app, &e);
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
     if crate::prefs_ui::on_recovery_event(app, &e) {

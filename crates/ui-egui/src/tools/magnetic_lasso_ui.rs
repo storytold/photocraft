@@ -357,7 +357,11 @@ fn commit(app: &mut PhotocraftApp) {
     let o = &app.ui.tool_options;
     let mode = if m.mode.is_empty() { "replace".to_owned() } else { m.mode };
     let p = json!({"points": m.path, "trace": false, "mode": mode, "antiAlias": o.anti_alias, "feather": o.feather});
-    let _ = app.run("select.magneticLasso", p);
+    let made = app.run("select.magneticLasso", p);
+    // A pulse on a haptic mouse as the border closes into a selection, as in Photoshop.
+    if crate::haptics::selected(&made) {
+        crate::haptics::play(app, crate::haptics::Waveform::Success);
+    }
 }
 
 /// Esc: drop the border.

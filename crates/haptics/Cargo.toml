@@ -1,0 +1,19 @@
+[package]
+name = "photocraft-haptics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Haptic feedback on haptic mice (the HID Simple Haptic Controller, Haptics page 0x0E) on Windows; a no-op elsewhere"
+
+[lints]
+workspace = true
+
+# The mouse's standard HID haptics collection, reached directly: no vendor SDK or service.
+# hidapi's `windows-native` backend is pure Rust (no C library is built); `winreg` reads the
+# Windows "Haptic signals" setting. Both MIT; `winreg` is already in Cargo.lock. Pinned exactly:
+# review the diff before bumping.
+[target.'cfg(target_os = "windows")'.dependencies]
+hidapi = { version = "=2.6.7", default-features = false, features = ["windows-native"] }
+log = { workspace = true }
+winreg = "=0.55.0"

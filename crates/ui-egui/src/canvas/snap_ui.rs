@@ -389,6 +389,10 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
             snapped(&snap.targets).or_else(|| snapped(&snap.smart)).unwrap_or((p, Vec::new()))
         }
     };
+    // A pulse on a haptic mouse when an alignment line appears, as Photoshop pulses for guides.
+    if crate::haptics::new_alignment(&app.prefs_rt.snap_lines, &lines) {
+        crate::haptics::play(app, crate::haptics::Waveform::Step);
+    }
     app.prefs_rt.snap_lines = lines;
     out
 }

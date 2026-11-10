@@ -762,6 +762,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         inbox: None,
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
         beep: Some(platform_beep),
+        haptics: Some(photocraft_haptics::Haptics::start()),
         check_updates: Some(crate::updates::service()),
         last_update: Some(crate::updates::last_update),
         clipboard_set_image: Some({

@@ -302,6 +302,7 @@ impl eframe::App for PhotocraftApp {
             self.ui.status = error;
             self.ui.status_error = true;
         }
+        crate::haptics::attach(ui.ctx(), self.services.haptics.as_ref(), self.session.prefs().enhanced_controls.haptic_feedback);
         self.ui_frame(ui, frame);
         self.finish_type_reset_pass(ui.ctx());
     }

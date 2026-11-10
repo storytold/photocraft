@@ -76,6 +76,7 @@ pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
 mod app;
+mod haptics;
 mod input;
 mod prefs;
 mod services;

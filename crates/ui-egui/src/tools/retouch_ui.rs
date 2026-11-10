@@ -422,9 +422,13 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
         return;
     }
     let p = content_aware_move_params(app, [i64::from(off[0]), i64::from(off[1])]);
-    if let Err(e) = app.run("paint.contentAwareMove", p) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    match app.run("paint.contentAwareMove", p) {
+        // A pulse on a haptic mouse as the move drops, as in Photoshop.
+        Ok(v) => crate::haptics::landed(app, &v),
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
 }
 
@@ -539,6 +543,7 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
             (false, false) => "replace",
         };
         let r = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all}));
+        object_selected_pulse(app, &r);
         crate::object_finder::clear(app);
         report_smart_result(app, r, tl!("No object found there — drag a rectangle around it"));
         return;
@@ -558,7 +563,15 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
         "replace"
     };
     let r = app.run("select.object", json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all}));
+    object_selected_pulse(app, &r);
     report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
+}
+
+/// A pulse on a haptic mouse when Object Selection selects something, as in Photoshop.
+fn object_selected_pulse(app: &PhotocraftApp, r: &Result<Value, String>) {
+    if crate::haptics::selected(r) {
+        crate::haptics::play(app, crate::haptics::Waveform::Success);
+    }
 }
 
 /// Reports a smart-selection command result in the status bar. Engine errors are already

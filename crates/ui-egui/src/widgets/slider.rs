@@ -145,6 +145,8 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
     let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
+    let before = *value;
+    let mut moved = false;
     if let Some(p) = resp.interact_pointer_pos()
         && (resp.dragged() || resp.clicked())
     {
@@ -153,6 +155,7 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
         if (nv - *value).abs() > f32::EPSILON {
             *value = nv;
             resp.mark_changed();
+            moved = true;
         }
     }
     // The double-click's first click has moved the knob to the pointer; the second resets.
@@ -169,8 +172,14 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
             if nv != *value {
                 *value = nv;
                 resp.mark_changed();
+                moved = true;
             }
         }
+    }
+    // A soft pulse on a haptic mouse when a drag or the wheel takes the knob to an end, as
+    // Photoshop pulses at slider limits.
+    if moved && crate::haptics::reached_end(before, *value, lo, hi) {
+        crate::haptics::play_in(ui.ctx(), crate::haptics::Waveform::Hover);
     }
     let f = curve_fraction(*value, lo, hi, g.curve);
     let knob_x = track.left() + f * track.width();
