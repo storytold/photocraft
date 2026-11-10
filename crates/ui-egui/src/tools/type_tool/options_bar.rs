@@ -1,4 +1,5 @@
 use super::defaults::{apply, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
+use super::dynamic_text::{dynamic_text_toggle, is_fitted};
 use super::editing::{cancel, commit_with};
 use super::fonts::{font_picker, font_picker_tip, fonts_ready, selected_style, style_label, styles};
 use super::keys::is_vertical;
@@ -59,15 +60,23 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "type", 13.0, t.icon);
     icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Font size")));
+    // Dynamic Text sets the size from the box: the field and its scrub are greyed out.
+    let fitted = is_fitted(app);
     // Photoshop's "T" scrubs the size field beside it, like the Character panel's icons (#6437).
-    crate::widgets::scrub_option_icon(ui, &icon, tl!("Set font size"));
+    if !fitted {
+        crate::widgets::scrub_option_icon(ui, &icon, tl!("Set font size"));
+    }
     let (unit, label) = type_unit(app);
     let mut display = size * unit;
-    if crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 66.0).on_hover_text(tl!("Set font size")).changed() {
+    let field = ui.add_enabled_ui(!fitted, |ui| crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 66.0)).inner;
+    if fitted {
+        field.on_disabled_hover_text(tl!("Size is set by Dynamic Text"));
+    } else if field.on_hover_text(tl!("Set font size")).changed() {
         let size = display / unit;
         app.ui.tool_options.type_size = size;
         apply(app, ui.ctx(), json!({"size": size, "metricsAsShown": true}));
     }
+    dynamic_text_toggle(app, ui);
     let mut aa = target(app)
         .and_then(|(id, _)| app.session.active().and_then(|st| text_layer(&st.doc, LayerId(id))))
         .map(|t| photocraft_engine::type_extra_cmds::aa_name(t.antialias).to_string())
@@ -321,6 +330,23 @@ pub(super) fn icon_label(ui: &mut egui::Ui, icon: &str, tip: &str) {
 
 /// Labelled numeric field (Photoshop's icon + value pairs). Returns the new value when edited.
 pub(super) fn num_field(ui: &mut egui::Ui, label: &str, tip: &str, v: f32, range: std::ops::RangeInclusive<f32>, unit: &str, width: f32) -> Option<f32> {
+    num_field_enabled(ui, label, tip, v, range, unit, width, None)
+}
+
+/// [`num_field`] that can be greyed out: `disabled` is the (translated) tip saying what sets the
+/// value instead, `None` keeps the field editable.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn num_field_enabled(
+    ui: &mut egui::Ui,
+    label: &str,
+    tip: &str,
+    v: f32,
+    range: std::ops::RangeInclusive<f32>,
+    unit: &str,
+    width: f32,
+    disabled: Option<&str>,
+) -> Option<f32> {
+    let enabled = disabled.is_none();
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut v = v;
     let mut out = None;
@@ -330,13 +356,15 @@ pub(super) fn num_field(ui: &mut egui::Ui, label: &str, tip: &str, v: f32, range
         ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, label, crate::theme::semibold(10.0), t.text_dim);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), tl!(tip)));
         crate::widgets::scrub_label(ui, &resp.on_hover_text(tl!(tip)));
-        let response = crate::widgets::value_field(ui, &mut v, range, unit, width);
+        let response = ui.add_enabled_ui(enabled, |ui| crate::widgets::value_field(ui, &mut v, range, unit, width)).inner;
         response.widget_info(|| {
-            let mut info = egui::WidgetInfo::drag_value(ui.is_enabled(), f64::from(v));
+            let mut info = egui::WidgetInfo::drag_value(enabled, f64::from(v));
             info.label = Some(tl!(tip).to_owned());
             info
         });
-        if response.changed() {
+        if let Some(why) = disabled {
+            response.on_disabled_hover_text(why);
+        } else if response.changed() {
             out = Some(v);
         }
     });

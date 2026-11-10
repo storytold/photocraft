@@ -3406,6 +3406,15 @@ curves	Smooth	Lisser
 	set name	nom du jeu
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
+	Dynamic Text	Texte dynamique
+	Convert to Dynamic Text	Convertir en texte dynamique
+	Release Dynamic Text	Libérer le texte dynamique
+	Size is set by Dynamic Text	La taille est définie par le texte dynamique
+	Leading is set by Line Gap	L’interlignage est défini par l’espace entre les lignes
+	Word Gap	Espace entre les mots
+	Line Gap	Espace entre les lignes
+	Select a type layer	Sélectionnez un calque de texte
+	Not available for vertical, right-to-left or path text	Indisponible pour le texte vertical, de droite à gauche ou sur un tracé
 	Show file name in title	Afficher le nom de fichier dans le titre
 	50% Threshold	Seuil 50 %
 	Pattern Dither	Simulation par motif

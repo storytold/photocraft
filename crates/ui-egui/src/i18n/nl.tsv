@@ -4159,6 +4159,15 @@ curves	Smooth	Vloeiend maken
 	There are too many sets: delete one first.	Er zijn te veel sets: verwijder er eerst een.
 	set name	naam van de set
 	{set} (modified)	{set} (gewijzigd)
+	Dynamic Text	Dynamische tekst
+	Convert to Dynamic Text	Converteren naar dynamische tekst
+	Release Dynamic Text	Dynamische tekst loslaten
+	Size is set by Dynamic Text	De grootte wordt bepaald door dynamische tekst
+	Leading is set by Line Gap	De interlinie wordt bepaald door de regelafstand
+	Word Gap	Woordafstand
+	Line Gap	Regelafstand
+	Select a type layer	Selecteer een tekstlaag
+	Not available for vertical, right-to-left or path text	Niet beschikbaar voor verticale tekst, tekst van rechts naar links of tekst op een pad
 	Show file name in title	Bestandsnaam in titel weergeven
 	50% Threshold	50% drempel
 	Pattern Dither	Patroondithering

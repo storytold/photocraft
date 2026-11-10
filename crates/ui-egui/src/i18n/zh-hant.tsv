@@ -3030,6 +3030,15 @@ curves	Smooth	平滑
 	set name	組合名稱
 	{set} (modified)	{set}（已修改）
 	Random	隨機
+	Dynamic Text	動態文字
+	Convert to Dynamic Text	轉換為動態文字
+	Release Dynamic Text	釋放動態文字
+	Size is set by Dynamic Text	大小由動態文字決定
+	Leading is set by Line Gap	行距由動態文字的行距決定
+	Word Gap	字距
+	Line Gap	行距
+	Select a type layer	請選擇文字圖層
+	Not available for vertical, right-to-left or path text	不適用於直排文字、由右至左的文字或路徑文字
 	Show file name in title	標題中顯示檔案名稱
 	50% Threshold	50% 臨界值
 	Pattern Dither	圖樣混色

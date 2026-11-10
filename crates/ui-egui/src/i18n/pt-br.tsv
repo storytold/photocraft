@@ -4197,6 +4197,15 @@ layerLabel	No Color	Sem cor
 	There are too many sets: delete one first.	Há conjuntos demais: exclua um primeiro.
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
+	Dynamic Text	Texto dinâmico
+	Convert to Dynamic Text	Converter em texto dinâmico
+	Release Dynamic Text	Liberar texto dinâmico
+	Size is set by Dynamic Text	O tamanho é definido pelo texto dinâmico
+	Leading is set by Line Gap	A entrelinha é definida pelo espaço entre linhas
+	Word Gap	Espaço entre palavras
+	Line Gap	Espaço entre linhas
+	Select a type layer	Selecione uma camada de texto
+	Not available for vertical, right-to-left or path text	Indisponível para texto vertical, da direita para a esquerda ou em um traçado
 	Show file name in title	Exibir nome do arquivo no título
 	50% Threshold	Limiar de 50%
 	Pattern Dither	Pontilhamento de padrão

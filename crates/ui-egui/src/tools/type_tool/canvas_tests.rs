@@ -3496,6 +3496,235 @@ fn hidden_target_path_is_not_a_click_target() {
     assert!(path_target(&app, 500.0, 400.0).is_none(), "Extras off");
 }
 
+/// Dynamic Text in the options bar and Properties: the toggle, the greyed-out size fields and
+/// the gap sliders.
+mod dynamic_text_ui {
+    use super::*;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+
+    fn app_with_box_text(words: &str, size: f32) -> (PhotocraftApp, LayerId) {
+        let mut app = new_app();
+        let r = app.run("type.create", json!({"x": 0, "y": 0, "text": words, "size": size, "color": "#000000", "box": [100, 100, 400, 200]})).unwrap();
+        (app, LayerId(r["layer"].as_u64().unwrap()))
+    }
+
+    fn bar(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
+        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                if properties {
+                    ui.set_width(340.0);
+                    super::super::type_properties(app, ui);
+                } else {
+                    ui.horizontal(|ui| super::super::options_bar(app, ui));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    fn fitted(h: &Harness<'static, PhotocraftApp>, id: LayerId) -> bool {
+        text(h.state(), id).fit.is_some()
+    }
+
+    #[test]
+    fn toggle_converts_and_releases() {
+        let (app, id) = app_with_box_text("Hello", 12.0);
+        let mut h = bar(app, false);
+        h.get_by_label("Dynamic Text").click();
+        h.run_steps(3);
+        assert!(fitted(&h, id));
+        // Box text keeps its base size; its solved line is scaled up to fill the box.
+        let t = text(h.state(), id);
+        let scale = t.fit.as_ref().and_then(|f| f.lines.first()).map_or(0.0, |l| l.scale);
+        assert!(t.size_pt == 12.0 && scale > 1.0, "fills the box: {} x {scale}", t.size_pt);
+        h.get_by_label("Dynamic Text").click();
+        h.run_steps(3);
+        assert!(!fitted(&h, id));
+        // Off puts the text back as it was before the toggle, as in Photoshop: 12 pt, no breaks.
+        let t = text(h.state(), id);
+        assert!(t.runs.iter().all(|r| r.style.size_pt == 12.0) && t.size_pt == 12.0, "{:?}", t.runs.iter().map(|r| r.style.size_pt).collect::<Vec<_>>());
+        assert_eq!(t.text, "Hello");
+    }
+
+    #[test]
+    fn size_field_disabled_only_while_fitted() {
+        let (app, id) = app_with_box_text("Hello", 12.0);
+        let mut h = bar(app, false);
+        let disabled = |h: &Harness<'static, PhotocraftApp>| h.get_all_by_role(Role::SpinButton).next().expect("size field").accesskit_node().is_disabled();
+        assert!(!disabled(&h));
+        h.state_mut().run("type.convertToDynamicText", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(fitted(&h, id) && disabled(&h));
+        h.state_mut().run("type.releaseDynamicText", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(!disabled(&h));
+    }
+
+    #[test]
+    fn properties_grey_size_and_leading_and_show_gap_sliders_only_while_fitted() {
+        let (app, _) = app_with_box_text("Hello", 12.0);
+        let mut h = bar(app, true);
+        assert!(h.query_all_by_label("Line Gap").next().is_none() && h.query_all_by_label("Word Gap").next().is_none());
+        assert!(!h.get_by_label("Font size").accesskit_node().is_disabled());
+        h.state_mut().run("type.convertToDynamicText", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(h.query_all_by_label("Line Gap").next().is_some() && h.query_all_by_label("Word Gap").next().is_some());
+        assert!(h.get_by_label("Font size").accesskit_node().is_disabled());
+        // The Leading field, its label and its presets menu are all greyed out.
+        assert!(h.get_all_by_label_contains("Leading").all(|n| n.accesskit_node().is_disabled()));
+        h.state_mut().run("type.releaseDynamicText", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(h.query_all_by_label("Line Gap").next().is_none());
+        assert!(!h.get_by_label("Font size").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn properties_toggle_converts_and_releases() {
+        let (app, id) = app_with_box_text("Hello", 12.0);
+        let mut h = bar(app, true);
+        h.get_by_label("Dynamic Text").click();
+        h.run_steps(3);
+        assert!(fitted(&h, id));
+        // The toggle sits with the gap rows it brings up.
+        assert!(h.query_all_by_label("Word Gap").next().is_some());
+        h.get_by_label("Dynamic Text").click();
+        h.run_steps(3);
+        assert!(!fitted(&h, id));
+        assert!(h.query_all_by_label("Word Gap").next().is_none());
+    }
+
+    #[test]
+    fn greyed_leading_says_line_gap_sets_it() {
+        let (mut app, _) = app_with_box_text("Hello", 12.0);
+        app.run("type.convertToDynamicText", json!({})).unwrap();
+        let mut h = bar(app, true);
+        h.get_all_by_label_contains("Leading").next().expect("Leading").hover();
+        h.run_steps(20);
+        assert!(h.query_by_label("Leading is set by Line Gap").is_some(), "the Leading field's own tip");
+        assert!(h.query_by_label("Size is set by Dynamic Text").is_none());
+    }
+
+    #[test]
+    fn word_gap_slider_goes_down_to_minus_100() {
+        let (app, id) = app_with_box_text("Hello there", 12.0);
+        let mut h = bar(app, true);
+        h.state_mut().run("type.convertToDynamicText", json!({})).unwrap();
+        h.state_mut().run("type.setDynamicText", json!({"wordGap": 37})).unwrap();
+        h.run_steps(3);
+        let field = h.get_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(37.0)).expect("Word Gap field");
+        field.click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        h.event(egui::Event::Text("-100".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(text(h.state(), id).fit.as_ref().map(|f| f.word_gap), Some(-100.0));
+    }
+
+    /// The topmost node labelled `label`: the row's label, above its slider (also labelled).
+    fn top_by_label<'h>(h: &'h Harness<'static, PhotocraftApp>, label: &'h str) -> egui_kittest::Node<'h> {
+        h.get_all_by_label(label).min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).expect(label)
+    }
+
+    fn toggle_disabled(h: &Harness<'static, PhotocraftApp>) -> bool {
+        h.get_by_label("Dynamic Text").accesskit_node().is_disabled()
+    }
+
+    #[test]
+    fn toggle_is_disabled_when_conversion_would_be_refused() {
+        // No type layer.
+        let h = bar(new_app(), false);
+        assert!(toggle_disabled(&h));
+        // Vertical type.
+        let mut app = new_app();
+        app.run("type.create", json!({"x": 100, "y": 100, "text": "abc", "orientation": "vertical"})).unwrap();
+        assert!(toggle_disabled(&bar(app, false)));
+        // Type on a path.
+        let (mut app, id) = app_with_box_text("abc", 12.0);
+        app.session
+            .edit("path", |doc, _| {
+                doc.work_path = Some(photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polyline(&[(10.0, 200.0), (390.0, 200.0)])]));
+                Ok(())
+            })
+            .unwrap();
+        app.run("type.attachToPath", json!({"layer": id.0})).unwrap();
+        assert!(toggle_disabled(&bar(app, false)));
+        // A box layer converts, and a fitted one can always be released.
+        let (app, _) = app_with_box_text("abc", 12.0);
+        let mut h = bar(app, false);
+        assert!(!toggle_disabled(&h));
+        h.state_mut().run("type.convertToDynamicText", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(!toggle_disabled(&h));
+    }
+
+    #[test]
+    fn gap_slider_drag_is_one_history_step() {
+        let (mut app, id) = app_with_box_text("Hello there friend", 12.0);
+        app.run("type.convertToDynamicText", json!({})).unwrap();
+        let mut h = bar(app, true);
+        let before = h.state().session.active().unwrap().history.entries().len();
+        let y = top_by_label(&h, "Line Gap").rect().center().y;
+        // The slider is not an accessible node: it sits just under the label, as wide as the row.
+        let label = top_by_label(&h, "Line Gap").rect();
+        let field =
+            h.get_all_by_role(Role::SpinButton).min_by(|a, b| (a.rect().center().y - y).abs().total_cmp(&(b.rect().center().y - y).abs())).unwrap().rect();
+        let start = Pos2::new(label.left() + (field.right() - label.left()) * 0.3, label.center().y + 21.0);
+        h.hover_at(start);
+        h.run_steps(1);
+        press(&mut h, start, true);
+        for k in 1..=5 {
+            h.hover_at(start + vec2(15.0 * k as f32, 0.0));
+            h.run_steps(1);
+        }
+        press(&mut h, start + vec2(75.0, 0.0), false);
+        h.run_steps(2);
+        assert!(text(h.state(), id).fit.unwrap().line_gap != 0.0, "the drag moved the gap");
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), before + 1, "one step per drag");
+    }
+
+    #[test]
+    fn gap_field_edits_run_set_dynamic_text() {
+        let (mut app, id) = app_with_box_text("Hello there friend", 12.0);
+        app.run("type.convertToDynamicText", json!({})).unwrap();
+        let mut h = bar(app, true);
+        let before = h.state().session.active().unwrap().history.entries().len();
+        // The Line Gap row's field is the spin button level with its label.
+        let y = top_by_label(&h, "Line Gap").rect().center().y;
+        let field = h.get_all_by_role(Role::SpinButton).min_by(|a, b| (a.rect().center().y - y).abs().total_cmp(&(b.rect().center().y - y).abs())).unwrap();
+        field.click();
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("50".into()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(text(h.state(), id).fit.unwrap().line_gap, 50.0);
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), before + 1);
+    }
+}
+
+#[test]
+fn hovering_a_drawn_rectangle_shows_the_area_type_target() {
+    use crate::canvas::{ToolEvent, tool_event};
+    // A rectangle drawn with the Rectangle tool, then the Type tool hovering inside it (#218).
+    let mut app = new_app();
+    app.ui.tool = crate::state::Tool::Rectangle;
+    tool_event(&mut app, ToolEvent::Down { x: 200.0, y: 200.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 500.0, y: 400.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 500.0, y: 400.0 }, Modifiers::NONE);
+    app.ui.tool = crate::state::Tool::Type;
+    assert!(matches!(crate::type_tool::hover_path_target(&mut app, 350.0, 300.0, false), Some(PathClick::Area { shape: Some(_) })));
+}
+
 #[test]
 fn an_unselected_work_path_is_not_an_area_target() {
     // The canvas draws a Work Path only while it is selected in Paths (or a path tool is active,

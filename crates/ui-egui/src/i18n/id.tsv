@@ -3414,6 +3414,15 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+	Dynamic Text	Teks Dinamis
+	Convert to Dynamic Text	Konversi ke Teks Dinamis
+	Release Dynamic Text	Lepaskan Teks Dinamis
+	Size is set by Dynamic Text	Ukuran ditentukan oleh Teks Dinamis
+	Leading is set by Line Gap	Leading ditentukan oleh Jarak Baris
+	Word Gap	Jarak Kata
+	Line Gap	Jarak Baris
+	Select a type layer	Pilih layer teks
+	Not available for vertical, right-to-left or path text	Tidak tersedia untuk teks vertikal, kanan-ke-kiri, atau teks pada path
 	Show file name in title	Tampilkan nama file di judul
 	50% Threshold	Threshold 50%
 	Pattern Dither	Dither Pola

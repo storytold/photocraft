@@ -3380,6 +3380,15 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+	Dynamic Text	Динамический текст
+	Convert to Dynamic Text	Преобразовать в динамический текст
+	Release Dynamic Text	Освободить динамический текст
+	Size is set by Dynamic Text	Размер задаётся динамическим текстом
+	Leading is set by Line Gap	Интерлиньяж задаётся интервалом между строками
+	Word Gap	Интервал между словами
+	Line Gap	Интервал между строками
+	Select a type layer	Выберите текстовый слой
+	Not available for vertical, right-to-left or path text	Недоступно для вертикального текста, текста справа налево и текста по контуру
 	Show file name in title	Показывать имя файла в заголовке
 	50% Threshold	Порог 50%
 	Pattern Dither	Регулярный дизеринг

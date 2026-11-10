@@ -4520,6 +4520,15 @@ shape	Appearance	Aspetto
 	There are too many sets: delete one first.	Ci sono troppi set: eliminane prima uno.
 	set name	nome del set
 	{set} (modified)	{set} (modificato)
+	Dynamic Text	Testo dinamico
+	Convert to Dynamic Text	Converti in testo dinamico
+	Release Dynamic Text	Rilascia testo dinamico
+	Size is set by Dynamic Text	La dimensione è impostata dal testo dinamico
+	Leading is set by Line Gap	L’interlinea è impostata dallo spazio tra le righe
+	Word Gap	Spazio tra le parole
+	Line Gap	Spazio tra le righe
+	Select a type layer	Seleziona un livello di testo
+	Not available for vertical, right-to-left or path text	Non disponibile per testo verticale, da destra a sinistra o su tracciato
 	Show file name in title	Mostra nome file nel titolo
 	50% Threshold	Soglia 50%
 	Pattern Dither	Dithering pattern

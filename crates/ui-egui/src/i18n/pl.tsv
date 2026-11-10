@@ -4017,6 +4017,15 @@ curves	Smooth	Wygładź
 	There are too many sets: delete one first.	Zestawów jest za dużo: najpierw usuń jeden.
 	set name	nazwa zestawu
 	{set} (modified)	{set} (zmieniony)
+	Dynamic Text	Tekst dynamiczny
+	Convert to Dynamic Text	Konwertuj na tekst dynamiczny
+	Release Dynamic Text	Zwolnij tekst dynamiczny
+	Size is set by Dynamic Text	Rozmiar jest ustalany przez tekst dynamiczny
+	Leading is set by Line Gap	Interlinia jest ustalana przez odstęp między wierszami
+	Word Gap	Odstęp między wyrazami
+	Line Gap	Odstęp między wierszami
+	Select a type layer	Zaznacz warstwę tekstową
+	Not available for vertical, right-to-left or path text	Niedostępne dla tekstu pionowego, od prawej do lewej ani tekstu na ścieżce
 	Show file name in title	Pokaż nazwę pliku w tytule
 	50% Threshold	Próg 50%
 	Pattern Dither	Rozpraszanie wzorkiem

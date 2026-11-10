@@ -3426,6 +3426,15 @@ curves	Smooth	Glätten
 	There are too many sets: delete one first.	Zu viele Sätze: Löschen Sie zuerst einen.
 	set name	Name des Satzes
 	{set} (modified)	{set} (geändert)
+	Dynamic Text	Dynamischer Text
+	Convert to Dynamic Text	In dynamischen Text konvertieren
+	Release Dynamic Text	Dynamischen Text aufheben
+	Size is set by Dynamic Text	Die Größe wird durch Dynamischen Text bestimmt
+	Leading is set by Line Gap	Der Zeilenabstand wird über „Zeilenabstand“ des dynamischen Texts festgelegt
+	Word Gap	Wortabstand
+	Line Gap	Zeilenabstand
+	Select a type layer	Textebene auswählen
+	Not available for vertical, right-to-left or path text	Nicht verfügbar für vertikalen Text, Text von rechts nach links oder Text auf Pfad
 	Show file name in title	Dateiname im Titel anzeigen
 	50% Threshold	50 %-Schwellenwert
 	Pattern Dither	Musterdither

@@ -4311,6 +4311,15 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+	Dynamic Text	Texto dinámico
+	Convert to Dynamic Text	Convertir en texto dinámico
+	Release Dynamic Text	Liberar texto dinámico
+	Size is set by Dynamic Text	El tamaño lo define el texto dinámico
+	Leading is set by Line Gap	La interlínea la define el espacio entre líneas
+	Word Gap	Espacio entre palabras
+	Line Gap	Espacio entre líneas
+	Select a type layer	Seleccione una capa de texto
+	Not available for vertical, right-to-left or path text	No disponible para texto vertical, de derecha a izquierda ni en un trazado
 	Show file name in title	Mostrar nombre de archivo en el título
 	50% Threshold	Umbral 50%
 	Pattern Dither	Tramado de motivo

@@ -4023,6 +4023,15 @@ navigator	Zoom	Zvětšení
 	There are too many sets: delete one first.	Sad je příliš mnoho: nejprve jednu smažte.
 	set name	název sady
 	{set} (modified)	{set} (změněno)
+	Dynamic Text	Dynamický text
+	Convert to Dynamic Text	Převést na dynamický text
+	Release Dynamic Text	Uvolnit dynamický text
+	Size is set by Dynamic Text	Velikost určuje dynamický text
+	Leading is set by Line Gap	Proklad určuje mezera mezi řádky
+	Word Gap	Mezera mezi slovy
+	Line Gap	Mezera mezi řádky
+	Select a type layer	Vyberte textovou vrstvu
+	Not available for vertical, right-to-left or path text	Není k dispozici pro svislý text, text zprava doleva ani text na křivce
 	Show file name in title	Zobrazit název souboru v titulu
 	50% Threshold	50% práh
 	Pattern Dither	Rozptyl se vzorkem

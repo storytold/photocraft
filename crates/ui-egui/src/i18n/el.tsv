@@ -4103,6 +4103,15 @@ curves	Smooth	Εξομάλυνση
 	There are too many sets: delete one first.	Υπάρχουν πάρα πολλά σύνολα: διαγράψτε πρώτα ένα.
 	set name	όνομα συνόλου
 	{set} (modified)	{set} (τροποποιημένο)
+	Dynamic Text	Δυναμικό κείμενο
+	Convert to Dynamic Text	Μετατροπή σε δυναμικό κείμενο
+	Release Dynamic Text	Αποδέσμευση δυναμικού κειμένου
+	Size is set by Dynamic Text	Το μέγεθος καθορίζεται από το δυναμικό κείμενο
+	Leading is set by Line Gap	Το διάστιχο καθορίζεται από το κενό γραμμών
+	Word Gap	Κενό λέξεων
+	Line Gap	Κενό γραμμών
+	Select a type layer	Επιλέξτε ένα επίπεδο κειμένου
+	Not available for vertical, right-to-left or path text	Μη διαθέσιμο για κατακόρυφο κείμενο, κείμενο από δεξιά προς τα αριστερά ή κείμενο σε διαδρομή
 	Show file name in title	Εμφάνιση ονόματος αρχείου στον τίτλο
 	50% Threshold	Κατώφλι 50%
 	Pattern Dither	Πρόσμιξη μοτίβου

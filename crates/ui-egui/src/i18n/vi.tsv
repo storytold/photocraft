@@ -3875,6 +3875,15 @@ curves	Smooth	Làm mượt
 	There are too many sets: delete one first.	Có quá nhiều bộ: hãy xóa một bộ trước.
 	set name	tên bộ
 	{set} (modified)	{set} (đã sửa đổi)
+	Dynamic Text	Văn bản động
+	Convert to Dynamic Text	Chuyển thành văn bản động
+	Release Dynamic Text	Gỡ văn bản động
+	Size is set by Dynamic Text	Kích thước do văn bản động quyết định
+	Leading is set by Line Gap	Giãn dòng do khoảng cách dòng quyết định
+	Word Gap	Khoảng cách từ
+	Line Gap	Khoảng cách dòng
+	Select a type layer	Chọn một lớp văn bản
+	Not available for vertical, right-to-left or path text	Không khả dụng cho văn bản dọc, văn bản phải sang trái hoặc văn bản trên đường dẫn
 	Show file name in title	Hiển thị tên tệp trong tiêu đề
 	50% Threshold	Ngưỡng 50%
 	Pattern Dither	Hòa sắc họa tiết

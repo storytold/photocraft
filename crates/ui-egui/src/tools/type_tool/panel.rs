@@ -1,4 +1,5 @@
 use super::defaults::{apply, apply_defaults, default_styles, formatting_params, open_color_picker, shown_scale, target, type_unit};
+use super::dynamic_text::{dynamic_text_gaps, dynamic_text_toggle, is_fitted};
 use super::fonts::{axis_sliders, font_picker, fonts_ready, selected_style, style_label, styles};
 use super::options_bar::{
     align_glyph, apply_kerning, direction_glyph, direction_items, icon_label, kerning_at, kerning_field, kerning_label, num_field, shown_family, styles_at,
@@ -259,12 +260,21 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
             }
         });
         axis_sliders(app, ui, &c);
+        // Dynamic Text sets the size from the box and the leading from its Line Gap.
+        let fitted = is_fitted(app);
         row(ui, &mut |ui| {
             let k = shown_scale(app);
             // Hover tips stay English until wired through `tl!` in a multi-locale change
             // (`every_tl_literal_is_translated` requires every complete catalog).
-            let size =
-                metric_field(ui, ("tT", "Font size", "Font size presets"), c.size_pt * k * u, 0.1 * u..=1296.0 * u, (u, unit), w, &[&SIZE_PRESETS], None);
+            let size = ui.add_enabled_ui(!fitted, |ui| {
+                metric_field(ui, ("tT", "Font size", "Font size presets"), c.size_pt * k * u, 0.1 * u..=1296.0 * u, (u, unit), w, &[&SIZE_PRESETS], None)
+            });
+            let size = if fitted {
+                size.response.on_disabled_hover_text(tl!("Size is set by Dynamic Text"));
+                None
+            } else {
+                size.inner
+            };
             if let Some(pt) = match size {
                 Some(MetricChoice::Typed(v)) => Some(v / u),
                 Some(MetricChoice::Preset(pt)) => Some(pt),
@@ -275,14 +285,24 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
             }
             let lead = c.leading_pt.unwrap_or(c.size_pt * para.auto_leading.max(0.01)) * k;
             let tip = "Leading (set to the font size × auto-leading when Auto)";
-            match metric_field(ui, ("A↕", tip, "Leading presets"), lead * u, 0.1 * u..=5000.0 * u, (u, unit), w, &[&SIZE_PRESETS], Some(c.leading_pt.is_none()))
-            {
+            let leading = ui.add_enabled_ui(!fitted, |ui| {
+                metric_field(ui, ("A↕", tip, "Leading presets"), lead * u, 0.1 * u..=5000.0 * u, (u, unit), w, &[&SIZE_PRESETS], Some(c.leading_pt.is_none()))
+            });
+            let leading = if fitted {
+                leading.response.on_disabled_hover_text(tl!("Leading is set by Line Gap"));
+                None
+            } else {
+                leading.inner
+            };
+            match leading {
                 Some(MetricChoice::Typed(v)) => apply(app, ui.ctx(), json!({"leading": v / u, "metricsAsShown": true})),
                 Some(MetricChoice::Preset(pt)) => apply(app, ui.ctx(), json!({"leading": pt, "metricsAsShown": true})),
                 Some(MetricChoice::Auto) => apply(app, ui.ctx(), json!({"leading": "auto"})),
                 None => {}
             }
         });
+        row(ui, &mut |ui| dynamic_text_toggle(app, ui));
+        dynamic_text_gaps(app, ui);
         row(ui, &mut |ui| {
             let shown = kerning_label(kerning_at(app).unwrap_or((c.kerning, c.kern)));
             ui.horizontal(|ui| {

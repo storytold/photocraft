@@ -3067,6 +3067,15 @@ curves	Smooth	平滑
 	set name	组名称
 	{set} (modified)	{set}（已修改）
 	Random	随机
+	Dynamic Text	动态文字
+	Convert to Dynamic Text	转换为动态文字
+	Release Dynamic Text	释放动态文字
+	Size is set by Dynamic Text	大小由动态文字决定
+	Leading is set by Line Gap	行距由行间距决定
+	Word Gap	字间距
+	Line Gap	行间距
+	Select a type layer	请选择文字图层
+	Not available for vertical, right-to-left or path text	不适用于竖排文字、从右到左的文字或路径文字
 	Show file name in title	标题中显示文件名
 	50% Threshold	50% 阈值
 	Pattern Dither	图案仿色

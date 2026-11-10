@@ -4441,6 +4441,15 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+	Dynamic Text	Динамички текст
+	Convert to Dynamic Text	Претвори у динамички текст
+	Release Dynamic Text	Ослободи динамички текст
+	Size is set by Dynamic Text	Величину одређује динамички текст
+	Leading is set by Line Gap	Проред одређује размак између редова
+	Word Gap	Размак између речи
+	Line Gap	Размак између редова
+	Select a type layer	Изаберите текстуални слој
+	Not available for vertical, right-to-left or path text	Није доступно за вертикални текст, текст здесна налево или текст на путањи
 	Show file name in title	Prikaži naziv datoteke u naslovu
 	50% Threshold	Prag 50%
 	Pattern Dither	Dither šarom

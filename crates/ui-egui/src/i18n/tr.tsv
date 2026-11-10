@@ -4099,6 +4099,15 @@ cameraData	Lens	Lens
 	There are too many sets: delete one first.	Çok fazla küme var: önce birini silin.
 	set name	küme adı
 	{set} (modified)	{set} (değiştirildi)
+	Dynamic Text	Dinamik Metin
+	Convert to Dynamic Text	Dinamik Metne Dönüştür
+	Release Dynamic Text	Dinamik Metni Serbest Bırak
+	Size is set by Dynamic Text	Boyutu Dinamik Metin belirler
+	Leading is set by Line Gap	Satır aralığını Satır Aralığı ayarı belirler
+	Word Gap	Sözcük Aralığı
+	Line Gap	Satır Aralığı
+	Select a type layer	Bir metin katmanı seçin
+	Not available for vertical, right-to-left or path text	Dikey, sağdan sola veya yol üzerindeki metin için kullanılamaz
 	Show file name in title	Başlıkta dosya adını göster
 	50% Threshold	%50 Eşik
 	Pattern Dither	Desen Titreklik

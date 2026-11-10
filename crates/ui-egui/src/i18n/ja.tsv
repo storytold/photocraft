@@ -4076,6 +4076,15 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+	Dynamic Text	ダイナミックテキスト
+	Convert to Dynamic Text	ダイナミックテキストに変換
+	Release Dynamic Text	ダイナミックテキストを解除
+	Size is set by Dynamic Text	サイズはダイナミックテキストによって決まります
+	Leading is set by Line Gap	行送りは行の間隔によって決まります
+	Word Gap	単語の間隔
+	Line Gap	行の間隔
+	Select a type layer	文字レイヤーを選択してください
+	Not available for vertical, right-to-left or path text	縦書き、右から左へのテキスト、パス上の文字には使用できません
 	Show file name in title	タイトルにファイル名を表示
 	50% Threshold	50% しきい値
 	Pattern Dither	パターンディザ

@@ -4103,6 +4103,15 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+	Dynamic Text	Динамічний текст
+	Convert to Dynamic Text	Перетворити на динамічний текст
+	Release Dynamic Text	Звільнити динамічний текст
+	Size is set by Dynamic Text	Розмір задається динамічним текстом
+	Leading is set by Line Gap	Інтерліньяж задається інтервалом між рядками
+	Word Gap	Інтервал між словами
+	Line Gap	Інтервал між рядками
+	Select a type layer	Виберіть текстовий шар
+	Not available for vertical, right-to-left or path text	Недоступно для вертикального тексту, тексту справа наліво та тексту по контуру
 	Show file name in title	Показувати ім’я файла в заголовку
 	50% Threshold	Поріг 50%
 	Pattern Dither	Візерунковий дизеринг

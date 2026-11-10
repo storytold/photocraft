@@ -3617,6 +3617,15 @@ curves	Smooth	매끄럽게
 	There are too many sets: delete one first.	세트가 너무 많습니다. 먼저 하나를 삭제하세요.
 	set name	세트 이름
 	{set} (modified)	{set}(수정됨)
+	Dynamic Text	다이내믹 텍스트
+	Convert to Dynamic Text	다이내믹 텍스트로 변환
+	Release Dynamic Text	다이내믹 텍스트 해제
+	Size is set by Dynamic Text	크기는 다이내믹 텍스트가 결정합니다
+	Leading is set by Line Gap	행간은 줄 간격이 결정합니다
+	Word Gap	단어 간격
+	Line Gap	줄 간격
+	Select a type layer	문자 레이어를 선택하세요
+	Not available for vertical, right-to-left or path text	세로 텍스트, 오른쪽에서 왼쪽 텍스트, 패스 위 텍스트에는 사용할 수 없습니다
 	Show file name in title	제목에 파일 이름 표시
 	50% Threshold	50% 한계값
 	Pattern Dither	패턴 디더

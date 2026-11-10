@@ -155,6 +155,8 @@ pub const TYPE_EDIT_MENU: &[Row] = &[
     None,
     Some(("Convert to Paragraph Text", "type.convertToParagraphText")),
     Some(("Convert to Point Text", "type.convertToPointText")),
+    Some(("Convert to Dynamic Text", "type.convertToDynamicText")),
+    Some(("Release Dynamic Text", "type.releaseDynamicText")),
     Some(("Warp Text…", "type.warpText")),
 ];
 

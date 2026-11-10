@@ -4290,6 +4290,15 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+	Dynamic Text	Dinamikus szöveg
+	Convert to Dynamic Text	Átalakítás dinamikus szöveggé
+	Release Dynamic Text	Dinamikus szöveg feloldása
+	Size is set by Dynamic Text	A méretet a dinamikus szöveg határozza meg
+	Leading is set by Line Gap	A sorközt a sorköz mérete határozza meg
+	Word Gap	Szóköz mérete
+	Line Gap	Sorköz mérete
+	Select a type layer	Válasszon ki egy szövegréteget
+	Not available for vertical, right-to-left or path text	Függőleges, jobbról balra írt vagy görbére illesztett szövegnél nem érhető el
 	Show file name in title	Fájlnév megjelenítése a címben
 	50% Threshold	50%-os küszöb
 	Pattern Dither	Mintázatos keverés
