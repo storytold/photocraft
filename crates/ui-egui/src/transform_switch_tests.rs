@@ -221,3 +221,46 @@ fn new_layer_with_bad_params_leaves_the_box_open() {
         assert_eq!(red_bounds(&h), photocraft_geom::Rect::new(100, 100, 200, 160), "{bad}");
     }
 }
+
+/// Open Free Transform and scale the box to twice its size about its centre: the red rectangle
+/// (100, 100)-(200, 160) becomes (50, 70)-(250, 190).
+fn transform_and_scale(h: &mut Harness<'static, PhotocraftApp>) {
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+    h.run_steps(2);
+    let t = h.state_mut().ui.transform.as_mut().expect("Free Transform is open");
+    let c = [(t.quad[0][0] + t.quad[2][0]) / 2.0, (t.quad[0][1] + t.quad[2][1]) / 2.0];
+    for p in &mut t.quad {
+        p[0] = c[0] + (p[0] - c[0]) * 2.0;
+        p[1] = c[1] + (p[1] - c[1]) * 2.0;
+    }
+    h.run_steps(2);
+}
+
+/// Edit › Copy while Free Transform is open takes the layer as the box shows it. The reference
+/// application transforms the layer as the box is dragged, so the copy it takes is the transformed
+/// one. PhotoCraft applies the transform when the box is committed, so a copy taken before that
+/// held the untransformed layer and the pasted one came out at the old size.
+#[test]
+fn a_copy_while_the_box_is_open_takes_the_transformed_pixels() {
+    let mut h = app();
+    transform_and_scale(&mut h);
+    assert_eq!(red_bounds(&h), photocraft_geom::Rect::new(100, 100, 200, 160), "the document still holds the untransformed layer");
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    let clip = h.state().session.clipboard.as_ref().expect("the clipboard holds the copy");
+    assert_eq!(clip.bounds, photocraft_geom::Rect::new(50, 70, 250, 190), "the copy holds the scaled pixels");
+    assert_eq!(red_bounds(&h), photocraft_geom::Rect::new(50, 70, 250, 190), "and the transform is applied");
+}
+
+/// The pasted copy of a scaled layer keeps the size the box showed.
+#[test]
+fn a_paste_after_a_copy_during_the_box_keeps_the_scaled_size() {
+    let mut h = app();
+    transform_and_scale(&mut h);
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    h.state_mut().run("edit.paste", json!({})).unwrap();
+    h.run_steps(2);
+    let st = h.state().session.active().unwrap();
+    let pasted = st.doc.layers.last().expect("the pasted layer").surface().expect("its pixels").content_bounds();
+    assert_eq!(pasted, photocraft_geom::Rect::new(50, 70, 250, 190), "the pasted layer keeps the scaled size");
+}
