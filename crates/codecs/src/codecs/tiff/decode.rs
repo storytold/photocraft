@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use super::bands::{Tally, convert_ab, decode_bands, extra_sample_indices, refill_zeroed, split_extra_samples, zeroed};
-use super::tags::{F, TAG_IMAGE_SOURCE_DATA, TAG_PHOTOSHOP, TAG_XMP, TEXT_TAGS, photoshop_tags};
+use super::tags::{F, TAG_IMAGE_SOURCE_DATA, TAG_IPTC, TAG_PHOTOSHOP, TAG_XMP, TEXT_TAGS, photoshop_tags};
 use super::ycbcr::YCbCr;
 use super::{
     ChannelLayout, ChunkType, CodecError, DecodeWarning, Decoder, ExifDirs, File, Ifd, Image, Limits, Metadata, Read, SampleType, Seek, SeekFrom, Tag,
@@ -273,7 +273,8 @@ fn metadata(f: &File<'_>, dir: &Ifd, icc: &mut Option<Vec<u8>>) -> Metadata {
         let s = std::str::from_utf8(b).ok()?.trim_end_matches('\0');
         (!s.is_empty()).then(|| s.to_owned())
     };
-    let mut meta = Metadata { xmp: text(TAG_XMP), ..Default::default() };
+    let iptc = f.tag_bytes(dir, TAG_IPTC).filter(|b| !b.is_empty()).map(<[u8]>::to_vec);
+    let mut meta = Metadata { xmp: text(TAG_XMP), iptc, ..Default::default() };
     let unit = f.tag_uint(dir, Tag::ResolutionUnit.to_u16()).unwrap_or(2);
     if let (Some(x), Some(y)) = (f.tag_f64(dir, Tag::XResolution.to_u16()), f.tag_f64(dir, Tag::YResolution.to_u16()))
         && x > 0.0

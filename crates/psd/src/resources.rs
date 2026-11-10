@@ -28,6 +28,8 @@ pub mod ids {
     pub const EXIF: u16 = 1058;
     /// XMP metadata.
     pub const XMP: u16 = 1060;
+    /// IPTC-NAA record.
+    pub const IPTC_NAA: u16 = 1028;
     /// Document timeline settings (versioned descriptor).
     pub const TIMELINE_INFO: u16 = 1075;
 }

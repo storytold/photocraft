@@ -1,5 +1,5 @@
 use super::bands::convert_ab;
-use super::tags::{F, TAG_IMAGE_SOURCE_DATA, TAG_PHOTOSHOP, TAG_XMP, TEXT_TAGS};
+use super::tags::{F, TAG_IMAGE_SOURCE_DATA, TAG_IPTC, TAG_PHOTOSHOP, TAG_XMP, TEXT_TAGS};
 use super::{
     ChannelLayout, CmykA16, CmykA32F, CodecError, Cow, EncodeOptions, ExifDirs, GrayA8, GrayA16, GrayA32F, Image, Lab8, Lab16, LabA8, LabA16,
     PhotometricInterpretation, Plan, Rational, ResolutionUnit, SampleFormat, SampleType, Tag, TiffColorType, TiffCompression, TiffEncoder, TiffKind,
@@ -254,6 +254,7 @@ struct TagSet<'a> {
     /// The EXIF block's directories and IFD0 tags, written as the TIFF's own.
     exif: Option<ExifDirs>,
     xmp: Option<&'a [u8]>,
+    iptc: Option<&'a [u8]>,
     dpi: Option<(f32, f32)>,
     text: Vec<(Tag, &'a str)>,
     /// ExtraSamples tag, including the unassociated-alpha marker when the image has alpha.
@@ -303,6 +304,9 @@ where
     }
     if let Some(xmp) = tags.xmp {
         d.write_tag(Tag::Unknown(TAG_XMP), xmp)?;
+    }
+    if let Some(iptc) = tags.iptc {
+        d.write_tag(Tag::Unknown(TAG_IPTC), Undefined(iptc))?;
     }
     for (tag, s) in &tags.text {
         d.write_tag(*tag, *s)?;
@@ -499,7 +503,7 @@ const CLASSIC_LIMIT: u64 = u32::MAX as u64;
 /// An upper estimate of the file size: the uncompressed samples plus every tag payload plus
 /// room for the directory and strip tables.
 fn estimated_size(img: &Image, tags: &TagSet<'_>) -> u64 {
-    let payloads = [tags.icc, tags.xmp, tags.photoshop_resources, tags.photoshop_layers].iter().flatten().map(|p| p.len() as u64).sum::<u64>();
+    let payloads = [tags.icc, tags.xmp, tags.iptc, tags.photoshop_resources, tags.photoshop_layers].iter().flatten().map(|p| p.len() as u64).sum::<u64>();
     let text = tags.text.iter().map(|(_, s)| s.len() as u64).sum::<u64>()
         + tags.exif.iter().flat_map(|e| e.ifd0.iter().chain(&e.exif).chain(&e.gps)).map(|f| f.value.len() as u64 + 12).sum::<u64>();
     // Strip tables: one offset and one count per strip of about 1 MB.
@@ -589,6 +593,7 @@ fn encode_ready(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
         icc: if opts.embed_icc { img.icc.as_deref() } else { None },
         exif: if opts.embed_metadata { img.meta.exif.as_deref().and_then(|e| tiff_exif::read(crate::orientation::tiff_body(e))) } else { None },
         xmp: xmp.as_deref().map(str::as_bytes),
+        iptc: if opts.embed_metadata { img.meta.iptc.as_deref().filter(|i| !i.is_empty()) } else { None },
         dpi: if opts.embed_metadata { img.meta.dpi.filter(|d| d.0 > 0.0 && d.1 > 0.0) } else { None },
         text,
         extra_samples: &kinds,
@@ -603,6 +608,7 @@ fn encode_ready(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
         icc: tags.icc,
         exif: None,
         xmp: None,
+        iptc: None,
         dpi: None,
         text: Vec::new(),
         extra_samples: alpha_kind,

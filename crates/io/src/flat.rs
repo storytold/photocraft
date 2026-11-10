@@ -888,6 +888,10 @@ fn flat_document(
     doc.metadata.exif = meta.exif.clone().map(Arc::new);
     doc.metadata.xmp = meta.xmp.as_deref().map(Arc::from);
     doc.metadata.text = meta.text.clone();
+    // Kept as Photoshop resource 1028, as a PSD keeps it (#9099).
+    if let Some(iptc) = &meta.iptc {
+        doc.metadata.psd_resources.push((photocraft_psd::resources::ids::IPTC_NAA, String::new(), Arc::new(iptc.clone())));
+    }
     if let Some((x, y)) = meta.dpi {
         doc.resolution_dpi = x;
         warnings.extend(crate::unequal_resolution_warning(f64::from(x), f64::from(y)));
@@ -1102,6 +1106,10 @@ fn single_layer_document(
     doc.metadata.exif = meta.exif.map(Arc::new);
     doc.metadata.xmp = meta.xmp.map(Arc::from);
     doc.metadata.text = meta.text;
+    // Kept as Photoshop resource 1028, as a PSD keeps it (#9099).
+    if let Some(iptc) = meta.iptc {
+        doc.metadata.psd_resources.push((photocraft_psd::resources::ids::IPTC_NAA, String::new(), Arc::new(iptc)));
+    }
     if let Some((x, y)) = meta.dpi {
         doc.resolution_dpi = x;
         warnings.extend(crate::unequal_resolution_warning(f64::from(x), f64::from(y)));
@@ -1485,6 +1493,7 @@ impl<'a> FlatSource<'a> {
         codecs::Metadata {
             exif: doc.metadata.exif.as_ref().map(|e| e.to_vec()),
             xmp: doc.metadata.xmp.as_deref().map(str::to_owned),
+            iptc: doc.metadata.psd_resources.iter().find(|(id, ..)| *id == photocraft_psd::resources::ids::IPTC_NAA).map(|(.., data)| data.to_vec()),
             text: doc.metadata.text.clone(),
             dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
             ..Default::default()
@@ -1795,11 +1804,12 @@ pub fn export_flat_with_renderer(
 }
 
 /// Export As's Metadata: None drops the XMP packet, which lists the text of every type layer and
-/// one id per placed document (#647), and the free-form descriptions, which can hold the same
-/// sensitive text.
+/// one id per placed document (#647), and the free-form descriptions and IPTC record, which can
+/// hold the same sensitive text.
 fn strip_xmp(meta: &mut codecs::Metadata, opts: &ExportOptions) {
     if opts.xmp == XmpEmbed::None {
         meta.xmp = None;
+        meta.iptc = None;
         meta.text.clear();
     }
 }
