@@ -19,10 +19,12 @@
 //!   its siblings beside it (the cells its parent was split into) down.
 //!
 //! Each cell becomes two triangles, split from its top-left corner, cut across at the vertices its
-//! left and right neighbours put on its sides. A vertex inside a bigger cell's edge sits on that
-//! edge's chord; so does a new vertex on a row whose own segment wasn't curved enough to need it,
-//! unless it is inside a cell that was split, or both cells beside it were split for their
-//! curvature; on the left and right sides of the surface the same holds for columns.
+//! left and right neighbours put on its sides. A new vertex on a row whose own segment wasn't
+//! curved enough to need it sits on that segment's chord, unless it is inside a cell that was
+//! split, or both cells beside it were split for their curvature; on the left and right sides of
+//! the surface the same holds for columns. A vertex inside a bigger cell's edge is then dropped
+//! onto that edge, perpendicular from where its own cells put it, so it keeps its place along
+//! the edge (the bigger cell's texture runs on straight past it, as the reference's does).
 
 use std::collections::HashMap;
 
@@ -506,27 +508,18 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
     let inside = |line: Option<&Vec<f64>>, lo: f64, hi: f64| -> Vec<f64> {
         line.map(|l| l.iter().copied().filter(|&t| t > lo + 1e-12 && t < hi - 1e-12).collect()).unwrap_or_default()
     };
-    // Places: the biggest cells first put the vertices inside their edges on their chords.
-    let mut pos: HashMap<(u64, u64), P> = HashMap::new();
-    let mut by_size: Vec<&Cell> = leaves.iter().collect();
-    by_size.sort_by(|a, b| ((b[1] - b[0]) * (b[3] - b[2])).total_cmp(&((a[1] - a[0]) * (a[3] - a[2]))));
     let lerp = |a: P, b: P, s: f64| [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s];
-    for &&[u0, u1, v0, v1] in &by_size {
-        let mut corner = |u: f64, v: f64| *pos.entry(key(u, v)).or_insert_with(|| surf(u, v));
-        let (c00, c10, c01, c11) = (corner(u0, v0), corner(u1, v0), corner(u0, v1), corner(u1, v1));
-        for (v, a, b) in [(v0, c00, c10), (v1, c01, c11)] {
-            for u in inside(on_v.get(&v.to_bits()), u0, u1) {
-                pos.entry(key(u, v)).or_insert_with(|| lerp(a, b, (u - u0) / (u1 - u0)));
-            }
-        }
-        for (u, a, b) in [(u0, c00, c01), (u1, c10, c11)] {
-            for v in inside(on_u.get(&u.to_bits()), v0, v1) {
-                pos.entry(key(u, v)).or_insert_with(|| lerp(a, b, (v - v0) / (v1 - v0)));
-            }
-        }
-    }
+    // The point of the segment `a`-`b` nearest `p`: a point dropped onto a bigger cell's edge.
+    let onto = |a: P, b: P, p: P| {
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let l2 = d[0] * d[0] + d[1] * d[1];
+        let s = if l2 > 0.0 { (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        lerp(a, b, s)
+    };
+    // Where each point's own cells put it: on the surface, or on its row's chord.
+    let mut own: HashMap<(u64, u64), P> = HashMap::new();
     for p in &keys {
-        pos.entry(key(p[0], p[1])).or_insert_with(|| surf(p[0], p[1]));
+        own.insert(key(p[0], p[1]), surf(p[0], p[1]));
     }
     let place = |pos: &HashMap<(u64, u64), P>, u: f64, v: f64| pos.get(&key(u, v)).copied().unwrap_or_else(|| surf(u, v));
     // A new vertex on a row the row didn't need sits on that row segment's chord.
@@ -549,8 +542,8 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
             continue;
         }
         if need(&segment(&net.row(v), a, b)) < 1.0 - EPS {
-            let m = lerp(place(&pos, a, v), place(&pos, b, v), 0.5);
-            pos.insert(key(u, v), m);
+            let m = lerp(place(&own, a, v), place(&own, b, v), 0.5);
+            own.insert(key(u, v), m);
         }
     }
     // The same for columns on the surface's left and right sides.
@@ -563,20 +556,47 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
         let w = 1.0 / f64::from(1u32 << lv);
         let (a, b) = (v - w, v + w);
         if need(&segment(&net.col(u), a, b)) < 1.0 - EPS {
-            let m = lerp(place(&pos, u, a), place(&pos, u, b), 0.5);
-            pos.insert(key(u, v), m);
+            let m = lerp(place(&own, u, a), place(&own, u, b), 0.5);
+            own.insert(key(u, v), m);
         }
     }
+    // Then the biggest cells first drop the points inside their edges onto them (perpendicular), so
+    // a point keeps its place along the edge as its own cells see it: the cells meet without a
+    // gap, and the bigger cell's texture runs on along its straight edge.
+    let mut pos: HashMap<(u64, u64), P> = HashMap::new();
+    let mut by_size: Vec<&Cell> = leaves.iter().collect();
+    by_size.sort_by(|a, b| ((b[1] - b[0]) * (b[3] - b[2])).total_cmp(&((a[1] - a[0]) * (a[3] - a[2]))));
+    for &&[u0, u1, v0, v1] in &by_size {
+        let mut corner = |u: f64, v: f64| *pos.entry(key(u, v)).or_insert_with(|| place(&own, u, v));
+        let (c00, c10, c01, c11) = (corner(u0, v0), corner(u1, v0), corner(u0, v1), corner(u1, v1));
+        for (v, a, b) in [(v0, c00, c10), (v1, c01, c11)] {
+            for u in inside(on_v.get(&v.to_bits()), u0, u1) {
+                let o = place(&own, u, v);
+                pos.entry(key(u, v)).or_insert_with(|| onto(a, b, o));
+            }
+        }
+        for (u, a, b) in [(u0, c00, c01), (u1, c10, c11)] {
+            for v in inside(on_u.get(&u.to_bits()), v0, v1) {
+                let o = place(&own, u, v);
+                pos.entry(key(u, v)).or_insert_with(|| onto(a, b, o));
+            }
+        }
+    }
+    for p in &keys {
+        let o = place(&own, p[0], p[1]);
+        pos.entry(key(p[0], p[1])).or_insert(o);
+    }
     if !rules.cut_sides {
-        // A leaf stays whole: a point of a smaller neighbour on its left or right side sits on that
-        // side's chord (biggest leaves first, so a side's own ends are where they belong).
+        // A leaf stays whole: a point of a smaller neighbour on its left or right side is dropped
+        // onto that side's chord (biggest leaves first, so a side's own ends are where they belong).
         let mut big: Vec<&Cell> = leaves.iter().collect();
         big.sort_by(|a, b| (b[3] - b[2]).total_cmp(&(a[3] - a[2])));
         for &&[u0, u1, v0, v1] in &big {
             for u in [u0, u1] {
                 let (a, b) = (place(&pos, u, v0), place(&pos, u, v1));
                 for v in inside(on_u.get(&u.to_bits()), v0, v1) {
-                    pos.insert(key(u, v), lerp(a, b, (v - v0) / (v1 - v0)));
+                    let o = place(&own, u, v);
+                    pos.insert(key(u, v), onto(a, b, o));
                 }
             }
         }
@@ -880,6 +900,31 @@ mod tests {
         assert!((surf[1] - mid[1]).abs() > 0.1, "the chord is off the surface here");
     }
 
+    /// A point inside a bigger cell's edge is dropped onto that edge from where its own cells put
+    /// it, keeping its place along the edge: Shell Lower 50 (a full mesh) at (⅛, ¼), under the
+    /// whole cell u 0..¼. The reference's point there lies on the chord, slid 0.285 px along it.
+    #[test]
+    fn a_point_on_a_bigger_cells_edge_keeps_its_place_along_it() {
+        use photocraft_geom::warp::{Warp, WarpStyle};
+        let b = [96.0, 96.0, 224.0, 224.0];
+        let w = Warp::preset(WarpStyle::ShellLower, 50.0, b);
+        let at = |u: f64, v: f64| {
+            let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * v);
+            [x, y]
+        };
+        let m = envelope_mesh(&at, true).expect("finite");
+        let find = |u: f64, v: f64| m.uv.iter().position(|q| (q[0] - u).abs() < 1e-12 && (q[1] - v).abs() < 1e-12).map(|k| m.pos[k]);
+        let (a, c, p) = (find(0.0, 0.25).expect("left end"), find(0.25, 0.25).expect("right end"), find(0.125, 0.25).expect("middle"));
+        let d = [c[0] - a[0], c[1] - a[1]];
+        let len = d[0].hypot(d[1]);
+        let along = |p: P| ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len;
+        let off = ((p[0] - a[0]) * d[1] - (p[1] - a[1]) * d[0]) / len;
+        assert!(off.abs() < 1e-9, "{p:?} is off the edge by {off}");
+        let s = at(0.125, 0.25);
+        assert!((along(p) - along(s)).abs() < 1e-9, "at {} along, its surface point at {}", along(p), along(s));
+        assert!(along(p) - len / 2.0 > 0.2, "slid only {} from the edge's middle", along(p) - len / 2.0);
+    }
+
     /// The 128 px square with its top-left corner pulled out to (48, 48), as a full mesh.
     fn corner_out() -> impl Fn(f64, f64) -> P {
         corner_out_by(48.0)
@@ -959,9 +1004,10 @@ mod tests {
                 for (k, q) in m.uv.iter().enumerate() {
                     if (q[0] - u).abs() < 1e-12 && q[1] > c[2] + 1e-9 && q[1] < c[3] - 1e-9 {
                         let (a, b) = (find(u, c[2]).expect("top"), find(u, c[3]).expect("bottom"));
-                        let s = (q[1] - c[2]) / (c[3] - c[2]);
-                        let chord = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s];
-                        assert!((m.pos[k][0] - chord[0]).abs() < 1e-9 && (m.pos[k][1] - chord[1]).abs() < 1e-9, "{q:?} off its side's chord");
+                        let (d, e) = ([b[0] - a[0], b[1] - a[1]], [m.pos[k][0] - a[0], m.pos[k][1] - a[1]]);
+                        let off = (e[0] * d[1] - e[1] * d[0]) / d[0].hypot(d[1]);
+                        let s = (e[0] * d[0] + e[1] * d[1]) / (d[0] * d[0] + d[1] * d[1]);
+                        assert!(off.abs() < 1e-9 && (0.0..=1.0).contains(&s), "{q:?} off its side's chord ({off}, {s})");
                         checked += 1;
                     }
                 }
