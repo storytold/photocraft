@@ -1497,3 +1497,6 @@ mod hand_menu_entries_tests;
 
 #[cfg(test)]
 mod pen_free_transform_label_tests;
+
+#[cfg(test)]
+mod make_selection_dialog_tests;
