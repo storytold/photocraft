@@ -163,9 +163,12 @@ fn add_anchor(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete_anchor(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.deleteAnchor";
     let k = knot(CMD, p)?;
+    // A saved path may lose its last anchor and stay listed, empty; the Work Path, a shape's path,
+    // a vector mask and a Type Path keep refusing it.
+    let saved = p.get("name").and_then(Value::as_str).is_some_and(|n| n != "layer" && !crate::vector_cmds::is_work(Some(n)));
     let mut removed = false;
     let mut r = edit_path(s, CMD, p, "Delete Anchor Point", |path| {
-        removed = edit::delete_anchor(path, k)?;
+        removed = if saved { edit::delete_anchor_allow_empty(path, k)? } else { edit::delete_anchor(path, k)? };
         Ok(())
     })?;
     if let Some(o) = r.as_object_mut() {
@@ -279,7 +282,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.deleteAnchor",
             "Delete Anchor Point",
-            r#""subpath":i,"knot":j (its neighbours are joined, keeping their handles; a subpath's last anchor removes the subpath; the path's only anchor is refused) (the result also has subpathRemoved:bool)"#.into(),
+            r#""subpath":i,"knot":j (its neighbours are joined, keeping their handles; a subpath's last anchor removes the subpath; the path's only anchor empties a saved path and is refused elsewhere) (the result also has subpathRemoved:bool)"#.into(),
             delete_anchor,
         ),
         spec(
