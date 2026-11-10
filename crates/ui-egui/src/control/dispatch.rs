@@ -86,6 +86,7 @@ fn mode_menu_choose(app: &mut PhotocraftApp, ctx: &egui::Context, label: &str) -
     ok(json!({"choice": label, "brushPicker": app.ui.brush_picker.is_some()}))
 }
 
+/// `engine.execute` and `ui.menu.invoke`: run command `command` (or `id`) with `params`, as the menu would or, for `engine.execute`, directly.
 fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let Some(id) = str_param(p, "command").or(str_param(p, "id")) else { return err("missing `command`") };
@@ -117,6 +118,8 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
     // result). `ui.menu.invoke` behaves like a menu click, so it may open the dialog.
     if req.method == "engine.execute" && photocraft_engine::commands::find(id).is_some() {
         return run_waiting(app, wait, |app| {
+            // These bypass `menus::invoke`: a Type box drag in progress applies its box first.
+            crate::type_box_preview::end_drag(app);
             let previous = std::mem::replace(&mut app.programmatic_playback, true);
             let result = app.run(id, params);
             app.programmatic_playback = previous;
@@ -1540,6 +1543,7 @@ fn forward_pointer_event(app: &mut PhotocraftApp, g: &PointerGesture, s: Pointer
 
 // ---- the application: open, save, quit ----
 
+/// The application-level control methods: open, save and quit.
 fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Option<Outcome> {
     let p = &req.params;
     Some(match req.method.as_str() {
@@ -1554,7 +1558,11 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
         "app.save" => match crate::FormatChoices::from_params(p, "app.save") {
             Ok(choices) => {
                 let path = str_param(p, "path").map(str::to_string);
-                run_waiting(app, wait_param(p), move |app| app.save_automation_with(path, choices))
+                run_waiting(app, wait_param(p), move |app| {
+                    // Saving bypasses `menus::invoke`: a Type box drag in progress applies its box first.
+                    crate::type_box_preview::end_drag(app);
+                    app.save_automation_with(path, choices)
+                })
             }
             Err(e) => err(e),
         },
@@ -1577,12 +1585,17 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
         Some(read) => read(path),
         None => Err("automation read authority is not configured".into()),
     };
-    wrap(opened.and_then(|(name, bytes)| {
+    wrap(opened.and_then(|crate::AutomationReadResult { name, bytes, save_path }| {
         let name = app.open_name(&name);
         let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);
+            if let Some(state) = app.session.active_mut()
+                && state.path.is_some()
+            {
+                state.path = save_path;
+            }
         }
         Ok(json!({"path": path, "name": name, "warnings": warnings}))
     }))
