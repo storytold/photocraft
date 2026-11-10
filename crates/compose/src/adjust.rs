@@ -388,10 +388,11 @@ mod lookup_tests {
         assert!(selective_color([1.0; 3], false, &w)[2] < 0.6);
     }
 
-    /// Issue #11409: the Black slider adds the same black percentage to every ink, so on a neutral
-    /// it can only darken, never tint. Every grey through Whites + Neutrals + Blacks at any Black
-    /// value, in both methods, keeps R = G = B. (Every per-range shift depends only on the channel's
-    /// own value and the range's Black, which are the same on all three channels of a grey.)
+    /// Issue #11409: the Black slider moves every channel by the same rule, so on a neutral it can
+    /// only darken or lighten, never tint. Every grey through Whites + Neutrals + Blacks at any
+    /// Black value, in both methods, keeps R = G = B. (Every per-range shift depends only on the
+    /// channel's own value and the range's Black, which are the same on all three channels of a
+    /// grey.)
     #[test]
     fn selective_color_black_slider_keeps_greys_neutral() {
         for k in [-100.0f32, -50.0, 50.0, 100.0] {
@@ -410,9 +411,11 @@ mod lookup_tests {
     }
 
     /// Issue #11409, the report's exact neutral cases: mid grey 128 with Black +100 on Whites,
-    /// Neutrals and Blacks. Absolute: shift = 1 × min(1, 2 × 128/255) = 1 on every channel, and the
-    /// achromatic weights sum to 1 (whites 0.0039 + neutrals 0.9961), so 128 → 0, a neutral black.
-    /// Relative: shift = 1 × ink = 127/255 on every channel, so 128 → 1. No cast either way.
+    /// Neutrals and Blacks. Absolute: each range moves the channel down by 1, clipped at 0, so the
+    /// shift is the whole channel, and the achromatic weights sum to 1 (whites 0.0039 + neutrals
+    /// 0.9961), so 128 → 0, a neutral black (reference: 0). Relative: the shift is 1 × ink =
+    /// 127/255, so 128 → 1; the reference measured 0.0078 (2/255), one level away. No cast
+    /// either way.
     #[test]
     fn selective_color_black_plus_100_on_mid_grey() {
         let mut adj = [[0.0f32; 4]; 9];
@@ -427,11 +430,12 @@ mod lookup_tests {
         assert_eq!(abs, [0.0; 3]);
         let rel = selective_color([g; 3], true, &adj).map(|v| v * 255.0);
         for v in rel {
-            assert!((v - 1.0).abs() < 1e-3, "{rel:?}");
+            assert!((v - 0.0078 * 255.0).abs() <= 1.0, "{rel:?}");
         }
-        // Black alone is, on a grey, the same as equal cyan, magenta and yellow: Black +50 on
-        // Neutrals darkens grey 64 to 32 on every channel, exactly the measured Neutrals Cyan +50
-        // case of `absolute_selective_color_matches_photoshop` (64 → 32, now on all three).
+        // At +50, Black on a grey matches equal cyan, magenta and yellow (both stop at the
+        // channel): Black +50 on Neutrals darkens grey 64 to 32 on every channel, like the measured
+        // Neutrals Cyan +50 case of `absolute_selective_color_matches_photoshop` (64 → 32, now on
+        // all three; reference: 32).
         let mut n = [[0.0f32; 4]; 9];
         n[7][3] = 50.0;
         let o = selective_color([64.0 / 255.0; 3], false, &n).map(|v| v * 255.0);
@@ -452,10 +456,10 @@ mod lookup_tests {
 
     /// Issue #11409, the report's exact chromatic cases: each pure primary and secondary through
     /// its own range at Black +100. Its weight in that range is 1 and in every other range 0.
-    /// Absolute: the shift on a channel at 1 is 1 × min(1, 2 × 1) = 1 and on a channel at 0 is
-    /// 1 × min(1, 0) = 0, so every one goes to black (0, 0, 0), not to a grey at its luminance.
-    /// Relative: the shift is 1 × ink, which is 0 on the channels at 1 and lands on channels already
-    /// at 0, so nothing changes (what the report saw as "does nothing").
+    /// Absolute: each channel moves down by 1, clipped at 0, so every one goes to black (0, 0, 0),
+    /// not to a grey at its luminance. Relative: the move is 1 × ink, which is 0 on the channels
+    /// at 1 and clips on channels already at 0, so nothing changes (what the report saw as "does
+    /// nothing"). The reference measured both, in 8- and 16-bit.
     #[test]
     fn selective_color_black_plus_100_on_primaries() {
         let cases: [(usize, [f32; 3]); 6] =
@@ -472,69 +476,117 @@ mod lookup_tests {
         }
     }
 
+    /// One 8-bit level: the tolerance of the #11409 reference measurements below.
+    const LEVEL: f32 = 1.0 / 255.0;
+
+    /// `selective_color(c)` is within `tol` of the reference `want` on every channel.
+    #[track_caller]
+    fn selective_near(c: [f32; 3], relative: bool, adj: &[[f32; 4]; 9], want: [f32; 3], tol: f32) {
+        let got = selective_color(c, relative, adj);
+        for i in 0..3 {
+            assert!((got[i] - want[i]).abs() <= tol, "{c:?} relative {relative}: {got:?} vs reference {want:?}");
+        }
+    }
+
+    /// Black on every range of one kind: `colours` on the six colour ranges, `achromatic` on
+    /// Whites, Neutrals and Blacks.
+    fn black_matrix(colours: f32, achromatic: f32) -> [[f32; 4]; 9] {
+        let mut adj = [[0.0f32; 4]; 9];
+        for (r, row) in adj.iter_mut().enumerate() {
+            row[3] = if r < 6 { colours } else { achromatic };
+        }
+        adj
+    }
+
     /// Relative Black on a nonbinary colour: the pure primaries above are unchanged in
     /// Relative mode, and would stay unchanged even if Relative Black stopped affecting
-    /// chromatic ranges at all. A nonbinary red (ink on every channel) does move: Reds
-    /// Black +100 shifts each channel by its own ink, so 0.9 -> 0.82 and the 0.1 channels
-    /// are driven to 0.
+    /// chromatic ranges at all. A nonbinary red (ink on every channel) does move. Reds
+    /// Black +100 moves each channel down by its own ink, clipped at 0, mixed in by the Reds
+    /// weight 0.8: red 230 → 0.82, and the 26 channels drop to 0.02, not 0. Reference (#11409,
+    /// 16-bit): (0.8206, 0.02, 0.02).
     #[test]
     fn selective_color_relative_black_on_nonbinary_red() {
         let mut adj = [[0.0f32; 4]; 9];
         adj[0][3] = 100.0;
-        let got = selective_color([0.9, 0.1, 0.1], true, &adj);
-        for (actual, expected) in got.iter().zip([0.82f32, 0.0, 0.0]) {
-            assert!((*actual - expected).abs() < 1e-6, "{got:?}");
-        }
+        let c = [230.0 / 255.0, 26.0 / 255.0, 26.0 / 255.0];
+        selective_near(c, true, &adj, [0.8206, 0.02, 0.02], LEVEL);
+        assert!(selective_color(c, true, &adj)[1] > 0.0, "Relative Black drove a 0.1 channel to 0");
     }
 
     /// The retouchers' saturation map built from Selective Color (Absolute; Black +100 on the six
     /// colour ranges, -100 on Whites, Neutrals and Blacks) maps pure red and blue to black and
-    /// mid-grey to white. Mixed colours can remain coloured.
+    /// mid-grey to white. Every colour lands on the exact grey 1 − (max − min): the colour ranges
+    /// scale it by 1 − their weight (which sums to max − min) and the achromatic ranges lift it
+    /// towards white by the rest. Reference (#11409): every case below.
     #[test]
     fn selective_color_saturation_map_recipe() {
-        let mut adj = [[0.0f32; 4]; 9];
-        for (r, row) in adj.iter_mut().enumerate() {
-            row[3] = if r < 6 { 100.0 } else { -100.0 };
-        }
+        let adj = black_matrix(100.0, -100.0);
         assert_eq!(selective_color([1.0, 0.0, 0.0], false, &adj), [0.0; 3]);
         assert_eq!(selective_color([0.0, 0.0, 1.0], false, &adj), [0.0; 3]);
-        assert_eq!(selective_color([128.0 / 255.0; 3], false, &adj), [1.0; 3]);
-        // A mixed colour stays coloured under the recipe, not monochrome: this pins that
-        // the recipe is not a grayscale conversion, which the three assertions above
-        // alone would also satisfy.
-        let mixed = selective_color([0.9, 0.8, 0.7], false, &adj);
-        let expected = [0.86, 0.92, 0.98];
-        for i in 0..3 {
-            assert!((mixed[i] - expected[i]).abs() < 1e-5, "{mixed:?}");
-        }
+        // Exact in real arithmetic; the f32 weights leave a ~2e-7 residue on mid-grey.
+        selective_near([128.0 / 255.0; 3], false, &adj, [1.0; 3], 1e-6);
+        selective_near([0.9, 0.8, 0.7], false, &adj, [0.8; 3], 1e-5);
+        selective_near([0.2, 0.6, 0.3], false, &adj, [0.6; 3], 1e-5);
+        selective_near([0.9, 0.1, 0.1], false, &adj, [0.2; 3], 1e-5);
     }
 
-    /// The #11409 reporter's exact recipe, pinned separately from the characterizations
-    /// above (raised in review on PR #11644): Absolute mode, Black -100 on all six
-    /// chromatic ranges and +100 on Whites, Neutrals and Blacks, applied together.
-    /// This pins THIS engine's outputs for that matrix — near-neutral results with
-    /// small residual chroma on some inputs. Photoshop's outputs for the same matrix
-    /// are unmeasured, so this is a characterization, not a parity claim.
+    /// The #11409 reporter's exact recipe (raised in review on PR #11644): Absolute mode,
+    /// Black -100 on all six chromatic ranges and +100 on Whites, Neutrals and Blacks,
+    /// applied together. The reference returns the exact neutral grey max − min for every
+    /// input (maintainer's measurements on #11409, 16-bit).
     #[test]
     fn selective_color_reporter_matrix_from_11409() {
-        let mut adj = [[0.0f32; 4]; 9];
-        for (r, row) in adj.iter_mut().enumerate() {
-            row[3] = if r < 6 { -100.0 } else { 100.0 };
-        }
-        let approx = |c: [f32; 3], expected: [f32; 3]| {
-            let got = selective_color(c, false, &adj);
-            for i in 0..3 {
-                assert!((got[i] - expected[i]).abs() < 1e-5, "{c:?} -> {got:?}");
-            }
-        };
+        let adj = black_matrix(-100.0, 100.0);
         // Exact neutral landings.
         assert_eq!(selective_color([1.0, 0.0, 0.0], false, &adj), [1.0; 3]);
         assert_eq!(selective_color([0.25, 0.5, 0.75], false, &adj), [0.5; 3]);
-        assert_eq!(selective_color([128.0 / 255.0; 3], false, &adj), [0.0; 3]);
-        approx([0.9, 0.1, 0.1], [0.86; 3]);
-        // Residual chroma remains: the channels converge but do not meet.
-        approx([0.9, 0.8, 0.7], [0.14, 0.08, 0.02]);
-        approx([0.2, 0.6, 0.3], [0.36, 0.32, 0.34]);
+        // Exact in real arithmetic; the f32 weights leave a ~2e-7 residue on mid-grey.
+        selective_near([128.0 / 255.0; 3], false, &adj, [0.0; 3], 1e-6);
+        selective_near([0.9, 0.1, 0.1], false, &adj, [0.8; 3], 1e-5);
+        // Mixed colours meet on the grey too: no residual chroma.
+        selective_near([0.9, 0.8, 0.7], false, &adj, [0.2; 3], 1e-5);
+        selective_near([0.2, 0.6, 0.3], false, &adj, [0.4; 3], 1e-5);
+    }
+
+    /// The same reporter matrix in Relative mode, against the reference's 16-bit outputs
+    /// (#11409). Relative greys sit up to one level darker than the reference (128: 1/255 vs
+    /// 0.0078), so the tolerance is one level.
+    #[test]
+    fn selective_color_reporter_matrix_relative_from_11409() {
+        let adj = black_matrix(-100.0, 100.0);
+        for c in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
+            selective_near(c, true, &adj, [1.0; 3], LEVEL);
+        }
+        selective_near([0.25, 0.5, 0.75], true, &adj, [0.5, 0.5019, 0.751], LEVEL);
+        for (grey, want) in [(128u8, 0.0078f32), (192, 0.5078), (240, 0.8828), (64, 0.0), (16, 0.0)] {
+            selective_near([f32::from(grey) / 255.0; 3], true, &adj, [want; 3], LEVEL);
+        }
+        selective_near([0.9, 0.1, 0.1], true, &adj, [0.9601, 0.8, 0.8], LEVEL);
+        selective_near([0.9, 0.8, 0.7], true, &adj, [0.8406, 0.6812, 0.5219], LEVEL);
+        selective_near([0.2, 0.6, 0.3], true, &adj, [0.4, 0.5219, 0.4], LEVEL);
+    }
+
+    /// Absolute Black at +100 scales every channel by 1 − the colour's weight in the range, and at
+    /// +50 on channels above 0.5 it subtracts evenly: each range moves the channel down by Black,
+    /// stopping at 0. Reference (#11409, 16-bit): every case below.
+    #[test]
+    fn selective_color_absolute_black_scales_or_subtracts() {
+        let one = |range: usize, k: f32| {
+            let mut adj = [[0.0f32; 4]; 9];
+            adj[range][3] = k;
+            adj
+        };
+        // Single colour range at +100: × (1 − weight).
+        selective_near([0.9, 0.1, 0.1], false, &one(0, 100.0), [0.18, 0.02, 0.02], 1e-5);
+        selective_near([0.9, 0.8, 0.7], false, &one(0, 100.0), [0.81, 0.72, 0.63], 1e-5);
+        selective_near([0.2, 0.6, 0.3], false, &one(2, 100.0), [0.14, 0.42, 0.21], 1e-5);
+        selective_near([0.25, 0.5, 0.75], false, &one(4, 100.0), [0.1875, 0.375, 0.5625], 1e-5);
+        // Whites + Neutrals + Blacks together at +100: × (1 − their summed weight).
+        let achromatic = black_matrix(0.0, 100.0);
+        selective_near([0.9, 0.8, 0.7], false, &achromatic, [0.18, 0.16, 0.14], 1e-5);
+        selective_near([0.2, 0.6, 0.3], false, &achromatic, [0.08, 0.24, 0.12], 1e-5);
+        // Neutrals +50 alone on channels above 0.5: each loses 0.4 × 0.5.
+        selective_near([0.9, 0.8, 0.7], false, &one(7, 50.0), [0.6992, 0.5992, 0.4992], LEVEL);
     }
 
     #[test]

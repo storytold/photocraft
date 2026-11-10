@@ -3154,9 +3154,8 @@ fn float_curves_extend_past_the_unit_range_like_photoshop() {
 /// layer as well as the direct function (PR #11644 review): Absolute mode, Black -100 on
 /// all six chromatic ranges and +100 on Whites, Neutrals and Blacks. The function-level
 /// pins in adjust.rs cannot catch a regression in how a layer applies the adjustment, so
-/// the characterized outputs are asserted again on the rendered route: near-neutral
-/// landings, with small residual chroma on the mixed colours. Photoshop's outputs for
-/// the same matrix are unmeasured — this characterizes our route, not parity.
+/// the outputs are asserted again on the rendered route: the exact grey max − min that
+/// the reference returned for each input (maintainer's measurements on #11409).
 #[test]
 fn selective_color_reporter_matrix_through_an_adjustment_layer() {
     let mut adjustments = [[0.0f32; 4]; 9];
@@ -3165,7 +3164,7 @@ fn selective_color_reporter_matrix_through_an_adjustment_layer() {
     }
     let adj = Adjustment::SelectiveColor { relative: false, adjustments };
     let input = Buffer { rect: Rect::new(0, 0, 3, 1), px: vec![[0.9, 0.8, 0.7, 1.0], [0.2, 0.6, 0.3, 1.0], [1.0, 0.0, 0.0, 1.0]] };
-    let want = [[0.14, 0.08, 0.02], [0.36, 0.32, 0.34], [1.0, 1.0, 1.0]];
+    let want = [[0.2, 0.2, 0.2], [0.4, 0.4, 0.4], [1.0, 1.0, 1.0]];
     let check = |got: &Buffer, what: &str| {
         for (p, w) in got.px.iter().zip(want) {
             for i in 0..3 {
