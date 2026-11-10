@@ -1539,8 +1539,8 @@ fn named_red_eye_target_does_not_bypass_channel_protection_on_the_active_layer()
     .unwrap();
     s.execute("channel.target", json!({"colors":[1,2]})).unwrap();
     let before = surface(&s);
-    let error = s.execute("paint.redEye", json!({"x":32,"y":32,"layer":"other"})).unwrap_err();
-    assert!(error.to_string().contains("no red-eye pixels"));
+    let result = s.execute("paint.redEye", json!({"x":32,"y":32,"layer":"other"})).unwrap();
+    assert_eq!(result["pixels"], 0, "{result}");
     assert!(surface(&s) == before);
 }
 
