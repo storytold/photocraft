@@ -66,6 +66,9 @@ impl PhotocraftApp {
         self.drain_control(ctx);
         native_menu::run(self, ctx);
         view_cmds::leave_full_screen_without_document(self, ctx);
+        // A box drag that ended without a release reaching the Type tool keeps its box, before
+        // the commit below can end the edit.
+        crate::type_box_preview::settle(self);
         // Switching tools commits, also between the Type and Type Mask tools.
         if self.ui.text_edit.as_ref().is_some_and(|ed| !self.ui.tool.is_type() || ed.mask != self.ui.tool.is_type_mask()) {
             type_tool::commit(self);
@@ -297,6 +300,9 @@ impl PhotocraftApp {
         let home = self.home_screen_up();
         if ((chrome && self.ui.panels.options_bar) || tabbed_in) && !home {
             panels::options_bar(self, ui);
+        } else {
+            // Its Fill help modal is gone with the bar: do not let a stale flag hold the crop's keys.
+            panels::options_bar::close_fill_help(ui.ctx());
         }
         if chrome && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);

@@ -87,8 +87,8 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
     if live_retouch_command(d.tool).is_some() || crate::retouch_ui::dab_params(app, d.tool).is_some() || d.tool == Tool::ColorReplacement {
         app.live_stroke = None;
     }
-    let finished =
-        crate::eraser_ui::finish_stroke(app, d.tool, &d.points, d.line) || crate::retouch_ui::finish_stroke(app, d.tool, &d.points, d.modifiers, d.line);
+    let finished = crate::eraser_ui::finish_stroke(app, d.tool, &d.points, d.line)
+        || crate::retouch_ui::finish_stroke_with(app, d.tool, &d.points, d.modifiers, d.line, d.history_params.clone());
     app.session.clear_live_stroke();
     if finished {
         return;

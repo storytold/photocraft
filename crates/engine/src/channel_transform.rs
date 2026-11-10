@@ -97,6 +97,29 @@ pub(crate) fn isolated_job(id: &str, p: &Value) -> bool {
             ))
 }
 
+/// Presets also follow a vector-mask target, which keeps its path-transform workflow.
+/// Other geometric commands retain their scalar resolver and reject a vector-mask string.
+pub(crate) fn command_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
+    let vector = crate::channel_cmds::follows_vector_mask_target(id)
+        && (p.get("target").and_then(Value::as_str) == Some("vectorMask")
+            || (p.get("target").is_none()
+                && p.get("layer").is_none_or(Value::is_null)
+                && p.get("layers").is_none_or(Value::is_null)
+                && s.active().is_some_and(|st| st.channel_view.target == ChannelTarget::VectorMask)));
+    if !vector {
+        return params(s, p);
+    }
+    if p.get("layers").is_some_and(|v| !v.is_null()) {
+        return Err(bad("a vector-mask target cannot be combined with layers"));
+    }
+    // Reuse object and explicit-layer validation without passing a path target to scalar code.
+    let mut pixels = if p.is_null() { json!({}) } else { p.clone() };
+    pixels.as_object_mut().ok_or_else(|| bad("params must be an object"))?.insert("target".into(), json!("pixels"));
+    let mut out = params(s, &pixels)?;
+    out["target"] = json!("vectorMask");
+    Ok(out)
+}
+
 /// Resolve once, without selecting a channel (which would also change its eyes).
 pub fn params(s: &Session, p: &Value) -> Result<Value> {
     let mut out = if p.is_null() { json!({}) } else { p.clone() };

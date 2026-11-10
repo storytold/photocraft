@@ -13,7 +13,7 @@ impl PhotocraftApp {
     /// ⌘I then inverts the mask, as in Photoshop (#780). A targeted alpha channel or Quick Mask
     /// mode wins, as the engine routes those itself.
     pub fn with_mask_target(&self, id: &str, params: Value) -> Value {
-        if (id.starts_with("edit.transform") && params.get("layer").is_some())
+        if (id.starts_with("edit.transform") && (params.get("layer").is_some_and(|v| !v.is_null()) || params.get("layers").is_some_and(|v| !v.is_null())))
             || !photocraft_engine::channel_cmds::follows_target(id)
             || params.get("target").is_some()
         {
@@ -23,6 +23,10 @@ impl PhotocraftApp {
         // Edit › Transform, Apply Image and the dialog filters act on the smart object.
         let target = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
             "filterMask"
+        } else if self.vector_mask_targeted() && photocraft_engine::channel_cmds::follows_vector_mask_target(id) {
+            // The Layers panel targets a vector mask: the Rotate/Flip presets turn its path
+            // alone, whether it is linked or not (#12283).
+            "vectorMask"
         } else if self.layer_mask_targeted() {
             "mask"
         } else {
@@ -47,6 +51,17 @@ impl PhotocraftApp {
                 && photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| v.filter)))
             && st.doc.quick_mask.is_none();
         composite && st.doc.layer(id).is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if !sm.smart_filters.is_empty()))
+    }
+
+    /// The active layer's vector mask is the Layers panel's target, and no alpha channel or Quick
+    /// Mask takes over (the engine routes those itself).
+    pub fn vector_mask_targeted(&self) -> bool {
+        if !self.ui.vector_mask_target {
+            return false;
+        }
+        let Some(st) = self.session.active() else { return false };
+        let alpha = matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Alpha(i) if i < st.doc.channels.len());
+        !alpha && st.doc.quick_mask.is_none()
     }
 
     /// The active layer's mask is what pixel commands edit: the Layers panel targets it, the layer

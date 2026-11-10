@@ -104,7 +104,7 @@ impl Session {
             return Err(EngineError::Disabled(id.into(), reason.into()));
         }
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
-        let run_params = if channel_transform::geometric(id) { channel_transform::params(self, &run_params)? } else { run_params };
+        let run_params = if channel_transform::geometric(id) { channel_transform::command_params(self, id, &run_params)? } else { run_params };
         if let Some(why) = color_channels::refusal(self, id, &run_params) {
             return Err(EngineError::Disabled(id.into(), why));
         }
@@ -143,7 +143,7 @@ impl Session {
         let Some(s) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
         let params = channel_cmds::inject_target(self, id, params.clone());
         let params = if channel_transform::geometric(id) {
-            match channel_transform::params(self, &params) {
+            match channel_transform::command_params(self, id, &params) {
                 Ok(p) => p,
                 Err(e) => return Some(e.to_string()),
             }
@@ -318,7 +318,9 @@ impl Session {
         // state: not a history step. A mapped edit (the four above) gives the exact map; any other
         // size change falls back to dropping whatever is now outside.
         let mut samplers_removed = 0;
-        if let Some(a) = sampler_map {
+        // The points sit on pixel centres (#11725), so they follow the geometry map, the one the
+        // symmetry gets: `sampler_map` is that map shifted for pixel indices (a flip or rotation).
+        if let Some(a) = sampler_map.and(symmetry_map) {
             let bounds = st.doc.bounds();
             let n = st.color_samplers.len();
             st.color_samplers.retain_mut(|p| {
