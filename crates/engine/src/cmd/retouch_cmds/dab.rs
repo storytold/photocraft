@@ -265,9 +265,26 @@ impl DabTool {
     }
 }
 
+/// The reference application refuses a Dodge stroke in Indexed Color and Bitmap documents, with
+/// its alert's words (#12686); other modes (Multichannel and Duotone were not measured) tone as
+/// before. The live stroke checks this too, so it previews nothing there.
+fn mode_refusal(s: &Session, cmd: &str) -> Result<()> {
+    let tool = match cmd {
+        "paint.dodge" => "dodge tool",
+        _ => return Ok(()),
+    };
+    let why = match s.active().map(|st| st.doc.mode) {
+        Some(photocraft_color::ColorMode::Indexed) => "it does not work with Indexed Color images (convert image to RGB Color mode to edit).",
+        Some(photocraft_color::ColorMode::Bitmap) => "it does not work with Bitmap images (convert image to Grayscale mode to edit).",
+        _ => return Ok(()),
+    };
+    Err(EngineError::Other(format!("Could not use the {tool} because {why}")))
+}
+
 /// Dodge, Burn, Sponge, Blur, Sharpen and Smudge: each dab edits a working copy in order
 /// (`apply_dab_stroke`). Blur, Sharpen and Smudge can sample all layers.
 pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    mode_refusal(s, cmd)?;
     let (stroke, id) = parse_brush(s, p, cmd)?;
     let (tool, label) = DabTool::parse(s, cmd, p, &stroke)?;
     let all = matches!(tool, DabTool::Focus { .. } | DabTool::Smudge { .. }) && sample_all_layers(p);
@@ -418,6 +435,7 @@ pub struct LiveDab {
 impl LiveDab {
     /// Start a live stroke of `cmd` from its params; their `points` are rendered.
     pub fn begin(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
+        mode_refusal(s, cmd)?;
         has_pixel_layer(s).map_err(EngineError::Other)?;
         if sample_all_layers(p) {
             return Err(bad(cmd, "Sample All Layers strokes aren't previewed live"));
@@ -673,3 +691,7 @@ impl LiveDab {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "dodge_refuses_indexed_tests.rs"]
+mod dodge_refuses_indexed_tests;

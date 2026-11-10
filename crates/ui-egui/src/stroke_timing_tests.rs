@@ -417,16 +417,18 @@ fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
 #[test]
 fn releasing_a_clone_stamp_stroke_commits_what_a_replay_paints() {
     let setup = |run: &mut dyn FnMut(&str, Value)| {
-        run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.4}}));
+        // The whole tip that differs from the default brush, as a replay starts from that.
+        run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.4, "spacing": 0.25, "smoothing": {"amount": 0.0}}}));
         run("paint.stroke", json!({"points": [[10, 20], [190, 80]], "size": 30, "hardness": 0.5, "color": "#2060c0"}));
         run("cloneSource.set", json!({"source": [40, 30]}));
     };
     let mut h = harness();
+    // Picked first, so the brush set above is the Clone Stamp's own.
+    h.state_mut().ui.tool = Tool::CloneStamp;
+    h.run_steps(1);
     setup(&mut |id, p| {
         h.state_mut().run(id, p).unwrap();
     });
-    h.state_mut().ui.tool = Tool::CloneStamp;
-    h.run_steps(1);
     move_to(&mut h, 60.0, 50.0);
     button(&mut h, 60.0, 50.0, true);
     for (x, y) in [(80.0, 40.0), (110.0, 60.0), (140.0, 45.0), (170.0, 65.0)] {
