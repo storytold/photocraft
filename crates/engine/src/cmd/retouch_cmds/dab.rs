@@ -209,6 +209,8 @@ impl DabTool {
     /// How far around each dab the effect reads (Blur and Sharpen read a neighbourhood).
     fn neighborhood(&self) -> DabNeighborhood {
         match self {
+            // Protect Detail sharpens against its own, wider Gaussian (#12938).
+            Self::Focus { sharpen: true, protect: true, .. } => DabNeighborhood::Halo((photocraft_algo::retouch::PROTECT_DETAIL_SIGMA * 3.0).ceil() as i32 + 1),
             Self::Focus { sigma, .. } => DabNeighborhood::Halo((sigma * 3.0).ceil() as i32 + 1),
             Self::Smudge { max_size, .. } => DabNeighborhood::Smudge(Smudge::sampling_radius(*max_size)),
             _ => DabNeighborhood::Halo(0),
@@ -241,7 +243,10 @@ impl DabTool {
                             return;
                         }
                         for x in r.x0..r.x1 {
-                            let k = per_dab(fp.at(x, y) * strength, sp);
+                            // Protect Detail applies Strength once per dab, so one click at 50 %
+                            // does half of what 100 % does (#12938). Spread over the overlapping
+                            // dabs (`per_dab`), it did 7 % of it at the default 10 % spacing.
+                            let k = if sharpen && protect { fp.at(x, y) * strength } else { per_dab(fp.at(x, y) * strength, sp) };
                             if k <= 0.0 {
                                 continue;
                             }

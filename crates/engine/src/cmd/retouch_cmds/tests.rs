@@ -470,16 +470,31 @@ fn blur_reduces_local_variance_and_sharpen_increases_it() {
         s.execute("paint.blur", json!({"points": [[5, 15], [25, 15]], "size": 20, "hardness": 100, "strength": 100})).unwrap();
         assert!(var(&s, 10) < v0 * 0.5, "depth {depth}: {v0} → {}", var(&s, 10));
         assert!((var(&s, 45) - v0).abs() < 1e-3, "outside untouched");
-        // Sharpen a low-contrast checkerboard: contrast grows; Protect Detail caps it at the local range.
+        // Sharpen a low-contrast checkerboard: contrast grows, with Protect Detail too (#12938).
         let mut s = session(60, 30, depth, "rgb");
         paint_layer(&mut s, |x, y| if (x + y) % 2 == 0 { [0.45, 0.45, 0.45, 1.0] } else { [0.55, 0.55, 0.55, 1.0] });
         let v0 = var(&s, 10);
         s.execute("paint.sharpen", json!({"points": [[5, 15], [25, 15]], "size": 20, "hardness": 100, "strength": 100, "protectDetail": false})).unwrap();
         assert!(var(&s, 10) > v0 * 1.5, "depth {depth}: {v0} → {}", var(&s, 10));
-        // Pinned at 25%: Protect Detail clamps per dab, so denser dabs creep past the range.
+        // Protect Detail moves a pixel by less than 6 levels per dab; at 25 % spacing four dabs
+        // pass over each point.
         s.execute("paint.sharpen", json!({"points": [[35, 15], [55, 15]], "size": 20, "hardness": 100, "strength": 100, "spacing": 25})).unwrap();
         let hi = (10..20).flat_map(|y| (40..50).map(move |x| (x, y))).map(|(x, y)| rgba(&s, x, y)[0]).fold(0.0, f32::max);
-        assert!(hi <= 0.55 + tol(depth), "protect detail: {hi}");
+        assert!(hi > 0.55 + tol(depth) && hi <= 0.55 + 4.0 * 6.0 / 255.0 + tol(depth), "protect detail: {hi}");
+    }
+}
+
+#[test]
+fn protect_detail_click_on_a_step_follows_strength() {
+    // #12938: one 40 px hard click on a grey 96 | 160 step, Protect Detail on (the default). The
+    // reference gives x 399/400 = 90/164 at 100 % and 93/162 at 50 %; Strength applies once per dab.
+    let level = |s: &Session, x| (rgba(s, x, 20)[0] * 255.0).round() as i32;
+    for (strength, dark, light, tol) in [(100, 90, 164, 3), (50, 93, 162, 2), (1, 96, 160, 0)] {
+        let mut s = session(80, 40, 8, "rgb");
+        paint_layer(&mut s, |x, _| if x < 40 { [96.0 / 255.0, 96.0 / 255.0, 96.0 / 255.0, 1.0] } else { [160.0 / 255.0, 160.0 / 255.0, 160.0 / 255.0, 1.0] });
+        s.execute("paint.sharpen", json!({"points": [[40, 20]], "size": 40, "hardness": 100, "strength": strength})).unwrap();
+        let (d, l) = (level(&s, 39), level(&s, 40));
+        assert!((d - dark).abs() <= tol && (l - light).abs() <= tol, "{strength} %: x 399/400 = {d}/{l}, want {dark}/{light} ± {tol}");
     }
 }
 
