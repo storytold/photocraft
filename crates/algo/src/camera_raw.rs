@@ -2,6 +2,13 @@
 //!
 //! Stages, in order (each skipped when its controls are neutral, so defaults are an identity):
 //!
+//! 0. **Geometry** (Upright and the Manual Transformations), on the scene as captured, so every
+//!    later stage sees the final framing: one inverse warp ([`GeometryMap`]). Offset and Aspect
+//!    are undone first, then [`crate::lens::LensMap`] (Scale, Rotate, the Vertical / Horizontal
+//!    keystone homography) and Upright's rotation ([`upright`]); the source is sampled with a
+//!    Catmull-Rom bicubic clamped to its 2×2 neighbourhood (no ringing), colour edges extended,
+//!    and alpha warped too, so corners the warp uncovers come out transparent. The caller keeps
+//!    the layer's own alpha when there is no warp.
 //! 1. **White balance and exposure** in linear light (the document's values decoded with the sRGB
 //!    curve as a perceptual working encoding; encoding is undone exactly at the end).
 //! 2. **Dehaze**: K. He, J. Sun, X. Tang, *Single Image Haze Removal Using Dark Channel Prior*,
@@ -53,10 +60,13 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
     Ok(())
 }
 
+use crate::lens;
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
+use photocraft_geom::Rect;
 
 mod local_tone;
 mod per_pixel;
+pub mod upright;
 mod whites_blacks;
 
 pub use per_pixel::{CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, per_pixel, white_black_points};
@@ -176,6 +186,30 @@ pub struct CameraRaw {
     pub calibration_hue: [f32; 3],
     /// Red, Green and Blue Primary › Saturation: −100 (grey) … 100 (purer).
     pub calibration_sat: [f32; 3],
+    // Geometry
+    /// Upright: `off | auto | level | vertical | full | guided` (see [`upright`]). The
+    /// automatic modes find the picture's lines themselves; Guided fits `upright_guides`.
+    pub upright: String,
+    /// Guided Upright's guides (at most four), each two endpoints as fractions (`0..=1`) of the
+    /// frame before any Geometry, so they stay on the picture's lines. Guides closer to vertical
+    /// are made plumb, the others level; two or more are needed.
+    pub upright_guides: Vec<[[f32; 2]; 2]>,
+    /// Manual Transformations › Vertical, −100..=100: keystone about the centre (negative widens
+    /// the top, as [`crate::lens::LensCorrection::vertical`]).
+    pub transform_vertical: f32,
+    /// Manual Transformations › Horizontal, −100..=100 (keystone, as
+    /// [`crate::lens::LensCorrection::horizontal`]).
+    pub transform_horizontal: f32,
+    /// Degrees, −10..=10 (positive turns the picture clockwise).
+    pub transform_rotate: f32,
+    /// −100..=100: positive stretches the picture horizontally, negative vertically (up to 1.5×).
+    pub transform_aspect: f32,
+    /// Percent, 50..=150.
+    pub transform_scale: f32,
+    /// −100..=100 (percent of half the image); positive moves the picture right.
+    pub transform_offset_x: f32,
+    /// −100..=100 (percent of half the image); positive moves the picture down.
+    pub transform_offset_y: f32,
 }
 
 impl Default for CameraRaw {
@@ -235,6 +269,15 @@ impl Default for CameraRaw {
             shadow_tint: 0.0,
             calibration_hue: [0.0; 3],
             calibration_sat: [0.0; 3],
+            upright: "off".into(),
+            upright_guides: Vec::new(),
+            transform_vertical: 0.0,
+            transform_horizontal: 0.0,
+            transform_rotate: 0.0,
+            transform_aspect: 0.0,
+            transform_scale: 100.0,
+            transform_offset_x: 0.0,
+            transform_offset_y: 0.0,
         }
     }
 }
@@ -587,8 +630,12 @@ pub fn band_weights(h: f32) -> [f32; 8] {
     w
 }
 
+/// Upright modes ([`CameraRaw::upright`]).
+pub const UPRIGHT_MODES: [&str; 6] = ["off", "auto", "level", "vertical", "full", "guided"];
+
 impl CameraRaw {
-    /// Rejects malformed point curves in new settings (see [`validate_curve`]).
+    /// Rejects malformed point curves in new settings (see [`validate_curve`]) and unknown
+    /// Upright modes.
     pub fn validate(&self) -> Result<(), String> {
         for (name, curve) in [
             ("pointCurve", &self.point_curve),
@@ -598,7 +645,33 @@ impl CameraRaw {
         ] {
             validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
         }
+        if !UPRIGHT_MODES.contains(&self.upright.as_str()) {
+            return Err(format!("upright must be one of {}", UPRIGHT_MODES.join("|")));
+        }
         Ok(())
+    }
+    /// Clamps the Geometry controls into their documented ranges (a non-finite value becomes the
+    /// control's default) and drops malformed Upright guides; in-range values are left exactly as
+    /// they are. The warp applies it itself; commands apply it to untrusted params too.
+    pub fn clamp_geometry(&mut self) {
+        let d = CameraRaw::default();
+        let f = |v: f32, lo: f32, hi: f32, def: f32| if v.is_finite() { v.clamp(lo, hi) } else { def };
+        for v in [
+            &mut self.transform_vertical,
+            &mut self.transform_horizontal,
+            &mut self.transform_aspect,
+            &mut self.transform_offset_x,
+            &mut self.transform_offset_y,
+        ] {
+            *v = f(*v, -100.0, 100.0, 0.0);
+        }
+        self.upright_guides.retain(|g| g.iter().flatten().all(|v| v.is_finite()));
+        self.upright_guides.truncate(4);
+        for v in self.upright_guides.iter_mut().flatten().flatten() {
+            *v = v.clamp(0.0, 1.0);
+        }
+        self.transform_rotate = f(self.transform_rotate, -10.0, 10.0, d.transform_rotate);
+        self.transform_scale = f(self.transform_scale, 50.0, 150.0, d.transform_scale);
     }
     /// [`validate`](Self::validate) for an edit of `stored` settings: a curve left as stored is
     /// accepted, so editing another control of an older Smart Filter still works.
@@ -639,9 +712,34 @@ impl CameraRaw {
         [self.curve_highlights, self.curve_lights, self.curve_darks, self.curve_shadows].iter().all(|v| *v == 0.0)
             && [&self.point_curve, &self.point_curve_red, &self.point_curve_green, &self.point_curve_blue].iter().all(|c| is_linear(c))
     }
+    /// Upright does something: a mode other than `off`, and for Guided at least two guides.
+    pub fn upright_active(&self) -> bool {
+        match self.upright.as_str() {
+            "off" => false,
+            "guided" => self.upright_guides.len() >= 2,
+            _ => true,
+        }
+    }
+    /// Upright and the Manual Transformations (the warp). When it isn't neutral, the result's
+    /// alpha is the warped alpha: corners the warp uncovers are transparent.
+    pub fn geometry_neutral(&self) -> bool {
+        !self.upright_active()
+            && [
+                self.transform_vertical,
+                self.transform_horizontal,
+                self.transform_rotate,
+                self.transform_aspect,
+                self.transform_offset_x,
+                self.transform_offset_y,
+            ]
+            .iter()
+            .all(|v| *v == 0.0)
+            && self.transform_scale == 100.0
+    }
     /// True when every control is neutral (the filter is an identity).
     pub fn is_identity(&self) -> bool {
         self.wb_neutral()
+            && self.geometry_neutral()
             && self.calibration_neutral()
             && self.tone_neutral()
             && self.dehaze == 0.0
@@ -681,6 +779,10 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
     }
     let ps = p.pixel_scale.clamp(0.01, 1.0);
     let long = w.max(h) as f32;
+    // 0. Geometry, on the scene as captured.
+    if !p.geometry_neutral() {
+        geometry(px, w, h, p);
+    }
     // 1. White balance + exposure in linear light.
     if let Some(g) = per_pixel::gains(p) {
         par_rows(px, w, 1, |_, row| {
@@ -1104,6 +1206,157 @@ fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
     });
 }
 
+/// Catmull-Rom bicubic sample of `src` (all four channels) at pixel coordinates (`x`, `y`)
+/// (pixel centres at integers), clamped to the edges and to the range of the four nearest pixels
+/// so it never rings past them.
+fn bicubic(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> [f32; 4] {
+    let x = if x.is_finite() { x.clamp(0.0, (w - 1) as f64) } else { 0.0 };
+    let y = if y.is_finite() { y.clamp(0.0, (h - 1) as f64) } else { 0.0 };
+    let (xf, yf) = (x.floor(), y.floor());
+    let (wx, wy) = (crate::photo_util::catmull_rom((x - xf) as f32), crate::photo_util::catmull_rom((y - yf) as f32));
+    let (xi, yi) = (xf as usize, yf as usize);
+    let col = |k: usize| (xi + k).saturating_sub(1).min(w - 1);
+    let row = |k: usize| (yi + k).saturating_sub(1).min(h - 1);
+    let mut acc = [0.0f32; 4];
+    for (j, wyv) in wy.iter().enumerate() {
+        let base = row(j) * w;
+        for (i, wxv) in wx.iter().enumerate() {
+            let q = src[base + col(i)];
+            let k = wxv * wyv;
+            for c in 0..4 {
+                acc[c] += k * q[c];
+            }
+        }
+    }
+    let near = [src[row(1) * w + col(1)], src[row(1) * w + col(2)], src[row(2) * w + col(1)], src[row(2) * w + col(2)]];
+    for c in 0..4 {
+        let (lo, hi) = near.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), q| (lo.min(q[c]), hi.max(q[c])));
+        acc[c] = acc[c].clamp(lo.min(hi), hi.max(lo));
+    }
+    acc
+}
+
+/// Geometry › Upright and the Manual Transformations as one map from output
+/// pixels to source pixels for a `w × h` frame. Each output pixel undoes Offset (a shift by up to
+/// half the frame) and Aspect (a stretch about the centre), then [`lens::LensMap`] undoes Scale,
+/// Rotate and the Vertical / Horizontal keystone, then then the Upright rotation
+/// ([`upright`]); all relative to the frame, so a preview proxy warps like the full image.
+pub struct GeometryMap {
+    map: lens::LensMap,
+    c: [f64; 2],
+    stretch: [f64; 2],
+    offset: [f64; 2],
+}
+
+impl GeometryMap {
+    /// `upright` is the forward Upright homography ([`upright::homography`]) if any.
+    pub fn new(p: &CameraRaw, w: usize, h: usize, upright: Option<&crate::transform::Homography>) -> Option<GeometryMap> {
+        let (Ok(wi), Ok(hi)) = (i32::try_from(w), i32::try_from(h)) else { return None };
+        let lc = lens::LensCorrection {
+            correct_distortion: false,
+            correct_vignette: false,
+            correct_ca: false,
+            vertical: f64::from(p.transform_vertical),
+            horizontal: f64::from(p.transform_horizontal),
+            angle: f64::from(p.transform_rotate),
+            scale: f64::from(p.transform_scale),
+            ..Default::default()
+        };
+        let mut map = lens::LensMap::new(&lc, Rect::new(0, 0, wi, hi));
+        if let Some(u) = upright {
+            map = map.then_homography(u.inverse()?.0);
+        }
+        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+        let aspect = f64::from(p.transform_aspect) / 100.0;
+        let stretch = if aspect >= 0.0 { [1.0 + 0.5 * aspect, 1.0] } else { [1.0, 1.0 - 0.5 * aspect] };
+        let offset = [f64::from(p.transform_offset_x) / 100.0 * cx, f64::from(p.transform_offset_y) / 100.0 * cy];
+        Some(GeometryMap { map, c: [cx, cy], stretch, offset })
+    }
+    /// Where output point `(x, y)` (pixels) samples the source; `None` past the horizon.
+    pub fn source_of(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        let [cx, cy] = self.c;
+        let ux = (x - self.offset[0] - cx) / self.stretch[0] + cx;
+        let uy = (y - self.offset[1] - cy) / self.stretch[1] + cy;
+        self.map.sample(ux, uy).map(|s| s.p)
+    }
+    /// Where source point `(x, y)` lands in the output (Newton's method on [`Self::source_of`]);
+    /// `None` when it doesn't converge (a point the warp sends past the horizon).
+    pub fn output_of(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        let mut q = [x, y];
+        let scale = self.c[0].hypot(self.c[1]).max(1.0);
+        for _ in 0..40 {
+            let s = self.source_of(q[0], q[1])?;
+            let (ex, ey) = (s[0] - x, s[1] - y);
+            if ex.hypot(ey) < 1e-4 * scale {
+                return Some(q);
+            }
+            let e = 1e-3 * scale;
+            let sx = self.source_of(q[0] + e, q[1])?;
+            let sy = self.source_of(q[0], q[1] + e)?;
+            let (a, b, c, d) = ((sx[0] - s[0]) / e, (sy[0] - s[0]) / e, (sx[1] - s[1]) / e, (sy[1] - s[1]) / e);
+            let det = a * d - b * c;
+            if !det.is_finite() || det.abs() < 1e-12 {
+                return None;
+            }
+            q = [q[0] - (d * ex - b * ey) / det, q[1] - (-c * ex + a * ey) / det];
+            if !q.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+        }
+        None
+    }
+}
+
+/// [`GeometryMap`] over the pixels. The source is sampled with a Catmull-Rom bicubic clamped to
+/// its 2×2 neighbourhood, with colour weighted by alpha so transparent pixels don't darken the
+/// edges next to them; samples past the frame extend its edges; where the warp has no
+/// preimage (past the horizon) the edge pixel in that direction is used. Alpha is warped too and
+/// fades out past the frame, so corners the warp uncovers are transparent.
+fn geometry(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
+    let mut p = p.clone();
+    p.clamp_geometry();
+    let p = &p;
+    let up = if p.upright_active() { upright::homography(&p.upright, &p.upright_guides, px, w, h) } else { None };
+    let Some(map) = GeometryMap::new(p, w, h, up.as_ref()) else { return };
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    let src = px.to_vec();
+    let premul: Vec<[f32; 4]> = src.iter().map(|q| [q[0] * q[3], q[1] * q[3], q[2] * q[3], q[3]]).collect();
+    par_rows(px, w, 1, |y, row| {
+        for (x, q) in row.iter_mut().enumerate() {
+            let (ox, oy) = (x as f64 + 0.5, y as f64 + 0.5);
+            let at = map.source_of(ox, oy).unwrap_or([cx + (ox - cx) * 1e4, cy + (oy - cy) * 1e4]);
+            let s = bicubic(&premul, w, h, at[0] - 0.5, at[1] - 0.5);
+            let a = s[3];
+            for c in 0..3 {
+                q[c] = if a > 1e-6 { s[c] / a } else { 0.0 };
+            }
+            q[3] = bilinear_alpha(&src, w, h, at[0] - 0.5, at[1] - 0.5) * coverage(at[0], w) * coverage(at[1], h);
+        }
+    });
+}
+
+/// How much of a one-pixel footprint centred on source coordinate `v` lies inside `0..n`: 1
+/// inside, 0 beyond the edge, a half-pixel ramp across it (an antialiased frame edge).
+fn coverage(v: f64, n: usize) -> f32 {
+    if !v.is_finite() {
+        return 0.0;
+    }
+    ((v + 0.5).min(n as f64 - v + 0.5)).clamp(0.0, 1.0) as f32
+}
+
+/// The source's alpha at `(x, y)` (pixel-centre coordinates, clamped to the frame).
+fn bilinear_alpha(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> f32 {
+    let x = if x.is_finite() { x.clamp(0.0, (w - 1) as f64) } else { 0.0 };
+    let y = if y.is_finite() { y.clamp(0.0, (h - 1) as f64) } else { 0.0 };
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
+    let a = |xx: usize, yy: usize| src.get(yy * w + xx).map_or(0.0, |q| q[3]);
+    let top = a(x0, y0) + (a(x1, y0) - a(x0, y0)) * fx;
+    let bottom = a(x0, y1) + (a(x1, y1) - a(x0, y1)) * fx;
+    top + (bottom - top) * fy
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1402,5 +1655,178 @@ mod tests {
         let mut a = vec![[2.0f32, 1.5, 0.5, 1.0]; 16];
         develop(&mut a, 4, 4, &CameraRaw { exposure: 0.5, ..Default::default() }, true);
         assert!(a[0][0] > 2.0);
+    }
+
+    fn run(src: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) -> Vec<[f32; 4]> {
+        let mut a = src.to_vec();
+        develop(&mut a, w, h, p, false);
+        a
+    }
+
+    /// R and G encode where a pixel came from: x and y as fractions of the frame.
+    fn coords(w: usize, h: usize) -> Vec<[f32; 4]> {
+        (0..w * h).map(|i| [((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32, 0.5, 1.0]).collect()
+    }
+
+    /// Box-downsamples by `f` (both sides multiples of `f`).
+    fn shrink(src: &[[f32; 4]], w: usize, h: usize, f: usize) -> Vec<[f32; 4]> {
+        let (sw, sh) = (w / f, h / f);
+        let mut out = vec![[0.0f32; 4]; sw * sh];
+        for y in 0..h {
+            for x in 0..w {
+                for c in 0..4 {
+                    out[(y / f) * sw + x / f][c] += src[y * w + x][c] / (f * f) as f32;
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn guided_upright_makes_the_guides_plumb_in_the_output() {
+        let (w, h) = (600usize, 400usize);
+        // Two posts leaning in toward the top, as a camera pitched up sees them.
+        let guides = vec![[[0.22f32, 0.1], [0.18, 0.9]], [[0.78, 0.1], [0.82, 0.9]]];
+        let p = CameraRaw { upright: "guided".into(), upright_guides: guides.clone(), ..Default::default() };
+        assert!(p.upright_active() && !p.is_identity());
+        let up = upright::homography(&p.upright, &p.upright_guides, &[], w, h).expect("a correction");
+        let map = GeometryMap::new(&p, w, h, Some(&up)).unwrap();
+        for g in &guides {
+            let [a, b] = g.map(|q| map.output_of(f64::from(q[0]) * w as f64, f64::from(q[1]) * h as f64).unwrap());
+            assert!((a[0] - b[0]).abs() < 0.5, "{a:?} {b:?}");
+            // And the round trip lands back on the guide.
+            let s = map.source_of(a[0], a[1]).unwrap();
+            assert!((s[0] - f64::from(g[0][0]) * w as f64).abs() < 0.01 && (s[1] - f64::from(g[0][1]) * h as f64).abs() < 0.01);
+        }
+        let base = img(60, 40);
+        assert_ne!(run(&base, 60, 40, &p), base);
+    }
+
+    /// Guides that lean the same way (a camera rolled, not pitched) are mostly a rotation, which
+    /// lives in the homography's top rows: the warp must apply those, not only its last row.
+    #[test]
+    fn guided_upright_rotates_a_rolled_picture() {
+        let (w, h) = (600usize, 400usize);
+        let guides = vec![[[0.49f32, 0.51], [0.50, 0.74]], [[0.67, 0.48], [0.69, 0.75]]];
+        let p = CameraRaw { upright: "guided".into(), upright_guides: guides.clone(), ..Default::default() };
+        let up = upright::homography(&p.upright, &p.upright_guides, &[], w, h).expect("a correction");
+        let map = GeometryMap::new(&p, w, h, Some(&up)).unwrap();
+        for g in &guides {
+            let [a, b] = g.map(|q| map.output_of(f64::from(q[0]) * w as f64, f64::from(q[1]) * h as f64).unwrap());
+            let lean = (b[0] - a[0]).atan2(b[1] - a[1]).to_degrees();
+            assert!(lean.abs() < 0.2, "{lean}° off plumb");
+        }
+    }
+
+    #[test]
+    fn a_warp_leaves_the_corners_it_uncovers_transparent() {
+        let (w, h) = (60, 40);
+        let base = img(w, h);
+        let out = run(&base, w, h, &CameraRaw { transform_rotate: 8.0, ..Default::default() });
+        assert!(out[0][3] < 0.01 && out[w * h - 1][3] < 0.01, "corners {:?} {:?}", out[0], out[w * h - 1]);
+        assert_eq!(out[(h / 2) * w + w / 2][3], 1.0, "the middle stays opaque");
+        // Shrinking the picture (Scale) uncovers a border all round; enlarging covers it again.
+        let small = run(&base, w, h, &CameraRaw { transform_scale: 80.0, ..Default::default() });
+        assert!(small[w / 2][3] < 0.01);
+        let big = run(&base, w, h, &CameraRaw { transform_rotate: 8.0, transform_scale: 130.0, ..Default::default() });
+        assert!(big.iter().all(|q| q[3] > 0.99));
+    }
+
+    #[test]
+    fn geometry_warps_in_the_expected_directions() {
+        let (w, h) = (80, 60);
+        let src = coords(w, h);
+        let at = |p: CameraRaw, x: usize, y: usize| run(&src, w, h, &p)[y * w + x];
+        let s = |x: usize, y: usize| src[y * w + x];
+        let d = CameraRaw::default;
+        // Offset: X + moves the picture right (the centre shows what was left of it), Y + down.
+        assert!(at(CameraRaw { transform_offset_x: 50.0, ..d() }, 40, 30)[0] < s(40, 30)[0] - 0.2);
+        assert!(at(CameraRaw { transform_offset_y: 50.0, ..d() }, 40, 30)[1] < s(40, 30)[1] - 0.2);
+        // Scale 150 % zooms in: the left edge shows content nearer the centre.
+        let z = at(CameraRaw { transform_scale: 150.0, ..d() }, 0, 30);
+        assert!(z[0] > 0.1 && (z[1] - s(0, 30)[1]).abs() < 0.02, "{z:?}");
+        // Aspect + stretches horizontally only, − vertically only.
+        let a = at(CameraRaw { transform_aspect: 60.0, ..d() }, 0, 0);
+        assert!(a[0] > s(0, 0)[0] + 0.05 && (a[1] - s(0, 0)[1]).abs() < 0.01, "{a:?}");
+        let a = at(CameraRaw { transform_aspect: -60.0, ..d() }, 0, 0);
+        assert!((a[0] - s(0, 0)[0]).abs() < 0.01 && a[1] > s(0, 0)[1] + 0.05, "{a:?}");
+        // Rotate + turns clockwise: the right side shows what was above it.
+        let r = at(CameraRaw { transform_rotate: 10.0, ..d() }, 79, 30);
+        assert!(r[1] < s(79, 30)[1] - 0.05, "{r:?}");
+        // Vertical −: the top widens (it shows a narrower span of the source than the bottom).
+        let v = run(&src, w, h, &CameraRaw { transform_vertical: -50.0, ..d() });
+        assert!(v[w - 1][0] - v[0][0] < v[w * h - 1][0] - v[(h - 1) * w][0], "top {:?} {:?}", v[0], v[w - 1]);
+        // The centre stays put under rotation, scale and keystone.
+        let c = at(CameraRaw { transform_rotate: 7.0, transform_scale: 130.0, transform_vertical: 40.0, ..d() }, 40, 30);
+        assert!((c[0] - s(40, 30)[0]).abs() < 0.02 && (c[1] - s(40, 30)[1]).abs() < 0.02, "{c:?}");
+        // Past the horizon (extreme keystone, small scale, offset) the edges extend: no NaN.
+        let far =
+            run(&src, w, h, &CameraRaw { transform_vertical: 100.0, transform_horizontal: 100.0, transform_scale: 50.0, transform_offset_x: -100.0, ..d() });
+        assert!(far.iter().all(|q| q.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))));
+    }
+
+    #[test]
+    fn geometry_matches_on_a_preview_proxy() {
+        // Geometry is relative to the frame, so a 4× proxy warps like the full image.
+        let (w, h, f) = (96, 64, 4);
+        let src = coords(w, h);
+        let p = CameraRaw {
+            transform_rotate: 6.0,
+            transform_vertical: -30.0,
+            transform_offset_x: 20.0,
+            transform_aspect: 30.0,
+            transform_scale: 110.0,
+            ..Default::default()
+        };
+        let full = shrink(&run(&src, w, h, &p), w, h, f);
+        let proxy = run(&shrink(&src, w, h, f), w / f, h / f, &CameraRaw { pixel_scale: 1.0 / f as f32, ..p });
+        let diff: Vec<f32> = full.iter().zip(&proxy).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).collect();
+        let (mean, max) = (diff.iter().sum::<f32>() / diff.len() as f32, diff.iter().fold(0.0f32, |m, v| m.max(*v)));
+        assert!(mean < 0.002 && max < 0.03, "mean {mean} max {max}");
+    }
+
+    #[test]
+    fn geometry_controls_move_pixels_and_only_a_warp_touches_alpha() {
+        let (w, h) = (40, 30);
+        let base = img(w, h);
+        // Guided Upright needs two guides; Off does nothing.
+        for p in [
+            CameraRaw { upright: "guided".into(), upright_guides: vec![[[0.2, 0.1], [0.25, 0.9]]], ..Default::default() },
+            CameraRaw { upright: "off".into(), ..Default::default() },
+        ] {
+            assert!(p.is_identity(), "{p:?}");
+        }
+        for p in [
+            CameraRaw { transform_vertical: -30.0, ..Default::default() },
+            CameraRaw { transform_horizontal: 30.0, ..Default::default() },
+            CameraRaw { transform_rotate: 3.0, ..Default::default() },
+            CameraRaw { transform_aspect: 30.0, ..Default::default() },
+            CameraRaw { transform_scale: 120.0, ..Default::default() },
+            CameraRaw { transform_offset_x: 10.0, ..Default::default() },
+            CameraRaw { transform_offset_y: -10.0, ..Default::default() },
+        ] {
+            assert!(!p.is_identity() && !p.geometry_neutral(), "{p:?}");
+            let out = run(&base, w, h, &p);
+            assert_ne!(out, base, "{p:?}");
+            assert!(out.iter().all(|q| q.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "{p:?}");
+        }
+        assert!(CameraRaw { upright: "sideways".into(), ..Default::default() }.validate().is_err());
+        // Untrusted values are clamped before the warp.
+        let mut p =
+            CameraRaw { transform_rotate: f32::NAN, transform_scale: 1e9, upright_guides: vec![[[f32::INFINITY, 0.0], [0.0, 0.0]]], ..Default::default() };
+        p.clamp_geometry();
+        assert_eq!((p.transform_rotate, p.transform_scale, p.upright_guides.len()), (0.0, 150.0, 0));
+    }
+
+    /// A warp blends colour weighted by alpha: the black under transparent pixels doesn't bleed
+    /// into the opaque white beside them as a dark fringe.
+    #[test]
+    fn geometry_keeps_edges_next_to_transparency_clean() {
+        let (w, h) = (40, 30);
+        let base: Vec<[f32; 4]> = (0..w * h).map(|i| if i % w < w / 2 { [1.0, 1.0, 1.0, 1.0] } else { [0.0; 4] }).collect();
+        let out = run(&base, w, h, &CameraRaw { transform_rotate: 3.0, ..Default::default() });
+        for q in out.iter().filter(|q| q[3] > 0.05) {
+            assert!(q[..3].iter().all(|&v| v > 0.99), "a dark fringe: {q:?}");
+        }
     }
 }
