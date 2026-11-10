@@ -2147,7 +2147,7 @@ fn right_click_menu_offers_warp_for_a_path() {
     assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
 }
 
-fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
+pub(super) fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": size, "height": size})).unwrap();
     app.sync_views();
