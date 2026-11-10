@@ -4318,7 +4318,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Esta camada de texto precisa ser rasterizada antes de continuar. O texto não poderá mais ser editado. Rasterizar o texto?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Esta camada de forma precisa ser rasterizada antes de continuar. Ela não poderá mais ser editada como forma. Rasterizar a forma?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
 	Graphics adapter: {adapter}	Adaptador gráfico: {adapter}
 	Backend: {backend} ({type})	Backend: {backend} ({type})
 	Driver: {driver}	Driver: {driver}
