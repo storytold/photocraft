@@ -1162,7 +1162,7 @@
 	Levels	लेव्हल्स
 	Lighten	फिकट करा
 	Lightness	फिकटपणा
-	Lights	फिकट भाग
+	Lights	उजळ भाग
 	Limits:	मर्यादा:
 	Linear Gradient	लिनियर ग्रेडियंट
 	Link layers	लेयर लिंक करा
@@ -2464,7 +2464,6 @@
 	Pixel	पिक्सेल
 	Adjustment	ॲडजस्टमेंट
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	ओढा (लॅसो) किंवा बिंदूंवर क्लिक करा (बहुभुज) · {add} जोडा · {sub} वजा करा
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	क्रॉप बॉक्स ओढा · हलवण्यासाठी आत ओढा · कडा आकार बदलतात ({ratio} गुणोत्तर, {centre} मध्य) · काढताना Space हलवते · बाण थोडे सरकवतात · X दिशा बदलते · {commit} लागू करते · Esc रद्द करते
 	{mode} Color · {bits} bit	{mode} रंग · {bits} बिट
 	Drag to move the layer	लेयर हलवण्यासाठी ओढा
 	Scrubby Zoom	स्क्रबी झूम
@@ -3557,7 +3556,7 @@ layerLabel	No Color	रंग नाही
 	Add Noise	नॉइज जोडा
 	Apply Data Set	डेटा सेट लागू करा
 	Apply Image	प्रतिमा लागू करा
-	Arbitrary	इच्छित
+	Arbitrary	अनियत
 	Artboard from Group	गटापासून आर्टबोर्ड
 	Artboard from Layers	लेयरपासून आर्टबोर्ड
 	Artboards to Files	आर्टबोर्ड फाइल्समध्ये
@@ -3900,7 +3899,6 @@ curves	Smooth	गुळगुळीत करा
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	पुढे जाण्यापूर्वी हा मजकूर लेयर रास्टराइझ करणे आवश्यक आहे. त्याचा मजकूर यापुढे संपादित करता येणार नाही. मजकूर रास्टराइझ करायचा?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	पुढे जाण्यापूर्वी हा आकृती लेयर रास्टराइझ करणे आवश्यक आहे. तो यापुढे आकृती म्हणून संपादित करता येणार नाही. आकृती रास्टराइझ करायची?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	पुढे जाण्यापूर्वी हा स्मार्ट ऑब्जेक्ट रास्टराइझ करणे आवश्यक आहे. “सामग्री संपादित करा” यापुढे उपलब्ध राहणार नाही. स्मार्ट ऑब्जेक्ट रास्टराइझ करायचा?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	पुढे जाण्यापूर्वी हा फिल लेयर रास्टराइझ करणे आवश्यक आहे. त्याची भरण सामग्री यापुढे संपादित करता येणार नाही. लेयर रास्टराइझ करायचा?
 	This layer must be rasterized before proceeding.	पुढे जाण्यापूर्वी हा लेयर रास्टराइझ करणे आवश्यक आहे.
 	Color Picker (Background Color)	रंग निवडक (पार्श्वभूमी रंग)
 	Color Picker (Foreground Color)	रंग निवडक (अग्रभूमी रंग)
@@ -4060,7 +4058,6 @@ shape	Appearance	स्वरूप
 	Color Indicates:	रंग दर्शवतो:
 	Copy Texture to Other Tools	टेक्सचर इतर साधनांवर कॉपी करा
 	Create Smart Object after Loading Layers	लेयर लोड केल्यानंतर स्मार्ट ऑब्जेक्ट तयार करा
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	क्रॉप बॉक्स ओढा · हलवण्यासाठी आत ओढा · कडा आकार बदलतात ({ratio} गुणोत्तर, {centre} केंद्र) · रेखाटताना Space हलवते · {commit} लागू करते · Esc रद्द करते
 	Drag to pan · Scroll to zoom · Double-click to fit	पॅन करण्यासाठी ओढा · झूम करण्यासाठी स्क्रोल करा · बसवण्यासाठी डबल-क्लिक करा
 	Drag: draw freehand · Release on the start point: close	ओढा: मुक्तहस्ते रेखाटा · सुरुवातीच्या बिंदूवर सोडा: बंद करा
 	Enter a name for the brush preset	ब्रश प्रीसेटसाठी नाव प्रविष्ट करा
@@ -4873,3 +4870,44 @@ cameraRaw	Loaded RAW Develop settings from {file}	{file} मधून RAW डे
 	Move Toolbar to the Right	टूलबार उजवीकडे हलवा
 	Select Pixels	पिक्सेल निवडा
 	The document changed. Please choose Clear All again.	दस्तऐवज बदलला आहे. कृपया पुन्हा "सर्व साफ करा" निवडा.
+# Runtime labels the other complete catalogs carry: crop options and hints, artboard options, RAW demosaic, fill prompts
+	Background (default):	पार्श्वभूमी (डीफॉल्ट):
+	Clear aspect ratio values	आस्पेक्ट रेशो मूल्ये साफ करा
+	Content-aware fill	कंटेंट-अवेअर फिल
+	Determines if pixel data outside the crop box is retained or deleted	क्रॉप बॉक्सबाहेरील पिक्सेल डेटा ठेवला जाईल की हटवला जाईल हे ठरवते
+	Displays pop-up help for the fill methods	भरण पद्धतींसाठी पॉप-अप मदत दाखवते
+	Fill options	भरण पर्याय
+	Fill the expanded area with your background color or transparent pixels	वाढवलेले क्षेत्र पार्श्वभूमी रंगाने किंवा पारदर्शक पिक्सेलने भरा
+	How expanded crop area gets filled	वाढवलेले क्रॉप क्षेत्र कसे भरले जाते
+	Reset the crop box, image rotation, and aspect ratio settings	क्रॉप बॉक्स, प्रतिमा फिरवणे आणि आस्पेक्ट रेशो सेटिंग्ज रीसेट करा
+	Sample content from part of the image and use it to fill a small area	प्रतिमेच्या एका भागातील सामग्री घेऊन लहान क्षेत्र भरा
+	Select a preset aspect ratio or crop size	प्रीसेट आस्पेक्ट रेशो किंवा क्रॉप आकार निवडा
+	Set the aspect ratio for the crop box	क्रॉप बॉक्ससाठी आस्पेक्ट रेशो सेट करा
+	Set the overlay options for the Crop Tool	क्रॉप साधनासाठी ओव्हरले पर्याय सेट करा
+	Auto-nest Layers	लेयर स्वयंचलितपणे नेस्ट करा
+	Auto-size Canvas	कॅनव्हास आकार स्वयंचलितपणे जुळवा
+	Distribute Heights	उंची वितरित करा
+	Distribute Widths	रुंदी वितरित करा
+	Keep Relative Position During Layer Reordering	लेयर पुनर्क्रमित करताना सापेक्ष स्थान ठेवा
+	Shrinkwrap Canvas on Save	जतन करताना कॅनव्हास सामग्रीपर्यंत लहान करा
+	Click to fill similar colors	समान रंग भरण्यासाठी क्लिक करा
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	क्रॉप बॉक्स ड्रॅग करा · आत ड्रॅग केल्याने हलतो · कडा आकार बदलतात ({ratio} गुणोत्तर, {centre} मध्य) · काढताना Space हलवते · बाण थोडे सरकवतात · X दिशा बदलते · {commit} लागू करते · Esc रद्द करते
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	ग्रेडियंट-सुधारित इंटरपोलेशन: तीक्ष्ण आणि वेगवान, बारीक तपशिलावर थोड्या रंगीत किनारी.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: सर्वात स्वच्छ कडा आणि सर्वात कमी रंगीत किनारी, सर्वात हळू.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	कॅमेऱ्याच्या रंग फिल्टरचा मोझेक कसा भरला जातो. फाइल उघडताना तो लागू होतो; पूर्वावलोकन ती ज्या पद्धतीने उघडली ती पद्धत दाखवते.
+	The fastest and the softest, with color fringing on fine detail.	सर्वात वेगवान आणि सर्वात मऊ, बारीक तपशिलावर रंगीत किनारी.
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	पुढे जाण्यापूर्वी या लेयरचे भरण रास्टराइझ करणे आवश्यक आहे. त्यानंतर ते भरण म्हणून संपादित करता येणार नाही. भरण रास्टराइझ करायचे?
+	Skip transform when placing	ठेवताना ट्रान्सफॉर्म वगळा
+cameraRaw	Canceled opening {name}	{name} उघडणे रद्द केले
+cameraRaw	Canceled {label}	{label} रद्द केले
+# Burn/Dodge, Eraser, Mixer Brush and Color Replacement options; anchor point tools
+	Anti-alias brush application	ब्रश लावताना अँटी-अलियास करा
+	Determines the spread of replaced color	बदललेल्या रंगाचा प्रसार ठरवते
+	Erase to History	इतिहासापर्यंत पुसा
+	Load Solid Colors Only	फक्त घन रंग लोड करा
+	Minimizes clipping in shadows and highlights, and keeps colors from shifting hue	सावल्या आणि हायलाइट्समधील क्लिपिंग कमी करते आणि रंगांची छटा बदलू देत नाही
+	No options for the Add Anchor Point Tool.	अँकर बिंदू जोडा साधनासाठी कोणतेही पर्याय नाहीत.
+	No options for the Delete Anchor Point Tool.	अँकर बिंदू हटवा साधनासाठी कोणतेही पर्याय नाहीत.
+	Set exposure for stroke	स्ट्रोकसाठी एक्सपोजर सेट करा
+	Tolerance for choosing related colors	संबंधित रंग निवडण्यासाठी सहनशीलता
+	dodge tool	डॉज साधन

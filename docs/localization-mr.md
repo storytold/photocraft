@@ -2,7 +2,7 @@
 
 This note goes with the Marathi catalog (`crates/ui-egui/src/i18n/mr.tsv`). It covers every key
 `cargo xtask i18n-coverage` measures and the runtime labels the other complete catalogs carry
-(filter and adjustment parameters, Camera Raw, panels, dialogs, status messages). Translations are
+(filter and adjustment parameters, RAW Develop, panels, dialogs, status messages). Translations are
 written from the meaning of PhotoCraft's English labels; no proprietary translation resources,
 fonts, screenshots or user documents are included. The catalog was machine-translated with Claude
 for @tronicum against the terms below and has not yet been reviewed by a native speaker: review
@@ -11,8 +11,10 @@ corrections are welcome, and a changed term should change here and in every row 
 ## Choosing Marathi
 
 Open **Edit > Preferences > Interface > Language** (Marathi: **संपादन › प्राधान्ये › इंटरफेस › भाषा**) and choose
-**मराठी**. With `interface.language` set to `auto`, the system locales `mr`, `mr-IN` and
+**मराठी**. In the desktop app, with `interface.language` set to `auto`, the system locales `mr`, `mr-IN` and
 `mr_IN.UTF-8` resolve to Marathi.
+The web build doesn't read the browser's language yet, so `auto` stays English there: choose
+**मराठी** yourself.
 
 ## Marathi script
 
@@ -61,7 +63,7 @@ Open **Edit > Preferences > Interface > Language** (Marathi: **संपाद�
 - **Escapes** `\n`, `\t`, `\\` stay exactly as in the source.
 - **Latin script stays Latin:** product, technology and file-format names (PhotoCraft, Photoshop,
   ArtCraft, PSD, PSB, TIFF, PNG, JPEG, EXR, SVG, PDF, ICC, CMYK, RGB, Lab, HSB, sRGB, OpenType,
-  GPU, CPU, wgpu, MCP, JSON, Camera Raw, 3D), key names and shortcuts (Ctrl, Alt, Shift, Cmd,
+  GPU, CPU, wgpu, MCP, JSON, RAW, Camera Raw in the names of its .xmp files, 3D), key names and shortcuts (Ctrl, Alt, Shift, Cmd,
   Esc, Tab, Enter, Space, Ctrl+S), units (px, pt, %, in, cm, mm, dpi, ppi, °, MB, GB), single
   axis letters (X, Y, W, H) and channel letters (R, G, B, A, L, a, b).
 - **Digits:** use Western digits 0-9, never Devanagari digits.

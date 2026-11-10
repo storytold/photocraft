@@ -55,6 +55,9 @@ fn marathi_tags_resolve() {
     assert_eq!(tr(mr, "File"), "फाइल");
     let forms: Vec<usize> = [0, 1, 2, 5, 21].into_iter().map(mr.0.plural).collect();
     assert_eq!(forms, [1, 0, 1, 1, 1], "one is n = 1 (CLDR)");
+    assert_eq!(trn(mr, 1, "{n} sample", "{n} samples"), "1 नमुना");
+    assert_eq!(trn(mr, 4, "{n} sample", "{n} samples"), "4 नमुने");
+    assert_eq!(tr(mr, "A label no catalog has"), "A label no catalog has", "a missing key falls back to English");
 }
 
 #[test]
