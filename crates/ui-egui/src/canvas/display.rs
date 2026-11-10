@@ -125,6 +125,9 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(shown) = crate::shape_fill_ui::display_doc(app, idx) {
         return shown;
     }
+    if let Some(shown) = crate::type_path_placement::display_doc(app, idx) {
+        return shown;
+    }
     if let Some(shown) = crate::type_transform::display_doc(app, idx) {
         return shown;
     }

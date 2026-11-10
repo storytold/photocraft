@@ -52,6 +52,7 @@ pub mod transform_fx;
 pub mod transform_tex;
 pub mod transform_tool;
 pub(super) mod type_font_preview;
+pub mod type_path_placement;
 pub mod type_tool;
 pub(super) mod type_transform;
 pub mod vector_ui;
