@@ -811,10 +811,13 @@ const MAX_DST_TILES: u64 = 1 << 20;
 const SAME_LAYER: f64 = 1e-3;
 /// Source pixels one destination tile may read densely.
 const MAX_FOOTPRINT_PIXELS: u64 = 1 << 25;
-/// How far (px) past a border edge an envelope's fringe reaches (see `Draw::fringe`).
+/// How far (px) past a border edge the fringe of a warp that reads no mip levels reaches (see
+/// `Draw::fringe`).
 const FRINGE: f64 = 0.5;
-/// Coarsest mip level a [`Sampling::Single`] warp samples (a 1024× reduction).
-const MAX_MIP_LEVEL: u32 = 10;
+/// Coarsest mip level a [`Sampling::Single`] warp samples: an 8× reduction. The reference
+/// application's shear probes (sources of 64 to 256 px, each pixel stepping up to 200 source
+/// pixels) never read a coarser one.
+const MAX_MIP_LEVEL: u32 = 3;
 
 /// The mip level a single-sample warp reads where one destination pixel to the right steps `jx`
 /// through the source: `floor(log2 |jx|)`, 0 below a 2× reduction. The reference application's
@@ -868,30 +871,133 @@ fn mip_levels(px: &[f32], fw: usize, fh: usize, n: usize, levels: u32, steps: Op
     out
 }
 
+/// How far (px) past a border edge a fringe reaches: half a texel of the coarsest level a strip
+/// reads (`strips`), [`FRINGE`] otherwise.
+fn fringe_reach(strips: bool) -> f64 {
+    if strips { 0.5 * f64::from(1u32 << MAX_MIP_LEVEL) } else { FRINGE }
+}
+
+/// A triangle's edge on the source's border, for [`fringe`]: its ends in the destination and in
+/// the source, and its side of the source (the axis across the side, the way out along that axis,
+/// the side's coordinate).
+type BorderEdge = ([f64; 2], [f64; 2], [f64; 2], [f64; 2], (usize, f64, f64));
+
+/// The strip of the fringe past one border edge, at pixel centre `p`: how far out `p` lies along
+/// the strip, the source point it reads, and the mip level it reads it from. `fwd` holds the
+/// triangle's destination step per source pixel along x and along y.
+///
+/// The strip continues the picture past the edge along the destination image of the source axis
+/// across that side, not along the edge's normal: `p = a + τ·(b − a) + out·g`, `g` the unit vector
+/// of that image, pointing out. It reads the side's point at `τ` moved out of the source at one
+/// source pixel per destination pixel, or at the triangle's own rate where the triangle squeezes
+/// the source along `g`. Its level is [`mip_level`] of that map's own step along a row, and it
+/// ends where the tap's alpha does, half a texel of that level out; beside the edge's ends
+/// (`τ` outside 0..1) there is none. Measured on the reference application's renders of sheared
+/// and scaled coordinate images (150 probes, every outline pixel's source point and level).
+fn strip(p: [f64; 2], &(a, b, sa, sb, (ax, sign, lim)): &BorderEdge, fwd: &[[f64; 2]; 2]) -> Option<(f64, [f64; 2], u32)> {
+    let col = fwd.get(ax)?;
+    let n = col[0].hypot(col[1]);
+    if n.is_nan() || n <= 1e-12 {
+        return None;
+    }
+    let g = [sign * col[0] / n, sign * col[1] / n];
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let den = ab[0] * g[1] - ab[1] * g[0];
+    if den.is_nan() || den.abs() < 1e-12 {
+        return None;
+    }
+    let r = [p[0] - a[0], p[1] - a[1]];
+    let tau = (r[0] * g[1] - r[1] * g[0]) / den;
+    let along = (ab[0] * r[1] - ab[1] * r[0]) / den;
+    if !(0.0..=1.0).contains(&tau) || along.is_nan() || along <= 0.0 {
+        return None;
+    }
+    // Source pixels per destination pixel along `g`.
+    let rate = (1.0 / n).max(1.0);
+    // The strip's own step through the source for one destination pixel to the right: `τ`'s
+    // share along the side, and the share along `g` across it.
+    let (tau_x, along_x) = (g[1] / den, -ab[1] / den);
+    let mut jx = [tau_x * (sb[0] - sa[0]), tau_x * (sb[1] - sa[1])];
+    *jx.get_mut(ax)? += along_x * rate * sign;
+    let level = mip_level(jx);
+    let out = along * rate;
+    if out >= 0.5 * f64::from(1u32 << level) {
+        return None;
+    }
+    let mut q = [sa[0] + tau * (sb[0] - sa[0]), sa[1] + tau * (sb[1] - sa[1])];
+    *q.get_mut(ax)? = lim + sign * out;
+    Some((along, q, level))
+}
+
+/// What [`fringe`] found for a tile, per pixel.
+#[derive(Default)]
+struct Fringe {
+    /// The alpha cap (1 away from the fringe and in a strip, whose own tap fades it).
+    cover: Vec<f64>,
+    /// The mip level a strip pixel reads (none elsewhere: its triangle's own).
+    level: Vec<Option<u32>>,
+}
+
 /// The fringe of [`Draw::fringe`] in tile `t` (`w` px wide): fills the uncovered pixels of `uv` and
-/// `owner` within [`FRINGE`] px of a border edge from the nearest one's triangle, and returns each
-/// pixel's alpha cap (1 elsewhere).
-fn fringe(tris: &[[usize; 3]], verts: &[([f64; 2], [f64; 2])], src_rect: Rect, t: &Rect, w: usize, uv: &mut [[f64; 2]], owner: &mut [u32]) -> Vec<f64> {
+/// `owner` past a border edge from the nearest such triangle. With `strips` (a warp that reads
+/// mip levels) a pixel is drawn where one of that triangle's [`strip`]s reaches it, the one it
+/// lies least far out along; otherwise within [`FRINGE`] px of the edge, from the triangle's map
+/// carried past it, with an alpha cap.
+#[allow(clippy::too_many_arguments)]
+fn fringe(
+    tris: &[[usize; 3]],
+    verts: &[([f64; 2], [f64; 2])],
+    src_rect: Rect,
+    t: &Rect,
+    w: usize,
+    uv: &mut [[f64; 2]],
+    owner: &mut [u32],
+    strips: bool,
+) -> Fringe {
     let mut cover = vec![1.0f64; uv.len()];
+    let mut level = vec![None; uv.len()];
     let (sx0, sy0, sx1, sy1) = (f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1));
     let on = |a: f64, b: f64, e: f64| (a - e).abs() < 1e-6 && (b - e).abs() < 1e-6;
-    let on_border = |a: [f64; 2], b: [f64; 2]| on(a[0], b[0], sx0) || on(a[0], b[0], sx1) || on(a[1], b[1], sy0) || on(a[1], b[1], sy1);
-    let mut near = vec![(FRINGE, [f64::NAN; 2], 0u32); uv.len()];
+    let side = |sa: [f64; 2], sb: [f64; 2]| {
+        if on(sa[0], sb[0], sx0) {
+            Some((0usize, -1.0, sx0))
+        } else if on(sa[0], sb[0], sx1) {
+            Some((0, 1.0, sx1))
+        } else if on(sa[1], sb[1], sy0) {
+            Some((1, -1.0, sy0))
+        } else if on(sa[1], sb[1], sy1) {
+            Some((1, 1.0, sy1))
+        } else {
+            None
+        }
+    };
+    let pad = fringe_reach(strips).ceil();
+    let mut near = vec![(if strips { f64::INFINITY } else { FRINGE }, [f64::NAN; 2], 0u32); uv.len()];
     for (k, tri) in tris.iter().enumerate() {
         let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
         let det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
         if det.abs() < 1e-12 {
             continue;
         }
-        let border: Vec<([f64; 2], [f64; 2])> =
-            [(p0, p1, s0, s1), (p1, p2, s1, s2), (p2, p0, s2, s0)].iter().filter(|e| on_border(e.2, e.3)).map(|e| (e.0, e.1)).collect();
+        let border: Vec<BorderEdge> =
+            [(p0, p1, s0, s1), (p1, p2, s1, s2), (p2, p0, s2, s0)].into_iter().filter_map(|(a, b, sa, sb)| side(sa, sb).map(|s| (a, b, sa, sb, s))).collect();
         if border.is_empty() {
             continue;
         }
-        let bx0 = (p0[0].min(p1[0]).min(p2[0]) - 1.0).floor().max(f64::from(t.x0)) as i32;
-        let by0 = (p0[1].min(p1[1]).min(p2[1]) - 1.0).floor().max(f64::from(t.y0)) as i32;
-        let bx1 = (p0[0].max(p1[0]).max(p2[0]) + 1.0).ceil().min(f64::from(t.x1)) as i32;
-        let by1 = (p0[1].max(p1[1]).max(p2[1]) + 1.0).ceil().min(f64::from(t.y1)) as i32;
+        // The destination step per source pixel along x and along y, for the strips.
+        let sdet = (s1[0] - s0[0]) * (s2[1] - s0[1]) - (s2[0] - s0[0]) * (s1[1] - s0[1]);
+        let fwd = (strips && sdet.abs() > 1e-12).then(|| {
+            let (e1, e2) = ([p1[0] - p0[0], p1[1] - p0[1]], [p2[0] - p0[0], p2[1] - p0[1]]);
+            let (u1, v1, u2, v2) = (s1[0] - s0[0], s1[1] - s0[1], s2[0] - s0[0], s2[1] - s0[1]);
+            [[(e1[0] * v2 - e2[0] * v1) / sdet, (e1[1] * v2 - e2[1] * v1) / sdet], [(e2[0] * u1 - e1[0] * u2) / sdet, (e2[1] * u1 - e1[1] * u2) / sdet]]
+        });
+        if strips && fwd.is_none() {
+            continue;
+        }
+        let bx0 = (p0[0].min(p1[0]).min(p2[0]) - pad).floor().max(f64::from(t.x0)) as i32;
+        let by0 = (p0[1].min(p1[1]).min(p2[1]) - pad).floor().max(f64::from(t.y0)) as i32;
+        let bx1 = (p0[0].max(p1[0]).max(p2[0]) + pad).ceil().min(f64::from(t.x1)) as i32;
+        let by1 = (p0[1].max(p1[1]).max(p2[1]) + pad).ceil().min(f64::from(t.y1)) as i32;
         for y in by0..by1 {
             let py = f64::from(y) + 0.5;
             for x in bx0..bx1 {
@@ -902,7 +1008,7 @@ fn fringe(tris: &[[usize; 3]], verts: &[([f64; 2], [f64; 2])], src_rect: Rect, t
                 let px = f64::from(x) + 0.5;
                 let d = border
                     .iter()
-                    .map(|&(a, b)| {
+                    .map(|&(a, b, ..)| {
                         let ab = [b[0] - a[0], b[1] - a[1]];
                         let l = ab[0] * ab[0] + ab[1] * ab[1];
                         let s = if l > 0.0 { (((px - a[0]) * ab[0] + (py - a[1]) * ab[1]) / l).clamp(0.0, 1.0) } else { 0.0 };
@@ -910,7 +1016,16 @@ fn fringe(tris: &[[usize; 3]], verts: &[([f64; 2], [f64; 2])], src_rect: Rect, t
                     })
                     .fold(f64::INFINITY, f64::min);
                 let Some(slot) = near.get_mut(o) else { continue };
-                if d < slot.0 {
+                if d >= slot.0 || d.is_nan() {
+                    continue;
+                }
+                if let Some(fwd) = &fwd {
+                    let best = border.iter().filter_map(|e| strip([px, py], e, fwd)).min_by(|a, b| a.0.total_cmp(&b.0));
+                    if let (Some((_, q, l)), Some(lv)) = (best, level.get_mut(o)) {
+                        *slot = (d, q, k as u32);
+                        *lv = Some(l);
+                    }
+                } else {
                     let l1 = ((px - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (py - p0[1])) / det;
                     let l2 = ((p1[0] - p0[0]) * (py - p0[1]) - (px - p0[0]) * (p1[1] - p0[1])) / det;
                     let l0 = 1.0 - l1 - l2;
@@ -925,12 +1040,13 @@ fn fringe(tris: &[[usize; 3]], verts: &[([f64; 2], [f64; 2])], src_rect: Rect, t
         {
             *u = q;
             *ow = k;
-            // The reference's fringe alpha is the cap floored to an 8-bit step (Arc 50's border:
-            // 80 % of fringe pixels exactly, rounding 49 %).
-            *c = ((0.5 - d) * 255.0).floor() / 255.0;
+            if !strips {
+                // The cap is `0.5 − d`, floored to an 8-bit step.
+                *c = ((0.5 - d) * 255.0).floor() / 255.0;
+            }
         }
     }
-    cover
+    Fringe { cover, level }
 }
 
 /// Scales premultiplied `px` (alpha last) down so its alpha is at most `cap` (none: unchanged).
@@ -977,11 +1093,12 @@ fn stack_layer(under: &mut Vec<([f64; 2], u32, u32)>, head: &mut u32, top: ([f64
 struct Draw<'a> {
     /// One sample per pixel (from a mip level where the warp squeezes rows), not a footprint.
     single: bool,
-    /// Pixels just outside an edge of the mesh that lies on the source's border are drawn too, from
-    /// the nearest such triangle's map carried past the edge, their alpha at most `0.5 − d` (floored
-    /// to an 8-bit step) for a
-    /// centre `d` px out (and the source's transparent surround lowers it further): the outline
-    /// the reference application's warp renders show.
+    /// Pixels just outside an edge of the mesh that lies on the source's border are drawn too: the
+    /// outline the reference application's warp renders show. A warp that reads mip levels
+    /// continues the picture past the edge in a [`strip`], faded by the tap's own reach into the
+    /// source's transparent surround; any other takes the nearest such triangle's map carried
+    /// past the edge, its alpha at most `0.5 − d` (floored to an 8-bit step) for a centre `d` px
+    /// out.
     fringe: bool,
     /// The picture can fold over itself: each triangle's rank in the order a fold stacks them
     /// (asked once, when a tile first needs it). A tile is drawn in the triangles' own order;
@@ -1173,7 +1290,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         let Ok(index) = u32::try_from(index) else { break };
         let ps = tri.map(|v| verts[v].0);
         // A fringe reaches past the triangle, into a neighbouring tile.
-        let grow = if draw.fringe { 1.0 } else { 0.0 };
+        let grow = if draw.fringe { fringe_reach(single && interp == Interp::Bilinear).ceil() } else { 0.0 };
         let bx0 = (ps.iter().map(|p| p[0]).fold(f64::MAX, f64::min) - grow).floor() as i32;
         let by0 = (ps.iter().map(|p| p[1]).fold(f64::MAX, f64::min) - grow).floor() as i32;
         let bx1 = (ps.iter().map(|p| p[0]).fold(f64::MIN, f64::max) + grow).ceil() as i32;
@@ -1311,18 +1428,21 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             }
             break;
         }
-        // The fringe (see `Draw::fringe`): per uncovered pixel, its distance to the nearest border
-        // edge and that triangle's source position carried out to it.
-        let cover = if draw.fringe { fringe(&order, verts, src_rect, t, w, &mut uv, &mut owner) } else { Vec::new() };
+        // The fringe (see `Draw::fringe`): per uncovered pixel past a border edge, the source
+        // position it reads, with its alpha cap or, in a strip, its own mip level.
+        let Fringe { cover, level: strip_level } =
+            if draw.fringe { fringe(&order, verts, src_rect, t, w, &mut uv, &mut owner, single && interp == Interp::Bilinear) } else { Fringe::default() };
+        let strip_level = |o: usize| strip_level.get(o).copied().flatten();
         // Where the covered pixels sample the source, with the spread of their subsamples (a mip
         // level's taps reach up to 1.5 texels of 2^level pixels from the sample), in regions read
         // apart ([`Regions`]): the top layer's and, apart, those of the fold layers under it. A
         // layer's windows start on the source's grid for its finest level, since mip levels are
         // built from the window: its blocks are the whole pyramid's (only the source's own far
         // edge leaves part blocks).
-        let spread = |(q, k): ([f64; 2], u32)| {
+        let level_of = |k: u32, strip: Option<u32>| strip.unwrap_or_else(|| lev.get(k as usize).copied().unwrap_or(0));
+        let spread = |(q, k): ([f64; 2], u32), strip: Option<u32>| {
             let j = jac[k as usize].0;
-            let l = lev.get(k as usize).copied().unwrap_or(0);
+            let l = level_of(k, strip);
             let m = if l > 0 { 1.5 * f64::from(1u32 << l) } else { 0.0 };
             (q, [0.5 * (j[0].abs() + j[2].abs()) + m, 0.5 * (j[1].abs() + j[3].abs()) + m])
         };
@@ -1364,11 +1484,12 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         // A top layer over an empty part of the source has no window: it is transparent there,
         // and the fold layers under it still show. Too much to read leaves the tile empty, as
         // without folds: what is under it can't show through where it may be opaque.
-        let top_level = uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(_, &k)| lev.get(k as usize).copied().unwrap_or(0)).max().unwrap_or(0);
+        let top_level =
+            uv.iter().zip(&owner).enumerate().filter(|(_, (q, _))| !q[0].is_nan()).map(|(o, (_, &k))| level_of(k, strip_level(o))).max().unwrap_or(0);
         let mut top_regions = Regions::new(
             &|f| {
-                for (q, &k) in uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()) {
-                    let (q, e) = spread((*q, k));
+                for (o, (q, &k)) in uv.iter().zip(&owner).enumerate().filter(|(_, (q, _))| !q[0].is_nan()) {
+                    let (q, e) = spread((*q, k), strip_level(o));
                     f(q, e);
                 }
             },
@@ -1387,7 +1508,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         let mut below_regions = Regions::new(
             &|f| {
                 for &(q, k, _) in under.iter().filter(|e| !e.0[0].is_nan()) {
-                    let (q, e) = spread((q, k));
+                    let (q, e) = spread((q, k), None);
                     f(q, e);
                 }
             },
@@ -1510,11 +1631,12 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 *s = blend([tap(ix, iy, c), tap(ix + 1.0, iy, c), tap(ix, iy + 1.0, c), tap(ix + 1.0, iy + 1.0, c)], fx, fy, steps);
             }
         };
-        // A premultiplied sample of triangle `k`'s source at (u, v): a mip level's tap, one point,
-        // or the average of its subsamples where the warp shrinks the source.
-        let sample = |win: &Win, q: [f64; 2], k: u32, acc: &mut [f64; 8], one: &mut [f64; 8]| {
+        // A premultiplied sample of triangle `k`'s source at (u, v): a mip level's tap (the
+        // triangle's level, or a fringe strip's own), one point, or the average of its subsamples
+        // where the warp shrinks the source.
+        let sample = |win: &Win, q: [f64; 2], k: u32, strip: Option<u32>, acc: &mut [f64; 8], one: &mut [f64; 8]| {
             let (j, nx, ny) = jac[k as usize];
-            let l = lev.get(k as usize).copied().unwrap_or(0);
+            let l = level_of(k, strip);
             if l > 0 {
                 mip_tap(win, l, q, acc);
                 return;
@@ -1545,7 +1667,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 continue;
             }
             match top_win(*q) {
-                Some(tw) => sample(tw, *q, k, &mut acc, &mut one),
+                Some(tw) => sample(tw, *q, k, strip_level(o), &mut acc, &mut one),
                 None => acc[..n].fill(0.0),
             }
             // A fold: its layers under this one, bottom first, composite under the top (unless
@@ -1557,7 +1679,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 while let Some(&(q, k, next)) = under.get(at as usize) {
                     at = next;
                     match below_win(q) {
-                        Some(bw) => sample(bw, q, k, &mut layer, &mut one),
+                        Some(bw) => sample(bw, q, k, None, &mut layer, &mut one),
                         None => layer[..n].fill(0.0),
                     }
                     let keep = 1.0 - layer[a].clamp(0.0, 1.0);
@@ -1570,7 +1692,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                     acc[c] += under_top[c] * keep;
                 }
             }
-            // A fringe pixel's alpha is capped by its distance out.
+            // A fringe pixel's alpha is capped by its distance out (a strip's by its tap alone).
             cap_alpha(&mut acc[..n], cover.get(o).copied());
             let al = acc[a].clamp(0.0, 1.0);
             // Float noise (a vertex a hair off the pixel grid) must not leave invisible
@@ -1818,6 +1940,10 @@ mod tests {
         assert_eq!(mip_level([f64::NAN, 0.0]), 0);
         assert_eq!(mip_level([f64::INFINITY, 0.0]), 0);
         assert_eq!(mip_level([1e300, 0.0]), MAX_MIP_LEVEL);
+        // No coarser than an eighth, however far a pixel steps.
+        assert_eq!(mip_level([8.0, 0.0]), 3);
+        assert_eq!(mip_level([16.0, 0.0]), 3);
+        assert_eq!(mip_level([200.0, 0.0]), 3);
     }
 
     #[test]
@@ -1916,13 +2042,43 @@ mod tests {
         assert!((0.2..=0.31).contains(&mesh), "mesh fringe alpha {mesh}");
         assert_eq!(alpha_at(Facets::Envelope, 17), 0.0);
         assert_eq!(alpha_at(Facets::Envelope, 8), 1.0);
-        // The cap is floored to an 8-bit step, as the reference's fringe is: stretched twice as
-        // wide (so the source's own falloff stays above the cap) and ending 0.25 px short of the
-        // pixel's centre, the cap is 63.75 steps, drawn as 63 (not 64).
+        // Stretched twice as wide, the fringe still reads one source pixel per pixel: ending
+        // 0.25 px short of the pixel's centre, the tap's weight is 63.75 steps, drawn as 63.
         let g = |x: f64, y: f64| (2.0 * x + 0.25, y);
         let out = warp_patches_surface(&src, Rect::new(0, 0, 16, 16), &g, [&[], &[]], Fold::IN_PLACE, Sampling::Single, Facets::Envelope);
         let a = out.read_region(Rect::new(32, 8, 33, 9))[3];
         assert_eq!((a * 255.0).round(), 63.0, "fringe alpha {}", a * 255.0);
+    }
+
+    /// The fringe continues the picture past a side along the image of the source axis across
+    /// that side, one source pixel per pixel, not along the side's normal.
+    #[test]
+    fn a_sheared_warps_fringe_runs_along_the_source_axis() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        let r = Rect::new(0, 0, 16, 16);
+        src.fill_rect(r, &[1.0, 1.0, 1.0, 1.0]);
+        let step = |f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), x: i32, y: i32| {
+            let out = warp_patches_surface(&src, r, f, [&[], &[]], Fold::IN_PLACE, Sampling::Single, Facets::Envelope);
+            f64::from(out.read_region(Rect::new(x, y, x + 1, y + 1))[3]) * 255.0
+        };
+        // Rows pushed sideways (x + y): the source's columns run diagonally, so a pixel centre
+        // 0.2 px above the top side is 0.2·√2 = 0.283 px out along them: 0.217 of a pixel is
+        // left under the tap, 55 steps (the side's normal would give 0.3: 76).
+        let a = step(&|x, y| (x + y, y + 0.7), 8, 0);
+        assert_eq!(a.round(), 55.0, "0.2 px above a sheared top side: {a}");
+        // 0.4 px above is 0.566 px out along them: past the tap's reach (the normal: 25 steps).
+        let a = step(&|x, y| (x + y, y + 0.9), 8, 0);
+        assert_eq!(a, 0.0, "0.4 px above a sheared top side: {a}");
+        // Columns pushed down (y + 1.5 x): a pixel steps 1.8 source pixels along a row inside
+        // (level 0), but the strip left of the left side steps √(2·1.8² − 1) = 2.35: it reads
+        // level 1, whose texels reach twice as far out. A centre 0.2 px left of the side is
+        // 0.36 px out along the source's rows: 0.32 of a level-1 texel's weight, 81 steps
+        // (level 0 along the normal: 76).
+        let a = step(&|x, y| (x + 0.7, y + 1.5 * x), 0, 8);
+        assert_eq!(a.round(), 81.0, "0.2 px left of a sheared left side: {a}");
+        // 0.51 px left of it is still within that level's reach (the normal's ends at 0.5).
+        let a = step(&|x, y| (x + 1.01, y + 1.5 * x), 0, 8);
+        assert_eq!(a.round(), 10.0, "0.51 px left of a sheared left side: {a}");
     }
 
     #[test]
