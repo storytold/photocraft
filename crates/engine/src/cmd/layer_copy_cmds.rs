@@ -83,9 +83,25 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
 /// [`adapt_copies`] with Color Settings' intent and black point compensation passed in, so it
 /// can run on a worker.
 fn adapt_copies_with(copies: &mut Document, dest: &Document, intent: photocraft_cms::Intent, bpc: bool) -> Result<()> {
-    // Link-group IDs are scoped to a document. Two independently linked pairs can both
-    // use group 1; copying one must not link it to the other's existing layers (#3045).
-    // Remap each imported group once so links within the copied batch stay intact.
+    remap_link_groups(copies, dest)?;
+    let mut contents = HashMap::new();
+    let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
+    for id in smart_ids {
+        if let Some(l) = copies.layer_mut(id)
+            && let LayerContent::Smart(sm) = &mut l.content
+        {
+            sm.contents_id = *contents.entry(sm.contents_id).or_insert_with(SmartContentsId::fresh);
+        }
+    }
+    convert_copies(copies, dest, intent, bpc)
+}
+
+/// Give the copies' link groups IDs `dest` doesn't use. Link-group IDs are scoped to a document:
+/// two independently linked pairs can both use group 1, and copying one must not link it to the
+/// other's existing layers (#3045). Each imported group is remapped once, so links within the
+/// copied batch stay intact. A copy made as a job remaps again as it lands, against the
+/// destination as it is then: it may have linked layers of its own meanwhile.
+fn remap_link_groups(copies: &mut Document, dest: &Document) -> Result<()> {
     let mut used: HashSet<u64> = dest.walk().into_iter().filter_map(|(_, _, l)| l.link_group).collect();
     let mut next_group = dest.unused_link_group().ok_or_else(|| EngineError::Other("no free linked-layer group id".into()))?;
     let groups: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| l.link_group.map(|group| (l.id, group))).collect();
@@ -106,15 +122,12 @@ fn adapt_copies_with(copies: &mut Document, dest: &Document, intent: photocraft_
             layer.link_group = remapped.get(&group).copied();
         }
     }
-    let mut contents = HashMap::new();
-    let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
-    for id in smart_ids {
-        if let Some(l) = copies.layer_mut(id)
-            && let LayerContent::Smart(sm) = &mut l.content
-        {
-            sm.contents_id = *contents.entry(sm.contents_id).or_insert_with(SmartContentsId::fresh);
-        }
-    }
+    Ok(())
+}
+
+/// The copies' pixels in `dest`'s colour profile and bit depth, type at its resolution, and their
+/// text styles and shapes made ready for it (the rest of [`adapt_copies_with`]).
+fn convert_copies(copies: &mut Document, dest: &Document, intent: photocraft_cms::Intent, bpc: bool) -> Result<()> {
     if (copies.mode, &copies.icc_profile) != (dest.mode, &dest.icc_profile) {
         let profile = crate::color_cmds::document_profile(dest);
         crate::color_cmds::convert_document(copies, &profile, intent, bpc)?;
@@ -354,7 +367,15 @@ fn land_copies(
     let find = |s: &Session, id: photocraft_doc::DocId| s.documents().iter().position(|d| d.doc.id == id);
     let src = find(s, sdoc.id).unwrap_or(src);
     let dest = find(s, ddoc.id).ok_or_else(|| bad("the destination document was closed"))?;
-    let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
+    let live = &s.documents()[dest].doc;
+    // The copies were converted for the destination as the job began: they no longer fit it if
+    // its mode, bit depth or profile changed meanwhile.
+    if (live.mode, live.depth, &live.icc_profile) != (ddoc.mode, ddoc.depth, &ddoc.icc_profile) {
+        return Err(bad("the destination's mode, bit depth or colour profile changed while the layers were copied; copy them again"));
+    }
+    // Link groups the destination took meanwhile stay its own.
+    remap_link_groups(&mut copies, live)?;
+    let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !live.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     let styles = std::mem::take(&mut copies.text_styles);
     s.set_active(dest);
     let edited = s.edit(label, |doc, active| {
