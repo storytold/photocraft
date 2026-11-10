@@ -30,8 +30,11 @@ fn clip_mask(rect: Rect, depth: photocraft_color::SampleType) -> Result<LayerMas
     let mut mask = LayerMask::hide_all();
     if !rect.is_empty() {
         // Both the GRAY8 source (1 B) and the depth-sized copy (`depth` B) are live while `mask_at_depth`
-        // converts, each counted as dense, which holds for partial edge tiles too.
-        crate::allocation::check_dense(rect, (depth.bytes() as u64).saturating_add(1), "the frame's mask")?;
+        // converts, each counted as dense. `fill_rect` and the conversion store whole tiles, so a thin
+        // rectangle is budgeted at its tile footprint, not its pixel area.
+        let tiles =
+            photocraft_geom::TileCoord::containing(rect.x0, rect.y0).rect().union(&photocraft_geom::TileCoord::containing(rect.x1 - 1, rect.y1 - 1).rect());
+        crate::allocation::check_dense(tiles, (depth.bytes() as u64).saturating_add(1), "the frame's mask")?;
         mask.surface.fill_rect(rect, &[1.0]);
         mask.surface.prune();
     }
@@ -326,6 +329,13 @@ mod budget_tests {
     fn the_frame_mask_budget_counts_the_gray8_source_too() {
         let rect = Rect::new(0, 0, 40_000, 47_000);
         let e = clip_mask(rect, photocraft_color::SampleType::F32).err().map(|e| e.to_string());
+        assert!(e.is_some_and(|e| e.contains("working memory")));
+    }
+
+    /// One pixel wide but 30 million tall: 150 MB of pixels, yet whole 256-wide tiles (38 GB).
+    #[test]
+    fn the_frame_mask_budget_counts_whole_tiles() {
+        let e = clip_mask(Rect::new(0, 0, 1, 30_000_000), photocraft_color::SampleType::F32).err().map(|e| e.to_string());
         assert!(e.is_some_and(|e| e.contains("working memory")));
     }
 }
