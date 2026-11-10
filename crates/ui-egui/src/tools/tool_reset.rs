@@ -88,6 +88,16 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
         app.ui.tool_brushes.retain(|(t, _)| *t != tool);
         reset_session_brush(app);
     }
+    // Pattern Stamp: after Reset Tool the pattern is the first of the first default group (#12868).
+    if tool == Tool::PatternStamp
+        && let Some(id) = photocraft_engine::presets::patterns::builtin_groups()
+            .first()
+            .and_then(|g| g.items.first())
+            .cloned()
+    {
+        app.session.presets.pattern = Some(id);
+        app.session.presets.rev += 1;
+    }
 }
 
 /// Reset All Tools: every option, the selection mode and every tool's brush.

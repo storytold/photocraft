@@ -1052,3 +1052,6 @@ mod view_guides_submenu_tests;
 
 #[cfg(test)]
 mod background_eraser_digit_keys_tests;
+
+#[cfg(test)]
+mod pattern_stamp_reset_defaults_tests;

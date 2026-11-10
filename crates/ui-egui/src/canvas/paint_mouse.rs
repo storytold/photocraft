@@ -77,17 +77,24 @@ const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 /// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing.
 const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
+/// The Pattern Stamp's tip after Reset Tool (#12868): a 21 px soft round at 25 % spacing.
+const PATTERN_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`]; the other tools keep the default tip.
+/// [`HEALING_BRUSH_TIP`], the Pattern Stamp's [`PATTERN_STAMP_TIP`]; the other tools keep the
+/// default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
         Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
         Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
+        Tool::PatternStamp => {
+            (brush.size, brush.hardness, brush.spacing) = PATTERN_STAMP_TIP;
+            brush.smoothing.amount = 0.0;
+        }
         _ => {}
     }
     session_fields(current, &brush)
