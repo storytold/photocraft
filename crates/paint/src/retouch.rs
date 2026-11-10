@@ -192,10 +192,17 @@ fn points_extent(stroke: &Stroke) -> u64 {
     if x1 < x0 || y1 < y0 {
         return 0;
     }
-    // The tip reaches half its width past the outermost point on each side (@FredApps, #8707
-    // review): without this the box is only a bound for a zero-size tip, and the gate refuses
-    // less than it safely could.
-    let grow = f64::from(stroke.brush.size.max(0.0)) / 2.0;
+    // The tip reaches its radius past the outermost point on each side (@FredApps, #8707 review):
+    // without it the box is a bound only for a zero-size tip, and the gate refuses less than it
+    // safely could.
+    //
+    // The floor is the renderer's own: `dynamics.rs` draws at `(diameter / 2.0).max(0.5)`, so a
+    // size of zero, negative or non-finite still puts down a half-pixel radius. Without the floor
+    // such a stroke measured as spanning nothing at all and walked straight through this gate
+    // into the tiles. Note the floor belongs on the radius, not on the size: `size.max(0.5) / 2.0`
+    // would give a quarter pixel, half of what is actually drawn. `f64::max` returns the other
+    // operand for a NaN, so a non-finite size lands on the floor rather than poisoning the box.
+    let grow = (f64::from(stroke.brush.size) / 2.0).max(0.5);
     let (x0, y0, x1, y1) = (x0 - grow, y0 - grow, x1 + grow, y1 + grow);
     // `as` on an out-of-range or non-finite f64 saturates, which is the answer wanted here.
     let side = |lo: f64, hi: f64| (hi - lo).max(0.0).ceil().min(u64::MAX as f64) as u64;
@@ -715,12 +722,16 @@ mod extent_tests {
         assert_eq!(points_extent(&stroke(&[(f64::MIN, f64::MIN), (f64::MAX, f64::MAX)])), u64::MAX);
         assert_eq!(points_extent(&stroke(&[(f64::NAN, 0.0), (f64::INFINITY, 1.0), (0.0, 0.0), (3.0, 2.0)])), grown(3, 2));
         assert_eq!(points_extent(&stroke(&[(f64::NAN, f64::NAN)])), 0, "no finite point is no span");
-        // A nonsense size cannot shrink the box or panic.
         let mut odd = stroke(&[(0.0, 0.0), (10.0, 4.0)]);
+        // A nonsense size falls to the renderer's half-pixel radius rather than to nothing: the
+        // renderer still draws at that size, so a zero-area box here would walk such a stroke
+        // straight into the tiles (#8707 follow-up). 10 x 4 points grown by 0.5 each side.
         odd.brush.size = -50.0;
-        assert_eq!(points_extent(&odd), 40, "a negative size grows by nothing");
+        assert_eq!(points_extent(&odd), 11 * 5, "a negative size still spans the smallest tip drawn");
         odd.brush.size = f32::NAN;
-        assert_eq!(points_extent(&odd), 40, "nor does a non-finite one");
+        assert_eq!(points_extent(&odd), 11 * 5, "and so does a non-finite one");
+        odd.brush.size = 0.0;
+        assert_eq!(points_extent(&odd), 11 * 5, "and a zero one");
     }
 
     /// #4961 follow-up: a stroke whose points already span more than the budget is refused
