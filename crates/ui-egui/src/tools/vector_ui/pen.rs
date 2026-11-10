@@ -412,7 +412,7 @@ pub fn pen_end(app: &mut PhotocraftApp) {
 /// layer; in Path mode a subpath of the targeted vector mask, else of the selected path or a new
 /// work path. An added subpath takes the options bar's Path Operation (#1397). `false` when the
 /// document refused it, with the reason in the status bar.
-fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> bool {
+fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, freeform: bool) -> bool {
     if pen.knots.is_empty() || (pen.knots.len() < 2 && app.ui.tool_options.vector_mode == "shape") {
         return true;
     }
@@ -434,12 +434,12 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
             stroke["color"] = json!(app.session.tools.foreground);
             stroke
         };
-        app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke}))
+        app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke, "historyName": freeform.then_some("Freeform Pen")}))
     } else if let Some((name, p)) =
         pen.resumes.as_ref().and_then(|r| app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &path)).map(|p| (r.path.clone(), p)))
     {
         // The resumed subpath, carried on, takes its old place: one step, no second subpath.
-        app.run("path.set", json!({"name": name, "path": p})).inspect(|_| app.ui.selected_path = Some(name))
+        app.run("path.set", json!({"name": name, "path": p, "historyName": freeform.then_some("Freeform Pen")})).inspect(|_| app.ui.selected_path = Some(name))
     } else if let Some((id, existing)) = targeted_vector_mask(app) {
         // A targeted vector mask takes the new subpath (#196), as in Photoshop.
         let mut p = photocraft_engine::vector_cmds::path_json(&existing);
@@ -458,7 +458,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
         // subpath, even with nothing selected in the Paths panel.
         let target = draft_target(app, pen);
         let name = target.clone().unwrap_or_else(|| "work".into());
-        let mut params = json!({"name": name, "path": path});
+        let mut params = json!({"name": name, "path": path, "historyName": freeform.then_some("Freeform Pen")});
         if target.is_some() {
             params["op"] = json!(op.unwrap_or("combine"));
         }
@@ -797,7 +797,7 @@ pub(crate) fn freeform_finish_owned(app: &mut PhotocraftApp, points: &[[f64; 3]]
     };
     let (mut pen, closed) = pen;
     pen.owner = Some(owner);
-    if let Err(e) = commit_path(app, &pen, closed) {
+    if let Err(e) = commit_path_named(app, &pen, closed, true) {
         app.ui.pen = Some(PenPath { commit_failed: true, ..pen });
         app.ui.status = e;
         app.ui.status_error = true;
@@ -863,9 +863,13 @@ fn fit_with_straight_segments(trace: &[[f64; 2]], straight: &[usize], fit: f64, 
 use super::{PenOwner, cancel_stale_pen, capture_pen_owner};
 
 fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> Result<(), String> {
+    commit_path_named(app, pen, closed, false)
+}
+
+fn commit_path_named(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, freeform: bool) -> Result<(), String> {
     let Some(owner) = pen.owner.clone().filter(|o| o.valid(app)) else { return Err("Pen draft target is stale; no path was changed".into()) };
     let result = as_owner(app, &owner, |app| {
-        let result = commit_path_current(app, pen, closed);
+        let result = commit_path_current(app, pen, closed, freeform);
         if result && matches!(owner.target, super::PenTarget::Shape { .. } | super::PenTarget::VectorMask(_)) {
             app.ui.selected_path = Some("layer".into());
         }
@@ -936,3 +940,7 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
     }
     r
 }
+
+#[cfg(test)]
+#[path = "freeform_history_name_tests.rs"]
+mod freeform_history_name_tests;
