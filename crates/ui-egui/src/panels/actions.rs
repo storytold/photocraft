@@ -1703,7 +1703,12 @@ fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
         return Ok(result);
     }
     let action = app.ui.actions.selected.ok_or_else(|| tl!("Select an action first").to_string())?;
-    let step = app.ui.actions.selected_step;
+    duplicate_row(app, action, app.ui.actions.selected_step)
+}
+
+/// Duplicate one action or step (the selected row, or one dropped on Create new action, #12373)
+/// and select the copy.
+fn duplicate_row(app: &mut PhotocraftApp, action: usize, step: Option<usize>) -> Result<Value, String> {
     let count = app.session.actions.list.len();
     let expanded = app.ui.actions.expanded.get(action).copied().unwrap_or(false);
     let result = app.run("actions.duplicate", json!({"action": action, "step": step}))?;
@@ -1714,6 +1719,10 @@ fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
         app.ui.actions.expanded.resize(count, false);
         if index <= app.ui.actions.expanded.len() {
             app.ui.actions.expanded.insert(index, expanded);
+        }
+        // A name field open on an action at or after the copy moves down with that action.
+        if let Some(r) = app.ui.actions.renaming.as_mut().filter(|r| r.index >= index) {
+            r.index += 1;
         }
     } else {
         app.ui.actions.expanded.resize(count, false);
@@ -1727,19 +1736,65 @@ fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
 fn delete_selection(app: &mut PhotocraftApp) {
     let Some(action) = app.ui.actions.selected else { return };
     let step = app.ui.actions.selected_step;
-    let mut params = json!({"action": action});
-    if let Some(step) = step {
-        params["step"] = json!(step);
-    }
-    if app.run("actions.delete", params).is_err() {
+    if !delete_row(app, action, step) {
         return;
     }
     // Clear selection after deletion so a second click cannot delete a different
     // step or unexpectedly fall back to deleting the entire action.
     app.ui.actions.selected = None;
     app.ui.actions.selected_step = None;
-    if step.is_none() && action < app.ui.actions.expanded.len() {
-        app.ui.actions.expanded.remove(action);
+}
+
+/// Delete one action or step (the selected row, or one dropped on the trash, #12373) and keep
+/// the selection and disclosure rows pointing at the same rows. False when the engine refused.
+fn delete_row(app: &mut PhotocraftApp, action: usize, step: Option<usize>) -> bool {
+    let mut params = json!({"action": action});
+    if let Some(step) = step {
+        params["step"] = json!(step);
+    }
+    if app.run("actions.delete", params).is_err() {
+        return false;
+    }
+    let ui = &mut app.ui.actions;
+    match (step, ui.selected) {
+        (None, Some(sel)) if sel == action => {
+            ui.selected = None;
+            ui.selected_step = None;
+        }
+        (None, Some(sel)) if sel > action => ui.selected = Some(sel - 1),
+        (Some(step), Some(sel)) if sel == action => match ui.selected_step {
+            Some(s) if s == step => {
+                ui.selected = None;
+                ui.selected_step = None;
+            }
+            Some(s) if s > step => ui.selected_step = Some(s - 1),
+            _ => {}
+        },
+        _ => {}
+    }
+    if step.is_none() {
+        if action < ui.expanded.len() {
+            ui.expanded.remove(action);
+        }
+        // A name field open on the deleted action closes; one on a later action moves up with it.
+        match ui.renaming.as_ref().map(|r| r.index) {
+            Some(i) if i == action => ui.renaming = None,
+            Some(i) if i > action => {
+                if let Some(r) = ui.renaming.as_mut() {
+                    r.index = i - 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// Outline a footer button a dragged row would be dropped on (an outline only, so the icon
+/// stays visible).
+fn drop_target_highlight(ui: &egui::Ui, response: &egui::Response, active: bool, t: &Tokens) {
+    if active && response.contains_pointer() {
+        ui.painter().rect_stroke(response.rect, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     }
 }
 
@@ -2153,15 +2208,33 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
-        if crate::icons::button(ui, "plus", 24.0, false, tl!("Create new action")).clicked() && !recording_now {
+        let dragged = egui::DragAndDrop::payload::<DragRow>(ui.ctx()).map(|row| *row);
+        let plus = crate::icons::button(ui, "plus", 24.0, false, tl!("Create new action"));
+        if plus.clicked() && !recording_now {
             begin_recording(app, false);
         }
+        // A row dragged onto Create new action is duplicated, as in Photoshop (#12373).
+        drop_target_highlight(ui, &plus, dragged.is_some() && !recording_now, &t);
+        if !recording_now
+            && let Some(row) = plus.dnd_release_payload::<DragRow>()
+            && let Err(e) = duplicate_row(app, row.action, row.step)
+        {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
         let can_delete = app.ui.actions.selected.is_some() && (!recording_now || app.ui.actions.selected_step.is_some());
-        ui.add_enabled_ui(can_delete, |ui| {
+        // While recording only a step may be deleted, by the button or by a drop.
+        let can_drop = dragged.is_some_and(|row| !recording_now || row.step.is_some());
+        ui.add_enabled_ui(can_delete || can_drop, |ui| {
             let response = crate::icons::button(ui, "trash", 24.0, false, tl!("Delete"));
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_delete, tl!("Delete")));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_delete || can_drop, tl!("Delete")));
             if response.clicked() {
                 delete_selection(app);
+            }
+            // A row dragged onto the trash is deleted without a confirmation (#12373).
+            drop_target_highlight(ui, &response, can_drop, &t);
+            if can_drop && let Some(row) = response.dnd_release_payload::<DragRow>() {
+                delete_row(app, row.action, row.step);
             }
         });
         let mode_label = if app.ui.actions.button_mode { tl!("Button Mode On") } else { tl!("Button Mode") };
@@ -2293,3 +2366,6 @@ mod stop_tests;
 
 #[cfg(test)]
 mod playback_tests;
+
+#[cfg(test)]
+mod drag_drop_tests;

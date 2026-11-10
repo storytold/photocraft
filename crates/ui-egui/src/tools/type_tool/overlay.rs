@@ -35,8 +35,8 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
         shape = Some(photocraft_doc::text::TextShape::Box { x: 0.0, y: 0.0, width: b[2].max(1.0) as f32, height: b[3].max(1.0) as f32 });
     }
     // Type on a path: the caret, selection and underline follow the curve the glyphs sit on.
-    let text_start = l.bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
-    let bend = shape.as_ref().and_then(|shape| photocraft_text::warp::Warp::on_path_with_text_start(shape, text_start));
+    let text_start = l.line_bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
+    let bend = shape.as_ref().and_then(|shape| photocraft_text::warp::Warp::on_path_oriented(shape, text_start, l.vertical));
     // Line space (lines, clusters, carets) → screen: vertical type turns it 90° clockwise.
     let scr = |x: f32, y: f32| -> Pos2 {
         let (x, y) = l.to_text(x, y);

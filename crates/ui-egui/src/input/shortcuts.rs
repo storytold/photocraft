@@ -773,6 +773,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if new_layer_without_dialog(app, ctx) {
         return true;
     }
+    if app.ui.type_path_drag.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::type_path_placement::cancel(app);
+        return true;
+    }
     // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).
     if crate::shortcut_dispatch::dispatch_pressed(app, ctx, focus, editing) {
         return true;
@@ -819,7 +823,7 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     // An open options bar popup (the Crop Ratio list, the overlay and gear menus) takes the keys
     // first: Esc closes it, and neither key reaches the crop beneath (#7386). Its id is kept in
     // memory from the last frame; `ctx.any_popup_open` only sees this frame's, drawn later.
-    if (!app.ui.polygon.is_empty() || app.ui.crop_rect.is_some()) && !egui::Popup::is_any_open(ctx) {
+    if (!app.ui.polygon.is_empty() || app.ui.crop_rect.is_some()) && !egui::Popup::is_any_open(ctx) && !crate::panels::options_bar::fill_help_takes_keys(ctx) {
         if pressed(Key::Enter) {
             if !app.ui.polygon.is_empty() {
                 crate::canvas::commit_polygon(app);
@@ -907,8 +911,9 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::opacity_keys::handle(app, ctx);
 }
 
-/// Selects a tool from its letter key. Pressing the key of the current group cycles within it; with
-/// the Shift-switch preference only ⇧+key cycles. Returns true when a tool key was handled.
+/// Selects a tool from its letter key. Entering a group uses its remembered eligible tool or the
+/// first eligible tool in toolbar order. Pressing the key of the current group cycles within it.
+/// With the Shift-switch preference, only ⇧+key cycles. Returns true when a tool key was handled.
 fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &impl Fn(Key) -> bool) -> bool {
     let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
     for t in Tool::ALL {
@@ -920,16 +925,25 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
         if cycle_shift || pressed(k) {
             let before = app.ui.tool;
             let mut group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
-            // Shift+key (the cycle and the fallback to the group's first tool) uses the toolbar
-            // flyout's order; plain keys keep the `Tool::ALL` order.
+            // Shift+key cycles in toolbar flyout order.
             if cycle_shift {
                 group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
             }
-            app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
+            let next_tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
-                None => app.ui.group_tools.iter().copied().find(|last| group.contains(last)).unwrap_or(group[0]),
+                None => app
+                    .ui
+                    .group_tools
+                    .iter()
+                    .copied()
+                    .find(|last| group.contains(last))
+                    .unwrap_or_else(|| group.iter().copied().min_by_key(|tool| crate::panels::toolbar::toolbar_position(*tool)).unwrap_or(t)),
             };
+            if before != next_tool {
+                crate::type_path_placement::cancel(app);
+            }
+            app.ui.tool = next_tool;
             crate::tool_memory::ended_by_tool(app);
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
             let (plain, now) = ctx.input(|i| (!cycle_shift && !i.modifiers.shift && !i.modifiers.alt, i.time));
@@ -946,3 +960,7 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tool_key_default_tests.rs"]
+mod tool_key_default_tests;
