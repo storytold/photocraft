@@ -263,12 +263,13 @@ fn leaving_the_preview_and_losing_focus_do_not_resume_an_interrupted_hold() {
 
 /// Cancel discards the preview and OK contributes exactly one document edit.
 /// A reopened dialog must not inherit the interrupted gesture from its predecessor.
+/// The original pixel snapshot outlives the temporary compositor buffer.
 #[test]
 fn interrupted_history_can_cancel_or_commit_without_extra_document_history() {
     for commit_dialog in [false, true] {
         let (mut app, ctx) = prepared();
         let before = app.session.active().unwrap().history.past_len();
-        let original = photocraft_compose::render(&app.session.active().unwrap().doc, Rect::new(0, 0, 120, 80)).px;
+        let original = photocraft_compose::render(&app.session.active().unwrap().doc, Rect::new(0, 0, 120, 80)).px.clone();
         stroke(&mut app, &ctx, pos2(240.0, 365.0), pos2(280.0, 365.0), true);
         stroke(&mut app, &ctx, pos2(400.0, 365.0), pos2(450.0, 365.0), false);
         let painted = snapshot(&app);
@@ -366,7 +367,7 @@ fn a_release_and_fresh_resize_press_in_one_frame_preserves_redo_without_painting
 }
 
 /// A same-frame release and Space-drag must pan the preview without painting
-/// or consuming Redo, including subsequent stationary repaint ticks.
+/// or consuming Redo, including a pause before the first movement and later repaint ticks.
 #[test]
 fn a_release_and_fresh_pan_press_in_one_frame_preserves_redo_without_painting() {
     let (mut app, ctx) = prepared();
@@ -380,6 +381,11 @@ fn a_release_and_fresh_pan_press_in_one_frame_preserves_redo_without_painting() 
     history_frame(&mut app, &ctx, vec![button(pos2(450.0, 365.0), false), space(true), egui::Event::PointerMoved(start), button(start, true)]);
     assert_snapshot(&app, &a, 1, 1);
     let center = app.distort.liquify.as_ref().unwrap().center;
+    // A pan owns the hold before egui has recognized its first drag movement.
+    app.distort.liquify.as_mut().unwrap().last_dab = f64::NEG_INFINITY;
+    history_frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.distort.liquify.as_ref().unwrap().center, center);
+    assert_snapshot(&app, &a, 1, 1);
     history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start + vec2(20.0, 10.0))]);
     assert_ne!(app.distort.liquify.as_ref().unwrap().center, center);
     app.distort.liquify.as_mut().unwrap().last_dab = f64::NEG_INFINITY;
@@ -421,4 +427,231 @@ fn brush_resize_and_pan_still_work_after_an_interrupted_hold() {
     assert_ne!(app.distort.liquify.as_ref().unwrap().center, center);
     assert_eq!(app.distort.liquify.as_ref().unwrap().field, empty.0, "panning does not deform the image");
     history_frame(&mut app, &ctx, vec![space(false)]);
+}
+
+/// Releasing a resize button and pressing plain primary in one frame must paint.
+/// Brush settings stay fixed and Undo/Redo replay the new stroke exactly.
+fn resize_release_then_brush(owner: egui::PointerButton, modifiers: egui::Modifiers) {
+    let (mut app, ctx) = prepared();
+    let empty = snapshot(&app);
+    let d = app.distort.liquify.as_ref().unwrap();
+    let initial = (d.opts.size, d.opts.density);
+    let zoom = d.zoom;
+    let start = pos2(240.0, 365.0);
+    let press = egui::Event::PointerButton { pos: start, button: owner, pressed: true, modifiers };
+    history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), egui::Event::ModifiersChanged(modifiers), press]);
+    let end = start + vec2(20.0, 10.0);
+    history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(end)]);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.brush_resize.is_some());
+    let moved = (d.opts.size, d.opts.density);
+    assert!(moved.0 > initial.0);
+    assert_snapshot(&app, &empty, 0, 0);
+    let next = pos2(400.0, 365.0);
+    let release_at = start + vec2(30.0, 0.0);
+    let resized = resized_brush(initial.0, initial.1, release_at.x - start.x, release_at.y - start.y, zoom);
+    assert_ne!(resized, moved, "the owner release includes movement after the preceding frame");
+    let release = egui::Event::PointerButton { pos: release_at, button: owner, pressed: false, modifiers };
+    history_frame(&mut app, &ctx, vec![release, egui::Event::ModifiersChanged(egui::Modifiers::NONE), egui::Event::PointerMoved(next), button(next, true)]);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.brush_resize.is_none(), "a new plain press must end the preceding {owner:?} resize");
+    assert!(d.cur.is_some(), "the fresh press must start an intentional brush stroke");
+    assert_eq!(d.cur.as_ref().unwrap().0.points.len(), 1);
+    assert_eq!((d.opts.size, d.opts.density), resized);
+    history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(next + vec2(40.0, 0.0))]);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_eq!((d.opts.size, d.opts.density), resized);
+    assert_ne!(d.field, empty.0, "the new brush must deform the preview");
+    assert!(d.cur.as_ref().unwrap().0.points.len() > 1);
+    history_frame(&mut app, &ctx, vec![button(next + vec2(40.0, 0.0), false)]);
+    let painted = snapshot(&app);
+    assert_snapshot(&app, &painted, 1, 0);
+    history_frame(&mut app, &ctx, vec![history_key(false)]);
+    assert_snapshot(&app, &empty, 0, 1);
+    history_frame(&mut app, &ctx, vec![history_key(true)]);
+    assert_snapshot(&app, &painted, 1, 0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_eq!((d.opts.size, d.opts.density), resized);
+}
+
+/// A coalesced Control-Alt primary release and plain press starts a movable brush.
+#[test]
+fn a_primary_resize_release_and_new_brush_press_starts_a_stroke() {
+    resize_release_then_brush(egui::PointerButton::Primary, egui::Modifiers::CTRL | egui::Modifiers::ALT);
+}
+
+/// A coalesced Alt-secondary release and plain primary press starts a movable brush.
+#[test]
+fn a_secondary_resize_release_and_new_brush_press_starts_a_stroke() {
+    resize_release_then_brush(egui::PointerButton::Secondary, egui::Modifiers::ALT);
+}
+
+/// A resize retains its original button through modifier changes and unrelated presses.
+/// Only its owner's release ends resizing, without brush dabs or local-history changes.
+#[test]
+fn an_ongoing_resize_survives_modifier_changes_and_an_unrelated_press() {
+    for (owner, other, modifiers) in [
+        (egui::PointerButton::Primary, egui::PointerButton::Secondary, egui::Modifiers::CTRL | egui::Modifiers::ALT),
+        (egui::PointerButton::Secondary, egui::PointerButton::Primary, egui::Modifiers::ALT),
+    ] {
+        let (mut app, ctx) = prepared();
+        let empty = snapshot(&app);
+        let start = pos2(240.0, 365.0);
+        let press = egui::Event::PointerButton { pos: start, button: owner, pressed: true, modifiers };
+        history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), egui::Event::ModifiersChanged(modifiers), press]);
+        history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start + vec2(20.0, 10.0))]);
+        let previous_size = app.distort.liquify.as_ref().unwrap().opts.size;
+        let unrelated = |pressed| egui::Event::PointerButton { pos: start + vec2(40.0, 20.0), button: other, pressed, modifiers: egui::Modifiers::NONE };
+        history_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE), egui::Event::PointerMoved(start + vec2(40.0, 20.0)), unrelated(true)],
+        );
+        assert!(app.distort.liquify.as_ref().unwrap().brush_resize.is_some());
+        assert!(app.distort.liquify.as_ref().unwrap().opts.size > previous_size);
+        assert_snapshot(&app, &empty, 0, 0);
+        let previous = (app.distort.liquify.as_ref().unwrap().opts.size, app.distort.liquify.as_ref().unwrap().opts.density);
+        history_frame(&mut app, &ctx, vec![unrelated(false), egui::Event::PointerMoved(start + vec2(50.0, 25.0))]);
+        assert!(app.distort.liquify.as_ref().unwrap().brush_resize.is_some(), "releasing the other button must retain {owner:?} resize ownership");
+        history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start + vec2(60.0, 30.0))]);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert!(d.opts.size > previous.0);
+        assert!(d.opts.density > previous.1);
+        assert_ne!((d.opts.size, d.opts.density), previous, "movement after an unrelated release must still resize");
+        assert_snapshot(&app, &empty, 0, 0);
+        let release = egui::Event::PointerButton { pos: start + vec2(60.0, 30.0), button: owner, pressed: false, modifiers: egui::Modifiers::NONE };
+        history_frame(&mut app, &ctx, vec![release]);
+        assert!(app.distort.liquify.as_ref().unwrap().brush_resize.is_none());
+        assert_snapshot(&app, &empty, 0, 0);
+    }
+}
+
+/// A resize release lets a new resize choose its own anchor or a new pan move the view.
+/// Neither transition may jump brush settings or paint while waiting for its first movement.
+#[test]
+fn a_resize_release_allows_a_fresh_resize_anchor_or_pan() {
+    for (owner, modifiers) in
+        [(egui::PointerButton::Primary, egui::Modifiers::CTRL | egui::Modifiers::ALT), (egui::PointerButton::Secondary, egui::Modifiers::ALT)]
+    {
+        for next_resizes in [false, true] {
+            let (mut app, ctx) = prepared();
+            control(&mut app, &json!({"tool": "twirlCw"})).unwrap();
+            let empty = snapshot(&app);
+            let start = pos2(240.0, 365.0);
+            let press = egui::Event::PointerButton { pos: start, button: owner, pressed: true, modifiers };
+            history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), egui::Event::ModifiersChanged(modifiers), press]);
+            let end = start + vec2(20.0, 10.0);
+            history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(end)]);
+            let d = app.distort.liquify.as_ref().unwrap();
+            let settings = (d.opts.size, d.opts.density);
+            let center = d.center;
+            let next = pos2(400.0, 365.0);
+            let next_mods = if next_resizes { egui::Modifiers::CTRL | egui::Modifiers::ALT } else { egui::Modifiers::NONE };
+            let space = |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: next_mods };
+            let release = egui::Event::PointerButton { pos: end, button: owner, pressed: false, modifiers };
+            let press = egui::Event::PointerButton { pos: next, button: egui::PointerButton::Primary, pressed: true, modifiers: next_mods };
+            history_frame(
+                &mut app,
+                &ctx,
+                vec![release, egui::Event::ModifiersChanged(next_mods), space(!next_resizes), egui::Event::PointerMoved(next), press],
+            );
+            let d = app.distort.liquify.as_ref().unwrap();
+            assert_eq!((d.opts.size, d.opts.density), settings, "a fresh gesture must not reuse the preceding resize anchor");
+            assert_eq!(d.brush_resize.is_some(), next_resizes);
+            assert_snapshot(&app, &empty, 0, 0);
+            app.distort.liquify.as_mut().unwrap().last_dab = f64::NEG_INFINITY;
+            history_frame(&mut app, &ctx, vec![]);
+            assert_eq!(app.distort.liquify.as_ref().unwrap().center, center);
+            assert_snapshot(&app, &empty, 0, 0);
+            history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(next + vec2(20.0, 10.0))]);
+            let d = app.distort.liquify.as_ref().unwrap();
+            if next_resizes {
+                assert!(d.opts.size > settings.0);
+                assert_eq!(d.center, center);
+            } else {
+                assert_ne!(d.center, center);
+                assert_eq!((d.opts.size, d.opts.density), settings);
+            }
+            assert_snapshot(&app, &empty, 0, 0);
+            let release =
+                egui::Event::PointerButton { pos: next + vec2(20.0, 10.0), button: egui::PointerButton::Primary, pressed: false, modifiers: next_mods };
+            history_frame(&mut app, &ctx, vec![release, space(false), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+            assert!(app.distort.liquify.as_ref().unwrap().brush_resize.is_none());
+            assert_snapshot(&app, &empty, 0, 0);
+        }
+    }
+}
+
+/// Both resize routes can hand off to a new Alt-right resize in one input frame.
+/// Its next frame can be the release itself, so waiting for a drag would lose the resize.
+#[test]
+fn a_resize_release_can_handoff_to_a_fresh_secondary_resize() {
+    let alt = egui::Modifiers::ALT;
+    for (first_button, first_mods) in [(egui::PointerButton::Primary, egui::Modifiers::CTRL | alt), (egui::PointerButton::Secondary, alt)] {
+        let (mut app, ctx) = prepared();
+        control(&mut app, &json!({"tool": "twirlCw", "density": 50})).unwrap();
+        let empty = snapshot(&app);
+        let d = app.distort.liquify.as_ref().unwrap();
+        let (size, density, zoom) = (d.opts.size, d.opts.density, d.zoom);
+        let first = pos2(240.0, 365.0);
+        let second = pos2(400.0, 365.0);
+        let press = egui::Event::PointerButton { pos: first, button: first_button, pressed: true, modifiers: first_mods };
+        history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(first), egui::Event::ModifiersChanged(first_mods), press]);
+        assert!(app.distort.liquify.as_ref().unwrap().brush_resize.is_some());
+        let release = egui::Event::PointerButton { pos: first + vec2(20.0, -12.0), button: first_button, pressed: false, modifiers: first_mods };
+        let press = egui::Event::PointerButton { pos: second, button: egui::PointerButton::Secondary, pressed: true, modifiers: alt };
+        history_frame(&mut app, &ctx, vec![release, egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(second), press]);
+        let d = app.distort.liquify.as_ref().unwrap();
+        let first_settings = resized_brush(size, density, 20.0, -12.0, zoom);
+        assert_eq!((d.opts.size, d.opts.density), first_settings);
+        assert!(d.brush_resize.is_some(), "the new secondary press owns the resize before its first movement");
+        let release = egui::Event::PointerButton { pos: second + vec2(27.0, 9.0), button: egui::PointerButton::Secondary, pressed: false, modifiers: alt };
+        history_frame(&mut app, &ctx, vec![release]);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!((d.opts.size, d.opts.density), resized_brush(first_settings.0, first_settings.1, 27.0, 9.0, zoom));
+        assert!(d.brush_resize.is_none());
+        assert_snapshot(&app, &empty, 0, 0);
+    }
+}
+
+/// A secondary hold or later press cannot borrow the anchor of a fresh Ctrl+Alt-primary resize.
+/// The new primary's own release applies its final delta and ends the resize.
+#[test]
+fn a_fresh_primary_resize_owns_its_release_with_secondary_down() {
+    let chord = egui::Modifiers::CTRL | egui::Modifiers::ALT;
+    let primary = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: chord };
+    let secondary = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: chord };
+    for secondary_already_held in [true, false] {
+        let (mut app, ctx) = prepared();
+        control(&mut app, &json!({"tool": "twirlCw", "density": 50})).unwrap();
+        let empty = snapshot(&app);
+        let d = app.distort.liquify.as_ref().unwrap();
+        let (size, density, zoom) = (d.opts.size, d.opts.density, d.zoom);
+        let first = pos2(240.0, 365.0);
+        let second = pos2(400.0, 365.0);
+        history_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(first), egui::Event::ModifiersChanged(chord), primary(first, true)]);
+        assert!(app.distort.liquify.as_ref().unwrap().brush_resize.is_some());
+        if secondary_already_held {
+            history_frame(&mut app, &ctx, vec![secondary(first, true)]);
+        }
+        let mut handoff = vec![primary(first + vec2(20.0, -12.0), false), egui::Event::PointerMoved(second), primary(second, true)];
+        if !secondary_already_held {
+            handoff.push(secondary(second, true));
+        }
+        history_frame(&mut app, &ctx, handoff);
+        let first_settings = resized_brush(size, density, 20.0, -12.0, zoom);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!((d.opts.size, d.opts.density), first_settings);
+        assert!(d.brush_resize.is_some());
+        history_frame(&mut app, &ctx, vec![primary(second + vec2(27.0, 9.0), false)]);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert!(ctx.input(|i| i.pointer.button_down(egui::PointerButton::Secondary)));
+        assert!(d.brush_resize.is_none(), "the actual primary release ends the resize with secondary still held");
+        let final_settings = resized_brush(first_settings.0, first_settings.1, 27.0, 9.0, zoom);
+        assert_eq!((d.opts.size, d.opts.density), final_settings);
+        history_frame(&mut app, &ctx, vec![secondary(second + vec2(45.0, 18.0), false), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!((d.opts.size, d.opts.density), final_settings);
+        assert_snapshot(&app, &empty, 0, 0);
+    }
 }

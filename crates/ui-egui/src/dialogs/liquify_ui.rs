@@ -9,7 +9,7 @@
 //! OK runs `filter.liquify` with the same strokes and gets the same field.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, MAX_LIVE_MS, ProxyImage, auto_cell};
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -191,8 +191,11 @@ impl LiquifyOpts {
         if let Some(t) = v.get("tool") {
             let tool: LiquifyTool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
             // Strokes can twirl counterclockwise, but no tool does: hold Alt with Twirl Clockwise.
-            if !LiquifyTool::ALL.contains(&tool) {
+            if tool == LiquifyTool::TwirlCcw {
                 return Err(format!("{t} is not a Liquify tool: choose twirlCw and hold Alt (Option) to twirl counterclockwise"));
+            }
+            if !LiquifyTool::ALL.contains(&tool) {
+                return Err(format!("{t} is not a Liquify tool"));
             }
             self.tool = tool;
         }
@@ -258,8 +261,8 @@ pub struct LiquifyDialog {
     zoom: f32,
     center: [f64; 2],
     hover: Option<[f64; 2]>,
-    /// Alt+right-drag (or Control+Alt-drag) resizing the brush: screen anchor, starting size, starting density.
-    brush_resize: Option<(Pos2, f32, f32)>,
+    /// Active brush resize: screen anchor, starting size/density and owning pointer button.
+    brush_resize: Option<(Pos2, f32, f32, egui::PointerButton)>,
     last_dab: f64,
     /// Last dab + proxy update time (ms), shown in the footer.
     pub dab_ms: f64,
@@ -267,6 +270,12 @@ pub struct LiquifyDialog {
     pub preview_ms: f64,
     /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
     smart_filter: Option<usize>,
+    /// Preview (P): off, the image is drawn unwarped while strokes still change the field, as
+    /// Photoshop's Preview checkbox does (#7905). Every opening starts with it on.
+    pub preview: bool,
+    /// The undisplaced field drawn while Preview is off. It is as large as `field`, so it exists
+    /// only while Preview is off: made when Preview is turned off, freed when it's turned back on.
+    identity: Option<LiquifyField>,
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -299,6 +308,7 @@ impl LiquifyDialog {
             "strokes": self.strokes.len() + usize::from(self.cur.is_some()),
             "redo": self.redo.len(),
             "meshSize": self.cell,
+            "preview": self.preview,
             "maxDisplacement": self.field.max_displacement(),
             "proxy": [self.proxy.w, self.proxy.h],
             "dabMs": self.dab_ms,
@@ -347,11 +357,15 @@ impl LiquifyDialog {
         self.last_dab = now;
     }
 
+    /// Continues the stroke to `p`. The point is recorded live, with the milliseconds since the
+    /// previous one, so the brush follows the pointer exactly and the stationary tools work by
+    /// real elapsed time ([`LiquifyField::stroke_segment_live`]); OK replays the same.
     fn extend(&mut self, p: [f64; 3], now: f64) {
         let Some((mut s, last)) = self.cur.take() else { return };
+        let ms = if (now - self.last_dab).is_finite() { (now - self.last_dab).max(0.0) } else { 0.0 };
         let t0 = crate::gpu_canvas::now_ms();
-        let d = self.field.stroke_segment(&s, last, p);
-        s.points.push(p.to_vec());
+        let d = self.field.stroke_segment_live(&s, last, p, ms);
+        s.points.push(vec![p[0], p[1], p[2], ms]);
         self.mark(d, matches!(s.tool, LiquifyTool::Freeze | LiquifyTool::Thaw));
         self.render_dirty();
         self.dab_ms = crate::gpu_canvas::now_ms() - t0;
@@ -448,14 +462,27 @@ impl LiquifyDialog {
     /// Re-renders the dirty proxy pixels into `out` (the texture upload happens in `show`).
     fn render_dirty(&mut self) {
         if let Some(r) = self.dirty {
+            let field = self.identity.as_ref().filter(|_| !self.preview).unwrap_or(&self.field);
             if let Some(source) = &self.native_proxy {
                 let bounds = Rect::new(0, 0, self.proxy.w as i32, self.proxy.h as i32);
                 let dirty = Rect::new(r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
-                render_components(source, bounds, &self.field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
+                render_components(source, bounds, field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
             } else {
-                self.proxy.render(&self.field, r, &mut self.out);
+                self.proxy.render(field, r, &mut self.out);
             }
         }
+    }
+
+    /// Turns Preview on or off: the whole preview is redrawn with, or without, the warp.
+    pub fn set_preview(&mut self, on: bool) {
+        if on == self.preview {
+            return;
+        }
+        self.identity = (!on).then(|| LiquifyField::new(self.canvas, self.cell));
+        self.preview = on;
+        self.dirty = Some([0, 0, self.proxy.w, self.proxy.h]);
+        self.render_dirty();
+        self.view_dirty = self.view_bounds;
     }
 
     /// Builds or updates the visible source-resolution viewport. At ordinary zoom the whole-layer
@@ -504,10 +531,11 @@ impl LiquifyDialog {
             return;
         }
         let started = crate::gpu_canvas::now_ms();
+        let field = self.identity.as_ref().filter(|_| !self.preview).unwrap_or(&self.field);
         let rendered = if self.native_proxy.is_some() {
-            render_components(&self.source, self.canvas, &self.field, 1.0, &self.target, bounds, dirty, &mut self.view_out)
+            render_components(&self.source, self.canvas, field, 1.0, &self.target, bounds, dirty, &mut self.view_out)
         } else {
-            ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch)
+            ProxyImage::render_full_resolution(&self.source, field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch)
         };
         if !rendered {
             self.view_bounds = None;
@@ -665,12 +693,19 @@ fn open_on(
         dab_ms: 0.0,
         preview_ms: 0.0,
         smart_filter,
+        preview: true,
+        identity: None,
     };
     // A sensible starting brush (about a tenth of the image), then the settings last used, so
     // Liquify opens as it was left (#418). Saved values are clamped; a bad one is skipped.
     d.opts.size = ((canvas.width().max(canvas.height()) as f32) / 10.0).round().clamp(10.0, 1500.0);
     if let Some(saved) = app.session.prefs().dialogs.get(REMEMBERED) {
-        let _ = d.opts.apply(saved);
+        // Older versions had a Twirl Counterclockwise tool; its saved choice is Twirl Clockwise now.
+        let mut saved = saved.clone();
+        if saved.get("tool").and_then(Value::as_str) == Some("twirlCcw") {
+            saved["tool"] = json!("twirlCw");
+        }
+        let _ = d.opts.apply(&saved);
     }
     // Layer ids belong to one document: a remembered backdrop Use starts at All Layers.
     d.opts.backdrop_layer = None;
@@ -734,6 +769,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     applied?;
     let num = |k: &str| ui.get(k).and_then(Value::as_f64).map(|v| v as f32);
     let flag = |k: &str| ui.get(k).and_then(Value::as_bool);
+    if let Some(on) = flag("preview") {
+        d.set_preview(on);
+    }
     if flag("undo") == Some(true) {
         d.undo();
     }
@@ -770,7 +808,7 @@ fn alt_tool(t: LiquifyTool) -> LiquifyTool {
 /// Where the brush outline is drawn: under the pointer, except during an Alt-drag of the brush
 /// size (`resize`), when it stays at the drag's anchor and only grows or shrinks, as the brush
 /// tools' Alt-drag does outside Liquify (#7884).
-fn brush_circle_at(resize: Option<(Pos2, f32, f32)>, hover: Option<Pos2>) -> Option<Pos2> {
+fn brush_circle_at(resize: Option<(Pos2, f32, f32, egui::PointerButton)>, hover: Option<Pos2>) -> Option<Pos2> {
     resize.map(|(anchor, ..)| anchor).or(hover)
 }
 
@@ -789,12 +827,132 @@ fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32, zoom: f3
     (size, (density * 100.0).round())
 }
 
+/// Finishes only the owning button's resize, before a later press chooses a new gesture.
+/// The release position supplies its final size/density even if another press moved the pointer.
+fn finish_released_resize(d: &mut LiquifyDialog, input: &egui::InputState) -> Option<usize> {
+    let (anchor, size0, density0, owner) = d.brush_resize?;
+    let release = input.events.iter().enumerate().find_map(|(index, event)| match event {
+        egui::Event::PointerButton { pos, button, pressed: false, .. } if *button == owner => Some((index, *pos)),
+        _ => None,
+    });
+    if let Some((_, pos)) = release {
+        (d.opts.size, d.opts.density) = resized_brush(size0, density0, pos.x - anchor.x, pos.y - anchor.y, d.zoom);
+    }
+    if release.is_some() || !input.pointer.button_down(owner) {
+        d.brush_resize = None;
+    }
+    release.map(|(index, _)| index)
+}
+
+/// Finds the first eligible held press after the preceding resize ended. Its button and
+/// anchor come from the same event. A later transition on that button supersedes an earlier press.
+fn fresh_resize_press(input: &egui::InputState, area: ERect, after: Option<usize>) -> Option<(Pos2, egui::PointerButton)> {
+    let mut primary_seen = false;
+    let mut secondary_seen = false;
+    let mut start = None;
+    for (index, event) in input.events.iter().enumerate().rev() {
+        if after.is_some_and(|release| index <= release) {
+            break;
+        }
+        let egui::Event::PointerButton { pos, button, pressed, modifiers } = event else { continue };
+        let seen = match button {
+            egui::PointerButton::Primary => &mut primary_seen,
+            egui::PointerButton::Secondary => &mut secondary_seen,
+            _ => continue,
+        };
+        if !std::mem::replace(seen, true)
+            && *pressed
+            && input.pointer.button_down(*button)
+            && area.contains(*pos)
+            && brush_resize_gesture(*modifiers, *button == egui::PointerButton::Secondary)
+        {
+            start = Some((*pos, *button));
+        }
+    }
+    start
+}
+
+/// Completes the old resize before arming a fresh one. A held brush can also enter
+/// resize when its chord is pressed, as long as only one eligible button owns the hold.
+fn prepare_brush_resize(d: &mut LiquifyDialog, ui: &egui::Ui, response: &egui::Response, area: ERect) {
+    let released = ui.input(|i| finish_released_resize(d, i));
+    if d.brush_resize.is_some() {
+        return;
+    }
+    let (primary, secondary, fresh_press, modifiers) = ui.input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.pointer.button_down(egui::PointerButton::Secondary),
+            i.pointer.primary_pressed() || i.pointer.button_pressed(egui::PointerButton::Secondary),
+            i.modifiers,
+        )
+    });
+    let owns_hold = response.is_pointer_button_down_on();
+    let start = if fresh_press {
+        let can_start = owns_hold || (response.contains_pointer() && !ui.ctx().dragging_something_else(response.id));
+        can_start.then(|| ui.input(|i| fresh_resize_press(i, area, released))).flatten()
+    } else if owns_hold && released.is_none() && primary != secondary && brush_resize_gesture(modifiers, secondary) {
+        let owner = if secondary { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+        ui.input(|i| i.pointer.press_origin()).or_else(|| response.interact_pointer_pos()).map(|p| (p, owner))
+    } else {
+        None
+    };
+    if let Some((anchor, owner)) = start {
+        d.brush_resize = Some((anchor, d.opts.size, d.opts.density, owner));
+    }
+}
+
+/// Updates one resize using its original anchor, settings and owning pointer button.
+/// Unrelated button releases cannot end it or lend a new press origin to the held gesture.
+fn update_brush_resize(d: &mut LiquifyDialog, ui: &egui::Ui, pointer_pos: Option<Pos2>) {
+    if let (Some((anchor, size0, dens0, _)), Some(p)) = (d.brush_resize, pointer_pos) {
+        let delta = p - anchor;
+        let (size, density) = resized_brush(size0, dens0, delta.x, delta.y, d.zoom);
+        d.opts.size = size;
+        d.opts.density = density;
+    }
+    if d.brush_resize.is_some_and(|(_, _, _, owner)| !ui.input(|i| i.pointer.button_down(owner))) {
+        d.brush_resize = None;
+    }
+    ui.ctx().request_repaint();
+}
+
 /// Pointer in document coordinates (from the preview or the control channel). Alt at
 /// pointer-down subtracts from the freeze mask (lasso), reverses a twirl and swaps Pucker/Bloat;
 /// Shift adds to the mask, same as no modifier. Explicit Down and Up events clear the
 /// history-interruption latch; an intentional new Down may therefore clear Redo normally.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
-    let now = crate::gpu_canvas::now_ms();
+    pointer_at(app, ev, mods, crate::gpu_canvas::now_ms());
+}
+
+/// One frame's queued pointer events, at frame time `now` (ms). The frame's moves share the time
+/// since the last point evenly, as they would arriving one per frame: the events are handled one
+/// after another, so reading the clock for each gave the first move nearly the whole frame and
+/// the rest only processing time, which changed the stationary tools' strength and where it
+/// landed. After a stall the frame counts for at most [`MAX_LIVE_MS`] in all, as one point would.
+fn dispatch_frame(app: &mut PhotocraftApp, events: Vec<ToolEvent>, mods: egui::Modifiers, now: f64) {
+    let moves = events.iter().filter(|e| matches!(e, ToolEvent::Move { .. })).count();
+    let mut start = now;
+    if let Some(d) = app.distort.liquify.as_mut().filter(|d| d.cur.is_some()) {
+        if now - d.last_dab > MAX_LIVE_MS {
+            d.last_dab = now - MAX_LIVE_MS;
+        }
+        start = d.last_dab;
+    }
+    let mut k = 0usize;
+    for ev in events {
+        let t = if matches!(ev, ToolEvent::Move { .. }) && start.is_finite() && start < now {
+            k += 1;
+            start + (now - start) * k as f64 / moves as f64
+        } else {
+            now
+        };
+        pointer_at(app, ev, mods, t);
+    }
+}
+
+/// [`pointer`] at time `now` (ms).
+fn pointer_at(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, now: f64) {
     let Some(d) = app.distort.liquify.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, pressure } => {
@@ -855,6 +1013,11 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
             "view.fitOnScreen" => 0.0,
             _ => 1.0,
         };
+    }
+    // P toggles Preview, as in Photoshop (#7905).
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::P)) {
+        let on = !d.preview;
+        d.set_preview(on);
     }
     // Ctrl+H (Hide Extras) toggles the red freeze-mask overlay; the mask itself stays active.
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::H)) {
@@ -1069,6 +1232,27 @@ fn preview_release_event(d: &LiquifyDialog, response: &egui::Response, primary_d
     }
 }
 
+/// Queues the active brush's coalesced motion and stationary tick for timed frame dispatch.
+fn queue_preview_brush_moves(d: &LiquifyDialog, ui: &egui::Ui, area: ERect, q: [f64; 2], pressure: f32, events: &mut Vec<ToolEvent>) {
+    let moved = d.cur.as_ref().is_some_and(|(_, l)| l[0] != q[0] || l[1] != q[1]);
+    // Stationary tools keep working while the brush is held still: a point every
+    // frame, each worth the time since the last, so the speed is the same at any
+    // frame rate and never stalls while the brush creeps.
+    let held = d.opts.tool.is_stationary();
+    // Every pointer position the platform reported this frame, not just the last, so
+    // a quick curved stroke keeps its curve instead of being cut into one straight
+    // chord per frame, and a detour that returns to where it began is not dropped.
+    let path: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
+    let detour = path.len() > 1;
+    for p in path.iter().take(path.len().saturating_sub(1)) {
+        let m = to_doc(d, area, *p);
+        events.push(ToolEvent::Move { x: m[0], y: m[1], pressure });
+    }
+    if moved || held || detour {
+        events.push(ToolEvent::Move { x: q[0], y: q[1], pressure });
+    }
+}
+
 /// Renders the modal preview after shortcut dispatch, keeping physical gestures separate.
 /// A fresh press may start a stroke even after a same-frame release; continued held motion
 /// after history navigation cannot restart painting or consume Redo. Pan and resize keep
@@ -1117,7 +1301,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
         painter.rect_filled(right, 0.0, t.dock);
         painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 12.0))));
+        // The properties scroll above the Preview row and the buttons.
+        let props_rect = ERect::from_min_max(right.min + vec2(14.0, 12.0), pos2(right.right() - 14.0, (right.bottom() - 84.0).max(right.top() + 12.0)));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(props_rect));
         egui::ScrollArea::vertical().id_salt("liquify-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             widgets::section_label(ui, tl!("Brush Tool Options"));
@@ -1192,6 +1378,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 .size(11.0),
             );
         });
+        // Preview, centred above OK and Cancel as in Photoshop (#7905).
+        let label_w = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Preview").to_owned(), egui::TextStyle::Body.resolve(ui.style()), t.text).size().x);
+        let row_w = (label_w + 30.0).min(RIGHT_W - 28.0);
+        let preview_row = ERect::from_center_size(pos2(right.center().x, right.bottom() - 64.0), vec2(row_w, 24.0));
+        let mut pr = ui.new_child(egui::UiBuilder::new().max_rect(preview_row).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let mut preview = d.preview;
+        if widgets::checkbox(&mut pr, &mut preview, tl!("Preview")).changed() {
+            d.set_preview(preview);
+        }
         // Footer buttons.
         let foot = ERect::from_min_size(pos2(right.left() + 14.0, right.bottom() - 48.0), vec2(RIGHT_W - 28.0, 32.0));
         let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
@@ -1278,7 +1473,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // started, so only its size changes (#7884).
         if let Some(hp) = brush_circle_at(d.brush_resize, resp.hover_pos()) {
             if d.opts.tool != LiquifyTool::LassoMask {
-                let center = d.brush_resize.map_or(hp, |(anchor, _, _)| anchor);
+                let center = d.brush_resize.map_or(hp, |(anchor, ..)| anchor);
                 let r = d.opts.size * 0.5 * d.zoom;
                 if d.brush_resize.is_some() {
                     crate::brush_resize::liquify_tip_preview(
@@ -1304,8 +1499,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         clip.rect_stroke(img, 0.0, Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
         // Mouse → strokes (Space or middle button pans). Alt+right-drag resizes the brush (#4702).
-        let (pan, secondary, mods_now) =
-            ui.input(|i| (i.key_down(egui::Key::Space) || i.pointer.middle_down(), i.pointer.button_down(egui::PointerButton::Secondary), i.modifiers));
+        let pan = ui.input(|i| i.key_down(egui::Key::Space) || i.pointer.middle_down());
         let (primary_down, primary_pressed, primary_released) =
             ui.input(|i| (i.pointer.primary_down(), i.pointer.primary_pressed(), i.pointer.primary_released()));
         let fresh_primary = primary_pressed
@@ -1316,31 +1510,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             d.brush_interrupted = false;
         }
         // egui clears the response's held/drag flags on a release, even when a new press
-        // follows in this frame. Only a fresh press in this preview may fill that gap.
-        let pointer_pos = resp.interact_pointer_pos().or_else(|| fresh_primary.then(|| ctx.pointer_interact_pos()).flatten());
-        // From the press, not once the drag is recognised a few points later: that first frame
-        // would otherwise start a stroke.
-        let resize = d.brush_resize.is_some() || ((fresh_primary || resp.is_pointer_button_down_on()) && brush_resize_gesture(mods_now, secondary));
+        // follows in this frame. A fresh press or the ongoing resize may fill that gap.
+        prepare_brush_resize(d, ui, &resp, area);
+        let pointer_pos = resp.interact_pointer_pos().or_else(|| (fresh_primary || d.brush_resize.is_some()).then(|| ctx.pointer_interact_pos()).flatten());
         let mut began_stroke = false;
-        if resize {
-            // Anchored where the button went down, not where the drag was recognised a few
-            // points later, so the outline doesn't jump when the gesture starts.
-            if d.brush_resize.is_none()
-                && let Some(p) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos())
-            {
-                d.brush_resize = Some((p, d.opts.size, d.opts.density));
-            }
-            if let (Some((anchor, size0, dens0)), Some(p)) = (d.brush_resize, pointer_pos) {
-                let delta = p - anchor;
-                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y, d.zoom);
-                d.opts.size = size;
-                d.opts.density = density;
-            }
-            if (resp.drag_stopped() && !fresh_primary) || !ui.input(|i| i.pointer.any_down()) {
-                d.brush_resize = None;
-            }
-            ctx.request_repaint();
-        } else if pan && (fresh_primary || resp.dragged()) {
+        if d.brush_resize.is_some() {
+            update_brush_resize(d, ui, pointer_pos);
+        } else if pan && (fresh_primary || resp.dragged() || resp.is_pointer_button_down_on()) {
+            // Keep an owned, stationary pan out of brush Down before the first drag movement.
             let dl = resp.drag_delta();
             d.center = [d.center[0] - f64::from(dl.x / d.zoom), d.center[1] - f64::from(dl.y / d.zoom)];
         } else if !d.brush_interrupted
@@ -1374,20 +1551,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 // The stroke already began at the press; egui's later drag start must not restart it (#8055).
                 events.push(ToolEvent::Down { x: q[0], y: q[1], pressure: pr });
             } else if resp.dragged() || resp.is_pointer_button_down_on() {
-                let moved = d.cur.as_ref().is_some_and(|(_, l)| l[0] != q[0] || l[1] != q[1]);
-                // Stationary tools keep working while the brush is held still (30 dabs/s).
-                let held = d.opts.tool.is_stationary() && crate::gpu_canvas::now_ms() - d.last_dab > 33.0;
-                if moved || held {
-                    events.push(ToolEvent::Move { x: q[0], y: q[1], pressure: pr });
-                }
+                queue_preview_brush_moves(d, ui, area, q, pr, &mut events);
                 ctx.request_repaint();
             }
         }
         events.extend(preview_release_event(d, &resp, primary_down, primary_released, began_stroke));
     });
-    for ev in events {
-        pointer(app, ev, mods);
-    }
+    dispatch_frame(app, events, mods, crate::gpu_canvas::now_ms());
     match action {
         Some("ok") => {
             let _ = commit(app);

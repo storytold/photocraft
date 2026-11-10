@@ -371,7 +371,8 @@ pub(super) fn path_to_selection(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "selected": selected }))
 }
 
-/// `path.toSelection` with the combine mode fixed by the command (⌘⇧↩ adds, ⌘⌥↩ subtracts);
+/// `path.toSelection` with the combine mode fixed by the command (⌘⇧↩ adds, ⌘⌥↩ subtracts,
+/// ⇧⌥⌘↩ intersects);
 /// a `mode` in the params is overridden, the rest is forwarded and validated as usual.
 pub(super) fn path_to_selection_with_mode(s: &mut Session, p: &Value, mode: &str) -> Result<Value> {
     let mut q = match p {
