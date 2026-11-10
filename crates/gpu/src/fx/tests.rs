@@ -353,6 +353,18 @@ fn softer_outer_glow_blurs_with_the_glow_tent() {
             spread_glow.spread = 0.4;
             let outer = weights(&program(&Effect::OuterGlow(spread_glow), &light, false));
             assert_eq!(outer, vec![glow_tent_kernel(6.0).1; 2], "outer glow with spread");
+            // A spread whose product is fractional leaves a whole width too (#12305, measured):
+            // 10 x 15 % = 1.5 dilates by 2 and blurs over 8, not 8.5, so the even-width glow
+            // tent is chosen (the earlier split handed the shared tent 8.5).
+            let mut half_glow = g.clone();
+            half_glow.spread = 0.15;
+            let outer = weights(&program(&Effect::OuterGlow(half_glow), &light, false));
+            assert_eq!(outer, vec![glow_tent_kernel(8.0).1; 2], "outer glow, spread 15 %");
+            // A fractional size is cut down to whole pixels: 9.6 blurs over 9.
+            let mut frac = g.clone();
+            frac.size = 9.6;
+            let outer = weights(&program(&Effect::OuterGlow(frac), &light, false));
+            assert_eq!(outer, vec![glow_tent_kernel(9.0).1; 2], "outer glow, size 9.6");
         }
         let inner = weights(&program(&Effect::InnerGlow(g), &light, false));
         assert_eq!(inner, vec![tent_kernel(size).1; 2], "inner glow size {size}");

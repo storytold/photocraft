@@ -1247,6 +1247,93 @@ fn softer_flat_contour_glow_matches_photoshop() {
     assert!(row[..5].iter().all(|&v| v < 0.9) && row[5..].iter().all(|&v| v > 0.999), "{row:?}");
 }
 
+/// #12305: the spread split is whole pixels. The size is cut down to whole pixels, the dilation is
+/// `size × spread` rounded half up, and the blur is the whole width left, so the two add up to the
+/// size and no fractional width reaches a kernel.
+#[test]
+fn spread_split_is_whole_pixels_and_adds_up_to_the_size() {
+    for (size, spread, want) in [
+        // The measured rows: 1.5 and 0.5 round up.
+        (10.0f32, 0.15f32, (2.0f32, 8.0f32)),
+        (10.0, 0.05, (1.0, 9.0)),
+        // No spread blurs the whole size; a full spread leaves nothing to blur.
+        (10.0, 0.0, (0.0, 10.0)),
+        (10.0, 1.0, (10.0, 0.0)),
+        (7.0, 1.0, (7.0, 0.0)),
+        // A fractional size is cut down first: 9.6 is 9 (9 × 15 % = 1.35 → 1), 10.5 is 10, 4.4 is 4.
+        (9.6, 0.15, (1.0, 8.0)),
+        (9.6, 0.0, (0.0, 9.0)),
+        (10.5, 0.15, (2.0, 8.0)),
+        (4.4, 0.5, (2.0, 2.0)),
+        // A 2 % spread of a 5 px shadow doesn't grow it at all.
+        (5.0, 0.02, (0.0, 5.0)),
+    ] {
+        assert_eq!(spread_split(size, spread), want, "size {size}, spread {spread}");
+    }
+    // Every whole size the dialog takes at every whole percent, read as a file stores it
+    // (`pct / 100` in f32): the dilation is the exactly rounded-half-up product, and both parts
+    // are whole and add up to the size.
+    for size in 0u32..=250 {
+        for pct in 0u32..=100 {
+            let (r, bw) = spread_split(size as f32, pct as f32 / 100.0);
+            let want = (size * pct + 50) / 100;
+            assert_eq!(r, want as f32, "size {size}, spread {pct} %: dilation");
+            assert_eq!(bw, (size - want) as f32, "size {size}, spread {pct} %: blur");
+        }
+    }
+}
+
+/// #12305, measured by the maintainer in the reference application: Outer Glow, Softer, red on
+/// black, Normal 100 %, a straight edge, `d` px out, flat contour Range 50 % (and Linear Range
+/// 100 % as the control). With a spread the glow is a whole-pixel dilation followed by the
+/// whole-width tent of what is left, `n = size − round(size × spread)`. Size 10, spread 15 %:
+/// dilation 2, tent 8, so 199, 100, 33 at 7–9 px and 0 at 10. The earlier split blurred over
+/// `10 × 0.85 = 8.5` and read 237, 134, 61 and 17 at 10 px (38 levels off at worst). A fractional
+/// size is cut down to whole pixels: 9.6 renders as 9, 10.5 as 10 and 4.4 as 4.
+#[test]
+fn softer_flat_contour_glow_with_spread_matches_photoshop() {
+    let n = 80;
+    let mut square = Map::new(n, n, 0.0);
+    for y in 25..55 {
+        for x in 25..55 {
+            square.v[y * n + x] = 1.0;
+        }
+    }
+    let at = |m: &Map, d: usize| 255.0 * m.v[40 * n + 25 - d];
+    let flat = |size: f32, spread: f32| Glow { spread, ..contour_glow(GlowTechnique::Softer, size, &FLAT) };
+    // `(spread, [(d, level)])`, flat contour, size 10.
+    for (spread, rows) in [
+        (0.15f32, [(6usize, 255.0f32), (7, 199.0), (8, 100.0), (9, 33.0)]),
+        // 10 × 5 % = 0.5 rounds up: dilation 1, tent 9.
+        (0.05, [(6, 255.0), (7, 157.0), (8, 79.0), (9, 26.0)]),
+    ] {
+        let m = glow_map(&square, &flat(10.0, spread), false, (0, 0));
+        for (d, ps) in rows {
+            let got = at(&m, d);
+            assert!((got - ps).abs() <= 1.0, "spread {spread}, {d} px out: {got} vs the reference application's {ps}");
+        }
+        // The reach stays `size − 1` px whatever the spread.
+        for d in [10, 11] {
+            assert_eq!(m.v[40 * n + 25 - d], 0.0, "spread {spread}, {d} px out: beyond the reach");
+        }
+    }
+    // The Linear control row (Range 100 %), size 10, spread 15 %: dilation 2 + tent 8, exactly.
+    let linear = Glow { contour: Contour::Linear, range: 1.0, ..flat(10.0, 0.15) };
+    let m = glow_map(&square, &linear, false, (0, 0));
+    for (d, ps) in [171.0f32, 143.0, 112.0, 84.0, 60.0, 40.0, 24.0, 12.0, 4.0, 0.0].into_iter().enumerate().map(|(i, v)| (i + 1, v)) {
+        let got = at(&m, d);
+        assert!((got - ps).abs() <= 1.0, "linear control, {d} px out: {got} vs the reference application's {ps}");
+    }
+    // A fractional size renders as the whole size under it, with and without a spread.
+    for (frac, whole) in [(9.6f32, 9.0f32), (10.5, 10.0), (4.4, 4.0)] {
+        for spread in [0.0f32, 0.15] {
+            let got = glow_map(&square, &flat(frac, spread), false, (0, 0));
+            let want = glow_map(&square, &flat(whole, spread), false, (0, 0));
+            assert_eq!(bits(&got.v), bits(&want.v), "size {frac} at spread {spread} renders as {whole}");
+        }
+    }
+}
+
 /// #11361 review: the table is linear from entry 0 up to a knee on a table entry, so the GPU's and
 /// CPU's linear interpolation paint the model's value at any coverage, the first step
 /// `(0, 1/4095]` included (a large Softer glow's outermost pixel has coverage there).

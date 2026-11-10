@@ -365,12 +365,30 @@ pub(super) fn paint_color(dst: &mut Buffer, m: &Map, c: [f32; 3], blend: BlendMo
     paint(dst, m, |_| [c[0], c[1], c[2], 1.0], blend, opacity);
 }
 
-/// Spread / choke of a soft effect: (dilation radius, blur width). The dilation is whole pixels
-/// (`size × spread` rounded: a 2 % spread of a 5 px shadow doesn't grow it at all), the blur
-/// keeps `size × (1 − spread)` (ag-psd effects 10.6 → 3.8 % of pixels off).
+/// Spread / choke of a soft effect: (dilation radius, blur width), both whole pixels. The size is
+/// cut down to whole pixels first (9.6 renders as 9, 10.5 as 10), the dilation is `size × spread`
+/// rounded, half up (a 2 % spread of a 5 px shadow doesn't grow it at all; 15 % of 10 px grows it
+/// by 2), and the blur takes the whole width left, `size − r`: the two always add up to the size,
+/// so the reach stays `size − 1` px whatever the spread (#12305, measured on a Softer outer glow,
+/// flat contour Range 50 % and Linear Range 100 %: 23 sizes and spreads within a level at every pixel; size
+/// 10, spread 15 % reads 199, 100, 33 at 7–9 px and 0 at 10, a dilation of 2 and a tent of 8,
+/// where the earlier `size × (1 − spread)` blurred over 8.5 and read 237, 134, 61, 17). The
+/// reference never blurs over a fractional width, so `glow_tent_kernel` only ever sees whole ones.
+/// Shadow spread and inner glow choke share this split; they were not measured with it (the
+/// earlier `size × (1 − spread)` blur was fitted on ag-psd effects: 10.6 → 3.8 % of pixels off).
 pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
-    ((size * spread).round(), size * (1.0 - spread))
+    let size = size.trunc();
+    // A spread is a whole percent stored as `pct / 100` in f32, which is a hair under the percent
+    // for some values, so a product that should be exactly k + ½ can round down. The nudge is far
+    // below the 0.01 steps whole sizes and percents land on, so it only settles those halves up.
+    let r = (size * spread + SPREAD_HALF_NUDGE).round();
+    (r, size - r)
 }
+
+/// See [`spread_split`]: rounds an f32 `size × spread` that should be exactly k + ½ up, as the
+/// reference does. f32 error at the largest reach (512 px) is about 6e-5; the next value whole
+/// percents allow is 0.01 away.
+const SPREAD_HALF_NUDGE: f32 = 1e-3;
 
 pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin: (i32, i32)) -> Map {
     let angle = if s.use_global_light { light.angle } else { s.angle };
