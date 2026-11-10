@@ -163,8 +163,10 @@ fn canvas_side(layout: &Layout<String>) -> Layout<String> {
 #[test]
 fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
     let mut h = harness(app(), vec2(1280.0, 800.0));
-    assert!(h.state().ui.docking.is_none(), "drawing the default does not customize the workspace");
-    let layout = legacy(h.state());
+    // The workspace is drawn with the first frame, so every reader sees one source.
+    assert!(h.state().ui.docking.is_some(), "the native dock is materialized as the workspace");
+    let layout = h.state().ui.docking.as_ref().unwrap().layout.clone();
+    assert_eq!(layout, legacy(h.state()), "the workspace is the native dock's conversion");
     assert!(valid(&layout));
     assert_eq!(
         root_groups(&layout),
@@ -181,7 +183,7 @@ fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
         assert!(h.state_mut().run(command, json!({"panel": CANVAS})).is_err(), "{command}");
     }
     h.state_mut().run("window.panel.move", json!({"panel":"layers","anchor":CANVAS,"zone":"center"})).unwrap_err();
-    assert!(h.state().ui.docking.is_none(), "a refused command leaves the default");
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, layout, "a refused command leaves the default");
 
     let mut studio = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     studio.ui.theme = crate::theme::ThemeKind::Studio;
@@ -190,9 +192,12 @@ fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
     assert_eq!((window.id, window.panels().cloned().collect::<Vec<_>>()), (PROPERTIES_WINDOW, vec!["properties".to_string(), "adjustments".into()]));
     assert_eq!(legacy(&studio).floating, layout.floating, "the same window every frame");
 
-    h.state_mut().ui.dock.set_collapsed(Group::Color, true);
+    let workspace = h.state().ui.docking.clone().unwrap();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.panel.group", json!({"panel": "color", "operation": "collapse"})).unwrap();
     h.run_steps(2);
-    assert!(collapsed_members(h.state(), &legacy(h.state())).contains("swatches"));
+    assert!(group_minimized(h.state(), Group::Color), "the native collapse is the workspace's minimize");
+    assert!(collapsed_members(h.state(), &workspace.layout).contains("swatches"));
     let color = tab_rect(&h, "color");
     assert!(tab_rect(&h, "properties").top() - color.bottom() < 12.0, "a collapsed group shows only its tabs");
 }
@@ -368,6 +373,7 @@ fn floating_group_titles_are_opaque_in_studio_themes() {
 #[test]
 fn escape_cancels_the_first_drag_without_replacing_the_legacy_workspace() {
     let mut h = harness(app(), vec2(1280.0, 800.0));
+    let default = h.state().ui.docking.as_ref().unwrap().layout.clone();
     let source = h.query_all_by_label("Layers").find(|node| node.rect().height() <= 45.0).unwrap().rect().center();
     h.event(Event::PointerMoved(source));
     h.run_steps(1);
@@ -375,13 +381,13 @@ fn escape_cancels_the_first_drag_without_replacing_the_legacy_workspace() {
     h.run_steps(1);
     h.event(Event::PointerMoved(source - vec2(90.0, 0.0)));
     h.run_steps(2);
-    assert!(h.state().ui.docking.is_none(), "a drag changes nothing before its drop");
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default, "a drag changes nothing before its drop");
     h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(1);
-    assert!(h.state().ui.docking.is_none());
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default);
     h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    assert!(h.state().ui.docking.is_none());
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default);
 }
 
 #[test]
@@ -2199,12 +2205,12 @@ fn queued_external_width_precedes_but_does_not_eagerly_consume_native_migration(
     app.last_canvas_rect = egui::Rect::NOTHING;
     let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
     assert!(!h.state().last_canvas_rect.is_positive(), "the dock-only harness has not laid out a canvas");
-    assert!(h.state().ui.docking.is_none());
+    assert!(h.state().ui.docking.is_some(), "the workspace is drawn from the first frame");
     let key = crate::panels::panel_state_id(&h.ctx, "dock");
     let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(900.0, 0.0), vec2(380.0, 700.0)) };
     h.ctx.data_mut(|data| data.insert_persisted(key, state));
     h.run_steps(1);
-    assert!(h.state().ui.docking.is_none(), "native migration still waits for canvas readiness");
+    assert!(h.state().ui.docking.is_some(), "the workspace draws anyway; the native state waits for the canvas");
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some());
     crate::panels::request_dock_width(&h.ctx, 520.0);
     h.run_steps(1);
@@ -2235,19 +2241,20 @@ fn explicit_legacy_noop_width_supersedes_native_migration_with_ready_canvas() {
             app.session.prefs.edit(|prefs| prefs.workspace_locked = locked);
             let mut h = if compact { dock_edge_harness(app, vec2(1280.0, 800.0)) } else { harness(app, vec2(1280.0, 800.0)) };
             assert!(h.state().last_canvas_rect.is_positive());
-            assert!(h.state().ui.docking.is_none());
+            assert!(h.state().ui.docking.is_some(), "the workspace is drawn from the first frame");
+            let before = h.state().ui.docking.as_ref().unwrap().layout.clone();
             let requested = dock_width(h.state());
             let key = remember_native_width_for_request_test(&h.ctx, 380.0);
             let ctx = h.ctx.clone();
             assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
             h.run_steps(1);
             assert_eq!(dock_width(h.state()), requested, "compact={compact}, locked={locked}: migration cannot override an explicit legacy no-op");
-            assert!(h.state().ui.docking.is_none(), "a same-width request must not customize the legacy workspace");
+            assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, before, "a same-width request must not change the workspace");
             assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
             assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
             h.run_steps(2);
             assert_eq!(dock_width(h.state()), requested);
-            assert!(h.state().ui.docking.is_none());
+            assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, before);
         }
     }
 }
@@ -2268,14 +2275,15 @@ fn explicit_legacy_noop_width_supersedes_native_migration_after_canvas_becomes_r
         h.run_steps(1);
         assert!(!h.state().last_canvas_rect.is_positive());
         assert_eq!(dock_width(h.state()), requested);
-        assert!(h.state().ui.docking.is_none());
+        assert!(h.state().ui.docking.is_some(), "the workspace is drawn from the first frame");
+        let before = h.state().ui.docking.as_ref().unwrap().layout.clone();
         let native_retained_after_request = h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some();
         assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
         h.state_mut().last_canvas_rect = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0));
         h.run_steps(1);
         assert_eq!(dock_width(h.state()), requested, "locked={locked}: later canvas readiness cannot revive the superseded native width");
         assert!(!native_retained_after_request, "consuming the explicit request retires native migration even before canvas readiness");
-        assert!(h.state().ui.docking.is_none(), "the legacy no-op still must not customize the workspace");
+        assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, before, "the legacy no-op still must not change the workspace");
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
     }
 }
@@ -2287,6 +2295,7 @@ fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspa
     // The current width (a legacy no-op) and a changed one.
     for changed in [false, true] {
         let mut h = dock_edge_harness(app(), vec2(1280.0, 800.0));
+        let default = h.state().ui.docking.as_ref().unwrap().layout.clone();
         let requested = if changed { 520.0 } else { dock_width(h.state()) };
         let key = remember_native_width_for_request_test(&h.ctx, 380.0);
         let invalid = Workspace::new(Layout { root: None, floating: Vec::new() });
@@ -2310,7 +2319,7 @@ fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspa
             dock_width(h.state())
         );
         if !changed {
-            assert!(h.state().ui.docking.is_none(), "the legacy no-op does not customize the workspace");
+            assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default, "the legacy no-op does not change the workspace");
         }
         assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none(), "changed={changed}: the queued request is consumed");
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "changed={changed}: the native state is retired");
@@ -2355,7 +2364,7 @@ fn native_migration_still_waits_and_runs_without_an_accepted_explicit_request() 
         }
         assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
         h.run_steps(1);
-        assert!(h.state().ui.docking.is_none());
+        assert!(h.state().ui.docking.is_some(), "the workspace is drawn from the first frame");
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(), "absent/rejected requests do not discard a pending migration");
         h.state_mut().last_canvas_rect = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0));
         h.run_steps(1);

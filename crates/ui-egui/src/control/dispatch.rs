@@ -242,7 +242,7 @@ fn ui_set(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
     // Everything is validated and materialized before the first field is applied, so a
     // rejected call applies none of its fields (#412's guarantee, down to the values
     // and nested keys).
-    wrap(UiSet::parse(app, p).and_then(|set| set.apply(app, ctx, p)))
+    wrap(UiSet::parse(app, p).and_then(|set| set.apply(app, ctx)))
 }
 
 struct UiSet {
@@ -270,7 +270,7 @@ impl UiSet {
     }
 
     /// Apply (nothing but the final `brushSize` command can fail).
-    fn apply(mut self, app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> std::result::Result<Value, String> {
+    fn apply(mut self, app: &mut PhotocraftApp, ctx: &egui::Context) -> std::result::Result<Value, String> {
         // All fields are validated. Select the requested frame thumbnail before applying the
         // remaining view state, so a denied selection leaves the other fields intact.
         self.tools.select_frame_target(app)?;
@@ -282,7 +282,7 @@ impl UiSet {
         }
         self.panels.apply_dock(app);
         if let Some(update) = self.legacy_update {
-            crate::panel_docking::commit_legacy_update(app, update, p);
+            crate::panel_docking::commit_legacy_update(app, update);
         }
         self.panels.apply_color_and_width(app, ctx);
         self.view.apply(app);

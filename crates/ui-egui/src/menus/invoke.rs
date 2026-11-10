@@ -841,6 +841,7 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
 pub fn apply_workspace(app: &mut PhotocraftApp) {
     // Saved workspaces (Window › Workspace › New Workspace…) restore their own layout.
     if crate::workspace_ui::apply_custom(app) {
+        app.ui.docking_pristine_theme = None;
         return;
     }
     // Presets use the default group order, heights and tabs (Reset brings everything back).
@@ -869,6 +870,9 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     p.history = history;
     p.properties = props;
     p.character = app.ui.workspace == "Graphic and Web";
+    // Presets return to the untouched conversion: the next frame re-derives the layout the
+    // per-frame native dock state describes.
+    app.ui.docking_pristine_theme = None;
     // Timeline is a floating panel, not a dock group. Showing it does not create or edit
     // a document timeline; changing away from Motion closes it just like its Close button.
     app.ui.timeline.open = app.ui.workspace == "Motion";

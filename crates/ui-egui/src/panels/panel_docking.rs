@@ -10,8 +10,10 @@
 
 use crate::dock::Group;
 use craft_ui::docking::{
-    Action, Column, DockCommand, DockHeights, FloatSpace, Floating, Layout, Location, Node, PanelState, Permissions, Placement, Side, Target, Zone,
+    Action, Column, DockCommand, DockHeights, FloatSpace, Layout, Location, Node, PanelState, Permissions, Placement, Target, Zone,
 };
+#[cfg(test)]
+use craft_ui::docking::{Floating, Side};
 use craft_ui::layout::{SplitAxis, SplitSize};
 use serde_json::{Map, Value, json};
 
@@ -330,55 +332,9 @@ pub(crate) fn newer(saved: &Value) -> bool {
     saved.get("docking").and_then(|docking| docking.get("version")).and_then(Value::as_u64).is_some_and(|version| version > u64::from(Workspace::VERSION))
 }
 
-fn legacy(app: &PhotocraftApp) -> Layout<String> {
-    legacy_layout(app, false)
-}
+mod migrate;
 
-/// The native dock's arrangement as a craft-ui layout: the canvas beside one dock column of the
-/// shown groups, top to bottom, with their tab order, selected tab and user-set heights. The
-/// Studio themes float Properties over the canvas's top right corner. `all` includes the groups
-/// that are not shown, with every tab.
-fn legacy_layout(app: &PhotocraftApp, all: bool) -> Layout<String> {
-    let pro = app.ui.theme.is_pro();
-    let mut groups = Vec::new();
-    let mut floating = Vec::new();
-    for group in app.ui.dock.order().into_iter().filter(|g| all || g.shown(&app.ui.panels)) {
-        let labels = group.tabs(pro);
-        let visible = if all { group.tabs(pro).iter().copied().enumerate().collect() } else { app.ui.dock.visible_tabs(group, pro) };
-        let panels: Vec<String> = visible.iter().filter_map(|(_, label)| normalize(label).map(str::to_owned)).collect();
-        if panels.is_empty() {
-            continue;
-        }
-        let selected = *group.tab_mut(&mut app.ui.dock_tabs.clone());
-        let active = labels.get(selected).and_then(|label| normalize(label)).and_then(|id| panels.iter().position(|p| p == id)).unwrap_or(0);
-        if group == Group::Properties && !pro {
-            floating.push(Floating::single(panels, active, studio_properties_rect(app)).with_id(PROPERTIES_WINDOW));
-            continue;
-        }
-        let height = app.ui.dock.heights.contains_key(&group).then(|| app.ui.dock.height(group));
-        groups.push(craft_ui::docking::Group { height, ..craft_ui::docking::Group::new(panels, active) });
-    }
-    let (columns, width) = if groups.is_empty() { (Vec::new(), 0.0) } else { (vec![Column::new(groups, default_width(pro))], default_width(pro)) };
-    Layout { root: Some(with_canvas(Node::Dock { side: Side::End, columns }, width)), floating }
-}
-
-/// Where the Studio themes' Properties card floats: inside the canvas's top right corner.
-fn studio_properties_rect(app: &PhotocraftApp) -> [f32; 4] {
-    let (width, height) = (320.0, 440.0);
-    let canvas = app.last_canvas_rect;
-    if canvas.is_positive() && canvas.width() > width + 24.0 {
-        [canvas.right() - width - 12.0, canvas.top() + 44.0, width, height]
-    } else {
-        [120.0, 160.0, width, height]
-    }
-}
-
-/// The native dock as a workspace: its shown panels, and where each hidden one goes back.
-fn legacy_workspace(app: &PhotocraftApp) -> Workspace {
-    let layout = legacy(app);
-    let hidden = migration_hidden(app, &layout);
-    Workspace { hidden, ..Workspace::new(layout) }
-}
+pub(crate) use migrate::{legacy, legacy_workspace};
 
 /// The workspace commands change: the customized one, or the native dock's. The lock is the
 /// Lock Workspace preference.
@@ -396,7 +352,9 @@ fn commit(app: &mut PhotocraftApp, workspace: Workspace, mut returns: Returns) {
     returns.retain(|panel, _| floats(&workspace.layout, panel));
     app.ui.docking = Some(workspace);
     app.ui.docking_returns = returns;
-    app.ui.panels.dock = true;
+    // The layout is no longer the untouched conversion [`migrate::materialize`] made; a theme
+    // change must not re-derive over it. (`materialize` re-arms the flag after its own call.)
+    app.ui.docking_pristine_theme = None;
     sync_visibility(app);
 }
 
@@ -404,22 +362,27 @@ fn floats(layout: &Layout<String>, panel: &str) -> bool {
     layout.floating.iter().any(|window| window.contains(&panel.to_owned()))
 }
 
-// Native collapse flags remain app-owned. An intact native tab group keeps its collapsed
-// presentation when the workspace first becomes customizable; mixed custom groups are expanded.
+/// Is the group minimized to its tab strip, in whatever form the state carries that — before
+/// the workspace exists the native dock's flag, after it the group's own minimized flag or the
+/// app's collapse set ([`group_command`] keeps fully minimized groups out of the workspace).
+/// [`presented`] applies the same fold to the drawn layout.
+pub(crate) fn group_minimized(app: &PhotocraftApp, group: Group) -> bool {
+    let Some(workspace) = app.ui.docking.as_ref() else { return app.ui.dock.is_collapsed(group) };
+    let layout = &workspace.layout;
+    let collapsed = collapsed_members(app, layout);
+    let members: Vec<String> = PANELS
+        .iter()
+        .filter(|p| p.2 == group)
+        .map(|p| p.0.to_owned())
+        .filter(|id| layout.contains(id))
+        .collect();
+    !members.is_empty() && members.iter().all(|id| collapsed.contains(id))
+}
+
 fn collapsed_members(app: &PhotocraftApp, layout: &Layout<String>) -> std::collections::HashSet<String> {
     let mut collapsed: std::collections::HashSet<String> = app.ui.docking_collapsed.iter().cloned().collect();
     for group in layout.root.iter().flat_map(tree_groups).filter(|group| group.minimized) {
         collapsed.extend(group.panels);
-    }
-    for panels in root_groups(layout) {
-        let group = panels.first().and_then(|id| PANELS.iter().find(|p| p.0 == id)).map(|p| p.2);
-        if let Some(group) = group.filter(|group| app.ui.dock.is_collapsed(*group)) {
-            let pro = app.ui.theme.is_pro();
-            let native: Vec<_> = app.ui.dock.visible_tabs(group, pro).iter().filter_map(|(_, name)| normalize(name)).collect();
-            if panels.len() == native.len() && panels.iter().all(|panel| native.contains(&panel.as_str())) {
-                collapsed.extend(panels.iter().cloned());
-            }
-        }
     }
     collapsed
 }
@@ -436,10 +399,40 @@ fn ensure(app: &PhotocraftApp, workspace: &mut Workspace, panel: &str) -> Result
     }
     if workspace.hidden.iter().any(|(id, _)| id == panel) {
         let anchor = first_root(&workspace.layout, panel);
-        return workspace.set_visible(panel.to_owned(), true, anchor, permissions).map_err(|e| e.to_string());
+        if hidden_restorable(workspace, panel)
+            && workspace.set_visible(panel.to_owned(), true, anchor, permissions).is_ok()
+        {
+            return Ok(());
+        }
+        // A hidden group's whole tab list is hidden (Character with Paragraph): no member
+        // restores, so the panel takes the native default position instead, as the old
+        // per-frame legacy layout placed it. Title bars would only make it a tab of another
+        // group (`set_visible`'s fallback).
+        workspace.hidden.retain(|(id, _)| id != panel);
+        let action = default_place(app, &workspace.layout, panel);
+        workspace.apply(action, permissions).map(drop).map_err(|e| e.to_string())
+    } else {
+        let action = default_place(app, &workspace.layout, panel);
+        workspace.apply(action, permissions).map(drop).map_err(|e| e.to_string())
     }
-    let action = default_place(app, &workspace.layout, panel);
-    workspace.apply(action, permissions).map(drop).map_err(|e| e.to_string())
+}
+
+/// Whether the panel's captured place still resolves: its own location, or one a chain of
+/// hidden neighbours opens first, restores onto the layout. Mirrors `Workspace::set_visible`'s
+/// restore, so the Window menu can fall back to the native default position only when the
+/// captured place is hopelessly hidden.
+fn hidden_restorable(workspace: &Workspace, panel: &str) -> bool {
+    let Some(at) = workspace.hidden.iter().find(|(id, _)| id == panel).map(|(_, at)| at.clone()) else { return false };
+    let mut chain = vec![(panel.to_owned(), at)];
+    while let Some((_, location)) = chain.last()
+        && let Some(anchor) = location.anchor.as_ref()
+        && !chain.iter().any(|(p, _)| p == anchor)
+        && let Some(next) = workspace.hidden.iter().find(|(id, _)| id == anchor)
+    {
+        chain.push((next.0.clone(), next.1.clone()));
+    }
+    let mut probe = workspace.layout.clone();
+    chain.into_iter().rev().all(|(id, at)| probe.restore(id, &at).is_ok())
 }
 
 /// Where the native dock shows `panel` in `layout`: a tab of its group, before the next of the
@@ -538,7 +531,9 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
                 None => return Some(Err("show must be a boolean".into())),
             },
         };
-        let id = if show { "window.panel.activate" } else { "window.panel.close" };
+        // The Window menu (and a toggle through the control channel) turns the panel's whole
+        // group off, like the native dock's per-group flag did; only a tab menu closes a tab.
+        let id = if show { "window.panel.activate" } else { "window.panel.closeGroup" };
         return Some(dock_command(app, id, &json!({"panel": panel})));
     }
     let id = match id {
@@ -793,6 +788,7 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
     }
     apply_pending_dock_width(app, ui.ctx());
     native_dock_width(app, ui.ctx());
+    migrate::materialize(app);
     let layout = match &app.ui.docking {
         Some(workspace) => workspace.layout.clone(),
         None => legacy(app),
@@ -1076,18 +1072,19 @@ fn resize_end_dock(node: &mut Node<String>, total: f32, actual: &mut f32) -> boo
 
 /// A dock width saved by earlier versions is in egui's remembered memory under the `dock` side
 /// panel's id. The default layout's column takes it once, after the canvas has been laid out so
-/// the Studio Properties card keeps its place.
+/// the Studio Properties card keeps its place. An explicit width request ([`apply_pending_dock_width`])
+/// supersedes it, whether the workspace exists yet or not.
 fn native_dock_width(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let id = crate::panels::panel_state_id(ctx, "dock");
     let Some(state) = ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(id)) else { return };
-    if app.ui.docking.is_none() && !app.last_canvas_rect.is_positive() {
+    if !app.last_canvas_rect.is_positive() {
         return;
     }
     ctx.data_mut(|data| data.remove::<egui::PanelState>(id));
     let pro = app.ui.theme.is_pro();
     let range = crate::panels::dock_width_range(ctx.content_rect().width());
     let width = state.size().x;
-    if app.ui.docking.is_none() && width.is_finite() && (width - default_width(pro)).abs() >= 1.0 {
+    if width.is_finite() && (width - default_width(pro)).abs() >= 1.0 {
         set_dock_width(app, width.clamp(*range.start(), *range.end()));
     }
 }
@@ -1253,15 +1250,6 @@ mod tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_tests;
 
-/// Return positions for panels already hidden in a legacy workspace.
-fn migration_hidden(app: &PhotocraftApp, visible: &Layout<String>) -> Vec<(String, Location<String>)> {
-    let full = legacy_layout(app, true);
-    PANELS
-        .iter()
-        .filter(|(id, _, _)| !visible.contains(&id.to_string()))
-        .filter_map(|(id, _, _)| full.location(&id.to_string()).ok().map(|at| ((*id).to_owned(), at)))
-        .collect()
-}
 
 /// A tab group of a layout tree.
 struct TabGroup {
@@ -1350,7 +1338,6 @@ pub(crate) fn rail_click(app: &mut PhotocraftApp, group: Group) {
     }
 }
 
-/// The docked tab groups, top to bottom, without the canvas.
 fn root_groups(layout: &Layout<String>) -> Vec<Vec<String>> {
     layout.root.iter().flat_map(tree_groups).map(|group| group.panels).filter(|panels| !panels.iter().any(|id| id == CANVAS)).collect()
 }
@@ -1424,7 +1411,6 @@ fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Strin
 
 pub(crate) struct LegacyUpdate {
     workspace: Workspace,
-    clear_collapse: Vec<Group>,
 }
 
 /// Validate and stage the legacy controls before ui.set commits any fields.
@@ -1453,28 +1439,18 @@ pub(crate) fn prepare_legacy_update(
     if app.session.prefs().workspace_locked {
         return Err("workspace is locked".into());
     }
-    let clear_collapse: Vec<_> =
-        dock.map(|d| Group::ALL.into_iter().filter(|g| d.is_collapsed(*g) != app.ui.dock.is_collapsed(*g)).collect()).unwrap_or_default();
-    if !clear_collapse.is_empty()
-        && root_groups(&current.layout).iter().any(|ids| {
-            let groups: std::collections::HashSet<_> = ids.iter().filter_map(|id| PANELS.iter().find(|p| p.0 == id).map(|p| p.2)).collect();
-            groups.len() > 1
-        })
-    {
-        return Err("legacy collapse settings cannot replace mixed custom groups; use window.panel.group".into());
-    }
     let mut workspace = current.clone();
     workspace.locked = false;
     for group in Group::ALL {
         let visibility = request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool);
         let selected = request.get("dockTabs").and_then(|p| p.get(group.key())).is_some();
-        let group_panels: Vec<_> = PANELS.iter().filter(|p| p.2 == group).collect();
-        for &&(id, label, _) in &group_panels {
+        for &&(id, label, _) in &PANELS.iter().filter(|p| p.2 == group).collect::<Vec<_>>() {
+            // Only explicit requests change visibility: a `dock` that carries just collapse flags
+            // or heights replaces those, and says nothing about the other panels.
             let explicitly_hidden = dock.is_some_and(|d| d.hidden_tabs.get(&group).is_some_and(|names| names.iter().any(|name| name == label)));
-            let explicitly_shown = dock.is_some() && !explicitly_hidden;
             if visibility == Some(false) || explicitly_hidden {
                 workspace.set_visible(id.to_owned(), false, None, permissions).map_err(|e| e.to_string())?;
-            } else if visibility == Some(true) || explicitly_shown {
+            } else if visibility == Some(true) {
                 ensure(app, &mut workspace, id)?;
             }
         }
@@ -1497,25 +1473,36 @@ pub(crate) fn prepare_legacy_update(
             workspace.apply(Action::Activate { panel: id.to_owned() }, permissions).map_err(|e| e.to_string())?;
         }
     }
-    Ok(Some(LegacyUpdate { workspace, clear_collapse }))
-}
-
-pub(crate) fn commit_legacy_update(app: &mut PhotocraftApp, update: LegacyUpdate, request: &Value) {
-    for group in update.clear_collapse {
-        let ids: Vec<_> = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).collect();
-        app.ui.docking_collapsed.retain(|id| !ids.contains(&id.as_str()));
-    }
-    let returns = app.ui.docking_returns.clone();
-    commit(app, update.workspace, returns);
-    for group in Group::ALL {
-        if request.get("dockTabs").and_then(|p| p.get(group.key())).is_some()
-            || request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool) == Some(true)
-        {
-            let ids: Vec<_> = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).collect();
-            app.ui.docking_collapsed.retain(|id| !ids.contains(&id.as_str()));
-            app.ui.dock.set_collapsed(group, false);
+    // The legacy `collapsed` list is the in-place tab-strip minimize: carry it onto the
+    // workspace's per-group minimized flags, so the request's collapse replaces the
+    // custom groups' list instead of a native-flag remap.
+    if let Some(dock) = dock {
+        for group in Group::ALL {
+            let want = dock.is_collapsed(group);
+            if group_minimized(app, group) == want {
+                continue;
+            }
+            let Some(panel) = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).find(|id| workspace.layout.contains(&id.to_string())).map(str::to_owned) else { continue };
+            workspace.apply(Action::SetMinimized { panel, minimized: want }, permissions).map_err(|e| e.to_string())?;
         }
     }
+    // Opening a tab or showing a panel expands its group (#129).
+    for group in Group::ALL {
+        let brings_back = request.get("dockTabs").and_then(|p| p.get(group.key())).is_some()
+            || request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool) == Some(true);
+        if !brings_back {
+            continue;
+        }
+        if let Some(panel) = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).find(|id| workspace.layout.contains(&id.to_string())).map(str::to_owned) {
+            workspace.apply(Action::SetMinimized { panel, minimized: false }, permissions).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(Some(LegacyUpdate { workspace }))
+}
+
+pub(crate) fn commit_legacy_update(app: &mut PhotocraftApp, update: LegacyUpdate) {
+    let returns = app.ui.docking_returns.clone();
+    commit(app, update.workspace, returns);
 }
 
 struct PanelContent<'a> {

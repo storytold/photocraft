@@ -156,20 +156,33 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     let (app, _, _) = app_with_layers();
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
     let ctx = h.ctx.clone();
-    h.state_mut().ui.dock.heights.insert(Group::Properties, 120.0);
-    h.state_mut().ui.dock.set_collapsed(Group::Color, true);
+    // Drawing materializes the native dock as the workspace; its saved forms replace it.
+    let default = drawn(&h).0;
+    let default_workspace = h.state().ui.docking.clone().unwrap();
+    // One group resized and one minimized: the workspace keeps both under its own name.
+    h.state_mut()
+        .run("window.panel.layout", json!({"action": {"ResizeGroup": {"panel": "properties", "height": 120.0}}}))
+        .unwrap();
+    h.run_steps(1);
+    crate::menus::invoke(h.state_mut(), &ctx, "window.panel.group", json!({"panel": "color", "operation": "collapse"})).unwrap();
+    h.run_steps(2);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.newWorkspace", json!({"name": "Tall Layers"})).unwrap();
-    let mine = h.state().ui.dock.clone();
+    let mine = h.state().ui.docking.clone().unwrap();
+    // The built-in workspace restores the default layout: Reset Workspace comes back to it.
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.essentials", json!({})).unwrap();
     h.run_steps(3);
-    let default = drawn(&h).0;
-    assert_eq!(h.state().ui.dock, DockLayout::default());
-    h.state_mut().ui.dock.heights.insert(Group::Color, 300.0);
+    assert_eq!(drawn(&h).0, default);
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default_workspace.layout, "the preset drops the tweaks");
+    h.state_mut()
+        .run("window.panel.layout", json!({"action": {"ResizeGroup": {"panel": "color", "height": 300.0}}}))
+        .unwrap();
+    h.run_steps(1);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
     h.run_steps(3);
     assert_eq!(drawn(&h).0, default);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name": "Tall Layers"})).unwrap();
-    assert_eq!(h.state().ui.dock, mine);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, mine.layout, "the saved arrangement stays itself");
 }
 
 #[test]
@@ -185,7 +198,7 @@ fn a_single_tab_click_expands_a_collapsed_panel() {
             let collapsed_height = rect_of(&h, Group::Color).height();
             let tab = probe::tab_rect(&h.ctx, panel_id(Group::Color, tab_index, is_pro(theme))).unwrap().center();
             click(&mut h, tab);
-            assert!(!h.state().ui.dock.is_collapsed(Group::Color), "{theme:?}: tab {tab_index}");
+            assert!(!crate::panel_docking::group_minimized(h.state(), Group::Color), "{theme:?}: tab {tab_index}");
             assert_eq!(h.state().ui.dock_tabs.color, tab_index);
             assert!(rect_of(&h, Group::Color).height() > collapsed_height);
         }

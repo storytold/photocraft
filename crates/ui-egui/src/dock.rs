@@ -503,6 +503,9 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     (app.ui.docking, app.ui.docking_returns) = crate::panel_docking::load(v).map_or((None, Default::default()), |(w, r)| (Some(w), r));
+    // A saved or restored layout is its own workspace, not the untouched conversion: the
+    // per-frame re-derivation must not overwrite it.
+    app.ui.docking_pristine_theme = None;
     app.ui.docking_kept = (app.ui.docking.is_none() && crate::panel_docking::newer(v))
         .then(|| ["docking", "dockingReturns", "dockingCollapsed"].into_iter().filter_map(|key| Some((key.to_owned(), v.get(key)?.clone()))).collect());
     // Collapsed custom groups belong to the workspace; the native dock keeps its own flags.

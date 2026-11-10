@@ -220,7 +220,8 @@ fn crowded_tabs_keep_their_whole_names_and_the_menu_lists_every_document() {
             let pro = crate::theme::Tokens::get(&h.ctx).pro;
             let labels: Vec<String> =
                 (0..14).map(|i| if pro { pro_tab_title(h.state(), i) } else { h.state().session.documents()[i].doc.name.clone() }).collect();
-            h.get_by_label("More documents").click();
+            let b = h.get_by_label("More documents");
+            b.click();
             h.run_steps(2);
             for (i, label) in labels.iter().enumerate() {
                 // The menu bar's padding: an unchecked row keeps the check mark's room, so names line up.
@@ -257,3 +258,4 @@ fn the_overflow_button_is_pinned_to_the_right_end() {
         assert_eq!(a, b, "{theme:?}: the » button doesn't follow the last tab");
     }
 }
+
