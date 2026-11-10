@@ -60,7 +60,7 @@ impl Kind {
             Kind::SmartObject => {
                 "This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?"
             }
-            Kind::Fill => "This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?",
+            Kind::Fill => "The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?",
         }
     }
 
@@ -207,7 +207,15 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     if let Some(filter) = f.get("filter").and_then(Value::as_str) {
         return confirm_filter(app, f, filter, layer);
     }
+    let revision = app.session.active().map(|st| st.revision);
     let r = app.run(kind.command(), json!({ "layer": layer }))?;
+    // A painting tool's type prompt names its step as the reference does (#12888); Layer ›
+    // Rasterize › Type keeps "Rasterize Type". Only a step this run added is renamed.
+    if kind == Kind::Type
+        && let Some(st) = app.session.active_mut().filter(|st| Some(st.revision) != revision)
+    {
+        st.history.set_current_label("Rasterize Layer");
+    }
     // The press that opened the prompt is not replayed: Photoshop only converts the layer, the
     // next click paints (#8806).
     Ok(json!({ "rasterized": r }))
@@ -243,3 +251,11 @@ mod tests;
 #[cfg(test)]
 #[path = "../rasterize_prompt_text_tests.rs"]
 mod rasterize_prompt_text_tests;
+
+#[cfg(test)]
+#[path = "rasterize_prompt_fill_text_tests.rs"]
+mod rasterize_prompt_fill_text_tests;
+
+#[cfg(test)]
+#[path = "../rasterize_prompt_history_name_tests.rs"]
+mod rasterize_prompt_history_name_tests;
