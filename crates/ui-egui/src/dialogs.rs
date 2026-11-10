@@ -438,6 +438,10 @@ fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
     // Long parameter lists (Flame, Lighting Effects) scroll, so the title and the
     // OK / Cancel buttons stay inside a small window. The preview window below the
     // parameters reserves its own space (#3769).
+    if crate::filter_preview_ui::full_window(fields) {
+        full_window_filter_body(app, ui, d, fields, id);
+        return;
+    }
     let room = (ui.ctx().content_rect().height() - DIALOG_CHROME - crate::filter_preview_ui::reserved_height(fields)).max(120.0);
     let body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
         egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| {
@@ -460,6 +464,43 @@ fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
     if let Some(Value::String(msg)) = fields.remove("__rangeAlert") {
         crate::panels::options_bar::range_alert(&mut app.ui, &msg);
     }
+}
+
+/// The height the OK / Cancel row takes under a dialog's body (its gap above included).
+const BUTTON_ROW_H: f32 = 44.0;
+/// The gap between a full-window filter dialog's preview and its parameter column.
+const FULL_WINDOW_GAP: f32 = 12.0;
+
+/// A full-window filter dialog (Lens Blur): the preview fills the left of the window and the
+/// parameters scroll in a column on its right, as in Photoshop, so settings can be judged live
+/// on the whole image.
+fn full_window_filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) {
+    let (preview, column_h) = full_window_layout(ui.available_size());
+    first_field_focused(ui, id, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| crate::filter_preview_ui::large_window(app, d.id, ui, fields, preview));
+            ui.add_space(FULL_WINDOW_GAP);
+            ui.vertical(|ui| {
+                ui.set_width(crate::filter_preview_ui::SIDE_W);
+                egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(column_h).show(ui, |ui| crate::filter_dialog::body(ui, fields));
+            });
+        });
+    });
+}
+
+/// A full-window filter dialog's layout for the `available` body size (under the title, over the
+/// button row): the preview image's size and the parameter column's height.
+fn full_window_layout(available: egui::Vec2) -> (egui::Vec2, f32) {
+    let h = (available.y - BUTTON_ROW_H).max(160.0);
+    let w = (available.x - crate::filter_preview_ui::SIDE_W - FULL_WINDOW_GAP).max(200.0);
+    (egui::vec2(w, (h - crate::filter_preview_ui::ZOOM_ROW_H).max(100.0)), h)
+}
+
+/// A full-window dialog's fixed size in a `content`-sized app window: all of it but a margin,
+/// never smaller than a usable minimum.
+fn full_window_size(content: egui::Vec2) -> egui::Vec2 {
+    let size = content - egui::vec2(64.0, 64.0);
+    if size.x.is_finite() && size.y.is_finite() { size.max(egui::vec2(720.0, 440.0)) } else { egui::vec2(720.0, 440.0) }
 }
 
 /// The OK / Cancel row (with Apply, Alternate or Reset where the dialog has them), drawn in the
@@ -639,7 +680,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // effects, extends down and right instead of re-centring.
         let pinned: Option<egui::Vec2> = ctx.data(|m| m.get_temp(id));
         let place = place_id(&d);
-        let start = pinned.or_else(|| ctx.data_mut(|m| m.get_persisted::<egui::Vec2>(place))).or_else(|| crate::blur_pins::first_place(&d.fields, ctx));
+        // A full-window filter dialog (Lens Blur) stays centred over the app window.
+        let full_window = crate::filter_preview_ui::full_window(&fields);
+        let start = if full_window {
+            None
+        } else {
+            pinned.or_else(|| ctx.data_mut(|m| m.get_persisted::<egui::Vec2>(place))).or_else(|| crate::blur_pins::first_place(&d.fields, ctx))
+        };
         let mut drag = egui::Vec2::ZERO;
         let mut close_clicked = false;
         let mut sizing = false;
@@ -675,8 +722,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             (remembered.unwrap_or(size), min, resizable_max(ctx, &fields, min))
         });
         let mut given = None;
-        let fixed = (d.kind == DialogKind::LayerStyle)
-            .then(|| egui::vec2(800.0, 550.0).min((ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(640.0, 360.0))));
+        let fixed = if d.kind == DialogKind::LayerStyle {
+            Some(egui::vec2(800.0, 550.0).min((ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(640.0, 360.0))))
+        } else if full_window {
+            Some(full_window_size(ctx.content_rect().size()))
+        } else {
+            None
+        };
         let modal = show_modal(modal, ctx, id, resize, fixed, interactive, |ui| {
             sizing = ui.is_sizing_pass();
             let available = ui.available_size();
@@ -1469,6 +1521,53 @@ mod preference_resize_tests {
         // Inside the frame (not past its edge) and near it.
         let near = |gap: f32| (0.0..24.0).contains(&gap);
         assert!(near(f.bottom() - row.bottom()) && near(f.right() - row.right()), "{when}: frame {f:?}, buttons {row:?}");
+    }
+
+    #[test]
+    fn full_window_layout_gives_the_preview_what_the_column_leaves() {
+        assert_eq!(full_window_size(egui::vec2(1600.0, 1000.0)), egui::vec2(1536.0, 936.0));
+        assert_eq!(full_window_size(egui::vec2(300.0, 200.0)), egui::vec2(720.0, 440.0), "never below the minimum");
+        assert_eq!(full_window_size(egui::vec2(f32::NAN, 1.0)), egui::vec2(720.0, 440.0));
+        let (preview, column) = full_window_layout(egui::vec2(1500.0, 900.0));
+        assert_eq!(column, 900.0 - BUTTON_ROW_H);
+        assert_eq!(preview.x, 1500.0 - crate::filter_preview_ui::SIDE_W - FULL_WINDOW_GAP);
+        assert_eq!(preview.y, column - crate::filter_preview_ui::ZOOM_ROW_H);
+        let (tiny, _) = full_window_layout(egui::vec2(0.0, 0.0));
+        assert!(tiny.x > 0.0 && tiny.y > 0.0, "a cramped body still gets a usable preview: {tiny:?}");
+    }
+
+    #[test]
+    fn lens_blur_dialog_fills_the_app_window_with_its_buttons_in_the_corner() {
+        // Lens Blur is judged on the whole image, as in Photoshop: its dialog fills the window
+        // instead of showing a 150-point strip under its parameters.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 600, "height": 400})).unwrap();
+        let id = crate::filter_dialog::open(&mut app, "filter.blur.lensBlur").expect("Lens Blur opens a dialog");
+        let screen = egui::vec2(1600.0, 1000.0);
+        let mut h = egui_kittest::Harness::builder().with_size(screen).build_ui_state(
+            |ui, app| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                    show(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(6);
+        let f = frame(&h);
+        assert!(f.width() > screen.x - 100.0 && f.height() > screen.y - 100.0, "fills the window: {f:?}");
+        assert!(f.min.x >= 0.0 && f.min.y >= 0.0 && f.max.x <= screen.x && f.max.y <= screen.y, "on screen: {f:?}");
+        assert!((f.center().x - screen.x / 2.0).abs() < 4.0 && (f.center().y - screen.y / 2.0).abs() < 4.0, "centred: {f:?}");
+        {
+            use egui_kittest::kittest::Queryable;
+            let row = h.get_by_label("OK").rect().union(h.get_by_label("Cancel").rect());
+            let near = |gap: f32| (0.0..24.0).contains(&gap);
+            assert!(near(f.bottom() - row.bottom()) && near(f.right() - row.right()), "buttons in the corner: frame {f:?}, buttons {row:?}");
+        }
+        // The preview opened at Fit in View: 600 × 400 shown at more than 100 %.
+        let fields = &h.state().ui.dialogs.iter().find(|d| d.id == id).expect("still open").fields;
+        assert_eq!(fields.get("__pvFit"), Some(&json!(true)));
+        assert!(fields.get("__pvZoom").and_then(Value::as_f64).is_some_and(|z| z > 1.0), "{:?}", fields.get("__pvZoom"));
     }
 
     #[test]

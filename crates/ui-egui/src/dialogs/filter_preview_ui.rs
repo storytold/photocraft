@@ -28,10 +28,43 @@ const PREVIEW_H: f32 = 150.0;
 const ZOOM_FIELD: &str = "__pvZoom";
 const CENTER_X_FIELD: &str = "__pvCx";
 const CENTER_Y_FIELD: &str = "__pvCy";
+/// Whether a full-window preview's zoom follows Fit in View (until − / + picks a level).
+const FIT_FIELD: &str = "__pvFit";
+/// The height of the zoom row under the preview image, in points.
+pub(crate) const ZOOM_ROW_H: f32 = 28.0;
+
+/// Filters whose dialog fills the app window: the preview takes most of it and the parameters
+/// sit in a column on its right, as in Photoshop's Lens Blur, so the effect of each setting
+/// can be judged on the whole image rather than a strip.
+const FULL_WINDOW: &[&str] = &["filter.blur.lensBlur"];
+/// The parameter column's width in a full-window filter dialog.
+pub(crate) const SIDE_W: f32 = 300.0;
+
+/// Whether the dialog with fields `f` is a full-window filter dialog ([`FULL_WINDOW`]).
+pub(crate) fn full_window(f: &Map<String, Value>) -> bool {
+    shows(f) && f.get("__command").and_then(Value::as_str).is_some_and(|c| FULL_WINDOW.contains(&c))
+}
 
 /// Draw the filter dialog's in-dialog preview window below its parameters (its `fields` `f`). A
 /// no-op for dialogs without a preview and for Select and Mask, which has its own view.
 pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let size = vec2(ui.available_width().max(140.0), PREVIEW_H);
+    window_sized(app, dialog, ui, f, size, false);
+}
+
+/// The full-window dialog's preview: an image region of `size` points (the zoom row goes under
+/// it), opening at Fit in View.
+pub(crate) fn large_window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mut Map<String, Value>, size: Vec2) {
+    window_sized(app, dialog, ui, f, size.max(vec2(140.0, 100.0)), true);
+}
+
+/// The zoom at which a `doc`-sized image fits a `region` (within the zoom bounds).
+fn fit_zoom(region: Vec2, doc: Vec2) -> f32 {
+    let z = (region.x / doc.x).min(region.y / doc.y);
+    if z.is_finite() && z > 0.0 { z.clamp(MIN_ZOOM, MAX_ZOOM) } else { DEFAULT_ZOOM }
+}
+
+fn window_sized(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mut Map<String, Value>, size: Vec2, fits: bool) {
     if !shows(f) {
         return;
     }
@@ -105,12 +138,20 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // View state, sanitised: a corrupt field must not divide by zero or draw off the texture.
     let mut zoom = f.get(ZOOM_FIELD).and_then(Value::as_f64).map(|v| v as f32).filter(|z| z.is_finite() && *z > 0.0).unwrap_or(DEFAULT_ZOOM);
     zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+    // A full-window preview follows Fit in View until − / + picks a level, so it fits again
+    // when the app window (and so the dialog) is resized.
+    let mut fit = fits && f.get(FIT_FIELD).and_then(Value::as_bool) != Some(false);
+    if fit {
+        zoom = fit_zoom(size, doc);
+    }
     let mut cx = f.get(CENTER_X_FIELD).and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(doc.x / 2.0);
     let mut cy = f.get(CENTER_Y_FIELD).and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(doc.y / 2.0);
     (cx, cy) = clamp_center(cx, cy, doc.x, doc.y);
 
-    let width = ui.available_width().max(140.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, PREVIEW_H), Sense::click_and_drag());
+    if fit {
+        (cx, cy) = (doc.x / 2.0, doc.y / 2.0);
+    }
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let (x0, y0, sw, sh) = source_rect(cx, cy, zoom, rect.size(), doc);
     let (dest, uv) = placement(rect, (x0, y0, sw, sh), zoom, doc);
 
@@ -126,12 +167,13 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     painter.rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
 
     // Drag to pan (the image follows the pointer); a plain click centres on the clicked point.
-    if response.dragged() {
+    if response.dragged() && !fit {
         let d = response.drag_delta();
         cx -= d.x / zoom;
         cy -= d.y / zoom;
     }
-    if response.clicked()
+    if !fit
+        && response.clicked()
         && let Some(p) = response.interact_pointer_pos()
     {
         (cx, cy) = point_to_source(p - rect.min, x0, y0, zoom, doc);
@@ -141,13 +183,21 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     ui.horizontal(|ui| {
         if crate::icons::button(ui, "minus", 22.0, false, tl!("Zoom out")).clicked() {
             zoom = step_zoom(zoom, false);
+            fit = false;
         }
         ui.label(egui::RichText::new(format!("{}%", crate::widgets::fmt_num(zoom as f64 * 100.0))).color(t.text_dim));
         if crate::icons::button(ui, "plus", 22.0, false, tl!("Zoom in")).clicked() {
             zoom = step_zoom(zoom, true);
+            fit = false;
+        }
+        if fits && !fit && crate::widgets::secondary_button(ui, tl!("Fit in View"), 84.0).clicked() {
+            fit = true;
         }
     });
 
+    if fits {
+        f.insert(FIT_FIELD.into(), json!(fit));
+    }
     f.insert(ZOOM_FIELD.into(), json!(zoom.clamp(MIN_ZOOM, MAX_ZOOM)));
     f.insert(CENTER_X_FIELD.into(), json!(cx));
     f.insert(CENTER_Y_FIELD.into(), json!(cy));
@@ -570,6 +620,52 @@ mod tests {
         crate::color_picker_ui::open(&mut app, "foreground");
         assert_eq!(locator(&app), None);
         assert!(!center_at(&mut app, 20.0, 20.0));
+    }
+
+    #[test]
+    fn only_lens_blur_fills_the_window() {
+        let fields = |cmd: &str| json!({"__command": cmd, "__preview": true}).as_object().cloned().unwrap();
+        assert!(full_window(&fields("filter.blur.lensBlur")));
+        assert!(!full_window(&fields("filter.blur.gaussianBlur")));
+        // Without a preview (a dialog that isn't a filter's) there is nothing to fill it with.
+        assert!(!full_window(json!({"__command": "filter.blur.lensBlur"}).as_object().unwrap()));
+    }
+
+    #[test]
+    fn fit_zoom_fits_the_whole_image_within_the_zoom_bounds() {
+        assert_eq!(fit_zoom(vec2(1000.0, 500.0), vec2(4000.0, 1000.0)), 0.25, "the wider side limits it");
+        assert_eq!(fit_zoom(vec2(1000.0, 500.0), vec2(1000.0, 2000.0)), 0.25, "the taller side limits it");
+        assert_eq!(fit_zoom(vec2(1000.0, 1000.0), vec2(10.0, 10.0)), MAX_ZOOM, "a tiny image stops at the top level");
+        assert_eq!(fit_zoom(vec2(100.0, 100.0), vec2(100_000.0, 100_000.0)), MIN_ZOOM);
+        assert_eq!(fit_zoom(vec2(100.0, 100.0), vec2(0.0, 0.0)), DEFAULT_ZOOM, "a degenerate size never yields inf or NaN");
+    }
+
+    #[test]
+    fn the_full_window_preview_opens_at_fit_and_keeps_a_chosen_level() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 800, "height": 400})).unwrap();
+        let id = crate::filter_dialog::open(&mut app, "filter.blur.lensBlur").expect("Lens Blur opens a dialog");
+        let mut f = app.ui.dialogs.iter().find(|d| d.id == id).expect("the dialog is open").fields.clone();
+        assert!(full_window(&f));
+        let draw = |f: &mut Map<String, Value>| {
+            egui::Context::default().run_ui(Default::default(), |ui| large_window(&app, id, ui, f, vec2(400.0, 400.0))).textures_delta.clear();
+        };
+        draw(&mut f);
+        assert_eq!(f.get(FIT_FIELD), Some(&json!(true)));
+        assert_eq!(f.get(ZOOM_FIELD), Some(&json!(0.5)), "800 px wide in 400 points");
+        assert_eq!((f.get(CENTER_X_FIELD), f.get(CENTER_Y_FIELD)), (Some(&json!(400.0)), Some(&json!(200.0))));
+        // − / + leave Fit: the level they picked stays, and so does a pan.
+        f.insert(FIT_FIELD.into(), json!(false));
+        f.insert(ZOOM_FIELD.into(), json!(2.0));
+        f.insert(CENTER_X_FIELD.into(), json!(100.0));
+        draw(&mut f);
+        assert_eq!(f.get(ZOOM_FIELD), Some(&json!(2.0)));
+        assert_eq!(f.get(CENTER_X_FIELD), Some(&json!(100.0)));
+        // The strip preview of other dialogs never writes the fit flag.
+        let mut strip = f.clone();
+        strip.remove(FIT_FIELD);
+        egui::Context::default().run_ui(Default::default(), |ui| window(&app, id, ui, &mut strip)).textures_delta.clear();
+        assert!(!strip.contains_key(FIT_FIELD));
     }
 
     #[test]
