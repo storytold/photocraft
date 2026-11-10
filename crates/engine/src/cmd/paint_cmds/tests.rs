@@ -368,12 +368,15 @@ fn assert_all_white(s: &Session, what: &str) {
     assert_eq!(not_white(&composite, width, 8), vec![], "{what}: composite pixels left after the fill");
 }
 
-/// #11311: after clearing an anti-aliased selection and bucket-filling the hole white at 100 %,
-/// every pixel of the layer and of the composite is opaque white. The clear itself is right: it
-/// leaves a soft rim of white at partial alpha around a fully transparent hole. The bucket used to
-/// leave that rim (and its own anti-aliased edge) semi-transparent: a grey ring over the checkerboard.
+/// #11311 / #11354 review: after clearing an anti-aliased selection and bucket-filling the hole
+/// white at 100 %, the hole and the hole's edge are opaque white and the opaque art is untouched.
+/// The soft rim the Clear left (straight white at partial alpha) rises only partly, as in the
+/// reference application: a pixel the fill reaches at alpha `α` ends at `α + (1 − α)²`, so a faint
+/// rim stays. Before the first round the hole's own edge stayed semi-transparent (a grey ring);
+/// the first round filled the rim to 255 too, which the reference does not do.
 #[test]
-fn bucket_after_clearing_an_antialiased_selection_leaves_no_ring() {
+fn bucket_after_clearing_an_antialiased_selection_fills_the_hole_and_raises_the_rim_partly() {
+    let level = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
     for depth in [8, 16, 32] {
         let ellipse = json!({"x": 20, "y": 10, "width": 80, "height": 80, "ellipse": true, "antiAlias": true});
         let (s, cleared) = clear_then_bucket(depth, ellipse, true);
@@ -383,7 +386,24 @@ fn bucket_after_clearing_an_antialiased_selection_leaves_no_ring() {
         let rim: Vec<&[f32; 4]> = cleared.iter().filter(|p| p[3] > 0.0 && p[3] < 1.0).collect();
         assert!(!rim.is_empty(), "depth {depth}: an anti-aliased clear leaves a soft rim");
         assert!(rim.iter().all(|p| p[..3].iter().all(|c| (c - 1.0).abs() < 1e-3)), "depth {depth}: the rim keeps its white");
-        assert_all_white(&s, &format!("depth {depth}, anti-aliased ellipse"));
+
+        let after = layer_rgba(&s);
+        let mut raised = 0;
+        for (i, (was, now)) in cleared.iter().zip(&after).enumerate() {
+            let at = (i % 120, i / 120);
+            if was[3] <= 0.0 || was[3] >= 1.0 {
+                assert_eq!(level(now[3]), 255, "depth {depth} at {at:?}: hole, hole edge and opaque art end opaque: {now:?}");
+            } else if now[3] > was[3] {
+                raised += 1;
+                let want = was[3] + (1.0 - was[3]).powi(2);
+                assert!((now[3] - want).abs() < 1.5 / 255.0, "depth {depth} at {at:?}: rim {was:?} -> {now:?}, want alpha {want}");
+            } else {
+                assert_eq!(now, was, "depth {depth} at {at:?}: a rim pixel the fill does not reach stays");
+            }
+            assert!(now[..3].iter().all(|c| (c - 1.0).abs() < 1e-3), "depth {depth} at {at:?}: white: {now:?}");
+        }
+        assert!(raised > 0, "depth {depth}: the fill reaches the rim");
+        assert!(after.iter().any(|p| level(p[3]) < 255), "depth {depth}: a faint rim stays, as in the reference");
     }
 }
 
