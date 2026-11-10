@@ -582,6 +582,68 @@ fn add_pattern(s: &mut Session, name: &str, w: u32, h: u32, levels: &[u8]) {
 }
 
 #[test]
+/// Compare cross-band Bitmap thresholds with independent full-pattern ranks, including shared tie ranks.
+fn bitmap_custom_pattern_ranks_across_row_bands() {
+    let mut s = session(1, 1, 8, "grayscale");
+    let levels: Vec<u8> = (0..2 * 513).map(|i| [220, 40, 120][(i / 257) % 3]).collect();
+    add_pattern(&mut s, "Across bands", 2, 513, &levels);
+    let (map, w, h) = custom_pattern_map(&s, "image.mode.bitmap", &json!({"pattern": "Across bands"})).unwrap();
+    assert_eq!((w, h), (2, 513));
+    for (&value, &level) in map.iter().zip(&levels) {
+        let less = levels.iter().filter(|v| **v < level).count();
+        let equal = levels.iter().filter(|v| **v == level).count();
+        let expected = 1. - (less as f32 + equal as f32 / 2.) / levels.len() as f32;
+        assert_eq!(value, expected);
+    }
+}
+
+#[test]
+/// Accept a paintable compact pattern beyond the dense RGBA cap and retain its global threshold ordering.
+fn bitmap_custom_pattern_accepts_compact_pattern_past_full_rgba_limit() {
+    let mut s = session(1, 1, 8, "grayscale");
+    let (w, h) = (4097u32, 4096u32);
+    let mut surface = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    surface.write_pixel(0, 0, &[0., 0., 0., 1.]);
+    surface.write_pixel(w as i32 - 1, h as i32 - 1, &[0., 0., 0., 1.]);
+    let pattern = photocraft_doc::Pattern { id: "compact".into(), name: "Compact".into(), width: w, height: h, surface };
+    assert!(pattern.is_paintable());
+    assert!(pattern.pixel_count() * 16 > photocraft_doc::pattern::MAX_WORKING_BYTES);
+    s.edit("pattern", |doc, _| {
+        doc.patterns.push(pattern);
+        Ok(())
+    })
+    .unwrap();
+    let (map, mw, mh) = custom_pattern_map(&s, "image.mode.bitmap", &json!({"pattern": "compact"})).unwrap();
+    assert_eq!((mw, mh), (w as usize, h as usize));
+    assert_eq!(map.len(), mw * mh);
+    let n = map.len() as f32;
+    assert_eq!(map[0], 1. - 1. / n);
+    assert_eq!(*map.last().unwrap(), map[0]);
+    assert!((map[1] - (0.5 - 1. / n)).abs() < 1e-7);
+}
+
+/// Refuse ranking workspace before expanding a sparse, otherwise paintable large pattern.
+#[test]
+fn bitmap_custom_pattern_rejects_excessive_ranking_workspace_before_reading_pixels() {
+    let mut s = session(1, 1, 8, "grayscale");
+    let pattern = photocraft_doc::Pattern {
+        id: "large-rank".into(),
+        name: "Large rank".into(),
+        width: 6000,
+        height: 5000,
+        surface: photocraft_raster::Surface::new(PixelFormat::RGBA8),
+    };
+    assert!(pattern.is_paintable());
+    s.edit("pattern", |doc, _| {
+        doc.patterns.push(pattern);
+        Ok(())
+    })
+    .unwrap();
+    let error = custom_pattern_map(&s, "image.mode.bitmap", &json!({"pattern": "large-rank"})).unwrap_err();
+    assert!(error.to_string().contains("threshold ranking exceeds the 256 MiB"), "{error}");
+}
+
+#[test]
 fn bitmap_output_resolution_resamples_and_sets_the_resolution() {
     // Photoshop: a 256 x 4 ramp at 72 ppi converted with Output 144 ppi is 512 x 8 at 144 ppi,
     // its 50% threshold at column 256; at 36 ppi it is 128 x 2, the threshold at column 64.
