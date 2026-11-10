@@ -4845,4 +4845,3 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Content-aware fill	Sisältöön perustuva täyttö
 	Sample content from part of the image and use it to fill a small area	Ota sisältöä kuvan osasta pienen alueen täyttämiseksi
 	Reset the crop box, image rotation, and aspect ratio settings	Palauta rajauskehys, kuvan kierto ja kuvasuhde
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Tämä älykäs objekti on rasteroitava ennen jatkamista. Sen sisältöä ei voi enää muokata. Rasteroidaanko älykäs objekti?

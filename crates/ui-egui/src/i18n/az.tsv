@@ -4646,4 +4646,3 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Content-aware fill	Məzmuna əsaslanan doldurma
 	Sample content from part of the image and use it to fill a small area	Kiçik sahəni doldurmaq üçün şəklin bir hissəsindən məzmun götürün
 	Reset the crop box, image rotation, and aspect ratio settings	Kəsmə çərçivəsini, şəkil fırlanmasını və aspekt nisbətini sıfırlayın
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Bu Ağıllı Obyekt davam etməzdən əvvəl rasterləşdirilməlidir. Onun məzmunu artıq redaktə edilə bilməyəcək. Ağıllı Obyekt rasterləşdirilsin?

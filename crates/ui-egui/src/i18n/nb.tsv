@@ -4844,4 +4844,3 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	Content-aware fill	Innholdsbasert fylling
 	Sample content from part of the image and use it to fill a small area	Hent innhold fra en del av bildet for å fylle et lite område
 	Reset the crop box, image rotation, and aspect ratio settings	Tilbakestill beskjæringsrammen, bilderotasjonen og bildeforholdet
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Dette smartobjektet må rasteriseres før du fortsetter. Innholdet kan da ikke lenger redigeres. Rasterisere smartobjektet?

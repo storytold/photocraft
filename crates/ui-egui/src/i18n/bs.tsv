@@ -4660,4 +4660,3 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	Popunjavanje prema sadržaju
 	Sample content from part of the image and use it to fill a small area	Uzmite sadržaj iz dijela slike da popunite malu oblast
 	Reset the crop box, image rotation, and aspect ratio settings	Vratite okvir za obrezivanje, rotaciju slike i razmeru
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Ovaj pametni objekat mora se rasterizirati prije nastavka. Njegov sadržaj više neće biti moguće uređivati. Rasterizirati pametni objekat?

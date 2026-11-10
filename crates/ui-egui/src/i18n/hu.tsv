@@ -3087,7 +3087,6 @@ cameraRaw	Yellow	Sárga
 	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	A folytatáshoz a kitöltőréteget raszterizálni kell. A kitöltés tartalma ezután nem lesz szerkeszthető. Raszterizálod a réteget?
 	This layer must be rasterized before proceeding.	A folytatáshoz a réteget raszterizálni kell.
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	A folytatáshoz az alakzatréteget raszterizálni kell. Ezután alakzatként nem lesz szerkeszthető. Raszterizálod az alakzatot?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	A folytatáshoz az intelligens objektumot raszterizálni kell. A tartalma ezután nem lesz szerkeszthető. Raszterizálod az intelligens objektumot?
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	A folytatáshoz a szövegréteget raszterizálni kell. A szöveg ezután nem lesz szerkeszthető. Raszterizálod a szöveget?
 	TIFF Options	TIFF-beállítások
 	Top:	Felső:

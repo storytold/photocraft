@@ -4786,4 +4786,3 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 	Content-aware fill	เติมตามเนื้อหา
 	Sample content from part of the image and use it to fill a small area	สุ่มเนื้อหาจากส่วนหนึ่งของภาพเพื่อเติมพื้นที่เล็ก ๆ
 	Reset the crop box, image rotation, and aspect ratio settings	รีเซ็ตกรอบครอป การหมุนภาพ และอัตราส่วน
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	สมาร์ทออบเจ็กต์นี้ต้องได้รับการแรสเตอร์ก่อนดำเนินการต่อ เนื้อหาจะไม่สามารถแก้ไขได้อีกต่อไป แรสเตอร์วัตถุอัจฉริยะหรือไม่
