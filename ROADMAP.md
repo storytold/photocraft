@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~30 points (ready for real work ~45% → ~75%, with reliable PSD) and ~1,100–1,800 h away
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-22 · **Change:** minor (Print: Japanese paper sizes — はがき, 往復はがき, JIS B5/B4, A6, L判, 2L判, KG判, 六切, 四切; previously: Object Finder retains large enclosed foregrounds (#6548); Russian catalog covers every dynamic label; previously minor: oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-11-07 · **Change:** minor (accuracy pass against the code at e6ba4aca4: menus 662/662, tools 68/68, language coverage re-measured, oracle floor 190 of 258, no missing tools; breadth ~79%; previously minor: Print: Japanese paper sizes — はがき, 往復はがき, JIS B5/B4, A6, L判, 2L判, KG判, 六切, 四切; previously: Object Finder retains large enclosed foregrounds (#6548); Russian catalog covers every dynamic label; previously minor: oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
 
 PhotoCraft's one-page summary of how close it is to Adobe Photoshop 2026 (27.11.0, measured from
 the installed app on 2026-10-10) at version 0.6.0. Detail: [target-app parity](docs/target-app-parity.md)
@@ -19,7 +19,7 @@ About 80% of the work parallelizes.
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **~76%** | partly measured: menus 628/628, tools 56/68, panels 30/35, formats 13+4 of 31 |
+| **Feature breadth** | **~79%** | partly measured: menus 662/662, tools 68/68, panels 30/35, formats 13+4 of 31 |
 | **Ready for real work** | **~45%** (40–50%) | estimated: weighted by dimension below |
 | Mainstream practitioner | ~43% (38–48%) | estimated: weekly areas of a typical pro, with discounts ([method](docs/target-app-parity.md#mainstream-practitioner-43)) |
 | Essentials user | ~61% (55–67%) | estimated: core features only ([method](docs/target-app-parity.md#essentials-user-61)) |
@@ -50,7 +50,7 @@ four are partial in depth, none blocked.
 
 | Dimension | % ready | Hours to full | Doc |
 |---|---:|---:|---|
-| Features (depth) | 55% (breadth 76%) | 600–1,000 | [target-app-parity](docs/target-app-parity.md#feature-areas) |
+| Features (depth) | 55% (breadth 79%) | 600–1,000 | [target-app-parity](docs/target-app-parity.md#feature-areas) |
 | UI/UX fidelity (tools, handles, modifiers, brush feel, panels) | 40% | 350–600 | [ui-parity](docs/ui-parity.md), [brush-parity](docs/brush-parity.md), [context-menu-parity](docs/context-menu-parity.md) |
 | File formats | 60% (presence ~80%) | 300–500 | [file-format-parity](docs/file-format-parity.md) |
 | Hardware (GPU, pen, displays) | 50% | 80–150 | [hardware-parity](docs/hardware-parity.md) |
@@ -86,35 +86,34 @@ Rows and evidence: [target-app-parity › Feature areas](docs/target-app-parity.
 
 ## Languages
 
-Measured with the `cargo xtask i18n-coverage` key universe (1,608 keys). `partial` everywhere
+Measured with the `cargo xtask i18n-coverage` key universe (2,400 keys at e6ba4aca4). "UI strings" is the share of those keys a catalog has a non-empty entry for; an entry counts even when its text matches the English (`parse_catalog` in `xtask/src/i18n_coverage.rs`), so it is not the share of visible text in that language. `partial` everywhere
 because engine messages are still English. Detail: [localization-parity](docs/localization-parity.md).
 
 | Language | Code | UI strings | Status |
 |---|---|---:|---|
 | English | `en` | 100% | full |
-| Simplified Chinese | `zh-hans` | 100% | partial |
-| Spanish | `es` | 100% | partial |
-| Hindi | `hi` | 0% | none |
-| Arabic | `ar` | 0% (RTL shell only) | none |
-| French | `fr` | 100% | partial |
-| Portuguese (Brazil) | `pt-br` | 100% | partial |
-| Indonesian | `id` | 100% | partial |
-| Japanese | `ja` | 100% | partial |
-| German | `de` | 100% | partial |
-| Korean | `ko` | 100% | partial |
-| Vietnamese | `vi` | 0% | none |
+| Simplified Chinese | `zh-hans` | 95% | partial |
+| Spanish | `es` | 95% | partial |
+| Hindi | `hi` | 17% | partial |
+| Arabic | `ar` | 94% | partial |
+| French | `fr` | 95% | partial |
+| Portuguese (Brazil) | `pt-br` | 95% | partial |
+| Indonesian | `id` | 95% | partial |
+| Japanese | `ja` | 95% | partial |
+| German | `de` | 95% | partial |
+| Korean | `ko` | 95% | partial |
+| Vietnamese | `vi` | 95% | partial |
 
-Also shipped: Traditional Chinese, Russian (every dynamic label, [notes](docs/localization-ru.md)), Ukrainian, Czech, Polish, Greek, Dutch, Italian (8).
+Also shipped: Traditional Chinese, Russian (every dynamic label, [notes](docs/localization-ru.md)), Ukrainian, Serbian, Bosnian, Czech, Polish, Greek, Dutch, Italian, Hungarian, Turkish, Swedish, Finnish, Danish, Norwegian Bokmål, Azerbaijani, Thai, Hebrew, Urdu, Romanian, Tamil, Georgian (23).
 
 ## Upcoming
 
 | Rank | Milestone | Estimate |
 |---|---|---:|
-| 1 | PSD that Photoshop trusts: Save As corruption, Photoshop re-open check, Photoshop-oracle floor 145 → 200+ of 258 | 150–250 h |
+| 1 | PSD that Photoshop trusts: Photoshop re-open check, Photoshop-oracle floor 190 → 200+ of 258 | 150–250 h |
 | 2 | Performance budgets: the 22 over-budget scenarios and the 150-layer GPU crash | 200–350 h |
 | 3 | User bug backlog to under 100 open | 250–400 h |
 | 4 | Brush and transform feel (brush-parity, ui-parity rows) | 160–290 h |
-| 5 | The 12 missing tools | 60–100 h |
 
 Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
@@ -140,6 +139,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Accuracy pass against the code at e6ba4aca4: menus 662/662 and tools 68/68 (`Tool` enum; no tool missing, so the missing-tools milestone is gone), so the weighted feature breadth is ~79% (was ~76% with tools at 87%; other components unchanged); language coverage re-measured on the current 2,400-key universe, Hindi, Arabic and Vietnamese catalogs and 23 other languages; oracle floor 190 of 258 (`crates/io/tests/it/corpus.rs`); Save As corruption (#2374) closed |
 | 2026-10-22 | minor | Print: Japanese paper sizes (はがき, 往復はがき, JIS B5/B4, A6, L判, 2L判, KG判, 六切, 四切) in the Print dialog, `file.print` and the PDF output |
 | 2026-10-17 | minor | Object Finder retains large enclosed foregrounds (#6548) |
 | 2026-10-13 | minor | Focus item 1 quoted the oracle floor as 133 of 256; it is 145 of 258 (`crates/io/tests/it/corpus.rs`, gaps.md G1). Open issues 579 → 953 (2026-10-13) |
