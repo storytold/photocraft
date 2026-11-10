@@ -340,6 +340,28 @@ fn ellipse_widget_drags_angle_and_roundness() {
     assert_eq!(r, 1.0);
 }
 
+#[test]
+fn spacing_row_has_one_label_and_a_shared_header_in_every_theme() {
+    for kind in theme::ThemeKind::ALL {
+        for enabled in [false, true] {
+            let b = BrushSettings { spacing: 0.427, spacing_enabled: enabled, ..Default::default() };
+            let mut h = section_harness(0, b.clone());
+            crate::PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(3);
+            assert_eq!(h.query_all_by_role_and_label(Role::Label, "Spacing").count(), 0, "{kind:?}: the checkbox is the single label");
+            assert_eq!(h.query_all_by_role_and_label(Role::CheckBox, "Spacing").count(), 1);
+            let checkbox = h.get_by_role_and_label(Role::CheckBox, "Spacing").rect();
+            let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(43.0)).unwrap();
+            assert!((checkbox.center().y - field.rect().center().y).abs() < 2.0, "{kind:?}: checkbox and percentage share a row");
+            assert_eq!(field.accesskit_node().is_disabled(), !enabled);
+            let slider = h.get_by_role_and_label(Role::Slider, "Spacing");
+            assert_eq!(slider.accesskit_node().numeric_value(), Some(43.0), "{kind:?}: the track is a named slider");
+            assert_eq!(slider.accesskit_node().is_disabled(), !enabled);
+            assert_eq!(h.state(), &b, "rendering does not round the saved spacing");
+        }
+    }
+}
+
 fn check_scatter_header(section: usize) {
     for kind in theme::ThemeKind::ALL {
         for both_axes in [false, true] {
@@ -364,6 +386,43 @@ fn check_scatter_header(section: usize) {
             );
             assert_eq!(h.state(), &b, "rendering retains fractional scatter and other settings");
         }
+    }
+}
+
+#[test]
+fn spacing_row_retains_disabled_values_and_percentage_editing_limits() {
+    let mut h = section_harness(0, BrushSettings { spacing: 0.42, spacing_enabled: false, ..Default::default() });
+    let before = h.state().clone();
+    let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(42.0)).unwrap();
+    let from = pos2(field.rect().left() - 100.0, field.rect().bottom() + 9.0);
+    let to = pos2(field.rect().right() - 25.0, from.y);
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.event(egui::Event::Text("999".into()));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    drag(&mut h, from, to);
+    assert_eq!(h.state(), &before, "Off ignores both field input and a track drag");
+    let checkbox = h.get_by_role_and_label(Role::CheckBox, "Spacing");
+    checkbox.click();
+    h.run_steps(2);
+    assert!(h.state().spacing_enabled);
+    assert_eq!(h.state().spacing, 0.42, "enabling keeps the saved value");
+    let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(42.0)).unwrap();
+    field.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().spacing, 0.43, "integer percentage edits become a fraction");
+    drag(&mut h, from, to);
+    assert!(h.state().spacing > 5.0, "the same track is editable when enabled");
+    for (spacing, value, key) in [(0.01, 1.0, egui::Key::ArrowDown), (10.0, 1000.0, egui::Key::ArrowUp)] {
+        h.state_mut().spacing = spacing;
+        h.run_steps(2);
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(value)).unwrap();
+        field.click();
+        h.key_press(key);
+        h.run_steps(2);
+        assert_eq!(h.state().spacing, spacing, "the percentage stays within 1..1000");
     }
 }
 

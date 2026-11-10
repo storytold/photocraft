@@ -134,38 +134,34 @@ fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::pref
 /// can't be opened, or isn't an absolute path (it would depend on the folder the app was started
 /// from), is left out, so that direction fails closed, and the warning says why: a folder moved
 /// since it was chosen must not stop the app from starting. Each folder is opened once, so one
-/// that goes away during the launch can't turn into an error.
+/// that goes away during the launch can't turn into an error, and the same folder for reading
+/// and writing shares one capability, as it does when given by flags.
 fn automation_workspace(
     flags: &photocraft_automation::args::AutomationArgs,
     prefs: &photocraft_engine::prefs::Integrations,
 ) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
-    use photocraft_automation::{agent_link::folder, workspace::AuthorizedWorkspace};
+    use photocraft_automation::agent_link::folder;
     let mut workspace = flags.workspace()?;
     let mut warnings = Vec::new();
-    let mut from_pref = |flag: &Option<std::path::PathBuf>, pref: &str, read: bool| -> Option<AuthorizedWorkspace> {
-        if flag.is_some() {
-            return None;
-        }
-        let root = folder(pref)?;
+    for read in [true, false] {
+        let given = if read { !flags.automation_read_root.is_empty() } else { flags.automation_write_root.is_some() };
+        let Some(root) = folder(if read { &prefs.read_root } else { &prefs.write_root }).filter(|_| !given) else {
+            continue;
+        };
         let opened = if !root.is_absolute() {
             Err(format!("`{}` is not an absolute path", root.display()))
         } else if read {
-            AuthorizedWorkspace::new(Some(&root), None).map_err(|e| e.to_string())
+            workspace.with_read_root(&root).map_err(|e| e.to_string())
         } else {
-            AuthorizedWorkspace::new(None, Some(&root)).map_err(|e| e.to_string())
+            workspace.with_write_root(&root).map_err(|e| e.to_string())
         };
-        opened
-            .map_err(|e| {
+        match opened {
+            Ok(w) => workspace = w,
+            Err(e) => {
                 let which = if read { "Automation Read Folder" } else { "Automation Write Folder" };
                 warnings.push(format!("Preferences › Integrations › {which} is not used: {e}"));
-            })
-            .ok()
-    };
-    if let Some(read) = from_pref(&flags.automation_read_root, &prefs.read_root, true) {
-        workspace = workspace.with_read_from(read);
-    }
-    if let Some(write) = from_pref(&flags.automation_write_root, &prefs.write_root, false) {
-        workspace = workspace.with_write_from(write);
+            }
+        }
     }
     Ok((workspace, (!warnings.is_empty()).then(|| warnings.join("\n"))))
 }
@@ -1236,7 +1232,10 @@ mod tests {
     }
 
     fn flags(read: Option<&std::path::Path>, write: Option<&std::path::Path>) -> photocraft_automation::args::AutomationArgs {
-        photocraft_automation::args::AutomationArgs { automation_read_root: read.map(Into::into), automation_write_root: write.map(Into::into) }
+        photocraft_automation::args::AutomationArgs {
+            automation_read_root: read.map(Into::into).into_iter().collect(),
+            automation_write_root: write.map(Into::into),
+        }
     }
 
     fn roots(read: &std::path::Path, write: &std::path::Path) -> photocraft_engine::prefs::Integrations {
@@ -1262,12 +1261,19 @@ mod tests {
         ws.write("a.txt", b"pref").unwrap();
         assert_eq!(std::fs::read(pref.join("a.txt")).unwrap(), b"pref");
         assert_eq!(ws.read("a.txt").unwrap(), b"pref");
+        // One folder for both shares one capability, as the flags do: an implicit save is allowed.
+        assert_eq!(ws.read_with_save_path("a.txt").unwrap().1.as_deref(), Some("a.txt"));
 
         // A write flag wins over the write folder; reads still come from the preference.
         let (ws, _) = super::automation_workspace(&flags(None, Some(&flag)), &roots(&pref, &pref)).unwrap();
         ws.write("b.txt", b"flag").unwrap();
         assert!(flag.join("b.txt").is_file() && !pref.join("b.txt").exists(), "the flag's folder takes the write");
         assert_eq!(ws.read("a.txt").unwrap(), b"pref");
+        assert_eq!(ws.read_with_save_path("a.txt").unwrap().1, None, "read and write folders differ: no implicit save");
+
+        // A read folder spelled like the write flag shares the flag's capability.
+        let (ws, _) = super::automation_workspace(&flags(None, Some(&flag)), &roots(&flag, &pref)).unwrap();
+        assert_eq!(ws.read_with_save_path("b.txt").unwrap().1.as_deref(), Some("b.txt"));
 
         // Empty preferences grant nothing, as no flags do.
         let (ws, warning) = super::automation_workspace(&flags(None, None), &photocraft_engine::prefs::Integrations::default()).unwrap();
