@@ -23,6 +23,12 @@ pub fn exists(name: &str) -> bool {
     white_icons().contains(name)
 }
 
+/// An embedded icon as a loader source, for the places that hand egui an image to draw itself
+/// instead of painting it here (craft-ui's dock icons): `None` when the name is not embedded.
+pub(crate) fn source(name: &str) -> Option<egui::ImageSource<'static>> {
+    white_icons().contains(name).then(|| white_icons().source(name))
+}
+
 /// Rasterize an embedded icon from the white icon set at exact pixel dimensions `[width, height]`.
 pub(crate) fn rasterize_svg(name: &str, width: u32, height: u32) -> Option<egui::ColorImage> {
     if width == 0 || height == 0 {

@@ -2666,3 +2666,28 @@ fn the_icon_column_mirrors_with_the_reading_direction() {
         }
     }
 }
+
+#[test]
+fn every_dock_panel_names_an_embedded_icon() {
+    for (id, label, _) in PANELS {
+        let name = panel_icon(id).unwrap_or_else(|| panic!("{label} has no dock icon"));
+        assert!(crate::icons::exists(name), "{label}: {name} is not an embedded icon");
+    }
+    assert_eq!(panel_icon(CANVAS), None, "the canvas never collapses to an icon column");
+}
+
+/// The dock's iconic column asks the content for an image and falls back to the label's initial
+/// without one, so a missing hook brings back the letter placeholders (plan B6, #icons).
+#[test]
+fn the_dock_icon_hook_answers_for_every_panel_and_not_for_the_canvas() {
+    let mut state = app();
+    let collapsed = std::collections::HashSet::new();
+    let fillers = std::collections::HashSet::new();
+    let card = std::collections::HashSet::new();
+    let mut commands = Vec::new();
+    let content = PanelContent { app: &mut state, collapsed: &collapsed, fillers: &fillers, card: &card, strip: 28.0, commands: &mut commands };
+    for (id, label, _) in PANELS {
+        assert!(craft_ui::docking::DockContent::icon(&content, &id.to_string()).is_some(), "{label} falls back to a letter");
+    }
+    assert!(craft_ui::docking::DockContent::icon(&content, &CANVAS.to_string()).is_none());
+}

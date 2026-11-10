@@ -43,6 +43,33 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("brushes", "Brushes", Group::Brushes),
 ];
 
+/// The panel's icon in the dock's icon column, by panel id: craft-ui draws it in place of the
+/// label's initial (Photoshop draws icons there). The canvas has none — it never collapses to
+/// icons, and its column shows a body or nothing.
+fn panel_icon(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "color" => "palette",
+        "swatches" => "swatch-book",
+        "gradients" => "gradient",
+        "patterns" => "grid-3x3",
+        "properties" => "sliders-horizontal",
+        "adjustments" => "adjustment-layer",
+        "character" => "type",
+        "paragraph" => "pilcrow",
+        "navigator" => "compass",
+        "histogram" => "chart-column",
+        "info" => "info",
+        "history" => "clock",
+        "actions" => "play",
+        "layerComps" => "images",
+        "layers" => "layers",
+        "channels" => "blend",
+        "paths" => "spline",
+        "brushes" => "brush",
+        _ => return None,
+    })
+}
+
 /// PhotoCraft's wording of craft-ui's docking labels, translated through `tl!`. The others keep
 /// craft-ui's English.
 const DOCK_LABELS: &[(&str, &str)] = &[
@@ -1539,6 +1566,11 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
 }
 
 impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
+    /// The panel's icon in the dock, so a column collapsed to icons shows the panel's glyph
+    /// instead of the first letter of its label (Photoshop draws icons there).
+    fn icon(&self, id: &String) -> Option<egui::ImageSource<'static>> {
+        crate::icons::source(panel_icon(id)?)
+    }
     /// Draws panel `id`'s body in `ui`: the canvas, or an expanded panel's contents when the
     /// column leaves it at least 200 points.
     fn body(&mut self, ui: &mut egui::Ui, id: &String) {
