@@ -266,7 +266,7 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             Ok(v)
         }
         Err(e) => {
-            st.doc = before;
+            let failed = std::mem::replace(&mut st.doc, before);
             st.active_layer = prior.active;
             st.selected_layers = prior.selected;
             st.layer_anchor = anchor;
@@ -279,7 +279,9 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             if was_clean {
                 st.saved_revision = st.revision;
             }
-            st.last_damage = None;
+            // This revision's damage; `Session::dispatch` reports the command's whole span (nothing,
+            // when the inner commands had changed pixels and the restore took them back).
+            st.last_damage = crate::layer_multi_cmds::step_damage(&failed, &st.doc);
             Err(e)
         }
     };
@@ -1099,7 +1101,9 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         other => return Err(bad(CMD, format!("unknown source `{other}` (auto|selection|ruler|count)"))),
     };
     // Numbered only once the rows exist, so a failed measurement does not use up a label.
-    let label = format!("Measurement {}", s.analysis.next_measurement + 1);
+    // A count's row is "Count N" (#11775); the number is the shared one.
+    let word = if source == "count" { "Count" } else { "Measurement" };
+    let label = format!("{word} {}", s.analysis.next_measurement + 1);
     let now = p.get("dateTime").and_then(Value::as_str).map(str::to_string).unwrap_or_else(now_iso);
     let factor = d.measurement.scale.factor();
     let mut rows: Vec<Map<String, Value>> = Vec::new();
