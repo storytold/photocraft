@@ -86,14 +86,46 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 /// The History Brush's source: the targeted surface (pixels, mask, channel) as it was in History
 /// panel row `state` or snapshot `snapshot` (default: the source set in the History panel,
 /// `history.setSource`, else the oldest state still held, the "Open" state unless trimmed).
+/// A layer that did not exist in that state has no pixels there, and the History Brush refuses it
+/// as Photoshop's does. `eraseToHistory` (the Eraser's Erase to History option) paints such a layer
+/// with that layer's own pixels (its opacity not applied) from a state holding a single layer,
+/// Background or not, or past its path with a shape's solid colour, else white, and refuses it
+/// from any other state: observed in Photoshop 27.11.0, where a state with a second layer, even an
+/// empty one, gives an error.
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
-    crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
-        .cloned()
-        .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))
+    let missing = || EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into());
+    match crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p) {
+        Ok(surf) => Ok(surf.clone()),
+        Err(_)
+            if flag(p, "eraseToHistory", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels && source_doc.layers.len() == 1 =>
+        {
+            let fmt = id.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(Surface::format).ok_or_else(missing)?;
+            let only = source_doc.layers.first().ok_or_else(missing)?;
+            // A shape paints past its path, as in Photoshop: a solid fill its colour, and a gradient,
+            // a pattern or no fill plain white, whatever its outline.
+            if let photocraft_doc::LayerContent::Shape(shape) = &only.content {
+                let color = match &shape.fill {
+                    Some(photocraft_doc::Fill::Solid(color)) => *color,
+                    _ => photocraft_color::Color::WHITE,
+                };
+                let c = color.in_mode(fmt.mode);
+                let mut pixel = c.c.get(..fmt.mode.color_channels()).unwrap_or_default().to_vec();
+                if fmt.alpha {
+                    pixel.push(c.alpha);
+                }
+                return Ok(Surface::with_default(fmt, &pixel));
+            }
+            let only = only.surface().ok_or_else(missing)?;
+            Ok(if only.format() == fmt { only.clone() } else { only.convert(fmt) })
+        }
+        Err(_) => Err(missing()),
+    }
 }
 
+/// `paint.historyBrush`: paints the stroke from the `history_source` surface. With `eraseToHistory`
+/// it is the Eraser's Erase to History, and its History row says History Eraser.
 pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.historyBrush";
     let (stroke, id) = parse_brush(s, p, CMD)?;
@@ -105,7 +137,8 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let live = s.live_commit.take().filter(|l| l.matches(s, CMD, p, &stroke.points));
     let from_live = live.is_some();
     let src_surface = history_source(s, id, p, CMD)?;
-    let dmg = run_stroke(s, "History Brush", id, p, |_, surf, sel, lock| {
+    let label = if flag(p, "eraseToHistory", false) { "History Eraser" } else { "History Brush" };
+    let dmg = run_stroke(s, label, id, p, |_, surf, sel, lock| {
         if let Some(l) = live {
             *surf = l.surface;
             return Ok(l.bounds);

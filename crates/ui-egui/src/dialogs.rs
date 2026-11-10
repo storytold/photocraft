@@ -77,16 +77,22 @@ fn press_began_on_dialog(ctx: &egui::Context, rects: &[egui::Rect]) -> bool {
     ctx.data(|m| m.get_temp::<bool>(key)).unwrap_or(false)
 }
 
+/// The position `p`, when it is on `canvas` and not over a dialog or one of its popups. Uses the
+/// given position rather than the pointer's hover, so a pointer event's own position is checked
+/// even after the pointer left the window.
+pub(crate) fn free_pointer_at(ctx: &egui::Context, canvas: egui::Rect, p: egui::Pos2) -> Option<egui::Pos2> {
+    if egui::Popup::is_any_open(ctx) {
+        return None;
+    }
+    let rects = rects(ctx);
+    (canvas.contains(p) && !rects.iter().any(|r| r.contains(p))).then_some(p)
+}
+
 /// With a dialog open the rest of the window is inert (egui's modal layer), but like Photoshop the
 /// image can still be panned and zoomed under it. The pointer position when it is over `canvas`
 /// and not over a dialog or one of its popups.
 pub fn free_pointer_over(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui::Pos2> {
-    if egui::Popup::is_any_open(ctx) {
-        return None;
-    }
-    let p = ctx.pointer_hover_pos()?;
-    let rects = rects(ctx);
-    (canvas.contains(p) && !rects.iter().any(|r| r.contains(p))).then_some(p)
+    free_pointer_at(ctx, canvas, ctx.pointer_hover_pos()?)
 }
 
 /// Pan drag under an open dialog: Space-drag, middle-drag, or a drag with the Hand tool, started on
