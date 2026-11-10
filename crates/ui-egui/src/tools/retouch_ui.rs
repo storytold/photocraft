@@ -84,7 +84,9 @@ pub(crate) fn color_replacement_params(app: &PhotocraftApp) -> Value {
         "mode": o.cr_mode,
         "sampling": o.cr_sampling,
         "limits": o.cr_limits,
-        "tolerance": o.cr_tolerance,
+        // As the field stores it (#11930), so a restored fraction replaces the same pixels before
+        // and after the options bar shows it.
+        "tolerance": crate::eraser_ui::stored_tolerance(o.cr_tolerance),
         "antiAlias": o.cr_anti_alias,
         // A mask or channel target is refused: the tool recolours layer pixels only.
         "target": crate::canvas::paint_target(app),
@@ -126,7 +128,7 @@ pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
 }
 
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
-pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
+pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers, line: bool) -> bool {
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
     let (cmd, mut p): (&str, Value) = match tool {
@@ -183,6 +185,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
     p["points"] = pts;
     // The layer mask, an alpha channel or the Quick Mask when targeted, as the Brush paints.
     p["target"] = crate::canvas::paint_target(app);
+    crate::canvas::unsmoothed_line(&mut p, line);
     let result = app.run(cmd, p);
     app.retouch_from_live = matches!(&result, Ok(r) if r.get("fromLive").and_then(Value::as_bool) == Some(true));
     match result {
@@ -737,6 +740,35 @@ fn content_aware_move_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Draw Protect Tones with the shared checkbox's appearance and mouse behavior.
+/// Keep the label response here so its accessibility description needs no shared-widget API change.
+fn protect_tones_checkbox(ui: &mut egui::Ui, on: &mut bool) -> (egui::Response, egui::Id) {
+    let label = tl!("Protect Tones");
+    let t = Tokens::get(ui.ctx());
+    let (mut resp, label_resp) = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::CLICK);
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            let l = ui
+                .add(egui::Label::new(egui::RichText::new(label).color(t.text_dim)).selectable(false).sense(egui::Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            // Pressing the label presses the box (#4476).
+            let pressed = resp.is_pointer_button_down_on() || l.is_pointer_button_down_on();
+            crate::widgets::check_box(ui.painter(), rect, *on, resp.hovered() || l.hovered(), pressed, &t);
+            (resp.union(l.clone()), l)
+        })
+        .inner;
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    // The label is the single named, focusable checkbox; the box is a mouse target.
+    // Override Label's metadata instead of creating a second node with the same name.
+    label_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label));
+    (resp, label_resp.id)
+}
+
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
@@ -826,11 +858,39 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::Dodge | Tool::Burn => {
+            let tooltip = |response: egui::Response, text: &str, accessibility_id: egui::Id| {
+                // The checkbox's box is a mouse target, not its named accessibility node.
+                // Match on_hover_text: enrich existing nodes without inventing another control.
+                if response.ctx.has_accesskit_node(accessibility_id) {
+                    response.ctx.accesskit_node_builder(accessibility_id, |node| {
+                        if node.description().is_none() {
+                            node.set_description(text);
+                        }
+                        if node.labelled_by().is_empty() && node.label().is_none_or(str::is_empty) {
+                            node.set_label(text);
+                        }
+                    });
+                }
+                response.on_hover_ui(|ui| {
+                    // Translations and larger UI fonts can make even the short tips overflow.
+                    let room = (ui.ctx().content_rect().width() - egui::Frame::popup(ui.style()).total_margin().sum().x).max(1.0);
+                    ui.set_max_width(ui.spacing().tooltip_width.min(room));
+                    ui.label(text);
+                });
+            };
             opt(ui, tl!("Range:"));
             let opts = [("shadows".to_string(), tl!("Shadows")), ("midtones".to_string(), tl!("Midtones")), ("highlights".to_string(), tl!("Highlights"))];
             crate::widgets::dropdown(ui, "tone-range", tl!("Range"), &mut o.tone_range, &opts, 100.0);
-            pct(ui, tl!("Exposure:"), &mut o.exposure);
-            crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"));
+            if let Some(range) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("tone-range"))) {
+                let id = range.id;
+                tooltip(range, tl!("Painting Mode"), id);
+            }
+            opt(ui, tl!("Exposure:"));
+            let exposure = crate::widgets::value_field(ui, &mut o.exposure, 1.0..=100.0, "%", 58.0);
+            let exposure_id = exposure.id;
+            tooltip(exposure, tl!("Set exposure for stroke"), exposure_id);
+            let (protect, protect_id) = protect_tones_checkbox(ui, &mut o.protect_tones);
+            tooltip(protect, tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"), protect_id);
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));
@@ -860,6 +920,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("luminosity".to_string(), tl!("Luminosity")),
             ];
             crate::widgets::dropdown(ui, "color-replacement-mode", tl!("Mode"), &mut o.cr_mode, &modes, 100.0);
+            // The reference application's tooltips (#11930), on the dropdowns' buttons by the ids their
+            // combo boxes take.
+            if let Some(mode) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("color-replacement-mode"))) {
+                mode.on_hover_text(tl!("Painting Mode"));
+            }
             crate::widgets::vline(ui, 22.0);
             ui.spacing_mut().item_spacing.x = 2.0;
             for (k, icon, tip) in [
@@ -880,9 +945,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("findEdges".to_string(), tl!("Find Edges")),
             ];
             crate::widgets::dropdown(ui, "color-replacement-limits", tl!("Limits:"), &mut o.cr_limits, &limits, 110.0);
+            if let Some(limits) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("color-replacement-limits"))) {
+                limits.on_hover_text(tl!("Determines the spread of replaced color"));
+            }
             opt(ui, tl!("Tolerance:"));
-            crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
-            crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
+            // Whole numbers 1..=100 with the reference's alert, as the Background Eraser's (#11930).
+            let out_of_range = crate::eraser_ui::whole_tolerance_field(
+                ui,
+                &mut o.cr_tolerance,
+                "color-replacement-tolerance-typed",
+                tl!("Tolerance for choosing related colors"),
+            );
+            crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias")).on_hover_text(tl!("Anti-alias brush application"));
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
+            }
         }
         Tool::HistoryBrush => {
             let label = app.session.active().and_then(|st| match photocraft_engine::history_source_cmds::source(st)? {
@@ -987,5 +1064,13 @@ fn pattern_stamp_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 mod tests;
 
 #[cfg(test)]
+#[path = "../color_replacement_tolerance_field_tests.rs"]
+mod color_replacement_tolerance_field_tests;
+
+#[cfg(test)]
 #[path = "../cam_options_bar_tests.rs"]
 mod cam_options_bar_tests;
+
+#[cfg(test)]
+#[path = "../burn_bar_tooltips_tests.rs"]
+mod burn_bar_tooltips_tests;
