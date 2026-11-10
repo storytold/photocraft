@@ -1405,6 +1405,8 @@ pub struct Preferences {
     pub script_events: crate::automate_cmds::ScriptEvents,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
     pub layer_mask_overlay: LayerMaskOverlay,
+    /// Quick Mask color indicates selected areas across sessions.
+    pub quick_mask_selected_areas: bool,
 }
 
 impl Preferences {
@@ -1544,6 +1546,8 @@ impl Session {
     /// linearity, the transform and layer-effect cache budgets and the text engine's
     /// missing-glyph protection.
     pub fn apply_prefs(&mut self) {
+        self.quick_mask_options.indicates =
+            if self.prefs().quick_mask_selected_areas { photocraft_doc::ColorIndicates::SelectedAreas } else { photocraft_doc::ColorIndicates::MaskedAreas };
         self.scratch_runtime.get_or_insert_with(crate::scratch::Runtime::default);
         crate::scratch::configure(self.prefs());
         self.scratch_epoch = photocraft_raster::spill::epoch();

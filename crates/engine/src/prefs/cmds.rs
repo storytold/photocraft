@@ -18,6 +18,7 @@ fn prefs_get(s: &mut Session, p: &Value) -> Result<Value> {
     get_path(&v, path).cloned().ok_or_else(|| bad("prefs.get", format!("unknown preference `{path}`")))
 }
 
+/// Apply a validated preference batch and keep an active Quick Mask in sync.
 fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "prefs.set";
     let mut changes: Vec<(String, Value)> = Vec::new();
@@ -48,6 +49,14 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
         s.color.settings = saved_color;
         return Err(bad(cmd, e));
     }
+    let selected = s.prefs().quick_mask_selected_areas;
+    if saved_prefs.quick_mask_selected_areas != selected
+        && let Err(e) = crate::channel_cmds::sync_quick_mask_preference(s, selected)
+    {
+        s.prefs.edit(|p| *p = saved_prefs);
+        s.color.settings = saved_color;
+        return Err(e);
+    }
     // `colorSettings.blendTextGamma` lives in the compositor too, as `edit.colorSettings` sets it.
     photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
     s.apply_prefs();
@@ -64,6 +73,9 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
         candidate.reset(path).map_err(|e| bad("prefs.reset", e))?;
         if candidate.actions.create_single_history_state != s.prefs().actions.create_single_history_state && crate::actions_cmds::history_policy_in_use(s) {
             return Err(bad("prefs.reset", "cannot change action history settings during playback"));
+        }
+        if candidate.quick_mask_selected_areas != s.prefs().quick_mask_selected_areas {
+            crate::channel_cmds::sync_quick_mask_preference(s, candidate.quick_mask_selected_areas)?;
         }
     }
     match path {
