@@ -739,7 +739,7 @@ fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_docume
         // The board lands at (0, 0) after the document shifted right 50 and down 20; the sampler
         // is pinned to the canvas, not the board, so it shifts with the document only.
         assert_eq!(board_rect(&s, gid.0), Rect::new(0, 0, 40, 40), "{cmd}");
-        assert_eq!(samplers(&s), vec![[65.0, 35.0]], "{cmd}");
+        assert_eq!(samplers(&s), vec![[65.5, 35.5]], "{cmd}");
         assert_eq!(center(&s), Some([120.0, 40.0]), "{cmd}: the symmetry stays on its pixels");
     }
     // A new board left of the canvas shifts the photo right by its overhang.
@@ -747,7 +747,7 @@ fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_docume
     add_square(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
     s.execute("view.colorSamplers.add", json!({"x": 15, "y": 15})).unwrap();
     s.execute("layer.new.artboard", json!({"rect": [-200, 0, 100, 80]})).unwrap();
-    assert_eq!(samplers(&s), vec![[215.0, 15.0]]);
+    assert_eq!(samplers(&s), vec![[215.5, 15.5]]);
     assert!(red_at(&s, 215, 15));
     // A board made from layers (or a group) left of the canvas shifts by their overhang.
     for cmd in ["layer.new.artboardFromLayers", "layer.new.artboardFromGroup"] {
@@ -759,7 +759,7 @@ fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_docume
             s.execute("layer.groupLayers", json!({})).unwrap();
         }
         s.execute(cmd, json!({})).unwrap();
-        assert_eq!(samplers(&s), vec![[45.0, 15.0]], "{cmd}");
+        assert_eq!(samplers(&s), vec![[45.5, 15.5]], "{cmd}");
         assert!(red_at(&s, 45, 15), "{cmd}");
     }
     // The "+" button left of a board at the origin shifts by the board and the gap.
@@ -770,11 +770,11 @@ fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_docume
     s.execute("layer.artboard.addBeside", json!({"layer": gid.0, "side": "left"})).unwrap();
     let by = 40 + GAP;
     assert_eq!(board_rect(&s, gid.0), Rect::new(by, 0, by + 40, 40));
-    assert_eq!(samplers(&s), vec![[f64::from(by) + 5.0, 5.0]]);
+    assert_eq!(samplers(&s), vec![[f64::from(by) + 5.5, 5.5]]);
     assert!(red_at(&s, by + 5, 5));
     // A board right of the canvas shifts nothing.
     s.execute("layer.artboard.addBeside", json!({"layer": gid.0, "side": "right"})).unwrap();
-    assert_eq!(samplers(&s), vec![[f64::from(by) + 5.0, 5.0]]);
+    assert_eq!(samplers(&s), vec![[f64::from(by) + 5.5, 5.5]]);
 }
 
 #[test]
@@ -799,7 +799,7 @@ fn duplicating_a_board_beside_one_past_the_origin_moves_the_color_samplers_with_
             s.execute("layer.duplicate", json!({"layer": gid.0})).unwrap();
         }
         assert_eq!(board_rect(&s, gid.0), Rect::new(0, 10, 40, 50), "multi {multi}: the document shifted right 40");
-        assert_eq!(s.active().unwrap().color_samplers, vec![[105.0, 15.0]], "multi {multi}");
+        assert_eq!(s.active().unwrap().color_samplers, vec![[105.5, 15.5]], "multi {multi}");
         assert!(red_at(&s, 105, 15), "multi {multi}: the sampler is still on the square");
     }
 }

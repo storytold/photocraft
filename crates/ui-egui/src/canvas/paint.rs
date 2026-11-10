@@ -743,7 +743,10 @@ mod clip_segment_tests {
             assert!(!starts.is_empty(), "the view at {left} shows dashes");
             for d in starts {
                 let off = d % (2.0 * DASH);
-                assert!(off < 0.01 || off > 2.0 * DASH - 0.01, "view at {left}: a dash starts {d} from the corner, off the pattern by {off}");
+                assert!(
+                    off.is_finite() && !(0.01..=2.0 * DASH - 0.01).contains(&off),
+                    "view at {left}: a dash starts {d} from the corner, off the pattern by {off}"
+                );
             }
         }
     }
