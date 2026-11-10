@@ -1,4 +1,4 @@
-//! Selection algorithms on coverage masks (`w × h` row-major `f32` in
+//! Selection algorithms on coverage masks (`w Ã— h` row-major `f32` in
 //! `0..=1` over an area): magic wand / flood regions, colour range,
 //! modify (expand, contract, border, smooth, feather), anti-aliased lasso,
 //! and combining with an existing selection.
@@ -24,7 +24,7 @@ pub enum SelectionMode {
 }
 
 impl SelectionMode {
-    /// Parses `replace|add|subtract|intersect` (unknown → replace).
+    /// Parses `replace|add|subtract|intersect` (unknown â†’ replace).
     pub fn parse(s: &str) -> Self {
         match s {
             "add" => SelectionMode::Add,
@@ -35,7 +35,7 @@ impl SelectionMode {
     }
 }
 
-/// Reads a selection surface over `area` (no selection → all zero).
+/// Reads a selection surface over `area` (no selection â†’ all zero).
 pub fn mask_from_surface(s: Option<&Surface>, area: Rect) -> Vec<f32> {
     let n = area.width() as usize * area.height() as usize;
     match s {
@@ -76,7 +76,7 @@ pub fn mask_from_surface(s: Option<&Surface>, area: Rect) -> Vec<f32> {
     }
 }
 
-/// 8-bit selection value of a coverage (clamped and rounded, as GRAY8 surfaces store it; NaN → 0).
+/// 8-bit selection value of a coverage (clamped and rounded, as GRAY8 surfaces store it; NaN â†’ 0).
 #[inline]
 fn coverage8(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
@@ -174,7 +174,7 @@ fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
     (a[3] == 0.0 && b[3] == 0.0) || (0..4).all(|c| (a[c] - b[c]).abs() * 255.0 <= tol + 1e-3)
 }
 
-/// Pixels similar to the seed pixel (per-channel difference ≤ `tolerance`
+/// Pixels similar to the seed pixel (per-channel difference â‰¤ `tolerance`
 /// levels, alpha included; fully transparent pixels match regardless of hidden RGB).
 /// `contiguous` limits to the 4-connected region
 /// around the seed. `px` covers `area`.
@@ -237,8 +237,8 @@ pub fn magic_wand(px: &[[f32; 4]], area: Rect, seed: (i32, i32), tolerance: f32,
 /// 249 and 123 gives 110; a straight fade to zero at 216 levels gives all three.
 const FRINGE_LEVELS: f32 = 216.0;
 
-/// Coverage (0–255) of an anti-aliased fringe pixel: a neighbour of the region whose most
-/// different colour channel is `over` levels past the tolerance, and `alpha` (0–255) the lower
+/// Coverage (0â€“255) of an anti-aliased fringe pixel: a neighbour of the region whose most
+/// different colour channel is `over` levels past the tolerance, and `alpha` (0â€“255) the lower
 /// of its and the clicked pixel's opacity. Photoshop keeps the region itself fully selected and
 /// softens only the pixels just outside it, fading with the distance past the tolerance; a
 /// neighbour without colour (transparent, next to a shape on its own layer) gets none.
@@ -288,7 +288,7 @@ pub struct Region {
 }
 
 impl Region {
-    /// Coverage (0–1) at document pixel `(x, y)`; zero outside the box.
+    /// Coverage (0â€“1) at document pixel `(x, y)`; zero outside the box.
     pub fn at(&self, x: i32, y: i32) -> f32 {
         if !self.bbox.contains(x, y) {
             return 0.0;
@@ -297,6 +297,22 @@ impl Region {
         let value = row.and_then(|i| i.checked_add(x.abs_diff(self.bbox.x0) as usize)).and_then(|i| self.mask.get(i)).copied().unwrap_or(0);
         f32::from(value) / 255.0
     }
+}
+
+/// The Magic Wand's tolerance as whole channel steps (the `+ 1e-3` keeps a tolerance of 32.0 from
+/// rounding down to 31 after a float round trip). A NaN or negative tolerance is 0.
+pub(crate) fn tolerance_steps(tolerance: f32) -> i32 {
+    (tolerance + 1e-3).floor().max(0.0) as i32
+}
+
+/// Whether `p` is similar to the seed colour `target` within `tol` steps ([`tolerance_steps`]):
+/// the colour is within `tol` by `distance` and alpha is that close. Copying a selection can leave
+/// RGB under zero alpha, and those invisible colours must not split a transparent region into
+/// pieces, so two fully transparent pixels always match when the seed is transparent. Shared by
+/// the Magic Wand and the Paint Bucket's soft edge so the two cannot disagree on what "similar"
+/// means.
+pub(crate) fn similar_to_seed(target: [u8; 4], tol: i32, p: [u8; 4], distance: ColorDistance) -> bool {
+    (target[3] == 0 && p[3] == 0) || (distance.rgb(p, target) <= tol && (i32::from(p[3]) - i32::from(target[3])).abs() <= tol)
 }
 
 /// How a wand-style fill measures how far an 8-bit colour is from the clicked one.
@@ -368,10 +384,8 @@ pub fn wand_region_by(
         return None;
     }
     let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
-    let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
-    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
-    // split a transparent region into pieces, as if the copied source were still visible.
-    let similar = |p: [u8; 4]| (target[3] == 0 && p[3] == 0) || (distance.rgb(p, target) <= tol && (p[3] as i32 - target[3] as i32).abs() <= tol);
+    let tol = tolerance_steps(tolerance);
+    let similar = |p: [u8; 4]| similar_to_seed(target, tol, p, distance);
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
     if contiguous {
@@ -512,7 +526,7 @@ pub fn combine_region(old: Option<&Surface>, new: Option<&Region>, mode: Selecti
 }
 
 /// Colour Range: coverage falls off linearly with the per-channel colour
-/// distance; `fuzziness` in levels (0–200).
+/// distance; `fuzziness` in levels (0â€“200).
 pub fn color_range(px: &[[f32; 4]], color: [f32; 3], fuzziness: f32) -> Vec<f32> {
     let f = fuzziness.max(0.0) + 1.0;
     px.iter()
@@ -534,7 +548,7 @@ pub struct RangeSample {
     pub at: Option<(f32, f32)>,
 }
 
-/// Color Range › Sampled Colors with several samples (the dialog's "Add to Sample" eyedropper):
+/// Color Range â€º Sampled Colors with several samples (the dialog's "Add to Sample" eyedropper):
 /// each pixel takes its best match over the samples, each judged like [`color_range`]. With
 /// `localized` (Localized Color Clusters) a sample also fades with distance from where it was
 /// picked, reaching 0 at `localized` pixels, so only nearby matching colours are selected;
@@ -561,9 +575,9 @@ pub fn color_range_samples(px: &[[f32; 4]], w: usize, samples: &[RangeSample], f
         .collect()
 }
 
-/// The colours of Color Range › Sampled Colors: the Lab box spanned by the eyedropper samples
+/// The colours of Color Range â€º Sampled Colors: the Lab box spanned by the eyedropper samples
 /// (Photoshop records it in actions as the Minimum and Maximum Lab colours; "Add to Sample"
-/// grows it). One sample is a box of size zero. CIE Lab (D50): L 0–100, a and b about −128–127.
+/// grows it). One sample is a box of size zero. CIE Lab (D50): L 0â€“100, a and b about âˆ’128â€“127.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LabRange {
     pub lo: [f32; 3],
@@ -589,12 +603,12 @@ impl LabRange {
 
     /// "Subtract from Sample" the way Photoshop does it (observed through its Color Range dialog):
     /// it only reshapes the box, each Lab axis on its own, with `w` the axis's width at `fuzziness`
-    /// (L: fuzziness/2.55 units, a and b: a third of fuzziness·256/255) and q = w/5.
+    /// (L: fuzziness/2.55 units, a and b: a third of fuzzinessÂ·256/255) and q = w/5.
     ///
     /// - Inside the box, the nearer edge moves onto the subtracted value (the upper one on a tie),
     ///   so the subtracted colour stays selected, at the new edge.
     /// - On an edge or outside it by less than w, that edge moves in to the first of
-    ///   m + q, m + 2q, … m + 5q beyond it (m the subtracted value).
+    ///   m + q, m + 2q, â€¦ m + 5q beyond it (m the subtracted value).
     /// - Further out, nothing changes. An edge never crosses the other one.
     pub fn subtract(self, lab: &[f32; 3], fuzziness: f32) -> Self {
         let fz = if fuzziness.is_finite() { fuzziness.max(0.0) } else { 0.0 };
@@ -633,17 +647,17 @@ impl LabRange {
     }
 }
 
-/// How much a Lab colour belongs to `range` at `fuzziness` (0–200), the way Photoshop's
-/// Select › Color Range › Sampled Colors decides it. Reconstructed by observation only (Color
+/// How much a Lab colour belongs to `range` at `fuzziness` (0â€“200), the way Photoshop's
+/// Select â€º Color Range â€º Sampled Colors decides it. Reconstructed by observation only (Color
 /// Range run on synthetic Lab lattices and photos with Photoshop's own eyedropper, its masks
 /// compared value by value): on an 8-bit sRGB photo it matches Photoshop 2024 to about half a
 /// level of 255 on average.
 ///
-/// - Per axis, the distance outside the box in 8-bit Lab units: L × 2.55, a and b as they are,
-///   with a and b weighted ×3 (hue counts three times as much as lightness).
+/// - Per axis, the distance outside the box in 8-bit Lab units: L Ã— 2.55, a and b as they are,
+///   with a and b weighted Ã—3 (hue counts three times as much as lightness).
 /// - Each axis falls off on its own and the coverage is their minimum: the falloff of the
 ///   largest of the three distances.
-/// - The falloff is a quadratic B-spline of width fuzziness × 256/255: full at the box, half at
+/// - The falloff is a quadratic B-spline of width fuzziness Ã— 256/255: full at the box, half at
 ///   half the width, nothing beyond it, quantised to 256 levels like Photoshop's 8-bit masks.
 ///
 /// Fuzziness 0 keeps only colours equal to the samples. For 8-bit documents use
@@ -699,7 +713,7 @@ pub fn quantize_lab8(lab: [f32; 3]) -> [f32; 3] {
     [(lab[0] * 2.55).round() / 2.55, lab[1].round(), lab[2].round()]
 }
 
-/// Color Range › Sampled Colors over Lab pixels (`lab[i]` = L, a, b, alpha; `w` the row width):
+/// Color Range â€º Sampled Colors over Lab pixels (`lab[i]` = L, a, b, alpha; `w` the row width):
 /// each pixel's [`lab_range_coverage`] ([`lab_range_coverage_8bit`] with `grid8`), 0 where
 /// transparent. With `localized` (Localized Color
 /// Clusters: a radius in pixels and the sample positions) coverage also fades with the distance
@@ -729,7 +743,7 @@ pub fn color_range_lab(lab: &[[f32; 4]], w: usize, range: &LabRange, fuzziness: 
     out
 }
 
-/// Hue (degrees, 0..360) and chroma (max − min) of an RGB colour.
+/// Hue (degrees, 0..360) and chroma (max âˆ’ min) of an RGB colour.
 fn hue_chroma([r, g, b]: [f32; 3]) -> (f32, f32) {
     let mx = r.max(g).max(b);
     let mn = r.min(g).min(b);
@@ -747,12 +761,12 @@ fn hue_chroma([r, g, b]: [f32; 3]) -> (f32, f32) {
     (h * 60.0, d)
 }
 
-/// Color Range › Select: Reds, Yellows, Greens, Cyans, Blues or Magentas (`center` = 0, 60,
-/// 120, 180, 240, 300°). A pixel belongs to a family by how close its hue is (full at the
-/// family's hue, none 60° away, so an orange is half red, half yellow) times its chroma
-/// (max − min), so neutrals are never selected and muted colours only partly. Darker colours
-/// weigh more, by `2 − max`: measured against Photoshop 2025's presets on 126 colours each for
-/// Reds, Yellows and Blues (hue ±40°, saturation 5..100 %, brightness 33..100 %), this matches
+/// Color Range â€º Select: Reds, Yellows, Greens, Cyans, Blues or Magentas (`center` = 0, 60,
+/// 120, 180, 240, 300Â°). A pixel belongs to a family by how close its hue is (full at the
+/// family's hue, none 60Â° away, so an orange is half red, half yellow) times its chroma
+/// (max âˆ’ min), so neutrals are never selected and muted colours only partly. Darker colours
+/// weigh more, by `2 âˆ’ max`: measured against Photoshop 2025's presets on 126 colours each for
+/// Reds, Yellows and Blues (hue Â±40Â°, saturation 5..100 %, brightness 33..100 %), this matches
 /// its selection to within one level, where chroma alone fell up to 61 levels short (#5243).
 pub fn hue_range(px: &[[f32; 4]], center: f32) -> Vec<f32> {
     px.iter()
@@ -770,7 +784,7 @@ pub fn hue_range(px: &[[f32; 4]], center: f32) -> Vec<f32> {
         .collect()
 }
 
-/// Color Range › Select: Skin Tones. Skin of every complexion falls in a compact region of the
+/// Color Range â€º Select: Skin Tones. Skin of every complexion falls in a compact region of the
 /// YCbCr chroma plane (Chai & Ngan, "Face segmentation using skin-color map", 1999: Cb about
 /// 77..127, Cr about 133..173, Rec. 601 on 0..255) that runs from pale (higher Cb, lower Cr) to
 /// saturated (lower Cb, higher Cr). Pixels inside an ellipse along that run are fully selected;
@@ -804,7 +818,7 @@ pub fn skin_tones(px: &[[f32; 4]], fuzziness: f32) -> Vec<f32> {
         .collect()
 }
 
-/// Color Range › Select: Highlights, Midtones or Shadows. Pixels whose luminance (Rec. 601
+/// Color Range â€º Select: Highlights, Midtones or Shadows. Pixels whose luminance (Rec. 601
 /// weights, 0..255) lies in `lo..=hi` are fully selected; outside, selection falls off linearly
 /// to 0 over `falloff` levels (the dialog's Fuzziness).
 pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
@@ -856,9 +870,9 @@ pub fn contract(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
     morphology::modify(m, w, h, r, morphology::Kind::Contract)
 }
 
-/// Select › Modify › Border: a soft band `2r` wide centred on the selection edge, as in
+/// Select â€º Modify â€º Border: a soft band `2r` wide centred on the selection edge, as in
 /// Photoshop. A pixel `D` away (centre to centre) from the nearest pixel on the other side of the
-/// edge is selected `1 − (D − 1) / r`: fully at the edge, fading to nothing `r` pixels out on
+/// edge is selected `1 âˆ’ (D âˆ’ 1) / r`: fully at the edge, fading to nothing `r` pixels out on
 /// either side (measured on Photoshop 27.11, Border 4: 63, 127, 191, 255 | 255, 191, 127, 63
 /// across a straight edge, the same along the inside of a corner). It used to be a hard band
 /// `r` wide.
@@ -873,14 +887,14 @@ pub fn smooth(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
     crate::selection_blur::smooth(m, w, h, r)
 }
 
-/// Feather: Gaussian blur of the mask with sigma = radius, as in Photoshop (kernel truncated at 3σ, zero
+/// Feather: Gaussian blur of the mask with sigma = radius, as in Photoshop (kernel truncated at 3Ïƒ, zero
 /// beyond the canvas). Parallel, confined to the selection's bounds, and independent of the
 /// radius (#211).
 pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
     crate::selection_blur::feather(m, w, h, radius)
 }
 
-/// How far [`feather`] spreads, in pixels (`⌈3σ⌉` with σ = `radius`, 0 when it changes nothing).
+/// How far [`feather`] spreads, in pixels (`âŒˆ3ÏƒâŒ‰` with Ïƒ = `radius`, 0 when it changes nothing).
 /// Samples farther than this from every nonzero sample stay 0, so a working window grown by this
 /// much gives the same result as the whole canvas.
 pub fn feather_reach(radius: f32) -> usize {
@@ -909,7 +923,7 @@ pub fn polygon_window(points: &[(f32, f32)], canvas: Rect, window: Rect, anti_al
     let dx = (i64::from(area.x0) - i64::from(canvas.x0)) as usize;
     let dy = (i64::from(area.y0) - i64::from(canvas.y0)) as usize;
     let sample_y = |py: usize, s: usize| canvas.y0 as f32 + (dy + py) as f32 + (s as f32 + 0.5) / sub as f32;
-    // A sub-row at y crosses the edge a→b iff top <= y < bottom; horizontal and NaN edges
+    // A sub-row at y crosses the edge aâ†’b iff top <= y < bottom; horizontal and NaN edges
     // never cross one.
     struct Edge {
         top: f32,
@@ -1095,7 +1109,7 @@ impl ColorBvh {
 /// Bytes of memory the index is charged per distinct colour: the dedupe set entry and its
 /// table slack, the colour in the point list, and its share of the tree nodes. It is an
 /// approximate average, not a worst case: while the set rehashes or the point list doubles,
-/// the peak runs to roughly 70–90 bytes per colour.
+/// the peak runs to roughly 70â€“90 bytes per colour.
 const COLOR_INDEX_BYTES: usize = 64;
 
 /// The most memory the index may be charged. It scales with the distinct colours rather than the
