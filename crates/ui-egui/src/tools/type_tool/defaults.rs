@@ -132,8 +132,10 @@ pub(super) fn default_styles(app: &PhotocraftApp) -> (photocraft_doc::text::Char
     let mut p = default_style_params(app);
     // The saved panels can appear on the very first frame. Style parsing resolves the named
     // font through shared(), which waits for the font scan; display the saved names meanwhile,
-    // and let fonts_ready/axis_sliders expose the font controls when try_shared is ready.
-    if photocraft_text::try_shared().is_none() {
+    // and let fonts_ready/axis_sliders expose the font controls when try_shared is ready. The
+    // same while a background job holds the engine (re-rendering type): resolving the font would
+    // wait for the job, so the saved names stand in and the other defaults still apply.
+    if photocraft_text::try_shared().is_none() || photocraft_text::background_holds_shared() {
         c.font_family = app.ui.tool_options.type_font.clone();
         c.font_style = app.ui.tool_options.type_style.clone();
         c.postscript_name = None;
