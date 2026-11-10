@@ -18,6 +18,11 @@ fn named(event: &str, label: &str, d: Descriptor) -> AtnItem {
     AtnItem { event: AtnEvent::name(event), dictionary: label.as_bytes().to_vec(), descriptor: Some(d), ..Default::default() }
 }
 
+/// A step stored under a four-character code, the way a recorded file stores `Aply`.
+fn coded(code: &str, label: &str, d: Descriptor) -> AtnItem {
+    AtnItem { event: AtnEvent::Code(code.as_bytes().try_into().unwrap()), dictionary: label.as_bytes().to_vec(), descriptor: Some(d), ..Default::default() }
+}
+
 fn saved(s: &mut Session) -> Vec<AtnItem> {
     let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
     assert_eq!(r["skipped"], json!([]), "{r}");
@@ -25,6 +30,7 @@ fn saved(s: &mut Session) -> Vec<AtnItem> {
 }
 
 /// The three steps load as their commands and save back with the same events and descriptors.
+/// Package and Import Notes have only a string ID; Apply Data Set is recorded under `Aply`.
 #[test]
 fn package_notes_and_data_set_steps_load_and_save_back() {
     let package = desc("null").with("T   ", path_value("/work/packages"));
@@ -33,7 +39,7 @@ fn package_notes_and_data_set_steps_load_and_save_back() {
     let items = vec![
         named("packageFile", "Package", package.clone()),
         named("importAnnots", "Import Notes", notes.clone()),
-        named("apply", "Apply Data Set", data_set.clone()),
+        coded("Aply", "Apply Data Set", data_set.clone()),
     ];
     let (mut s, r) = load(items.clone());
     assert_eq!(r["unsupported"], json!([]), "{r}");
@@ -49,6 +55,47 @@ fn package_notes_and_data_set_steps_load_and_save_back() {
     for (b, original) in back.iter().zip(&items) {
         assert_eq!((&b.event, &b.descriptor), (&original.event, &original.descriptor));
     }
+}
+
+/// Apply Data Set is `stringIDToTypeID("apply")` = `charIDToTypeID("Aply")`, so a recorded file
+/// stores the step under the four-character code `Aply` (davidmann4 review on events.rs, the
+/// `apply` entry). It loads as `image.applyDataSet`, not as a kept step, and saving writes `Aply`
+/// back, with the same descriptor.
+#[test]
+fn an_apply_data_set_step_stored_under_aply_loads_and_saves_back_as_aply() {
+    let data_set = desc("null").with("null", name_ref("dataSetClass", "Summer sale"));
+    let (mut s, r) = load(vec![coded("Aply", "Apply Data Set", data_set.clone())]);
+    assert_eq!(r["unsupported"], json!([]), "a recorded Apply Data Set is not a kept step: {r}");
+    assert_eq!(s.actions.list[0].steps, [("image.applyDataSet".to_string(), json!({"name": "Summer sale"}))]);
+    let back = saved(&mut s);
+    assert_eq!(back[0].event, AtnEvent::Code(*b"Aply"));
+    assert_eq!(back[0].descriptor.as_ref(), Some(&data_set));
+    // A step PhotoCraft saves for the command is the same event.
+    let item = export_item("image.applyDataSet", &json!({"name": "Summer sale"}), "S").unwrap();
+    assert_eq!((item.event, item.descriptor.as_ref()), (AtnEvent::Code(*b"Aply"), Some(&data_set)));
+}
+
+/// The string name `apply` still loads (the same event ID), and saves back under the
+/// four-character code, as the other events that have one do.
+#[test]
+fn an_apply_data_set_step_stored_by_name_saves_back_under_aply() {
+    let data_set = desc("null").with("null", name_ref("dataSetClass", "Summer sale"));
+    let (mut s, r) = load(vec![named("apply", "Apply Data Set", data_set.clone())]);
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    assert_eq!(s.actions.list[0].steps, [("image.applyDataSet".to_string(), json!({"name": "Summer sale"}))]);
+    let back = saved(&mut s);
+    assert_eq!((&back[0].event, back[0].descriptor.as_ref()), (&AtnEvent::Code(*b"Aply"), Some(&data_set)));
+}
+
+/// An `Aply` step that is not a data set by name stays a kept step and saves back unchanged,
+/// under the code it was recorded with.
+#[test]
+fn an_aply_step_that_is_not_a_data_set_by_name_stays_kept() {
+    let other = desc("null").with("null", name_ref("Lyr ", "Summer sale"));
+    let (mut s, r) = load(vec![coded("Aply", "Apply Data Set", other.clone())]);
+    assert_ne!(s.actions.list[0].steps[0].0, "image.applyDataSet", "{r}");
+    let back = saved(&mut s);
+    assert_eq!((&back[0].event, back[0].descriptor.as_ref()), (&AtnEvent::Code(*b"Aply"), Some(&other)));
 }
 
 /// Package plays: the document and its folder are written where the step says.

@@ -1210,7 +1210,9 @@ pub(super) const EVENTS: &[Event] = &[
         to: super::steps_droplet::droplet_to,
     },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
-    // File › Package, File › Import › Notes and Image › Apply Data Set (#10723).
+    // File › Package, File › Import › Notes and Image › Apply Data Set (#10723). Package and Import
+    // Notes have only a string ID; `stringIDToTypeID("apply")` is `charIDToTypeID("Aply")`, so a
+    // recorded Apply Data Set step is stored under `Aply`.
     Event {
         code: "",
         name: "packageFile",
@@ -1228,7 +1230,7 @@ pub(super) const EVENTS: &[Event] = &[
         to: super::steps_file_menu::notes_to,
     },
     Event {
-        code: "",
+        code: "Aply",
         name: "apply",
         label: "Apply Data Set",
         ids: &["image.applyDataSet"],
