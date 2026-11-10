@@ -272,7 +272,8 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
-    let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
+    let raw_bg = s.tools.background;
+    let bg = crate::color_cmds::swatch_in_doc(s, raw_bg);
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
@@ -296,7 +297,8 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             if auto_erase {
                 // A stroke in the table's colour starts on what the foreground painted as.
                 let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
-                apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
+                // Not in #11940: Pencil Auto Erase keeps the plain background colour.
+                apply_auto_erase(&mut brush, surf, pts.first(), fg, raw_bg);
             }
             let unpainted = table.as_ref().map(|_| surf.clone());
             let damage = if let Some(axis) = &symmetry {
@@ -619,7 +621,7 @@ impl LiveStroke {
         erase_locked(&mut brush, lock, bg);
         if pencil && flag(p, "autoErase", false) {
             let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
-            apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
+            apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
         let symmetry = s.active().and_then(|st| st.symmetry.clone());

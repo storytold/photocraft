@@ -70,15 +70,15 @@ fn pencil_auto_erase_params() -> serde_json::Value {
 }
 
 #[test]
-fn live_pencil_auto_erase_paints_the_converted_background_in_a_gray_document() {
-    // A stroke that starts on a pixel of the foreground colour (white, on the white Background)
-    // paints the background colour's gray. The stroke the canvas renders live and the one the
-    // commit renders must agree on it (CodeRabbit on #12908).
+fn pencil_auto_erase_keeps_the_raw_background_live_and_committed() {
+    // #11940 lists the Eraser's and Edit › Fill's background lines; Pencil Auto Erase paints the
+    // foreground-colour pixel with the plain background colour as before (the luma grey, about
+    // 117 for RGB 0, 200, 0), in the committed stroke and in the live one the canvas shows.
     let mut reference = session("grayscale");
     reference.tools.foreground = [1.0, 1.0, 1.0, 1.0];
     reference.execute("paint.pencil", pencil_auto_erase_params()).unwrap();
     let expected = pixel(&mut reference, 20, 16);
-    assert!((level(expected[0]) - 173).abs() <= 2, "committed pixel {expected:?}");
+    assert!((level(expected[0]) - 117).abs() <= 2, "committed pixel {expected:?}");
 
     let mut s = session("grayscale");
     s.tools.foreground = [1.0, 1.0, 1.0, 1.0];
