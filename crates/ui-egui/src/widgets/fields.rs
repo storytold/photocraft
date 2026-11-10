@@ -538,6 +538,8 @@ fn number_edit(
                 };
                 let s = ready.as_str();
                 let v = if hold_typed { zoom_number(s, units) } else { parse_num_in(s, units) };
+                // Whether the text being typed is a number at all, for [`typed_text_parses`].
+                ctx.data_mut(|d| d.insert_temp(id.with("parses"), v.is_some()));
                 if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
@@ -568,6 +570,12 @@ fn number_edit(
     }
     resp.flags.set(egui::response::Flags::CHANGED, *value != before);
     resp
+}
+
+/// Whether the text last typed into the number field `id` (a [`value_field`]'s response id) reads
+/// as a number, an arithmetic entry included once it is complete: `None` before anything was typed.
+pub fn typed_text_parses(ctx: &egui::Context, id: egui::Id) -> Option<bool> {
+    ctx.data(|d| d.get_temp::<bool>(id.with("parses")))
 }
 
 /// The zoom a zoom field's text stands for, with at most one decimal separator (`,` or `.`): a

@@ -798,6 +798,8 @@ mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
+mod pencil_pressure_toggles_tests;
+#[cfg(test)]
 mod shape_bounds_box_tests;
 
 #[cfg(test)]
@@ -889,6 +891,9 @@ mod star_tool_tests;
 
 #[cfg(test)]
 mod transform_several_tests;
+
+#[cfg(test)]
+mod transform_corner_projection_tests;
 
 #[cfg(test)]
 mod transform_selection_rules_tests;
@@ -1040,6 +1045,8 @@ mod artboard_options_bar_tests;
 mod background_eraser_bar_angle_tests;
 #[cfg(test)]
 mod brush_opacity_minimum_tests;
+#[cfg(test)]
+mod burn_default_tip_tests;
 
 #[cfg(test)]
 mod pencil_shift_digit_opacity_tests;
