@@ -613,11 +613,6 @@ fn opt(ui: &mut egui::Ui, text: &str) {
     crate::widgets::scrub_option_label(ui, &label);
 }
 
-fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
-    opt(ui, label);
-    crate::widgets::value_field(ui, v, 1.0..=100.0, "%", 58.0);
-}
-
 const STRUCTURE_RANGE_ALERT: &str = "An integer between 1 and 7 is required. Closest value inserted.";
 const COLOR_RANGE_ALERT: &str = "An integer between 0 and 10 is required. Closest value inserted.";
 const STRUCTURE_TIP: &str = "Adjust how strictly the source structure is preserved";
@@ -899,7 +894,20 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
-            pct(ui, tl!("Strength:"), &mut o.strength);
+            let label = tl!("Strength:");
+            opt(ui, label);
+            // Only Blur's Strength is measured (#12650); a copy, so a shared fraction is not rounded.
+            let out_of_range = if tool == Tool::Blur {
+                let mut s = o.strength;
+                let (r, alert) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
+                if r.changed() {
+                    o.strength = s;
+                }
+                alert
+            } else {
+                crate::widgets::value_field(ui, &mut o.strength, 1.0..=100.0, "%", 58.0);
+                false
+            };
             if let Some(all) = o.sample_all.slot(tool) {
                 crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
             }
@@ -908,6 +916,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             if tool == Tool::Smudge {
                 crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
+            }
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
             }
         }
         Tool::ColorReplacement => {
