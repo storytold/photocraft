@@ -255,12 +255,59 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
     Some(if surf.content_bounds().is_empty() { "the active layer is empty" } else { "the active layer has no pixels in that area" })
 }
 
+/// Object Selection with Hard Edge off (#12855): `region` with a softer rim. A 3x3 tent
+/// (1-2-1 each way) turns a hard edge into a two-pixel ramp, about 75% just inside and 25% just
+/// outside it, so the result is one pixel wider on each side. Pixels past `canvas` repeat the
+/// canvas edge, so an object that touches the document border stays fully selected there.
+fn soften_edge(region: &Region, canvas: Rect) -> Region {
+    let src = region.bbox;
+    let bbox = Rect::new(src.x0.saturating_sub(1), src.y0.saturating_sub(1), src.x1.saturating_add(1), src.y1.saturating_add(1)).intersect(&canvas);
+    if bbox.is_empty() || src.is_empty() {
+        return region.clone();
+    }
+    let (sw, sh) = (src.width() as usize, src.height() as usize);
+    let at = |x: i32, y: i32| -> u32 {
+        let (x, y) = (x.clamp(canvas.x0, canvas.x1 - 1), y.clamp(canvas.y0, canvas.y1 - 1));
+        if !src.contains(x, y) {
+            return 0;
+        }
+        let (cx, cy) = (x.abs_diff(src.x0) as usize, y.abs_diff(src.y0) as usize);
+        if cx >= sw || cy >= sh {
+            return 0;
+        }
+        region.mask.get(cy * sw + cx).copied().map_or(0, u32::from)
+    };
+    let (w, h) = (bbox.width() as usize, bbox.height() as usize);
+    // Horizontal pass over the rows the vertical pass reads: one above and one below the box.
+    let rows = h + 2;
+    let mut tmp = vec![0u32; w * rows];
+    for (y, row) in (bbox.y0.saturating_sub(1)..).zip(tmp.chunks_exact_mut(w)) {
+        for (x, t) in (bbox.x0..).zip(row.iter_mut()) {
+            *t = at(x.saturating_sub(1), y) + 2 * at(x, y) + at(x.saturating_add(1), y);
+        }
+    }
+    let mut mask = Vec::with_capacity(w * h);
+    for win in tmp.chunks_exact(w).collect::<Vec<_>>().windows(3) {
+        if let [above, mid, below] = win {
+            mask.extend(above.iter().zip(mid.iter()).zip(below.iter()).map(|((a, m), b)| ((a + 2 * m + b + 8) / 16).min(255) as u8));
+        }
+    }
+    Region { bbox, mask }
+}
+
+/// `select.object`'s `"hardEdge"` (default on): off, the found object gets [`soften_edge`]'s rim.
+fn object_edge(canvas: Rect, p: &Value, region: Option<&Region>) -> Option<Region> {
+    let region = region?;
+    Some(if b(p, "hardEdge", true) { region.clone() } else { soften_edge(region, canvas) })
+}
+
 /// `select.object` with `"point"`: the Object Finder's object under the point (cached).
 fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1))?;
     let target = sampled_target(&d.doc, d.active_layer, all_layers);
+    let canvas = d.doc.bounds();
     let region = match s.object_finder.lookup(&d.doc, target, x, y) {
         Some(r) => Some(r),
         None => {
@@ -272,7 +319,9 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
             found
         }
     };
-    let out = apply(s, "Object Selection", region.as_deref(), mode(p, "replace"))?;
+    // The cache keeps the object as found; Hard Edge only shapes what is stored.
+    let region = object_edge(canvas, p, region.as_deref());
+    let out = apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))?;
     if let Some(d) = s.active() {
         let doc = std::sync::Arc::clone(&d.doc);
         s.object_finder.follow(&doc);
@@ -308,7 +357,7 @@ fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, rect)?;
-    let region = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
+    let region = with_sampler(s, all_layers, |smp, doc| object_edge(doc.bounds(), p, grabcut::object_select(smp, doc.bounds(), rect, 160_000).as_ref()))?;
     apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))
 }
 
@@ -560,7 +609,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false} (point: the Object Finder's object under the point, as hovering previews it)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, one pixel wider on each side)"##,
             has_doc,
             object_selection
         ),
@@ -591,6 +640,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod object_hard_edge_tests;
 #[cfg(test)]
 mod tests;
 
