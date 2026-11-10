@@ -300,9 +300,14 @@ fn layer_at_point(doc: &Document, pt: [f64; 2]) -> Option<LayerId> {
 }
 
 /// Re-bind markers whose bound layer was deleted: the frame re-tracks the topmost visible,
-/// non-background layer under its centre (the replacement layer), or is unbound when nothing is
-/// there. Returns whether anything changed. Runs at the start of `revision.detect`, so deleting a
-/// bound layer and placing its replacement re-binds automatically.
+/// non-background layer under its centre (the replacement layer). Returns whether anything
+/// changed. Runs at the start of `revision.detect`, so deleting a bound layer and placing its
+/// replacement re-binds automatically.
+///
+/// The dead id is kept while nothing is under the centre yet: an automatic check runs ~0.25 s
+/// after the delete, usually before the replacement layer exists, and clearing the id there would
+/// make the marker look deliberately unbound and leave it stranded. Keeping it keeps the marker
+/// orphaned, so the layer that lands later is still picked up.
 fn repair_bindings(d: &mut Document) -> bool {
     // Collect the frames whose bound layer is gone first, so the centre lookups below do not
     // clash with the mutable borrow of the marker list.
@@ -316,11 +321,17 @@ fn repair_bindings(d: &mut Document) -> bool {
     if stale.is_empty() {
         return false;
     }
+    let mut rebound = false;
     for (i, centre) in stale {
-        // The bound layer is gone: bind to the layer now under the frame centre, if any.
-        d.revision_markers[i].layer_id = layer_at_point(d, centre);
+        // The bound layer is gone: bind to the layer now under the frame centre. Nothing there yet
+        // (the replacement hasn't been placed, or only the background is) leaves the dead id in
+        // place, so a later check still sees the marker as orphaned and binds it then.
+        if let Some(id) = layer_at_point(d, centre) {
+            rebound = true;
+            d.revision_markers[i].layer_id = Some(id);
+        }
     }
-    true
+    rebound
 }
 
 fn detect(s: &mut Session, p: &Value) -> Result<Value> {
@@ -546,6 +557,34 @@ mod tests {
         s.execute("revision.detect", json!({})).unwrap();
         let v = s.execute("revision.list", json!({})).unwrap();
         assert_eq!(v["markers"][0]["layerId"], json!(new), "re-bound to the replacement layer");
+        assert_eq!(v["markers"][0]["done"], json!(true), "content changed vs the old snapshot → green");
+    }
+
+    #[test]
+    fn rebind_when_the_replacement_layer_arrives_after_a_check() {
+        // The automatic check runs right after the bound layer is deleted, when nothing covers the
+        // frame yet: the marker must stay orphaned (not silently unbound) so the replacement that
+        // lands afterwards still binds it.
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 60.0, "height": 40.0})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let layers = s.execute("layer.list", json!({})).unwrap();
+        let old = layers["layers"].as_array().unwrap()[0]["id"].as_u64().unwrap();
+        s.execute("revision.set", json!({"index": 0, "layerId": old})).unwrap();
+        s.execute("layer.delete", json!({"layer": old})).unwrap();
+        // A check in between: only the background is left under the frame.
+        let v = s.execute("revision.detect", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["layerId"], json!(old), "the dead id stays, so the marker is still orphaned");
+        // The replacement layer is placed and painted over the framed area.
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let layers = s.execute("layer.list", json!({})).unwrap();
+        let new = layers["layers"].as_array().unwrap()[0]["id"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 60, "height": 40})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.0, 1.0, 0.0]})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("revision.detect", json!({})).unwrap();
+        let v = s.execute("revision.list", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["layerId"], json!(new), "bound to the layer that replaced it");
         assert_eq!(v["markers"][0]["done"], json!(true), "content changed vs the old snapshot → green");
     }
 

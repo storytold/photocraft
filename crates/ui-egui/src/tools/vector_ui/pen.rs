@@ -198,6 +198,55 @@ pub fn pen_up(app: &mut PhotocraftApp) {
     }
 }
 
+/// Arrow keys while the Pen draws a path (#8531): the anchor just placed moves 1 px (⇧ 10 px),
+/// its handles moving with it, as in Photoshop. The draft is editor state, not document history,
+/// so the presses add no History step (⌘/Ctrl+Z still takes the anchor back). Returns true when a
+/// key was used.
+pub fn pen_arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    use egui::{Key, Modifiers};
+    if app.ui.text_edit.is_some() {
+        return false;
+    }
+    // Plain or ⇧ arrows only: ⌥ kerns type, ⌘ is the temporary Move tool / Direct Selection.
+    let m = ctx.input(|i| i.modifiers);
+    if m.alt || m.command || m.ctrl {
+        return false;
+    }
+    let nudges = app.ui.pen.as_ref().is_some_and(|pen| {
+        pen.drawn_with(app.ui.tool) && !pen.knots.is_empty() && !pen.dragging && pen.moving.is_none()
+    });
+    if !nudges {
+        return false;
+    }
+    let keys = [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)];
+    for (key, ux, uy) in keys {
+        // ⇧ first: `consume_key` ignores an extra ⇧.
+        for mods in [Modifiers::SHIFT, Modifiers::NONE] {
+            if ctx.input_mut(|i| i.consume_key(mods, key)) {
+                let k = if mods.shift { 10.0 } else { 1.0 };
+                let (dx, dy) = (ux * k, uy * k);
+                if let Some(pen) = app.ui.pen.as_mut() {
+                    let curvature = pen.curvature;
+                    if let Some(knot) = pen.knots.last_mut() {
+                        for point in knot.iter_mut() {
+                            point[0] += dx;
+                            point[1] += dy;
+                        }
+                        // The next drag continues from the anchor where it now is.
+                        pen.last_pointer = Some(knot[0]);
+                    }
+                    if curvature {
+                        // A Curvature Pen path's handles follow its anchors, so they are recomputed.
+                        curvature_refresh(pen, false);
+                    }
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// ⌥/Alt during a Pen drag breaks the pair of handles being pulled out: from then on only the
 /// outgoing handle follows the pointer and the incoming curve stays as it is (#3306).
 pub fn pen_break_handle(app: &mut PhotocraftApp) {

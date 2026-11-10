@@ -231,7 +231,10 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     use egui::{Key, Modifiers};
     let cmd = ctx.input(|i| i.modifiers.command) && crate::hold_keys::cmd_nudges(app);
     if app.ui.tool != Tool::Move && app.ui.transform.is_none() && !cmd {
-        return selection_arrow_keys(app, ctx) || crate::direct_select::arrow_keys(app, ctx) || brush_arrow_keys(app, ctx);
+        return crate::vector_ui::pen_arrow_keys(app, ctx)
+            || selection_arrow_keys(app, ctx)
+            || crate::direct_select::arrow_keys(app, ctx)
+            || brush_arrow_keys(app, ctx);
     }
     // `consume_key` never ignores an extra ⌘, so it is part of every pattern while it moves.
     let base = if cmd { Modifiers::COMMAND } else { Modifiers::NONE };

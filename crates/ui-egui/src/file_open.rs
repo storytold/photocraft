@@ -37,8 +37,10 @@ pub enum DropTarget {
 /// A file dropped on the canvas, waiting its turn to be placed in the document it was dropped on
 /// (queued with its [`DocId`] in `drop_places`).
 pub(crate) enum DropPlace {
-    /// Destination captured when the file is dropped, before a later pointer move.
-    At { source: Box<DropPlace>, frame: Option<photocraft_doc::LayerId> },
+    /// Destination captured when the file is dropped, before a later pointer move: the frame under
+    /// the pointer (to fill it, as in Photoshop) and the document point it was dropped on, which is
+    /// where the new layer lands (#8531).
+    At { source: Box<DropPlace>, frame: Option<photocraft_doc::LayerId>, centre: Option<[f64; 2]> },
     /// Dropped onto the window (desktop): read from its path, or through egui.
     File(egui::DroppedFileHandle),
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
@@ -307,7 +309,8 @@ impl PhotocraftApp {
     /// absolute path, read in bounded reads (#375) rather than egui's whole-file read.
     pub fn open_dropped(&mut self, ctx: &egui::Context, files: Vec<egui::DroppedFileHandle>, at: Option<egui::Pos2>) {
         let target = self.drop_target(ctx, at);
-        let frame = at.and_then(|at| crate::canvas::ViewXform::active(self).map(|xf| xf.to_doc(at))).and_then(|p| crate::frame_tool::frame_at(self, p));
+        let point = at.and_then(|at| crate::canvas::ViewXform::active(self).map(|xf| xf.to_doc(at)));
+        let frame = point.and_then(|p| crate::frame_tool::frame_at(self, p));
         let mut slot = match target {
             DropTarget::Tabs(slot) => Some(slot),
             DropTarget::Canvas | DropTarget::Elsewhere => None,
@@ -322,7 +325,7 @@ impl PhotocraftApp {
             let name = dropped_name(&f);
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
                 if let Some(doc) = self.session.active().map(|st| st.doc.id) {
-                    self.queue_drop(doc, DropPlace::At { source: Box::new(DropPlace::File(f)), frame });
+                    self.queue_drop(doc, DropPlace::At { source: Box::new(DropPlace::File(f)), frame, centre: point });
                 }
                 continue;
             }
@@ -420,14 +423,27 @@ impl PhotocraftApp {
             let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
                 return;
             };
-            let (next, frame) = match next {
-                DropPlace::At { source, frame } => (*source, Some(frame)),
-                next => (next, None),
+            let (next, frame, centre) = match next {
+                DropPlace::At { source, frame, centre } => (*source, Some(frame), centre),
+                next => (next, None, None),
             };
-            let params = frame.map_or_else(
-                || serde_json::json!({}),
-                |frame| serde_json::json!({"frame": frame.map_or(serde_json::Value::Bool(false), |id| serde_json::json!(id.0))}),
-            );
+            // Where the layer lands: the point the file was dropped on, as in Photoshop (a place
+            // with no drop point falls back to the view centre in `place_params`). The command's
+            // own default is the centre of the whole canvas, which in a document with several
+            // artboards is empty space between boards. A drop that fills a frame keeps the frame's
+            // own placement instead.
+            let params = {
+                let mut p = serde_json::json!({});
+                if let Some(frame) = frame {
+                    p["frame"] = frame.map_or(serde_json::Value::Bool(false), |id| serde_json::json!(id.0));
+                    if frame.is_none()
+                        && let Some([x, y]) = centre
+                    {
+                        p["center"] = serde_json::json!([x, y]);
+                    }
+                }
+                p
+            };
             let (name, placed) = match next {
                 DropPlace::At { .. } => {
                     self.failed(tl!("Invalid nested file drop").into());
@@ -516,13 +532,37 @@ impl PhotocraftApp {
         self.place_bytes_with(name, bytes, linked, &serde_json::json!({}))
     }
 
+    /// The document point in the middle of the canvas view: where a placed layer lands when there
+    /// is no drop point to use (File › Place, a file read by the shell), as in Photoshop. `None`
+    /// when no view is laid out (a headless or web shell), where the command's own default applies.
+    pub(crate) fn view_center_doc(&self) -> Option<[f64; 2]> {
+        let xf = crate::canvas::ViewXform::active(self)?;
+        Some(xf.to_doc(xf.rect.center()))
+    }
+
+    /// The place command's `params` with the default landing spot filled in: the view centre, when
+    /// the caller named no `center` and the place does not fill a frame (a frame's image is fitted
+    /// into the frame itself, where a centre would move it off).
+    fn place_params(&self, params: &serde_json::Value) -> serde_json::Value {
+        let mut p = params.clone();
+        let framed = p.get("frame").is_some_and(|f| !matches!(f, serde_json::Value::Bool(false)));
+        if !framed
+            && p.get("center").is_none()
+            && let Some([x, y]) = self.view_center_doc()
+        {
+            p["center"] = serde_json::json!([x, y]);
+        }
+        p
+    }
+
     /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where
     /// places run in the background, else synchronously.
     fn place_bytes_with(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let params = self.place_params(params);
         let r = if crate::jobs_ui::place_in_background(self) {
-            crate::jobs_ui::start_place_bytes(self, name, bytes, linked, params)
+            crate::jobs_ui::start_place_bytes(self, name, bytes, linked, &params)
         } else {
-            photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, params).map_err(|e| e.to_string())
+            photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &params).map_err(|e| e.to_string())
         };
         self.sync_views();
         r

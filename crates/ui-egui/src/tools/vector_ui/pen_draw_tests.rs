@@ -96,6 +96,38 @@ fn near(a: [f64; 2], b: [f64; 2]) -> bool {
     (a[0] - b[0]).abs() < 0.05 && (a[1] - b[1]).abs() < 0.05
 }
 
+/// #8531: arrow keys while the Pen draws move the anchor just placed (⇧ 10 px), its handles
+/// moving with it, as in Photoshop.
+#[test]
+fn arrow_keys_nudge_the_pen_anchor_just_placed() {
+    let mut h = harness();
+    h.state_mut().ui.extras.snap = false;
+    click(&mut h, [20.0, 20.0]);
+    // A smooth anchor: its handles are pulled out from the anchor.
+    drag(&mut h, &[[80.0, 20.0], [100.0, 40.0]], None);
+    let before = h.state().ui.pen.clone().unwrap().knots[1];
+    let steps = h.state().session.active().unwrap().history.entries().len();
+    h.key_press(Key::ArrowRight);
+    h.run_steps(1);
+    let moved = h.state().ui.pen.clone().unwrap().knots[1];
+    assert!(near(moved[0], [before[0][0] + 1.0, before[0][1]]), "anchor moves 1 px right: {moved:?}");
+    assert!(near(moved[2], [before[2][0] + 1.0, before[2][1]]), "the handle moves with it: {moved:?}");
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowDown);
+    h.run_steps(1);
+    let moved = h.state().ui.pen.clone().unwrap().knots[1];
+    assert!(near(moved[0], [before[0][0] + 1.0, before[0][1] + 10.0]), "⇧ moves 10 px: {moved:?}");
+    assert_eq!(h.state().ui.pen.as_ref().unwrap().knots.len(), 2, "no anchor is added");
+    // The draft is not document history: the nudges record no step.
+    let steps_after = h.state().session.active().unwrap().history.entries().len();
+    assert_eq!(steps_after, steps, "the nudges add no history step");
+    // The path still commits with the anchor where the arrow keys left it.
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    let doc = &h.state().session.active().unwrap().doc;
+    let k = doc.work_path.as_ref().unwrap().subpaths[0].knots[1];
+    assert!(near([k.anchor.x, k.anchor.y], [before[0][0] + 1.0, before[0][1] + 10.0]), "{k:?}");
+}
+
 #[test]
 fn space_repositions_a_pen_anchor_and_keeps_its_handles() {
     let mut h = harness();
