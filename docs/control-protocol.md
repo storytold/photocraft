@@ -120,6 +120,8 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 
 ## Engine commands
 
+`edit.perspectiveWarpGlobal` is an advanced **headless** command that fits **one global homography over the entire raster layer**, not separate regional patches. It rejects selections, masks, locked or non-raster targets, validates the solved mapping before allocation, and commits atomically with Undo/Redo; `solveOnly` returns diagnostics without changing history. The existing multi-plane Perspective Warp UI is separate. See [Global Perspective Warp](global-perspective-warp.md) for guide input and limits.
+
 Change the UI language without restarting with `prefs.set`:
 `{"path":"interface.language","value":"fr"}`. Supported codes and preview/apply behaviour
 are documented in [UI localisation](localization.md). `prefs.get` and the existing preference
