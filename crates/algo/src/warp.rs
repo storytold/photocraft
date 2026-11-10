@@ -147,13 +147,9 @@ pub fn cell_order(pos: &[[f64; 2]], rest: &[[f64; 2]], row: usize) -> Vec<usize>
         }
     }
     let by = |x: &(bool, f64, usize), y: &(bool, f64, usize)| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1));
-    // A stable sort either way, so equal cells keep row order.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        cells.par_sort_by(by);
-    }
-    #[cfg(target_arch = "wasm32")]
+    // A stable sort, so equal cells keep row order. On this thread alone: a render asks for the
+    // order from a pool thread that other tiles wait on, and a sort shared with the pool could
+    // hand that thread one of those tiles, which would wait for the order for ever.
     cells.sort_by(by);
     cells.into_iter().map(|(_, _, a)| a).collect()
 }
@@ -1236,5 +1232,32 @@ mod tests {
         assert_eq!(o.pixel(0, 0), vec![1.0]);
         assert_eq!(o.pixel(12, 6), vec![0.0]);
         assert_eq!(o.pixel(5, 6), vec![1.0]);
+    }
+
+    /// Tiles are drawn on the thread pool, and the first one that meets a fold works out the
+    /// fold's order while the others that need it wait. That must never hand the working thread
+    /// another folded tile (it would wait on itself, and every tile after it for ever): a warp
+    /// that folds some of its tiles, with a mesh big enough to be worth sorting on several
+    /// threads, finishes every time.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_fold_never_stalls_the_thread_pool() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        src.fill_rect(Rect::new(0, 0, 64, 64), &[1.0, 0.0, 0.0, 1.0]);
+        let r = Rect::new(0, 0, 2048, 2048);
+        // The left quarter folded over the next: a quarter of the tiles hold two layers.
+        let fold = |x: f64, y: f64| (if x < 512.0 { 1024.0 - x } else { x }, y);
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Pools of its own, so a stall can't take the other tests' pool with it.
+        std::thread::spawn(move || {
+            for threads in [8, 16] {
+                let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(threads).build() else { return };
+                for _ in 0..12 {
+                    pool.install(|| warp_mesh_surface_with(&src, r, &fold, Fold::IN_PLACE, Interp::Nearest, &Interrupt::NONE));
+                }
+            }
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(120)).is_ok(), "the warp never finished");
     }
 }
