@@ -15,9 +15,7 @@ fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(
         Session::new(),
         Services {
-            import: Some(Box::new(|name, bytes, opts| {
-                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-            })),
+            import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
             export: Some(Box::new(|doc, path, _| {
                 photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
             })),
@@ -555,10 +553,13 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
 
     crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
 
+    let color_settings = app.session.color.settings.clone();
+    let ignore_exif_profile_tag = app.session.prefs().file_handling.ignore_exif_profile_tag;
     crate::open_prompt::arrive(
         &mut app,
         crate::open_prompt::Held {
             doc: photocraft_doc::Document::new("test", photocraft_geom::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
+            initial_view: None,
             read_only: false,
             damage_pending: false,
             name: "profile.psd".into(),
@@ -570,6 +571,8 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
             question: Some(json!({"missing": false, "working": "sRGB", "embedded": "Adobe RGB"})),
             policy_applied: false,
             smart_object: false,
+            color_settings: Some(color_settings),
+            ignore_exif_profile_tag: Some(ignore_exif_profile_tag),
         },
     );
 
@@ -587,10 +590,13 @@ fn mixed_prompts_follow_arrival_order_fifo() {
     let gb = 1u64 << 30;
 
     // 1. Arrive damage prompt first
+    let color_settings = app.session.color.settings.clone();
+    let ignore_exif_profile_tag = app.session.prefs().file_handling.ignore_exif_profile_tag;
     crate::open_prompt::arrive(
         &mut app,
         crate::open_prompt::Held {
             doc: photocraft_doc::Document::new("test", photocraft_geom::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
+            initial_view: None,
             read_only: false,
             damage_pending: true,
             name: "first_damage.psd".into(),
@@ -602,6 +608,8 @@ fn mixed_prompts_follow_arrival_order_fifo() {
             question: None,
             policy_applied: false,
             smart_object: false,
+            color_settings: Some(color_settings),
+            ignore_exif_profile_tag: Some(ignore_exif_profile_tag),
         },
     );
 
@@ -835,7 +843,7 @@ fn inline_set_keeps_the_memory_prompted_file_in_batch_order() {
             assert_eq!(app.held_memory_prompts.front().unwrap().order.map(|o| o.seq), Some(0), "the set order travels with the prompt");
             // The flat file waits behind the prompt, keeping its own place in the set.
             assert_eq!(app.held_opens.len(), 1);
-            assert_eq!(app.held_opens.front().unwrap().order.map(|o| o.seq), Some(1));
+            assert_eq!(app.held_opens.front().unwrap().order().map(|o| o.seq), Some(1));
             let dlg = app.ui.dialogs[0].id;
             assert_eq!(call(&mut app, "ui.dialog.confirm", json!({"dialog": dlg}))["ok"], true);
             let names: Vec<_> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();

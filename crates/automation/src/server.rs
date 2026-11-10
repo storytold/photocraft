@@ -55,6 +55,9 @@ pub struct OpenParams {
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
+    /// Explicit byte order for historical high-depth XCF7–11: little-endian or big-endian.
+    #[serde(default, rename = "historicalXcfSampleOrder")]
+    pub historical_xcf_sample_order: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -365,6 +368,7 @@ pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, moveShowTransform (bool, the Move tool's
     /// Show Transform Controls option), panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
+    /// importReport (bool, opens or closes the read-only import conversion report),
     /// vectorMaskTarget, filterMaskTarget (paint the active smart object's filter mask), selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
     /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
@@ -633,6 +637,16 @@ impl PhotocraftMcp {
         &self,
         f: impl FnOnce(&mut Headless) -> Result<T, AutomationError> + Send + 'static,
     ) -> Option<Result<T, AutomationError>> {
+        self.headless_op_with_poll(true, f).await
+    }
+
+    /// Cancellation discards queued worker results before publication; normal calls first
+    /// synchronize completed jobs, as the desktop's ordinary frame boundary does.
+    async fn headless_op_with_poll<T: Send + 'static>(
+        &self,
+        poll: bool,
+        f: impl FnOnce(&mut Headless) -> Result<T, AutomationError> + Send + 'static,
+    ) -> Option<Result<T, AutomationError>> {
         let Backend::Headless(h) = &*self.backend else {
             return None;
         };
@@ -643,7 +657,9 @@ impl PhotocraftMcp {
                 // of the document (`Session::edit`), so the session is still
                 // consistent: keep serving instead of failing every later call.
                 let mut g = h.lock().unwrap_or_else(PoisonError::into_inner);
-                g.sync_jobs();
+                if poll {
+                    g.sync_jobs();
+                }
                 f(&mut g)
             })
             .await
@@ -734,19 +750,35 @@ impl PhotocraftMcp {
     }
 
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
+    /// Validate explicit historical order and open through the authorized headless backend or the GUI bridge.
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
         let approve = p.approve_high_memory;
-        if let Some(r) = self.headless_op(move |h| h.open_with_approval(&path, approve)).await {
+        let mut params = json!({"path": p.path});
+        if approve {
+            params["approveHighMemory"] = json!(true);
+        }
+        if let Some(order) = p.historical_xcf_sample_order {
+            params["historicalXcfSampleOrder"] = json!(order);
+        }
+        let order = match photocraft_engine::file_cmds::historical_xcf_sample_order(&params, "doc_open") {
+            Ok(order) => order,
+            Err(error) => return to_result(Err(error.into())),
+        };
+        if let Some(r) = self
+            .headless_op(move |h| {
+                h.open_with_options(
+                    &path,
+                    &photocraft_io::ImportOptions { psd_high_memory_approved: approve, historical_xcf_sample_order: order, ..Default::default() },
+                )
+            })
+            .await
+        {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        let mut params = json!({"path": p.path});
-        if approve {
-            params["approveHighMemory"] = json!(true);
-        }
         to_result(b.call("app.open", params).await)
     }
 
@@ -1106,6 +1138,7 @@ fn bridge_only_headless(name: &str) -> Result<CallToolResult, McpError> {
 }
 
 impl PhotocraftMcp {
+    /// Start a normally authorized engine command in headless mode or forward it through the available GUI bridge.
     async fn run_command(&self, id: String, params: Value, wait: bool) -> Result<CallToolResult, McpError> {
         to_result(self.step(id, params, wait, &mut Waiter::new(None), (0, 1)).await)
     }
@@ -1115,7 +1148,7 @@ impl PhotocraftMcp {
         let none = || Err(AutomationError::Other("internal error: no headless session or app bridge".into()));
         match &*self.backend {
             Backend::Headless(_) if wait => self.headless_wait(id, params, waiter, at).await.unwrap_or_else(none),
-            Backend::Headless(_) => self.headless_op(move |h| h.command_start(&id, params, false)).await.unwrap_or_else(none),
+            Backend::Headless(_) => self.headless_op_with_poll(id != "jobs.cancel", move |h| h.command_start(&id, params, false)).await.unwrap_or_else(none),
             Backend::Bridge(b) if wait => self.bridge_wait(b, id, params, waiter, at).await,
             Backend::Bridge(b) => b.call("engine.execute", json!({"command": id, "params": params, "wait": false})).await,
         }
@@ -1166,7 +1199,7 @@ impl PhotocraftMcp {
     /// `jobs.list` / `jobs.cancel` in either backend; `read` picks the bridge's retry rule.
     async fn jobs_call(&self, method: &'static str, params: Value, read: bool) -> Result<CallToolResult, McpError> {
         let p2 = params.clone();
-        if let Some(r) = self.headless_op(move |h| h.command_start(method, p2, true)).await {
+        if let Some(r) = self.headless_op_with_poll(method != "jobs.cancel", move |h| h.command_start(method, p2, true)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
@@ -1416,22 +1449,43 @@ mod tests {
         assert_eq!(docs, 0, "the step after the budget ran out did not run");
     }
 
+    /// A cancellation-aware worker stays pending until cancelled without depending on a
+    /// filter's memory admission or machine speed. Startup and drop use the production waiter.
+    fn cancellation_test_job(h: &mut Headless, started: Option<tokio::sync::oneshot::Sender<()>>) -> Result<photocraft_engine::jobs::Started, AutomationError> {
+        Ok(h.session.start_job(
+            "test.waitedCancellation",
+            json!({}),
+            "Wait for cancellation",
+            true,
+            move |ctx| {
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                loop {
+                    ctx.check()?;
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            },
+            |_, ()| Ok(Value::Null),
+        )?)
+    }
+
     /// rmcp may drop a cancelled request's future without polling it again; its job must still
     /// stop and leave the document unchanged (#8129).
     #[tokio::test(flavor = "multi_thread")]
     async fn dropping_a_waited_command_cancels_its_job() {
         let mcp = PhotocraftMcp::headless();
-        mcp.headless_op(|h| {
-            h.command_run("file.new", json!({"width": 6000, "height": 6000}))?;
-            h.command_run("filter.noise.addNoise", json!({"amount": 50}))
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap().unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        let document = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
+        let (started, running) = tokio::sync::oneshot::channel();
+        let mut waited = Box::pin(mcp.headless_wait_with_start(true, move |h| cancellation_test_job(h, Some(started)), &mut waiter, (0, 1)));
+        tokio::select! {
+            outcome = &mut waited => panic!("the cancellation worker ended before it was dropped: {outcome:?}"),
+            started = tokio::time::timeout(std::time::Duration::from_secs(5), running) => started.expect("worker starts").expect("worker signals startup"),
+        }
+        drop(waited);
         let t = std::time::Instant::now();
         loop {
             let (running, cancelled) =
@@ -1444,6 +1498,9 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+        let after = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
+        assert!(Arc::ptr_eq(&document, &after), "cancellation must retain the exact document snapshot");
+        assert_eq!(*document, *after);
     }
 
     /// Dropped while its start still waits for the session lock (held here as a long synchronous
@@ -1451,14 +1508,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_wait_dropped_before_its_job_starts_cancels_the_job() {
         let mcp = PhotocraftMcp::headless();
-        mcp.headless_op(|h| {
-            h.command_run("file.new", json!({"width": 6000, "height": 6000}))?;
-            h.command_run("filter.noise.addNoise", json!({"amount": 50}))
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap().unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        let document = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
         let Backend::Headless(session) = &*mcp.backend else { panic!("headless") };
         let (session, (locked, is_locked)) = (session.clone(), std::sync::mpsc::channel());
         let holder = std::thread::spawn(move || {
@@ -1468,7 +1520,7 @@ mod tests {
         });
         is_locked.recv().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
+        let waited = mcp.headless_wait_with_start(true, |h| cancellation_test_job(h, None), &mut waiter, (0, 1));
         assert!(tokio::time::timeout(std::time::Duration::from_millis(50), waited).await.is_err(), "the start waits for the lock");
         holder.join().unwrap();
         let t = std::time::Instant::now();
@@ -1483,6 +1535,9 @@ mod tests {
         let cancelled = mcp.headless_op(|h| Ok(h.session.jobs_with_recent().iter().any(|j| j.state == "cancelled"))).await.unwrap().unwrap();
         assert!(cancelled, "the job ended without being cancelled");
         assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+        let after = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
+        assert!(Arc::ptr_eq(&document, &after), "cancellation must retain the exact document snapshot");
+        assert_eq!(*document, *after);
     }
 
     /// Cancellation notifications only cancel the token: the handler remains alive while
@@ -1602,6 +1657,10 @@ mod tests {
         assert!(!omitted.approve_high_memory);
         let approved: OpenParams = serde_json::from_value(json!({"path": "file.psd", "approve_high_memory": true})).unwrap();
         assert!(approved.approve_high_memory);
+        let combined: OpenParams =
+            serde_json::from_value(json!({"path":"file.xcf", "approve_high_memory":true, "historicalXcfSampleOrder":"big-endian"})).unwrap();
+        assert!(combined.approve_high_memory);
+        assert_eq!(combined.historical_xcf_sample_order.as_deref(), Some("big-endian"));
         for invalid in [Value::Null, json!("true"), json!(1)] {
             assert!(serde_json::from_value::<OpenParams>(json!({"path": "file.psd", "approve_high_memory": invalid})).is_err());
         }

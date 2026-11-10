@@ -1101,7 +1101,13 @@ fn blend_if_weight(this_px: vec4<f32>, under: vec4<f32>) -> f32 {
         } else {
             // compose::blend_if_gray: (30 R + 59 G + 11 B) / 100, rounded half down on whole levels.
             let sum = 30.0 * v.r + 59.0 * v.g + 11.0 * v.b;
-            let gray = select(sum / 100.0, floor((sum + 49.0) / 100.0), all(v == round(v)));
+            var gray = sum / 100.0;
+            if (all(v == round(v))) {
+                // A relaxed float divide can put 9700 / 100 just below 97. These clamped
+                // whole levels fit exactly in u32, so retain the CPU's integer boundary.
+                let levels = vec3<u32>(v);
+                gray = f32((30u * levels.r + 59u * levels.g + 11u * levels.b + 49u) / 100u);
+            }
             k = k * bi_weight(0u, s, gray) * bi_weight(1u, s, v.r) * bi_weight(2u, s, v.g) * bi_weight(3u, s, v.b);
         }
         if (k <= 0.0) {

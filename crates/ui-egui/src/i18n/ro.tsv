@@ -4615,3 +4615,35 @@ navigator	Zoom	Zoom
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Setările de developare RAW au fost salvate în {file}
+
+# Native XCF import report
+	Import Conversion Report	Raport de conversie la import
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Rezultatele din timpul importului. Editarea folosește regulile native PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Este păstrat un raport într-un format mai nou. Detaliile sale nu pot fi afișate.
+	No conversion report was recorded.	Nu a fost înregistrat niciun raport de conversie.
+	No entries on this page.	Nu există înregistrări pe această pagină.
+	Layer mask	Mască de strat
+	Source item	Element sursă
+	{first}–{last} of {total}	{first}–{last} din {total}
+	Native equivalent	Echivalent nativ
+	Native approximation	Aproximare nativă
+	Retained, not applied	Păstrat, neaplicat
+	Nonessential data skipped	Date neesențiale omise
+	Unknown outcome	Rezultat necunoscut
+	Native rules	Reguli native
+	Native capability limit	Limită a capacităților native
+	Conversion not implemented	Conversie neimplementată
+	Resource unavailable	Resursă indisponibilă
+	Invalid optional data	Date opționale nevalide
+	Retention limit	Limită de păstrare
+	Precision conversion	Conversie de precizie
+	Unknown reason	Motiv necunoscut
+	Native layer {id} (removed; historical reference)	Strat nativ {id} (eliminat; referință istorică)
+	Native layer: {name}	Strat nativ: {name}
+	Alpha Percentile	Percentilă alfa
+	Alpha Weighted	Ponderat după alfa
+	Color Percentile	Percentilă de culoare
+	Connectivity	Conectivitate
+	Disc	Vecinătate circulară
+	Each	Fiecare
+	Value	Valoare

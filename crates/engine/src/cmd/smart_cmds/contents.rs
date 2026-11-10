@@ -1,10 +1,10 @@
 use super::filters::{smart, smart_mut};
 use super::placing::detach_psd;
-use super::rendering::{refresh, refresh_or_fail, unapplied_filters};
-use super::source::{authorized_source_bytes, source_bytes};
+use super::rendering::{refresh, refresh_or_fail, refresh_or_fail_in, unapplied_filters};
+use super::source::{authorized_source_bytes, decode_source_in, source_bytes};
 use super::{
-    Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
-    decode_source, encode_source, json, layer_param, other,
+    Arc, DocId, Document, EngineError, JobCtx, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad,
+    base_name, decode_source, encode_source, json, layer_param, other,
 };
 
 pub(super) fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
@@ -32,27 +32,7 @@ pub(super) fn set_source(
 
 // Keep the shared-instance transaction out of the per-command source-builder instantiations.
 fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
-    let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
-        let contents_id = smart(doc, id)?.contents_id;
-        let changed = instances(doc, contents_id);
-        let mut warnings = std::collections::BTreeSet::new();
-        for &instance in &changed {
-            smart_mut(doc, instance)?.source = new.clone();
-            if !keep_psd {
-                detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
-            }
-            warnings
-                .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
-            refresh_or_fail(doc, instance)?;
-        }
-        Ok((doc.id, contents_id, changed, warnings))
-    })?;
-    // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
-    // document open, but the next Edit Contents opens the replacement source.
-    s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
-    // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
-    // command once per copy (#4075).
-    Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings}))
+    set_shared_source_in(s, id, label, keep_psd, new, &JobCtx::new())
 }
 
 pub(super) fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
@@ -71,8 +51,21 @@ pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, 
 
 /// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
 pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
-    decode_source(file_name, &bytes)?; // fail before touching the document
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+    let file_name = file_name.to_string();
+    let decode_name = file_name.clone();
+    let bytes = Arc::new(bytes);
+    let decode_bytes = bytes.clone();
+    crate::jobs::run(
+        s,
+        "Replace Contents",
+        true,
+        move |ctx| {
+            decode_source_in(&decode_name, &decode_bytes, ctx)?; // fail before touching the document
+            ctx.check()?;
+            Ok(ctx.clone())
+        },
+        move |s, ctx| set_shared_source_in(s, id, "Replace Contents", false, SmartSource::Embedded { file_name, bytes }, &ctx),
+    )
 }
 
 /// The file name and bytes of smart object `id`'s contents.
@@ -85,6 +78,7 @@ pub fn contents_of(doc: &Document, id: LayerId) -> Result<(String, Arc<Vec<u8>>)
 pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_param("layer.smartObjects.exportContents", p)?;
     let id = layer_param(s, p)?;
+    crate::file_cmds::check_import_destination(s.active().ok_or(EngineError::NoDocument)?, path)?;
     let (name, bytes) = contents_of(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     let ext = |f: &str| {
         let e = std::path::Path::new(f).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
@@ -209,4 +203,31 @@ pub(super) fn update_all(s: &mut Session) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"updated": updated}))
+}
+
+/// Keep all shared-instance refreshes and the final publication under the replacing job's cancellation context.
+fn set_shared_source_in(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource, ctx: &JobCtx) -> Result<Value> {
+    ctx.check()?;
+    let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
+        let contents_id = smart(doc, id)?.contents_id;
+        let changed = instances(doc, contents_id);
+        let mut warnings = std::collections::BTreeSet::new();
+        for &instance in &changed {
+            smart_mut(doc, instance)?.source = new.clone();
+            if !keep_psd {
+                detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
+            }
+            warnings
+                .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
+            refresh_or_fail_in(doc, instance, ctx)?;
+        }
+        ctx.check()?;
+        Ok((doc.id, contents_id, changed, warnings))
+    })?;
+    // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
+    // document open, but the next Edit Contents opens the replacement source.
+    s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
+    // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
+    // command once per copy (#4075).
+    Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings}))
 }

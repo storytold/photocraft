@@ -232,7 +232,7 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         warnings.push("PDF text uses fonts embedded in the PDF; it may change font when edited or reopened".into());
     }
 
-    Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, warnings, document: doc, source_read_only: false, preview_only: false })
 }
 
 /// Renders one page, forwarding `ctl`'s cancellation to craft-pdf while it interprets content.

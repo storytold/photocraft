@@ -4274,3 +4274,35 @@ navigator	Zoom	பெரிதாக்கல்
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW உருவாக்க அமைப்புகள் {file} இல் சேமிக்கப்பட்டன
+
+# Native XCF import report
+	Import Conversion Report	இறக்குமதி மாற்ற அறிக்கை
+	Import-time outcomes. Editing uses native PhotoCraft rules.	இறக்குமதி நேர விளைவுகள். திருத்தம் PhotoCraft-இன் உள்ளமைந்த விதிகளைப் பயன்படுத்துகிறது.
+	A newer report format is retained. Its details cannot be displayed.	புதிய அறிக்கை வடிவம் தக்கவைக்கப்பட்டுள்ளது. அதன் விவரங்களைக் காட்ட முடியாது.
+	No conversion report was recorded.	மாற்ற அறிக்கை எதுவும் பதிவு செய்யப்படவில்லை.
+	No entries on this page.	இந்தப் பக்கத்தில் பதிவுகள் இல்லை.
+	Layer mask	அடுக்கு முகமூடி
+	Source item	மூல உருப்படி
+	{first}–{last} of {total}	மொத்தம் {total}-இல் {first}–{last}
+	Native equivalent	உள்ளமைந்த சமமானது
+	Native approximation	உள்ளமைந்த தோராயம்
+	Retained, not applied	தக்கவைக்கப்பட்டது, பயன்படுத்தப்படவில்லை
+	Nonessential data skipped	அத்தியாவசியமற்ற தரவு தவிர்க்கப்பட்டது
+	Unknown outcome	தெரியாத விளைவு
+	Native rules	உள்ளமைந்த விதிகள்
+	Native capability limit	உள்ளமைந்த திறன் வரம்பு
+	Conversion not implemented	மாற்றம் செயல்படுத்தப்படவில்லை
+	Resource unavailable	வளம் கிடைக்கவில்லை
+	Invalid optional data	தவறான விருப்பத் தரவு
+	Retention limit	தக்கவைப்பு வரம்பு
+	Precision conversion	துல்லிய மாற்றம்
+	Unknown reason	தெரியாத காரணம்
+	Native layer {id} (removed; historical reference)	உள்ளமைந்த அடுக்கு {id} (அகற்றப்பட்டது; வரலாற்றுக் குறிப்பு)
+	Native layer: {name}	உள்ளமைந்த அடுக்கு: {name}
+	Alpha Percentile	ஆல்பா சதமானம்
+	Alpha Weighted	ஆல்பா எடையிடப்பட்டது
+	Color Percentile	நிறச் சதமானம்
+	Connectivity	இணைப்புத்தன்மை
+	Disc	வட்ட அண்டைச்சூழல்
+	Each	ஒவ்வொன்றும்
+	Value	மதிப்பு

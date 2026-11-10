@@ -112,6 +112,11 @@ pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, layer: Optio
 fn edits_mask(id: &str) -> bool {
     id.strip_prefix("image.adjustments.").is_some_and(|kind| crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
         || crate::filters::params_for(id, &Value::Null).is_some()
+        || id == crate::coverage_cmds::FILL_HOLES
+        || id == crate::coverage_cmds::PERCENTILE
+        || id == crate::coverage_cmds::CHANNEL_NOISE
+        || id == crate::coverage_cmds::CONVOLUTION
+        || id == crate::hdr_filter::ID
         || id == "edit.fill"
         // Copying a targeted mask (#2928).
         || matches!(id, "edit.copy" | "edit.cut" | "edit.clear")
@@ -279,8 +284,10 @@ pub(crate) fn color_restriction(s: &Session, id: &str, params: &Value) -> Option
     }
     // Native plane implementations already write only the selected encoded samples. Avoid a
     // second full-layer restore pass after these commands (painting still needs the guard).
+    // Average's raster command uses map_pixels rather than the native filter runner, so it
+    // still needs this guard even though its Smart Filter replay has native parameters.
     if id.strip_prefix("image.adjustments.").is_some_and(|kind| crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
-        || crate::filters::params_for(id, params).is_some()
+        || (id != "filter.blur.average" && crate::filters::params_for(id, params).is_some())
     {
         return None;
     }
