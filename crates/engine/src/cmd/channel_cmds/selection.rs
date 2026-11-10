@@ -43,14 +43,17 @@ pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
                 Ok(doc.channels.len() - 1)
             }
             (Some(i), op) => {
-                let old = read_plane(&doc.channels[i].surface, area);
+                // A spot channel stores ink (1 = solid) but reads as its tone, as Load Selection
+                // reads it: the selection combines with the tone and is stored back as ink.
+                let ink = doc.channels[i].spot.is_some();
+                let old = tone_of(read_plane(&doc.channels[i].surface, area), ink);
                 let vals: Vec<f32> = match op {
                     "add" => old.iter().zip(&selection).map(|(a, b)| a.max(*b)).collect(),
                     "subtract" => old.iter().zip(&selection).map(|(a, b)| (a - b).max(0.0)).collect(),
                     "intersect" => old.iter().zip(&selection).map(|(a, b)| a.min(*b)).collect(),
                     _ => selection.clone(),
                 };
-                doc.channels[i].surface = plane_surface(&vals, area, fmt);
+                doc.channels[i].surface = plane_surface(&tone_of(vals, ink), area, fmt);
                 if let Some(n) = &name {
                     doc.channels[i].name = n.clone();
                 }
@@ -64,6 +67,12 @@ pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let i = r?;
     let name = s.documents()[di].doc.channels[i].name.clone();
     Ok(json!({ "channel": i, "name": name, "document": di }))
+}
+
+/// A channel's values as its tone, or a tone as the channel's values: the values themselves, and
+/// for an `ink` (spot) channel, which stores density, their complement.
+fn tone_of(plane: Vec<f32>, ink: bool) -> Vec<f32> {
+    if ink { plane.into_iter().map(|v| 1.0 - v).collect() } else { plane }
 }
 
 /// Save Selection with Document: New. As in Photoshop the selection goes to a new Multichannel

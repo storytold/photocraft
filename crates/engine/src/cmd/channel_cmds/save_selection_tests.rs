@@ -21,6 +21,14 @@ fn selection_plane(s: &Session, i: usize) -> Vec<f32> {
     sel::mask_from_surface(d.selection.as_ref(), d.bounds())
 }
 
+/// Asserts that `loaded` is the selection `saved`, within one 8-bit level a pixel.
+fn assert_same_selection(loaded: &[f32], saved: &[f32]) {
+    assert_eq!(loaded.len(), saved.len());
+    for (k, (a, b)) in loaded.iter().zip(saved).enumerate() {
+        assert!((a - b).abs() <= 1.0 / 255.0 + 1e-6, "pixel {k}: loaded {a}, saved {b}");
+    }
+}
+
 #[test]
 fn save_to_a_new_document_makes_a_multichannel_image_of_the_selection() {
     for (depth, sample) in [(8, SampleType::U8), (16, SampleType::U16), (32, SampleType::F32)] {
@@ -68,10 +76,59 @@ fn the_new_documents_channel_loads_back_as_the_selection() {
     s.set_active(0);
     s.execute("select.deselect", json!({})).unwrap();
     s.execute("select.loadSelection", json!({"document": 1, "channel": "Keep"})).unwrap();
-    let loaded = selection_plane(&s, 0);
-    assert_eq!(loaded.len(), selection.len());
-    for (k, (a, b)) in loaded.iter().zip(&selection).enumerate() {
-        assert!((a - b).abs() <= 1.0 / 255.0 + 1e-6, "pixel {k}: loaded {a}, saved {b}");
+    assert_same_selection(&selection_plane(&s, 0), &selection);
+}
+
+/// The new document is an ordinary Multichannel image on disk too: saved as a PSD and opened
+/// again it is still the one channel under its name, and Load Selection reads it back.
+#[test]
+fn the_new_document_keeps_the_selection_through_a_psd_save() {
+    for depth in [8, 16] {
+        let mut s = feathered(depth, 24, 16);
+        let selection = selection_plane(&s, 0);
+        s.execute("select.saveSelection", json!({"document": "new", "name": "Keep"})).unwrap();
+        let out = photocraft_io::export(&s.documents()[1].doc, "psd", &Default::default()).unwrap();
+        assert!(out.warnings.is_empty(), "{depth}-bit: {:?}", out.warnings);
+        let back = photocraft_io::import("keep.psd", &out.bytes).unwrap().document;
+        assert_eq!((back.mode, back.size), (ColorMode::Multichannel, s.documents()[0].doc.size), "{depth}-bit");
+        assert_eq!(back.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Keep"], "{depth}-bit");
+        let reopened = s.add_document(back, None);
+        s.set_active(0);
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("select.loadSelection", json!({"document": reopened, "channel": "Keep"})).unwrap();
+        assert_same_selection(&selection_plane(&s, 0), &selection);
+    }
+}
+
+/// The new document's channel is an ink: stored as density, read as its tone. Saving into it
+/// again from the Document list combines with the selection it holds, as with an alpha channel,
+/// and it stays the ink the image is drawn from.
+#[test]
+fn saving_into_the_new_documents_channel_combines_with_the_selection_it_holds() {
+    // Columns 0..12 are saved to the new document, then columns 6..18 are saved into its channel.
+    for (operation, columns) in [("replace", 6..18), ("add", 0..18), ("subtract", 0..6), ("intersect", 6..12)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 24, "height": 16})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 12, "height": 16})).unwrap();
+        s.execute("select.saveSelection", json!({"document": "new"})).unwrap();
+        s.set_active(0);
+        s.execute("select.rect", json!({"x": 6, "y": 0, "width": 12, "height": 16, "mode": "replace"})).unwrap();
+        let r = s.execute("select.saveSelection", json!({"document": 1, "channel": "Alpha 1", "operation": operation})).unwrap();
+        assert_eq!(r, json!({"channel": 0, "name": "Alpha 1", "document": 1}), "{operation}");
+        let d = &s.documents()[1].doc;
+        assert_eq!((d.channels.len(), d.channels[0].spot), (1, Some((Color::BLACK, 0.0))), "{operation}: still the one ink");
+        let ink = read_plane(&d.channels[0].surface, d.bounds());
+        let want: Vec<f32> = (0..16).flat_map(|_| (0..24).map(|x| if columns.contains(&x) { 1.0 } else { 0.0 })).collect();
+        assert_eq!(ink, want.iter().map(|v| 1.0 - v).collect::<Vec<f32>>(), "{operation}: ink where nothing is selected");
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("select.loadSelection", json!({"document": 1, "channel": 0})).unwrap();
+        assert_eq!(selection_plane(&s, 0), want, "{operation}: loads back");
+        // Undo in the new document takes the save back out of its channel.
+        s.set_active(1);
+        s.execute("edit.undo", json!({})).unwrap();
+        let d = &s.documents()[1].doc;
+        let first: Vec<f32> = (0..16).flat_map(|_| (0..24).map(|x| if x < 12 { 0.0 } else { 1.0 })).collect();
+        assert_eq!(read_plane(&d.channels[0].surface, d.bounds()), first, "{operation}: undone");
     }
 }
 
