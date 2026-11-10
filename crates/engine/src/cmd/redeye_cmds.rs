@@ -456,3 +456,7 @@ mod tests {
         assert!(s.execute("paint.redEye", json!({"x": 12, "y": 12})).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "redeye_history_state_tests.rs"]
+mod redeye_history_state_tests;
