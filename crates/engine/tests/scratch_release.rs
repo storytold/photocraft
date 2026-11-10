@@ -52,6 +52,36 @@ fn closing_a_document_leaves_none_of_its_buffers_in_the_pool() {
 }
 
 #[test]
+/// Closing many documents at once (Close All) frees them all, one after another on a single
+/// release thread rather than a thread each, and leaves none of their buffers in the pool.
+fn closing_many_documents_frees_them_all_on_one_release_thread() {
+    let _q = Quiet::new();
+    let mut s = Session::new();
+    for _ in 0..24 {
+        s.execute("file.new", json!({"width": 512, "height": 512})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
+    }
+    s.execute("file.closeAll", json!({})).unwrap();
+    assert!(s.documents().is_empty());
+    let t = std::time::Instant::now();
+    while Session::documents_being_released() > 0 {
+        #[cfg(target_os = "linux")]
+        assert!(release_threads() <= 1, "one release thread, not one per document");
+        assert!(t.elapsed() < std::time::Duration::from_secs(30), "the closed documents were not freed");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(scratch::retained_bytes(), 0);
+}
+
+/// How many of this process's threads are release threads (`photocraft-close`, shortened to 15
+/// characters by the kernel).
+#[cfg(target_os = "linux")]
+fn release_threads() -> usize {
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else { return 0 };
+    tasks.filter_map(Result::ok).filter(|t| std::fs::read_to_string(t.path().join("comm")).is_ok_and(|c| c.starts_with("photocraft-clo"))).count()
+}
+
+#[test]
 /// Verifies a command that keeps its document does not release unrelated pooled buffers.
 fn commands_that_keep_their_documents_keep_the_pool() {
     let _q = Quiet::new();
