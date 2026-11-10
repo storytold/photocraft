@@ -16,6 +16,9 @@ pub struct Drag {
     pub clear: bool,
     /// ⇧ constraint of a painting stroke (stroke_constraint.rs).
     pub constrain: Option<crate::stroke_constraint::Axis>,
+    /// A ⇧-click line from the previous stroke's end. Smoothing doesn't apply to it, so it ends
+    /// at the click whatever Catch-up on Stroke End is set to, as in Photoshop (#11887).
+    pub line: bool,
     /// Modifiers held now (updated on every pointer event of the gesture).
     pub live: egui::Modifiers,
     /// Which of the modifiers held at the press have been released since.
@@ -30,6 +33,9 @@ pub struct Drag {
     /// The pointer, before snapping, has been half a pixel or more from the press: the gesture is
     /// not a click even if it comes back there (`tool_input::selection_release`, #11392).
     pub left_press: bool,
+    /// Restore a pre-existing floating piece if this Move drag becomes a copy
+    /// into another document; a fresh float belongs only to this gesture.
+    pub transfer_floating_before: Option<photocraft_engine::float_cmds::Floating>,
     /// The last ⇧-locked offset of a selection-tool drag of the selection (`move_mods`, #6231);
     /// keeps the locked direction stable between events. The Move tool's own drags use `move_mods`.
     pub sel_axis: Option<[f64; 2]>,
@@ -55,11 +61,13 @@ impl Drag {
             erase,
             clear: false,
             constrain: None,
+            line: false,
             live: modifiers,
             released: egui::Modifiers::NONE,
             reposition: false,
             sel_move: None,
             left_press: false,
+            transfer_floating_before: None,
             sel_axis: None,
             lasso: None,
             vector_owner: None,

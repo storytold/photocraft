@@ -102,7 +102,7 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
 
 /// Color Lookup from params: `"lut"` (a built-in look id or `"none"`), `"file"` (a .cube / .3dl /
 /// .look path, native only) or `"data"` (file text, or base64 with `"dataEncoding":"base64"`).
-/// `"lutFormat":"cube|3dl|look"` can supply the format when the file name doesn't identify it.
+/// `"lutFormat":"cube|3dl|look"` (`"auto"`: detect) can supply the format when the file name doesn't identify it.
 /// `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`. The table is embedded in the
 /// layer, as Photoshop does. Unspecified fields keep `base`'s values; a key of the wrong type is an
 /// error.
@@ -119,11 +119,11 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         return Err(bad(CMD, "`dataEncoding` must be \"text\" or \"base64\""));
     }
     let format = match opt_str(CMD, p, "lutFormat")? {
-        None => None,
+        None | Some("auto") => None,
         Some("cube") => Some(photocraft_cms::lutfile::Format::Cube),
         Some("3dl") => Some(photocraft_cms::lutfile::Format::ThreeDl),
         Some("look") => Some(photocraft_cms::lutfile::Format::Look),
-        Some(_) => return Err(bad(CMD, "`lutFormat` must be \"cube\", \"3dl\" or \"look\"")),
+        Some(_) => return Err(bad(CMD, "`lutFormat` must be \"auto\", \"cube\", \"3dl\" or \"look\"")),
     };
     // The parsed table, its label and (for a file) the file as loaded, which a PSD save embeds.
     let mut loaded: Option<(photocraft_cms::lutfile::LutFile, String, Option<LutSource>)> = None;
@@ -139,8 +139,8 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
             loaded = Some((f, label, None));
         }
     }
-    let file_name = opt_str(CMD, p, "fileName")?;
-    if let Some(text) = opt_str(CMD, p, "data")? {
+    let file_name = opt_str(CMD, p, "fileName")?.filter(|s| !s.is_empty());
+    if let Some(text) = opt_str(CMD, p, "data")?.filter(|s| !s.is_empty()) {
         let file_name = file_name.unwrap_or("lut.cube");
         let bytes = if encoding == "base64" {
             photocraft_paint::tile::b64_decode(text).ok_or_else(|| bad(CMD, "`data` is not valid base64"))?
