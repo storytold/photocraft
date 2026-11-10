@@ -9,6 +9,7 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     }
     crate::distort_ui::drop_foreign(app);
+    crate::layer_transfer::prepare(app, ui.ctx());
     documents(app, ui);
     crate::layer_transfer::finish(app, ui.ctx());
     // Once a frame, not per document view: the right-click or options-bar Brush Preset picker.
