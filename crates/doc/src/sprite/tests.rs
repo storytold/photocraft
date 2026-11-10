@@ -323,6 +323,28 @@ fn unindexed_cel_quantizes_samples_with_or_without_repainting() {
     }
 }
 
+/// Sparse surfaces still have samples in unallocated tiles inside the cel rectangle.
+#[test]
+fn quantization_captures_default_pixels_without_allocated_tiles() {
+    let rect = Rect::from_xywh(-1, -1, 258, 2);
+    let palette = [
+        PaletteEntry { rgba: [0; 4], name: String::new() },
+        PaletteEntry { rgba: [255, 0, 0, 255], name: String::new() },
+        PaletteEntry { rgba: [0, 0, 255, 255], name: String::new() },
+    ];
+    let original = Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]);
+    let edited = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 1.0, 1.0]);
+    for indexed in [false, true] {
+        let indices = indexed.then(|| Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), &[1.0 / 255.0]));
+        let mut cel = SpriteCel { rect, pixels: original.clone(), indices, opacity: 255, z_index: 0, linked_frame: None, precise: None };
+        let before = cel.clone();
+        pixels::capture_indices(&mut cel, &edited, &palette, Some(0)).unwrap();
+        assert!(cel.indices.as_ref().unwrap().to_interleaved(rect).iter().all(|index| *index == 2), "indexed={indexed}");
+        assert_eq!(cel.pixels.to_interleaved(rect), edited.to_interleaved(rect));
+        assert_eq!(before.pixels, original, "the previous cel remains unchanged");
+    }
+}
+
 /// The byte stride is public input; reject an overflowing tile cost before multiplying it.
 #[test]
 fn checked_sprite_bounds_reject_byte_count_overflow() {

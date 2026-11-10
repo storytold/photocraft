@@ -58,9 +58,15 @@ pub fn capture_indices(cel: &mut SpriteCel, edited: &Surface, palette: &[Palette
     let mut display = cel.pixels.clone();
     let mut previous_row = Vec::new();
     let mut edited_row = Vec::new();
-    let tiles: std::collections::BTreeSet<_> = cel.pixels.tiles().chain(edited.tiles()).map(|(tc, _)| *tc).collect();
+    let defaults_changed = cel.pixels.default_pixel() != edited.default_pixel();
+    let mut tiles: std::collections::BTreeSet<_> = cel.pixels.tiles().chain(edited.tiles()).map(|(tc, _)| *tc).collect();
+    // A missing tile still supplies its surface's default samples. Quantizing a new
+    // index plane or changing that default must visit those pixels inside the cel too.
+    if cel.indices.is_none() || defaults_changed {
+        tiles.extend(rect.tiles());
+    }
     for tc in tiles {
-        if cel.indices.is_some() && cel.pixels.tile(tc) == edited.tile(tc) {
+        if cel.indices.is_some() && !defaults_changed && cel.pixels.tile(tc) == edited.tile(tc) {
             continue;
         }
         let r = rect.intersect(&tc.rect());
