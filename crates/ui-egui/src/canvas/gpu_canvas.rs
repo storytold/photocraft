@@ -224,6 +224,7 @@ impl GpuCanvas {
         res.separate_mip_targets = separate_mip_targets(info.backend, info.vendor, std::env::var("PHOTOCRAFT_SEPARATE_MIPS").ok().as_deref());
         let vram = video_memory(&info);
         res.canvas_budget.store(canvas_budget(physical_memory(), vram), Ordering::Relaxed);
+        res.card_memory_known = vram.is_some();
         let budget = res.canvas_budget.clone();
         rs.renderer.write().callback_resources.insert(res);
         log::info!(
