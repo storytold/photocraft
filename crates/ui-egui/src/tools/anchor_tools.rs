@@ -187,3 +187,6 @@ fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod add_anchor_delete_key_tests;
