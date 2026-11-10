@@ -22,6 +22,8 @@ fn harness(width: f32, scale: f32, theme: crate::theme::ThemeKind) -> Harness<'s
     );
     crate::control::handle(h.state_mut(), &ctx, &req);
     h.run_steps(5);
+    h.state_mut().run("window.panel.layers", json!({"show": true})).unwrap();
+    h.run_steps(8);
     h
 }
 
