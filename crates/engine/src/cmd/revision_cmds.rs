@@ -628,4 +628,29 @@ mod tests {
         s.execute("history.undo", json!({})).unwrap();
         assert_eq!(s.active().unwrap().history.entries(), after, "undo steps back over the edit, not over a check");
     }
+
+    /// A marker is part of the document, so making one is an edit: on a saved file it has to
+    /// count as modified, or closing the document would drop the markers without asking to save.
+    #[test]
+    fn a_marker_edit_marks_a_saved_document_modified() {
+        let mut s = session();
+        {
+            let st = s.active_mut().unwrap();
+            st.saved_revision = st.revision;
+        }
+        assert!(!s.active().unwrap().is_dirty(), "just saved");
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 60.0, "height": 40.0})).unwrap();
+        assert!(s.active().unwrap().is_dirty(), "adding a marker modifies the file");
+        s.execute("revision.set", json!({"index": 0, "done": true})).unwrap();
+        assert!(s.active().unwrap().is_dirty(), "committing it too");
+        s.execute("revision.clear", json!({})).unwrap();
+        assert!(s.active().unwrap().is_dirty(), "removing them all too");
+        // A pure selection change on a saved document still leaves it clean.
+        {
+            let st = s.active_mut().unwrap();
+            st.saved_revision = st.revision;
+        }
+        s.execute("select.all", json!({})).unwrap();
+        assert!(!s.active().unwrap().is_dirty(), "a selection is not an edit");
+    }
 }

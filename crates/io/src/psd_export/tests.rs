@@ -842,3 +842,34 @@ fn a_cancelled_save_stops_between_the_bands_of_a_layer() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The revision-marker filter used to run for every imported resource and answer "false" for any
+/// id that is not the markers' own, so a save quietly dropped unknown image resources. Only
+/// 0x0F00 is filtered now, and the document's own markers are written in its place.
+#[test]
+fn unknown_imported_resources_survive_a_save_that_rewrites_the_markers() {
+    use photocraft_doc::{LayerId, RevisionMarker};
+    let unknown: u16 = 0x1234;
+    let markers_id = crate::revision_map::REVISION_MARKERS;
+    let mut doc = document(8, 8);
+    doc.metadata.psd_resources.push((unknown, String::new(), std::sync::Arc::new(vec![1, 2, 3])));
+    doc.metadata.psd_resources.push((markers_id, String::new(), std::sync::Arc::new(vec![0, 0, 0])));
+    doc.revision_markers.push(RevisionMarker {
+        name: "A".into(),
+        pos: [1.0, 2.0],
+        size: [10.0, 6.0],
+        layer_id: Some(LayerId(1)),
+        snapshot: vec![0u8; 48 * 48 * 4],
+        snapshot_size: [48, 48],
+        done: false,
+        note: String::new(),
+    });
+    let file = document_to_psd(&doc);
+    let kept = |id: u16| file.resources.iter().filter(|r| r.id == id).count();
+    assert_eq!(kept(unknown), 1, "an unknown resource keeps its bytes");
+    assert_eq!(file.resources.iter().find(|r| r.id == unknown).unwrap().data, vec![1, 2, 3]);
+    assert_eq!(kept(markers_id), 1, "the stale imported copy is replaced, not doubled");
+    let back = crate::import("markers.psd", &file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(back.revision_markers, doc.revision_markers);
+    assert!(back.metadata.psd_resources.iter().any(|(id, ..)| *id == unknown));
+}

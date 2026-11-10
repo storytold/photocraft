@@ -547,7 +547,17 @@ impl PhotocraftApp {
     /// into the frame itself, where a centre would move it off).
     fn place_params(&self, params: &serde_json::Value) -> serde_json::Value {
         let mut p = params.clone();
-        let framed = p.get("frame").is_some_and(|f| !matches!(f, serde_json::Value::Bool(false)));
+        let framed = match p.get("frame") {
+            Some(serde_json::Value::Bool(false)) => false,
+            Some(v) if !v.is_null() => true,
+            // No `frame` in the params: the command fills the active layer's frame, if it is one,
+            // and reads a centre as a position inside that frame.
+            _ => self
+                .session
+                .active()
+                .and_then(|st| st.active_layer.and_then(|id| photocraft_engine::cmd::frame_cmds::frame_of(&st.doc, id)))
+                .is_some(),
+        };
         if !framed
             && p.get("center").is_none()
             && let Some([x, y]) = self.view_center_doc()

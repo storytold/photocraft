@@ -199,12 +199,15 @@ mod tests {
 
     #[test]
     fn removes_a_long_blue_axis() {
-        let mut s = shot(64, 64);
-        for y in 4..60 {
-            paint(&mut s, 30, y, [0, 0, 255]);
+        // The axis has to cross a good share of the shot, and a shot shorter than 120 px has none
+        // to remove (the 3D view's axis is only part of a full-size capture), so the picture is a
+        // realistic size rather than a 64 px thumbnail.
+        let mut s = shot(200, 200);
+        for y in 20..180 {
+            paint(&mut s, 100, y, [0, 0, 255]);
         }
         strip_axes(&mut s);
-        let o = ((20 * 64 + 30) * 4) as usize;
+        let o = ((100 * 200 + 100) * 4) as usize;
         assert_ne!(s.rgba[o + 2], 255, "the blue axis pixel was replaced");
         assert_eq!(s.rgba[o], 240, "with the plate behind it");
     }

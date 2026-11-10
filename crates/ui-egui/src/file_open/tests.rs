@@ -511,6 +511,30 @@ fn a_placed_file_lands_at_the_view_centre() {
     assert_eq!(st.doc.layers.len(), 2, "a placed layer joins the stack, it does not replace a layer");
 }
 
+/// A place whose params name no `frame` fills the active layer's frame, and the engine reads a
+/// `center` as a position inside that frame: the view centre must not be added there.
+#[test]
+fn a_place_into_a_selected_frame_is_not_given_a_view_centre() {
+    let (mut app, _) = app_with(Vec::new());
+    app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+    app.sync_views();
+    app.ui.views[0].zoom = 1.0;
+    app.ui.views[0].center = [120.0, 460.0];
+    app.ui.views[0].fit_pending = false;
+    app.run("layer.new.frame", json!({"x": 100, "y": 80, "width": 200, "height": 120})).unwrap();
+    let st = app.session.active().unwrap();
+    assert!(st.doc.layer(st.active_layer.unwrap()).unwrap().frame.is_some(), "a frame is active");
+    let params = app.place_params(&json!({}));
+    assert!(params.get("center").is_none(), "the frame decides where its image lands: {params}");
+    // An explicit `"frame": false` places on the canvas, where the view centre does apply.
+    let on_canvas = app.place_params(&json!({"frame": false}));
+    let center = on_canvas.get("center").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+    assert_eq!(center.len(), 2, "the view centre is used without a frame: {on_canvas}");
+    // An explicit `center` is the caller's own drop point and is kept as it is.
+    let dropped = app.place_params(&json!({"center": [11.0, 22.0]}));
+    assert_eq!(dropped["center"], json!([11.0, 22.0]));
+}
+
 #[test]
 fn files_dropped_onto_the_canvas_are_placed_in_free_transform_one_by_one() {
     let dir = std::env::temp_dir().join(format!("photocraft-drop-place-{}", std::process::id()));

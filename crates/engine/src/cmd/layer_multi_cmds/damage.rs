@@ -398,7 +398,7 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         notes,
         text_styles,
         slices,
-        revision_markers: _,
+        revision_markers,
         variables,
         timeline,
         file_encoding,
@@ -422,6 +422,9 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         && *notes == b.notes
         && *text_styles == b.text_styles
         && *slices == b.slices
+        // A marker added, committed or reset on an otherwise clean document is an edit: it must
+        // mark the file modified, or closing would drop it without asking to save.
+        && *revision_markers == b.revision_markers
         && *variables == b.variables
         && *timeline == b.timeline
         && *file_encoding == b.file_encoding

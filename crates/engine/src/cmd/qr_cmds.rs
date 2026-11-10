@@ -21,19 +21,36 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 /// Decode every QR code inside `r` (document coordinates, already clamped to the canvas).
 /// A region entirely outside the canvas simply finds nothing.
-fn scan_region(doc: &photocraft_doc::Document, r: Rect) -> Vec<Value> {
+fn scan_region(doc: &photocraft_doc::Document, r: Rect) -> Result<Vec<Value>> {
     if r.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
+    }
+    // The composite and the greyscale copy are both held at once (5 bytes per pixel), and the scan
+    // runs on the calling thread: a whole-document scan of a very large file would take gigabytes
+    // and could take the app down with unsaved work in it. Refuse with a clear message instead —
+    // selecting the area a code sits in scans it at full detail.
+    const MAX_PIXELS: usize = 16_000_000;
+    let (w, h) = (r.width().max(0) as usize, r.height().max(0) as usize);
+    if w.saturating_mul(h) > MAX_PIXELS {
+        return Err(bad("qr.scan", format!("the scanned area is {w}×{h} px; make a selection of 16 megapixels or less and scan that")));
     }
     let full = photocraft_compose::composite_to_surface(doc, r, doc.pixel_format(), None);
-    let (w, h) = (r.width() as usize, r.height() as usize);
-    let mut rgba = vec![[0u8; 4]; w * h];
-    full.read_rgba8_into(r, &mut rgba);
-    // Luminance (ITU-R BT.601): rqrr works on plain greyscale, 0 = black, 255 = white.
-    let gray: Vec<u8> = rgba
-        .iter()
-        .map(|p| ((2126 * u32::from(p[0]) + 7152 * u32::from(p[1]) + 722 * u32::from(p[2])) / 10000) as u8)
-        .collect();
+    // Luminance (ITU-R BT.601): rqrr works on plain greyscale, 0 = black, 255 = white. The
+    // composite is read in bands, so the greyscale copy is the only whole-region buffer.
+    let mut gray: Vec<u8> = Vec::with_capacity(w * h);
+    const BAND: i32 = 256;
+    let height = r.height() as i32;
+    let mut row = 0i32;
+    while row < height {
+        let rows = BAND.min(height - row);
+        let band = Rect::new(r.x0, r.y0 + row, r.x1, r.y0 + row + rows);
+        let mut rgba = vec![[0u8; 4]; w * rows as usize];
+        full.read_rgba8_into(band, &mut rgba);
+        gray.extend(
+            rgba.iter().map(|p| ((2126 * u32::from(p[0]) + 7152 * u32::from(p[1]) + 722 * u32::from(p[2])) / 10000) as u8),
+        );
+        row += rows;
+    }
     let mut img = rqrr::PreparedImage::prepare_from_greyscale(w, h, |x, y| gray[y * w + x]);
     let mut codes = Vec::new();
     for grid in img.detect_grids() {
@@ -55,7 +72,7 @@ fn scan_region(doc: &photocraft_doc::Document, r: Rect) -> Vec<Value> {
             "content": content,
         }));
     }
-    codes
+    Ok(codes)
 }
 
 fn scan(s: &mut Session, p: &Value) -> Result<Value> {
@@ -78,7 +95,7 @@ fn scan(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         canvas
     };
-    Ok(json!({"codes": scan_region(&d, r)}))
+    Ok(json!({"codes": scan_region(&d, r)?}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
