@@ -254,6 +254,25 @@ fn send_to_worker(l: &mut LiveStroke, pts: Vec<photocraft_engine::paint::StrokeP
     true
 }
 
+/// Keep the live stroke's next worker step "running" until the returned sender is dropped (the
+/// step then fails, and the release renders the stroke itself): for tests of what happens while a
+/// released stroke is still on its worker. Waits for a step already running first.
+#[cfg(test)]
+pub(crate) fn hold_worker_step(app: &mut PhotocraftApp) -> Option<std::sync::mpsc::Sender<WorkerStep>> {
+    let l = app.live_stroke.as_mut()?;
+    let start = std::time::Instant::now();
+    while land_worker(l, Some(std::time::Duration::from_millis(50))) == Landed::Running {
+        if start.elapsed() > std::time::Duration::from_secs(20) {
+            return None;
+        }
+    }
+    let EngineStroke::Brush(b) = &l.stroke else { return None };
+    l.stroke = EngineStroke::Busy(Busy::of(b));
+    let (tx, rx) = std::sync::mpsc::channel();
+    l.worker = Some(StrokeWorker { rx, points: 0, started: crate::gpu_canvas::now_ms() });
+    Some(tx)
+}
+
 /// A worker step slower than this (ms) is logged: what a slow brush costs.
 const SLOW_STROKE_STEP_MS: f64 = 100.0;
 

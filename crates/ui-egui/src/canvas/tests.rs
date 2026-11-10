@@ -3437,6 +3437,55 @@ fn a_command_during_the_catch_up_lands_the_stroke_first() {
     assert!(st.doc.layer(id).unwrap().surface().unwrap().rgba(160, 50)[3] < 0.01, "the stroke was undone");
 }
 
+/// While a released stroke is still on its worker, a command from automation gets an error to
+/// retry instead of being queued: queued, it would run after the request returned, its result lost
+/// and outside the request's authorization (`actions.play` and its steps included). A command made
+/// by hand is queued, and runs once the stroke has committed.
+#[test]
+fn automation_gets_an_error_while_a_stroke_finishes_and_a_command_by_hand_waits_for_it() {
+    super::strokes::TEST_WORKER.with(|w| w.set(true));
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width":200,"height":100,"background":"#ffffff"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("tools.setBrush", json!({"brush":{"size":8,"smoothing":{"amount":0.0}}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let count = app.session.active().unwrap().history.past_len();
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    // The worker stays busy with the next step until `held` is dropped.
+    let held = super::strokes::hold_worker_step(&mut app).expect("the Brush is on a worker");
+    for i in 1..=40 {
+        tool_event(&mut app, ToolEvent::Move { x: 10.0 + f64::from(i) * 4.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    }
+    tool_event(&mut app, ToolEvent::Up { x: 170.0, y: 50.0 }, egui::Modifiers::NONE);
+    assert!(app.finishing_stroke.is_some(), "released with a step on the worker");
+
+    app.automation_input = true;
+    for id in ["layer.new.layer", "actions.play"] {
+        assert_eq!(app.run(id, json!({})), Err(super::still_finishing().to_string()), "{id} from automation: an error to retry");
+    }
+    app.automation_input = false;
+    assert!(app.queued_commands.is_empty(), "nothing from automation is queued");
+    assert!(app.finishing_stroke.is_some(), "the stroke is still finishing");
+    assert_eq!(app.session.active().unwrap().history.past_len(), count, "nothing ran");
+
+    let queued = app.run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(queued["queued"], json!(true), "by hand: queued");
+    assert_eq!(app.queued_commands.len(), 1);
+
+    // The step fails (its worker is gone): the stroke is rendered at the commit, then the queued
+    // command runs.
+    drop(held);
+    let start = std::time::Instant::now();
+    while continue_finishing_stroke(&mut app) {
+        assert!(start.elapsed() < std::time::Duration::from_secs(20), "the stroke commits");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    super::strokes::TEST_WORKER.with(|w| w.set(false));
+    assert!(app.finishing_stroke.is_none() && app.queued_commands.is_empty());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), count + 2, "the stroke, then the queued command");
+}
+
 /// One dab of a very large brush on a storyboard took most of a second on the UI thread, and the
 /// window was dropped. The Brush now renders on a worker: the canvas shows the last finished step
 /// meanwhile, and the release commits once the worker has caught up.
