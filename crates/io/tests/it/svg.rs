@@ -637,11 +637,14 @@ fn a_costly_filter_past_the_pattern_recursion_cutoff_is_refused() {
     let e = import("x.svg", deep.as_bytes()).err().unwrap_or_else(|| panic!("opened a costly filter 210 patterns deep"));
     assert!(matches!(&e, IoError::Svg(m) if m.contains("too costly")), "{e}");
     assert!(svg::rasterize(deep.as_bytes(), 1.0).is_err());
-    // A short chain with an ordinary filter still opens, and so do groups nested past the cutoff.
+    // A short chain with an ordinary filter and groups within the XML nesting budget still open.
     assert!(!open(&chain(4, "<feGaussianBlur stdDeviation=\"2\"/>")).document.layers.is_empty());
-    let groups =
-        format!("<svg {NS} width=\"10\" height=\"10\">{}<rect width=\"10\" height=\"10\"/>{}</svg>", "<g opacity=\"0.99\">".repeat(250), "</g>".repeat(250));
-    assert!(!open(&groups).document.layers.is_empty());
+    let groups = |depth: usize| {
+        format!("<svg {NS} width=\"10\" height=\"10\">{}<rect width=\"10\" height=\"10\"/>{}</svg>", "<g opacity=\"0.99\">".repeat(depth), "</g>".repeat(depth))
+    };
+    assert!(!open(&groups(svg::MAX_XML_DEPTH - 2)).document.layers.is_empty());
+    // The smaller stack-safe allowance rejects the formerly accepted 250-level drawing.
+    assert!(matches!(import("groups.svg", groups(250).as_bytes()), Err(IoError::Svg(m)) if m.contains("nested")));
 }
 
 #[test]
