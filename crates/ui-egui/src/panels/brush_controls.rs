@@ -40,8 +40,11 @@ pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraf
 /// picking another mode leaves it. The wheel steps it as it steps the other Mode dropdowns.
 /// Without `behind_enabled` (the Background is the active layer) Behind is greyed, as in the
 /// Shift+right-click menu, and the wheel and the keys step past it.
-pub(super) fn pattern_stamp_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraft_engine::BrushSettings, behind_enabled: bool) {
-    let opts = crate::brush_mode_menu::pattern_stamp_choices();
+pub(super) fn pattern_stamp_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraft_engine::BrushSettings, behind_enabled: bool, threshold: bool) {
+    let mut opts = crate::brush_mode_menu::pattern_stamp_choices();
+    if threshold && let Some(normal) = opts.iter_mut().find(|o| o.0 == (Some(BlendMode::Normal), false)) {
+        normal.1 = tl!("Threshold");
+    }
     let before = if b.behind { (None, true) } else { (Some(b.mode), false) };
     let mut mode = before;
     let groups = |m: &(Option<BlendMode>, bool)| m.0.is_some_and(starts_blend_group);
