@@ -67,6 +67,9 @@ copies; the open documents, their history and their source files remain intact. 
 separate output folder. Duplicate output names appear in the per-file errors instead of
 replacing an earlier result.
 
+Untitled document names follow the portable filename rules used for layer exports: for
+example, `foo/bar` becomes `foo_bar`. The document's displayed name stays unchanged.
+
 Agents can use the same engine command:
 
 ```json

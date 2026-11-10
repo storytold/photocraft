@@ -1,5 +1,5 @@
 use super::open::import_at_raw_ppi;
-use super::paths::{extension, file_name, join, list_files, list_images, read_file, stem, write_file};
+use super::paths::{extension, file_name, join, list_files, list_images, read_file, sanitize, stem, write_file};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, encode, save_doc, save_doc_as};
 use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, json, str_param};
@@ -263,6 +263,7 @@ type PrepareInput<'a> = &'a dyn Fn(&mut Session, &str) -> Result<()>;
 
 /// Process the current in-memory images in scratch sessions: unsaved edits are included and
 /// resizing never touches the open documents' pixels, selection, history or save state.
+/// Untitled names use the shared filename sanitizer before becoming output stems.
 pub(super) fn process_document_copies(
     s: &Session,
     documents: &[&crate::DocState],
@@ -277,7 +278,8 @@ pub(super) fn process_document_copies(
     for state in documents {
         // Export resolves stored links against this source, including non-active documents.
         let _document = crate::doc_path::scope(state.path.as_deref().map(std::path::Path::new));
-        let path = state.path.clone().unwrap_or_else(|| format!("{}.psd", state.doc.name));
+        // An untitled document's name is a label, not a path: keep it as one portable component.
+        let path = state.path.clone().unwrap_or_else(|| format!("{}.psd", sanitize(&state.doc.name)));
         let ext = if format == "same" { same_format(&path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         let out = join(output, &format!("{}.{ext}", stem(&path)));
         // Copies must not overwrite any open source file, including aliases of its path.

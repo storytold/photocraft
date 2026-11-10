@@ -242,3 +242,39 @@ fn image_processor_open_embeds_relative_links_from_each_documents_own_folder() {
         assert!(Arc::ptr_eq(&state.doc, original));
     }
 }
+
+/// Untitled names are labels rather than paths: preserve the full name through the shared
+/// sanitizer, keep the original document untouched and use PSD for the `same` format.
+#[test]
+fn image_processor_untitled_names_use_the_shared_filename_sanitizer() {
+    for source in ["current", "open"] {
+        for (format, extension) in [("png", "png"), ("same", "psd")] {
+            for (name, safe_name) in [
+                ("foo/bar", "foo_bar"),
+                (r"foo\bar", "foo_bar"),
+                ("../outside", "_outside"),
+                ("../../outside", "_.._outside"),
+                ("..", "layer"),
+                ("CON", "CON_"),
+                ("nul.v2", "nul_.v2"),
+                ("trailing. ", "trailing"),
+                ("chapter.v2", "chapter.v2"),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let output = dir.path().join("processed");
+                let mut s = Session::new();
+                add(&mut s, name, 8, "#ff0000").unwrap();
+                let original = s.active().unwrap().doc.clone();
+                let result = s.execute("file.scripts.imageProcessor", json!({"source": source, "output": output, "format": format})).unwrap();
+                assert!(result["errors"].as_array().unwrap().is_empty(), "{source}, {format}, {name:?}: {result}");
+                assert_eq!(result["files"], json!([output.join(format!("{safe_name}.{extension}"))]), "{source}, {format}, {name:?}");
+                assert_eq!(exported(&result, 0).unwrap().size, original.size);
+                let state = s.active().unwrap();
+                assert!(Arc::ptr_eq(&state.doc, &original));
+                assert_eq!(state.doc.name, name);
+                assert!(state.path.is_none());
+                assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "only the output folder is created");
+            }
+        }
+    }
+}
