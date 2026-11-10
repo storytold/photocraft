@@ -49,7 +49,7 @@
 # Strings added to the UI after this catalog was first written (rebase onto main, 2026-10).
 # Gradient Editor window, opened from the options bar's gradient swatch.
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 
 
@@ -87,7 +87,7 @@
 # Smart Filter editors
 
 # Dynamic labels the tl! literal scanner cannot see: filter and Filter Gallery parameter names and
-# choices (humanized from their keys), Camera Raw controls, render filters (Flame, Picture Frame, Tree),
+# choices (humanized from their keys), RAW Develop controls, render filters (Flame, Picture Frame, Tree),
 # measurement columns, file info fields and the macOS application menu. Translated the same way as
 # above, from the plain meaning of the English label.
 # Select and Mask view modes (#1754)
@@ -129,7 +129,7 @@
 
 # Labels the UI looks up through a variable (tool, glyph-group, Liquify and warp names, command
 # parameters and choices humanized from their keys, history steps and contextual
-# Camera Raw / layer labels) that other catalogs already covered. Translated the same way as
+# RAW Develop / layer labels) that other catalogs already covered. Translated the same way as
 # above, from the plain meaning of the English label.
 
 # DDS Options (#1327)
@@ -359,7 +359,7 @@
 	Plugins…	Zásuvné moduly…
 	Type…	Text…
 	Enhanced Controls…	Rozšířené ovládání…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Výchozí nastavení RAW…
 	Raw Defaults…	Výchozí nastavení Raw…
 	Integrations…	Integrace…
 	AI Integrations…	Integrace AI…
@@ -692,7 +692,7 @@
 	Last Filter	Poslední filtr
 	Filter Gallery…	Galerie filtrů…
 	Adaptive Wide Angle…	Adaptivní širokoúhlý objektiv…
-	Camera Raw Filter…	Filtr Camera Raw…
+	RAW Develop Filter…	Filtr Vyvolání RAW…
 	Liquify…	Zkapalnit…
 	Vanishing Point…	Úběžník…
 	Blur	Rozostření
@@ -1050,8 +1050,8 @@
 	Load Settings…	Načíst nastavení…
 	Save these settings as a Camera Raw .xmp file	Uložit toto nastavení jako soubor Camera Raw .xmp
 	Load settings from a Camera Raw .xmp file	Načíst nastavení ze souboru Camera Raw .xmp
-	Loaded Camera Raw settings from {file}	Nastavení Camera Raw načteno ze souboru {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Nastavení Camera Raw načteno ze souboru {file} (nepodporováno: {n})
+	Loaded RAW Develop settings from {file}	Nastavení Vyvolání RAW načteno ze souboru {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Nastavení Vyvolání RAW načteno ze souboru {file} (nepodporováno: {n})
 	Begin recording	Zahájit záznam
 	Bend:	Ohyb:
 	Bicubic	Bikubická
@@ -1079,7 +1079,7 @@
 	Brush Reconstruct Options	Možnosti štětce rekonstrukce
 	Brush Tool Options	Možnosti nástroje štětec
 	Cache Level:	Úroveň mezipaměti:
-	Camera Raw isn't open	Camera Raw není otevřen
+	RAW Develop isn't open	Vyvolání RAW není otevřen
 	Cancel	Zrušit
 	Cancel (Esc)	Zrušit (Esc)
 	Manage submitted jobs in the system print queue	Spravovat odeslané úlohy v systémové tiskové frontě
@@ -2054,7 +2054,7 @@
 	Brush preview color	Barva náhledu štětce
 	Cache levels	Úrovně mezipaměti
 	Cache tile size	Velikost dlaždice mezipaměti
-	Camera Raw Defaults	Výchozí nastavení Camera Raw
+	RAW Defaults	Výchozí nastavení RAW
 	Canvas border	Okraj plátna
 	Show canvas dots	Zobrazit tečky plátna
 	Clip thumbnails to layer bounds	Oříznout miniatury na hranice vrstvy
@@ -2141,7 +2141,6 @@
 	Never	Nikdy
 	Normal tip	Normální hrot
 	Open as smart object	Otevřít jako chytrý objekt
-	Open in camera raw	Otevírat v Camera Raw
 	Open documents as tabs	Otevírat dokumenty jako záložky
 	Overscroll	Posouvání za okraj
 	Performance	Výkon
@@ -2419,8 +2418,8 @@
 	Tone Histogram	Histogram tónů
 	Show Selected Region	Zobrazit vybranou oblast
 cameraRaw	Light	Světlo
-	Camera Raw Filter ({layer})	Filtr Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Filtr Vyvolání RAW ({layer})
+	RAW Develop ({name})	Vyvolání RAW ({name})
 cameraRaw	Red	Červené
 cameraRaw	Orange	Oranžové
 cameraRaw	Yellow	Žluté
@@ -2899,8 +2898,8 @@ cameraData	Lens	Objektiv
 	Burlap	Pytlovina
 	Calculations	Výpočty
 	Camera Calibration	Kalibrace fotoaparátu
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Filtr Camera Raw
+	RAW Develop	Vyvolání RAW
+	RAW Develop Filter	Filtr Vyvolání RAW
 	Candle Light	Plamen svíčky
 	Canvas Size	Velikost plátna
 	Caption	Popisek
@@ -4359,7 +4358,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Zobrazit hranice vrstvy při najetí
 	Expand layer group on click	Rozbalit skupinu vrstev kliknutím
 	Show hover bounds from Layers	Zobrazit hranice při najetí z panelu Vrstvy
-	Saved Camera Raw settings to {file}	Nastavení Camera Raw uložena do {file}
+	Saved RAW Develop settings to {file}	Nastavení Vyvolání RAW uložena do {file}
 	Save the settings to each raw's sidecar without opening it	Uložit nastavení do souboru sidecar každého snímku raw bez jeho otevření
 	No settings saved: these raws can't keep a sidecar here	Nic neuloženo: tyto snímky raw zde nemohou mít soubor sidecar
 	Some settings could not be saved; the raws stay open	Některá nastavení nelze uložit; snímky raw zůstávají otevřené
@@ -4371,3 +4370,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Automaticky měnit velikost plátna
 	Keep Relative Position During Layer Reordering	Zachovat relativní polohu při změně pořadí vrstev
 	Shrinkwrap Canvas on Save	Při uložení zmenšit plátno na obsah
+	Move Toolbar to the Right	Přesunout panel nástrojů doprava
+	Move Toolbar to the Left	Přesunout panel nástrojů doleva

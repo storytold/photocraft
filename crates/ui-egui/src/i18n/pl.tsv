@@ -327,7 +327,7 @@
 	Plugins…	Wtyczki…
 	Type…	Tekst…
 	Enhanced Controls…	Ulepszone elementy sterujące…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Domyślne ustawienia RAW…
 	Raw Defaults…	Domyślne ustawienia Raw…
 	Integrations…	Integracje…
 	AI Integrations…	Integracje AI…
@@ -662,7 +662,7 @@
 	Last Filter	Ostatni filtr
 	Filter Gallery…	Galeria filtrów…
 	Adaptive Wide Angle…	Adaptacyjny szeroki kąt…
-	Camera Raw Filter…	Filtr Camera Raw…
+	RAW Develop Filter…	Filtr Wywoływanie RAW…
 	Liquify…	Skraplanie…
 	Vanishing Point…	Punkt zbieżności…
 	Blur	Rozmycie
@@ -1030,8 +1030,8 @@
 	Load Settings…	Wczytaj ustawienia…
 	Save these settings as a Camera Raw .xmp file	Zapisz te ustawienia jako plik .xmp Camera Raw
 	Load settings from a Camera Raw .xmp file	Wczytaj ustawienia z pliku .xmp Camera Raw
-	Loaded Camera Raw settings from {file}	Wczytano ustawienia Camera Raw z pliku {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Wczytano ustawienia Camera Raw z pliku {file} (nieobsługiwane: {n})
+	Loaded RAW Develop settings from {file}	Wczytano ustawienia Wywoływanie RAW z pliku {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Wczytano ustawienia Wywoływanie RAW z pliku {file} (nieobsługiwane: {n})
 	Begin recording	Rozpocznij nagrywanie
 	Bend:	Zgięcie:
 	Bicubic	Dwusześcienna
@@ -1059,7 +1059,7 @@
 	Brush Reconstruct Options	Opcje pędzla rekonstrukcji
 	Brush Tool Options	Opcje narzędzia Pędzel
 	Cache Level:	Poziom pamięci podręcznej:
-	Camera Raw isn't open	Camera Raw nie jest otwarty
+	RAW Develop isn't open	Wywoływanie RAW nie jest otwarty
 	Cancel	Anuluj
 	Cancel (Esc)	Anuluj (Esc)
 	Manage submitted jobs in the system print queue	Zarządzaj przesłanymi zadaniami w systemowej kolejce drukowania
@@ -2026,7 +2026,7 @@
 	Brush preview color	Kolor podglądu pędzla
 	Cache levels	Poziomy pamięci podręcznej
 	Cache tile size	Rozmiar kafla pamięci podręcznej
-	Camera Raw Defaults	Domyślne ustawienia Camera Raw
+	RAW Defaults	Domyślne ustawienia RAW
 	Canvas border	Obramowanie płótna
 	Show canvas dots	Pokaż kropki płótna
 	Clip thumbnails to layer bounds	Przycinaj miniatury do granic warstwy
@@ -2513,8 +2513,6 @@
 	Roman Hanging Punctuation	Wiszące znaki interpunkcyjne (łacińskie)
 	Avoid Widows/Orphans	Unikaj wdów i sierot
 	Compose	Skład
-	Adobe Single-line Composer	Skład jednowierszowy Adobe
-	Adobe Every-line Composer	Skład wielowierszowy Adobe
 	Justification	Justowanie
 	Word Spacing	Odstępy między wyrazami
 	Letter Spacing	Odstępy między literami
@@ -2770,7 +2768,6 @@
 	Intersect with	Część wspólna z
 	Capture Comp	Przechwyć kompozycję
 	No Layer Comps	Brak kompozycji warstw
-	Adobe PDF Presets…	Ustawienia wstępne Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Podglądy technologii…
 	Background from Layer	Tło z warstwy
@@ -2848,7 +2845,7 @@ fontWeight	Bold	Pogrubiony
 fontWeight	ExtraBold	Ekstra gruby
 fontWeight	Black	Czarny
 fontWeight	Italic	Kursywa
-	Camera Raw Filter ({layer})	Filtr Camera Raw ({layer})
+	RAW Develop Filter ({layer})	Filtr Wywoływanie RAW ({layer})
 cameraRaw	Lights	Jasne tony
 cameraRaw	Darks	Ciemne tony
 cameraRaw	Blacks	Czernie
@@ -3207,7 +3204,7 @@ cameraRaw	Roughness	Chropowatość
 	Color Settings	Ustawienia kolorów
 	Assign Profile	Przypisz profil
 	Convert to Profile	Konwertuj na profil
-	Camera Raw	Camera Raw
+	RAW Develop	Wywoływanie RAW
 	Raw Defaults	Domyślne ustawienia Raw
 	AI Integrations	Integracje AI
 	Install Plug-in	Zainstaluj wtyczkę
@@ -3254,7 +3251,7 @@ cameraRaw	Roughness	Chropowatość
 	Border	Obramowanie
 	Contract	Zwęź
 	Filter Gallery	Galeria filtrów
-	Camera Raw Filter	Filtr Camera Raw
+	RAW Develop Filter	Filtr Wywoływanie RAW
 	Liquify	Skraplanie
 	Vanishing Point	Punkt zbieżności
 	Field Blur	Rozmycie pola
@@ -3539,11 +3536,10 @@ cameraRaw	Roughness	Chropowatość
 	Pick a screen pixel or press Esc to cancel	Wybierz piksel ekranu lub naciśnij Esc, aby anulować
 	Scroll to zoom	Przewijaj, aby zmieniać powiększenie
 	Drag to pan · Scroll to zoom · Double-click to fit	Przeciągnij, aby przesunąć · Przewijaj, aby powiększyć · Kliknij dwukrotnie, aby dopasować
-	Open in camera raw	Otwórz w Camera Raw
 	System title bar	Systemowy pasek tytułu
 	More documents	Więcej dokumentów
 	Developing {name}	Wywoływanie {name}
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop ({name})	Wywoływanie RAW ({name})
 	Show/Hide All Panels	Pokaż/ukryj wszystkie panele
 	Show/Hide Panels	Pokaż/ukryj panele
 	Could not open	Nie można otworzyć
@@ -4236,7 +4232,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Pokaż granice warstwy po najechaniu
 	Expand layer group on click	Rozwiń grupę warstw po kliknięciu
 	Show hover bounds from Layers	Pokaż granice po najechaniu z panelu Warstwy
-	Saved Camera Raw settings to {file}	Zapisano ustawienia Camera Raw w {file}
+	Saved RAW Develop settings to {file}	Zapisano ustawienia Wywoływanie RAW w {file}
 	Save the settings to each raw's sidecar without opening it	Zapisz ustawienia w pliku sidecar każdego pliku raw bez otwierania go
 	No settings saved: these raws can't keep a sidecar here	Nic nie zapisano: te pliki raw nie mogą tu mieć pliku sidecar
 	Some settings could not be saved; the raws stay open	Nie udało się zapisać niektórych ustawień; pliki raw pozostają otwarte
@@ -4248,3 +4244,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Automatycznie zmieniaj rozmiar płótna
 	Keep Relative Position During Layer Reordering	Zachowaj położenie względne przy zmianie kolejności warstw
 	Shrinkwrap Canvas on Save	Przytnij płótno do zawartości przy zapisie
+	Move Toolbar to the Right	Przenieś pasek narzędzi w prawo
+	Move Toolbar to the Left	Przenieś pasek narzędzi w lewo

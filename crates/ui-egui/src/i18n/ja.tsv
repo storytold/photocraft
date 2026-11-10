@@ -42,7 +42,7 @@
 # Strings added to the UI after this catalog was first written (rebase onto main, 2026-10).
 # Gradient Editor window, opened from the options bar's gradient swatch.
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 
 
@@ -352,7 +352,7 @@
 	Plugins…	プラグイン…
 	Type…	文字…
 	Enhanced Controls…	拡張コントロール…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	RAWの既定値…
 	Raw Defaults…	RAW の既定値…
 	Integrations…	連携…
 	AI Integrations…	AI 連携…
@@ -686,7 +686,7 @@
 	Last Filter	直前のフィルター
 	Filter Gallery…	フィルターギャラリー…
 	Adaptive Wide Angle…	広角補正…
-	Camera Raw Filter…	Camera Raw フィルター…
+	RAW Develop Filter…	RAW現像 フィルター…
 	Liquify…	ゆがみ…
 	Vanishing Point…	消点…
 	Blur	ぼかし
@@ -1041,8 +1041,8 @@
 	Load Settings…	設定を読み込み…
 	Save these settings as a Camera Raw .xmp file	この設定を Camera Raw の .xmp ファイルとして保存
 	Load settings from a Camera Raw .xmp file	Camera Raw の .xmp ファイルから設定を読み込む
-	Loaded Camera Raw settings from {file}	{file} から Camera Raw の設定を読み込みました
-	Loaded Camera Raw settings from {file} ({n} not supported)	{file} から Camera Raw の設定を読み込みました（未対応: {n}）
+	Loaded RAW Develop settings from {file}	{file} から RAW現像 の設定を読み込みました
+	Loaded RAW Develop settings from {file} ({n} not supported)	{file} から RAW現像 の設定を読み込みました（未対応: {n}）
 	Begin recording	記録を開始
 	Bend:	曲げ:
 	Bicubic	バイキュービック
@@ -1070,7 +1070,7 @@
 	Brush Reconstruct Options	ブラシの復元オプション
 	Brush Tool Options	ブラシツールのオプション
 	Cache Level:	キャッシュレベル:
-	Camera Raw isn't open	Camera Raw は開いていません
+	RAW Develop isn't open	RAW現像 は開いていません
 	Cancel	キャンセル
 	Cancel (Esc)	キャンセル(Esc)
 	Manage submitted jobs in the system print queue	送信済みのジョブはシステムの印刷キューで管理してください
@@ -2040,7 +2040,7 @@
 	Brush preview color	ブラシプレビューの色
 	Cache levels	キャッシュレベル
 	Cache tile size	キャッシュタイルのサイズ
-	Camera Raw Defaults	Camera Raw の既定値
+	RAW Defaults	RAWの既定値
 	Canvas border	カンバスの境界
 	Show canvas dots	カンバスのドットを表示
 	Clip thumbnails to layer bounds	サムネールをレイヤーの境界でクリップ
@@ -2127,7 +2127,6 @@
 	Never	しない
 	Normal tip	通常の先端
 	Open as smart object	スマートオブジェクトとして開く
-	Open in camera raw	Camera Raw で開く
 	Open documents as tabs	ドキュメントをタブで開く
 	Overscroll	オーバースクロール
 	Performance	パフォーマンス
@@ -2403,8 +2402,8 @@
 	Tone Histogram	階調ヒストグラム
 	Show Selected Region	選択範囲を表示
 cameraRaw	Light	ライト
-	Camera Raw Filter ({layer})	Camera Raw フィルター ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	RAW現像 フィルター ({layer})
+	RAW Develop ({name})	RAW現像 ({name})
 cameraRaw	Lights	明部
 cameraRaw	Blending	ブレンド
 cameraRaw	Blacks	黒レベル
@@ -2974,7 +2973,7 @@ fontWeight	Italic	斜体
 	Box Blur	ぼかし (ボックス)
 	Bulge	膨らみ
 	Burn	焼き込み
-	Camera Raw Filter	Camera Raw フィルター
+	RAW Develop Filter	RAW現像 フィルター
 	Canvas Size	カンバスサイズ
 	Circularity	真円度
 	Clipping Path	クリッピングパス
@@ -3159,7 +3158,7 @@ fontWeight	Italic	斜体
 	Border	境界
 	Browse	参照
 	Calculations	演算
-	Camera Raw	Camera Raw
+	RAW Develop	RAW現像
 	Caption	キャプション
 	Category	カテゴリー
 	Channel	チャンネル
@@ -3345,10 +3344,7 @@ fontWeight	Italic	斜体
 	Add to selection  (⇧)	選択範囲に追加  (⇧)
 	Adds grain to the soft edges of the brush tip.	ブラシ先端の柔らかい縁に粒子を加えます。
 	Adjustment Layer	色調補正レイヤー
-	Adobe Every-line Composer	Adobe 全行コンポーザー
-	Adobe PDF Presets…	Adobe PDF プリセット…
 	Adobe RGB (1998)	Adobe RGB (1998)
-	Adobe Single-line Composer	Adobe 1 行コンポーザー
 	Advanced Controls	詳細コントロール
 	After (X)	後 (X)
 	Airbrush: keeps painting while the pointer rests.	エアブラシ: ポインターを止めている間も描き続けます。
@@ -4289,7 +4285,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	ホバー時にレイヤーの境界を表示
 	Expand layer group on click	クリックでレイヤーグループを展開
 	Show hover bounds from Layers	レイヤーパネルからのホバー境界を表示
-	Saved Camera Raw settings to {file}	Camera Raw の設定を {file} に保存しました
+	Saved RAW Develop settings to {file}	RAW現像 の設定を {file} に保存しました
 	Save the settings to each raw's sidecar without opening it	各 Raw のサイドカーファイルに設定を保存し、開かずに閉じます
 	No settings saved: these raws can't keep a sidecar here	保存されませんでした：これらの Raw にはここでサイドカーファイルを作成できません
 	Some settings could not be saved; the raws stay open	一部の設定を保存できませんでした。Raw は開いたままです
@@ -4301,3 +4297,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	カンバスサイズを自動調整
 	Keep Relative Position During Layer Reordering	レイヤーの並べ替え中も相対位置を保持
 	Shrinkwrap Canvas on Save	保存時にカンバスを内容に合わせて縮小
+	Move Toolbar to the Right	ツールバーを右へ移動
+	Move Toolbar to the Left	ツールバーを左へ移動

@@ -238,7 +238,7 @@
 	Plugins…	المكونات الإضافية…
 	Type…	النص…
 	Enhanced Controls…	عناصر التحكم المحسنة…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	إعدادات RAW الافتراضية…
 	Raw Defaults…	إعدادات Raw الافتراضية…
 	Integrations…	التكاملات…
 	AI Integrations…	تكاملات الذكاء الاصطناعي…
@@ -587,7 +587,7 @@
 	Last Filter	آخر فلتر
 	Filter Gallery…	معرض الفلاتر…
 	Adaptive Wide Angle…	زاوية واسعة تكيفية…
-	Camera Raw Filter…	فلتر Camera Raw…
+	RAW Develop Filter…	فلتر معالجة RAW…
 	Liquify…	تمويع…
 	Vanishing Point…	نقطة التلاشي…
 	Blur	ضبابية
@@ -929,8 +929,8 @@
 	Load Settings…	تحميل الإعدادات…
 	Save these settings as a Camera Raw .xmp file	حفظ هذه الإعدادات كملف .xmp لـ Camera Raw
 	Load settings from a Camera Raw .xmp file	تحميل الإعدادات من ملف .xmp لـ Camera Raw
-	Loaded Camera Raw settings from {file}	تم تحميل إعدادات Camera Raw من {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	تم تحميل إعدادات Camera Raw من {file} ({n} غير مدعومة)
+	Loaded RAW Develop settings from {file}	تم تحميل إعدادات معالجة RAW من {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	تم تحميل إعدادات معالجة RAW من {file} ({n} غير مدعومة)
 	Begin recording	بدء التسجيل
 	Bend:	الانحناء:
 	Bicubic	ثنائي التكعيب
@@ -958,7 +958,7 @@
 	Brush Reconstruct Options	خيارات إعادة بناء الفرشاة
 	Brush Tool Options	خيارات أداة الفرشاة
 	Cache Level:	مستوى ذاكرة التخزين المؤقت:
-	Camera Raw isn't open	Camera Raw غير مفتوح
+	RAW Develop isn't open	معالجة RAW غير مفتوح
 	Cancel	إلغاء
 	Reset	إعادة تعيين
 	Cancel (Esc)	إلغاء (Esc)
@@ -1936,7 +1936,7 @@
 	Brush preview color	لون معاينة الفرشاة
 	Cache levels	مستويات ذاكرة التخزين المؤقت
 	Cache tile size	حجم بلاطة ذاكرة التخزين المؤقت
-	Camera Raw Defaults	إعدادات Camera Raw الافتراضية
+	RAW Defaults	إعدادات RAW الافتراضية
 	Canvas border	حدود مساحة الرسم
 	Show canvas dots	إظهار نقاط مساحة الرسم
 	Clip thumbnails to layer bounds	قصر الصور المصغرة على حدود الطبقة
@@ -2023,7 +2023,6 @@
 	Never	أبدًا
 	Normal tip	رأس عادي
 	Open as smart object	فتح ككائن ذكي
-	Open in camera raw	فتح في Camera Raw
 	Open documents as tabs	فتح المستندات كعلامات تبويب
 	Overscroll	التمرير الزائد
 	Performance	الأداء
@@ -2379,8 +2378,8 @@
 	3 x 3	3 × 3
 	4 x 4	4 × 4
 	5 x 5	5 × 5
-	Camera Raw Filter ({layer})	فلتر Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	فلتر معالجة RAW ({layer})
+	RAW Develop ({name})	معالجة RAW ({name})
 	Edit Type	تحرير النص
 	Grid:	الشبكة:
 	Highlight Clipping Warning (O)	تحذير اقتطاع الإضاءات (O)
@@ -3619,3 +3618,10 @@ curves	Smooth	تنعيم
 	Auto-size Canvas	تحديد حجم مساحة الرسم تلقائيًا
 	Keep Relative Position During Layer Reordering	الإبقاء على الموضع النسبي عند إعادة ترتيب الطبقات
 	Shrinkwrap Canvas on Save	تقليص مساحة الرسم إلى المحتوى عند الحفظ
+	Move Toolbar to the Right	نقل شريط الأدوات إلى اليمين
+	Move Toolbar to the Left	نقل شريط الأدوات إلى اليسار
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	تم حفظ إعدادات معالجة RAW في {file}
+	RAW Develop	معالجة RAW
+	RAW Develop Filter	مرشح معالجة RAW

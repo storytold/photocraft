@@ -38,7 +38,7 @@
 
 # Labels added on main after this catalog (depth labels, Wayland drop, profiles, rendering mode)
 
-# Camera Raw scopes and the Patch tool
+# RAW Develop scopes and the Patch tool
 
 # Warp grid presets (#388)
 
@@ -326,7 +326,7 @@
 	Plugins…	Extensions…
 	Type…	Texte…
 	Enhanced Controls…	Commandes avancées…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Valeurs par défaut RAW…
 	Raw Defaults…	Valeurs Raw par défaut…
 	Integrations…	Intégrations…
 	AI Integrations…	Intégrations d'IA…
@@ -645,7 +645,7 @@
 	Last Filter	Dernier filtre
 	Filter Gallery…	Galerie de filtres…
 	Adaptive Wide Angle…	Grand angle adaptatif…
-	Camera Raw Filter…	Filtre Camera Raw…
+	RAW Develop Filter…	Filtre Développement RAW…
 	Liquify…	Liquéfier…
 	Vanishing Point…	Point de fuite…
 	Blur	Flou
@@ -999,8 +999,8 @@
 	Load Settings…	Charger les paramètres…
 	Save these settings as a Camera Raw .xmp file	Enregistrer ces paramètres dans un fichier .xmp Camera Raw
 	Load settings from a Camera Raw .xmp file	Charger les paramètres d’un fichier .xmp Camera Raw
-	Loaded Camera Raw settings from {file}	Paramètres Camera Raw chargés depuis {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Paramètres Camera Raw chargés depuis {file} ({n} non pris en charge)
+	Loaded RAW Develop settings from {file}	Paramètres Développement RAW chargés depuis {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Paramètres Développement RAW chargés depuis {file} ({n} non pris en charge)
 	Begin recording	Démarrer l'enregistrement
 	Bend:	Courbure :
 	Bicubic	Bicubique
@@ -1028,7 +1028,7 @@
 	Brush Reconstruct Options	Options du pinceau de reconstruction
 	Brush Tool Options	Options de l'outil Pinceau
 	Cache Level:	Niveau de cache :
-	Camera Raw isn't open	Camera Raw n'est pas ouvert
+	RAW Develop isn't open	Développement RAW n'est pas ouvert
 	Cancel	Annuler
 	Cancel (Esc)	Annuler (Échap)
 	Manage submitted jobs in the system print queue	Gérer les tâches soumises dans la file d’impression du système
@@ -1990,7 +1990,7 @@
 	Brush preview color	Couleur de l'aperçu du pinceau
 	Cache levels	Niveaux de cache
 	Cache tile size	Taille des tuiles du cache
-	Camera Raw Defaults	Valeurs par défaut de Camera Raw
+	RAW Defaults	Valeurs par défaut RAW
 	Canvas border	Bordure du canevas
 	Show canvas dots	Afficher les points du canevas
 	Clip thumbnails to layer bounds	Rogner les vignettes aux limites du calque
@@ -2077,7 +2077,6 @@
 	Never	Jamais
 	Normal tip	Pointe normale
 	Open as smart object	Ouvrir en tant qu'objet intelligent
-	Open in camera raw	Ouvrir dans Camera Raw
 	Open documents as tabs	Ouvrir les documents dans des onglets
 	Overscroll	Défilement au-delà des bords
 	Performance	Performances
@@ -2481,8 +2480,6 @@
 	Roman Hanging Punctuation	Ponctuation latine hors justification
 	Avoid Widows/Orphans	Éviter les veuves et orphelines
 	Compose	Composition
-	Adobe Single-line Composer	Composeur ligne par ligne Adobe
-	Adobe Every-line Composer	Composeur multiligne Adobe
 	Justification	Justification
 	Word Spacing	Espacement des mots
 	Letter Spacing	Espacement des lettres
@@ -2737,7 +2734,6 @@
 	Intersect with	Intersection avec
 	Capture Comp	Capturer la composition
 	No Layer Comps	Aucune composition de calques
-	Adobe PDF Presets…	Préréglages Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Aperçus technologiques…
 	Background from Layer	Arrière-plan d'après le calque
@@ -2828,8 +2824,8 @@
 	Tone Histogram	Histogramme des tons
 	Show Selected Region	Afficher la zone sélectionnée
 cameraRaw	Light	Lumière
-	Camera Raw Filter ({layer})	Filtre Camera Raw ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	Filtre Développement RAW ({layer})
+	RAW Develop ({name})	Développement RAW ({name})
 cameraRaw	Lights	Tons clairs
 cameraRaw	Darks	Tons sombres
 cameraRaw	Blacks	Noirs
@@ -3512,7 +3508,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Adwaita (Dark)	Adwaita (sombre)
 	Adwaita (Light)	Adwaita (clair)
 	After	Après
-	All shortcuts reset to Photoshop defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de Photoshop.
 	Ambience	Ambiance
 	Ambient	Ambiante
 	Amplitude Max	Amplitude max.
@@ -3588,8 +3583,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Brush Type	Type de pinceau
 	Burlap	Toile de jute
 	Calculations	Calculs
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Filtre Camera Raw
+	RAW Develop	Développement RAW
+	RAW Develop Filter	Filtre Développement RAW
 	Cancel transform	Annuler la transformation
 	Candle Light	Bougie
 	Canvas Size	Taille du canevas
@@ -3698,7 +3693,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Deep Yellow	Jaune profond
 	Default Foreground and Background Colors	Couleurs par défaut du premier plan et de l'arrière-plan
 	Default Leaves	Feuilles par défaut
-	Default Photoshop Size	Taille Photoshop par défaut
 	Defaults	Valeurs par défaut
 	Define Brush Preset	Définir un préréglage de pinceau
 	Define Custom Shape	Définir une forme personnalisée
@@ -4641,7 +4635,7 @@ shape	Appearance	Apparence
 	Show layer bounds on hover	Afficher les limites du calque au survol
 	Expand layer group on click	Développer le groupe de calques au clic
 	Show hover bounds from Layers	Afficher les limites au survol depuis Calques
-	Saved Camera Raw settings to {file}	Réglages Camera Raw enregistrés dans {file}
+	Saved RAW Develop settings to {file}	Réglages Développement RAW enregistrés dans {file}
 	Save the settings to each raw's sidecar without opening it	Enregistrer les réglages dans le fichier annexe de chaque raw sans l’ouvrir
 	No settings saved: these raws can't keep a sidecar here	Rien n’a été enregistré : ces raw ne peuvent pas avoir de fichier annexe ici
 	Some settings could not be saved; the raws stay open	Certains réglages n’ont pas pu être enregistrés ; les raw restent ouverts
@@ -4653,3 +4647,5 @@ shape	Appearance	Apparence
 	Auto-size Canvas	Redimensionner le canevas automatiquement
 	Keep Relative Position During Layer Reordering	Conserver la position relative lors de la réorganisation des calques
 	Shrinkwrap Canvas on Save	Réduire le canevas au contenu à l'enregistrement
+	Move Toolbar to the Right	Déplacer la barre d'outils à droite
+	Move Toolbar to the Left	Déplacer la barre d'outils à gauche

@@ -26,7 +26,7 @@
 
 # Layers-panel trash confirmation
 
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 # Current shell labels and shortcut templates. Keep {key} platform-dependent.
 # Gradient Editor window, opened from the options bar's gradient swatch.
 # Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
@@ -303,7 +303,6 @@
 	Histories	历史记录
 	Video Cache	视频缓存
 	All	全部
-	Adobe PDF Presets…	Adobe PDF 预设…
 	Presets	预设
 	Preset Manager…	预设管理器…
 	Migrate Presets	迁移预设
@@ -334,7 +333,7 @@
 	3D…	3D…
 	Enhanced Controls…	增强控件…
 	Technology Previews…	技术预览…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	RAW 默认设置…
 	Raw Defaults…	Raw 默认设置…
 	Integrations…	集成…
 	AI Integrations…	AI 集成…
@@ -669,7 +668,7 @@
 	Last Filter	上次滤镜
 	Filter Gallery…	滤镜库…
 	Adaptive Wide Angle…	自适应广角…
-	Camera Raw Filter…	Camera Raw 滤镜…
+	RAW Develop Filter…	RAW 显影 滤镜…
 	Liquify…	液化…
 	Vanishing Point…	消失点…
 	Blur	模糊
@@ -1041,8 +1040,8 @@
 	Load Settings…	载入设置…
 	Save these settings as a Camera Raw .xmp file	将这些设置存储为 Camera Raw .xmp 文件
 	Load settings from a Camera Raw .xmp file	从 Camera Raw .xmp 文件载入设置
-	Loaded Camera Raw settings from {file}	已从 {file} 载入 Camera Raw 设置
-	Loaded Camera Raw settings from {file} ({n} not supported)	已从 {file} 载入 Camera Raw 设置（{n} 项不支持）
+	Loaded RAW Develop settings from {file}	已从 {file} 载入 RAW 显影 设置
+	Loaded RAW Develop settings from {file} ({n} not supported)	已从 {file} 载入 RAW 显影 设置（{n} 项不支持）
 	Begin recording	开始录制
 	Bend:	弯曲：
 	Bicubic	双三次
@@ -1070,7 +1069,7 @@
 	Brush Reconstruct Options	画笔重建选项
 	Brush Tool Options	画笔工具选项
 	Cache Level:	缓存级别：
-	Camera Raw isn't open	尚未打开 Camera Raw
+	RAW Develop isn't open	尚未打开 RAW 显影
 	Cancel	取消
 	Cancel (Esc)	取消（Esc）
 	Manage submitted jobs in the system print queue	在系统打印队列中管理已提交的作业
@@ -2066,7 +2065,7 @@
 	Brush preview color	画笔预览颜色
 	Cache levels	缓存级别
 	Cache tile size	缓存图块大小
-	Camera Raw Defaults	Camera Raw 默认设置
+	RAW Defaults	RAW 默认设置
 	Canvas border	画布边框
 	Show canvas dots	显示画布圆点
 	Clip thumbnails to layer bounds	将缩略图裁剪到图层边界
@@ -2153,7 +2152,6 @@
 	Never	从不
 	Normal tip	正常笔尖
 	Open as smart object	作为智能对象打开
-	Open in camera raw	在 Camera Raw 中打开
 	Open documents as tabs	以标签页打开文档
 	Overscroll	过度滚动
 	Performance	性能
@@ -2290,8 +2288,8 @@
 	Tone Histogram	色调直方图
 	Show Selected Region	显示选定区域
 cameraRaw	Light	光线
-	Camera Raw Filter ({layer})	Camera Raw 滤镜（{layer}）
-	Camera Raw ({name})	Camera Raw（{name}）
+	RAW Develop Filter ({layer})	RAW 显影 滤镜（{layer}）
+	RAW Develop ({name})	RAW 显影（{name}）
 cameraRaw	Lights	亮调
 cameraRaw	Darks	暗调
 cameraRaw	Blacks	黑色色阶
@@ -3310,7 +3308,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	悬停时显示图层边界
 	Expand layer group on click	单击时展开图层组
 	Show hover bounds from Layers	显示来自图层面板的悬停边界
-	Saved Camera Raw settings to {file}	已将 Camera Raw 设置保存到 {file}
+	Saved RAW Develop settings to {file}	已将 RAW 显影 设置保存到 {file}
 	Save the settings to each raw's sidecar without opening it	将设置保存到每个 Raw 的附属文件，不打开它
 	No settings saved: these raws can't keep a sidecar here	未保存任何内容：这些 Raw 在此处无法拥有附属文件
 	Some settings could not be saved; the raws stay open	部分设置无法保存；Raw 保持打开
@@ -3322,3 +3320,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	自动调整画布大小
 	Keep Relative Position During Layer Reordering	重新排列图层时保持相对位置
 	Shrinkwrap Canvas on Save	保存时将画布缩至内容大小
+	Move Toolbar to the Right	将工具栏移到右侧
+	Move Toolbar to the Left	将工具栏移到左侧
+
+# RAW Develop feature labels
+	RAW Develop	RAW 显影
+	RAW Develop Filter	RAW 显影滤镜

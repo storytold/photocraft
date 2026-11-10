@@ -9,6 +9,7 @@
 //! one undo step per click / stroke.
 
 use photocraft_algo::selection as sel;
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_paint::Stroke;
@@ -106,7 +107,10 @@ fn magic_eraser(s: &mut Session, p: &Value) -> Result<Value> {
         let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::NoLayer(id))?;
         (d.doc.bounds(), sel::rgba8_image(surf, d.doc.bounds()))
     };
-    let region = sel::wand_region(&img, area, (x, y), tolerance, contiguous, anti_alias);
+    // The reference's colour distance is measured for 8-bit RGB only (#11995).
+    let rgb8 = s.active().is_some_and(|d| d.doc.mode == ColorMode::Rgb && d.doc.depth == SampleType::U8);
+    let distance = if rgb8 { sel::ColorDistance::Spread } else { sel::ColorDistance::LargestChannel };
+    let region = sel::wand_region_by(&img, area, (x, y), tolerance, contiguous, anti_alias, None, distance);
     drop(img);
     let Some(region) = region else { return Ok(damage(s, Rect::EMPTY, false)) };
     let bg = s.tools.background;
@@ -138,6 +142,8 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
         return Err(bad(CMD, "`points` must be finite canvas coordinates"));
     }
     let brush = crate::brush_cmds::resolve_brush(s, p, CMD)?;
+    // The inks a colour was picked as, for a CMYK document (#12352).
+    let picked = |c: [f32; 4]| s.tools.picked_cmyk([c[0], c[1], c[2]]).map(|k| ([c[0], c[1], c[2]], k));
     let bs = BgEraseSettings {
         sampling: enum_param(p, CMD, "sampling", Sampling::Continuous, "continuous|once|backgroundSwatch")?,
         limits: enum_param(p, CMD, "limits", Limits::Contiguous, "discontiguous|contiguous|findEdges")?,
@@ -145,6 +151,8 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
         protect_foreground: flag(p, "protectForegroundColor", false),
         foreground: s.tools.foreground,
         background: s.tools.background,
+        foreground_cmyk: picked(s.tools.foreground),
+        background_cmyk: picked(s.tools.background),
     };
     let id = active_pixel_layer(s, p, CMD)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -283,6 +291,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod magic_eraser_tolerance_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

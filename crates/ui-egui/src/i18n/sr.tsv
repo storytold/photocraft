@@ -18,7 +18,7 @@
 # (Datoteka, Uređivanje, Slika ...), commands are imperatives (Otvori…, Sačuvaj kao…), tools read
 # "Alatka …" (Alatka četkica, Alatka za pomeranje), presets are "šabloni", patterns "šare" and
 # swatches "uzorci boja". Serbian quotation marks „…“ around names. Product and technology names
-# (PhotoCraft, ArtCraft, Camera Raw, OpenType, Lab ...) stay as they are; RGB/CMYK stay as they
+# (PhotoCraft, ArtCraft, RAW Develop, OpenType, Lab ...) stay as they are; RGB/CMYK stay as they
 # are; the trailing "…" of dialog commands is kept. A count that is not an @plural entry is kept
 # out of noun agreement ("Broj: {n}", "slojeva: {n}") so every number reads correctly.
 
@@ -34,7 +34,7 @@
 
 # Labels added on main after this catalog (depth labels, Wayland drop, profiles, rendering mode)
 
-# Camera Raw scopes and the Patch tool
+# RAW Develop scopes and the Patch tool
 
 # Warp grid presets (#388)
 
@@ -75,11 +75,11 @@
 
 # Gradient Editor window, opened from the options bar's gradient swatch.
 
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 # Counted status messages and labels (Serbian: one | few | many)
 
-# Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs)
+# Dynamic labels (filter and adjustment parameters, RAW Develop, panels, dialogs)
 
 # Path, channel, layer style, status and System Info labels the Czech catalog added
 
@@ -91,14 +91,14 @@
 # Character, Paragraph and Glyphs panels
 
 
-# Camera Raw labels
+# RAW Develop labels
 
 # Keyboard Shortcuts and Menus editor
 
 # Color Settings dialog
 
 
-# Camera Raw chrome, tone, curve, color mixer, grading, detail and effects
+# RAW Develop chrome, tone, curve, color mixer, grading, detail and effects
 
 # New Document, Home and Image Size
 
@@ -106,7 +106,7 @@
 
 # Contextual labels
 
-# Added on merge with main (spelling, Camera Raw settings files, printing, Object Finder, brush
+# Added on merge with main (spelling, RAW Develop settings files, printing, Object Finder, brush
 # controls, actions, gradient presets, Pen Auto Add/Delete)
 
 # Native Windows printing qualification
@@ -348,7 +348,7 @@
 	Plugins…	Dodaci…
 	Type…	Tekst…
 	Enhanced Controls…	Napredne kontrole…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	Podrazumevana RAW podešavanja…
 	Raw Defaults…	Podrazumevana Raw podešavanja…
 	Integrations…	Integracije…
 	AI Integrations…	AI integracije…
@@ -666,7 +666,7 @@
 	Last Filter	Poslednji filter
 	Filter Gallery…	Galerija filtera…
 	Adaptive Wide Angle…	Prilagodljivi široki ugao…
-	Camera Raw Filter…	Camera Raw filter…
+	RAW Develop Filter…	RAW obrada filter…
 	Liquify…	Tečno izobličavanje…
 	Vanishing Point…	Tačka nestajanja…
 	Blur	Zamućenje
@@ -1042,7 +1042,7 @@
 	Brush Reconstruct Options	Opcije četkice za rekonstrukciju
 	Brush Tool Options	Opcije alatke četkica
 	Cache Level:	Nivo keša:
-	Camera Raw isn't open	Camera Raw nije otvoren
+	RAW Develop isn't open	RAW obrada nije otvoren
 	Cancel	Otkaži
 	Cancel (Esc)	Otkaži (Esc)
 	Cancel any current edits (Esc)	Otkaži sve tekuće izmene (Esc)
@@ -2000,7 +2000,7 @@
 	Brush preview color	Boja pregleda četkice
 	Cache levels	Nivoi keša
 	Cache tile size	Veličina pločice keša
-	Camera Raw Defaults	Podrazumevana Camera Raw podešavanja
+	RAW Defaults	Podrazumevana RAW podešavanja
 	Canvas border	Ivica platna
 	Show canvas dots	Prikaži tačke na platnu
 	Clip thumbnails to layer bounds	Iseci sličice prema granicama sloja
@@ -2087,7 +2087,6 @@
 	Never	Nikad
 	Normal tip	Normalan vrh
 	Open as smart object	Otvori kao pametni objekat
-	Open in camera raw	Otvori u Camera Raw-u
 	Open documents as tabs	Otvaraj dokumente kao kartice
 	Overscroll	Pomeranje preko ivice
 	Performance	Performanse
@@ -2497,8 +2496,6 @@
 	Roman Hanging Punctuation	Viseća interpunkcija za latinicu
 	Avoid Widows/Orphans	Izbegavaj udovice/siročiće
 	Compose	Slaganje
-	Adobe Single-line Composer	Adobe slagač pojedinačnih redova
-	Adobe Every-line Composer	Adobe slagač svih redova
 	Justification	Obostrano poravnanje
 	Word Spacing	Razmak između reči
 	Letter Spacing	Razmak između slova
@@ -2754,7 +2751,6 @@
 	Intersect with	Presek sa
 	Capture Comp	Zabeleži kompoziciju
 	No Layer Comps	Nema kompozicija slojeva
-	Adobe PDF Presets…	Adobe PDF šabloni…
 	3D…	3D…
 	Technology Previews…	Probne tehnologije…
 	Background from Layer	Pozadina od sloja
@@ -2845,8 +2841,8 @@
 	Tone Histogram	Tonski histogram
 	Show Selected Region	Prikaži izabranu oblast
 cameraRaw	Light	Svetlo
-	Camera Raw Filter ({layer})	Camera Raw filter ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	RAW obrada filter ({layer})
+	RAW Develop ({name})	RAW obrada ({name})
 cameraRaw	Lights	Svetli tonovi
 cameraRaw	Darks	Tamni tonovi
 cameraRaw	Blacks	Crne
@@ -3869,8 +3865,8 @@ layerLabel	No Color	Bez boje
 	Border	Obod
 	Box Blur	Pravougaono zamućenje
 	Calculations	Proračuni
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw filter
+	RAW Develop	RAW obrada
+	RAW Develop Filter	RAW obrada filter
 	Channel1	Kanal 1
 	Channel2	Kanal 2
 	Channel3	Kanal 3
@@ -4220,7 +4216,6 @@ layerLabel	Magenta	Magenta
 	Save Path	Sačuvaj putanju
 cameraRaw	Highlights	Svetla
 cameraRaw	Shadows	Senke
-	All shortcuts reset to Photoshop defaults.	Sve prečice su vraćene na podrazumevane vrednosti Photoshop-a.
 	Temporary	Privremeno
 	none	nijedna
 	red	crvena
@@ -4270,7 +4265,6 @@ cameraRaw	Feather	Omekšavanje
 cameraRaw	Midpoint	Središte
 cameraRaw	Roundness	Zaobljenost
 cameraRaw	Size	Veličina
-	Default Photoshop Size	Podrazumevana Photoshop veličina
 document	Orientation	Orijentacija
 	Arc Lower	Donji luk
 	Arc Upper	Gornji luk
@@ -4295,8 +4289,8 @@ shape	Appearance	Izgled
 	Load Settings…	Učitaj podešavanja…
 	Save these settings as a Camera Raw .xmp file	Sačuvaj ova podešavanja kao Camera Raw .xmp datoteku
 	Load settings from a Camera Raw .xmp file	Učitaj podešavanja iz Camera Raw .xmp datoteke
-	Loaded Camera Raw settings from {file}	Camera Raw podešavanja su učitana iz {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw podešavanja su učitana iz {file} (nije podržano: {n})
+	Loaded RAW Develop settings from {file}	RAW obrada podešavanja su učitana iz {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	RAW obrada podešavanja su učitana iz {file} (nije podržano: {n})
 	Manage submitted jobs in the system print queue	Upravljajte poslatim poslovima u sistemskom redu za štampu
 	Pick Color From Image	Uzmi boju sa slike
 	Drag to pan · Scroll to zoom · Double-click to fit	Prevucite za pomeranje · Skrolujte za zumiranje · Dvaput kliknite za uklapanje
@@ -4684,7 +4678,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Prikaži granice sloja pri prelasku miša
 	Expand layer group on click	Proširi grupu slojeva klikom
 	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi
-	Saved Camera Raw settings to {file}	Подешавања Camera Raw сачувана у {file}
+	Saved RAW Develop settings to {file}	Подешавања RAW obrada сачувана у {file}
 	Save the settings to each raw's sidecar without opening it	Sačuvaj podešavanja u prateću datoteku svakog raw snimka bez otvaranja
 	No settings saved: these raws can't keep a sidecar here	Ništa nije sačuvano: ovi raw snimci ovde ne mogu imati prateću datoteku
 	Some settings could not be saved; the raws stay open	Neka podešavanja nije moguće sačuvati; raw snimci ostaju otvoreni
@@ -4696,3 +4690,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Automatski promeni veličinu platna
 	Keep Relative Position During Layer Reordering	Zadrži relativni položaj pri promeni redosleda slojeva
 	Shrinkwrap Canvas on Save	Smanji platno na sadržaj pri čuvanju
+	Move Toolbar to the Right	Premesti traku sa alatkama desno
+	Move Toolbar to the Left	Premesti traku sa alatkama levo
