@@ -766,6 +766,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
 mod tests;
 
 #[cfg(test)]
+mod convert_point_history_tests;
+
+#[cfg(test)]
 mod freeform_command_tests {
     use super::*;
 
