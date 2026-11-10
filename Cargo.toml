@@ -74,6 +74,8 @@ rayon = "1"
 rustc-hash = "2.1.3"
 criterion = { version = "0.8", default-features = false }
 getrandom = "0.3"
+# TLS/cryptographic primitives; 0.17.15+ fixes an assembly-linking bug on Arch Linux (#12331).
+ring = "0.17"
 # Monotonic clock on native and wasm (screenshot deadlines: a wall clock can jump).
 web-time = "1"
 
