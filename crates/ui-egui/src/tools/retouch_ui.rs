@@ -574,6 +574,12 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 /// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
 /// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
+    if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
+        crate::object_finder::clear(app);
+        crate::brush_refusal::prompt(app, tl!(why));
+        return;
+    }
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let sample_all = app.ui.tool_options.sample_all.object_selection;
@@ -943,18 +949,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
             let label = tl!("Strength:");
             opt(ui, label);
-            // Only Blur's Strength is measured (#12650); a copy, so a shared fraction is not rounded.
-            let out_of_range = if tool == Tool::Blur {
-                let mut s = o.strength;
-                let (r, alert) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
-                if r.changed() {
-                    o.strength = s;
-                }
-                alert
-            } else {
-                crate::widgets::value_field(ui, &mut o.strength, 1.0..=100.0, "%", 58.0);
-                false
-            };
+            // Measured for Blur (#12650), Sharpen (#12949) and Smudge (#12962); a copy, so a shared fraction is not rounded.
+            let mut s = o.strength;
+            let (r, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
+            if r.changed() {
+                o.strength = s;
+            }
             if let Some(all) = o.sample_all.slot(tool) {
                 crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
             }
