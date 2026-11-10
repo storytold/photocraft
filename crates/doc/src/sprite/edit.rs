@@ -200,12 +200,17 @@ impl Document {
                     pixels::checked_rect(cel.rect, surface.format().bytes_per_pixel())?;
                     cel.pixels = surface.clone();
                 }
-                changes.push((layer.id, cel.clone()));
-            } else if sprite.indexed
+            }
+            // Painting may have changed only one tile while the palette recolors every
+            // index in the cel, including samples on untouched tiles.
+            if sprite.indexed
                 && palette != frame.palette
                 && let Some(indices) = &cel.indices
             {
                 cel.pixels = pixels::render_indices(indices, cel.rect, &palette, (base.flags & 8 == 0).then_some(sprite.transparent_index))?;
+            }
+            if changed {
+                changes.push((layer.id, cel.clone()));
             }
             if source.is_none() || source.is_some_and(|old| **old != cel) {
                 Arc::make_mut(sprite.frames.get_mut(current).ok_or("sprite frame is missing")?).cels.insert(layer.id, Arc::new(cel));

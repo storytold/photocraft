@@ -265,3 +265,37 @@ fn reference_opacity_persists_with_absent_translucent_and_zero_opacity_cels() {
         }
     }
 }
+
+/// A palette edit and painting in one transaction must preserve untouched index identity,
+/// including pixels sharing a changed tile and pixels in another tile.
+#[test]
+fn simultaneous_palette_and_pixel_edits_keep_indices_and_refresh_all_display_tiles() {
+    let mut doc = indexed();
+    let id = doc.layers[0].id;
+    let sprite = doc.sprite.as_mut().unwrap();
+    for frame in &mut sprite.frames {
+        let frame = Arc::make_mut(frame);
+        let cel = Arc::make_mut(frame.cels.get_mut(&id).unwrap());
+        cel.rect = Rect::from_xywh(0, 0, 513, 1);
+        let mut index_plane = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), &[4.0 / 255.0]);
+        index_plane.write_interleaved(Rect::from_xywh(0, 0, 2, 1), &[1, 2]);
+        index_plane.write_interleaved(Rect::from_xywh(512, 0, 1, 1), &[1]);
+        cel.pixels = pixels::render_indices(&index_plane, cel.rect, &frame.palette, Some(4)).unwrap();
+        cel.indices = Some(index_plane);
+    }
+    doc.restore_sprite_frame().unwrap();
+    let before = doc.clone();
+    doc.color_table.as_mut().unwrap().colors[1] = [0, 255, 0];
+    doc.layers[0].surface_mut().unwrap().write_pixel(1, 0, &[0.0, 0.0, 1.0, 1.0]);
+    doc.capture_sprite_frame().unwrap();
+    for frame in 0..2 {
+        let stored = indices(&doc, frame);
+        assert_eq!([stored[0], stored[1], stored[512]], [1, 3, 1], "frame {frame}: unchanged indices survive");
+    }
+    for x in [0, 512] {
+        assert_eq!(doc.layers[0].surface().unwrap().pixel(x, 0), [0.0, 1.0, 0.0, 1.0]);
+    }
+    doc.select_sprite_frame(1).unwrap();
+    assert_eq!(doc.layers[0].surface().unwrap().pixel(0, 0), [1.0, 0.0, 0.0, 1.0], "linked frame keeps its own palette");
+    assert_eq!(indices(&before, 0)[1], 2, "history is unchanged");
+}

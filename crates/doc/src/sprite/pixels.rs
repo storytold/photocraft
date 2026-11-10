@@ -55,6 +55,8 @@ pub fn capture_indices(cel: &mut SpriteCel, edited: &Surface, palette: &[Palette
         expanded
     };
     let mut display = cel.pixels.clone();
+    let mut previous_row = Vec::new();
+    let mut edited_row = Vec::new();
     let tiles: std::collections::BTreeSet<_> = cel.pixels.tiles().chain(edited.tiles()).map(|(tc, _)| *tc).collect();
     for tc in tiles {
         if cel.pixels.tile(tc) == edited.tile(tc) {
@@ -64,11 +66,20 @@ pub fn capture_indices(cel: &mut SpriteCel, edited: &Surface, palette: &[Palette
         for y in r.y0..r.y1 {
             let mut row = Vec::with_capacity(r.width() as usize);
             let mut colors = Vec::with_capacity(r.width() as usize * 4);
-            for x in r.x0..r.x1 {
-                let rgba = rgba8(edited, x, y);
+            // Read the original samples a row at a time instead of allocating and
+            // looking up the same source tile again for every repainted pixel.
+            let span = Rect::from_xywh(r.x0, y, r.width(), 1);
+            cel.pixels.read_region_into(span, &mut previous_row);
+            edited.read_region_into(span, &mut edited_row);
+            let current_pixels = edited_row.chunks(edited.channels().max(1));
+            let original_pixels = previous_row.chunks(cel.pixels.channels().max(1));
+            for ((x, current), original) in (r.x0..r.x1).zip(current_pixels).zip(original_pixels) {
+                let rgba = rgba8_samples(current);
                 let old = (indices.pixel(x, y).first().copied().unwrap_or(0.0) * 255.0).round() as u8;
                 let matches = |i: u8| palette.get(usize::from(i)).is_some_and(|e| color(e, i, transparent) == rgba);
-                let index = if matches(old) {
+                // Palette edits can accompany painting. An unchanged displayed sample keeps
+                // its index even when that entry has just changed color.
+                let index = if matches(old) || rgba == rgba8_samples(original) {
                     old
                 } else if rgba[3] == 0
                     && let Some(index) = transparent
@@ -115,8 +126,7 @@ fn color(entry: &PaletteEntry, index: u8, transparent: Option<u8>) -> [u8; 4] {
     value
 }
 
-fn rgba8(surface: &Surface, x: i32, y: i32) -> [u8; 4] {
-    let p = surface.pixel(x, y);
+fn rgba8_samples(p: &[f32]) -> [u8; 4] {
     let byte = |i: usize, default| (p.get(i).copied().unwrap_or(default).clamp(0.0, 1.0) * 255.0).round() as u8;
     [byte(0, 0.0), byte(1, 0.0), byte(2, 0.0), byte(3, 1.0)]
 }

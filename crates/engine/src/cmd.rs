@@ -61,21 +61,7 @@ fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Val
     }
     if let Some(d) = s.active() {
         check_sprite_canvas_geometry(&d.doc)?;
-        let edge_map = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
-        if let Some(sprite) = &d.doc.sprite {
-            for cel in sprite.frames.iter().flat_map(|frame| frame.cels.values()) {
-                for bounds in
-                    std::iter::once(cel.rect).chain(std::iter::once(cel.pixels.content_bounds())).chain(cel.indices.iter().map(Surface::content_bounds))
-                {
-                    for (x, y) in [(bounds.x0, bounds.y0), (bounds.x1, bounds.y1)] {
-                        let point = edge_map.apply(photocraft_geom::Point::new(f64::from(x), f64::from(y)));
-                        if point.x < f64::from(i32::MIN) || point.x > f64::from(i32::MAX) || point.y < f64::from(i32::MIN) || point.y > f64::from(i32::MAX) {
-                            return Err(EngineError::Other("turning this sprite would exceed the supported coordinate range".into()));
-                        }
-                    }
-                }
-            }
-        }
+        crate::canvas_geom::check_turn_coordinates(&d.doc, t)?;
         let a = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
         // Sampler points are pixel indices, not pixel edges: map the pixel's centre, so the point
         // lands on the same pixel `Turn::pixel_map` moves the pixels to (`w - 1 - x`).
