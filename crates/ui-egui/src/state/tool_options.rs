@@ -74,7 +74,9 @@ pub struct ToolOptions {
     pub cam_mode: String,
     pub cam_structure: f32,
     pub cam_color: f32,
-    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch).
+    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch). On by
+    /// default (#12185); a saved `false` stays off.
+    #[serde(default = "yes")]
     pub cam_transform_on_drop: bool,
     /// Dodge/Burn: shadows | midtones | highlights, exposure %, protect tones.
     pub tone_range: String,
@@ -226,6 +228,9 @@ pub struct ToolOptions {
     pub bg_limits: String,
     pub bg_tolerance: f32,
     pub bg_protect_fg: bool,
+    /// The Background Eraser popup's "Tolerance:" pen control (#11910): `off`, `penPressure` (the
+    /// reference's default) or `stylusWheel`.
+    pub bg_tolerance_control: String,
     /// Color Replacement: mode (hue | saturation | color | luminosity), sampling (continuous |
     /// once | backgroundSwatch), limits (discontiguous | contiguous | findEdges), tolerance % and
     /// anti-alias, as `paint.colorReplacement` takes them.
@@ -237,6 +242,10 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
+    /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
+    #[serde(default)]
+    pub hand_scroll_all: bool,
     /// Pencil › Auto Erase: a stroke that starts on the foreground colour paints the background colour.
     #[serde(default)]
     pub pencil_auto_erase: bool,
@@ -251,6 +260,9 @@ pub struct ToolOptions {
     /// `paint.pencil`), as in Photoshop's options bar (#2662).
     #[serde(default = "default_eraser_mode")]
     pub eraser_mode: String,
+    /// Mixer Brush › Useful mixer brush combinations: the entry last picked, an index into
+    /// `brush_controls::MIXER_COMBINATIONS` (0 = Custom, #11946).
+    pub mixer_combination: usize,
     /// Magnetic Lasso: detection width (px, 1..256), edge contrast (%, 1..100), how often it
     /// fastens points by itself (0..100), and whether pen pressure narrows the width.
     pub magnetic_width: f32,
@@ -459,7 +471,7 @@ impl Default for ToolOptions {
             cam_mode: "move".into(),
             cam_structure: 4.0,
             cam_color: 0.0,
-            cam_transform_on_drop: false,
+            cam_transform_on_drop: true,
             tone_range: "midtones".into(),
             exposure: 50.0,
             protect_tones: true,
@@ -522,16 +534,19 @@ impl Default for ToolOptions {
             bg_limits: "contiguous".into(),
             bg_tolerance: 50.0,
             bg_protect_fg: false,
+            bg_tolerance_control: "penPressure".into(),
             cr_mode: "color".into(),
             cr_sampling: "continuous".into(),
             cr_limits: "contiguous".into(),
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,
             pencil_clear: false,
             eraser_mode: default_eraser_mode(),
+            mixer_combination: 0,
             magnetic_width: 10.0,
             magnetic_contrast: 10.0,
             magnetic_frequency: 57.0,
@@ -547,3 +562,7 @@ impl Default for ToolOptions {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../cam_transform_on_drop_default_tests.rs"]
+mod cam_transform_on_drop_default_tests;

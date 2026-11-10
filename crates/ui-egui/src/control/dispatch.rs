@@ -614,6 +614,10 @@ fn crop_fill_param(p: &Value) -> std::result::Result<Option<bool>, String> {
 /// keeps a pin and `{"pinned": true}` keeps a dragged position (#10890).
 fn panels_patch(app: &PhotocraftApp, patch: Option<&Value>) -> std::result::Result<Option<Value>, String> {
     let Some(mut patch) = patch.cloned() else { return Ok(None) };
+    // Saved panels read an unknown side as the default; a control request is still refused.
+    if let Some(side) = patch.get("toolbar_side") {
+        serde_json::from_value::<crate::state::ToolbarSide>(side.clone()).map_err(|e| format!("panels.toolbar_side: {e}"))?;
+    }
     if let Some(obj) = patch.as_object_mut()
         && let Some(bar) = obj.get("task_bar")
     {
@@ -725,11 +729,12 @@ impl PanelSet {
         }
     }
 
+    /// Applies the Color panel state and queues the requested end-dock width for the next frame.
     fn apply_color_and_width(&mut self, app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some(v) = self.color_panel.take() {
             app.ui.color_panel = v;
         }
-        // Right dock width in points (clamped to the dock's 250..=520 range), applied next frame.
+        // End dock width in points, clamped to its window-dependent range and applied next frame.
         if let Some(w) = self.dock_width {
             crate::panels::request_dock_width(ctx, w as f32);
         }
@@ -1342,11 +1347,11 @@ fn parse_pointer_event(i: usize, e: &Value) -> std::result::Result<PointerSample
 
 /// Whether a modal tool, picker or context menu took the event instead of the canvas.
 fn pointer_event_intercepted(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
-    let took = pointer_eyedropper_took(app, ctx, g, s) || color_range_took(app, g, s) || (g.secondary && secondary_menu_took(app, ctx, g, s));
+    let took = pointer_eyedropper_took(app, ctx, g, s) || color_range_took(app, g, s);
     if took && matches!(s.ev, ToolEvent::Up { .. }) && !g.secondary && !g.middle {
         release_taken_drag(app, g);
     }
-    took
+    took || preview_locator_took(app, g, s) || (g.secondary && secondary_menu_took(app, ctx, g, s))
 }
 
 /// A sampler (Color Picker, Curves/Levels or Properties eyedroppers, Curves ⌘-click, Color
@@ -1358,6 +1363,28 @@ fn release_taken_drag(app: &mut PhotocraftApp, g: &PointerGesture) {
     if let Some([x, y]) = app.drag.as_ref().map(|d| d.points.last().map_or(d.start, |p| [p[0], p[1]])) {
         tool_event(app, ToolEvent::Up { x, y }, g.mods);
     }
+}
+
+/// A filter dialog with a preview window on top: the image is its locator, as for the mouse
+/// (#9648). A press with the primary button centres the window there; every other event
+/// is consumed too, so nothing reaches the tool under the dialog, except the moves and release of
+/// a tool gesture begun before the dialog opened, which finish it along the path they draw. A Crop
+/// frame or Straighten drag is one too, though the Crop tool keeps it apart from `app.drag`. While
+/// one is open, a second primary press (no mouse can make one) is dropped: it neither centres the
+/// window nor reaches the tool, so no locator press splits the gesture's moves and release.
+fn preview_locator_took(app: &mut PhotocraftApp, g: &PointerGesture, s: &PointerSample) -> bool {
+    if crate::filter_preview_ui::locator(app).is_none() {
+        return false;
+    }
+    let down = matches!(s.ev, ToolEvent::Down { .. });
+    let tool_gesture = app.drag.is_some() || app.crop.drag.is_some() || app.crop.straighten.line.is_some();
+    if !g.secondary && !g.middle && tool_gesture {
+        return down;
+    }
+    if down && !g.secondary && !g.middle && !g.space {
+        crate::filter_preview_ui::center_at(app, s.x, s.y);
+    }
+    true
 }
 
 fn pointer_eyedropper_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {

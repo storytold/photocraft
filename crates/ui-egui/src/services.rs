@@ -429,6 +429,10 @@ pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
 /// whether the app window is focused (to re-assert WinTab overlap priority on activation).
 pub type TabletPollFn = Box<dyn FnMut(bool)>;
 
+/// What the last self-update came to: `Ok` with the version it installed, `Err` with the reason it
+/// could not be installed, `None` when there is nothing to report ([`Services::last_update`]).
+pub type LastUpdateFn = fn() -> Option<Result<String, String>>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -486,6 +490,9 @@ pub struct Services {
     pub alert: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// What the last self-update came to, read once at the first frame: `Ok` with the version it
+    /// installed, `Err` with the reason it could not be installed (desktop).
+    pub last_update: Option<LastUpdateFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,

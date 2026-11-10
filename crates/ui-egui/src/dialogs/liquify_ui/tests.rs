@@ -1025,6 +1025,61 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
 }
 
+/// The dialog's field and recorded points after a stroke of `tool` from (40, 40) through
+/// (50, 40) to (60, 40) over 32 ms, its moves handed over one frame at a time (`batched` false)
+/// or both in one frame (`true`).
+fn timed_stroke(tool: &str, pressure: f64, batched: bool) -> (LiquifyField, Vec<Vec<f64>>) {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    control(&mut app, &json!({"tool": tool, "size": 200, "pressure": pressure})).unwrap();
+    let none = egui::Modifiers::NONE;
+    let (a, b) = (ToolEvent::Move { x: 50.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 });
+    dispatch_frame(&mut app, vec![ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }], none, 1000.0);
+    if batched {
+        dispatch_frame(&mut app, vec![a, b], none, 1032.0);
+    } else {
+        dispatch_frame(&mut app, vec![a], none, 1016.0);
+        dispatch_frame(&mut app, vec![b], none, 1032.0);
+    }
+    let d = app.distort.liquify.as_ref().unwrap();
+    let points = d.cur.as_ref().unwrap().0.points.clone();
+    (d.field.clone(), points)
+}
+
+/// A frame's moves share its time evenly: two moves batched into one frame paint what the same
+/// moves give delivered one per frame over the same time (FredApps' review of #10690). Reading
+/// the clock per event gave the first move nearly the whole frame and the second only processing
+/// time, so a stationary tool's strength and where it landed depended on the batching.
+#[test]
+fn moves_batched_in_one_frame_share_its_time() {
+    for (tool, pressure) in [("freeze", 10.0), ("twirlCw", 100.0), ("bloat", 50.0), ("forwardWarp", 100.0)] {
+        let (separate, sp) = timed_stroke(tool, pressure, false);
+        let (batched, bp) = timed_stroke(tool, pressure, true);
+        let ms = |p: &[Vec<f64>]| p.iter().map(|q| q.get(3).copied().unwrap_or(0.0)).collect::<Vec<_>>();
+        assert_eq!(ms(&bp), [0.0, 16.0, 16.0], "{tool}: each move gets half the frame");
+        assert_eq!(ms(&sp), ms(&bp), "{tool}");
+        assert!(separate == batched, "{tool}: batching changed the field");
+    }
+}
+
+/// After a stall, a frame's batched moves count for at most `MAX_LIVE_MS` in all, as a single
+/// move after the stall does, instead of each catching up on a share of the whole stall.
+#[test]
+fn a_stalled_frame_counts_for_at_most_the_catch_up_limit() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    control(&mut app, &json!({"tool": "twirlCw", "size": 60})).unwrap();
+    let none = egui::Modifiers::NONE;
+    dispatch_frame(&mut app, vec![ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }], none, 1000.0);
+    let moves = (1..=4).map(|k| ToolEvent::Move { x: 40.0 + f64::from(k), y: 40.0, pressure: 1.0 }).collect();
+    dispatch_frame(&mut app, moves, none, 3000.0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    let total: f64 = d.cur.as_ref().unwrap().0.points.iter().filter_map(|p| p.get(3)).sum();
+    assert_eq!(total, MAX_LIVE_MS);
+}
+
 /// Preview off shows the image unwarped while strokes still change the field, and P turns it back
 /// on, as Photoshop's Liquify Preview checkbox does (#7905). Each opening starts with it on.
 #[test]
