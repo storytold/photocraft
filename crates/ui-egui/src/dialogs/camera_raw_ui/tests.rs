@@ -774,7 +774,7 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
         }
     }
     let method = photocraft_io::raw::Demosaic::Ahd;
-    let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method, crop: None };
+    let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method, crop: None, conversion: None };
     let (unshown, _) = filmstrip::first_settings(&app, &raw);
     open_raw(&mut app, &ctx, raw).unwrap();
     let shown = &app.camera_raw.as_ref().unwrap().params;
@@ -815,7 +815,8 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
                 bytes: None,
                 developed_with: Default::default(),
                 demosaic: Default::default(),
-                crop: None
+                crop: None,
+                conversion: None
             }
         )
         .is_err()
