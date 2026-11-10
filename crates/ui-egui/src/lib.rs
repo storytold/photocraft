@@ -905,6 +905,8 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+#[cfg(test)]
+mod move_shift_click_tests;
 
 #[cfg(test)]
 mod move_target_default_tests;
