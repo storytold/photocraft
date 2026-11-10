@@ -666,3 +666,645 @@ fn pixel_paste_reads_the_bitmap_when_the_svg_read_fails() {
     app.run("file.new", json!({"width":24,"height":20})).unwrap();
     assert!(app.run("edit.paste", json!({"as":"pixels"})).is_err());
 }
+
+/// #5031: in a Wayland Flatpak sandbox where arboard cannot open the clipboard, `Event::PasteImage`
+/// survives a logic-only tick to create a layer on the next UI pass, and `export_os_clipboard`
+/// flushes `OutputCommand::CopyImage` through both `App::logic` and `App::ui`.
+#[test]
+fn wayland_paste_image_and_copy_image_work_when_arboard_is_unreadable() {
+    use eframe::App as _;
+    let unreadable = std::rc::Rc::new(std::cell::Cell::new(false));
+    let (u_get, u_flag) = (unreadable.clone(), unreadable.clone());
+    let services = Services {
+        is_wayland: true,
+        clipboard_set_image: Some(Box::new(|_, _, _| Err("Wayland data-control unavailable".into()))),
+        clipboard_get_image: Some(Box::new(move || {
+            u_get.set(true);
+            Err("Wayland data-control unavailable".into())
+        })),
+        clipboard_unreadable: Some(Box::new(move || u_flag.get())),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.ui.notices.clear();
+    app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+
+    // 1. Menu Edit › Paste with no internal copy requests a Wayland paste without a false notice.
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput::default());
+    let res = crate::menus::invoke(&mut app, &ctx, "edit.paste", json!({})).unwrap();
+    let mut out = ctx.end_pass();
+    out.textures_delta.clear();
+    assert_eq!(res["pasted"], false);
+    assert_eq!(app.pending_paste_cmd.front().map(|(c, _)| c.as_str()), Some("edit.paste"));
+    assert!(app.ui.notices.is_empty(), "menu paste must not warn before RequestPaste");
+    assert!(out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+
+    // Negative case A: keyboard-driven `edit.paste` (`from_key`) must not emit `RequestPaste`.
+    app.pending_paste_cmd.clear();
+    let key_raw = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: Some(egui::Key::V),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }],
+        ..Default::default()
+    };
+    ctx.begin_pass(key_raw);
+    let _ = crate::menus::invoke(&mut app, &ctx, "edit.paste", json!({})).unwrap();
+    let mut out = ctx.end_pass();
+    out.textures_delta.clear();
+    assert!(!out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+
+    // 2. `Event::PasteImage` arriving on a logic-only tick is preserved across `App::logic`
+    // and consumed by the subsequent UI pass without requesting the clipboard a second time.
+    let mut frame = eframe::Frame::_new_kittest();
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx, &mut frame));
+    let pasted_color = egui::Color32::from_rgba_unmultiplied(200, 100, 50, 128);
+    let color_img = std::sync::Arc::new(egui::ColorImage::new([2, 1], vec![pasted_color; 2]));
+    let layers_before = app.session.active().unwrap().doc.layers.len();
+    let mut raw = egui::RawInput { events: vec![egui::Event::PasteImage(color_img)], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut raw);
+    let _ = ctx.run_logic(&raw, |ctx| app.logic(ctx, &mut frame));
+    assert!(app.pending_paste_image.is_some(), "logic-only tick must preserve pending_paste_image");
+    // eframe retains `raw` as `pending_raw_input` after `update_logic_only` and feeds it to `update`.
+    app.raw_input_hook(&ctx, &mut raw);
+    let mut ui_out = ctx.run_ui(raw, |ui| {
+        app.logic(ui.ctx(), &mut frame);
+        app.ui(ui, &mut frame);
+    });
+    ui_out.textures_delta.clear();
+    assert!(!ui_out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+    assert!(app.pending_paste_image.is_none());
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers_before + 1);
+    let clip = app.session.clipboard.as_ref().expect("PasteImage imported into session clipboard");
+    assert!(app.clip_external);
+    let mut actual_px = [[0u8; 4]; 2];
+    clip.surface.read_rgba8_into(clip.bounds, &mut actual_px);
+    assert_eq!(actual_px[0], pasted_color.to_srgba_unmultiplied());
+    assert!(!app.import_os_clipboard().unwrap(), "consumed PasteImage must not be re-imported");
+
+    // 3. Copying an internal layer on Wayland emits `OutputCommand::CopyImage` through both
+    // `App::logic` and `App::ui`, preserves the internal copy on self-paste, and skips `RequestPaste`.
+    copy_blue(&mut app);
+    assert!(!app.clip_external);
+    let copied_img = app.pending_copy_image.clone().expect("Wayland copy queues ColorImage");
+    let logic_out = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx, &mut frame));
+    assert!(logic_out.platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyImage(_))));
+
+    copy_blue(&mut app);
+    let mut ui_copy_out = ctx.run_ui(egui::RawInput::default(), |ui| app.ui(ui, &mut frame));
+    ui_copy_out.textures_delta.clear();
+    assert!(ui_copy_out.platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyImage(_))));
+
+    let copied_arc = std::sync::Arc::new(copied_img);
+    app.pending_paste_image = Some(std::sync::Arc::clone(&copied_arc));
+    assert!(!app.import_os_clipboard().unwrap(), "self-paste must keep internal copy");
+    assert!(!app.clip_external);
+
+    // Flushed Wayland internal copy requests the current Wayland selection on menu paste so a
+    // newer external selection can replace it, while self-paste still preserves internal copy state.
+    let layers_before = app.session.active().unwrap().doc.layers.len();
+    ctx.begin_pass(egui::RawInput::default());
+    let res = crate::menus::invoke(&mut app, &ctx, "edit.paste", json!({})).unwrap();
+    let mut out = ctx.end_pass();
+    out.textures_delta.clear();
+    assert_eq!(res["pasted"], false);
+    assert!(out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+    let mut self_paste_raw = egui::RawInput { events: vec![egui::Event::PasteImage(copied_arc)], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut self_paste_raw);
+    assert!(!app.clip_external, "self-paste response must keep internal copy ownership");
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers_before + 1);
+
+    // Unexported internal copy (`export_clipboard = false`) skips `RequestPaste` and pastes directly
+    // when the system clipboard is unavailable.
+    app.session.edit_prefs(|p| p.general.export_clipboard = false);
+    copy_blue(&mut app);
+    let unexported_before = app.session.active().unwrap().doc.layers.len();
+    ctx.begin_pass(egui::RawInput::default());
+    let unexported_res = crate::menus::invoke(&mut app, &ctx, "edit.paste", json!({})).unwrap();
+    let mut unexported_out = ctx.end_pass();
+    unexported_out.textures_delta.clear();
+    assert_ne!(unexported_res["pasted"], false);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), unexported_before + 1);
+    assert!(!unexported_out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+}
+
+/// #5031: deferred menu paste commands (`file.newFromClipboard`, `edit.pasteSpecial.pasteInPlace`)
+/// preserve FIFO order across overlapping requests, bind to their initiating document, cancel if
+/// text editing starts before `Event::PasteImage` arrives, and clear on text paste.
+#[test]
+fn wayland_deferred_menu_paste_and_import_fallbacks() {
+    use eframe::App as _;
+    let services = Services {
+        is_wayland: true,
+        clipboard_get_image: Some(Box::new(|| Err("Wayland data-control unavailable".into()))),
+        clipboard_unreadable: Some(Box::new(|| true)),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+    let ctx = egui::Context::default();
+
+    // 1. `Ctrl+Shift+V` (`edit.pasteSpecial.pasteInPlace`) requests a Wayland paste, and text
+    // `Event::Paste` pops the queued command.
+    let shift_v = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: Some(egui::Key::V),
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        }],
+        ..Default::default()
+    };
+    ctx.begin_pass(shift_v);
+    let res = crate::menus::invoke(&mut app, &ctx, "edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+    let mut out = ctx.end_pass();
+    out.textures_delta.clear();
+    assert_eq!(res["pasted"], false);
+    assert!(out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+
+    let mut text_raw = egui::RawInput { events: vec![egui::Event::Paste("plain text".into())], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut text_raw);
+    assert!(app.pending_paste_cmd.is_empty(), "text paste response must pop pending_paste_cmd");
+
+    // Holding Ctrl+Shift+V until `Event::PasteImage` arrives retains `pc-paste-key-seen`
+    // so releasing V on the next frame does not synthesize a second paste.
+    let mut hold_raw = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: Some(egui::Key::V),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        }],
+        ..Default::default()
+    };
+    app.raw_input_hook(&ctx, &mut hold_raw);
+    ctx.begin_pass(hold_raw);
+    let _ = crate::menus::invoke(&mut app, &ctx, "edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+    ctx.end_pass().textures_delta.clear();
+    let layers_before = app.session.active().unwrap().doc.layers.len();
+    let held_img = std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::BLUE; 4]));
+    let mut img_raw = egui::RawInput { events: vec![egui::Event::PasteImage(held_img)], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut img_raw);
+    ctx.begin_pass(img_raw);
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers_before + 1);
+    let mut release_raw = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: Some(egui::Key::V),
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        }],
+        ..Default::default()
+    };
+    app.raw_input_hook(&ctx, &mut release_raw);
+    ctx.begin_pass(release_raw);
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers_before + 1, "releasing V after held Paste in Place must not paste twice");
+
+    // Switching documents while `edit.pasteSpecial.pasteInPlace` is in flight discards the
+    // deferred paste so it never pastes into the newly active document.
+    ctx.begin_pass(egui::RawInput::default());
+    let _ = crate::menus::invoke(&mut app, &ctx, "edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+    ctx.end_pass().textures_delta.clear();
+    app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
+    let second_doc_layers = app.session.active().unwrap().doc.layers.len();
+    let wrong_doc_img = std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::RED; 4]));
+    let mut wrong_doc_raw = egui::RawInput { events: vec![egui::Event::PasteImage(wrong_doc_img)], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut wrong_doc_raw);
+    assert!(app.pending_paste_cmd.is_empty() && app.pending_paste_image.is_none());
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), second_doc_layers);
+
+    // 2. Overlapping `edit.pasteSpecial.pasteInPlace` and `file.newFromClipboard` requests
+    // execute in FIFO order against their respective `Event::PasteImage` responses.
+    let active_layers_before = app.session.active().unwrap().doc.layers.len();
+    let docs_before = app.session.documents().len();
+    ctx.begin_pass(egui::RawInput::default());
+    let _ = crate::menus::invoke(&mut app, &ctx, "edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+    let _ = crate::menus::invoke(&mut app, &ctx, "file.newFromClipboard", json!({})).unwrap();
+    let mut req_out = ctx.end_pass();
+    req_out.textures_delta.clear();
+    assert_eq!(req_out.viewport_output.values().flat_map(|v| &v.commands).filter(|c| matches!(c, egui::ViewportCommand::RequestPaste)).count(), 2);
+    assert_eq!(app.pending_paste_cmd.len(), 2);
+    let first_img = std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::YELLOW; 4]));
+    let second_img = std::sync::Arc::new(egui::ColorImage::new([3, 2], vec![egui::Color32::GREEN; 6]));
+    let mut overlap_raw = egui::RawInput { events: vec![egui::Event::PasteImage(first_img), egui::Event::PasteImage(second_img)], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut overlap_raw);
+    assert!(app.pending_paste_cmd.is_empty() && app.pending_paste_image.is_none());
+    assert_eq!(app.session.documents().len(), docs_before + 1);
+    assert_eq!(app.session.documents()[1].doc.layers.len(), active_layers_before + 1, "first image must paste in place into initiating doc");
+    let new_doc = &app.session.active().unwrap().doc;
+    assert_eq!((new_doc.size.width, new_doc.size.height), (3, 2), "second image must create new document");
+
+    // Overlapping transfers where the first transfer is rejected (`Event::Paste` with no image)
+    // removes only the rejected command while keeping the second still-pending transfer queued.
+    ctx.begin_pass(egui::RawInput::default());
+    let _ = crate::menus::invoke(&mut app, &ctx, "edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+    let _ = crate::menus::invoke(&mut app, &ctx, "file.newFromClipboard", json!({})).unwrap();
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.pending_paste_cmd.len(), 2);
+    let mut reject_first_raw = egui::RawInput { events: vec![egui::Event::Paste(String::new())], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut reject_first_raw);
+    assert_eq!(app.pending_paste_cmd.len(), 1, "rejected first transfer must pop its command while keeping the second pending");
+    assert_eq!(app.pending_paste_cmd[0].0, "file.newFromClipboard");
+    let docs_before_second = app.session.documents().len();
+    let second_ok_img = std::sync::Arc::new(egui::ColorImage::new([4, 3], vec![egui::Color32::WHITE; 12]));
+    let mut second_ok_raw = egui::RawInput { events: vec![egui::Event::PasteImage(second_ok_img)], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut second_ok_raw);
+    assert!(app.pending_paste_cmd.is_empty());
+    assert_eq!(app.session.documents().len(), docs_before_second + 1);
+    assert_eq!((app.session.active().unwrap().doc.size.width, app.session.active().unwrap().doc.size.height), (4, 3));
+
+    // Overlapping transfers where an earlier transfer is canceled by a document switch still
+    // associate the second image with `file.newFromClipboard`, and hardware cancellation cleans up
+    // silent failures without leaving stale entries in `pending_paste_cmd`.
+    ctx.begin_pass(egui::RawInput::default());
+    let _ = crate::menus::invoke(&mut app, &ctx, "edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+    ctx.end_pass().textures_delta.clear();
+    app.run("file.new", json!({"width": 5, "height": 5})).unwrap();
+    let mut idle_switch = egui::RawInput::default();
+    app.raw_input_hook(&ctx, &mut idle_switch);
+    ctx.begin_pass(egui::RawInput::default());
+    let _ = crate::menus::invoke(&mut app, &ctx, "file.newFromClipboard", json!({})).unwrap();
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.pending_paste_cmd.len(), 2);
+    let docs_before_pair = app.session.documents().len();
+    let canceled_first = std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::RED; 4]));
+    let valid_second = std::sync::Arc::new(egui::ColorImage::new([6, 2], vec![egui::Color32::BLUE; 12]));
+    let mut pair_raw = egui::RawInput { events: vec![egui::Event::PasteImage(canceled_first), egui::Event::PasteImage(valid_second)], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut pair_raw);
+    assert!(app.pending_paste_cmd.is_empty());
+    assert_eq!(app.session.documents().len(), docs_before_pair + 1);
+    assert_eq!((app.session.active().unwrap().doc.size.width, app.session.active().unwrap().doc.size.height), (6, 2));
+
+    ctx.begin_pass(egui::RawInput::default());
+    let _ = crate::menus::invoke(&mut app, &ctx, "edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+    let _ = crate::menus::invoke(&mut app, &ctx, "file.newFromClipboard", json!({})).unwrap();
+    ctx.end_pass().textures_delta.clear();
+    let mut cancel_overlap_raw = egui::RawInput { events: vec![egui::Event::Copy], ..Default::default() };
+    app.raw_input_hook(&ctx, &mut cancel_overlap_raw);
+    assert!(app.pending_paste_cmd.is_empty(), "canceled overlapping transfers must leave no stale entries");
+}
+
+/// #5031: when `arboard` falls back to an empty or stale X11 clipboard, Wayland paste requests and
+/// `Event::PasteImage` take precedence without replacing usable internal copies, and text-only
+/// paste responses never re-paste a previously imported external image.
+#[test]
+fn wayland_paste_requests_on_empty_native_read_and_bounds_dimensions() {
+    use eframe::App as _;
+    let ctx = egui::Context::default();
+
+    // 1. Deferred command errors surface in `ui.status` / `ui.status_error`, and active text
+    // editing cancels a deferred paste before `self.run`.
+    let mut empty_app = PhotocraftApp::new(Session::new(), Services { is_wayland: true, ..Default::default() });
+    empty_app.pending_paste_cmd.push_back(("edit.pasteSpecial.pasteInPlace".into(), None));
+    let err_img = std::sync::Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::RED]));
+    let mut raw = egui::RawInput { events: vec![egui::Event::PasteImage(err_img)], ..Default::default() };
+    empty_app.raw_input_hook(&ctx, &mut raw);
+    assert!(empty_app.ui.status_error && !empty_app.ui.status.is_empty());
+
+    let mut text_edit_app = PhotocraftApp::new(Session::new(), Services { is_wayland: true, ..Default::default() });
+    text_edit_app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+    let doc_id = text_edit_app.session.active().unwrap().doc.id;
+    let layers_before = text_edit_app.session.active().unwrap().doc.layers.len();
+    text_edit_app.pending_paste_cmd.push_back(("edit.pasteSpecial.pasteInPlace".into(), Some(doc_id)));
+    let cancel_img = std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::GREEN; 4]));
+    let mut cancel_raw = egui::RawInput { events: vec![egui::Event::PasteImage(cancel_img)], ..Default::default() };
+    text_edit_app.preprocess_paste_events(&egui::Context::default(), &mut cancel_raw, true);
+    assert!(text_edit_app.pending_paste_cmd.is_empty() && text_edit_app.pending_paste_image.is_none());
+    assert_eq!(text_edit_app.session.active().unwrap().doc.layers.len(), layers_before, "active text editing must cancel deferred Paste in Place");
+
+    // 2. `Ok(None)` from `arboard` requests a Wayland paste when there is no internal copy,
+    // but preserves a usable internal copy.
+    let mut ok_none_app = PhotocraftApp::new(
+        Session::new(),
+        Services { is_wayland: true, clipboard_get_image: Some(Box::new(|| Ok(None))), clipboard_unreadable: Some(Box::new(|| false)), ..Default::default() },
+    );
+    ok_none_app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+    for cmd in ["edit.paste", "file.newFromClipboard"] {
+        ctx.begin_pass(egui::RawInput::default());
+        let res = crate::menus::invoke(&mut ok_none_app, &ctx, cmd, json!({})).unwrap();
+        let mut out = ctx.end_pass();
+        out.textures_delta.clear();
+        assert_eq!(res["pasted"], false, "{cmd} with Ok(None) must defer to Wayland RequestPaste");
+        assert!(out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+        ok_none_app.pending_paste_cmd.clear();
+    }
+    copy_blue(&mut ok_none_app);
+    let ok_none_layers_before = ok_none_app.session.active().unwrap().doc.layers.len();
+    ctx.begin_pass(egui::RawInput::default());
+    let res = crate::menus::invoke(&mut ok_none_app, &ctx, "edit.paste", json!({})).unwrap();
+    let mut out = ctx.end_pass();
+    out.textures_delta.clear();
+    assert_ne!(res["pasted"], false, "usable internal copy must paste immediately");
+    assert_eq!(ok_none_app.session.active().unwrap().doc.layers.len(), ok_none_layers_before + 1);
+    assert!(!out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste)));
+
+    // 3. `import_os_clipboard` consumes `pending_paste_image` on `Ok(None)` or `None`, and
+    // rejects dimensions above `MAX_PASTE_IMAGE_DIM` with a well-formed pixel buffer.
+    ok_none_app.session.clipboard = None;
+    ok_none_app.pending_paste_image = Some(std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::WHITE; 4])));
+    assert!(ok_none_app.import_os_clipboard().unwrap());
+    assert!(ok_none_app.pending_paste_image.is_none());
+
+    let mut no_service_app = PhotocraftApp::new(Session::new(), Services { is_wayland: true, ..Default::default() });
+    no_service_app.pending_paste_image = Some(std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::WHITE; 4])));
+    assert!(no_service_app.import_os_clipboard().unwrap());
+    assert_eq!(no_service_app.session.clipboard.as_ref().unwrap().bounds.width(), 2);
+
+    no_service_app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+    let doc_id = no_service_app.session.active().map(|d| d.doc.id);
+    let layers_before_oversize = no_service_app.session.active().unwrap().doc.layers.len();
+    no_service_app.pending_paste_cmd.push_back(("edit.paste".into(), doc_id));
+    let oversize_img = std::sync::Arc::new(egui::ColorImage::new([16_385, 1], vec![egui::Color32::WHITE; 16_385]));
+    let mut oversize_raw = egui::RawInput { events: vec![egui::Event::PasteImage(oversize_img.clone())], ..Default::default() };
+    no_service_app.raw_input_hook(&ctx, &mut oversize_raw);
+    assert!(no_service_app.pending_paste_cmd.is_empty());
+    assert!(no_service_app.session.clipboard.is_none(), "oversized PasteImage must clear retained external clipboard");
+    assert_eq!(no_service_app.session.active().unwrap().doc.layers.len(), layers_before_oversize, "oversized deferred paste must not add a layer");
+
+    let mut internal_app = PhotocraftApp::new(Session::new(), Services { is_wayland: true, ..Default::default() });
+    copy_blue(&mut internal_app);
+    assert!(!internal_app.clip_external);
+    let layers_before = internal_app.session.active().unwrap().doc.layers.len();
+    let internal_ctx = egui::Context::default();
+    let mut internal_raw = egui::RawInput { events: vec![egui::Event::PasteImage(oversize_img.clone())], ..Default::default() };
+    eframe::App::raw_input_hook(&mut internal_app, &internal_ctx, &mut internal_raw);
+    internal_ctx.begin_pass(internal_raw);
+    crate::shortcuts::handle(&mut internal_app, &internal_ctx);
+    internal_ctx.end_pass().textures_delta.clear();
+    assert_eq!(internal_app.session.active().unwrap().doc.layers.len(), layers_before, "keyboard-delivered oversized PasteImage must not paste internal copy");
+
+    no_service_app.pending_paste_image = Some(oversize_img);
+    assert!(!no_service_app.import_os_clipboard().unwrap());
+    assert!(no_service_app.session.clipboard.is_none());
+
+    // 4. Late `Event::PasteImage` arriving after transient text editing ends is discarded rather
+    // than falling through to ordinary Paste, and oversized copy export warns without error.
+    let late_layers_before = internal_app.session.active().unwrap().doc.layers.len();
+    let internal_doc = internal_app.session.active().map(|d| d.doc.id);
+    internal_app.pending_paste_cmd.push_back(("edit.paste".into(), internal_doc));
+    internal_app.pending_paste_cmd_meta.push_back((internal_ctx.cumulative_pass_nr(), None));
+    let mut transient_edit_raw = egui::RawInput::default();
+    internal_app.preprocess_paste_events(&internal_ctx, &mut transient_edit_raw, true);
+    assert_eq!(internal_app.pending_paste_cmd.len(), 1, "in-flight canceled slot must remain until response arrives");
+    let late_img = std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::GREEN; 4]));
+    let mut late_raw = egui::RawInput { events: vec![egui::Event::PasteImage(late_img)], ..Default::default() };
+    eframe::App::raw_input_hook(&mut internal_app, &internal_ctx, &mut late_raw);
+    internal_ctx.begin_pass(late_raw);
+    crate::shortcuts::handle(&mut internal_app, &internal_ctx);
+    internal_ctx.end_pass().textures_delta.clear();
+    assert!(internal_app.pending_paste_cmd.is_empty());
+    assert_eq!(internal_app.session.active().unwrap().doc.layers.len(), late_layers_before, "late PasteImage after text-edit cancel must not paste");
+
+    internal_app.ui.status.clear();
+    internal_app.session.clipboard.as_mut().unwrap().bounds = photocraft_geom::Rect::new(0, 0, 9_000, 8_000);
+    internal_app.export_os_clipboard();
+    assert!(!internal_app.ui.status.is_empty() && !internal_app.ui.status_error, "oversized copy export must warn that system clipboard was not updated");
+    assert!(internal_app.pending_copy_image.is_none());
+}
+
+/// #5031: Wayland `Event::PasteImage` takes precedence over a stale X11 `arboard` image, text-only
+/// paste responses clear retained external images, external imports invalidate `os_clip_wayland_sig`,
+/// and translucent internal copies with distinct native/Wayland signatures preserve layer metadata.
+#[test]
+fn wayland_signature_invalidation_x11_precedence_and_translucent_self_paste() {
+    use eframe::App as _;
+    let ctx = egui::Context::default();
+
+    // 1. Prefer Wayland `pending_paste_image` when `arboard` returns a different X11 selection.
+    let mut x11_mismatch_app = PhotocraftApp::new(
+        Session::new(),
+        Services { is_wayland: true, clipboard_get_image: Some(Box::new(|| Ok(Some((1, 1, vec![255, 0, 0, 255]))))), ..Default::default() },
+    );
+    x11_mismatch_app.pending_paste_image = Some(std::sync::Arc::new(egui::ColorImage::new([3, 1], vec![egui::Color32::GREEN; 3])));
+    assert!(x11_mismatch_app.import_os_clipboard().unwrap());
+    assert_eq!(x11_mismatch_app.session.clipboard.as_ref().unwrap().bounds.width(), 3, "Wayland PasteImage must win over stale X11 read");
+
+    // 2. A text-only Wayland paste response clears a retained external image so a synthetic V
+    // release in the same batch cannot paste the stale image when `arboard` is unreadable.
+    let mut text_batch_app = PhotocraftApp::new(
+        Session::new(),
+        Services {
+            is_wayland: true,
+            clipboard_get_image: Some(Box::new(|| Err("Wayland data-control unavailable".into()))),
+            clipboard_unreadable: Some(Box::new(|| true)),
+            ..Default::default()
+        },
+    );
+    text_batch_app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+    text_batch_app.pending_paste_image = Some(std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::BLUE; 4])));
+    assert!(text_batch_app.import_os_clipboard().unwrap());
+    assert!(text_batch_app.clip_external && text_batch_app.session.clipboard.is_some());
+    let layers_before = text_batch_app.session.active().unwrap().doc.layers.len();
+    let mut text_raw = egui::RawInput {
+        events: vec![
+            egui::Event::Paste("copied text".into()),
+            egui::Event::Key { key: egui::Key::V, physical_key: Some(egui::Key::V), pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND },
+        ],
+        ..Default::default()
+    };
+    text_batch_app.raw_input_hook(&ctx, &mut text_raw);
+    ctx.begin_pass(text_raw);
+    crate::shortcuts::handle(&mut text_batch_app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert!(text_batch_app.session.clipboard.is_none(), "text response must clear retained external image");
+    assert_eq!(text_batch_app.session.active().unwrap().doc.layers.len(), layers_before, "text response must not paste retained external image");
+
+    // 3. Translucent internal copy with a working native setter (`Ok(())`) and empty native read
+    // (`Ok(None)`) produces distinct `os_clip_sig` and `os_clip_wayland_sig` values; self-paste
+    // preserves layer metadata, and importing external image B invalidates `os_clip_wayland_sig`
+    // so a subsequent paste of A imports A rather than keeping B.
+    let mut app = PhotocraftApp::new(
+        Session::new(),
+        Services {
+            is_wayland: true,
+            clipboard_set_image: Some(Box::new(|_, _, _| Ok(()))),
+            clipboard_get_image: Some(Box::new(|| Ok(None))),
+            ..Default::default()
+        },
+    );
+    copy_blue(&mut app);
+    let r = app.session.clipboard.as_ref().unwrap().bounds;
+    let translucent_bytes = [200u8, 100, 50, 128].repeat((r.width() * r.height()) as usize);
+    let doc_box = Box::new((*app.session.active().unwrap().doc).clone());
+    let clip = app.session.clipboard.as_mut().unwrap();
+    clip.surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &translucent_bytes);
+    clip.layers = Some(doc_box);
+    app.export_os_clipboard();
+    assert_ne!(app.os_clip_sig, app.os_clip_wayland_sig, "translucent pixel round-trip must yield distinct signatures");
+    assert!(app.session.clipboard.as_ref().unwrap().layers.is_some(), "internal copy has layer metadata");
+    let wayland_img_a = std::sync::Arc::new(app.pending_copy_image.take().expect("queued Wayland copy image A"));
+
+    app.pending_paste_image = Some(std::sync::Arc::clone(&wayland_img_a));
+    assert!(!app.import_os_clipboard().unwrap(), "self-paste must match os_clip_wayland_sig");
+    assert!(app.session.clipboard.as_ref().unwrap().layers.is_some(), "self-paste must preserve layer metadata");
+
+    let ext_img_b = std::sync::Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::from_rgba_unmultiplied(10, 20, 30, 255)]));
+    app.pending_paste_image = Some(ext_img_b);
+    assert!(app.import_os_clipboard().unwrap(), "external image B must replace internal copy A");
+    assert_eq!(app.session.clipboard.as_ref().unwrap().bounds.width(), 1);
+    assert!(app.os_clip_wayland_sig.is_none(), "external import must clear os_clip_wayland_sig");
+
+    app.pending_paste_image = Some(wayland_img_a);
+    assert!(app.import_os_clipboard().unwrap(), "returning image A must be imported after B replaced A");
+    assert_eq!(app.session.clipboard.as_ref().unwrap().bounds.width(), r.width());
+}
+
+/// #5031: Full pixel comparison detects changes that collide under the 997-step sampled hash,
+/// `OutputCommand::CopyText` invalidates `wayland_copy_flushed` / `pending_copy_image`, and
+/// queued Wayland paste events honor FIFO order, document binding, and pass/focus expiry.
+#[test]
+fn wayland_hash_collision_copy_text_invalidation_and_queued_paste_guards() {
+    let ctx = egui::Context::default();
+
+    // 1. Two 16x16 images that differ only at byte index 4 (skipped by step_by(997)) must still
+    // be recognized as distinct clipboard images via OsClipPixels.
+    let px_a = vec![10u8; 16 * 16 * 4];
+    let mut px_b = px_a.clone();
+    px_b[4] = 250;
+    let state = std::sync::Arc::new(std::sync::Mutex::new(px_a.clone()));
+    let state_get = std::sync::Arc::clone(&state);
+    let mut app = PhotocraftApp::new(
+        Session::new(),
+        Services { is_wayland: true, clipboard_get_image: Some(Box::new(move || Ok(Some((16, 16, state_get.lock().unwrap().clone()))))), ..Default::default() },
+    );
+    assert!(app.import_os_clipboard().unwrap(), "initial 16x16 image must import");
+    assert!(!app.import_os_clipboard().unwrap(), "identical 16x16 image must not re-import");
+    *state.lock().unwrap() = px_b;
+    assert!(app.import_os_clipboard().unwrap(), "hash-colliding pixel change at byte 4 must re-import");
+
+    // 2. OutputCommand::CopyText cancels pending_copy_image and clears external/flushed Wayland state.
+    app.pending_copy_image = Some(egui::ColorImage::new([2, 2], vec![egui::Color32::RED; 4]));
+    app.wayland_copy_flushed = true;
+    ctx.begin_pass(egui::RawInput::default());
+    ctx.copy_text("plain text".into());
+    app.flush_pending_copy_image(&ctx);
+    let mut out = ctx.end_pass();
+    out.textures_delta.clear();
+    assert!(app.pending_copy_image.is_none());
+    assert!(!app.wayland_copy_flushed);
+    assert!(!out.platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyImage(_))));
+
+    // 3. Ordinary two-image FIFO queue via `import_os_clipboard`, document-switch rejection
+    // without alias fallback, slow multi-pass deferred command retention, and cancellation on input.
+    let mut queue_app = PhotocraftApp::new(
+        Session::new(),
+        Services {
+            is_wayland: true,
+            clipboard_get_image: Some(Box::new(|| Err("Wayland data-control unavailable".into()))),
+            clipboard_unreadable: Some(Box::new(|| true)),
+            ..Default::default()
+        },
+    );
+    queue_app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let fifo_first = std::sync::Arc::new(egui::ColorImage::new([2, 1], vec![egui::Color32::RED; 2]));
+    let fifo_second = std::sync::Arc::new(egui::ColorImage::new([4, 1], vec![egui::Color32::BLUE; 4]));
+    let mut fifo_raw = egui::RawInput { events: vec![egui::Event::PasteImage(fifo_first), egui::Event::PasteImage(fifo_second)], ..Default::default() };
+    queue_app.preprocess_paste_events(&ctx, &mut fifo_raw, false);
+    assert!(queue_app.import_os_clipboard().unwrap(), "first queued PasteImage must import");
+    assert_eq!(queue_app.session.clipboard.as_ref().unwrap().bounds.width(), 2);
+    assert!(queue_app.import_os_clipboard().unwrap(), "second queued PasteImage must import in FIFO order");
+    assert_eq!(queue_app.session.clipboard.as_ref().unwrap().bounds.width(), 4);
+
+    // Queued PasteImage bound to doc A is canceled rather than falling back to pending_paste_image
+    // when active document switches to doc B before import_os_clipboard runs.
+    let doc_a = queue_app.session.active().map(|d| d.doc.id);
+    let doc_a_img = std::sync::Arc::new(egui::ColorImage::new([5, 1], vec![egui::Color32::GREEN; 5]));
+    queue_app.pending_paste_images.push_back((std::sync::Arc::clone(&doc_a_img), doc_a));
+    queue_app.pending_paste_image = Some(doc_a_img);
+    queue_app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
+    assert!(!queue_app.import_os_clipboard().unwrap(), "switched document must cancel bound PasteImage without alias fallback");
+    assert!(queue_app.pending_paste_image.is_none() && queue_app.pending_paste_images.is_empty());
+
+    // Deferred command survives multiple non-invalidating passes (slow Wayland transfer) and is
+    // cancelled only when an invalidating event (such as focus loss or new key press) arrives.
+    let doc_b = queue_app.session.active().map(|d| d.doc.id);
+    queue_app.pending_paste_cmd.push_back(("edit.paste".into(), doc_b));
+    queue_app.pending_paste_cmd_meta.push_back((ctx.cumulative_pass_nr(), None));
+    for _ in 0..4 {
+        ctx.begin_pass(egui::RawInput::default());
+        ctx.end_pass().textures_delta.clear();
+        let mut idle_raw = egui::RawInput::default();
+        queue_app.preprocess_paste_events(&ctx, &mut idle_raw, false);
+    }
+    assert_eq!(queue_app.pending_paste_cmd.len(), 1, "slow transfer must survive idle passes");
+    let mut cancel_raw = egui::RawInput { events: vec![egui::Event::WindowFocused(false)], ..Default::default() };
+    queue_app.preprocess_paste_events(&ctx, &mut cancel_raw, false);
+    assert!(queue_app.pending_paste_cmd.is_empty(), "focus loss on later pass must cancel pending_paste_cmd");
+
+    // 4. UI-level pass with two PasteImage events in one batch creates both layers in event order.
+    let ui_layers_before = queue_app.session.active().unwrap().doc.layers.len();
+    let ui_first = std::sync::Arc::new(egui::ColorImage::new([8, 8], vec![egui::Color32::RED; 64]));
+    let ui_second = std::sync::Arc::new(egui::ColorImage::new([8, 8], vec![egui::Color32::BLUE; 64]));
+    let mut ui_batch = egui::RawInput { events: vec![egui::Event::PasteImage(ui_first), egui::Event::PasteImage(ui_second)], ..Default::default() };
+    eframe::App::raw_input_hook(&mut queue_app, &ctx, &mut ui_batch);
+    ctx.begin_pass(ui_batch);
+    crate::shortcuts::handle(&mut queue_app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    let layers = &queue_app.session.active().unwrap().doc.layers;
+    assert_eq!(layers.len(), ui_layers_before + 2, "both PasteImage events in one UI batch must insert layers");
+    let sample_rect = photocraft_geom::Rect::from_xywh(0, 0, 1, 1);
+    let mut first_px = [[0u8; 4]];
+    let mut second_px = [[0u8; 4]];
+    layers[ui_layers_before].surface().unwrap().read_rgba8_into(sample_rect, &mut first_px);
+    layers[ui_layers_before + 1].surface().unwrap().read_rgba8_into(sample_rect, &mut second_px);
+    assert_eq!(first_px[0], egui::Color32::RED.to_srgba_unmultiplied(), "first pasted layer must match first PasteImage");
+    assert_eq!(second_px[0], egui::Color32::BLUE.to_srgba_unmultiplied(), "second pasted layer must match second PasteImage");
+
+    // 5. Two PasteImage events accompanied by a Ctrl+V key release without a native clipboard
+    // getter (`clipboard_get_image: None`) must paste each image once without replaying the second.
+    let mut no_getter_app = PhotocraftApp::new(Session::new(), Services { is_wayland: true, ..Default::default() });
+    no_getter_app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let ng_before = no_getter_app.session.active().unwrap().doc.layers.len();
+    let ng_ctx = egui::Context::default();
+    let ng_first = std::sync::Arc::new(egui::ColorImage::new([4, 4], vec![egui::Color32::RED; 16]));
+    let ng_second = std::sync::Arc::new(egui::ColorImage::new([4, 4], vec![egui::Color32::GREEN; 16]));
+    let mut ng_batch = egui::RawInput {
+        events: vec![
+            egui::Event::Key { key: egui::Key::V, physical_key: Some(egui::Key::V), pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND },
+            egui::Event::PasteImage(ng_first),
+            egui::Event::PasteImage(ng_second),
+        ],
+        ..Default::default()
+    };
+    eframe::App::raw_input_hook(&mut no_getter_app, &ng_ctx, &mut ng_batch);
+    ng_ctx.begin_pass(ng_batch);
+    crate::shortcuts::handle(&mut no_getter_app, &ng_ctx);
+    ng_ctx.end_pass().textures_delta.clear();
+    assert_eq!(
+        no_getter_app.session.active().unwrap().doc.layers.len(),
+        ng_before + 2,
+        "Ctrl+V release with two PasteImage events must create exactly two layers"
+    );
+
+    let ng_after_first = no_getter_app.session.active().unwrap().doc.layers.len();
+    let ng_third = std::sync::Arc::new(egui::ColorImage::new([4, 4], vec![egui::Color32::BLUE; 16]));
+    let ng_fourth = std::sync::Arc::new(egui::ColorImage::new([4, 4], vec![egui::Color32::YELLOW; 16]));
+    let mut ng_trailing_release = egui::RawInput {
+        events: vec![
+            egui::Event::PasteImage(ng_third),
+            egui::Event::PasteImage(ng_fourth),
+            egui::Event::Key { key: egui::Key::V, physical_key: Some(egui::Key::V), pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND },
+        ],
+        ..Default::default()
+    };
+    eframe::App::raw_input_hook(&mut no_getter_app, &ng_ctx, &mut ng_trailing_release);
+    ng_ctx.begin_pass(ng_trailing_release);
+    crate::shortcuts::handle(&mut no_getter_app, &ng_ctx);
+    ng_ctx.end_pass().textures_delta.clear();
+    assert_eq!(
+        no_getter_app.session.active().unwrap().doc.layers.len(),
+        ng_after_first + 2,
+        "trailing Ctrl+V release after two PasteImage events must create exactly two layers",
+    );
+}

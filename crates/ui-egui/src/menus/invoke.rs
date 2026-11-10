@@ -378,6 +378,7 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
     result.map(Some)
 }
 
+/// Dispatch a menu command `id` with `params` after modal/workspace guards have been checked.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
@@ -530,10 +531,67 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "select.transformSelection" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::transform_tool::begin_selection(app, ctx).map(|_| json!({"transform": app.ui.transform}))
         }
-        "edit.paste" if params.as_object().is_none_or(|o| o.is_empty()) => {
+        "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard" if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let consume_plain_paste_keys = |ctx: &egui::Context| {
+                ctx.input_mut(|i| {
+                    i.events.retain(|e| match e {
+                        egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } => {
+                            !((modifiers.command || modifiers.ctrl) && !modifiers.shift && !modifiers.alt)
+                        }
+                        egui::Event::Key { key: egui::Key::Insert, pressed: true, modifiers, .. } => {
+                            !(modifiers.shift && !modifiers.command && !modifiers.ctrl && !modifiers.alt)
+                        }
+                        _ => true,
+                    });
+                });
+            };
+            let had_paste_image = app.pending_paste_image.is_some() || !app.pending_paste_images.is_empty();
+            if app.cancel_mismatched_paste_images() {
+                if id == "edit.paste" && had_paste_image {
+                    consume_plain_paste_keys(ctx);
+                }
+                return Ok(json!({"pasted": false}));
+            }
+            // Only plain `edit.paste` shortcuts (`Cmd+V` / `Shift+Insert`) start an async Wayland
+            // paste inside `egui-winit` on key-down; `Cmd+Shift+V` (`pasteInPlace`) and menu
+            // invocations must request the Wayland clipboard image explicitly.
+            let from_key = id == "edit.paste"
+                && ctx.input(|i| {
+                    !i.pointer.any_released()
+                        && !i.pointer.any_click()
+                        && i.events.iter().any(|e| match e {
+                            egui::Event::Key { key: egui::Key::V, modifiers, .. } => {
+                                (modifiers.command || modifiers.ctrl) && !modifiers.shift && !modifiers.alt
+                            }
+                            egui::Event::Key { key: egui::Key::Insert, modifiers, .. } => {
+                                modifiers.shift && !modifiers.command && !modifiers.ctrl && !modifiers.alt
+                            }
+                            egui::Event::Paste(_) | egui::Event::PasteImage(_) => true,
+                            _ => false,
+                        })
+                });
+            let needs_wayland_paste =
+                app.session.clipboard.is_none() || app.clip_external || (!app.clip_unmirrored && app.pending_copy_image.is_none()) || app.wayland_copy_flushed;
+            if !from_key && !had_paste_image && app.services.is_wayland && needs_wayland_paste {
+                let doc = app.session.active().map(|d| d.doc.id);
+                app.pending_paste_cmd.push_back((id.to_string(), doc));
+                app.pending_paste_cmd_meta.push_back((ctx.cumulative_pass_nr(), ctx.memory(|m| m.focused())));
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                return Ok(json!({"pasted": false}));
+            }
+            app.import_os_clipboard()?;
+            if app.clip_paste_rejected {
+                if id == "edit.paste" && had_paste_image {
+                    consume_plain_paste_keys(ctx);
+                }
+                return Ok(json!({"pasted": false}));
+            }
+            if id != "edit.paste" {
+                app.clip_read_for_paste = true;
+                return app.run(id, params);
+            }
             // Photoshop: paste in place when the copied area is visible, else centred in the view;
             // images from other apps are always centred.
-            app.import_os_clipboard()?;
             app.clip_read_for_paste = true;
             let external = app.clip_external;
             let visible = !external
@@ -549,7 +607,21 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 Some(i) if !visible => json!({"center": app.ui.views[i].center}),
                 _ => json!({}),
             };
-            app.run("edit.paste", p)
+            let mut res = app.run("edit.paste", p)?;
+            while had_paste_image && !app.pending_paste_images.is_empty() {
+                if app.cancel_mismatched_paste_images() {
+                    break;
+                }
+                app.import_os_clipboard()?;
+                if app.clip_paste_rejected {
+                    continue;
+                }
+                res = app.run_edit_paste()?;
+            }
+            if had_paste_image {
+                consume_plain_paste_keys(ctx);
+            }
+            Ok(res)
         }
         // Layer › New › Layer… (⇧⌘N) asks first, as in Photoshop; with params it runs as is.
         crate::new_layer_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog": crate::new_layer_ui::open(app)?})),

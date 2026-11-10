@@ -137,7 +137,10 @@ impl PhotocraftApp {
             } else if !clip_read {
                 self.import_os_clipboard()?;
             }
-            if paste_as.is_none() && self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {
+            if paste_as.is_none() && self.clip_paste_rejected {
+                return Ok(serde_json::json!({"pasted": false}));
+            }
+            if paste_as.is_none() && self.session.clipboard.is_none() && (self.services.clipboard_get_image.is_some() || self.services.is_wayland) {
                 if self.services.clipboard_unreadable.as_ref().is_some_and(|unreadable| unreadable()) {
                     // The clipboard may well hold an image that can't be reached: say why.
                     notices::clipboard_unreadable(self);
