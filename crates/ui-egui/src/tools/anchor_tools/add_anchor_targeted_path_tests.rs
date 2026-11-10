@@ -1,49 +1,12 @@
 //! #12705: Add Anchor Point edits only the targeted path: the path selected in the Paths panel
 //! or the active shape layer's. A shape layer that is not active, or is hidden, is left alone.
 
-use egui::Modifiers;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-/// 800 x 600, white Background, pixel layer "Red" active, and a shape layer from (450,100) to
-/// (650,250) below it in the stack's activity (Red stays the active layer).
-fn setup(tool: Tool) -> (PhotocraftApp, u64) {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
-    app.sync_views();
-    app.ui.tool = tool;
-    let shape = app.run("shape.create", json!({"kind": "rect", "rect": [450, 100, 200, 150], "fill": "#3070c0"})).unwrap()["layer"].as_u64().unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    let red = app.session.active().unwrap().active_layer.unwrap();
-    app.run("layer.renameLayer", json!({"layer": red.0, "name": "Red"})).unwrap();
-    (app, shape)
-}
-
-fn shape_path(app: &mut PhotocraftApp, id: u64) -> Value {
-    app.run("shape.info", json!({"layer": id})).unwrap()["path"].clone()
-}
-
-fn steps(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().history.entries().len()
-}
-
-fn click(app: &mut PhotocraftApp, at: [f64; 2]) {
-    tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, Modifiers::NONE);
-}
-
-fn select_saved_path(app: &mut PhotocraftApp) {
-    let path = json!({"subpaths": [{"closed": true, "knots": [[50, 450], [150, 450], [150, 550], [50, 550]]}]});
-    app.run("path.set", json!({"name": "Path 1", "path": path})).unwrap();
-    app.ui.selected_path = Some("Path 1".into());
-}
-
-fn select_layer(app: &mut PhotocraftApp, id: u64) {
-    app.run("layer.select", json!({"layer": id})).unwrap();
-}
+// The setup and steps shared with #12762's tests.
+use super::delete_anchor_targeted_path_tests::{click, select_layer, select_saved_path, setup, shape_path, steps};
 
 #[test]
 fn a_click_on_the_top_edge_of_a_shape_that_is_not_active_changes_nothing() {
