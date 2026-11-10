@@ -925,7 +925,9 @@ fn fringe(tris: &[[usize; 3]], verts: &[([f64; 2], [f64; 2])], src_rect: Rect, t
         {
             *u = q;
             *ow = k;
-            *c = 0.5 - d;
+            // The reference's fringe alpha is the cap floored to an 8-bit step (Arc 50's border:
+            // 80 % of fringe pixels exactly, rounding 49 %).
+            *c = ((0.5 - d) * 255.0).floor() / 255.0;
         }
     }
     cover
@@ -976,7 +978,8 @@ struct Draw<'a> {
     /// One sample per pixel (from a mip level where the warp squeezes rows), not a footprint.
     single: bool,
     /// Pixels just outside an edge of the mesh that lies on the source's border are drawn too, from
-    /// the nearest such triangle's map carried past the edge, their alpha at most `0.5 − d` for a
+    /// the nearest such triangle's map carried past the edge, their alpha at most `0.5 − d` (floored
+    /// to an 8-bit step) for a
     /// centre `d` px out (and the source's transparent surround lowers it further): the outline
     /// the reference application's warp renders show.
     fringe: bool,
@@ -1913,6 +1916,13 @@ mod tests {
         assert!((0.2..=0.31).contains(&mesh), "mesh fringe alpha {mesh}");
         assert_eq!(alpha_at(Facets::Envelope, 17), 0.0);
         assert_eq!(alpha_at(Facets::Envelope, 8), 1.0);
+        // The cap is floored to an 8-bit step, as the reference's fringe is: stretched twice as
+        // wide (so the source's own falloff stays above the cap) and ending 0.25 px short of the
+        // pixel's centre, the cap is 63.75 steps, drawn as 63 (not 64).
+        let g = |x: f64, y: f64| (2.0 * x + 0.25, y);
+        let out = warp_patches_surface(&src, Rect::new(0, 0, 16, 16), &g, [&[], &[]], Fold::IN_PLACE, Sampling::Single, Facets::Envelope);
+        let a = out.read_region(Rect::new(32, 8, 33, 9))[3];
+        assert_eq!((a * 255.0).round(), 63.0, "fringe alpha {}", a * 255.0);
     }
 
     #[test]
