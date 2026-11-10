@@ -4204,3 +4204,17 @@ shape	Appearance	화면 모양
 	Shrinkwrap Canvas on Save	저장 시 캔버스를 내용에 맞게 축소
 	Move Toolbar to the Right	도구 모음을 오른쪽으로 이동
 	Move Toolbar to the Left	도구 모음을 왼쪽으로 이동
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	사전 설정 종횡비 또는 자르기 크기 선택
+	Set the aspect ratio for the crop box	자르기 프레임의 종횡비 설정
+	Clear aspect ratio values	종횡비 값 지우기
+	Set the overlay options for the Crop Tool	자르기 오버레이 옵션 설정
+	Determines if pixel data outside the crop box is retained or deleted	자르기 프레임 밖의 픽셀을 유지할지 삭제할지 결정
+	How expanded crop area gets filled	확장된 자르기 영역을 채우는 방법
+	Displays pop-up help for the fill methods	채우기 방법에 대한 팝업 도움말 표시
+	Fill options	채우기 옵션
+	Background (default):	배경 (기본값):
+	Fill the expanded area with your background color or transparent pixels	확장된 영역을 배경색 또는 투명 픽셀로 채우기
+	Content-aware fill	내용 기반 채우기
+	Sample content from part of the image and use it to fill a small area	이미지의 일부에서 내용을 샘플링하여 작은 영역 채우기
+	Reset the crop box, image rotation, and aspect ratio settings	자르기 프레임, 이미지 회전 및 종횡비 재설정

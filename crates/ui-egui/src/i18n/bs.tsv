@@ -4646,3 +4646,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Postavke RAW obrade sačuvane u {file}
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	Odaberite unaprijed postavljenu razmeru ili veličinu obrezivanja
+	Set the aspect ratio for the crop box	Postavite razmeru okvira za obrezivanje
+	Clear aspect ratio values	Obrišite vrijednosti razmere
+	Set the overlay options for the Crop Tool	Postavite opcije preklapanja obrezivanja
+	Determines if pixel data outside the crop box is retained or deleted	Određuje da li se pikseli izvan okvira za obrezivanje zadržavaju ili brišu
+	How expanded crop area gets filled	Kako se popunjava proširena oblast obrezivanja
+	Displays pop-up help for the fill methods	Prikazuje iskačuću pomoć za metode popunjavanja
+	Fill options	Opcije popunjavanja
+	Background (default):	Pozadina (zadano):
+	Fill the expanded area with your background color or transparent pixels	Popunite proširenu oblast bojom pozadine ili prozirnim pikselima
+	Content-aware fill	Popunjavanje prema sadržaju
+	Sample content from part of the image and use it to fill a small area	Uzmite sadržaj iz dijela slike da popunite malu oblast
+	Reset the crop box, image rotation, and aspect ratio settings	Vratite okvir za obrezivanje, rotaciju slike i razmeru
