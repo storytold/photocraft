@@ -77,6 +77,12 @@ fn prepare_shapes(layers: &mut [Layer], doc: &Document, new_canvas: bool) {
 /// including another opening of the same file), and the pixels convert to `dest`'s profile and
 /// bit depth.
 pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) -> Result<()> {
+    adapt_copies_with(copies, dest, s.color.settings.intent(), s.color.settings.bpc)
+}
+
+/// [`adapt_copies`] with Color Settings' intent and black point compensation passed in, so it
+/// can run on a worker.
+fn adapt_copies_with(copies: &mut Document, dest: &Document, intent: photocraft_cms::Intent, bpc: bool) -> Result<()> {
     // Link-group IDs are scoped to a document. Two independently linked pairs can both
     // use group 1; copying one must not link it to the other's existing layers (#3045).
     // Remap each imported group once so links within the copied batch stay intact.
@@ -111,7 +117,7 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
     }
     if (copies.mode, &copies.icc_profile) != (dest.mode, &dest.icc_profile) {
         let profile = crate::color_cmds::document_profile(dest);
-        crate::color_cmds::convert_document(copies, &profile, s.color.settings.intent(), s.color.settings.bpc)?;
+        crate::color_cmds::convert_document(copies, &profile, intent, bpc)?;
     }
     if copies.depth != dest.depth {
         crate::image_cmds::for_each_surface(&mut copies.layers, true, &mut |surf, _| {
@@ -297,7 +303,6 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     prepare_shapes(&mut copies.layers, &sdoc, false);
     let bounds = copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
     let content = if bounds.is_empty() { sdoc.bounds() } else { bounds };
-    adapt_copies(s, &mut copies, &ddoc)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
     // the layers are in the source (default: the same canvas position).
     let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
@@ -310,11 +315,48 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         point(p, "offset")?.map_or((0.0, 0.0), |o| (o[0], o[1]))
     };
     let (dx, dy) = (dx.round() as i32, dy.round() as i32);
-    translate_copies(&mut copies, &ddoc, dx, dy);
+    let (intent, bpc) = (s.color.settings.intent(), s.color.settings.bpc);
+    let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
+    // Converting the copies to the destination's profile and depth and shifting them into place
+    // touch every pixel: a large layer took 0.7 s on the UI thread. As a job they are made on a
+    // worker (the source stays locked) and land as one history step in the destination.
+    let work_dest = ddoc.clone();
+    crate::jobs::run(
+        s,
+        label,
+        true,
+        move |ctx| {
+            ctx.progress(0.0, "Converting layers");
+            adapt_copies_with(&mut copies, &work_dest, intent, bpc)?;
+            ctx.check()?;
+            ctx.progress(0.5, "Placing layers");
+            translate_copies(&mut copies, &work_dest, dx, dy);
+            Ok(copies)
+        },
+        move |s, copies| land_copies(s, src, &sdoc, &ddoc, copies, typed, label, (dx, dy)),
+    )
+}
+
+/// The second half of [`copy_to_document`], once the copies are converted and placed: insert them
+/// in the destination as one history step and select them there.
+#[allow(clippy::too_many_arguments)]
+fn land_copies(
+    s: &mut Session,
+    src: usize,
+    sdoc: &Document,
+    ddoc: &Document,
+    mut copies: Document,
+    typed: Option<String>,
+    label: &str,
+    (dx, dy): (i32, i32),
+) -> Result<Value> {
+    // The documents may have moved in the tab list while the job ran: find them again by id.
+    let find = |s: &Session, id: photocraft_doc::DocId| s.documents().iter().position(|d| d.doc.id == id);
+    let src = find(s, sdoc.id).unwrap_or(src);
+    let dest = find(s, ddoc.id).ok_or_else(|| bad("the destination document was closed"))?;
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     let styles = std::mem::take(&mut copies.text_styles);
     s.set_active(dest);
-    let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
     let edited = s.edit(label, |doc, active| {
         doc.patterns.extend(patterns);
         land_text_styles(doc, styles);
