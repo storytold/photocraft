@@ -469,3 +469,7 @@ pub fn multi_click(app: &mut PhotocraftApp, egui_count: u32, x: f64, y: f64) {
         (e.anchor, e.caret) = (a, b);
     }
 }
+
+#[cfg(test)]
+#[path = "mask_placeholder_tests.rs"]
+mod mask_placeholder_tests;
