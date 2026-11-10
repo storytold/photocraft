@@ -347,6 +347,28 @@ pub(crate) fn hit_target(app: &PhotocraftApp, p: [f64; 2], handles: bool) -> Opt
     })
 }
 
+/// What the anchor tools edit at `p`: a hit on the targeted paths only (`active_paths`), never on
+/// a shape layer that is not active. A shape layer that is hidden, or inside a hidden group, shows
+/// no path, so it is skipped (#12762, #12705).
+pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
+    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+    let st = app.session.active()?;
+    active_paths(app)
+        .into_iter()
+        .filter(|(r, _)| !matches!(r, PathRef::Layer(id) if !layer_shown(st, *id)))
+        .find_map(|(r, path)| edit::hit(&path, Point::new(p[0], p[1]), tol, &[]).map(|h| (r, path, h)))
+}
+
+/// Is the shape layer `id` shown: it and every group above it visible. A vector mask of a hidden
+/// layer is not drawn either.
+fn layer_shown(st: &photocraft_engine::DocState, id: u64) -> bool {
+    st.doc
+        .walk()
+        .iter()
+        .find(|(_, _, l)| l.id.0 == id)
+        .is_some_and(|(path, _, l)| l.visible && (1..=path.len()).all(|n| st.doc.layer_at(&path[..n]).is_some_and(|a| a.visible)))
+}
+
 fn retracted(k: &photocraft_doc::Knot, h: Handle) -> bool {
     let c = if h == Handle::In { k.in_ctrl } else { k.out_ctrl };
     (c.x - k.anchor.x).abs() < 1e-9 && (c.y - k.anchor.y).abs() < 1e-9

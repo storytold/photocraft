@@ -1,0 +1,87 @@
+//! #12705: Add Anchor Point edits only the targeted path: the path selected in the Paths panel
+//! or the active shape layer's. A shape layer that is not active, or is hidden, is left alone.
+
+use egui::Modifiers;
+use serde_json::{Value, json};
+
+use crate::PhotocraftApp;
+use crate::canvas::{ToolEvent, tool_event};
+use crate::state::Tool;
+
+/// 800 x 600, white Background, pixel layer "Red" active, and a shape layer from (450,100) to
+/// (650,250) below it in the stack's activity (Red stays the active layer).
+fn setup(tool: Tool) -> (PhotocraftApp, u64) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
+    app.sync_views();
+    app.ui.tool = tool;
+    let shape = app.run("shape.create", json!({"kind": "rect", "rect": [450, 100, 200, 150], "fill": "#3070c0"})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let red = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.renameLayer", json!({"layer": red.0, "name": "Red"})).unwrap();
+    (app, shape)
+}
+
+fn shape_path(app: &mut PhotocraftApp, id: u64) -> Value {
+    app.run("shape.info", json!({"layer": id})).unwrap()["path"].clone()
+}
+
+fn steps(app: &PhotocraftApp) -> usize {
+    app.session.active().unwrap().history.entries().len()
+}
+
+fn click(app: &mut PhotocraftApp, at: [f64; 2]) {
+    tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, Modifiers::NONE);
+}
+
+fn select_saved_path(app: &mut PhotocraftApp) {
+    let path = json!({"subpaths": [{"closed": true, "knots": [[50, 450], [150, 450], [150, 550], [50, 550]]}]});
+    app.run("path.set", json!({"name": "Path 1", "path": path})).unwrap();
+    app.ui.selected_path = Some("Path 1".into());
+}
+
+fn select_layer(app: &mut PhotocraftApp, id: u64) {
+    app.run("layer.select", json!({"layer": id})).unwrap();
+}
+
+#[test]
+fn a_click_on_the_top_edge_of_a_shape_that_is_not_active_changes_nothing() {
+    let (mut app, shape) = setup(Tool::AddAnchorPoint);
+    let (before, n) = (shape_path(&mut app, shape), steps(&app));
+    click(&mut app, [620.0, 100.0]);
+    assert_eq!(shape_path(&mut app, shape), before);
+    assert_eq!(steps(&app), n);
+}
+
+#[test]
+fn a_click_on_the_top_edge_of_the_active_shape_adds_an_anchor() {
+    let (mut app, shape) = setup(Tool::AddAnchorPoint);
+    select_layer(&mut app, shape);
+    let n = steps(&app);
+    click(&mut app, [550.0, 100.0]);
+    assert_eq!(shape_path(&mut app, shape)["subpaths"][0]["knots"].as_array().unwrap().len(), 5);
+    assert_eq!(steps(&app), n + 1);
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
+}
+
+#[test]
+fn with_a_saved_path_selected_a_click_on_the_shape_edge_does_nothing() {
+    let (mut app, shape) = setup(Tool::AddAnchorPoint);
+    select_saved_path(&mut app);
+    let (before, n) = (shape_path(&mut app, shape), steps(&app));
+    click(&mut app, [550.0, 100.0]);
+    assert_eq!(shape_path(&mut app, shape), before);
+    assert_eq!(steps(&app), n);
+}
+
+#[test]
+fn a_hidden_active_shape_is_not_edited() {
+    let (mut app, shape) = setup(Tool::AddAnchorPoint);
+    select_layer(&mut app, shape);
+    app.run("layer.setProps", json!({"layer": shape, "visible": false})).unwrap();
+    let (before, n) = (shape_path(&mut app, shape), steps(&app));
+    click(&mut app, [550.0, 100.0]);
+    assert_eq!(shape_path(&mut app, shape), before);
+    assert_eq!(steps(&app), n);
+}
