@@ -28,6 +28,12 @@ pub fn value_field_prec(ui: &mut Ui, value: &mut f32, range: std::ops::RangeIncl
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), ..Default::default() }, None).0
 }
 
+/// A [`value_field_prec`] that shows an unset `0` as an empty field (Crop's free ratio sides,
+/// #10888). Everything else, including scrubbing and typed input, is identical.
+pub fn value_field_prec_blank(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, decimals: u32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), blank_when_zero: true, ..Default::default() }, None).0
+}
+
 /// A field's unit and the resolution a typed unit converts at (`1in` in a px field).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FieldUnits {
