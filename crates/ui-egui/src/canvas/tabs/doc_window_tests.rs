@@ -215,3 +215,33 @@ fn ctrl_tab_to_a_tabbed_document_gives_the_main_window_the_keyboard() {
     assert_eq!(desktop.h.state().session.active_index(), Some(1));
     assert_eq!(desktop.host.borrow().focus_requests, [ViewportId::ROOT], "the main window, with the tab, takes the keyboard");
 }
+
+/// Keys typed into a focused text field in a document window are the field's: nothing is
+/// forwarded to the shortcuts then. Without a focused widget they are forwarded.
+#[test]
+fn keys_for_a_focused_text_field_are_not_forwarded() {
+    let ctx = egui::Context::default();
+    let key = |pressed| Event::Key { key: Key::B, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    let frame = |focus_field: bool| {
+        let mut text = String::new();
+        let mut keys = Vec::new();
+        let raw = egui::RawInput { events: vec![key(true), Event::Text("b".into()), key(false)], ..Default::default() };
+        ctx.run_ui(raw, |ui| {
+            let field = ui.text_edit_singleline(&mut text);
+            if focus_field {
+                field.request_focus();
+            } else {
+                field.surrender_focus();
+            }
+            keys = super::leftover_keys(ui.ctx()).0;
+        })
+        .textures_delta
+        .clear();
+        keys
+    };
+    // A first frame puts the keyboard focus on the field.
+    frame(true);
+    assert!(frame(true).is_empty(), "the focused field keeps its keys");
+    frame(false);
+    assert_eq!(frame(false).len(), 3, "without a focused widget the key, its text and its release are forwarded");
+}
