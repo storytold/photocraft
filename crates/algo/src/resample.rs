@@ -382,6 +382,22 @@ pub fn resize_surface_with_interrupt(
     Ok(out)
 }
 
+/// [`resize_surface_in_canvas`] with cancellation between passes and bounded groups of output
+/// bands; a cancelled operation returns no partially resized surface.
+pub fn resize_surface_in_canvas_with_interrupt(
+    s: &Surface,
+    sx: f64,
+    sy: f64,
+    filter: Resample,
+    canvas: Rect,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Surface, photocraft_raster::Cancelled> {
+    ctl.check()?;
+    let out = resize_controlled(s, sx, sy, filter, Some(canvas), READ_BUDGET, ctl);
+    ctl.check()?;
+    Ok(out)
+}
+
 fn resize_controlled(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>, budget: usize, ctl: &photocraft_raster::Interrupt) -> Surface {
     let mut cur: Option<Surface> = None;
     let mut canvas = canvas;
