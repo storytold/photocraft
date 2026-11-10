@@ -198,6 +198,8 @@ fn background_damage_only_open_does_not_create_a_spurious_profile_question() {
     assert!(app.ui.dialogs.is_empty(), "color:null is not a profile question");
 }
 
+/// A high-memory PSD asks first; the workspace stays up under the prompt, and Cancel drops the
+/// pending open and goes back to Home as before.
 #[test]
 fn memory_confirmation_dialog_and_cancel_lifecycle() {
     let mut app = app();
@@ -221,10 +223,12 @@ fn memory_confirmation_dialog_and_cancel_lifecycle() {
     crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
     assert_eq!(app.ui.dialogs.len(), 1);
     assert!(crate::open_prompt::owns_memory(&app.ui.dialogs[0].fields));
+    assert!(!app.home_screen_up(), "the workspace stays up under the prompt, not Home");
     let dlg_id = app.ui.dialogs[0].id;
 
     assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dlg_id}))["ok"], true);
     assert!(app.ui.dialogs.is_empty());
+    assert_eq!(app.home_screen_up(), app.ui.chrome.shows_home(0, app.session.prefs().general.auto_show_home_screen), "declined: back to Home as before");
     assert!(app.session.take_pending_preflight(preflight_id).is_none(), "pending preflight dropped on cancel");
     assert!(app.held_memory_prompts.is_empty());
     assert!(app.prompt_order.is_empty());
