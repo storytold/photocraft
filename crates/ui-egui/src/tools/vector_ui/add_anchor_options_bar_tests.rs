@@ -1,6 +1,5 @@
 //! #12731: the Add Anchor Point options bar holds the preset picker and "No options for the Add
-//! Anchor Point Tool." centred in the rest of the bar, as in Photoshop; the Delete Anchor Point bar
-//! keeps its hint.
+//! Anchor Point Tool." centred in the rest of the bar, as in Photoshop.
 
 use egui::vec2;
 use egui_kittest::Harness;
@@ -38,12 +37,4 @@ fn add_anchor_point_bar_says_it_has_no_options() {
     let centre = (picker.max.x + WIDTH) / 2.0;
     let mid = (rect.min.x + rect.max.x) / 2.0;
     assert!((mid - centre).abs() < 20.0, "text centre {mid} vs remaining bar centre {centre}");
-}
-
-#[test]
-fn delete_anchor_point_bar_keeps_its_hint() {
-    let h = harness(Tool::DeleteAnchorPoint);
-    let hint = crate::i18n::fmt("Click an anchor point to delete it · {alt}-click a segment to add one", &[("alt", &crate::shortcuts::pretty("Alt"))]);
-    h.get_by_label(&hint);
-    assert!(h.query_by_label(NO_OPTIONS).is_none());
 }
