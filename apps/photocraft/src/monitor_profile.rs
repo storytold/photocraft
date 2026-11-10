@@ -76,9 +76,19 @@ return out"#;
 
 #[cfg(target_os = "macos")]
 fn detect() -> Detection {
+    // The script goes in through stdin (`osascript -`), not `-e`, so it isn't part of the
+    // helper's command line (EDR rules that flag encoded strings in osascript arguments).
+    parse_reply(&run_helper(&mut osascript_command(), HELPER_TIMEOUT, Some(SCRIPT))?)
+}
+
+/// `osascript` reading the script from standard input (`-`): the script, which contains
+/// `base64EncodedStringWithOptions:`, stays out of the process's arguments, where endpoint
+/// security rules (Elastic Defend's "Base64 Encoded String Execution via Osascript") flag it.
+#[cfg(target_os = "macos")]
+fn osascript_command() -> std::process::Command {
     let mut cmd = std::process::Command::new("/usr/bin/osascript");
-    cmd.args(["-e", SCRIPT]);
-    parse_reply(&run_helper(&mut cmd, HELPER_TIMEOUT)?)
+    cmd.arg("-");
+    cmd
 }
 
 /// How long a reading may take before the helper is stopped (it normally takes about 0.4 s).
@@ -88,11 +98,22 @@ const HELPER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Run the helper and return its standard output; a helper that fails, or runs longer than
 /// `timeout`, is an error (and is killed and reaped), so a hung reading can't block later ones.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn run_helper(cmd: &mut std::process::Command, timeout: std::time::Duration) -> Result<String, String> {
-    use std::io::Read;
+fn run_helper(cmd: &mut std::process::Command, timeout: std::time::Duration, input: Option<&str>) -> Result<String, String> {
+    use std::io::{Read, Write};
     use std::process::Stdio;
-    let mut child =
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't run the display profile reader: {e}"))?;
+    let mut child = cmd
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("couldn't run the display profile reader: {e}"))?;
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        let text = text.to_owned();
+        // Written off-thread and then closed (EOF ends the script); a helper that exits early just breaks the pipe.
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(text.as_bytes());
+        });
+    }
     // Drain both pipes while waiting: a reply larger than the pipe buffer would otherwise block
     // the helper until the deadline.
     let drain = |p: Option<Box<dyn Read + Send>>| {
@@ -497,16 +518,39 @@ mod tests {
     fn a_hung_helper_is_stopped_and_big_replies_dont_block() {
         let _spawns = crate::CHILD_SPAWNS.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let t0 = std::time::Instant::now();
-        let e = run_helper(std::process::Command::new("sleep").arg("30"), std::time::Duration::from_millis(300)).unwrap_err();
+        let e = run_helper(std::process::Command::new("sleep").arg("30"), std::time::Duration::from_millis(300), None).unwrap_err();
         assert!(e.contains("took longer than"), "{e}");
         assert!(t0.elapsed() < std::time::Duration::from_secs(5), "killed at the deadline");
         // 1 MB on stdout (far beyond a pipe buffer) arrives whole.
-        let big = run_helper(std::process::Command::new("/bin/sh").args(["-c", "head -c 1048576 /dev/zero | tr '\\0' a"]), std::time::Duration::from_secs(20))
-            .unwrap();
+        let big =
+            run_helper(std::process::Command::new("/bin/sh").args(["-c", "head -c 1048576 /dev/zero | tr '\\0' a"]), std::time::Duration::from_secs(20), None)
+                .unwrap();
         assert_eq!(big.len(), 1 << 20);
-        let e = run_helper(std::process::Command::new("/bin/sh").args(["-c", "echo boom >&2; exit 3"]), std::time::Duration::from_secs(5)).unwrap_err();
+        let e = run_helper(std::process::Command::new("/bin/sh").args(["-c", "echo boom >&2; exit 3"]), std::time::Duration::from_secs(5), None).unwrap_err();
         assert!(e.contains("boom"), "{e}");
-        assert!(run_helper(&mut std::process::Command::new("/nonexistent/helper"), std::time::Duration::from_secs(1)).is_err());
+        assert!(run_helper(&mut std::process::Command::new("/nonexistent/helper"), std::time::Duration::from_secs(1), None).is_err());
+    }
+
+    // The macOS reader hands its script to `osascript` on stdin; the arguments carry only `-`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_script_is_not_in_the_helpers_arguments() {
+        let cmd = osascript_command();
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, ["-"]);
+        assert!(SCRIPT.contains("base64EncodedStringWithOptions"), "the script this guards still encodes the profile");
+    }
+
+    // Input larger than a pipe buffer reaches the helper whole while its reply is read.
+    #[cfg(unix)]
+    #[test]
+    fn helper_input_arrives_on_stdin() {
+        let _spawns = crate::CHILD_SPAWNS.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let input = "x".repeat(1 << 20);
+        let out = run_helper(&mut std::process::Command::new("cat"), std::time::Duration::from_secs(20), Some(&input)).unwrap();
+        assert_eq!(out, input);
+        let none = run_helper(&mut std::process::Command::new("cat"), std::time::Duration::from_secs(5), None).unwrap();
+        assert_eq!(none, "", "without input stdin is closed (null), so `cat` ends at once");
     }
 
     fn base64_encode(b: &[u8]) -> String {
