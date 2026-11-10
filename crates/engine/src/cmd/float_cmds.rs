@@ -265,8 +265,12 @@ fn piece_outline(piece: &Surface, sample: photocraft_color::SampleType) -> Resul
         .into_par_iter()
         .map(|(tc, t): (TileCoord, Arc<Tile>)| -> Result<Option<(TileCoord, Arc<Tile>)>> {
             // A tile that can't be read back fails the float, rather than leave its part of the
-            // outline out.
-            let tb = t.try_bytes().map_err(|e| oom(photocraft_raster::AllocationError::ScratchRead(e)))?;
+            // outline out: a scratch file problem, not a lack of memory.
+            let tb = t.try_bytes().map_err(|e| {
+                EngineError::Other(format!(
+                    "could not read the selection's pixels back from the scratch file ({e}) while floating it; the document was not changed"
+                ))
+            })?;
             let mut out = blank.try_default_tile().map_err(oom)?;
             let (mut any, mut full) = (false, true);
             {
