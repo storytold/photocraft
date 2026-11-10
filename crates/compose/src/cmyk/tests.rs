@@ -60,7 +60,11 @@ fn over(b: Cmyka, s: Cmyka, opacity: f32) -> Cmyka {
     }
     let mut o = [0.0; 5];
     for i in 0..4 {
-        o[i] = (s[i] * sa + b[i] * b[4] * (1.0 - sa)) / a;
+        // Over nothing, under a covering source, or where both inks agree, the result is the
+        // source's ink exactly: `s * sa / sa` can be one ulp off, which a later mode or
+        // rounding step can turn into a whole level.
+        let shows_through = b[4] > 0.0 && sa < 1.0;
+        o[i] = if !shows_through || b[i] == s[i] { s[i] } else { (s[i] * sa + b[i] * b[4] * (1.0 - sa)) / a };
     }
     o[4] = a;
     o
@@ -760,6 +764,37 @@ fn clips_onto_pass_through(layers: &[LayerSpec]) -> bool {
         matches!(w[0], LayerSpec::Group { pass_through: true, fill, .. } if fill >= 1.0)
             && matches!(w[1], LayerSpec::Pixels { clipped: true, visible: true, .. })
     }) || layers.iter().any(|l| matches!(l, LayerSpec::Group { children, .. } if clips_onto_pass_through(children)))
+}
+
+/// A proptest case from main's CI: a masked shape below 100% Fill, then Posterize in Color
+/// Burn (Paint.NET) inside an isolated group. The burned brightness is exactly 73.5/255.
+#[test]
+fn posterize_in_paint_net_color_burn_on_a_rounding_tie_matches_the_reference() {
+    let shape = LayerSpec::Pixels {
+        kind: Kind::Shape,
+        blend: BlendMode::Normal,
+        fills: vec![(Rect::new(0, 0, 1, 1), [0.47422728, 0.0, 0.0, 0.0, 1.0])],
+        opacity: 1.0,
+        fill: 0.876696,
+        clipped: false,
+        visible: true,
+        mask: Some(MaskSpec { rects: vec![], default: 0.06425183, density: 1.0, enabled: true }),
+    };
+    let posterize = LayerSpec::Pixels {
+        kind: Kind::Adjust(AdjSpec::Posterize(4)),
+        blend: BlendMode::PaintNetColorBurn,
+        fills: vec![(Rect::new(0, 0, 1, 1), [0.0; 5])],
+        opacity: 1.0,
+        fill: 1.0,
+        clipped: false,
+        visible: true,
+        mask: None,
+    };
+    let group = LayerSpec::Group { children: vec![shape, posterize], pass_through: false, blend: BlendMode::Normal, opacity: 1.0, fill: 1.0, mask: None };
+    let s = Spec { w: 8, h: 6, layers: vec![group] };
+    let mut d = doc(s.w as u32, s.h as u32);
+    d.layers = s.layers.iter().map(build).collect();
+    assert_matches_reference(&d);
 }
 
 proptest! {
@@ -2007,4 +2042,50 @@ fn adjustment_layers_keep_the_special_fill_rule() {
         assert_matches_reference(&d);
         assert_routes_agree(&d);
     }
+}
+
+/// A one-pixel 32-bit CMYK document: a raster `base` backdrop and an Invert adjustment layer in
+/// `blend` at `fill`; `clipped`, when given, is a fully covering clipped Normal raster that
+/// replaces the adjusted inks exactly.
+fn special_fill_doc(base: Cmyka, blend: BlendMode, fill: f32, clipped: Option<Cmyka>) -> Document {
+    let format = PixelFormat { mode: ColorMode::Cmyk, sample: SampleType::F32, alpha: true };
+    let pixel = Rect::new(0, 0, 1, 1);
+    let mut d = Document::new("fill", Size::new(1, 1), ColorMode::Cmyk, SampleType::F32);
+    let mut backdrop = Layer::raster("base", format);
+    backdrop.surface_mut().unwrap().fill_rect(pixel, &base);
+    d.layers.push(backdrop);
+    let mut adjust = adjustment(Adjustment::Invert);
+    adjust.blend = blend;
+    adjust.fill_opacity = fill;
+    d.layers.push(adjust);
+    if let Some(ink) = clipped {
+        let mut clip = Layer::raster("clip", format);
+        clip.surface_mut().unwrap().fill_rect(pixel, &ink);
+        clip.clipped = true;
+        d.layers.push(clip);
+    }
+    d
+}
+
+/// Zero Fill leaves the backdrop bit-exact in all of the special eight. Linear Burn and Linear
+/// Light used to round trip through brightness (0.7 came back as 0.70000005).
+#[test]
+fn adjustment_zero_fill_keeps_backdrop_inks_exact() {
+    let base = [0.1, 0.4, 0.7, 0.3, 1.0];
+    for mode in SEPARABLE.iter().copied().filter(|m| crate::psblend::fill_is_special(*m)) {
+        let d = special_fill_doc(base, mode, 0.0, None);
+        assert!(supports(&d));
+        assert_eq!(render1(&d, 0, 0), base, "{mode:?}");
+    }
+}
+
+/// Two F32 inks can share one brightness; zero Fill keeps the backdrop's, not the source's.
+#[test]
+fn adjustment_zero_fill_preserves_colliding_brightness() {
+    let base = [f32::from_bits(0x3dcccccc), 0.4, 0.7, 0.3, 1.0];
+    let source = [f32::from_bits(0x3dcccccd), 0.4, 0.7, 0.3, 1.0];
+    assert_ne!(base[0], source[0]);
+    assert_eq!(1.0 - base[0], 1.0 - source[0]);
+    let d = special_fill_doc(base, BlendMode::Difference, 0.0, Some(source));
+    assert_eq!(render1(&d, 0, 0), base);
 }
