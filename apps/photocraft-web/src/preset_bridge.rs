@@ -79,12 +79,13 @@ pub enum WriteError {
     Aborted(String),
     Stale(String),
     Uncertain(String),
+    Blocked(String),
 }
 
 impl WriteError {
     pub fn message(&self) -> &str {
         match self {
-            Self::Aborted(message) | Self::Stale(message) | Self::Uncertain(message) => message,
+            Self::Aborted(message) | Self::Stale(message) | Self::Uncertain(message) | Self::Blocked(message) => message,
         }
     }
 }
@@ -95,8 +96,13 @@ impl From<String> for WriteError {
     }
 }
 
+pub enum ActionRecovery {
+    Reopen,
+    Preserve,
+}
+
 pub enum SaveWarning {
-    Actions(String),
+    Actions(String, Option<ActionRecovery>),
     Presets(String),
 }
 
@@ -230,7 +236,7 @@ impl Bridge {
             return None;
         }
         let Some(revision) = s.action_revision.checked_add(1) else {
-            s.action_error = Some(WriteError::Stale("Browser Action revision limit reached".into()));
+            s.action_error = Some(WriteError::Blocked("Browser Action revision limit reached".into()));
             return None;
         };
         s.dirty.remove(ACTIONS_FILE);
@@ -281,11 +287,26 @@ impl Bridge {
         s.rejected
             .iter()
             .next()
-            .map(|(name, error)| if name == ACTIONS_FILE { SaveWarning::Actions(error.clone()) } else { SaveWarning::Presets(error.clone()) })
+            .map(
+                |(name, error)| {
+                    if name == ACTIONS_FILE { SaveWarning::Actions(error.clone(), Some(ActionRecovery::Preserve)) } else { SaveWarning::Presets(error.clone()) }
+                },
+            )
             .or_else(|| s.error.clone().map(SaveWarning::Presets))
-            .or_else(|| s.action_error.as_ref().map(|e| SaveWarning::Actions(e.message().to_owned())))
-            .or_else(|| s.action_quarantine.clone().map(SaveWarning::Actions))
-            .or_else(|| s.actions_unsynced.then(|| SaveWarning::Actions("Browser Actions definitions could not be staged".into())))
+            .or_else(|| {
+                s.action_error.as_ref().map(|error| {
+                    let recovery = match error {
+                        WriteError::Aborted(_) => None,
+                        WriteError::Stale(_) | WriteError::Uncertain(_) => Some(ActionRecovery::Reopen),
+                        WriteError::Blocked(_) => Some(ActionRecovery::Preserve),
+                    };
+                    SaveWarning::Actions(error.message().to_owned(), recovery)
+                })
+            })
+            .or_else(|| s.action_quarantine.clone().map(|error| SaveWarning::Actions(error, Some(ActionRecovery::Preserve))))
+            .or_else(|| {
+                s.actions_unsynced.then(|| SaveWarning::Actions("Browser Actions definitions could not be staged".into(), Some(ActionRecovery::Preserve)))
+            })
     }
 
     pub fn unsaved(&self) -> bool {
@@ -482,8 +503,19 @@ mod tests {
             bridge.finish(batch, Ok(()));
             assert!(bridge.unsaved(), "the Action intent is still pending");
             assert!(bridge.begin().is_none(), "retry must wait for a fresh Action generation");
-            assert!(matches!(bridge.error(), Some(SaveWarning::Actions(message)) if message == reason));
+            assert!(matches!(bridge.error(), Some(SaveWarning::Actions(message, Some(ActionRecovery::Reopen))) if message == reason));
         }
+    }
+
+    #[test]
+    fn exhausted_action_revisions_warn_to_preserve_actions_without_promising_a_reopen_fix() {
+        let bridge = Bridge::default();
+        bridge.load_action_keys(u64::MAX, ActionKeys::default());
+        bridge.write(ACTIONS_FILE, b"local actions").unwrap();
+        assert!(bridge.begin().is_none());
+        assert!(matches!(bridge.error(), Some(SaveWarning::Actions(_, Some(ActionRecovery::Preserve)))));
+        bridge.retry();
+        assert!(bridge.begin().is_none());
     }
 
     #[test]
@@ -503,6 +535,7 @@ mod tests {
         assert_eq!(bridge.committed_action_keys(), None);
         assert_eq!(bridge.read(ACTIONS_FILE, 1024).unwrap(), malformed);
         assert!(bridge.write(ACTIONS_FILE, b"would overwrite damaged data").is_err());
+        assert!(matches!(bridge.error(), Some(SaveWarning::Actions(_, Some(ActionRecovery::Preserve)))));
         assert!(bridge.remove(ACTIONS_FILE).is_err());
         bridge.stage_action_keys(keys);
         bridge.write(INDEX_FILE, b"unrelated index").unwrap();

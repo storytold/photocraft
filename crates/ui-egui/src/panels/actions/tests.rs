@@ -639,6 +639,31 @@ fn assigning_an_action_shortcut_clears_only_conflicting_action_alternates() {
     assert_eq!(app.session.prefs().alternate_shortcuts["file.save"], ["F6", "F8"]);
 }
 
+#[test]
+fn assigning_a_primary_shortcut_clears_mixed_case_legacy_conflicts() {
+    for pending in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let id = "0123456789abcdef0123456789abcdef";
+        app.session.actions.list = vec![Action::new("First", Vec::new()), Action::new("Second", Vec::new())];
+        app.session.actions.list[1].action_id = Some(id.into());
+        app.session.edit_prefs(|prefs| {
+            prefs.shortcuts.insert("actions.play:First".into(), "f6".into());
+            prefs.shortcuts.insert("file.save".into(), "f6".into());
+        });
+        app.ui.actions.preset_store_disconnected = pending;
+        assign_shortcut(&mut app, 1, "F6").unwrap();
+        if pending {
+            finish_deferred_shortcut_conflicts(&mut app, false);
+            assert_eq!(app.session.prefs().shortcuts["actions.play:First"], "f6");
+            finish_deferred_shortcut_conflicts(&mut app, true);
+        }
+        let prefs = app.session.prefs();
+        assert_eq!(prefs.shortcuts[&actions_cmds::occurrence_key(id)], "F6");
+        assert_eq!(prefs.shortcuts["actions.play:First"], "");
+        assert_eq!(prefs.shortcuts["file.save"], "f6");
+    }
+}
+
 /// #7646: an action's function key can take Shift and Command, as in Photoshop's Action
 /// Options, and only that combination plays it.
 #[test]

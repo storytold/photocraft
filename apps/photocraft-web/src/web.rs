@@ -14,7 +14,7 @@ use photocraft_ui_egui::theme::ThemeKind;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
 use wasm_bindgen::JsCast as _;
 
-use crate::preset_bridge::SaveWarning;
+use crate::preset_bridge::{ActionRecovery, SaveWarning};
 
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 type PlaceInbox = photocraft_ui_egui::PlaceInbox;
@@ -516,7 +516,7 @@ impl eframe::App for WebShell {
                         ui.ctx().request_repaint();
                     }
                     match &warning {
-                        SaveWarning::Actions(error) => {
+                        SaveWarning::Actions(error, _) => {
                             ui.colored_label(tokens.warning, i18n::t("Actions"));
                             ui.colored_label(tokens.warning, error.as_str());
                         }
@@ -525,12 +525,21 @@ impl eframe::App for WebShell {
                         }
                     }
                 });
-                if matches!(warning, SaveWarning::Presets(_)) {
-                    ui.label(if self.database.is_some() {
-                        i18n::t("Keep this tab open to retain your brushes.")
-                    } else {
-                        i18n::t("Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.")
-                    });
+                match warning {
+                    SaveWarning::Actions(_, Some(ActionRecovery::Reopen)) => {
+                        ui.label(i18n::t("Export a copy of any unsaved Actions before reopening this page. Reopening can discard unsaved changes."));
+                    }
+                    SaveWarning::Actions(_, Some(ActionRecovery::Preserve)) => {
+                        ui.label(i18n::t("Keep this tab open and export a copy of any available Actions."));
+                    }
+                    SaveWarning::Actions(_, None) => {}
+                    SaveWarning::Presets(_) => {
+                        ui.label(if self.database.is_some() {
+                            i18n::t("Keep this tab open to retain your brushes.")
+                        } else {
+                            i18n::t("Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.")
+                        });
+                    }
                 }
             });
         }

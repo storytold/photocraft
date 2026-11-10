@@ -327,10 +327,10 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
                             let revision = if current.is_undefined() || current.is_instance_of::<Blob>() {
                                 0
                             } else {
-                                paired_actions(&current).map_err(|error| WriteError::Stale(format!("{error}. Reopen the page before saving Actions again.")))?.0
+                                paired_actions(&current).map_err(WriteError::Blocked)?.0
                             };
                             if revision != base {
-                                return Err(WriteError::Stale("Actions changed in another tab. Reopen the page before saving Actions again.".into()));
+                                return Err(WriteError::Stale("Actions changed in another tab.".into()));
                             }
                             store.put_with_key(&record, &key).map_err(js)?;
                             Ok(())

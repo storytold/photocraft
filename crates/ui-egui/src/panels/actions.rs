@@ -430,7 +430,7 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
         let pending_legacy = |other: &str| pending && other.starts_with(actions_cmds::PLAY_SHORTCUT_PREFIX);
         let mut conflicts = DeferredShortcutConflicts { winner: id.clone(), chord: key.clone(), primary: Vec::new(), alternate: Vec::new() };
         for (other, assigned) in &prefs.shortcuts {
-            if assigned == &key {
+            if photocraft_engine::prefs::normalize_shortcut(assigned).as_ref() == Some(&key) {
                 if pending_legacy(other) {
                     conflicts.primary.push(other.clone());
                 } else if can_clear(other) {
@@ -499,7 +499,9 @@ pub(crate) fn finish_deferred_shortcut_conflicts(app: &mut PhotocraftApp, action
         }
         let losing = |key: &str| actions_cmds::shortcut_row(list, key).is_some_and(|row| row != winner);
         for key in pending.primary {
-            if losing(&key) && prefs.shortcuts.get(&key) == Some(&pending.chord) {
+            if losing(&key)
+                && prefs.shortcuts.get(&key).and_then(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned)).as_ref() == Some(&pending.chord)
+            {
                 primary.insert(key);
             }
         }
