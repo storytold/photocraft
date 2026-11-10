@@ -13,13 +13,13 @@ fn app() -> PhotocraftApp {
 }
 
 fn click(app: &mut PhotocraftApp, p: [f64; 2]) {
-    assert!(pointer(app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }));
-    assert!(pointer(app, ToolEvent::Up { x: p[0], y: p[1] }));
+    assert!(pointer(app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE));
+    assert!(pointer(app, ToolEvent::Up { x: p[0], y: p[1] }, egui::Modifiers::NONE));
 }
 
 /// The pointer moved with the button up.
 fn hover(app: &mut PhotocraftApp, p: [f64; 2]) {
-    assert!(pointer(app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }));
+    assert!(pointer(app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE));
 }
 
 const A: [f64; 2] = [30.0, 20.0];
