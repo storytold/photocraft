@@ -682,7 +682,7 @@ fn text_kerning_roundtrips_and_defaults() {
     assert!(s.contains("\"kern\":0.0"), "kern defaults to 0");
 }
 
-/// Type on a path (#218): the path, start offset and flip survive .pcraft.
+/// Type on a path (#218): the path, start and end offsets, and flip survive .pcraft.
 #[test]
 fn path_text_shape_roundtrips() {
     use photocraft_doc::text::TextShape;
@@ -692,7 +692,7 @@ fn path_text_shape_roundtrips() {
     let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
     for id in ids {
         if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
-            t.shape = TextShape::Path { path: path.clone(), start: 12.5, flip: true };
+            t.shape = TextShape::Path { path: path.clone(), start: 12.5, end: Some(83.0), flip: true };
         }
     }
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
@@ -700,7 +700,7 @@ fn path_text_shape_roundtrips() {
         LayerContent::Text(t) => Some(t.shape.clone()),
         _ => None,
     });
-    assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, flip: true }));
+    assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, end: Some(83.0), flip: true }));
 }
 
 /// Area type (#218): the whole path, ops and fill rule included, survives .pcraft.

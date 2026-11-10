@@ -39,12 +39,40 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
     })
 }
 
+/// Whether command `id` leaves a Type box-handle drag going: only the ones that change what is
+/// on screen and nothing else. `UI_COMMANDS` is every command the shell carries out itself, so it
+/// can't tell them apart: it holds `edit.freeTransform` and `file.save`, which must see the dragged
+/// box, `view.clearSelectedGuides`, which edits the document, and `window.nextDocument`, which
+/// switches to another one mid-drag. So the commands that cannot touch either are listed one by
+/// one, and the panel ones (open, close, arrange: `window.panel.*`, `window.toggle.*` and
+/// `type.panels.*`, the Character panel's Cmd+T among them) by prefix, since they only lay out
+/// windows. Everything else applies the box first, which is harmless when no drag is going.
+fn keeps_box_drag(id: &str) -> bool {
+    const VIEW: &[&str] = &[
+        "view.zoomIn",
+        "view.zoomOut",
+        "view.fitOnScreen",
+        "view.actualPixels",
+        "view.rotateView",
+        "view.resetView",
+        "view.screenMode.cycle",
+        "view.darkenInterface",
+        "view.lightenInterface",
+    ];
+    VIEW.contains(&id) || ["window.panel.", "window.toggle.", "type.panels."].iter().any(|prefix| id.starts_with(prefix))
+}
+
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
     {
         authorize(id, &params)?;
+    }
+    // A held Type box handle applies its box before any command that may read or edit the
+    // document runs; a command that edits it first would make the drag's box stale and lose it.
+    if !keeps_box_drag(id) {
+        crate::type_box_preview::end_drag(app);
     }
     if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
