@@ -1,6 +1,7 @@
 //! #12829: measured Photoshop History names, without changing other Pen tools or destinations.
 use super::*;
 
+/// Creates a 200 by 200 document with Freeform Pen selected in the requested drawing mode.
 fn app(mode: &str) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
@@ -10,6 +11,7 @@ fn app(mode: &str) -> PhotocraftApp {
     app
 }
 
+/// Builds an offset four-corner trace, optionally returning to its start to exercise closure.
 fn trace(closed: bool, offset: f64) -> Vec<[f64; 3]> {
     let mut points = vec![[20.0 + offset, 20.0, 1.0], [80.0 + offset, 20.0, 1.0], [80.0 + offset, 80.0, 1.0], [20.0 + offset, 80.0, 1.0]];
     if closed {
@@ -18,10 +20,12 @@ fn trace(closed: bool, offset: f64) -> Vec<[f64; 3]> {
     points
 }
 
+/// Counts committed undo steps, excluding the initial document state.
 fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.past_len()
 }
 
+/// Checks that a successful stroke adds exactly one step with the expected undo label.
 fn assert_step(app: &PhotocraftApp, before: usize, name: &str) {
     let h = &app.session.active().unwrap().history;
     assert_eq!(h.past_len(), before + 1, "one step per stroke");
@@ -29,6 +33,7 @@ fn assert_step(app: &PhotocraftApp, before: usize, name: &str) {
     assert!(!app.ui.status_error, "{}", app.ui.status);
 }
 
+/// Checks that open and closed Work Path strokes remain separate named undo/redo operations.
 #[test]
 fn freeform_path_strokes_are_individual_named_steps_and_undo_redo_the_whole_stroke() {
     for closed in [false, true] {
@@ -53,6 +58,7 @@ fn freeform_path_strokes_are_individual_named_steps_and_undo_redo_the_whole_stro
     }
 }
 
+/// Checks that each open or closed Shape stroke creates a layer in one named undo/redo step.
 #[test]
 fn freeform_shape_strokes_create_layers_in_the_same_named_step() {
     for closed in [false, true] {
@@ -79,6 +85,7 @@ fn freeform_shape_strokes_create_layers_in_the_same_named_step() {
     }
 }
 
+/// Ensures selecting Freeform Pen cannot relabel an existing Pen or Curvature Pen draft commit.
 #[test]
 fn pen_and_curvature_keep_default_history_names_even_with_freeform_selected_at_commit() {
     for mode in ["path", "shape"] {
@@ -102,6 +109,7 @@ fn pen_and_curvature_keep_default_history_names_even_with_freeform_selected_at_c
     }
 }
 
+/// Ensures a Freeform gesture retains its captured destination and tool identity through commit.
 #[test]
 fn freeform_uses_captured_destination_and_tool_identity() {
     let mut app = app("shape");
@@ -115,6 +123,7 @@ fn freeform_uses_captured_destination_and_tool_identity() {
     assert!(app.run("shape.info", json!({})).is_ok());
 }
 
+/// Checks that empty, stationary and click-only traces create neither a path nor a history step.
 #[test]
 fn freeform_click_and_empty_trace_make_no_step() {
     let mut app = app("path");
@@ -126,6 +135,7 @@ fn freeform_click_and_empty_trace_make_no_step() {
     }
 }
 
+/// Checks that the unmeasured existing-shape and vector-mask destinations keep their labels.
 #[test]
 fn unmeasured_existing_shape_and_vector_mask_keep_their_labels() {
     let mut app = app("shape");
@@ -147,6 +157,7 @@ fn unmeasured_existing_shape_and_vector_mask_keep_their_labels() {
     assert!(app.session.active().unwrap().doc.work_path.is_none());
 }
 
+/// Checks atomic label validation and one-step commits for accepted and default history labels.
 #[test]
 fn history_name_is_validated_before_mutation_and_defaults_are_preserved() {
     let path = json!({"subpaths": [{"knots": [[20, 20], [80, 80]]}]});
@@ -189,6 +200,7 @@ fn history_name_is_validated_before_mutation_and_defaults_are_preserved() {
     }
 }
 
+/// Drives the control channel to check release-only commits, including a selected endpoint start.
 #[test]
 fn control_pointer_strokes_commit_only_on_release_with_the_freeform_label() {
     use crate::control::{ControlRequest, Outcome, handle};

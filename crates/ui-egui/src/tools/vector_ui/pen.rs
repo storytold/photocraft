@@ -412,6 +412,8 @@ pub fn pen_end(app: &mut PhotocraftApp) {
 /// layer; in Path mode a subpath of the targeted vector mask, else of the selected path or a new
 /// work path. An added subpath takes the options bar's Path Operation (#1397). `false` when the
 /// document refused it, with the reason in the status bar.
+///
+/// The Freeform history override applies to document paths and new shape layers only.
 fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, freeform: bool) -> bool {
     if pen.knots.is_empty() || (pen.knots.len() < 2 && app.ui.tool_options.vector_mode == "shape") {
         return true;
@@ -862,10 +864,13 @@ fn fit_with_straight_segments(trace: &[[f64; 2]], straight: &[usize], fit: f64, 
 
 use super::{PenOwner, cancel_stale_pen, capture_pen_owner};
 
+/// Commits a draft with the normal history labels used by Pen and Curvature Pen.
 fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> Result<(), String> {
     commit_path_named(app, pen, closed, false)
 }
 
+/// Commits a draft with its captured owner and returns the refusal message on failure.
+/// `freeform` changes history labels only for document paths and newly created shape layers.
 fn commit_path_named(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, freeform: bool) -> Result<(), String> {
     let Some(owner) = pen.owner.clone().filter(|o| o.valid(app)) else { return Err("Pen draft target is stale; no path was changed".into()) };
     let result = as_owner(app, &owner, |app| {
