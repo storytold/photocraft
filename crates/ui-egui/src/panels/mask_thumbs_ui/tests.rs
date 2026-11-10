@@ -831,11 +831,23 @@ fn a_new_adjustment_layer_brings_properties_to_the_front() {
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dockTabs": {"properties": 1}}));
     crate::control::handle(h.state_mut(), &ctx, &req);
     h.run_steps(2);
-    assert!(h.state().ui.dock.is_collapsed(crate::dock::Group::Properties));
+    h.state_mut().run("window.panel.group", json!({"panel": "properties", "operation": "collapse"})).unwrap();
+    h.run_steps(2);
+    fn compact_properties(node: &craft_ui::docking::Node<String>) -> bool {
+        use craft_ui::docking::Node;
+        match node {
+            Node::Dock { columns, .. } => columns.iter().any(|c| c.iconic && c.groups.iter().any(|g| g.panels.iter().any(|p| p == "properties"))),
+            Node::Split { first, second, .. } => compact_properties(first) || compact_properties(second),
+            _ => false,
+        }
+    }
+    let compact = |h: &Harness<'_, PhotocraftApp>| {
+        h.state().ui.docking.as_ref().and_then(|w| w.layout.root.as_ref()).is_some_and(compact_properties)
+    };
+    assert!(compact(&h), "the Properties column is compact");
     h.state_mut().run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
     h.run_steps(6);
-    assert_eq!(h.state().ui.dock_tabs.properties, 0, "Properties is the group's tab");
-    assert!(!h.state().ui.dock.is_collapsed(crate::dock::Group::Properties), "the group is expanded");
+    assert_eq!(h.state().ui.docking_flyout.as_deref(), Some("properties"), "creating an adjustment opens Properties");
     assert!(h.query_all_by_label("Reset to defaults").next().is_some(), "the Curves settings show");
 }
 
