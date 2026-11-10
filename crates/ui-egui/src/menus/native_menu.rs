@@ -711,6 +711,12 @@ impl NativeMenu {
         NativeMenu { backend, state: None, clicks: Vec::new(), dirty: true, logged: false }
     }
 
+    /// Whether a native snapshot can be reused without waiting for pending capability data.
+    #[cfg(test)]
+    pub(crate) fn has_stable_snapshot(&self) -> bool {
+        self.state.is_some()
+    }
+
     /// Before egui sees this frame's input: key equivalents become the key presses they were,
     /// and clicks wait for [`NativeMenu::run`].
     ///
@@ -738,7 +744,8 @@ impl NativeMenu {
     }
 }
 
-/// Run the native menu clicks that arrived since the last frame, like in-window menu clicks.
+/// Run queued native clicks against current modal state and OpenType capabilities. The
+/// published menu can still reflect an earlier selection when a native click arrives.
 pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_mut() else { return };
     let clicks = std::mem::take(&mut menu.clicks);
@@ -747,8 +754,7 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             continue;
         }
-        // The rows are disabled while a dialog is open; a click that raced the update is dropped.
-        if !crate::menus::modal_allows(app, &id) {
+        if !crate::menus::modal_allows(app, &id) || crate::type_tool::opentype_availability(app, &id).is_some_and(|availability| !availability.enabled()) {
             continue;
         }
         if let Err(e) = crate::menus::invoke(app, ctx, &id, serde_json::json!({})) {
@@ -768,7 +774,10 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let lang = crate::i18n::current();
-    let mut items = crate::menus::menu_items(app);
+    let (mut items, retry) = super::items::menu_items_with_retry(app);
+    if retry {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
     for it in &mut items {
         it.enabled &= crate::menus::modal_allows(app, &it.id);
     }
@@ -781,7 +790,7 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
         menu.logged = true;
     }
     menu.backend.sync(&layout.bar);
-    menu.state = Some(state);
+    menu.state = (!retry).then_some(state);
     menu.dirty = false;
 }
 
@@ -793,10 +802,13 @@ pub(crate) fn had_input(ctx: &egui::Context) -> bool {
 /// What the menus' rows depend on, cheaply: commands run, the documents (their names, in tab
 /// order, for the Window menu) and the active one's revision,
 /// selection, recent files, panels and view state, the language. `input` forces a change on
-/// frames with a click or key press, which covers state the hash doesn't list.
+/// frames with a click or key press, which covers state the hash doesn't list. Font catalog
+/// changes, PostScript resolution and background readiness refresh OpenType availability even
+/// without input.
 pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     let mut h = DefaultHasher::new();
     input.hash(&mut h);
+    (photocraft_text::fonts::shared_generation(), photocraft_text::fonts::shared_postscript_generation(), photocraft_text::try_shared().is_some()).hash(&mut h);
     let s = &app.session;
     s.journal.len().hash(&mut h);
     s.active_index().hash(&mut h);
@@ -810,6 +822,7 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
         (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
     }
     let ui = &app.ui;
+    ui.text_edit.as_ref().map(|edit| (edit.document, edit.layer, edit.anchor, edit.caret)).hash(&mut h);
     (&ui.recent_files, &ui.workspace, ui.palette_open, ui.transform.is_some(), ui.text_edit.is_some(), ui.dialogs.len()).hash(&mut h);
     (app.discard.is_some(), app.camera_raw.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
     // Edit / Clear Selected Guides are enabled only while a guide is selected.

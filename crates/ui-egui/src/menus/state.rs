@@ -2,7 +2,18 @@ use super::invoke::{panel_alias, proof_preset, workspace_name};
 use super::items::MenuItem;
 use super::{DOCUMENT_ITEM, PhotocraftApp, Value};
 
+/// UI enablement includes matched-face OpenType capabilities; engine commands remain valid
+/// independently, so automation can preserve styling for fonts installed on another machine.
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
+    if crate::type_tool::opentype_availability(app, id).is_some_and(|availability| !availability.enabled()) {
+        return false;
+    }
+    is_enabled_without_opentype(app, id)
+}
+
+/// Shell and engine enablement after the caller checks OpenType capabilities. Menu builders
+/// supply that check from one shared target snapshot instead of traversing runs for every item.
+pub(super) fn is_enabled_without_opentype(app: &PhotocraftApp, id: &str) -> bool {
     if id == "layer.selectUnderCursor" {
         return app.session.active().is_some() && app.drag.is_none() && app.brush_resize.is_none();
     }
