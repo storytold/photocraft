@@ -54,7 +54,7 @@ impl Frame {
             path: self.outline(),
             fill: None,
             stroke: Some(stroke),
-            pixel_align_stroke: false,
+            use_aligned_rendering: false,
             psd_coordinate_frame: None,
             cache: None,
             psd_raw: None,

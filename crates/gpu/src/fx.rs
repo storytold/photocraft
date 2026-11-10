@@ -566,6 +566,13 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
                 }
             }
             LayerContent::Adjustment(a) => format!("{a:?}").hash(h),
+            LayerContent::Shape(sh) => {
+                format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(h);
+                (sh.use_aligned_rendering, sh.psd_coordinate_frame, sh.psd_raw.is_some(), sh.density.to_bits(), sh.feather.to_bits()).hash(h);
+                if let Some(s) = &sh.cache {
+                    surface_fp(s, h, pin);
+                }
+            }
             _ => {
                 if let Some(s) = l.surface() {
                     surface_fp(s, h, pin);

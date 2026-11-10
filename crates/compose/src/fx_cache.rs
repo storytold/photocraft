@@ -62,7 +62,7 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
         LayerContent::Shape(shape) => {
             layer.surface().map_or(0, |s| surface_fp(s, pin)).hash(h);
             format!("{:?}{:?}{:?}{:?}", shape.path, shape.fill, shape.stroke, shape.live).hash(h);
-            (shape.pixel_align_stroke, shape.psd_coordinate_frame, shape.psd_raw.is_some()).hash(h);
+            (shape.use_aligned_rendering, shape.psd_coordinate_frame, shape.psd_raw.is_some()).hash(h);
             (shape.density.to_bits(), shape.feather.to_bits()).hash(h);
         }
         _ => layer.surface().map_or(0, |s| surface_fp(s, pin)).hash(h),

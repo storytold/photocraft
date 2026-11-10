@@ -157,7 +157,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             psd_raw: opt_blob(&s.psd_raw, sink),
             path: s.path.clone(),
             stroke: s.stroke.clone(),
-            pixel_align_stroke: s.pixel_align_stroke,
+            use_aligned_rendering: s.use_aligned_rendering,
             psd_coordinate_frame: s.psd_coordinate_frame,
             // Older PhotoCraft versions cannot deserialize ArrowLine.
             // The saved path preserves the arrow's visual appearance.
@@ -463,7 +463,6 @@ impl Loader<'_> {
         let mut layer = self.layer_with(m, children)?;
         // Older native files predate explicit PSD coordinate provenance.
         if let LayerContent::Shape(shape) = &mut layer.content
-            && shape.pixel_align_stroke
             && shape.psd_raw.is_some()
             && shape.psd_coordinate_frame.is_none()
         {
@@ -502,12 +501,12 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, pixel_align_stroke, psd_coordinate_frame, live, arrow_live, density, feather } => {
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, use_aligned_rendering, psd_coordinate_frame, live, arrow_live, density, feather } => {
                 LayerContent::Shape(ShapeLayer {
                     path: path.clone(),
                     fill: fill.clone(),
                     stroke: stroke.clone(),
-                    pixel_align_stroke: *pixel_align_stroke,
+                    use_aligned_rendering: *use_aligned_rendering,
                     psd_coordinate_frame: *psd_coordinate_frame,
                     live: arrow_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. })).cloned().or_else(|| live.clone()),
                     cache: self.opt_surface(cache)?,

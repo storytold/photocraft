@@ -338,8 +338,8 @@ pub struct ShapeLayer {
     /// `None` = no fill (Photoshop's fill "none").
     pub fill: Option<Fill>,
     pub stroke: Option<ShapeStroke>,
-    /// Opt-in pixel alignment; false preserves legacy stroke rendering.
-    pub pixel_align_stroke: bool,
+    /// Align Edges: snap fill and stroke edges to document pixels at render time.
+    pub use_aligned_rendering: bool,
     /// Original PSD coordinate grid, retained independently of the export block.
     /// Supplies the half-quantum alignment allowance after an integer translation.
     pub psd_coordinate_frame: Option<[u32; 2]>,
@@ -362,7 +362,7 @@ impl Default for ShapeLayer {
             path: Path::default(),
             fill: None,
             stroke: None,
-            pixel_align_stroke: false,
+            use_aligned_rendering: false,
             psd_coordinate_frame: None,
             live: None,
             cache: None,

@@ -786,16 +786,16 @@ mod tests {
         ] {
             let (mut app, _) = app();
             app.ui.tool = tool;
-            app.ui.tool_options.pixel_align_stroke = true;
+            app.ui.tool_options.use_aligned_rendering = true;
             let params = new_tool_preset_params(&app, tool);
-            assert_eq!(params["options"]["toolOptions"]["pixel_align_stroke"], true, "{tool:?}");
+            assert_eq!(params["options"]["toolOptions"]["useAlignedRendering"], true, "{tool:?}");
             let name = app.run("tool.presets.new", params).unwrap()["name"].as_str().unwrap().to_string();
             crate::tool_reset::reset_options(&mut app.ui.tool_options, tool);
-            assert!(!app.ui.tool_options.pixel_align_stroke, "{tool:?}");
+            assert!(!app.ui.tool_options.use_aligned_rendering, "{tool:?}");
             app.ui.tool_options.feather = 11.0;
             select_tool_preset(&mut app, &name);
             assert_eq!(app.ui.tool, tool);
-            assert!(app.ui.tool_options.pixel_align_stroke, "{tool:?}");
+            assert!(app.ui.tool_options.use_aligned_rendering, "{tool:?}");
             assert_eq!(app.ui.tool_options.feather, 11.0);
         }
     }
@@ -856,7 +856,7 @@ mod tests {
         for enabled in [false, true] {
             for drop in [false, true] {
                 let (mut app, _) = app();
-                app.ui.tool_options.pixel_align_stroke = enabled;
+                app.ui.tool_options.use_aligned_rendering = enabled;
                 app.last_canvas_rect = Rect::from_min_max(pos2(340.0, 0.0), pos2(800.0, 500.0));
                 let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 500.0)).with_step_dt(0.02).build_ui_state(
                     |ui, app: &mut PhotocraftApp| {
@@ -891,14 +891,14 @@ mod tests {
                     }
                 }
                 let info = h.state_mut().run("shape.info", json!({})).unwrap();
-                assert_eq!(info["pixelAlignStroke"], enabled, "drop={drop}");
+                assert_eq!(info["useAlignedRendering"], enabled, "drop={drop}");
                 assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
                 h.state_mut().run("edit.undo", json!({})).unwrap();
                 assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
                 h.state_mut().run("edit.redo", json!({})).unwrap();
                 let redone = h.state_mut().run("shape.info", json!({})).unwrap();
                 assert_eq!(redone["path"], info["path"]);
-                assert_eq!(redone["pixelAlignStroke"], enabled);
+                assert_eq!(redone["useAlignedRendering"], enabled);
             }
         }
     }

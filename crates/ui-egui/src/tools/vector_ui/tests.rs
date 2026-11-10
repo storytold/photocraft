@@ -1601,7 +1601,7 @@ fn pixel_align_checkbox_keeps_pending_stroke_width_expression() {
     for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::PathSelection, Tool::DirectSelection] {
         let mut app = app();
         app.ui.tool = tool;
-        app.run("shape.create", json!({"kind":"rect","rect":[20,20,100,80],"stroke":{"width":3},"pixelAlignStroke":false})).unwrap();
+        app.run("shape.create", json!({"kind":"rect","rect":[20,20,100,80],"stroke":{"width":3},"useAlignedRendering":false})).unwrap();
         let before = app.run("shape.info", json!({})).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
             move |ui, app: &mut PhotocraftApp| {
@@ -1621,7 +1621,7 @@ fn pixel_align_checkbox_keeps_pending_stroke_width_expression() {
         h.event(egui::Event::Text("1+1".into()));
         h.run();
         assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "arithmetic waits for commit");
-        let at = h.get_by_label("Pixel Align Stroke").rect().center();
+        let at = h.get_by_label("Align Edges").rect().center();
         h.hover_at(at);
         h.step();
         // Deliver a complete click in one frame: losing focus commits the expression while
@@ -1633,20 +1633,20 @@ fn pixel_align_checkbox_keeps_pending_stroke_width_expression() {
         h.run_steps(2);
         let after = h.state_mut().run("shape.info", json!({})).unwrap();
         assert_eq!(after["stroke"]["width"], 2.0, "{tool:?}: expression and checkbox must both apply");
-        assert_eq!(after["pixelAlignStroke"], true);
+        assert_eq!(after["useAlignedRendering"], true);
         assert_eq!(after["path"], before["path"]);
         assert_eq!(after["fill"], before["fill"]);
         assert_eq!(h.state().ui.tool_options.stroke_width, 2.0);
-        assert!(h.state().ui.tool_options.pixel_align_stroke);
+        assert!(h.state().ui.tool_options.use_aligned_rendering);
         assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1, "one atomic edit");
         h.state_mut().run("edit.undo", json!({})).unwrap();
         let undone = h.state_mut().run("shape.info", json!({})).unwrap();
         assert_eq!(undone["stroke"], before["stroke"]);
-        assert_eq!(undone["pixelAlignStroke"], false);
+        assert_eq!(undone["useAlignedRendering"], false);
         h.state_mut().run("edit.redo", json!({})).unwrap();
         let redone = h.state_mut().run("shape.info", json!({})).unwrap();
         assert_eq!(redone["stroke"], after["stroke"]);
-        assert_eq!(redone["pixelAlignStroke"], true);
+        assert_eq!(redone["useAlignedRendering"], true);
     }
 }
 
@@ -1657,7 +1657,7 @@ fn pixel_align_checkbox_edits_selected_shape_and_undo_restores_its_value() {
     let mut app = app();
     finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default());
     // The selected layer, rather than the next-shape preference, supplies the checkbox.
-    app.ui.tool_options.pixel_align_stroke = true;
+    app.ui.tool_options.use_aligned_rendering = true;
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -1669,32 +1669,32 @@ fn pixel_align_checkbox_edits_selected_shape_and_undo_restores_its_value() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
     h.run_steps(4);
 
-    h.get_by_label("Pixel Align Stroke").click();
+    h.get_by_label("Align Edges").click();
     h.run_steps(3);
     let st = h.state().session.active().unwrap();
     let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
-    assert!(shape.pixel_align_stroke);
+    assert!(shape.use_aligned_rendering);
     h.state_mut().run("edit.undo", json!({})).unwrap();
     h.run_steps(3);
     let st = h.state().session.active().unwrap();
     let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
-    assert!(!shape.pixel_align_stroke);
+    assert!(!shape.use_aligned_rendering);
     h.state_mut().ui.tool_options.shape_mode = "path".into();
     h.run_steps(3);
-    assert!(h.query_by_label("Pixel Align Stroke").is_none(), "Path mode has no stroke controls");
+    assert!(h.query_by_label("Align Edges").is_none(), "Path mode has no stroke controls");
 }
 
 /// Keeping alignment in preview metadata must not add paint to Path-mode outlines.
 #[test]
 fn pixel_align_preview_preserves_shape_and_path_modes() {
     let mut app = app();
-    app.ui.tool_options.pixel_align_stroke = true;
+    app.ui.tool_options.use_aligned_rendering = true;
     app.ui.tool_options.shape_fill = true;
     app.ui.tool_options.stroke_width = 1.0;
     for mode in ["shape", "path"] {
         app.ui.tool_options.shape_mode = mode.into();
         let preview = super::shapes::shape_preview(&app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default()).unwrap();
-        assert!(preview.pixel_align_stroke);
+        assert!(preview.use_aligned_rendering);
         assert_eq!(preview.fill.is_some(), mode == "shape");
         assert_eq!(preview.stroke.is_some(), mode == "shape");
     }
@@ -1704,7 +1704,7 @@ fn pixel_align_preview_preserves_shape_and_path_modes() {
 #[test]
 fn pixel_align_shape_drag_keeps_fractional_width_coverage_at_double_zoom() {
     let mut app = app();
-    app.ui.tool_options.pixel_align_stroke = true;
+    app.ui.tool_options.use_aligned_rendering = true;
     app.ui.tool_options.shape_fill = false;
     app.ui.tool_options.stroke_width = 0.5;
     let ctx = egui::Context::default();
@@ -1732,7 +1732,7 @@ fn pixel_align_live_line_preview_matches_commit() {
     for vertical in [false, true] {
         for arrows in [false, true] {
             let mut app = app();
-            app.ui.tool_options.pixel_align_stroke = true;
+            app.ui.tool_options.use_aligned_rendering = true;
             app.ui.tool_options.stroke_width = 0.0;
             app.ui.tool_options.line_weight = 1.0;
             app.ui.tool_options.arrow_end = arrows;
@@ -1770,10 +1770,10 @@ fn pixel_align_reset_restores_shape_mode_without_resetting_pen_mode() {
     for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::CustomShape, Tool::Line] {
         app.ui.tool_options.shape_mode = "path".into();
         app.ui.tool_options.vector_mode = "shape".into();
-        app.ui.tool_options.pixel_align_stroke = true;
+        app.ui.tool_options.use_aligned_rendering = true;
         crate::tool_reset::reset_options(&mut app.ui.tool_options, tool);
         assert_eq!(app.ui.tool_options.shape_mode, "shape", "{tool:?}");
         assert_eq!(app.ui.tool_options.vector_mode, "shape", "{tool:?}: Pen preference must remain independent");
-        assert!(!app.ui.tool_options.pixel_align_stroke);
+        assert!(!app.ui.tool_options.use_aligned_rendering);
     }
 }

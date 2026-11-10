@@ -90,7 +90,7 @@ fn stroke_width(h: &mut Harness<'_, PhotocraftApp>, width: &str) {
 fn pixel_align_properties_keeps_pending_width_expression() {
     for enabled in [false, true] {
         let mut app = app("rgb", 8);
-        app.run("shape.create", json!({"rect":[20,20,60,40],"stroke":{"width":3},"pixelAlignStroke":enabled})).unwrap();
+        app.run("shape.create", json!({"rect":[20,20,60,40],"stroke":{"width":3},"useAlignedRendering":enabled})).unwrap();
         let original = shape(&app).clone();
         let mut h = harness(app, true);
         let history = h.state().session.active().unwrap().history.past_len();
@@ -100,7 +100,7 @@ fn pixel_align_properties_keeps_pending_width_expression() {
         h.event(Event::Text("1+1".into()));
         h.run();
         assert_eq!(shape(h.state()).stroke.as_ref().unwrap().width, 3.0);
-        let at = h.get_by_label("Pixel Align Stroke").rect().center();
+        let at = h.get_by_label("Align Edges").rect().center();
         h.hover_at(at);
         h.step();
         for pressed in [true, false] {
@@ -110,16 +110,16 @@ fn pixel_align_properties_keeps_pending_width_expression() {
         h.run_steps(2);
         let after = shape(h.state()).clone();
         assert_eq!(after.stroke.as_ref().unwrap().width, 2.0);
-        assert_eq!(after.pixel_align_stroke, !enabled);
+        assert_eq!(after.use_aligned_rendering, !enabled);
         assert_eq!(after.path, original.path);
         assert_eq!(after.fill, original.fill);
         assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(shape(h.state()).stroke, original.stroke);
-        assert_eq!(shape(h.state()).pixel_align_stroke, enabled);
+        assert_eq!(shape(h.state()).use_aligned_rendering, enabled);
         h.state_mut().run("edit.redo", json!({})).unwrap();
         assert_eq!(shape(h.state()).stroke, after.stroke);
-        assert_eq!(shape(h.state()).pixel_align_stroke, !enabled);
+        assert_eq!(shape(h.state()).use_aligned_rendering, !enabled);
     }
 }
 
@@ -1151,7 +1151,7 @@ fn pixel_align_properties_keeps_pending_live_geometry_expression() {
         h.key_press_modifiers(Modifiers::COMMAND, Key::A);
         h.event(Event::Text("2+2".into()));
         h.run();
-        let at = h.get_by_label("Pixel Align Stroke").rect().center();
+        let at = h.get_by_label("Align Edges").rect().center();
         h.hover_at(at);
         h.step();
         for pressed in [true, false] {
@@ -1160,7 +1160,7 @@ fn pixel_align_properties_keeps_pending_live_geometry_expression() {
         h.step();
         h.run_steps(2);
         let after = shape(h.state()).clone();
-        assert!(after.pixel_align_stroke, "{label}");
+        assert!(after.use_aligned_rendering, "{label}");
         assert_ne!(after.path, before.path, "{label}");
         assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
         h.state_mut().run("edit.undo", json!({})).unwrap();
@@ -1172,15 +1172,17 @@ fn pixel_align_properties_keeps_pending_live_geometry_expression() {
 
 #[test]
 fn pixel_align_round2_locked_shape_toolbar_restores_preference() {
-    let mut app = app("rgb", 8);
-    app.run("shape.create", json!({"rect":[20,20,60,60],"pixelAlignStroke":false})).unwrap();
-    let id = app.session.active().unwrap().active_layer.unwrap();
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(id).unwrap().locks.all = true;
-    app.ui.tool_options.pixel_align_stroke = false;
-    let mut h = harness(app, false);
-    h.get_by_label("Pixel Align Stroke").click();
-    h.run_steps(3);
-    assert!(h.state().ui.status_error);
-    assert!(!h.state().ui.tool_options.pixel_align_stroke);
-    assert!(!shape(h.state()).pixel_align_stroke);
+    for preference in [false, true] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"rect":[20,20,60,60],"useAlignedRendering":false})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(id).unwrap().locks.all = true;
+        app.ui.tool_options.use_aligned_rendering = preference;
+        let mut h = harness(app, false);
+        h.get_by_label("Align Edges").click();
+        h.run_steps(3);
+        assert!(h.state().ui.status_error);
+        assert_eq!(h.state().ui.tool_options.use_aligned_rendering, preference);
+        assert!(!shape(h.state()).use_aligned_rendering);
+    }
 }

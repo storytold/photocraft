@@ -317,3 +317,16 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!((bands[0].y0, bands[0].y1, bands[1].y1), (i32::MAX - 100, i32::MAX - 36, i32::MAX));
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
+
+#[test]
+fn group_key_tracks_uncached_shape_alignment() {
+    use photocraft_doc::ShapeLayer;
+    let mut group = Layer::group("g", vec![Layer::new("shape", LayerContent::Shape(ShapeLayer::default()))]);
+    let light = GlobalLight::default();
+    let before = group_key(&group, &light, &mut |_| {});
+    let LayerContent::Group(g) = &mut group.content else { unreachable!() };
+    let LayerContent::Shape(sh) = &mut g.children[0].content else { unreachable!() };
+    sh.use_aligned_rendering = true;
+    sh.psd_coordinate_frame = Some([1000, 2000]);
+    assert_ne!(before, group_key(&group, &light, &mut |_| {}));
+}

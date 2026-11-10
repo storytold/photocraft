@@ -1,10 +1,17 @@
-//! Coverage-only alignment of one-pixel straight runs. Geometry and dash arc lengths are
-//! never rounded. Curve tangencies and joins retain their original area antialiasing.
+//! Render-only alignment of shape edges and straight one-pixel stroke runs. Stored
+//! geometry and dash settings remain unchanged; curved interiors retain area antialiasing.
 use photocraft_doc::{LiveShape, Path, ShapeLayer, StrokeAlign};
 use photocraft_geom::Rect;
 
 // Trigonometric live shapes and quarter-turn transforms carry tiny rounding errors.
 const ALIGN_EPSILON: f64 = 1e-7;
+/// Round an edge to the nearest pixel, choosing increasing coordinates at half ties.
+/// Comparing the fractional part avoids addition rounding just below a half pixel.
+pub(crate) fn snap_edge(coordinate: f64) -> f64 {
+    let lower = coordinate.floor();
+    if coordinate - lower >= 0.5 { lower + 1.0 } else { lower }
+}
+
 type CleanLine = (Vec<(f64, f64)>, Vec<bool>);
 /// Compare source coordinates without treating flattened curve chords as straight segments.
 fn same(a: f64, b: f64) -> bool {
@@ -126,7 +133,7 @@ impl PixelRuns {
     }
     /// Keep centered one-pixel source runs isolated from neighboring geometry and joins.
     pub(crate) fn stroke(shape: &ShapeLayer, tol: f64, coordinate_tolerance: (f64, f64)) -> Self {
-        if !shape.pixel_align_stroke || !shape.stroke.as_ref().is_some_and(|s| s.width == 1.0 && s.align == StrokeAlign::Center) {
+        if !shape.use_aligned_rendering || !shape.stroke.as_ref().is_some_and(|s| s.width == 1.0 && s.align == StrokeAlign::Center) {
             return Self::default();
         }
         let mut runs = Self::path(&shape.path, coordinate_tolerance);
@@ -231,7 +238,7 @@ pub(crate) fn line_fill_path(shape: &ShapeLayer) -> Option<Path> {
         .stroke
         .as_ref()
         .is_some_and(|s| s.width > 0.0 && s.opacity > 0.0 && !matches!(&s.paint, photocraft_doc::Fill::Solid(color) if color.alpha <= 0.0));
-    if !shape.pixel_align_stroke || shape.has_soft_mask() || visible_outline {
+    if !shape.use_aligned_rendering || shape.has_soft_mask() || visible_outline {
         return None;
     }
     let live = shape.live.as_ref()?;
@@ -358,7 +365,7 @@ pub(crate) fn integer_rectangle(path: &Path, tolerance: (f64, f64)) -> bool {
 /// The original bounds of an eligible rectangle; only its render-time clipping mask is rounded.
 pub(crate) fn rectangle_bounds(shape: &ShapeLayer, tolerance: (f64, f64)) -> Option<(f64, f64, f64, f64)> {
     let stroke = shape.stroke.as_ref()?;
-    if !shape.pixel_align_stroke || stroke.width != 1.0 || stroke.align != StrokeAlign::Center || !integer_rectangle(&shape.path, tolerance) {
+    if !shape.use_aligned_rendering || stroke.width != 1.0 || stroke.align != StrokeAlign::Center || !integer_rectangle(&shape.path, tolerance) {
         return None;
     }
     shape.path.control_bounds()
@@ -440,4 +447,62 @@ fn clean_line(line: &crate::Polyline) -> Option<CleanLine> {
         knots.pop();
     }
     Some((points, knots))
+}
+
+/// Snap source axis-aligned edges on a render-only path. Moving a knot's handles
+/// with its anchor preserves the adjoining curve's tangent. Diagonals and curves
+/// are not inferred from tessellated chords.
+pub(crate) fn aligned_edge_path(shape: &ShapeLayer) -> Option<Path> {
+    if !shape.use_aligned_rendering || line_fill_path(shape).is_some() {
+        return None;
+    }
+    let mut path = shape.path.clone();
+    for subpath in &mut path.subpaths {
+        let source = subpath.knots.clone();
+        let count = source.len();
+        if count < 2 {
+            continue;
+        }
+        let mut axes = vec![(false, false); count];
+        // A vertical tangent identifies a horizontal extremum, and conversely.
+        // Snap its normal coordinate, moving handles with the anchor; curve
+        // interiors keep area antialiasing instead of thresholding their chords.
+        for (index, knot) in source.iter().enumerate() {
+            let curved = knot.in_ctrl != knot.anchor || knot.out_ctrl != knot.anchor;
+            axes[index] = (
+                curved && same(knot.in_ctrl.x, knot.anchor.x) && same(knot.out_ctrl.x, knot.anchor.x),
+                curved && same(knot.in_ctrl.y, knot.anchor.y) && same(knot.out_ctrl.y, knot.anchor.y),
+            );
+        }
+        let segments = if subpath.closed { count } else { count - 1 };
+        for index in 0..segments {
+            let next = (index + 1) % count;
+            let a = source[index];
+            let b = source[next];
+            let points = [a.anchor, a.out_ctrl, b.in_ctrl, b.anchor];
+            let vertical = points.iter().all(|point| same(point.x, a.anchor.x));
+            let horizontal = points.iter().all(|point| same(point.y, a.anchor.y));
+            for knot in [index, next] {
+                axes[knot].0 |= vertical;
+                axes[knot].1 |= horizontal;
+            }
+        }
+        for ((target, original), (vertical, horizontal)) in subpath.knots.iter_mut().zip(source).zip(axes) {
+            if vertical && original.anchor.x.is_finite() {
+                let snapped = snap_edge(original.anchor.x);
+                let delta = snapped - original.anchor.x;
+                target.anchor.x = snapped;
+                target.in_ctrl.x = original.in_ctrl.x + delta;
+                target.out_ctrl.x = original.out_ctrl.x + delta;
+            }
+            if horizontal && original.anchor.y.is_finite() {
+                let snapped = snap_edge(original.anchor.y);
+                let delta = snapped - original.anchor.y;
+                target.anchor.y = snapped;
+                target.in_ctrl.y = original.in_ctrl.y + delta;
+                target.out_ctrl.y = original.out_ctrl.y + delta;
+            }
+        }
+    }
+    (path != shape.path).then_some(path)
 }
