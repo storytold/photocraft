@@ -1,8 +1,8 @@
 use super::heal::history_source;
 use super::sampling::{SampleLayers, sample, sample_layers};
 use super::{
-    BlendMode, BrushSettings, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleType, Session, Stroke, StrokePoint, Surface, Value,
-    alpha_index, apply_coverage, bad, blend_from_str, coverage, damage_json, flag, has_pixel_layer, json, parse_brush, pattern_stamp, periodic, point,
+    BlendMode, BrushSettings, ColorTable, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleType, Session, Stroke, StrokePoint, Surface,
+    Value, alpha_index, apply_coverage, bad, blend_from_str, coverage, damage_json, flag, has_pixel_layer, json, parse_brush, pattern_stamp, periodic, point,
     reject_huge_stroke, run_stroke, to_rgba,
 };
 
@@ -173,6 +173,7 @@ pub struct LiveRetouch {
     pre: std::sync::Arc<Document>,
     pre_surf: Surface,
     colors: Option<crate::color_channels::ColorChannels>,
+    indexed_table: Option<ColorTable>,
     id: Option<LayerId>,
     params: Value,
     paint: LivePaint,
@@ -228,6 +229,7 @@ impl LiveRetouch {
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let (pre, base) = (st.doc.clone(), (st.doc.id, st.revision));
         let mut doc = (*pre).clone();
+        let indexed_table = crate::brush_cmds::indexed_table_for(&pre, p)?;
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
@@ -246,6 +248,7 @@ impl LiveRetouch {
             pre,
             pre_surf,
             colors: crate::color_channels::target(s, p)?,
+            indexed_table,
             id,
             params: p.clone(),
             paint,
@@ -315,6 +318,10 @@ impl LiveRetouch {
         if let Some(colors) = self.colors {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
             crate::color_channels::restrict_region(&self.pre_surf, surf, colors, damage)?;
+        }
+        if let Some(table) = self.indexed_table.as_ref() {
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
+            crate::indexed_edit::constrain_surface(surf, Some(&self.pre_surf), table, damage)?;
         }
         Ok(damage)
     }

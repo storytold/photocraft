@@ -277,6 +277,7 @@ impl Session {
         if let Some(id) = filter_mask_layer {
             smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;
         }
+        crate::indexed_edit::constrain_document(&before, &mut doc)?;
         if let Err(error) = photocraft_raster::spill::check_since(scratch_generation).and_then(|()| before.scratch_health()).and_then(|()| doc.scratch_health())
         {
             st.active_layer = previous_active_layer;

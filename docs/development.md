@@ -693,6 +693,37 @@ except Place, which is a job that `poll_jobs` steps on the UI thread (a *coopera
   inline place (1000 ms). Wasm is slower than a desktop core, so check a release web build too.
 
 
+## Indexed painting
+
+An Indexed document keeps its fixed `ColorTable` beside an expanded RGB/RGBA raster. Pixel
+edits do not append colours to that table. The `Session::edit` transaction boundary constrains
+accepted brush/retouch, fill, gradient, paste and interpolating transform edits after opacity,
+flow, blending, selection coverage and transparency rules have run. Every changed pixel maps to the
+nearest existing opaque table entry by squared encoded-RGB distance; equal distances keep the
+earlier table entry. The mapping is nearest-only: it does not add palette construction or
+dithering to painting.
+
+If the table reserves a transparent entry, it is excluded from opaque matching. A changed pixel
+whose resulting alpha is below 50% maps to that reserved entry and gets binary zero alpha;
+otherwise it maps to an opaque entry and gets binary full alpha. With no reserved transparent
+entry, painting remains opaque (including erasing a transparency-locked Background, which paints
+the existing background colour instead). A malformed or table-without-opaque-entry document is
+rejected rather than silently growing or changing its table.
+
+The constraint is applied to pixel-layer rasters only. Layer masks, alpha channels and Quick Mask
+remain grayscale/alpha targets even while the document is Indexed. Cold commits and live previews
+use the same constraint, including offered/clone previews, symmetry, wrapped retouch strokes and
+partitioned pointer batches. Changed tiles are constrained without densifying untouched sparse
+tiles; entering Indexed mode, changing the table, or changing depth performs its own explicit
+remap and is not remapped a second time.
+
+Current Indexed-mode tool refusals remain in force: Color Replacement, Mixer Brush and Dodge
+are not re-enabled by this constraint. `indexed_tool_matrix` adapts @squintdev's two-palette,
+12-operation matrix: it captures the original table before each operation, checks accepted
+operations through undo/redo, uses meaningful RGB or guaranteed-change controls, and verifies
+that refused operations leave pixels, layers and history untouched. The matrix keeps its
+immutable source attribution in the test header.
+
 ## Indexed Color timings
 
 The stock Indexed Color dialog exposes Matte: None, Foreground Color, Background Color,
