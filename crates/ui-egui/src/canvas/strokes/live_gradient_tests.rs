@@ -87,8 +87,9 @@ fn actual_shared_live_damage_covers_initial_and_pushed_gradient_relayout() {
         assert_eq!(effects_frame(doc.layer(id).unwrap(), doc.bounds()), Rect::new(64, 8, 906, 56));
         // Real cache keys fold in the display key; damage_since consumes that exact convention.
         let display_key = 0x13ab;
-        let damage = crate::canvas::textures::damage_since(&app, 0, (revision, seen ^ display_key), (revision, live.display_key()), display_key, None)
-            .expect("known live damage, not an unknown/full-refresh fallback");
+        let damage =
+            crate::canvas::textures::damage_since(&app, 0, (revision, seen ^ display_key), (revision, live.display_key()), display_key, (revision, None))
+                .expect("known live damage, not an unknown/full-refresh fallback");
         if overlay {
             assert!(damage.contains_rect(&Rect::new(256, 24, 272, 40)));
             let cold = render(doc, doc.bounds());
