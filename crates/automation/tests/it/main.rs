@@ -15,5 +15,6 @@ mod native_full_composite;
 mod native_save_name;
 mod openraster;
 mod raw_defaults;
+mod read_roots;
 mod renderer_save;
 mod smart_filter_authorization;
