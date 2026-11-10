@@ -118,6 +118,22 @@ mod spot;
 mod targeting;
 mod view;
 
+/// Apply a changed indication preference to the active Quick Mask, if any.
+pub(crate) fn sync_quick_mask_preference(s: &mut Session, selected: bool) -> Result<()> {
+    let indicates = if selected { ColorIndicates::SelectedAreas } else { ColorIndicates::MaskedAreas };
+    if s.active().is_some_and(|st| st.doc.quick_mask.as_ref().is_some_and(|mask| mask.indicates != indicates)) {
+        // A preference command is normally allowed during jobs, but this one also edits the document.
+        if let Some(why) = s.job_conflict("channel.options", true) {
+            return Err(EngineError::Disabled("channel.options".into(), why));
+        }
+        s.edit("Quick Mask Options", |doc, _| {
+            manage::set_quick_mask_indication(doc, indicates);
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
 use calc::{apply_image, calculations};
 use manage::{delete_channel, duplicate_channel, move_channel, new_channel, new_spot, options, rename_channel, set_visible};
 use planes::edit_mode;

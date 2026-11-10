@@ -18,6 +18,23 @@ fn indicates_param(v: Option<&Value>) -> Option<ColorIndicates> {
     }
 }
 
+/// Change the live Quick Mask's indication without changing its selection.
+pub(super) fn set_quick_mask_indication(doc: &mut Document, indicates: ColorIndicates) {
+    let area = doc.bounds();
+    let fmt = channel_format(doc);
+    let unselected = doc.quick_mask_unselected;
+    if let Some(q) = &mut doc.quick_mask {
+        if q.indicates != indicates {
+            let mut vals = read_plane(&q.surface, area);
+            if !(unselected && uniform(&vals, 1.0)) {
+                vals.iter_mut().for_each(|v| *v = 1.0 - *v);
+                q.surface = plane_surface(&vals, area, fmt);
+            }
+        }
+        q.indicates = indicates;
+    }
+}
+
 fn color_value(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
     if p.get(key).is_none() {
         return Ok(None);
@@ -274,6 +291,7 @@ pub(super) fn set_visible(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list(s))
 }
 
+/// Apply channel display options, preserving a Quick Mask's selection when its indication changes.
 pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "channel.options";
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -333,20 +351,10 @@ pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
             if s.active().is_some_and(|d| d.doc.quick_mask.is_some()) {
                 let o = s.quick_mask_options;
                 s.edit("Quick Mask Options", |doc, _| {
-                    let area = doc.bounds();
-                    let fmt = channel_format(doc);
-                    let unselected = doc.quick_mask_unselected;
+                    set_quick_mask_indication(doc, o.indicates);
                     if let Some(q) = &mut doc.quick_mask {
-                        if q.indicates != o.indicates {
-                            let mut vals = read_plane(&q.surface, area);
-                            if !(unselected && uniform(&vals, 1.0)) {
-                                vals.iter_mut().for_each(|v| *v = 1.0 - *v);
-                                q.surface = plane_surface(&vals, area, fmt);
-                            }
-                        }
                         q.color = o.color;
                         q.opacity = o.opacity;
-                        q.indicates = o.indicates;
                     }
                     Ok(())
                 })?;

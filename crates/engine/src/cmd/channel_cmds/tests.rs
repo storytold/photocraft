@@ -1272,3 +1272,37 @@ fn quick_mask_selected_areas_round_trip_and_preferences() {
     restored.load_prefs_json(&s.prefs_to_json()).unwrap();
     assert_eq!(restored.quick_mask_options.indicates, ColorIndicates::SelectedAreas);
 }
+
+#[test]
+fn quick_mask_preference_commands_preserve_active_selection() {
+    for depth in [8, 16, 32] {
+        let mut s = session_depth(depth);
+        rect(&mut s, 0, 0, 20, 20, "replace");
+        s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        s.execute("prefs.set", json!({"path":"quickMaskSelectedAreas", "value":true})).unwrap();
+        assert_eq!(doc(&s).quick_mask.as_ref().unwrap().indicates, ColorIndicates::SelectedAreas);
+        assert_eq!((qm_overlay(&s, 5, 5), qm_overlay(&s, 30, 5)), (1.0, 0.0));
+        let revision = s.active().unwrap().revision;
+        s.execute("prefs.set", json!({"path":"quickMaskSelectedAreas", "value":true})).unwrap();
+        assert_eq!(s.active().unwrap().revision, revision, "unchanged preference must not edit the mask");
+        s.execute("paint.stroke", json!({"points":[[30,10]], "size":4, "hardness":1.0, "color":"#000000"})).unwrap();
+        s.execute("paint.stroke", json!({"points":[[5,5]], "size":4, "hardness":1.0, "color":"#ffffff"})).unwrap();
+        s.execute("prefs.reset", json!({"path":"quickMaskSelectedAreas"})).unwrap();
+        assert_eq!(doc(&s).quick_mask.as_ref().unwrap().indicates, ColorIndicates::MaskedAreas);
+        assert_eq!((qm_overlay(&s, 5, 5), qm_overlay(&s, 12, 12), qm_overlay(&s, 30, 10)), (1.0, 0.0, 0.0));
+        s.execute("select.editInQuickMaskMode", json!({"on":false})).unwrap();
+        assert_eq!((sel_at(&s, 5, 5), sel_at(&s, 12, 12), sel_at(&s, 30, 10)), (0.0, 1.0, 1.0));
+    }
+}
+
+#[test]
+fn quick_mask_preference_commands_keep_an_untouched_empty_mask_empty() {
+    let mut s = session();
+    s.execute("select.editInQuickMaskMode", json!({"on":true})).unwrap();
+    s.execute("prefs.set", json!({"path":"quickMaskSelectedAreas", "value":true})).unwrap();
+    assert_eq!(qm_overlay(&s, 5, 5), 0.0);
+    s.execute("prefs.reset", json!({})).unwrap();
+    assert_eq!(qm_overlay(&s, 5, 5), 0.0);
+    s.execute("select.editInQuickMaskMode", json!({"on":false})).unwrap();
+    assert!(doc(&s).selection.is_none());
+}
