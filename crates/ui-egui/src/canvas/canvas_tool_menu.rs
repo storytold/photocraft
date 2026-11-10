@@ -1840,3 +1840,6 @@ mod delete_anchor_menu_tests;
 
 #[cfg(test)]
 mod convert_point_menu_tests;
+
+#[cfg(test)]
+mod object_selection_menu_tests;
