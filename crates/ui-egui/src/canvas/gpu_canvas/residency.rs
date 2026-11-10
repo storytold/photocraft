@@ -21,6 +21,9 @@ use super::texels::texel_bytes;
 const TAG_BITS: u64 = !((1u64 << 58) - 1);
 /// The tag of a document's viewport pages (`viewport_pages::stream_key`).
 const PAGES_BIT: u64 = 1u64 << 57;
+/// A background texture set more than this many times the bytes asked for is kept while the
+/// total stays within a quarter over the budget ([`Residency::victims`]).
+const LARGE_FACTOR: u64 = 4;
 
 impl DocTextures {
     /// GPU bytes of every texture (all mip levels) in this set or page set.
@@ -115,8 +118,24 @@ impl Residency {
             })
             .collect();
         cold.sort_unstable();
+        // A background texture set many times the size of what is asked for is the expensive
+        // one to lose: a gigapixel storyboard filled the budget alone, so showing any other tab
+        // freed it and switching back redrew it from scratch (about 6 s). Smaller ones go first;
+        // the large ones stay while the total is within a quarter over the budget (the budget is
+        // 3/8 of video memory, `vram_share`, so a quarter over it is still under half).
+        let large = |b: u64| b > bytes.saturating_mul(LARGE_FACTOR);
         let mut out = Vec::new();
-        for (_, k, b) in cold {
+        for &(_, k, b) in cold.iter().filter(|(_, _, b)| !large(*b)) {
+            if total <= budget {
+                return out;
+            }
+            total -= b;
+            out.push(k);
+        }
+        if total <= budget.saturating_add(budget / 4) {
+            return out;
+        }
+        for &(_, k, b) in cold.iter().filter(|(_, _, b)| large(*b)) {
             if total <= budget {
                 break;
             }
@@ -205,5 +224,18 @@ mod tests {
         assert_eq!(r.victims(&held, 4, 10 * GB, 6 * GB), vec![1, 2, pages(2), 3]);
         // Nor the document's own: its pages make room by evicting the other tabs.
         assert_eq!(r.victims(&held, pages(3), GB, 4 * GB), vec![1, 2, pages(2)]);
+    }
+
+    /// A background canvas many times the size asked for stays while the total is within a
+    /// quarter over the budget, and still goes when far over it.
+    #[test]
+    fn a_large_background_canvas_survives_a_small_tab() {
+        let mut r = Residency::default();
+        r.publish(&[(1, 6 * GB)]);
+        r.publish(&[(2, GB / 2)]);
+        // The storyboard (tab 1, 6 GB) fills the 6 GB budget; tab 2 needs half a GB.
+        assert!(r.victims(&[(1, 6 * GB)], 2, GB / 2, 6 * GB).is_empty(), "kept: within a quarter over");
+        // Far over the budget, it still goes.
+        assert_eq!(r.victims(&[(1, 6 * GB)], 2, 2 * GB, 6 * GB), vec![1]);
     }
 }
