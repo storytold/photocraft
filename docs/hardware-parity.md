@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (haptic mice on Windows: pulses on snapping to guides and layers, slider ends, a lasso closing, Object Selection and a Content-Aware Move landing, through the mouse's standard HID haptics; confirmed on an MX Master 4 on a Bolt receiver) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -66,11 +66,13 @@ rotation; its eraser end comes from the pointer hooks (#2285).
 | Touch screens (Windows) | yes | basic pointer only | partial |
 | 3D mouse, MIDI, Surface Dial | Surface Dial on Windows | no | missing (low value) |
 | Scanners (WIA / TWAIN) | WIA menu (Windows) | menu item live; no driver integration | partial |
+| Haptic mice (e.g. MX Master 4) | through Logitech's Photoshop plug-in: snap to a guide, slider limit, lasso closed, object selected, Content-Aware Move, Generative Fill done | Windows: `crates/haptics` drives the mouse's HID Simple Haptic Controller directly (no plug-in), honoring Settings › Mouse › Haptic signals and Preferences › Enhanced Controls › Haptic feedback; the same moments except Generative Fill (not in PhotoCraft yet); snap: Step, slider end: Hover, selections and Content-Aware Move: Success. Behind a Logitech receiver the mouse is woken with a HID++ ping first, since it otherwise holds a pulse sent right after a key press until it moves; a mouse left still then pulses once its link is back up, a moment later. Confirmed on an MX Master 4 with an MX Keys on a Bolt receiver; not tried on Bluetooth or on another make | partial |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Haptic mice on Windows: pulses on snapping, slider ends, lasso closed, Object Selection and Content-Aware Move, through standard HID haptics; HID++ wake-up behind a Logitech receiver; Haptic feedback preference; confirmed on an MX Master 4 (Bolt) |
 | 2026-11-06 | minor | Windows eraser end: the pointer hooks read `PEN_FLAG_INVERTED` and the Eraser switch follows it (Windows Ink on; #2285) |
 | 2026-11-05 | minor | Optional WinTab driver mode on Windows: pressure and eraser; tilt with orientation axes; rotation with a twist-reporting pen, with Windows Ink off |
 | 2026-10-28 | minor | Build GPU compositor pipelines in the background; benchmark baseline pending (#9157) |

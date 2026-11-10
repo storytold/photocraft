@@ -1085,11 +1085,20 @@ pub struct EnhancedControls {
     pub touch_gestures: bool,
     pub zoom_with_trackpad_pinch: bool,
     pub rotate_view_with_trackpad: bool,
+    /// Pulses on a haptic mouse (snapping, slider ends, selections, Content-Aware Move). Windows'
+    /// own haptic signals switch and intensity still apply on top.
+    pub haptic_feedback: bool,
 }
 
 impl Default for EnhancedControls {
     fn default() -> Self {
-        Self { scrubby_slider_acceleration: true, touch_gestures: true, zoom_with_trackpad_pinch: true, rotate_view_with_trackpad: false }
+        Self {
+            scrubby_slider_acceleration: true,
+            touch_gestures: true,
+            zoom_with_trackpad_pinch: true,
+            rotate_view_with_trackpad: false,
+            haptic_feedback: true,
+        }
     }
 }
 

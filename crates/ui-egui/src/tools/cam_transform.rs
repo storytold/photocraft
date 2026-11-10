@@ -136,9 +136,13 @@ pub(crate) fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let p = params(app, &place);
-    if let Err(e) = app.run("paint.contentAwareMove", p) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    match app.run("paint.contentAwareMove", p) {
+        // A pulse on a haptic mouse as the move drops, as in Photoshop.
+        Ok(v) => crate::haptics::landed(app, &v),
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
 }
 

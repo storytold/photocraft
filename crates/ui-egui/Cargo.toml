@@ -19,6 +19,8 @@ photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-gpu = { workspace = true }
 photocraft-engine = { workspace = true }
+# Pulses on a haptic mouse (snap to a guide, slider ends, lasso closed, …); played by the desktop app.
+photocraft-haptics = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-plugins = { workspace = true }
 photocraft-algo = { workspace = true }
