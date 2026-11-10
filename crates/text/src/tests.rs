@@ -3729,10 +3729,15 @@ fn colour_passes_hold_each_glyph_once() {
     }
 }
 
+/// Taken by every test that marks a thread with `background_thread`: the count behind
+/// `background_holds_shared` is process-wide, so two such tests at once would see each other.
+static BACKGROUND_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A background job's hold on the shared engine shows in `background_holds_shared`; a hold on any
 /// other thread, or a job's that has ended, doesn't.
 #[test]
 fn only_a_background_jobs_hold_on_the_shared_engine_counts() {
+    let _serial = BACKGROUND_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let job = std::thread::spawn(|| {
         let _job = crate::background_thread();
         let guard = crate::lock_shared();
@@ -3741,7 +3746,7 @@ fn only_a_background_jobs_hold_on_the_shared_engine_counts() {
         during
     });
     assert!(job.join().unwrap(), "seen while the job holds it");
-    // Other text tests may hold the engine meanwhile, but none of them as a job.
+    // Other text tests may hold the engine meanwhile, but none as a job (`BACKGROUND_TESTS`).
     let other = std::thread::spawn(|| {
         let _engine = crate::lock_shared();
         crate::background_holds_shared()

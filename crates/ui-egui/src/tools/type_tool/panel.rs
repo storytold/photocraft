@@ -213,10 +213,12 @@ pub fn character_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bo
 /// Whether a background job re-rendering type holds the shared font engine, such as Free
 /// Transform of a storyboard folder full of type layers (each layer re-rendered with the engine
 /// held). The panels' fields read fonts through the same engine, and waiting for it froze the
-/// window for the whole job (14 s), long enough for Wayland to drop it. Other holds are short
-/// and waited out (`fonts::engine_unless_busy`).
+/// window for the whole job (14 s), long enough for Wayland to drop it. Other holds are short:
+/// the fields' reads wait them out (`fonts::engine_unless_busy`).
 fn font_engine_busy() -> bool {
-    photocraft_text::try_shared().is_some() && super::fonts::engine_unless_busy().is_none()
+    // Checked every frame: unless a job holds the engine, it doesn't even try the lock.
+    photocraft_text::background_holds_shared()
+        && photocraft_text::try_shared().is_some_and(|m| matches!(m.try_lock(), Err(std::sync::TryLockError::WouldBlock)))
 }
 
 /// The Character and/or Paragraph sections, with the shared collapsible headers and fields that
