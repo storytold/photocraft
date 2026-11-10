@@ -1602,11 +1602,10 @@
 	Company	Εταιρεία
 	% of all commits	% του συνόλου των commits
 	Lines +/−	Γραμμές +/−
-	Open in camera raw	Άνοιγμα στο Camera Raw
 	System title bar	Γραμμή τίτλου συστήματος
 	More documents	Περισσότερα έγγραφα
 	Developing {name}	Επεξεργασία του {name}
-	Camera Raw ({name})	Επεξεργασία RAW ({name})
+	RAW Develop ({name})	Επεξεργασία RAW ({name})
 	New Brush Preset…	Νέα προεπιλογή πινέλου…
 	Capture Brush Size in Preset	Αποθήκευση μεγέθους πινέλου στην προεπιλογή
 	Include Tool Settings	Συμπερίληψη ρυθμίσεων εργαλείου
@@ -1774,7 +1773,7 @@
 	Brush preview color	Χρώμα προεπισκόπησης πινέλου
 	Cache levels	Επίπεδα προσωρινής μνήμης
 	Cache tile size	Μέγεθος πλακιδίου προσωρινής μνήμης
-	Camera Raw Defaults	Προεπιλογές Camera Raw
+	RAW Defaults	Προεπιλογές RAW
 	Canvas border	Περίγραμμα καμβά
 	Show canvas dots	Εμφάνιση κουκκίδων καμβά
 	Clip thumbnails to layer bounds	Περικοπή μικρογραφιών στα όρια του επιπέδου
@@ -2069,11 +2068,11 @@
 	Load Settings…	Φόρτωση ρυθμίσεων…
 	Save these settings as a Camera Raw .xmp file	Αποθήκευση αυτών των ρυθμίσεων ως αρχείο Camera Raw .xmp
 	Load settings from a Camera Raw .xmp file	Φόρτωση ρυθμίσεων από αρχείο Camera Raw .xmp
-	Loaded Camera Raw settings from {file}	Φορτώθηκαν ρυθμίσεις Camera Raw από το {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Φορτώθηκαν ρυθμίσεις Camera Raw από το {file} ({n} δεν υποστηρίζονται)
+	Loaded RAW Develop settings from {file}	Φορτώθηκαν ρυθμίσεις Επεξεργασία RAW από το {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	Φορτώθηκαν ρυθμίσεις Επεξεργασία RAW από το {file} ({n} δεν υποστηρίζονται)
 	Blending	Ανάμειξη
-	Camera Raw Filter ({layer})	Φίλτρο Camera Raw ({layer})
-	Camera Raw isn't open	Το Camera Raw δεν είναι ανοιχτό
+	RAW Develop Filter ({layer})	Φίλτρο Επεξεργασία RAW ({layer})
+	RAW Develop isn't open	Το Επεξεργασία RAW δεν είναι ανοιχτό
 	Clarity	Διαύγεια
 	Color Detail	Λεπτομέρεια χρώματος
 	Color Grading	Χρωματική διαβάθμιση
@@ -2162,7 +2161,6 @@
 	Adds grain to the soft edges of the brush tip.	Προσθέτει κόκκο στις απαλές άκρες του πινέλου.
 	Adjust for Zoom	Προσαρμογή στη μεγέθυνση
 	Adjustment visible	Η προσαρμογή είναι ορατή
-	Adobe PDF Presets…	Προεπιλογές Adobe PDF…
 	Adobe RGB (1998) compatible	Συμβατό με Adobe RGB (1998)
 	Advanced Blending	Σύνθετες επιλογές ανάμειξης
 	After (X)	Μετά (X)
@@ -2262,10 +2260,10 @@
 	Bulge	Κυρτότητα
 	Cache Level:	Επίπεδο προσωρινής μνήμης:
 	Calculations	Υπολογισμοί
-	Camera Raw	Επεξεργασία ακατέργαστης εικόνας
-	Camera Raw Filter	Φίλτρο επεξεργασίας ακατέργαστης εικόνας
-	Camera Raw Filter…	Φίλτρο επεξεργασίας ακατέργαστης εικόνας…
-	Camera Raw…	Επεξεργασία ακατέργαστης εικόνας…
+	RAW Develop	Επεξεργασία RAW
+	RAW Develop Filter	Φίλτρο Επεξεργασία RAW
+	RAW Develop Filter…	Φίλτρο Επεξεργασία RAW…
+	RAW Defaults…	Προεπιλογές RAW…
 	Cancel (Esc)	Ακύρωση (Esc)
 	Manage submitted jobs in the system print queue	Διαχειριστείτε τις υποβληθείσες εργασίες στην ουρά εκτύπωσης του συστήματος
 	Cancel any current edits (Esc)	Ακύρωση τρεχουσών αλλαγών (Esc)
@@ -4318,7 +4316,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Εμφάνιση ορίων στρώσης στο πέρασμα του δείκτη
 	Expand layer group on click	Ανάπτυξη ομάδας στρώσεων με κλικ
 	Show hover bounds from Layers	Εμφάνιση ορίων στο πέρασμα από τις Στρώσεις
-	Saved Camera Raw settings to {file}	Οι ρυθμίσεις Camera Raw αποθηκεύτηκαν στο {file}
+	Saved RAW Develop settings to {file}	Οι ρυθμίσεις Επεξεργασία RAW αποθηκεύτηκαν στο {file}
 	Save the settings to each raw's sidecar without opening it	Αποθήκευση των ρυθμίσεων στο συνοδευτικό αρχείο κάθε raw χωρίς άνοιγμα
 	No settings saved: these raws can't keep a sidecar here	Δεν αποθηκεύτηκε τίποτα: αυτά τα raw δεν μπορούν να έχουν συνοδευτικό αρχείο εδώ
 	Some settings could not be saved; the raws stay open	Ορισμένες ρυθμίσεις δεν ήταν δυνατό να αποθηκευτούν· τα raw παραμένουν ανοιχτά
@@ -4330,3 +4328,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Αυτόματη αλλαγή μεγέθους καμβά
 	Keep Relative Position During Layer Reordering	Διατήρηση σχετικής θέσης κατά την αναδιάταξη επιπέδων
 	Shrinkwrap Canvas on Save	Σμίκρυνση καμβά στο περιεχόμενο κατά την αποθήκευση
+	Move Toolbar to the Right	Μετακίνηση γραμμής εργαλείων δεξιά
+	Move Toolbar to the Left	Μετακίνηση γραμμής εργαλείων αριστερά

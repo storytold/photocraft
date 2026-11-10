@@ -40,7 +40,7 @@
 
 # Tool and Scope strings
 
-# Camera Raw
+# RAW Develop
 
 # Coverage-test keys (English until translated)
 
@@ -357,8 +357,8 @@
 	Impressionist	प्रभाववादी
 	Aligned	संरेखित
 	Fit in View	दृश्य में फ़िट करें
-	Camera Raw	Camera Raw
-	Camera Raw…	Camera Raw…
+	RAW Develop	RAW डेवलप
+	RAW Defaults…	RAW डिफ़ॉल्ट…
 cameraRaw	Amount	मात्रा
 	Amount	मात्रा
 cameraRaw	Aqua	एक्वा
@@ -373,11 +373,11 @@ cameraRaw	Blending	मिश्रण
 	Blending	मिश्रण
 cameraRaw	Blue	नीला
 	Blue	नीला
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Camera Raw फ़िल्टर ({layer})
-	Camera Raw Filter ({layer})	Camera Raw फ़िल्टर ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw खुला नहीं है
-	Camera Raw isn't open	Camera Raw खुला नहीं है
+cameraRaw	RAW Develop ({name})	RAW डेवलप ({name})
+cameraRaw	RAW Develop Filter ({layer})	RAW डेवलप फ़िल्टर ({layer})
+	RAW Develop Filter ({layer})	RAW डेवलप फ़िल्टर ({layer})
+cameraRaw	RAW Develop isn't open	RAW डेवलप खुला नहीं है
+	RAW Develop isn't open	RAW डेवलप खुला नहीं है
 cameraRaw	Cancel	रद्द करें
 cameraRaw	Canceled opening {name}	{name} खोलना रद्द किया गया
 	Canceled opening {name}	{name} खोलना रद्द किया गया
@@ -436,8 +436,8 @@ cameraRaw	Load Settings…	सेटिंग्स लोड करें…
 	Load Settings…	सेटिंग्स लोड करें…
 cameraRaw	Load settings from a Camera Raw .xmp file	Camera Raw .xmp फ़ाइल से सेटिंग्स लोड करें
 	Load settings from a Camera Raw .xmp file	Camera Raw .xmp फ़ाइल से सेटिंग्स लोड करें
-cameraRaw	Loaded Camera Raw settings from {file}	{file} से Camera Raw सेटिंग्स लोड की गईं
-	Loaded Camera Raw settings from {file}	{file} से Camera Raw सेटिंग्स लोड की गईं
+cameraRaw	Loaded RAW Develop settings from {file}	{file} से RAW डेवलप सेटिंग्स लोड की गईं
+	Loaded RAW Develop settings from {file}	{file} से RAW डेवलप सेटिंग्स लोड की गईं
 cameraRaw	Luminance	लुमिनेंस
 	Luminance	लुमिनेंस
 cameraRaw	Luminance Detail	लुमिनेंस डिटेल
@@ -693,3 +693,12 @@ cameraRaw	Yellow	पीला
 	Auto-size Canvas	कैनवास का आकार स्वचालित रूप से बदलें
 	Keep Relative Position During Layer Reordering	लेयर्स का क्रम बदलते समय सापेक्ष स्थिति बनाए रखें
 	Shrinkwrap Canvas on Save	सहेजते समय कैनवास को सामग्री के अनुसार छोटा करें
+	Move Toolbar to the Right	टूलबार को दाएँ ले जाएँ
+	Move Toolbar to the Left	टूलबार को बाएँ ले जाएँ
+	RAW Defaults	RAW डिफ़ॉल्ट
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	RAW डेवलप सेटिंग्स {file} में सहेजी गईं
+	RAW Develop Filter	RAW डेवलप फ़िल्टर
+	RAW Develop Filter…	RAW डेवलप फ़िल्टर…
+	Loaded RAW Develop settings from {file} ({n} not supported)	{file} से RAW डेवलप सेटिंग्स लोड की गईं ({n} समर्थित नहीं)

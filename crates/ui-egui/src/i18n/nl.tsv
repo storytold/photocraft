@@ -284,7 +284,7 @@
 	Plugins…	Plug-ins…
 	Type…	Tekst…
 	Enhanced Controls…	Uitgebreide bediening…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	RAW-standaardwaarden…
 	Raw Defaults…	Raw-standaardwaarden…
 	Integrations…	Integraties…
 	AI Integrations…	AI-integraties…
@@ -617,7 +617,7 @@
 	Last Filter	Laatste filter
 	Filter Gallery…	Filtergalerie…
 	Adaptive Wide Angle…	Adaptieve groothoek…
-	Camera Raw Filter…	Camera Raw-filter…
+	RAW Develop Filter…	RAW-ontwikkeling-filter…
 	Liquify…	Uitvloeien…
 	Vanishing Point…	Verdwijnpunt…
 	Blur	Vervagen
@@ -962,8 +962,8 @@
 	Load Settings…	Instellingen laden…
 	Save these settings as a Camera Raw .xmp file	Deze instellingen opslaan als Camera Raw-.xmp-bestand
 	Load settings from a Camera Raw .xmp file	Instellingen laden uit een Camera Raw-.xmp-bestand
-	Loaded Camera Raw settings from {file}	Camera Raw-instellingen geladen uit {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw-instellingen geladen uit {file} ({n} niet ondersteund)
+	Loaded RAW Develop settings from {file}	RAW-ontwikkeling-instellingen geladen uit {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	RAW-ontwikkeling-instellingen geladen uit {file} ({n} niet ondersteund)
 	Begin recording	Opname starten
 	Bend:	Buiging:
 	Bicubic	Bicubisch
@@ -990,7 +990,7 @@
 	Brush Reconstruct Options	Opties reconstructiepenseel
 	Brush Tool Options	Opties penseelgereedschap
 	Cache Level:	Cacheniveau:
-	Camera Raw isn't open	Camera Raw is niet geopend
+	RAW Develop isn't open	RAW-ontwikkeling is niet geopend
 	Cancel	Annuleren
 	Reset	Herstellen
 	Cancel (Esc)	Annuleren (Esc)
@@ -1961,7 +1961,7 @@
 	Brush preview color	Kleur penseelvoorvertoning
 	Cache levels	Cacheniveaus
 	Cache tile size	Tegelgrootte cache
-	Camera Raw Defaults	Standaardwaarden Camera Raw
+	RAW Defaults	RAW-standaardwaarden
 	Canvas border	Canvasrand
 	Show canvas dots	Canvasstippen tonen
 	Clip thumbnails to layer bounds	Miniaturen bijsnijden tot laaggrenzen
@@ -2048,7 +2048,6 @@
 	Never	Nooit
 	Normal tip	Normale punt
 	Open as smart object	Openen als slim object
-	Open in camera raw	Openen in Camera Raw
 	Open documents as tabs	Documenten openen als tabbladen
 	Overscroll	Doorscrollen
 	Performance	Prestaties
@@ -2397,8 +2396,8 @@
 	3 x 3	3 x 3
 	4 x 4	4 x 4
 	5 x 5	5 x 5
-	Camera Raw Filter ({layer})	Camera Raw-filter ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	RAW-ontwikkeling-filter ({layer})
+	RAW Develop ({name})	RAW-ontwikkeling ({name})
 	Edit Type	Tekst bewerken
 	Grid:	Raster:
 	Highlight Clipping Warning (O)	Waarschuwing afsnijden hooglichten (O)
@@ -3398,7 +3397,6 @@ cameraRaw	Color	Kleur
 	Add Pins	Spelden toevoegen
 	Add a mask  (from the selection; ⌥ inverts)	Een masker toevoegen  (vanuit de selectie; ⌥ keert om)
 	Adds grain to the soft edges of the brush tip.	Voegt korrel toe aan de zachte randen van de penseelpunt.
-	Adobe PDF Presets…	Adobe PDF-voorinstellingen…
 	Advanced Blending	Geavanceerd overvloeien
 	After (X)	Na (X)
 	Airbrush: keeps painting while the pointer rests.	Airbrush: blijft schilderen zolang de aanwijzer stilstaat.
@@ -3425,8 +3423,8 @@ cameraRaw	Color	Kleur
 	Border	Rand
 	Box Blur	Kadervervaging
 	Calculations	Berekeningen
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw-filter
+	RAW Develop	RAW-ontwikkeling
+	RAW Develop Filter	RAW-ontwikkeling-filter
 	Canvas rotation	Canvasrotatie
 	Channel1	Kanaal 1
 	Channel2	Kanaal 2
@@ -3705,8 +3703,6 @@ cameraRaw	Whites	Witten
 	Mac Crisp	Mac helder
 	Mac Strong	Mac krachtig
 	Mac Smooth	Mac vloeiend
-	Adobe Single-line Composer	Adobe-zetmachine per regel
-	Adobe Every-line Composer	Adobe-zetmachine voor alle regels
 	X	X
 	Y	Y
 	30 fps	30 fps
@@ -4372,7 +4368,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Laaggrenzen tonen bij aanwijzen
 	Expand layer group on click	Laaggroep uitvouwen bij klikken
 	Show hover bounds from Layers	Aanwijsgrenzen tonen vanuit Lagen
-	Saved Camera Raw settings to {file}	Camera Raw-instellingen opgeslagen in {file}
+	Saved RAW Develop settings to {file}	RAW-ontwikkeling-instellingen opgeslagen in {file}
 	Save the settings to each raw's sidecar without opening it	De instellingen in het sidecarbestand van elke raw opslaan zonder die te openen
 	No settings saved: these raws can't keep a sidecar here	Niets opgeslagen: deze raws kunnen hier geen sidecarbestand krijgen
 	Some settings could not be saved; the raws stay open	Sommige instellingen konden niet worden opgeslagen; de raws blijven open
@@ -4384,3 +4380,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Canvasgrootte automatisch aanpassen
 	Keep Relative Position During Layer Reordering	Relatieve positie behouden bij het wijzigen van de laagvolgorde
 	Shrinkwrap Canvas on Save	Canvas bij opslaan verkleinen tot de inhoud
+	Move Toolbar to the Right	Werkbalk naar rechts verplaatsen
+	Move Toolbar to the Left	Werkbalk naar links verplaatsen

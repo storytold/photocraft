@@ -195,7 +195,7 @@
 	Plug-ins…	პლაგინები…
 	Type…	ტექსტი…
 	Enhanced Controls…	გაუმჯობესებული მართვის ელემენტები…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	RAW-ის ნაგულისხმევი პარამეტრები…
 	Raw Defaults…	Raw-ის ნაგულისხმევი პარამეტრები…
 	Integrations…	ინტეგრაციები…
 	AI Integrations…	AI ინტეგრაციები…
@@ -507,7 +507,7 @@
 	Last Filter	ბოლო ფილტრი
 	Filter Gallery…	ფილტრების გალერეა…
 	Adaptive Wide Angle…	ადაპტიური ფართოკუთხა…
-	Camera Raw Filter…	Camera Raw ფილტრი…
+	RAW Develop Filter…	RAW დამუშავება ფილტრი…
 	Liquify…	გათხევადება…
 	Vanishing Point…	გაქრობის წერტილი…
 	Blur	გაბუნდოვნება
@@ -857,7 +857,7 @@
 	Brush Reconstruct Options	ფუნჯით აღდგენის პარამეტრები
 	Brush Tool Options	ფუნჯის ხელსაწყოს პარამეტრები
 	Cache Level:	ქეშის დონე:
-	Camera Raw isn't open	Camera Raw არ არის გახსნილი
+	RAW Develop isn't open	RAW დამუშავება არ არის გახსნილი
 	Cancel	გაუქმება
 	Cancel (Esc)	გაუქმება (Esc)
 	Cancel any current edits (Esc)	მიმდინარე ცვლილებების გაუქმება (Esc)
@@ -1811,7 +1811,7 @@
 	Brush preview color	ფუნჯის წინასწარი ნახვის ფერი
 	Cache levels	ქეშის დონეები
 	Cache tile size	ქეშის ფილის ზომა
-	Camera Raw Defaults	Camera Raw-ის ნაგულისხმევი პარამეტრები
+	RAW Defaults	RAW-ის ნაგულისხმევი პარამეტრები
 	Canvas border	ტილოს საზღვარი
 	Show canvas dots	ტილოს წერტილების ჩვენება
 	Canvas color	ტილოს ფერი
@@ -1891,7 +1891,6 @@
 	Never	არასოდეს
 	Normal tip	ჩვეულებრივი წვერი
 	Open as smart object	ჭკვიან ობიექტად გახსნა
-	Open in camera raw	Camera Raw-ში გახსნა
 	Open documents as tabs	დოკუმენტების ჩანართებად გახსნა
 	Overscroll	საზღვრებს მიღმა გადახვევა
 	Performance	წარმადობა
@@ -2276,8 +2275,6 @@
 	Roman Hanging Punctuation	ლათინური გამოწეული პუნქტუაცია
 	Avoid Widows/Orphans	ობოლი სტრიქონების თავიდან აცილება
 	Compose	აწყობა
-	Adobe Single-line Composer	Adobe-ის სტრიქონის მიხედვით აწყობა
-	Adobe Every-line Composer	Adobe-ის აბზაცის მიხედვით აწყობა
 	Justification	სწორება
 	Word Spacing	სიტყვებს შორის ინტერვალი
 	Letter Spacing	ასოებს შორის ინტერვალი
@@ -2530,7 +2527,6 @@
 	Intersect with	გადაკვეთა:
 	Capture Comp	კომპოზიციის ჩაწერა
 	No Layer Comps	შრეების კომპოზიციები არ არის
-	Adobe PDF Presets…	Adobe PDF-ის პრესეტები…
 	3D…	3D…
 	Technology Previews…	ტექნოლოგიების წინასწარი ვერსიები…
 	Background from Layer	ფონი შრიდან
@@ -2618,8 +2614,8 @@
 	Tone Histogram	ტონების ჰისტოგრამა
 	Show Selected Region	მონიშნული რეგიონის ჩვენება
 cameraRaw	Light	სინათლე
-	Camera Raw Filter ({layer})	Camera Raw ფილტრი ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	RAW დამუშავება ფილტრი ({layer})
+	RAW Develop ({name})	RAW დამუშავება ({name})
 cameraRaw	Lights	ნათელი ტონები
 cameraRaw	Darks	მუქი ტონები
 cameraRaw	Blacks	შავები
@@ -3615,8 +3611,8 @@ layerLabel	No Color	ფერის გარეშე
 	Border	საზღვარი
 	Box Blur	კვადრატული გაბუნდოვნება
 	Calculations	გამოთვლები
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw ფილტრი
+	RAW Develop	RAW დამუშავება
+	RAW Develop Filter	RAW დამუშავება ფილტრი
 	Channel1	არხი1
 	Channel2	არხი2
 	Channel3	არხი3
@@ -4093,7 +4089,6 @@ shape	Appearance	იერსახე
 	Add Mask to Selection	ნიღბის მონიშნულში დამატება
 	Add Open Files	გახსნილი ფაილების დამატება
 	Add to Dictionary	ლექსიკონში დამატება
-	All shortcuts reset to Photoshop defaults.	ყველა მალსახმობი დაბრუნდა Photoshop-ის ნაგულისხმევზე.
 	Allow Continue	გაგრძელების დაშვება
 	Attempt to Automatically Align Source Images	წყაროს გამოსახულებების ავტომატური სწორების მცდელობა
 	Auto Add/Delete	ავტომატური დამატება/წაშლა
@@ -4114,7 +4109,6 @@ shape	Appearance	იერსახე
 	Color Indicates:	ფერი აღნიშნავს:
 	Copy Texture to Other Tools	ტექსტურის სხვა ხელსაწყოებში კოპირება
 	Create Smart Object after Loading Layers	შრეების ჩატვირთვის შემდეგ ჭკვიანი ობიექტის შექმნა
-	Default Photoshop Size	Photoshop-ის ნაგულისხმევი ზომა
 	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	გადაათრიეთ ჩამოჭრის ჩარჩო · შიგნით გადათრევით გადაადგილება · კიდეებით ზომის შეცვლა ({ratio} თანაფარდობა, {centre} ცენტრიდან) · Space — გადაადგილება ხაზვისას · {commit} — დადასტურება · Esc — გაუქმება
 	Drag to pan · Scroll to zoom · Double-click to fit	გადათრევა: გადაადგილება · გადახვევა: მასშტაბი · ორმაგი დაწკაპუნება: ჩატევა
 	Drag: draw freehand · Release on the start point: close	გადათრევა: თავისუფალი ხატვა · გაშვება საწყის წერტილზე: დახურვა
@@ -4133,8 +4127,8 @@ shape	Appearance	იერსახე
 	Load Actions…	მოქმედებების ჩატვირთვა…
 	Load Settings…	პარამეტრების ჩატვირთვა…
 	Load settings from a Camera Raw .xmp file	პარამეტრების ჩატვირთვა Camera Raw-ის .xmp ფაილიდან
-	Loaded Camera Raw settings from {file}	Camera Raw-ის პარამეტრები ჩაიტვირთა {file}-დან
-	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw-ის პარამეტრები ჩაიტვირთა {file}-დან (მხარდაუჭერელი: {n})
+	Loaded RAW Develop settings from {file}	RAW დამუშავება-ის პარამეტრები ჩაიტვირთა {file}-დან
+	Loaded RAW Develop settings from {file} ({n} not supported)	RAW დამუშავება-ის პარამეტრები ჩაიტვირთა {file}-დან (მხარდაუჭერელი: {n})
 	Mask Channel	ნიღბის არხი
 	Message:	შეტყობინება:
 	No Spelling Suggestions	მართლწერის შეთავაზებები არ არის
@@ -4595,9 +4589,9 @@ layerLabel	Magenta	მეწამული
 @plural	{n} document|{n} documents	{n} დოკუმენტი
 @plural	{n} pixel|{n} pixels	{n} პიქსელი
 cameraRaw	Before (Y)	მანამდე (Y)
-cameraRaw	Camera Raw ({name})	Camera Raw ({name})
-cameraRaw	Camera Raw Filter ({layer})	Camera Raw ფილტრი ({layer})
-cameraRaw	Camera Raw isn't open	Camera Raw არ არის გახსნილი
+cameraRaw	RAW Develop ({name})	RAW დამუშავება ({name})
+cameraRaw	RAW Develop Filter ({layer})	RAW დამუშავება ფილტრი ({layer})
+cameraRaw	RAW Develop isn't open	RAW დამუშავება არ არის გახსნილი
 cameraRaw	Cancel	გაუქმება
 cameraRaw	Cancelled opening {name}	{name}-ის გახსნა გაუქმდა
 cameraRaw	Cancelled {label}	გაუქმდა: {label}
@@ -4609,7 +4603,7 @@ cameraRaw	Highlight Clipping Warning (O)	ღია ტონების მო�
 cameraRaw	Highlight Priority	ღია ტონების პრიორიტეტი
 cameraRaw	Load Settings…	პარამეტრების ჩატვირთვა…
 cameraRaw	Load settings from a Camera Raw .xmp file	პარამეტრების ჩატვირთვა Camera Raw-ის .xmp ფაილიდან
-cameraRaw	Loaded Camera Raw settings from {file}	Camera Raw-ის პარამეტრები ჩაიტვირთა {file}-დან
+cameraRaw	Loaded RAW Develop settings from {file}	RAW დამუშავება-ის პარამეტრები ჩაიტვირთა {file}-დან
 cameraRaw	Noise Reduction	ხმაურის შემცირება
 cameraRaw	OK	OK
 cameraRaw	Open	გახსნა
@@ -4717,3 +4711,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	თითოეული არხისთვის სხვა დოკუმენტი აირჩიეთ.
 	A picked document is no longer open.	ერთ-ერთი არჩეული დოკუმენტი აღარ არის გახსნილი.
 	A picked document is no longer a grayscale document of the same size.	ერთ-ერთი არჩეული დოკუმენტი აღარ არის იმავე ზომის ნაცრისფერი ტონების დოკუმენტი.
+	Move Toolbar to the Right	ხელსაწყოების პანელის მარჯვნივ გადატანა
+	Move Toolbar to the Left	ხელსაწყოების პანელის მარცხნივ გადატანა
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	RAW დამუშავების პარამეტრები შენახულია {file}-ში

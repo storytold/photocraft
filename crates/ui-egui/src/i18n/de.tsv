@@ -330,7 +330,7 @@
 	Plugins…	Plug-ins…
 	Type…	Text…
 	Enhanced Controls…	Erweiterte Bedienelemente…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	RAW-Standardeinstellungen…
 	Raw Defaults…	RAW-Standardwerte…
 	Integrations…	Integrationen…
 	AI Integrations…	KI-Integrationen…
@@ -665,7 +665,7 @@
 	Last Filter	Letzter Filter
 	Filter Gallery…	Filtergalerie…
 	Adaptive Wide Angle…	Adaptiver Weitwinkel…
-	Camera Raw Filter…	Camera-Raw-Filter…
+	RAW Develop Filter…	RAW-Entwicklung-Filter…
 	Liquify…	Verflüssigen…
 	Vanishing Point…	Fluchtpunkt…
 	Blur	Weichzeichnen
@@ -1009,8 +1009,8 @@
 	Load Settings…	Einstellungen laden…
 	Save these settings as a Camera Raw .xmp file	Diese Einstellungen als Camera-Raw-.xmp-Datei speichern
 	Load settings from a Camera Raw .xmp file	Einstellungen aus einer Camera-Raw-.xmp-Datei laden
-	Loaded Camera Raw settings from {file}	Camera-Raw-Einstellungen aus {file} geladen
-	Loaded Camera Raw settings from {file} ({n} not supported)	Camera-Raw-Einstellungen aus {file} geladen ({n} nicht unterstützt)
+	Loaded RAW Develop settings from {file}	RAW-Entwicklung-Einstellungen aus {file} geladen
+	Loaded RAW Develop settings from {file} ({n} not supported)	RAW-Entwicklung-Einstellungen aus {file} geladen ({n} nicht unterstützt)
 	Begin recording	Aufnahme starten
 	Bend:	Biegung:
 	Bicubic	Bikubisch
@@ -1038,7 +1038,7 @@
 	Brush Reconstruct Options	Pinsel-Rekonstruktionsoptionen
 	Brush Tool Options	Pinselwerkzeug-Optionen
 	Cache Level:	Cache-Stufe:
-	Camera Raw isn't open	Camera Raw ist nicht geöffnet
+	RAW Develop isn't open	RAW-Entwicklung ist nicht geöffnet
 	Cancel	Abbrechen
 	Reset	Zurücksetzen
 	Cancel (Esc)	Abbrechen (Esc)
@@ -2015,7 +2015,7 @@
 	Brush preview color	Pinselvorschau-Farbe
 	Cache levels	Cache-Stufen
 	Cache tile size	Cache-Kachelgröße
-	Camera Raw Defaults	Camera-Raw-Standardeinstellungen
+	RAW Defaults	RAW-Standardeinstellungen
 	Canvas border	Zeichenflächenrand
 	Show canvas dots	Punkte der Zeichenfläche anzeigen
 	Clip thumbnails to layer bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
@@ -2102,7 +2102,6 @@
 	Never	Nie
 	Normal tip	Normale Spitze
 	Open as smart object	Als Smart-Objekt öffnen
-	Open in camera raw	In Camera Raw öffnen
 	Open documents as tabs	Dokumente als Registerkarten öffnen
 	Overscroll	Überscrollen
 	Performance	Leistung
@@ -2457,8 +2456,8 @@
 	3 x 3	3 x 3
 	4 x 4	4 x 4
 	5 x 5	5 x 5
-	Camera Raw Filter ({layer})	Camera-Raw-Filter ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	RAW Develop Filter ({layer})	RAW-Entwicklung-Filter ({layer})
+	RAW Develop ({name})	RAW-Entwicklung ({name})
 	Edit Type	Text bearbeiten
 	Grid:	Raster:
 	Highlight Clipping Warning (O)	Lichter-Abschneidewarnung (O)
@@ -3654,7 +3653,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Ebenenbegrenzung beim Darüberfahren anzeigen
 	Expand layer group on click	Ebenengruppe per Klick erweitern
 	Show hover bounds from Layers	Begrenzung beim Darüberfahren aus Ebenen anzeigen
-	Saved Camera Raw settings to {file}	Camera-Raw-Einstellungen in {file} gespeichert
+	Saved RAW Develop settings to {file}	RAW-Entwicklung-Einstellungen in {file} gespeichert
 	Save the settings to each raw's sidecar without opening it	Die Einstellungen in der Filialdatei jeder Raw-Datei speichern, ohne sie zu öffnen
 	No settings saved: these raws can't keep a sidecar here	Nichts gespeichert: Diese Raw-Dateien können hier keine Filialdatei haben
 	Some settings could not be saved; the raws stay open	Einige Einstellungen konnten nicht gespeichert werden; die Raw-Dateien bleiben geöffnet
@@ -3666,3 +3665,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Zeichenflächengröße automatisch anpassen
 	Keep Relative Position During Layer Reordering	Relative Position beim Neuanordnen von Ebenen beibehalten
 	Shrinkwrap Canvas on Save	Zeichenfläche beim Speichern auf den Inhalt verkleinern
+	Move Toolbar to the Right	Werkzeugleiste nach rechts verschieben
+	Move Toolbar to the Left	Werkzeugleiste nach links verschieben
+
+# RAW Develop feature labels
+	RAW Develop	RAW-Entwicklung
+	RAW Develop Filter	RAW-Entwicklungsfilter

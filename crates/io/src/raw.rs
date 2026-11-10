@@ -128,7 +128,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         .filter(|(_, v)| *v != 0.0)
         .map(|(k, v)| format!(", {k} {v:+.0}"))
         .collect::<String>();
-    let summary = format!("developed in Camera Raw (exposure {:+.2} EV{tone}, {wb}, {} demosaic{cropped})", tuning.exposure, tuning.demosaic.id());
+    let summary = format!("developed in RAW Develop (exposure {:+.2} EV{tone}, {wb}, {} demosaic{cropped})", tuning.exposure, tuning.demosaic.id());
     Ok((developed_document(name, bytes, format, dev, &summary)?, wb_applied))
 }
 

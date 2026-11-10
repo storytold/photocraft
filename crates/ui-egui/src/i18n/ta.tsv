@@ -219,7 +219,7 @@
 	Plug-ins…	செருகுநிரல்கள்…
 	Type…	உரை…
 	Enhanced Controls…	மேம்படுத்தப்பட்ட கட்டுப்பாடுகள்…
-	Camera Raw…	கேமரா Raw…
+	RAW Defaults…	RAW இயல்புநிலைகள்…
 	Raw Defaults…	Raw இயல்புநிலைகள்…
 	Integrations…	ஒருங்கிணைப்புகள்…
 	AI Integrations…	AI ஒருங்கிணைப்புகள்…
@@ -548,7 +548,7 @@
 	Last Filter	கடைசி வடிகட்டி
 	Filter Gallery…	வடிகட்டி காட்சியகம்…
 	Adaptive Wide Angle…	தகவமைக்கும் அகலக் கோணம்…
-	Camera Raw Filter…	கேமரா Raw வடிகட்டி…
+	RAW Develop Filter…	RAW உருவாக்கம் வடிகட்டி…
 	Liquify…	திரவமாக்கு…
 	Vanishing Point…	மறையும் புள்ளி…
 	Blur	மங்கலாக்கு
@@ -891,8 +891,8 @@
 	Load Settings…	அமைப்புகளை ஏற்று…
 	Save these settings as a Camera Raw .xmp file	இந்த அமைப்புகளை கேமரா Raw .xmp கோப்பாகச் சேமி
 	Load settings from a Camera Raw .xmp file	கேமரா Raw .xmp கோப்பிலிருந்து அமைப்புகளை ஏற்று
-	Loaded Camera Raw settings from {file}	{file} இலிருந்து கேமரா Raw அமைப்புகள் ஏற்றப்பட்டன
-	Loaded Camera Raw settings from {file} ({n} not supported)	{file} இலிருந்து கேமரா Raw அமைப்புகள் ஏற்றப்பட்டன ({n} ஆதரிக்கப்படவில்லை)
+	Loaded RAW Develop settings from {file}	{file} இலிருந்து RAW உருவாக்கம் அமைப்புகள் ஏற்றப்பட்டன
+	Loaded RAW Develop settings from {file} ({n} not supported)	{file} இலிருந்து RAW உருவாக்கம் அமைப்புகள் ஏற்றப்பட்டன ({n} ஆதரிக்கப்படவில்லை)
 	Begin recording	பதிவைத் தொடங்கு
 	Bend:	வளைவு:
 	Bicubic	இருபக்கக் கனச்சதுர
@@ -920,7 +920,7 @@
 	Brush Reconstruct Options	தூரிகை மறுகட்டமைப்பு விருப்பங்கள்
 	Brush Tool Options	தூரிகைக் கருவி விருப்பங்கள்
 	Cache Level:	தற்காலிக சேமிப்பு நிலை:
-	Camera Raw isn't open	கேமரா Raw திறக்கப்படவில்லை
+	RAW Develop isn't open	RAW உருவாக்கம் திறக்கப்படவில்லை
 	Cancel	ரத்துசெய்
 	Cancel (Esc)	ரத்துசெய் (Esc)
 	Manage submitted jobs in the system print queue	சமர்ப்பித்த வேலைகளைக் கணினி அச்சு வரிசையில் நிர்வகி
@@ -1896,7 +1896,7 @@
 	Brush preview color	தூரிகை முன்னோட்ட நிறம்
 	Cache levels	தற்காலிக சேமிப்பு நிலைகள்
 	Cache tile size	தற்காலிக சேமிப்பு ஓடு அளவு
-	Camera Raw Defaults	கேமரா Raw இயல்புநிலைகள்
+	RAW Defaults	RAW இயல்புநிலைகள்
 	Canvas border	படச்சட்ட விளிம்பு
 	Show canvas dots	படச்சட்ட புள்ளிகளைக் காண்பி
 	Clip thumbnails to layer bounds	சிறுபடங்களை அடுக்கு எல்லைக்கு வெட்டு
@@ -1978,7 +1978,6 @@
 	Never	ஒருபோதும் இல்லை
 	Normal tip	இயல்பான முனை
 	Open as smart object	திறன்மிகு பொருளாகத் திற
-	Open in camera raw	கேமரா Raw இல் திற
 	Open documents as tabs	ஆவணங்களைத் தாவல்களாகத் திற
 	Overscroll	மிகைஉருட்டல்
 	Performance	செயல்திறன்
@@ -2336,8 +2335,8 @@
 	Tone Histogram	தொனி ஹிஸ்டோகிராம்
 	Show Selected Region	தேர்ந்தெடுத்த பகுதியைக் காண்பி
 cameraRaw	Light	ஒளி
-	Camera Raw Filter ({layer})	கேமரா Raw வடிகட்டி ({layer})
-	Camera Raw ({name})	கேமரா Raw ({name})
+	RAW Develop Filter ({layer})	RAW உருவாக்கம் வடிகட்டி ({layer})
+	RAW Develop ({name})	RAW உருவாக்கம் ({name})
 cameraRaw	Lights	ஒளிகள்
 cameraRaw	Darks	கருமைகள்
 cameraRaw	Red	சிவப்பு
@@ -2929,8 +2928,6 @@ curves	Smooth	மென்மையாக்கு
 	Roman Hanging Punctuation	ரோமன் தொங்கும் நிறுத்தற்குறிகள்
 	Avoid Widows/Orphans	தனித்த வரிகளைத் தவிர்
 	Compose	அமை
-	Adobe Single-line Composer	Adobe ஒற்றை வரி அமைப்பி
-	Adobe Every-line Composer	Adobe ஒவ்வொரு வரி அமைப்பி
 	Word Spacing	சொல் இடைவெளி
 	Letter Spacing	எழுத்து இடைவெளி
 	Glyph Scaling	குறியுரு அளவீடு
@@ -3126,7 +3123,6 @@ curves	Smooth	மென்மையாக்கு
 	Intersect with	இதனுடன் வெட்டிக்கொள்
 	Capture Comp	அமைப்பைப் பதிவுசெய்
 	No Layer Comps	அடுக்கு அமைப்புகள் இல்லை
-	Adobe PDF Presets…	Adobe PDF முன்னமைவுகள்…
 	3D…	3D…
 	Technology Previews…	தொழில்நுட்ப முன்னோட்டங்கள்…
 	Add a mask  (from the selection; ⌥ inverts)	மறைப்பை சேர் (தேர்விலிருந்து; ⌥ தலைகீழாக்கும்)
@@ -3752,8 +3748,8 @@ layerLabel	No Color	நிறம் இல்லை
 	Border	எல்லை
 	Box Blur	பெட்டி மங்கல்
 	Calculations	கணக்கீடுகள்
-	Camera Raw	கேமரா ரா
-	Camera Raw Filter	கேமரா ரா வடிகட்டி
+	RAW Develop	RAW உருவாக்கம்
+	RAW Develop Filter	RAW உருவாக்கம் வடிகட்டி
 	Channel1	சேனல்1
 	Channel2	சேனல்2
 	Channel3	சேனல்3
@@ -4273,3 +4269,8 @@ navigator	Zoom	பெரிதாக்கல்
 	Transparent (default)	ஒளிஊடுருவும் (இயல்புநிலை)
 	The path was kept as the Work Path	பாதை பணிப் பாதையாக வைக்கப்பட்டது
 	The path was discarded	பாதை நிராகரிக்கப்பட்டது
+	Move Toolbar to the Right	கருவிப்பட்டியை வலப்புறம் நகர்த்து
+	Move Toolbar to the Left	கருவிப்பட்டியை இடப்புறம் நகர்த்து
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	RAW உருவாக்க அமைப்புகள் {file} இல் சேமிக்கப்பட்டன

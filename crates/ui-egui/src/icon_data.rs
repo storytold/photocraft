@@ -110,6 +110,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("paint-bucket", include_bytes!("../../../assets/icons/paint-bucket.svg")),
     ("painting-symmetry", include_bytes!("../../../assets/icons/painting-symmetry.svg")),
     ("palette", include_bytes!("../../../assets/icons/palette.svg")),
+    ("panel-left", include_bytes!("../../../assets/icons/panel-left.svg")),
     ("panel-right", include_bytes!("../../../assets/icons/panel-right.svg")),
     ("panels-top-left", include_bytes!("../../../assets/icons/panels-top-left.svg")),
     ("path-op-combine", include_bytes!("../../../assets/icons/path-op-combine.svg")),

@@ -34,7 +34,7 @@
 
 # Adjustments and filters
 
-# Camera Raw and camera data
+# RAW Develop and camera data
 
 # Dialogs, preferences and file formats
 
@@ -544,7 +544,7 @@
 	Brush Settings	Ecsetbeállítások
 	Brushes	Ecsetek
 	brushes	ecsetek
-	Camera Raw Filter…	Camera Raw szűrő…
+	RAW Develop Filter…	RAW-előhívás szűrő…
 	Canvas Guides	Vászon-segédvonalak
 	Cascade	Lépcsőzetes
 	Change Panel Group	Panelcsoport váltása
@@ -2573,11 +2573,11 @@ navigator	Zoom	Nagyítás mértéke
 	Balance	Egyensúly
 	Before (Y)	Előtte (Y)
 	Blending	Keverés
-	Camera Raw	Camera Raw
-	Camera Raw ({name})	Camera Raw ({name})
-	Camera Raw Filter	Camera Raw szűrő
-	Camera Raw Filter ({layer})	Camera Raw szűrő ({layer})
-	Camera Raw isn't open	A Camera Raw nincs megnyitva
+	RAW Develop	RAW-előhívás
+	RAW Develop ({name})	RAW-előhívás ({name})
+	RAW Develop Filter	RAW-előhívás szűrő
+	RAW Develop Filter ({layer})	RAW-előhívás szűrő ({layer})
+	RAW Develop isn't open	A RAW-előhívás nincs megnyitva
 	Canceled opening {name}	Megnyitás megszakítva: {name}
 	Damaged Photoshop document	Sérült Photoshop-dokumentum
 	The document “{name}” may be damaged.	A(z) „{name}” dokumentum sérült lehet.
@@ -2630,7 +2630,6 @@ navigator	Zoom	Nagyítás mértéke
 	Noise Luminance	Zajcsökkentés: luminancia
 	Noise Luminance Detail	Zajcsökkentés: luminancia-részletesség
 	Noise Reduction	Zajcsökkentés
-	Open in camera raw	Megnyitás a Camera Raw-ban
 	Paint Overlay	Ráfestés
 	Previous	Előző
 	Purple	Lila
@@ -3188,8 +3187,8 @@ cameraRaw	Yellow	Sárga
 	Cache levels	Gyorsítótár-szintek
 	Cache tile size	Gyorsítótár csempemérete
 	Camera Data	Fényképezőgép adatai
-	Camera Raw Defaults	Camera Raw-alapértékek
-	Camera Raw…	Camera Raw…
+	RAW Defaults	RAW-alapértékek
+	RAW Defaults…	RAW-alapértékek…
 	Cancel opening	Megnyitás megszakítása
 	Canvas border	Vászonszegély
 	Canvas extension color:	Vászonbővítés színe:
@@ -3779,9 +3778,6 @@ cameraRaw	Yellow	Sárga
 	Add to selection  (⇧)	Hozzáadás a kijelöléshez  (⇧)
 	Adds grain to the soft edges of the brush tip.	Szemcsézettséget ad az ecsethegy lágy széleihez.
 	Adjustment Layers	Korrekciós rétegek
-	Adobe Every-line Composer	Adobe többsoros szedőmotor
-	Adobe PDF Presets…	Adobe PDF-előbeállítások…
-	Adobe Single-line Composer	Adobe egysoros szedőmotor
 	Advanced Controls	Speciális vezérlők
 	After (X)	Utána (X)
 	Airbrush: keeps painting while the pointer rests.	Festékszóró: a festés akkor is folytatódik, amikor a mutató áll.
@@ -4193,8 +4189,8 @@ cameraRaw	Yellow	Sárga
 	Load Settings…	Beállítások betöltése…
 	Save these settings as a Camera Raw .xmp file	A beállítások mentése Camera Raw .xmp-fájlként
 	Load settings from a Camera Raw .xmp file	Beállítások betöltése Camera Raw .xmp-fájlból
-	Loaded Camera Raw settings from {file}	Camera Raw-beállítások betöltve innen: {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw-beállítások betöltve innen: {file} ({n} nem támogatott)
+	Loaded RAW Develop settings from {file}	RAW-előhívás-beállítások betöltve innen: {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	RAW-előhívás-beállítások betöltve innen: {file} ({n} nem támogatott)
 	Auto Add/Delete	Automatikus hozzáadás/törlés
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	A nyomtatási beállításokban ne jelöld be a tükrözést is: a két tükrözés kioltja egymást.
 	Print Settings…	Nyomtatási beállítások…
@@ -4525,7 +4521,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Réteghatárok megjelenítése rámutatáskor
 	Expand layer group on click	Rétegcsoport kibontása kattintásra
 	Show hover bounds from Layers	Határok megjelenítése a Rétegek panelről rámutatáskor
-	Saved Camera Raw settings to {file}	Camera Raw-beállítások mentve ide: {file}
+	Saved RAW Develop settings to {file}	RAW-előhívás-beállítások mentve ide: {file}
 	Save the settings to each raw's sidecar without opening it	A beállítások mentése minden raw kísérőfájljába megnyitás nélkül
 	No settings saved: these raws can't keep a sidecar here	Nincs mentve semmi: ezek a raw fájlok itt nem kaphatnak kísérőfájlt
 	Some settings could not be saved; the raws stay open	Néhány beállítást nem sikerült menteni; a raw fájlok nyitva maradnak
@@ -4537,3 +4533,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Vászonméret automatikus módosítása
 	Keep Relative Position During Layer Reordering	Relatív pozíció megtartása a rétegek átrendezésekor
 	Shrinkwrap Canvas on Save	Vászon összehúzása a tartalomra mentéskor
+	Move Toolbar to the Right	Eszköztár áthelyezése jobbra
+	Move Toolbar to the Left	Eszköztár áthelyezése balra
