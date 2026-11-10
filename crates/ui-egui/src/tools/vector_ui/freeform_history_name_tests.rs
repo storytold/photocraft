@@ -207,5 +207,14 @@ fn control_pointer_strokes_commit_only_on_release_with_the_freeform_label() {
             call(&mut app, json!({"events": [{"kind": "move", "x": 60.0 + offset, "y": 80.0}, {"kind": "up", "x": 20.0 + offset, "y": 100.0}]}));
             assert_step(&app, n, "Freeform Pen");
         }
+        if mode == "path" {
+            // A further stroke starting at the selected open path's endpoint has the same name.
+            assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+            let n = steps(&app);
+            call(&mut app, json!({"events": [{"kind": "down", "x": 110, "y": 100}, {"kind": "move", "x": 150, "y": 150}]}));
+            assert_eq!(steps(&app), n);
+            call(&mut app, json!({"events": [{"kind": "up", "x": 190, "y": 120}]}));
+            assert_step(&app, n, "Freeform Pen");
+        }
     }
 }
