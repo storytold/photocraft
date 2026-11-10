@@ -18,7 +18,7 @@ pub(crate) fn filled<T: Clone>(len: usize, value: T, purpose: &str) -> Result<Ve
 /// Reads a regular file of at most `max` bytes. The opened handle must be a regular file (a
 /// device such as `/dev/zero` never ends) and reading stops one byte past `max`, so neither a
 /// special file nor one that grows after a size check can fill memory.
-pub(crate) fn read_file_within(path: &str, max: u64) -> std::io::Result<Vec<u8>> {
+pub(crate) fn read_file_within(path: impl AsRef<std::path::Path>, max: u64) -> std::io::Result<Vec<u8>> {
     use std::io::{Error, ErrorKind, Read};
     let file = std::fs::File::open(path)?;
     if !file.metadata()?.is_file() {
@@ -149,5 +149,17 @@ mod tests {
         assert!(read_file_within(std::env::temp_dir().to_str().unwrap(), 10).is_err());
         #[cfg(unix)]
         assert!(read_file_within("/dev/zero", 1 << 30).is_err_and(|e| e.kind() == std::io::ErrorKind::InvalidInput));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_file_within_reads_a_path_that_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::temp_dir().join(format!("pc-read-within-nonutf8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(std::ffi::OsStr::from_bytes(b"frame-\xff.png"));
+        std::fs::write(&path, [3u8; 4]).unwrap();
+        assert_eq!(read_file_within(&path, 10).unwrap(), vec![3u8; 4]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
