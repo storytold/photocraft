@@ -234,10 +234,54 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Close document `index` as [`Session::close`] does, and free it off the UI thread. A
+    /// gigapixel document and its history are millions of tiles: dropping them where the command
+    /// ran took over a second, long enough for a Wayland compositor to drop the window. Returns
+    /// whether there was such a document.
+    pub fn close_and_release(&mut self, index: usize) -> bool {
+        let Some(closed) = self.close(index) else { return false };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // If the thread can't start, the closure (and the document) drops here instead.
+            let _ = std::thread::Builder::new().name("photocraft-close".into()).spawn(move || drop(closed));
+        }
+        #[cfg(target_arch = "wasm32")]
+        drop(closed);
+        true
+    }
+}
+
 pub(super) fn fix_active(st: &mut DocState) {
     if st.active_layer.is_none_or(|id| st.doc.layer(id).is_none()) {
         st.active_layer = st.doc.top_layer();
     }
     fix_selection(st);
     channel_cmds::fix_view(st);
+}
+
+#[cfg(test)]
+mod close_tests {
+    use serde_json::json;
+
+    use crate::Session;
+
+    /// Closing removes the document and says so; a document that isn't open is reported missing.
+    #[test]
+    fn closing_frees_the_document_and_reports_a_missing_one() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+        let first = std::sync::Arc::downgrade(&s.documents()[0].doc);
+        assert!(s.close_and_release(0));
+        assert_eq!(s.documents().len(), 1, "closed like Session::close");
+        assert_eq!(s.documents()[0].doc.size.width, 32, "the other document stays");
+        assert!(!s.close_and_release(5), "no such document");
+        // Freed on its own thread: gone shortly after.
+        let t = std::time::Instant::now();
+        while first.upgrade().is_some() {
+            assert!(t.elapsed() < std::time::Duration::from_secs(10), "the closed document was never freed");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 }
