@@ -1330,6 +1330,47 @@ fn import_source_identity_respects_separate_read_and_write_roots() {
 }
 
 #[test]
+fn import_source_identity_protects_all_possible_relative_sources_across_read_roots() {
+    let (library, work, _) = roots("import-source-multiple-roots");
+    std::fs::write(library.join("source.xcf"), b"library source").unwrap();
+    std::fs::write(work.join("source.xcf"), b"work source").unwrap();
+    std::fs::hard_link(library.join("source.xcf"), work.join("library-alias.pcraft")).unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    assert_eq!(workspace.read("source.xcf").unwrap(), b"library source");
+    assert!(workspace.is_import_source("source.xcf", "source.xcf").unwrap(), "relative source provenance is ambiguous across roots");
+    assert!(!workspace.is_import_source(&library.join("source.xcf").to_string_lossy(), "source.xcf").unwrap(), "an absolute library source is precise");
+    assert!(workspace.is_import_source("source.xcf", "library-alias.pcraft").unwrap());
+    assert!(workspace.is_import_source(&work.join("source.xcf").to_string_lossy(), "source.xcf").unwrap());
+    std::fs::remove_file(library.join("source.xcf")).unwrap();
+    assert_eq!(workspace.read("source.xcf").unwrap(), b"work source");
+    assert!(workspace.is_import_source("source.xcf", "source.xcf").unwrap());
+    assert!(!workspace.is_import_source("source.xcf", "library-alias.pcraft").unwrap());
+    assert!(!workspace.is_import_source("source.xcf", "new.pcraft").unwrap());
+    std::fs::write(library.join("source.xcf"), b"new earlier candidate").unwrap();
+    assert_eq!(workspace.read("source.xcf").unwrap(), b"new earlier candidate");
+    assert!(workspace.is_import_source("source.xcf", "source.xcf").unwrap(), "a newly shadowing root cannot unprotect the later source");
+}
+
+#[test]
+fn import_source_identity_preserves_multi_root_refusals_and_removed_source_protection() {
+    let (library, work, _) = roots("import-source-multiple-root-refusals");
+    std::fs::create_dir(library.join("source.xcf")).unwrap();
+    std::fs::write(work.join("source.xcf"), b"work source").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    let error = workspace.is_import_source("source.xcf", "new.pcraft").unwrap_err().to_string();
+    assert!(error.contains("inspect source") && error.contains("not a regular file"), "{error}");
+    assert!(workspace.is_import_source("../source.xcf", "new.pcraft").is_err());
+    assert!(workspace.is_import_source("source.xcf", "../new.pcraft").is_err());
+    std::fs::remove_dir(library.join("source.xcf")).unwrap();
+    std::fs::remove_file(work.join("source.xcf")).unwrap();
+    assert!(workspace.is_import_source("source.xcf", "source.xcf").unwrap());
+    assert!(!workspace.is_import_source("source.xcf", "new.pcraft").unwrap());
+    assert!(AuthorizedWorkspace::default().is_import_source("source.xcf", "new.pcraft").is_err());
+    let read_only = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], None).unwrap();
+    assert!(read_only.is_import_source("source.xcf", "new.pcraft").is_err());
+}
+
+#[test]
 /// Reject source/destination directories before opening them and preserve missing-file and alias semantics.
 fn import_source_identity_refuses_nonregular_candidates_and_preserves_missing_paths() {
     let (inside, _, workspace) = roots("import-source-nonregular");
