@@ -257,6 +257,7 @@ pub use prefs::flick_pan;
 pub use prefs::kys_import;
 pub use prefs::prefs_ui;
 use prefs::pressure_curve_ui;
+pub use services::AutomationReadResult;
 pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
@@ -803,6 +804,8 @@ mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
+mod pencil_pressure_toggles_tests;
+#[cfg(test)]
 mod shape_bounds_box_tests;
 
 #[cfg(test)]
@@ -896,6 +899,9 @@ mod star_tool_tests;
 mod transform_several_tests;
 
 #[cfg(test)]
+mod transform_corner_projection_tests;
+
+#[cfg(test)]
 mod transform_selection_rules_tests;
 
 #[cfg(test)]
@@ -905,6 +911,8 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+#[cfg(test)]
+mod move_shift_click_tests;
 
 #[cfg(test)]
 mod move_target_default_tests;
@@ -1045,6 +1053,8 @@ mod artboard_options_bar_tests;
 mod background_eraser_bar_angle_tests;
 #[cfg(test)]
 mod brush_opacity_minimum_tests;
+#[cfg(test)]
+mod burn_default_tip_tests;
 
 #[cfg(test)]
 mod pencil_shift_digit_opacity_tests;
@@ -1064,3 +1074,6 @@ mod view_guides_submenu_tests;
 
 #[cfg(test)]
 mod background_eraser_digit_keys_tests;
+
+#[cfg(test)]
+mod clone_stamp_reset_tip_tests;

@@ -41,6 +41,8 @@ pub struct PerspectiveCrop {
     pub drag: Option<Drag>,
     /// Corners clicked so far, before the fourth makes the quad.
     pub clicks: Vec<[f64; 2]>,
+    /// The pointer between clicks (button up), the preview quad's free corner (#11804).
+    pub hover: Option<[f64; 2]>,
     /// The document the pending quad belongs to.
     doc: Option<photocraft_doc::DocId>,
 }
@@ -76,6 +78,7 @@ pub fn cancel(app: &mut PhotocraftApp) {
     app.ui.perspective_crop = None;
     app.pcrop.drag = None;
     app.pcrop.clicks.clear();
+    app.pcrop.hover = None;
 }
 
 /// Another document became active: its pending quad is dropped (also from `sync_views`, so it is
@@ -141,6 +144,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
     };
     if app.session.active().is_none() || !p[0].is_finite() || !p[1].is_finite() {
+        app.pcrop.hover = None;
         return true;
     }
     cancel_stale(app);
@@ -161,7 +165,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 None => Some(Drag::New { start: p, cur: p, square: mods.shift, centred: mods.alt }),
             };
         }
-        ToolEvent::Move { .. } => drag_to(app, p, mods),
+        ToolEvent::Move { .. } => {
+            // Between corner clicks the preview's free corner follows the pointer (#11804).
+            app.pcrop.hover = (app.pcrop.drag.is_none() && !app.pcrop.clicks.is_empty()).then_some(p);
+            drag_to(app, p, mods);
+        }
         ToolEvent::Up { .. } => {
             drag_to(app, p, mods);
             if let Some(Drag::New { start, cur, square, centred }) = app.pcrop.drag {
@@ -282,6 +290,39 @@ fn grid_steps(side: f32) -> usize {
     ((side / 48.0).round() as usize).clamp(2, 12)
 }
 
+/// The quad that follows the pointer while corners are clicked (#11804): after two clicks the two
+/// points and the pointer as the third and fourth corner (a triangle), after three the three points
+/// and the pointer as the fourth. `None` with fewer clicks or no pointer position.
+pub(crate) fn click_preview(app: &PhotocraftApp) -> Option<[[f64; 2]; 4]> {
+    let h = app.pcrop.hover.filter(|h| h.iter().all(|v| v.is_finite()))?;
+    match app.pcrop.clicks[..] {
+        [a, b] => Some([a, b, h, h]),
+        [a, b, c] => Some([a, b, c, h]),
+        _ => None,
+    }
+}
+
+/// The grid lines of the quad `q` (document px, `n` steps): its perspective grid, or for a quad
+/// with two corners on one point (the two-click preview) the lines between matching points of
+/// opposite sides, which meet at that point.
+fn grid_lines(q: [[f64; 2]; 4], n: usize) -> Vec<[[f64; 2]; 2]> {
+    let lerp = |a: [f64; 2], b: [f64; 2], t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    let homography = if convex_quad(&q) { Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], q) } else { None };
+    let at = |u: f64, v: f64| match &homography {
+        Some(h) => {
+            let (x, y) = h.apply(u, v);
+            [x, y]
+        }
+        None => lerp(lerp(q[0], q[1], u), lerp(q[3], q[2], u), v),
+    };
+    (1..n)
+        .flat_map(|k| {
+            let t = k as f64 / n as f64;
+            [[at(t, 0.0), at(t, 1.0)], [at(0.0, t), at(1.0, t)]]
+        })
+        .collect()
+}
+
 /// The shield over the image outside a pending quad (#11972): grey 89 at 18 % opacity, which shows
 /// red 255, 0, 0 as 225, 16, 16, as measured in the reference application.
 pub(crate) const SHIELD: Color32 = Color32::from_rgba_premultiplied(16, 16, 16, 46);
@@ -376,12 +417,29 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         }
     }
     let clicks: Vec<Pos2> = app.pcrop.clicks.iter().map(|c| scr(*c)).collect();
-    if clicks.len() > 1 {
+    if let Some(q) = click_preview(app) {
+        // The quad to the pointer with its grid, in the finished quad's style (#11804). A third
+        // click that makes it cross turns it red as the finished quad (not measured); the
+        // two-click triangle is drawn as a quad.
+        let ok = clicks.len() == 2 || convex_quad(&q);
+        let color = if ok { accent } else { Color32::from_rgb(0xe5, 0x3e, 0x3e) };
+        let pts: Vec<Pos2> = q.iter().map(|c| scr(*c)).collect();
+        if ok && app.ui.tool_options.perspective_crop_grid {
+            let side = pts.iter().zip(pts.iter().skip(1)).map(|(a, b)| a.distance(*b)).fold(0.0, f32::max);
+            let thin = Stroke::new(0.75, Color32::from_rgba_unmultiplied(255, 255, 255, 150));
+            for [a, b] in grid_lines(q, grid_steps(side)) {
+                painter.line_segment([scr(a), scr(b)], thin);
+            }
+        }
+        painter.add(egui::Shape::closed_line(pts, Stroke::new(1.5, color)));
+    } else if clicks.len() > 1 {
         painter.add(egui::Shape::line(clicks.clone(), Stroke::new(1.5, accent)));
     }
+    // The clicked corners: small square handles, as the reference application marks them.
     for c in clicks {
-        painter.circle_filled(c, 4.0, Color32::WHITE);
-        painter.circle_stroke(c, 4.0, Stroke::new(1.25, accent));
+        let r = egui::Rect::from_center_size(c, egui::vec2(8.0, 8.0));
+        painter.rect_filled(r, 0.0, Color32::WHITE);
+        painter.rect_stroke(r, 0.0, Stroke::new(1.25, accent), egui::StrokeKind::Inside);
     }
 }
 
@@ -417,6 +475,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
 }
+
+#[cfg(test)]
+#[path = "perspective_crop_click_preview_tests.rs"]
+mod perspective_crop_click_preview_tests;
 
 #[cfg(test)]
 #[path = "perspective_crop_bar_buttons_tests.rs"]

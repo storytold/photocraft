@@ -298,6 +298,9 @@ impl PhotocraftApp {
         let home = self.home_screen_up();
         if ((chrome && self.ui.panels.options_bar) || tabbed_in) && !home {
             panels::options_bar(self, ui);
+        } else {
+            // Its Fill help modal is gone with the bar: do not let a stale flag hold the crop's keys.
+            panels::options_bar::close_fill_help(ui.ctx());
         }
         if chrome && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);

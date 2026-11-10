@@ -819,7 +819,7 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     // An open options bar popup (the Crop Ratio list, the overlay and gear menus) takes the keys
     // first: Esc closes it, and neither key reaches the crop beneath (#7386). Its id is kept in
     // memory from the last frame; `ctx.any_popup_open` only sees this frame's, drawn later.
-    if (!app.ui.polygon.is_empty() || app.ui.crop_rect.is_some()) && !egui::Popup::is_any_open(ctx) {
+    if (!app.ui.polygon.is_empty() || app.ui.crop_rect.is_some()) && !egui::Popup::is_any_open(ctx) && !crate::panels::options_bar::fill_help_takes_keys(ctx) {
         if pressed(Key::Enter) {
             if !app.ui.polygon.is_empty() {
                 crate::canvas::commit_polygon(app);
