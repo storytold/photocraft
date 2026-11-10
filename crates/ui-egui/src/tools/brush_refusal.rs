@@ -13,6 +13,20 @@ pub const HIDDEN: &str = "Could not use the {tool} because the target layer is h
 pub const LOCKED: &str = "Could not use the {tool} because the layer is locked.";
 pub const GROUP: &str = "Could not use the {tool} because the pixels in a group cannot be edited without merging the group.";
 
+/// The colour-mode alerts (#12686); `{tool}` is [`mode_tool_name`]. The engine refuses the
+/// command with the same words.
+pub const INDEXED: &str = "Could not use the {tool} because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+pub const BITMAP: &str = "Could not use the {tool} because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
+/// The tool's name in the colour-mode alerts, for the tools whose wording was measured: the Dodge
+/// tool. Kept apart from [`tool_name`]: the layer alerts weren't measured for these tools (#12685).
+fn mode_tool_name(tool: Tool) -> Option<&'static str> {
+    match tool {
+        Tool::Dodge => Some(tl!("dodge tool")),
+        _ => None,
+    }
+}
+
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush.
 pub fn tool_name(tool: Tool) -> Option<&'static str> {
     match tool {
@@ -23,8 +37,17 @@ pub fn tool_name(tool: Tool) -> Option<&'static str> {
 
 /// The alert a press with `tool` gets, if any. `hidden` is the press-time hidden-target refusal
 /// (`canvas::tool_input`), which this only words; the lock and the group are checked here. Lock
-/// transparent pixels is no refusal, and a group's targeted mask paints.
+/// transparent pixels is no refusal, and a group's targeted mask paints. A tool with a
+/// [`mode_tool_name`] gets only its colour-mode alert, in an Indexed Color or Bitmap document.
 pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
+    if let Some(name) = mode_tool_name(tool) {
+        let template = match app.session.active()?.doc.mode {
+            photocraft_doc::ColorMode::Indexed => INDEXED,
+            photocraft_doc::ColorMode::Bitmap => BITMAP,
+            _ => return None,
+        };
+        return Some(crate::i18n::fmt(tl!(template), &[("tool", name)]));
+    }
     let name = tool_name(tool)?;
     let template = if hidden {
         HIDDEN

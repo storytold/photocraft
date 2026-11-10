@@ -3946,7 +3946,7 @@ curves	Smooth	გაგლუვება
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	გასაგრძელებლად ეს ტექსტის შრე უნდა დარასტრირდეს. მისი ტექსტი აღარ იქნება რედაქტირებადი. დავარასტრირო ტექსტი?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	გასაგრძელებლად ეს ფიგურის შრე უნდა დარასტრირდეს. ის ფიგურად აღარ იქნება რედაქტირებადი. დავარასტრირო ფიგურა?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	გასაგრძელებლად ეს ჭკვიანი ობიექტი უნდა დარასტრირდეს. მისი შიგთავსი აღარ იქნება რედაქტირებადი. დავარასტრირო ჭკვიანი ობიექტი?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	გასაგრძელებლად ეს შევსების შრე უნდა დარასტრირდეს. მისი შევსება აღარ იქნება რედაქტირებადი. დავარასტრირო შრე?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	გასაგრძელებლად ეს შევსების შრე უნდა დარასტრირდეს. მისი შევსება აღარ იქნება რედაქტირებადი. დავარასტრირო შრე?
 	This layer must be rasterized before proceeding.	გასაგრძელებლად ეს შრე უნდა დარასტრირდეს.
 	Color Picker (Background Color)	ფერის ამრჩევი (ფონის ფერი)
 	Color Picker (Foreground Color)	ფერის ამრჩევი (წინა პლანის ფერი)
@@ -4716,3 +4716,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW დამუშავების პარამეტრები შენახულია {file}-ში
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	აირჩიეთ წინასწარ დაყენებული ასპექტის თანაფარდობა ან ჩამოჭრის ზომა
+	Set the aspect ratio for the crop box	დააყენეთ ასპექტის თანაფარდობა ჩამოჭრის ჩარჩოსთვის
+	Clear aspect ratio values	გაასუფთავეთ ასპექტის თანაფარდობის მნიშვნელობები
+	Set the overlay options for the Crop Tool	დააყენეთ ჩამოჭრის გადაფარვის პარამეტრები
+	Determines if pixel data outside the crop box is retained or deleted	განსაზღვრავს, შენარჩუნდება თუ წაიშლება ჩამოჭრის ჩარჩოს გარეთ არსებული პიქსელები
+	How expanded crop area gets filled	როგორ ივსება გაფართოებული ჩამოჭრის არე
+	Displays pop-up help for the fill methods	აჩვენებს ამომხტარ დახმარებას შევსების მეთოდებზე
+	Fill options	შევსების პარამეტრები
+	Background (default):	ფონი (ნაგულისხმევი):
+	Fill the expanded area with your background color or transparent pixels	შეავსეთ გაფართოებული არე ფონის ფერით ან გამჭვირვალე პიქსელებით
+	Content-aware fill	შიგთავსზე დაფუძნებული შევსება
+	Sample content from part of the image and use it to fill a small area	აიღეთ შიგთავსი სურათის ნაწილიდან პატარა არის შესავსებად
+	Reset the crop box, image rotation, and aspect ratio settings	ჩამოჭრის ჩარჩოს, სურათის ბრუნვისა და ასპექტის თანაფარდობის აღდგენა
