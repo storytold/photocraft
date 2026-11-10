@@ -154,10 +154,13 @@ pub fn pen_undo_last_point(app: &mut PhotocraftApp) -> bool {
         app.ui.pen_redo.clear();
     }
     let before = app.ui.pen.clone();
+    let target = capture_pen_owner(app).map(|owner| owner.target);
     if !undo_last_point(app) {
         return false;
     }
-    if let Some(mut before) = before {
+    if let Some(mut before) = before
+        && let Some(target) = target
+    {
         before.dragging = false;
         before.adjusting_last = false;
         before.adjusting_in = false;
@@ -168,7 +171,7 @@ pub fn pen_undo_last_point(app: &mut PhotocraftApp) -> bool {
         if app.ui.pen_redo.len() == 128 {
             app.ui.pen_redo.remove(0);
         }
-        app.ui.pen_redo.push(super::PenUndo { before, after: app.ui.pen.clone() });
+        app.ui.pen_redo.push(super::PenUndo { before, after: app.ui.pen.clone(), target });
     }
     true
 }
@@ -179,13 +182,20 @@ pub fn pen_can_redo(app: &PhotocraftApp) -> bool {
     if app.ui.transform.is_some() || crate::crop_ui::pending(app) {
         return false;
     }
-    app.ui
-        .pen_redo
-        .last()
-        .is_some_and(|step| step.before.drawn_with(app.ui.tool) && step.before.owner.as_ref().is_some_and(|owner| owner.valid(app)) && app.ui.pen == step.after)
+    app.ui.pen_redo.last().is_some_and(|step| {
+        step.before.drawn_with(app.ui.tool)
+            && step.before.owner.as_ref().is_some_and(|owner| owner.valid(app))
+            && app.ui.pen == step.after
+            // The draft's owner stays pinned, but Redo must not cross a new panel/mode target.
+            && capture_pen_owner(app).is_some_and(|owner| owner.target == step.target)
+    })
 }
 
 pub fn pen_redo_last_point(app: &mut PhotocraftApp) -> bool {
+    // A modal Redo belongs to the box; it neither replays nor discards draft anchors.
+    if app.ui.transform.is_some() || crate::crop_ui::pending(app) {
+        return false;
+    }
     if !pen_can_redo(app) {
         app.ui.pen_redo.clear();
         return false;

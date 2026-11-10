@@ -237,6 +237,7 @@ pub(crate) use pen::freeform_locked_shape;
 pub struct PenUndo {
     before: PenPath,
     after: Option<PenPath>,
+    target: PenTarget,
 }
 
 /// Where a Pen draft goes, captured at its first anchor.

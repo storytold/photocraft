@@ -148,3 +148,47 @@ fn draft_anchor_redo_uses_shortcut_dispatch_and_is_not_persisted() {
     app.ui.tool = Tool::Pen;
     assert!(!pen_redo_last_point(&mut app));
 }
+
+#[test]
+fn draft_anchor_redo_refuses_a_changed_path_target() {
+    let mut app = draft(false);
+    assert!(pen_commit(&mut app, false));
+    let path = app.session.active().unwrap().doc.work_path.clone().unwrap();
+    app.session.execute("path.set", json!({"name": "Other", "path": photocraft_engine::vector_cmds::path_json(&path)})).unwrap();
+    app.ui.selected_path = Some("work".into());
+    pen_down(&mut app, 140., 140., false);
+    pen_up(&mut app);
+    pen_down(&mut app, 180., 180., false);
+    pen_up(&mut app);
+    assert!(pen_undo_last_point(&mut app));
+    app.ui.selected_path = Some("Other".into());
+    let pen = app.ui.pen.clone();
+    let doc = app.session.active().unwrap().doc.clone();
+    assert!(!pen_redo_last_point(&mut app));
+    assert_eq!(app.ui.pen, pen);
+    assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+}
+
+#[test]
+fn modal_redo_does_not_discard_the_draft_anchor_future() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.sync_views();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.ui.tool = Tool::Pen;
+    app.ui.tool_options.vector_mode = "path".into();
+    for (x, y) in [(20., 20.), (80., 20.), (80., 90.)] {
+        pen_down(&mut app, x, y, false);
+        pen_up(&mut app);
+    }
+    let pen = app.ui.pen.clone();
+    assert!(pen_undo_last_point(&mut app));
+    let ctx = egui::Context::default();
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    assert!(app.ui.transform.is_some());
+    assert!(!pen_redo_last_point(&mut app), "the modal box owns Redo");
+    crate::transform_tool::cancel(&mut app);
+    assert!(pen_redo_last_point(&mut app), "the box did not consume the anchor future");
+    assert_eq!(app.ui.pen, pen);
+}
