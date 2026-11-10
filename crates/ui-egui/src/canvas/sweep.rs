@@ -82,10 +82,24 @@ pub(crate) fn start(app: &mut PhotocraftApp, doc: &Document, visible: Rect) {
 /// everything in blocks. A sweep already running is that net for the blocks it hasn't drawn, and
 /// restarting it would throw away the ones it has: each change (a transform's commit and the
 /// selection update after it, say) restarted a whole-canvas redraw.
+///
+/// Off unless `PHOTOCRAFT_SWEEP_SAFETY_NET` is set (to check the comparison while debugging):
+/// the comparison claims an area only when every difference it found is bounded, and redraws
+/// everything itself otherwise, so the net only repeated work. On a storyboard of ~450 layer
+/// passes it redrew the whole canvas (about 5 s) after every bounded change, such as a layer
+/// dropped from another document, though the changed area had already been redrawn.
 pub(crate) fn safety_net(app: &mut PhotocraftApp, doc: &Document, visible: Rect) {
+    if !safety_net_on() {
+        return;
+    }
     if !running(app, doc.id) {
         start(app, doc, visible);
     }
+}
+
+fn safety_net_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PHOTOCRAFT_SWEEP_SAFETY_NET").is_some())
 }
 
 /// Add `region` of `doc`'s canvas to its sweep, drawn before what was already pending.
@@ -313,10 +327,10 @@ mod tests {
         add(&mut app, &big, changed, big.bounds());
         let next = *app.canvas_states[&big.id].pending.last().unwrap();
         assert!(!next.intersect(&changed).is_empty(), "the changed area is drawn next: {next:?}");
-        // With nothing running, the net is a whole sweep.
+        // With nothing running, the net is a whole sweep when it is on, and nothing by default.
         app.canvas_states.get_mut(&big.id).unwrap().pending.clear();
         safety_net(&mut app, &big, big.bounds());
-        assert!(running(&app, big.id));
+        assert_eq!(running(&app, big.id), safety_net_on());
     }
 
     #[test]
