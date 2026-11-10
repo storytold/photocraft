@@ -1320,7 +1320,9 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields:
             FileDialogAnswer::Contents(..) | FileDialogAnswer::ContentsMany(_) => {
                 return Err("open the displacement map as a document, then choose it as the Map Document".into());
             }
-            FileDialogAnswer::SaveTo(_) | FileDialogAnswer::FolderTo(_) => return Err("unexpected answer from the file dialog".into()),
+            FileDialogAnswer::SaveTo(_) | FileDialogAnswer::SaveToUnasked { .. } | FileDialogAnswer::FolderTo(_) => {
+                return Err("unexpected answer from the file dialog".into());
+            }
         };
         let mut fields = fields;
         fields.insert("mapPath".into(), json!(path));

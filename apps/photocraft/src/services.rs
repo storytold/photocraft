@@ -150,6 +150,21 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
     v
 }
 
+/// `path` with trailing whitespace trimmed from the stem of its file name, and its extension kept.
+/// The portal's dialog starts on a name that ends in a space (see [`portal_dialog_name`]); GTK
+/// strips it from the file it saves, and a backend that hands it back, or appends the type's
+/// extension after it (`art .png`), gets it trimmed here too.
+#[cfg(any(target_os = "linux", test))]
+fn without_trailing_space(path: &Path) -> PathBuf {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { return path.to_path_buf() };
+    let trimmed = stem.trim_end();
+    if trimmed.len() == stem.len() || trimmed.is_empty() {
+        return path.to_path_buf();
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(if ext.is_empty() { trimmed.to_string() } else { format!("{trimmed}.{ext}") })
+}
+
 /// `path` with the extension of the file type picked in the save dialog (`chosen`), where the
 /// dialog left the name alone (#6121): the format follows the extension, and the GTK file chooser
 /// keeps the typed name when another type is picked. Only a name that still has the extension the
@@ -160,6 +175,8 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
 /// is part of the name, and the type's extension is added after it.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String]) -> PathBuf {
+    let path = without_trailing_space(path);
+    let path = path.as_path();
     let Some(first) = chosen.first() else { return path.to_path_buf() };
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     let opened_ext = opened_with.and_then(|n| Path::new(n).extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
@@ -176,6 +193,26 @@ pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &
     }
 }
 
+/// [`with_chosen_type`] for the portal's dialog, which opened on `dialog_name` (a stem and a
+/// trailing space, see [`portal_dialog_name`]). A name that comes back as that stem — the user
+/// left it alone — is a stem even when it has a dot (`003.2`), so the picked type's extension is
+/// appended rather than taken for the name's own. Any other name, typed or completed by the
+/// dialog, follows [`with_chosen_type`].
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn with_chosen_type_from_dialog(path: &Path, opened_with: Option<&str>, dialog_name: Option<&str>, chosen: &[String]) -> PathBuf {
+    let path = without_trailing_space(path);
+    let stem = dialog_name.and_then(|name| name.strip_suffix(' ')).filter(|stem| !stem.is_empty());
+    if let (Some(stem), Some(first)) = (stem, chosen.first())
+        && path.file_name().and_then(|n| n.to_str()) == Some(stem)
+    {
+        let mut name = path.as_os_str().to_owned();
+        name.push(".");
+        name.push(first);
+        return PathBuf::from(name);
+    }
+    with_chosen_type(&path, opened_with, chosen)
+}
+
 /// The name the save dialog starts with. Where the type picked gives a bare name its extension
 /// (`adds_extension`), the dialog gets the stem and the suggested type (listed first by
 /// [`save_filters`]) supplies `.psd`:
@@ -185,7 +222,8 @@ pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &
 ///   replace a file of that name, so `test.psd` with PNG picked asked to replace test.psd, which
 ///   the save leaves alone (#6121). From the stem [`with_chosen_type`] gives the picked type's
 ///   extension, and a name that then exists is asked about under that name
-///   (`portal_save::save_as`).
+///   (`portal_save::save_as_answered`). The portal is given the stem with a trailing space
+///   ([`portal_dialog_name`]), so GTK's completion leaves it alone.
 ///
 /// A stem that still has a dot (`scan.jpg.psd`: Windows could keep `scan.jpg`) or an upper-case
 /// extension (the user's spelling) keeps the whole name. Elsewhere the whole name is kept: the
@@ -196,6 +234,29 @@ fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
     let (Some(stem), Some(ext)) = (path.file_stem(), path.extension().and_then(|e| e.to_str())) else { return Some(name) };
     let bare = adds_extension && Path::new(stem).extension().is_none() && !ext.is_empty() && ext == ext.to_ascii_lowercase();
     Some(if bare { stem.to_string_lossy().into_owned() } else { name })
+}
+
+/// The name the portal's Save dialog starts on: the suggested file's name without its last
+/// extension, and a trailing space.
+///
+/// GTK's save dialog completes the name entry from the folder as it loads and inserts the common
+/// prefix of the files whose names start with the entry (`gtk_entry_completion_insert_prefix` in
+/// `finished_loading_cb`), in save mode too. Opened on the stem `OS25` with `OS25.png` in the
+/// folder, the entry became `OS25.png`, so the extension the dialog showed stayed the opened
+/// file's, whatever type was picked. The space makes the entry match no file, so nothing is
+/// inserted; GTK strips leading and trailing whitespace from the name it saves
+/// (`check_save_entry`), and [`with_chosen_type_from_dialog`] trims it too.
+///
+/// The stem is always the name without its last extension, even when it has a dot (`003.2.png`
+/// opens as `003.2`) or the extension is upper case (`photo.PNG` opens as `photo`), so the name
+/// never keeps the opened file's extension. [`with_chosen_type_from_dialog`] appends the picked
+/// type's extension to a name that comes back as this stem.
+#[cfg(any(target_os = "linux", test))]
+fn portal_dialog_name(suggested: &str) -> Option<String> {
+    let path = Path::new(suggested);
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or(name);
+    Some(format!("{stem} "))
 }
 
 /// Shows an Open or Save dialog without blocking the event loop (#673, #574): rfd's async dialog
@@ -254,7 +315,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                 let parent = crate::portal_save::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
                 let req = crate::portal_save::SaveRequest {
                     parent,
-                    name: dialog_file_name(&suggested, true),
+                    name: portal_dialog_name(&suggested),
                     suggested: Path::new(&suggested).file_name().map(|n| n.to_string_lossy().into_owned()),
                     folder: dir,
                     filters,
@@ -264,9 +325,16 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                     let portal = zbus::blocking::connection::Builder::session()
                         .and_then(|b| b.build())
                         .map_err(|e| e.to_string())
-                        .and_then(|conn| crate::portal_save::save_as(&conn, req));
+                        .and_then(|conn| crate::portal_save::save_as_answered(&conn, req));
                     match portal {
-                        Ok(path) => path.map(|p| answer_one(&p, true, FileDialogAnswer::SaveTo)),
+                        Ok(Some(saved)) => {
+                            let crate::portal_save::SaveAs { path, answered, replace } = saved;
+                            let answered = answered.to_string_lossy().into_owned();
+                            Some(answer_one(&path, true, move |path| {
+                                if replace { FileDialogAnswer::SaveToUnasked { path, answered } } else { FileDialogAnswer::SaveTo(path) }
+                            }))
+                        }
+                        Ok(None) => None,
                         Err(e) => {
                             log::info!("portal save dialog unavailable ({e}), using rfd");
                             dialog.save_file().await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo))
