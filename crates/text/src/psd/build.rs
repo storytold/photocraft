@@ -952,11 +952,13 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         // One run per paragraph, as Photoshop writes them: a run spanning several paragraphs
         // makes Photoshop join their lines when the text is edited (#12420).
         let mut lens: Vec<i64> = piece.split_inclusive('\r').map(utf16_len).collect();
-        // A run that starts inside a paragraph keeps that paragraph's tail with its next one.
-        if !starts_paragraph && lens.len() > 1 {
-            let tail = lens.remove(0);
-            if let Some(first) = lens.first_mut() {
-                *first += tail;
+        // A run that starts inside a paragraph: the rest of that paragraph stays in the run the
+        // paragraph started in (its style is the one shown), so no run spans a break.
+        if !starts_paragraph && !lens.is_empty() {
+            let head = lens.remove(0);
+            match psplit.iter_mut().rev().find_map(|(_, l): &mut (E, Vec<i64>)| l.last_mut()) {
+                Some(prev) => *prev += head,
+                None => lens.insert(0, head),
             }
         }
         psplit.push((sheet, lens));
@@ -965,7 +967,9 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
     // model run then, so every paragraph style survives.
     if psplit.iter().map(|(_, l)| l.len()).sum::<usize>() > MAX_ENGINE_RUNS {
         for (_, lens) in &mut psplit {
-            *lens = vec![lens.iter().sum()];
+            if !lens.is_empty() {
+                *lens = vec![lens.iter().sum()];
+            }
         }
     }
     let mut pruns = Vec::new();
