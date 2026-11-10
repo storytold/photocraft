@@ -1,7 +1,7 @@
 //! On a Grayscale document's Background, the Eraser and Edit › Fill with the background colour
 //! paint that colour's grey as the reference converts it: RGB 0, 200, 0 gives 173, not its 117
-//! luminance (#11940). Converting through the document's grey profile gives 153, so the two
-//! Grayscale tests are ignored until the issue says which conversion the swatch uses.
+//! luminance (#11940). The swatch goes through the sRGB tone curve (sGray), not the document's Dot
+//! Gain curve, which would give 153.
 
 use crate::Session;
 use serde_json::json;
@@ -30,7 +30,6 @@ fn erase_at(s: &mut Session, x: i32, y: i32) {
 }
 
 #[test]
-#[ignore = "#11940: the grey profile gives 153 for RGB 0,200,0; the issue measures 173. Waiting on which conversion the swatch should use"]
 fn the_eraser_on_a_gray_background_paints_the_background_colours_gray() {
     let mut s = session("grayscale");
     erase_at(&mut s, 20, 16);
@@ -42,7 +41,6 @@ fn the_eraser_on_a_gray_background_paints_the_background_colours_gray() {
 }
 
 #[test]
-#[ignore = "#11940: the grey profile gives 153 for RGB 0,200,0; the issue measures 173. Waiting on which conversion the swatch should use"]
 fn edit_fill_with_the_background_colour_gives_the_same_gray() {
     let mut s = session("grayscale");
     s.execute("edit.fill", json!({"contents": "background"})).unwrap();
