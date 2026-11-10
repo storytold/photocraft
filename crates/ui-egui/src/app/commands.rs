@@ -6,6 +6,7 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -30,6 +31,13 @@ impl PhotocraftApp {
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
+        }
+        // Find Layers sets the Layers panel's Name filter however it runs: the menu, the shortcut,
+        // `engine.execute` or an action step (#10884).
+        if id == "select.findLayers"
+            && let Ok(reply) = &result
+        {
+            crate::layer_filter_ui::find::apply(self, reply);
         }
         result
     }
@@ -63,7 +71,16 @@ impl PhotocraftApp {
             self.session.precheck(id, &params).map_err(|e| e.to_string())?;
             transform_tool::commit(self);
             if transform_tool::committing(self).is_some() {
-                return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+                // A click stays a click: it runs when the commit lands (#9974). Only a click in the
+                // committing document, one at a time: a script, a control request or an action step
+                // needs its answer now, and a click in another tab wasn't meant for this one.
+                let committing_here = self.transform_preview.as_ref().is_some_and(|pv| self.session.active().is_some_and(|st| st.doc.id == pv.doc.id));
+                let click = !self.automation_input && self.session.authorize.is_none() && self.run_depth == 1;
+                if !click || !committing_here || self.after_transform_commit.is_some() {
+                    return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+                }
+                self.after_transform_commit = Some((id.to_string(), params));
+                return Ok(Value::Null);
             }
             if self.ui.transform.is_some() {
                 return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
@@ -85,10 +102,42 @@ impl PhotocraftApp {
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
         if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard") {
-            if !clip_read {
+            let paste_as = if id == "edit.paste" {
+                match params.get("as") {
+                    None => None,
+                    Some(value) => match value.as_str() {
+                        Some(mode @ ("pixels" | "path" | "shape")) => Some(mode),
+                        _ => return Err("`as` must be pixels, path or shape".into()),
+                    },
+                }
+            } else {
+                None
+            };
+            if let Some(mode) = paste_as {
+                // Pixels can come from the bitmap when the SVG can't be read; vectors can't.
+                let (imported, svg_error) = match self.import_os_svg_clipboard() {
+                    Ok(imported) => (imported, None),
+                    Err(error) if mode == "pixels" => (false, Some(error)),
+                    Err(error) => return Err(error),
+                };
+                if mode == "pixels"
+                    && !imported
+                    && !clip_read
+                    && let Err(error) = self.import_os_clipboard()
+                {
+                    return Err(svg_error.unwrap_or(error));
+                }
+                if let Some(error) = svg_error {
+                    if self.session.clipboard.is_none() {
+                        return Err(error);
+                    }
+                    self.ui.status.clear();
+                    self.ui.status_error = false;
+                }
+            } else if !clip_read {
                 self.import_os_clipboard()?;
             }
-            if self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {
+            if paste_as.is_none() && self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {
                 if self.services.clipboard_unreadable.as_ref().is_some_and(|unreadable| unreadable()) {
                     // The clipboard may well hold an image that can't be reached: say why.
                     notices::clipboard_unreadable(self);
@@ -223,6 +272,7 @@ impl PhotocraftApp {
                     | "path.toSelection"
                     | "path.addToSelection"
                     | "path.subtractFromSelection"
+                    | "path.intersectWithSelection"
             )
             && self.session.active().is_some_and(|st| st.doc.selection.is_some())
         {
@@ -263,6 +313,16 @@ impl PhotocraftApp {
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        // Crop's Fill goes back to its default entry when another document that was already open
+        // becomes active (a tab switch, or closing the active one), as in the reference
+        // application. A new or opened document isn't in `view_docs` yet, so it keeps the setting,
+        // as do tool switches, commits and cancels, which leave the active document alone (#10894).
+        if let (Some((id, ..)), Some((old_id, ..))) = (&document, &self.path_document)
+            && id != old_id
+            && self.view_docs.contains(id)
+        {
+            self.ui.tool_options.crop_content_aware = false;
+        }
         let same_document = match (&self.path_document, &document) {
             (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
             (None, None) => true,
@@ -272,12 +332,15 @@ impl PhotocraftApp {
             self.ui.selected_path = None;
         }
         self.path_document = document;
+        // A shape box handle drag belongs to its document, revision and tool.
+        crate::shape_bounds_box::cancel_stale(self);
         vector_ui::cancel_stale_pen(self);
         crate::direct_select::cancel_stale(self);
         canvas::cancel_stale_vector_drag(self);
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
+        crate::retouch_ui::cancel_stale(self);
         // A polygon under construction belongs to the Polygonal Lasso tool, not the next tool.
         if self.ui.tool != Tool::PolygonLasso {
             self.ui.polygon.clear();
@@ -314,6 +377,9 @@ impl PhotocraftApp {
         }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
+        self.snapshot_thumbs.retain(|(doc, _), _| ids.contains(doc));
+        // Closing a document cancels its page work; its GPU pages go with `retain_gpu_documents`.
+        self.streams.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;
         self.prune_thumbs();
         self.sync_mask_targets();
@@ -321,6 +387,10 @@ impl PhotocraftApp {
         if !self.channel_views.is_empty() {
             let docs = self.session.documents();
             self.channel_views.retain(|id, _| docs.iter().any(|d| d.doc.id.0 == *id));
+        }
+        // With no document left, no canvas paints the Levels clipping display to drop its cache.
+        if self.session.documents().is_empty() {
+            self.levels_clipping = None;
         }
         // Commands may close and reopen a preserved-ID document before the next repaint.
         canvas::retain_gpu_documents(self);

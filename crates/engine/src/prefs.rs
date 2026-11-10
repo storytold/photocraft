@@ -100,6 +100,11 @@ choice!(
     /// pointer (Photoshop), or erase with the current brush while dragging (Krita, Paint).
     RightClickPaint { BrushPicker = "brushPicker", Erase = "erase" } default BrushPicker
 );
+choice!(
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    TabletInput { WindowsInk = "windowsInk", WinTab = "winTab" } default WindowsInk
+);
 choice!(OtherCursor { Standard = "standard", Precise = "precise" } default Standard);
 choice!(CheckerSize { None = "none", Small = "small", Medium = "medium", Large = "large" } default Medium);
 choice!(CheckerColors { Light = "light", Medium = "medium", Dark = "dark", Red = "red", Orange = "orange", Green = "green", Blue = "blue", Purple = "purple", Custom = "custom" } default Light);
@@ -183,6 +188,78 @@ impl Unit {
         let unit = if suffix.is_empty() { None } else { Some(Unit::from_suffix(suffix)?) };
         Some((v, unit))
     }
+    /// A length typed as Photoshop's numeric fields take arithmetic (#10440): lengths and numbers
+    /// joined by `+`, `-`, `*` and `/`, e.g. "100% / 3", "100% - 50px", "1in + 10", "2 * 50 px".
+    /// `*` and `/` bind tighter, and `−` (U+2212) is a minus. A number without a unit added or
+    /// subtracted takes the first operand's unit (Photoshop: "1in + 10" is 11 in), or `default`
+    /// when the first has none; one multiplied or divided is a plain number. `to_px` converts a
+    /// value in a unit. `None` when the text is over 1024 bytes (the numeric fields' cap) or isn't
+    /// such an expression, multiplies two lengths, divides by a length or by zero, or the result
+    /// isn't finite.
+    pub fn eval_length(text: &str, default: Unit, to_px: impl Fn(f64, Unit) -> f64) -> Option<f64> {
+        if text.len() > 1024 {
+            return None;
+        }
+        let text = text.replace('−', "-");
+        // Tokens: operators, and operands (a number with an optional unit suffix).
+        let mut ops = Vec::new();
+        let mut operands: Vec<(f64, Option<Unit>)> = Vec::new();
+        let mut rest = text.trim();
+        let mut want_operand = true;
+        while !rest.is_empty() {
+            if want_operand {
+                let num_end = rest
+                    .char_indices()
+                    .find(|&(i, c)| !(c.is_ascii_digit() || matches!(c, '.' | ',') || (i == 0 && matches!(c, '-' | '+'))))
+                    .map_or(rest.len(), |(i, _)| i);
+                let after = &rest[num_end..];
+                let unit_end = after.find(['+', '-', '*', '/']).unwrap_or(after.len());
+                let (v, unit) = Unit::parse_length(&rest[..num_end + unit_end])?;
+                operands.push((v, unit));
+                rest = after[unit_end..].trim_start();
+                want_operand = false;
+            } else {
+                let op = rest.chars().next()?;
+                if !matches!(op, '+' | '-' | '*' | '/') {
+                    return None;
+                }
+                ops.push(op);
+                rest = rest[1..].trim_start();
+                want_operand = true;
+            }
+        }
+        if want_operand || operands.is_empty() {
+            return None;
+        }
+        let first_unit = operands[0].1.unwrap_or(default);
+        // Fold the products and quotients into terms: (sum of px for unit factors, scalar, has a unit).
+        let mut terms: Vec<(char, f64, Option<Unit>)> = Vec::new();
+        let (mut sign, mut value, mut unit) = ('+', operands[0].0, operands[0].1);
+        for (op, (v, u)) in ops.iter().zip(operands.iter().skip(1)) {
+            match op {
+                '*' => {
+                    if unit.is_some() && u.is_some() {
+                        return None;
+                    }
+                    value *= v;
+                    unit = unit.or(*u);
+                }
+                '/' => {
+                    if u.is_some() || *v == 0.0 {
+                        return None;
+                    }
+                    value /= v;
+                }
+                _ => {
+                    terms.push((sign, value, unit));
+                    (sign, value, unit) = (*op, *v, *u);
+                }
+            }
+        }
+        terms.push((sign, value, unit));
+        let px: f64 = terms.iter().map(|&(s, v, u)| if s == '-' { -1.0 } else { 1.0 } * to_px(v, u.unwrap_or(first_unit))).sum();
+        px.is_finite().then_some(px)
+    }
     /// The unit a typed suffix names, in any case: `px`, `in` or `"`, `cm`, `mm`, `pt`, `pc` or
     /// `pica`, `%`, and their long forms (`pixels`, `inches`, `centimetres`…). The one table every
     /// length field reads.
@@ -222,6 +299,10 @@ pub struct General {
     pub export_clipboard: bool,
     pub resize_image_during_place: bool,
     pub always_create_smart_objects_when_placing: bool,
+    /// Place files without opening Free Transform on them (#8492). Only the interactive place
+    /// (File ▸ Place, canvas drops) opens Free Transform; `file.placeEmbedded`/`file.placeLinked`
+    /// run with a `path` (actions, scripts, automation) never do, so this doesn't affect them.
+    pub skip_transform_when_placing: bool,
     /// Scroll wheel zooms instead of panning.
     pub zoom_with_scroll_wheel: bool,
     /// Wheel zoom eases over the frames of a notch; off, a notch is one instant ×1.1 step.
@@ -242,6 +323,7 @@ impl Default for General {
             export_clipboard: true,
             resize_image_during_place: true,
             always_create_smart_objects_when_placing: true,
+            skip_transform_when_placing: false,
             zoom_with_scroll_wheel: false,
             animated_zoom: true,
             zoom_resizes_windows: false,
@@ -287,15 +369,13 @@ pub struct Interface {
     /// objects in a large document stay visible (Photoshop's Clip Thumbnails to Layer Bounds; #4281).
     pub clip_thumbnails_to_layer_bounds: bool,
     pub show_tooltips: bool,
-    /// Menus, popups and collapsing sections fade and slide, and scroll areas glide to a new
-    /// position. Off, everything changes at once (a reduced-motion mode; #1218, #3273).
-    pub enable_animations: bool,
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
     /// Windows and Linux: use the system's title bar and window buttons instead of PhotoCraft's
     /// own one-row title bar (tiling window managers, desktops that draw their own decorations;
-    /// #1271, #1316). Read when the app starts. macOS always uses the system's.
+    /// #1271, #1316). The integrated title bar remains the default on Linux and Windows;
+    /// the system frame is opt-in. Read when the app starts. macOS always uses the system's.
     pub system_title_bar: bool,
     /// Show the active document's file name in the title bar and the OS window title. The tabs
     /// already name the file, so this can be turned off for a plain "PhotoCraft" title (#5037).
@@ -329,7 +409,6 @@ impl Default for Interface {
             show_menu_colors: true,
             clip_thumbnails_to_layer_bounds: false,
             show_tooltips: true,
-            enable_animations: true,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
             show_file_name_in_title: true,
@@ -395,6 +474,9 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    pub tablet_input: TabletInput,
     /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
     /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
     pub pressure_curve: Vec<[f32; 2]>,
@@ -422,6 +504,7 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            tablet_input: TabletInput::WindowsInk,
             pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
             bundle_nudges: true,
             nudge_bundle_pause_ms: 1000,
@@ -487,11 +570,20 @@ pub struct FileHandling {
     pub recover_on_launch: bool,
     /// Open a file with no ICC profile as untagged even when its EXIF ColorSpace tag says sRGB.
     pub ignore_exif_profile_tag: bool,
+    /// PDF import resolution in DPI; the document keeps it so the page's print size is preserved.
+    pub pdf_dpi: f32,
+    /// The first PDF page to import (1-based; 0 imports from the first page).
+    pub pdf_first_page: u32,
+    /// The last PDF page to import (1-based; 0 imports to the last page).
+    pub pdf_last_page: u32,
     /// Most renderers write ACEScg EXRs without stating the colour space. With this on, an EXR
     /// that would otherwise open as linear sRGB opens as ACEScg (AP1, linear) instead.
     pub exr_aces_cg: bool,
     pub ask_before_saving_layered_tiff: bool,
     pub maximize_psd_compatibility: Ask,
+    /// A `.pcraft` save also writes the flattened document at its canvas size as
+    /// `composite/full.png`. Off by default.
+    pub pcraft_full_composite: bool,
     /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
     pub rasterize_svg_groups_deeper_than: u32,
     pub recent_file_count: u32,
@@ -521,9 +613,13 @@ impl Default for FileHandling {
             autosave_minutes: 10,
             recover_on_launch: true,
             ignore_exif_profile_tag: false,
+            pdf_dpi: 300.0,
+            pdf_first_page: 0,
+            pdf_last_page: 0,
             exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
+            pcraft_full_composite: false,
             rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),
@@ -543,6 +639,10 @@ pub struct Export {
     pub webp_quality: u32,
     pub metadata: ExportMetadata,
     pub convert_to_srgb: bool,
+    /// The folder the last successful export through a save dialog went to (Export As, Quick
+    /// Export, Save for Web, ...). The next export dialog starts there; empty until the first
+    /// export, and ignored while the folder no longer exists (#10192).
+    pub last_folder: String,
 }
 
 impl Default for Export {
@@ -555,6 +655,7 @@ impl Default for Export {
             webp_quality: 85,
             metadata: ExportMetadata::Copyright,
             convert_to_srgb: true,
+            last_folder: String::new(),
         }
     }
 }
@@ -563,13 +664,41 @@ impl Default for Export {
 pub const DEFAULT_MEMORY_USAGE_MB: u32 = 8192;
 
 /// The most Memory Usage the web build honours, in MB: a wasm module's linear memory tops out at
-/// 4 GiB, so a larger allowance (the desktop default is 8 GiB) would never trim anything.
+/// 4 GiB, so a larger allowance (the desktop default is 8 GiB) would never trim anything. The
+/// effect cache is capped at it on every 32-bit build ([`SMALL_ADDRESS_SPACE`]).
 const WASM_MEMORY_USAGE_CAP_MB: u32 = 1536;
+
+/// A 32-bit address space (wasm32, 32-bit Windows): an effect cache budget beyond
+/// [`WASM_MEMORY_USAGE_CAP_MB`] would never evict before allocation fails.
+const SMALL_ADDRESS_SPACE: bool = cfg!(target_pointer_width = "32");
 
 /// The Memory Usage a build honours for a `stored` preference: capped on the web build (`web`).
 /// Separate from the target check so native tests exercise both.
 fn honoured_memory_usage_mb(stored: u32, web: bool) -> u32 {
     if web { stored.min(WASM_MEMORY_USAGE_CAP_MB) } else { stored }
+}
+
+/// The smallest Effect Cache the Preferences dialog and `prefs.set` accept, in MB.
+const EFFECT_CACHE_MIN_MB: u32 = 16;
+
+/// The largest Effect Cache the Preferences dialog and `prefs.set` accept, in MB: on a build with
+/// a 32-bit address space (`small`) the cap there, so the field shows the budget the cache gets.
+fn effect_cache_max_mb(small: bool) -> u32 {
+    if small { WASM_MEMORY_USAGE_CAP_MB } else { 65536 }
+}
+
+/// The nearest Effect Cache the field accepts to a `stored` preference, in MB, on a build with a
+/// 32-bit address space (`small`) or not. Separate from the target check so native tests exercise
+/// both.
+fn accepted_effect_cache_mb(stored: u32, small: bool) -> u32 {
+    stored.clamp(EFFECT_CACHE_MIN_MB, effect_cache_max_mb(small))
+}
+
+/// The layer-effect cache budget a build honours for a `stored` preference, in bytes: within the
+/// range the field accepts, so a hand-edited 0 reports 16 MB, not 0. Separate from the target
+/// check so native tests exercise both.
+fn effect_cache_budget_bytes_for(stored: u32, small: bool) -> u64 {
+    u64::from(accepted_effect_cache_mb(stored, small)) << 20
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -578,6 +707,9 @@ pub struct Performance {
     /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
     /// oldest states are dropped beyond it), and the result of one transform.
     pub memory_usage_mb: u32,
+    /// Percent of physical RAM for the complete process; None preserves the legacy MB limit.
+    #[serde(default)]
+    pub memory_usage_percent: Option<u8>,
     /// Undo steps kept per document (History panel states).
     pub history_states: u32,
     /// Cache Levels, 1–8: the highest cache level the Histogram panel counts a large document at
@@ -638,6 +770,31 @@ impl Performance {
     pub fn history_budget_bytes(&self) -> usize {
         (self.effective_memory_usage_mb() as usize).saturating_mul(1 << 20)
     }
+
+    /// The byte limit History enforces now: none (only History States) while the scratch disk
+    /// is spilling, since tiles only History holds go to disk instead; otherwise
+    /// [`Self::history_budget_bytes`].
+    pub fn history_cap_bytes(&self) -> usize {
+        if photocraft_raster::spill::enabled() { 0 } else { self.history_budget_bytes() }
+    }
+
+    /// Pixel bytes kept in memory before tiles move to the scratch disk: half of Memory Usage
+    /// (the rest is for the GPU canvas, caches and the app). `PHOTOCRAFT_TILE_BUDGET_MB`
+    /// overrides it (tests, stress runs).
+    pub fn tile_budget_bytes(&self) -> usize {
+        let bytes = std::env::var("PHOTOCRAFT_TILE_BUDGET_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|mb| mb.saturating_mul(1 << 20))
+            .unwrap_or_else(|| u64::from(self.effective_memory_usage_mb()).saturating_mul(1 << 20) / 2);
+        usize::try_from(bytes).unwrap_or(usize::MAX)
+    }
+
+    /// The layer-effect cache budget the build honours, in bytes: [`Performance::effect_cache_mb`],
+    /// capped at 1536 MB on 32-bit builds (the web and 32-bit Windows).
+    pub fn effect_cache_budget_bytes(&self) -> usize {
+        usize::try_from(effect_cache_budget_bytes_for(self.effect_cache_mb, SMALL_ADDRESS_SPACE)).unwrap_or(usize::MAX)
+    }
 }
 
 impl Default for Performance {
@@ -645,6 +802,7 @@ impl Default for Performance {
     fn default() -> Self {
         Self {
             memory_usage_mb: DEFAULT_MEMORY_USAGE_MB,
+            memory_usage_percent: Some(70),
             history_states: 50,
             cache_levels: 4,
             cache_tile_size: 8192,
@@ -674,11 +832,15 @@ pub struct ScratchDisk {
 pub struct ScratchDisks {
     /// Disks for spilling tiles once the memory budget is reached (in priority order).
     pub disks: Vec<ScratchDisk>,
+    /// Largest the scratch file may grow, in MB; 0 = no limit. Reaching it pauses spilling
+    /// like a full disk (History's byte limit applies again). At least max(1 GB, 5 % of the
+    /// volume) is always left free, whatever this is set to.
+    pub size_limit_mb: u32,
 }
 
 impl Default for ScratchDisks {
     fn default() -> Self {
-        Self { disks: vec![ScratchDisk { path: "(system temp)".into(), enabled: true }] }
+        Self { disks: vec![ScratchDisk { path: "(system temp)".into(), enabled: true }], size_limit_mb: 0 }
     }
 }
 
@@ -1019,21 +1181,70 @@ impl Default for Integrations {
     }
 }
 
-/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either).
-/// Photoshop's snapshot options come with #3634.
+choice!(
+    /// Playback Options › Performance: how fast a person's Play runs an action's steps.
+    PlaybackPerformance { Accelerated = "accelerated", StepByStep = "step", Pause = "pause" } default Accelerated
+);
+
+/// Actions panel Playback Options. These are saved independently of an action library.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Actions {
+    pub create_single_history_state: bool,
+    /// Accelerated, Step by Step or Pause For. Agents and headless playback always run at once.
+    pub performance: PlaybackPerformance,
+    /// Pause For's whole seconds between steps, 1 to 60 (the dialog keeps it while another mode
+    /// is chosen, as the reference application does).
+    pub pause_seconds: u8,
+}
+
+impl Default for Actions {
+    fn default() -> Self {
+        Self { create_single_history_state: true, performance: PlaybackPerformance::Accelerated, pause_seconds: 1 }
+    }
+}
+
+impl Actions {
+    /// Shortest and longest Pause For, in seconds.
+    pub const PAUSE_SECONDS: std::ops::RangeInclusive<u8> = 1..=60;
+
+    /// Pause For's seconds, within [`Self::PAUSE_SECONDS`] also when a hand-edited file holds
+    /// another number.
+    pub fn pause_seconds(&self) -> u8 {
+        self.pause_seconds.clamp(*Self::PAUSE_SECONDS.start(), *Self::PAUSE_SECONDS.end())
+    }
+}
+
+/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either),
+/// in the dialog's order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HistoryOptions {
+    /// Automatically Create First Snapshot: a new or opened document starts with a snapshot of
+    /// itself, named after it (the History panel's top row).
+    pub automatically_create_first_snapshot: bool,
+    /// Automatically Create New Snapshot When Saving: every save of the document (not a copy)
+    /// adds a snapshot named with the time of the save.
+    pub automatically_create_new_snapshot_when_saving: bool,
     /// Allow Non-Linear History: editing after selecting an earlier state keeps the later
     /// states (the new step is appended at the end), and deleting a state deletes only it.
     pub allow_non_linear_history: bool,
+    /// Show New Snapshot Dialog by Default: a plain click on the History panel's camera button
+    /// opens New Snapshot (otherwise only ⌥-click does).
+    pub show_new_snapshot_dialog_by_default: bool,
     /// Make Layer Visibility Changes Undoable: showing or hiding a layer is a history state.
     pub make_layer_visibility_changes_undoable: bool,
 }
 
 impl Default for HistoryOptions {
     fn default() -> Self {
-        Self { allow_non_linear_history: false, make_layer_visibility_changes_undoable: true }
+        Self {
+            automatically_create_first_snapshot: true,
+            automatically_create_new_snapshot_when_saving: false,
+            allow_non_linear_history: false,
+            show_new_snapshot_dialog_by_default: false,
+            make_layer_visibility_changes_undoable: true,
+        }
     }
 }
 
@@ -1103,6 +1314,7 @@ impl LayerMaskOverlay {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Preferences {
+    pub actions: Actions,
     pub general: General,
     pub interface: Interface,
     pub workspace: Workspace,
@@ -1175,6 +1387,13 @@ pub struct Preferences {
     /// Last selected tool, restored at launch. A tool-name string owned and validated by the
     /// shell; null in older files. Kept separate from tool options so neither overwrites the other.
     pub selected_tool: Value,
+    /// Foreground/background swatches for pixels and masks and exact CMYK picks, restored by the shell at launch.
+    /// Null in older files, which retain the default black/white pixel colours.
+    pub tool_colors: Value,
+    /// The tools used last, most recent first, restored at launch so each toolbar slot shows the
+    /// tool it was left on and each tool key brings it back, as in Photoshop (#3569). Tool-name
+    /// strings owned and validated by the shell; null in older files.
+    pub group_tools: Value,
     /// View › Extras, the View › Show items (Pixel Grid, Grid, Guides, …) and the View › Snap To
     /// targets that differ from their defaults, saved as the user toggles them and restored at
     /// launch, as Photoshop keeps them between sessions (#3762). JSON owned by the shell.
@@ -1325,9 +1544,12 @@ impl Session {
     /// linearity, the transform and layer-effect cache budgets and the text engine's
     /// missing-glyph protection.
     pub fn apply_prefs(&mut self) {
+        self.scratch_runtime.get_or_insert_with(crate::scratch::Runtime::default);
+        crate::scratch::configure(self.prefs());
+        self.scratch_epoch = photocraft_raster::spill::epoch();
         let n = self.prefs().performance.history_states.max(1) as usize;
-        let bytes = self.prefs().performance.history_budget_bytes();
-        let budget = self.prefs().performance.effect_cache_mb as usize;
+        let bytes = self.prefs().performance.history_cap_bytes();
+        let budget = self.prefs().performance.effect_cache_budget_bytes();
         let non_linear = self.prefs().history_options.allow_non_linear_history;
         for st in &mut self.docs {
             st.history.max_states = n;
@@ -1335,11 +1557,30 @@ impl Session {
             st.history.non_linear = non_linear;
             st.trim_history();
         }
-        photocraft_compose::set_effect_cache_budget(budget << 20);
+        photocraft_compose::set_effect_cache_budget(budget);
         crate::transform_cmds::set_budget(u64::from(self.prefs().performance.effective_memory_usage_mb()) << 20);
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
         crate::plugin_cmds::sync_prefs(self);
+    }
+
+    /// Re-apply History's byte limit after the scratch disk paused (a write, create or
+    /// free-space failure) or resumed since it was last applied: while spilling is paused,
+    /// History again bounds the pixel memory it holds, as with no scratch disk. Runs before
+    /// every command; a single atomic load when nothing changed.
+    pub(crate) fn sync_scratch_state(&mut self) {
+        let epoch = photocraft_raster::spill::epoch();
+        if self.scratch_epoch == epoch {
+            return;
+        }
+        self.scratch_epoch = epoch;
+        let bytes = self.prefs().performance.history_cap_bytes();
+        for st in &mut self.docs {
+            if st.history.max_bytes != bytes {
+                st.history.max_bytes = bytes;
+                st.trim_history();
+            }
+        }
     }
 
     /// Everything persisted as one JSON document: the preferences plus `colorSettings`.
@@ -1399,7 +1640,11 @@ impl Session {
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
         let mut invalid = Vec::new();
-        let prefs: Preferences = read_lenient(v, &[], &mut invalid);
+        let mut prefs: Preferences = read_lenient(v, &[], &mut invalid);
+        // An Effect Cache the field no longer accepts (above the 32-bit cap, saved before the cap
+        // or by a 64-bit build; a hand-edited 0) loads as the nearest value it does. Otherwise
+        // Apply from another Preferences tab, which validates every value, would reject it.
+        prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
         if let Some(c) = color {
             self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
@@ -1471,6 +1716,9 @@ impl Session {
             }
         } else {
             next.set(path, value)?;
+        }
+        if next.actions.create_single_history_state != self.prefs().actions.create_single_history_state && crate::actions_cmds::history_policy_in_use(self) {
+            return Err("cannot change action history settings during playback".into());
         }
         // Old `prefs.set interface.theme` clients (by path or inside a section object) still
         // select a visible theme.

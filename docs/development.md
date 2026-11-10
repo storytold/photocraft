@@ -36,6 +36,8 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
+On Linux, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
+
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
 cargo run --release -p photocraft -- --control 7878 --control-token-file .private/control.token \
@@ -111,6 +113,8 @@ the opted-in test; an unset variable leaves the ordinary behavior tests availabl
 After review, remove only the two generated PNGs and their owned temporary directory. The same
 Rust test and variable work on Windows with the native shell's environment-variable syntax.
 
+**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. After the regular gate, `python3 scripts/ci-gpu-lavapipe.py` reruns the configured `gpu` group with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected. It requires Vulkan parity evidence and rejects authored skips, except the documented software-adapter timing exceptions. It reads the filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1` and run the same script. Windows uses WARP; this check does not certify Windows skip coverage.
+
 ## Fonts (craft-fonts)
 
 Font assets shared by the Crafting Apps live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to craft-fonts).
@@ -153,6 +157,10 @@ The window itself draws with the same device (or, with the CPU canvas, one it wa
 
 ## Logs
 
+Native pixel residency, RAM limits and scratch failure recovery are described in
+[`scratch-disks.md`](scratch-disks.md). Control `ui.inspect` includes `scratch` counters and
+the `memory` sample, effective allowances and current working reservations.
+
 The desktop app writes its `log` records to standard error and to `logs/photocraft.log` in the settings directory (Linux `~/.config/photocraft/logs/`, macOS `~/Library/Application Support/Photocraft/logs/`, Windows `%APPDATA%\Photocraft\logs\`, or under `PHOTOCRAFT_CONFIG_DIR` / the portable data folder). A start launched from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug report: GPU startup fallbacks, a lost device and the crash guard's panic report all land there. Each launch moves the previous log to `photocraft.1.log` (and that one to `photocraft.2.log`), so the log of a run that crashed survives the next start. A launch while another PhotoCraft is still running leaves that instance's log where it is and writes its own `photocraft-<pid>.log` next to it (the newest two of those are kept once their instances have exited; the `PhotoCraft <version>, log file <path>` line at startup names the file in use). The file stops growing at 16 MiB. `--version` and command-line errors write no file. A desktop start that fails before any window exists logs the error and, when no terminal, automation client or headless session can report it, shows it in a dialog naming this file (#7643).
 
 By default PhotoCraft's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`, `RUST_LOG=warn,photocraft_gpu=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`photocraft*=debug`). The logger is `apps/photocraft/src/logging.rs`; the web build logs to the browser console instead.
@@ -163,6 +171,7 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 
 | Variable | Effect |
 |---|---|
+| `PHOTOCRAFT_GPU=1` (or `=0`) | Headless CLI: prefer GPU composition and flat export (0 to disable, empty to unset). Explicit `--gpu`/`--no-gpu` CLI flags override this variable. `file.export.quickExport` composites and encodes inside the engine, which has no renderer, so it always runs on the CPU; `run --gpu` prints a one-time warning when a step uses it |
 | `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>`; also the port for `photocraft-cli serve --port` and `mcp --bridge` when the flag is absent. Empty is unset |
 | `PHOTOCRAFT_NO_PRINT` | Set to anything but `0`: `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works). CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
@@ -243,6 +252,7 @@ See `docs/control-protocol.md` for every method. Tips:
 ```sh
 cargo run -p photocraft-cli -- convert in.psd out.pcraft               # any supported format -> any
 cargo run -p photocraft-cli -- info out.pcraft                          # JSON: size, mode, depth, layer tree
+cargo run -p photocraft-cli -- info out.psd --detail                    # also text runs, anti-aliasing, full layer-effect settings
 cargo run -p photocraft-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
                                           --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
 cargo run -p photocraft-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
@@ -262,6 +272,17 @@ ln -s photocraft-<version>-linux-x86_64.AppImage photocraft-cli
 
 The `--cli` selector is removed; all remaining arguments, stdin, stdout, stderr and the exit status are passed through. CLI launches skip desktop integration. The symlink form uses the AppImage runtime's `ARGV0`; the normal AppImage name launches the GUI.
 
+### GPU rendering
+
+PhotoCraft CLI supports optional native GPU acceleration for flat exports and composition in `convert`, `run`, `batch`, `serve`, and headless `mcp`:
+
+- `--gpu`: Opt into GPU acceleration. Prefers a hardware adapter, performs bounded multi-band readback, and automatically falls back to CPU if an unsupported document feature (such as unsupported blend modes or layered saves) is encountered or if the GPU device becomes unavailable.
+- `--no-gpu`: Explicitly disable GPU rendering and use CPU composition (the default).
+- `PHOTOCRAFT_GPU`: Environment variable equivalent when neither flag is supplied (`1` enables GPU, `0` disables it). An empty or whitespace-only value is treated as unset (defaulting to CPU). Any other value is rejected with a usage error naming the variable. Explicit `--gpu` or `--no-gpu` flags always override the environment variable.
+- **Backend scope and limitations**: GPU acceleration applies to flat exports (e.g. PNG, JPEG, WebP, flat TIFF). Layered/native saves (`.pcraft`, PSD, TIFF with layers) and embedded thumbnail generation remain CPU operations.
+- **Diagnostics and protocol safety**: GPU initialization status, adapter information, and deduplicated fallback warnings are written to standard error. Standard output (JSON lines in `run`, MCP protocol frames, etc.) is never polluted with diagnostics.
+- **Bridge MCP**: When `photocraft-cli mcp` is bridged to a running desktop app (`--bridge`), explicit `--gpu` / `--no-gpu` flags are rejected because the desktop process controls rendering. `PHOTOCRAFT_GPU` is ignored in bridge mode to prevent ambient environment variables from disrupting live bridges.
+
 `actions.json` holds the steps of a recorded action: `[["<id>", {…}], …]`, `[{"command": "<id>", "params": {…}}, …]` or bare ids, as a list or wrapped in `{"actions": …}` or `{"steps": …}`; a droplet file works too. It can also be an Actions set (the Actions panel's `actions.json`, `{"actions": [{"name": …, "steps": […]}, …]}`): `--action <name>` picks the action to play (optional when the set holds one), and the whole set is loaded for each file, so a step that plays another action of the set works. `batch` refuses an `--out` folder that is the `--in` folder, since the results would replace the originals, unless `--in-place` is given. `run` prints one JSON line per command result.
 
 ## Native format (.pcraft)
@@ -271,6 +292,7 @@ The `--cli` selector is removed; all remaining arguments, stdin, stdout, stderr 
 - `manifest.json`: the versioned document tree, with migrations in `format/src/migrate.rs`.
 - `tiles/<blake3>.zst` and `blobs/<blake3>.zst`: zstd-compressed objects, content-addressed by the BLAKE3 hash of their uncompressed bytes.
 - `thumb.png` and `composite/preview.png`: previews.
+- `composite/full.png`: the flattened document at the canvas size, for other apps that read `.pcraft` files. Saves write it only when asked (`ExportOptions::pcraft_full_composite`, off by default), and may leave it out in the cases listed in [the format guide](../book/src/formats/pcraft.md). Check the manifest's `full_composite` member to confirm it was written.
 - `save.lock` (directory bundles only): an empty file a save holds an OS file lock on, so two writers or processes saving one bundle take turns (#4957).
 
 Keep one `PcraftWriter` per open document: re-saving then only compresses and writes tiles that changed. Directory bundles verify objects on first encounter in a folder; later saves reuse them while their file size and modification time are unchanged, and re-verify changed objects, repair missing or damaged objects, and garbage-collect unreferenced ones. `format::Autosaver` writes snapshots into a recovery directory on a background thread. `list_recovery` / `recover` / `discard_recovery` implement crash recovery, and `format::RecoveryStore` is the lifecycle the desktop app uses: new documents autosave under per-launch keys (document ids restart every launch, so they never overwrite an older entry), and a recovered document adopts the entry it came from. That entry is replaced in place by the next autosave and removed only when the document is saved or closed, never just because it was recovered, so a second crash loses nothing. The web build has no crash recovery (no autosave services).
@@ -382,6 +404,25 @@ none). A missing translation shows in English and fails nothing: `cargo xtask ci
 as its last step so the list appears in the log, and only prints a warning if the report itself
 can't run.
 
+## Panel command routing
+
+Every panel button must dispatch an engine command by id (AGENTS.md rule 1), so the UI, CLI,
+control channel and MCP stay equivalent. `cargo xtask panel-commands` (also a step of
+`cargo xtask ci` and of CI) scans `crates/ui-egui/src` outside test code for click handlers: the
+block of an `if` whose condition calls `.clicked()`, `.changed()`, `.dragged()` and friends, or a
+widget function that takes a `Ui` and returns `bool`. Inside one it fails, with file:line, on a
+direct document or session change: `active_mut()`, `Arc::make_mut` on a doc,
+`session.undo/redo/select_layer/add_document/close(…)` or an assignment to a session field
+(`app.session.tools.foreground = …`). Dispatch the command instead (`app.run`, `menus::invoke`).
+A passing scan is not complete coverage. The scanner is lexical: it does not follow calls into
+helpers, and it only recognises an `if` block (a `match` arm guard with a block counts) or a
+`let` local holding a response, so a `match` on a response without such a guard, a response kept
+in a struct field and tested later, or a closure callback is not checked. Preferences
+(`edit_prefs`), shell view state (`app.ui`, the `UI_COMMANDS`) and switching the active document
+are out of scope. Existing violations are listed in
+`ALLOWLIST` in `xtask/src/panel_commands.rs` by file and function, each with its reason; an entry
+that matches nothing any more is an error, so the list only shrinks.
+
 ## Testing strategy
 
 - **Unit and property tests** in every crate. proptest is used for tile COW, regions and codecs.
@@ -421,9 +462,30 @@ can't run.
 - **Numbers** (7360 × 4912, 8 text layers + one painted layer with drop shadow + stroke + bevel, Hue/Saturation on top; M4 Pro; `cargo run --release -p photocraft-ui-egui --example fx_bench`), CPU fallback → GPU: full refresh with warm effect maps 5.7 s → 47 ms; Hue/Saturation tweak above the effects 4.7 s → 31 ms; brush dab on a plain layer 32 → 1.7 ms; brush dab on the effect layer (its maps rebuilt around the dab) 659 → 3.7 ms; first refresh (all maps built) 6.4 s → 0.39 s. With the CPU ~14× oversubscribed by parallel builds (min of 7 runs): 8.1 s → 0.33 s, 9.9 s → 0.28 s, 28 → 2.2 ms, 1.7 s → 89 ms; moving a text layer 7 px 336 → 13 ms. `fx_bench --compare corpus/psd/…/*.psd` reports the GPU vs CPU difference on real files (30 of the 31 corpus files with effects render on the GPU, worst 0.12/255).
 - On the CPU path `compose::effect_maps` caches shadow, glow, bevel and satin maps per layer state (LRU, 768 MB budget).
 - Live adjustment previews on large documents use a downsampled proxy (`ui-egui/src/proxy.rs`).
+- **Opening JPEG and PNG files** (#10259). `cargo run --release -p photocraft-ui-egui --example flat_open_bench` generates 24 and 36 MP JPEG, PNG RGB 8-bit, RGB 16-bit and RGBA 8-bit inputs (and a JPEG with EXIF orientation 6) from seeded gradients and noise, caches them in the target directory's `fixtures/` (`--cache`), and times the real open (`import`), session `admission`, the codec `decode`, `orient`, `tiles` (`image_to_document`), the `first composite` and the whole `editable` chain. Each case runs in its own process (`--case <key>` runs one by hand). Its peak resident memory (`VmHWM`, Linux only, else `n/a`) is a process-lifetime high-water mark: `peak_process_after_import_bytes` is read after real import and admission, while `peak_process_after_all_passes_bytes` also includes the standalone decode/orient/tiles pass, GPU setup and warm-up, and editable-open passes. The latter is not an isolated composite or editable-open peak. Each timing row identifies which reading it carries in `peak_rss_provenance`. `--quick` uses 1200x800 images, `--only <substring>` filters cases, `--cpu` skips the GPU, `--json <file>` writes the report `cargo xtask perf` reads (scenarios P83 to P86).
 - **Content-Aware tools** (`algo::inpaint`, `algo::content_aware`: Fill, Spot Healing, Patch, Content-Aware Move). `cargo run --release -p photocraft-engine --example content_aware_bench -- bench caf|heal|cancel` times the P21, P22 and P49 rows without the UI, one sample per line, so two builds can be run in turn and pooled. `-- hash` prints a hash of every tool's output at 8, 16 and 32 bits and in Gray, CMYK and Lab: the fill is fitted to Photoshop, so a speed-up must leave both builds' lists equal. The solver works only over the hole's bounds grown by a patch radius (nothing else changes or is matched). PatchMatch sweeps its bands in wavefronts when there are fewer bands than threads; each cell sees the same neighbours and random numbers as in raster order, so the result does not depend on the thread count. Cancellation is checked per row: a 24 MP fill stops within tens of milliseconds, most of it spent freeing its buffers.
 - `ui.inspect` returns `perf` timings (UI ms per frame, composite ms, upload ms).
 - Never scan full surfaces per frame. Cache per document revision (`PhotocraftApp::cached_bounds`). An uncached `content_bounds()` on a 36 MP layer once cost 77 ms per frame.
+
+### Headless GPU rendering and flat export (issue #8062)
+
+PhotoCraft foundation PR 1 adds an optional, additive headless GPU rendering backend for flat export and headless automation sessions:
+
+- **Layering & Contracts:**
+  - `photocraft-gpu` (L3) provides windowless native context creation ([`NativeContext`]), checked bounded band readback ([`readback::render_bands`]), and device health monitoring ([`DeviceHealth`]). It does not depend on IO or UI crates.
+  - `photocraft-io` (L4) defines the renderer contract ([`BandRenderer`], [`CpuRenderer`], [`RenderBand`], [`RenderError`]) and additive export entrypoints ([`export_with_renderer`], [`export_flat_with_renderer`], [`document_to_image_with_renderer`]). Wgpu types are excluded from the public IO contract.
+  - `photocraft-automation` (L6) provides the [`GpuRenderer`] adapter behind the `gpu` cargo feature, with lazy adapter initialization, compositor caching across edits, capability-scoped writes, and preview sizing.
+
+- **Supported Matrix:**
+  - Color modes: RGB and Grayscale (including ICC profile conversions and working spaces).
+  - Depth: 8-bit unsigned integer. 16-bit unsigned integer and 32-bit floating point documents use the CPU compositor: layer content is uploaded as half-precision textures, which cannot preserve their samples.
+  - Features: Straight-alpha transparency, Photoshop blend modes, opacity × fill opacity, layer masks, vector masks, clipping groups, isolated/pass-through groups, adjustments, solid/gradient fills, and GPU-supported layer effects.
+  - Targets: Flat raster exports (PNG, JPEG, TIFF, WebP, etc.) and automation `render_png` previews.
+
+- **Conservative CPU Fallback:**
+  - Documents requiring ink-value mixing ([`cmyk::renders_inks`]), Multichannel documents, and unproven features fall back to the CPU reference compositor.
+  - Any compositor rejection ([`Compositor::supports`]), device loss, shader compiler error, staging allocation limit, or buffer mapping failure triggers a 100% whole-export restart on the CPU compositor, discarding partial GPU attempts. No CPU and GPU bands are ever mixed.
+  - Atomic destination writes guarantee that failed exports never corrupt or replace existing files on disk.
 
 ## Scorecard and performance budgets
 
@@ -506,6 +568,16 @@ want the verdict, the merged `results.json`/`summary.md` and the regression chec
 Every `--bench` name must match a `[[bench]]` name in `perf/budgets.toml`; an unknown name
 is rejected before any benchmark runs or any report or baseline is written.
 
+`perf_scenarios` rows that time a command and then the canvas refresh after it also split each
+sample: `cmd_samples_ms` and `refresh_samples_ms` (`samples_ms`, what budgets judge, is their sum),
+`refresh_kinds` (how many refreshes were `gpu-rect`, `gpu-full`, `rect`/`full` on the CPU
+compositor, also without an adapter, `none` when nothing needed drawing, …) and `fallbacks` (why
+the wgpu compositor didn't draw, `CpuReason::kind`). The console line ends with the medians, e.g.
+`cmd 0.06 + refresh 1.71 ms {"gpu-rect": 7}`, so a slow row says whether the engine or the canvas
+is the cost before you profile it. The bench refreshes like the app's `damage_since`: the last
+edit's rect only when the canvas showed the revision before it, else everything; a row whose timed
+refresh also had to draw untimed setup edits is reported on stderr.
+
 Read the sample count before quoting a percentile. `--reps` defaults to 7 in `--quick` and 15
 otherwise, it is per bench, and some rows cap it themselves (the `#211` algorithm rows use
 `b.reps.min(5)`); percentiles are nearest-rank, so **at n ≤ 5 the "p95" is simply the maximum**. A
@@ -549,7 +621,9 @@ trunk serve --release              # dev server on http://127.0.0.1:8765
 
 Any static file server works for `dist/web`, for example `python3 -m http.server 8765` run inside that directory. Trunk downloads the matching `wasm-bindgen` and `wasm-opt` itself. `trunk build --release` uses the `wasm-release` Cargo profile (`data-cargo-profile` in `index.html`: fat LTO, opt-level "z" for the UI, engine, I/O and web shells and for large crates off the hot paths (document model, file parsers, JSON, SVG parsing, shader translation), "s" for other crates except pixel processing, which keeps level 3). The UI override reduces browser code size while retaining the speed-oriented settings for filters and compositing. Serve the `.wasm` with compression; its raw size varies with the source and compiler. Some static hosts refuse a file that large (Cloudflare's per-file cap is 25 MiB), so the release site doesn't hold it as one file: `packaging/web/package.sh` gzips it, cuts it into parts of at most 20 MiB under `app/`, and ships the page of `apps/photocraft-web-boot`, a small module that fetches the parts, has the browser inflate them (or inflates them itself where the browser can't) and passes the stream to the app's own loader (issue #5302). The script fails if any file in the site is over 24 MiB; the wasm's own size is no longer limited, but it is still what every visitor downloads, so watch it. Pull-request CI also builds the actual browser app with the same pinned Trunk version as the release job and runs `packaging/web/package.sh`, including the relative-URL and file-size checks. The `web build and wasm size gate` check runs on main and on PRs that change something the web build compiles or packages (`apps/photocraft-web`, `apps/photocraft-web-boot`, `packaging/web`, crate sources and manifests, `Cargo.toml`/`Cargo.lock`, the CI workflow), and reports the wasm's size and the site's largest file in the Actions job summary. The web build never embeds craft-fonts (see Fonts above). To see where the bytes go, run `twiggy top -n 40` on `target/wasm32-unknown-unknown/wasm-release/photocraft-web.wasm` (before wasm-opt strips the names).
 
-URL flags: `?webgl` forces the WebGL2 backend, and `?cpu` forces the CPU canvas path.
+URL flags: `?webgl` forces the WebGL2 backend, and `?cpu` forces the CPU canvas path. `?free-mb=N` is a diagnostic: the memory gates and the low-memory warning behave as if only N MiB could be allocated, so they can be checked in a browser without gigabytes of images (for example `?free-mb=300`, then Place a large image, or `?free-mb=400` for the warning).
+
+Running out of memory in the browser: a failed allocation aborts the WebAssembly module, and stable Rust can't turn that into an error, so the page froze on its last frame. Three layers now cover it (#10024). **Gate:** Place, Image Size, a smart-object re-render and every save or export (Save, Save a Copy, Export As, layer and batch exports) ask `photocraft_raster::headroom::ensure` first (a trial `try_reserve_exact` of the operation's estimated need plus 128 MiB, freed at once; always passes off the web), and refuse with an error naming the operation and the need when it won't fit (`photocraft_engine::memory_gate`, estimates per operation; `photocraft_io::estimate_export_bytes` for saves). **Warn:** `memory_warning` posts a sticky notice when linear memory is within 512 MiB of the 4 GiB wasm32 ceiling (`headroom::below` reads the memory size and allocates nothing, since a periodic trial reservation would grow memory that never shrinks), and re-arms at or above 768 MiB in simulations. Real wasm linear memory normally does not shrink, so the warning cannot normally re-arm. A PSD/PSB source's estimate adds a canvas-sized surface per layer (the layer count is read from its layer info, without decoding); one that isn't 8-bit RGB or grayscale, or whose sections can't be read, has no safe bound and is refused before Place or smart-object rendering on the web. **Backstop:** if the module still traps, `index.html` holds a hidden `#photocraft_stopped` message that `web.rs` reveals (the `error` and `unhandledrejection` events), saying whether it ran out of memory or hit an internal error (a panic's message is kept by a chained panic hook), with a Reload link; the "Leave site?" prompt is skipped then.
 
 To build and serve the web app entirely in Docker, run from the repository root:
 
@@ -570,9 +644,61 @@ How the web shell (`apps/photocraft-web/src/web.rs`) differs from desktop:
 - **No control server:** browsers can't listen on TCP. To automate the web build, drive headless Chrome with `--remote-debugging-port`. `Page.setInterceptFileChooserDialog` plus `DOM.setFileInputFiles` covers Open, `Input.dispatchDragEvent` with `files` covers drops, and `Browser.setDownloadBehavior` captures downloads.
 - Headless Chrome on macOS (`--headless=new --enable-unsafe-webgpu`) gets a real WebGPU adapter.
 
+### Jobs without threads (Place, #10031)
+
+wasm32-unknown-unknown has no threads, so on the web `Session::start` runs every command inline
+except Place, which is a job that `poll_jobs` steps on the UI thread (a *cooperative* job):
+
+- `jobs::StepWork` is work that runs a slice at a time; `jobs::run_stepped` / `Session::start_job_stepped`
+  register it. With `Session::cooperative_jobs()` (always on for wasm, `set_cooperative_jobs(true)`
+  runs the same path on a desktop, for tests) each `poll_jobs` gives one such job about 8 ms
+  (`set_job_step_budget`; zero means one unit of work per poll, which tests use to count polls
+  without depending on the machine). Elsewhere the same work runs to the end on a worker thread,
+  or inline under `execute`, and gives the same result.
+- `file_cmds::PlaceSteps` cuts a place into units: a plain PNG decodes a row at a time
+  (`photocraft_codecs::PngDecodeRows`, through `photocraft_io::PngImport`) and, when its rows come
+  in final order, each group of 256 rows becomes tiles at once and is dropped, as the one-shot import
+  does, so the decoded image never exists beside the layer (a 100 MP RGBA8 file would cost about 400 MB
+  more, too much for a browser tab). An interlaced, animated or oriented PNG is decoded whole, turned
+  upright in bands of 64 rows (`photocraft_codecs::OrientSteps`) and copied into tiles in bands; any
+  other format decodes in one unit. The flatten runs in bands of four tiles (`composite_to_surface`,
+  the tiles moved into the result), the resize in bands of 64 output rows
+  (`photocraft_algo::resample::ResizeSteps`, the code `resize_surface` runs), and moving the pixels to
+  where they land a tile at a time (`photocraft_raster::TranslateSteps`, the code
+  `Surface::translated` runs). Without a cooperative session each stage is one unit and a desktop
+  keeps its parallel flatten, resize and translate.
+- The UI places through a job when `background_jobs || session.cooperative_jobs()`
+  (`jobs_ui::place_in_background`); `background_jobs` stays off on the web, since save, print and
+  the other commands gated on it need threads. The status bar shows the progress and Esc cancels.
+- Measure it with `RAYON_NUM_THREADS=1 cargo test --release -p photocraft-engine --test
+  place_steps_measure -- --ignored --nocapture` (a synthetic 4096×4096 RGBA PNG into a
+  3600×4200 document). 2026-10-29, one core: 4096 row units of 0.1 ms, flatten bands 5.3 ms,
+  resize bands 5.8 ms; the units that cannot be cut up are opening the PNG (6 ms), image to document
+  (10 ms) and translate, layer and apply (13 ms, once 23 ms); 95 polls, 950 ms in all, as long as the
+  inline place (1000 ms). Wasm is slower than a desktop core, so check a release web build too.
+
 
 ## Indexed Color timings
 
+The stock Indexed Color dialog exposes Matte: None, Foreground Color, Background Color,
+White, Black, 50% Gray, Netscape Gray and Other… (the shared Color Picker). Choosing Other…
+opens the picker without replacing the current matte; Cancel leaves that choice unchanged, and
+OK commits the picked `#rrggbb` in document RGB coordinates. Automation accepts `matte` as
+`none`, `foreground`, `background`, `white`, `black`, `gray` (50% Gray, encoded
+`#808080`), `netscapeGray` (Netscape Gray, encoded `#c0c0c0`) or `#rrggbb`. Foreground/background
+tool colours are converted from the working RGB profile into the document profile and clipped
+to its encodable RGB range before blending. A selected matte blends all
+partially transparent edges; with Transparency on, fully clear pixels stay transparent.
+With Transparency off, the selected matte also fills clear pixels. None retains the existing
+hard-edged transparency/default flattening behavior. Indexed conversion retains the document's
+ICC profile and encoded RGB sample representation; matte colours are interpreted in the document
+RGB coordinate space. Default Indexed → RGB expands the stored RGB samples without converting
+them to the working profile; an explicitly supplied destination profile still requests a CMS
+conversion. Inline and worker dialog previews inherit the current foreground/background tool
+colors, and changing those colors invalidates both cached frames and pending worker results,
+including when the preview proxy factor changes. A same-color frame at the old factor can
+remain visible during a drag until the new result arrives. This follows Adobe's documented
+[Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).
@@ -590,7 +716,8 @@ On native desktop sessions, Indexed Color live previews calculate and flatten on
 The last preview remains visible while dragging; intermediate settings are coalesced, and only
 a result matching the current document revision, active layer, dialog and parameters is uploaded.
 GPU upload/display conversion still run on the UI thread. Web and `PHOTOCRAFT_INLINE_JOBS=1`
-sessions retain synchronous previews. Closing the dialog invalidates its result; an already
+sessions retain synchronous previews (the web has no threads; only Place is stepped there, see
+Jobs without threads). Closing the dialog invalidates its result; an already
 running calculation finishes without editing the session.
 
 ## Offscreen UI snapshots (no window)
@@ -612,8 +739,8 @@ so a following `ui.inspect` observes their effect.
 
 ## Photoshop Actions (.atn)
 
-`photocraft-psd` reads and writes Photoshop Actions files (`atn`, version 16: Photoshop 6 and
-later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
+`photocraft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
+(Photoshop 6 and later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
 `actions.save`; the Actions panel menu's Load/Save Actions…; `photocraft-cli batch --actions
 set.atn`). To see what a set holds (event ids, panel names, the parameter keys Photoshop
 recorded) when adding an event to the table:
@@ -630,6 +757,34 @@ PhotoCraft equivalent.
 
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
+
+Recorded direct Gradient Map (`GrMp`) and Replace Color (`RplC`) forms are described in
+[the ATN reference](atn.md#supported-direct-adjustment-settings), based on davidmann4's
+measurements in #10603. Gradient Map keeps its event, fractional RGB stops and recorded name;
+unsupported interpolation, midpoint and transparency settings remain preserved steps.
+Replace Color accepts `labMinimum` / `labMaximum` (three D50 Lab numbers each), mutually
+exclusive with RGB samples and localized settings. The new option matches native surface samples through
+the document profile, retains alpha and untouched native pixels, and uses one undoable edit.
+A zero tone shift validates its inputs without changing pixels. The existing RGB option keeps
+its previous behavior. Explicit Lab bounds require a composite pixel-layer target.
+
+Artboard from Group action settings follow [the measured guide/background behavior](atn.md#newer-events-string-id-only):
+guide IDs are ignored session metadata, 1 or absent `changeBackground` applies the
+background, and other integer flags give white. The group's bounds are retained.
+Background-only `editArtboardEvent` uses the existing Artboard edit command; its
+recorded rectangle/preset are retained for saving, without resizing the target.
+
+`crates/psd/tests/it/atn_contract.rs` checks the parser's public API against small, independently
+encoded version-16 fixtures (the version-12 ones are read by `atn_v12::`) in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
+its README): `cargo test -p photocraft-psd --test it atn_contract::`.
+Recorded layer indexes and ordinals resolve against the full stack, including collapsed children
+and hidden group-end positions. Indexed moves use the stack before the move. Recorded document
+indexes are one-based opening order; a native numeric `document` parameter remains a zero-based
+tab index. Layer comp references retain their name, index, ID or ordinal form when saved, including
+the measured comp ordinals that reapply the current or first comp. Invalid comp indexes do nothing,
+even with an empty comp list. Recording-document layer IDs and layer/comp offsets stay kept steps.
+These rules follow [davidmann4's measured reference](https://github.com/storytold/photocraft/pull/10603)
+(#10701).
 
 ## Remove Tool quality
 
@@ -659,12 +814,152 @@ before merged-image validation or decoding. The conservative estimate sums retai
 storage (including padding and negative offsets) and the largest decode/conversion workspace.
 It does not credit uniform-tile sharing or pruning, so some files that could fit after decoding
 are refused. Valid off-canvas pixels are preserved; oversized layers are rejected rather than
-clipped. Defaults are 2 GiB on native targets and 1 GiB on wasm. Applications can lower the
-allowance with `ImportOptions::psd_max_pixel_bytes`; values above the default are capped.
-The source-only convenience API uses the default; `import_file_for_open_with` honours options.
+clipped.
 
-An over-budget ordinary or interactive import returns `IoError::PsdImportBudget` with the
-estimated and allowed byte counts; damaged-file recovery never bypasses that error. The legacy
+Native desktop platforms use an adaptive memory policy evaluated against currently available
+physical RAM (excluding swap) and, where measurable, system commit headroom:
+- **Hard budget (H)** for known memory, with A the available RAM and C the commit headroom:
+  $\min(\lfloor 3A/4 \rfloor, A - 256 \text{ MiB}, C - r(C), \text{aggregate address-space cap})$, where the
+  commit reserve $r(C) = \min(\max(C/4, 256 \text{ MiB}), 512 \text{ MiB})$. An approved import therefore
+  always leaves at least `LOW_MEMORY_RESERVE` (256 MiB) free.
+- **Soft budget (S)**: $\min(A/2, 8 \text{ GiB}, \max(A - 1 \text{ GiB}, A/4), \max(C - 512 \text{ MiB}, C/4), H)$
+  (the commit term only where C is known).
+- The low-memory band: with more than 4/3 GiB free, automatic opening is unchanged (it leaves
+  1 GiB free). Below that, up to a quarter of the free RAM opens automatically and the rest goes
+  to approval, up to $\min(3A/4, A - 256 \text{ MiB})$. The commit reserve shrinks from a flat
+  512 MiB to a quarter of the headroom with a 256 MiB floor. At or below 256 MiB of either
+  measurement there is no room and every file is refused. For example 1 GiB free gives S = 256 MiB
+  and H = 768 MiB; 512 MiB free gives S = 128 MiB and H = 256 MiB.
+- Scratch-disk credit (see `docs/scratch-disks.md`) is added on top of these limits before a
+  caller's limit applies; non-spillable memory stays against RAM alone.
+- Files requiring $\le S$ are admitted automatically.
+- Files requiring $S < E \le H$ prompt for explicit one-shot user confirmation ("Open anyway") in the UI. Headless callers default to no interactive dialog and require explicit per-invocation opt-in:
+  - Engine commands: `file.openAs` and `file.placeEmbedded` take `approveHighMemory: bool` (default `false`); `file.approveMemory` takes `{"id": u64, "approve": bool = true}`.
+  - Headless RPC / control protocol: `doc.open` and `doc.place` take `approveHighMemory: bool`.
+  - MCP: `doc_open` and `doc_place` take `approve_high_memory: bool` (default `false`; a wrong type is refused, not coerced).
+  - CLI: `convert`, `info`, `run`, and `batch` take `--approve-high-memory`.
+  - Explicit approval authorizes imports within $(S, H]$ but never bypasses the hard memory budget $H$.
+- Files requiring $> H$ are refused and cannot be overridden.
+- When available RAM is unknown (an unsupported platform or a failed provider), native
+  automatic admission is 2 GiB, not 8 GiB:
+  $S = \min(2 \text{ GiB}, \max(C - 512 \text{ MiB}, C/4), H)$, where $H$ is the aggregate
+  address-space cap (`native_platform_cap`), reduced by known commit headroom as above. Estimates above $S$ need the same
+  explicit, per-invocation approval as known-memory estimates above $S$, and approval is possible
+  up to $H$. Estimates above 8 GiB remain approvable; `MemoryBudget::warning_threshold` and
+  `MemoryBudget::requires_uncertainty_warning` let callers show the uncertain-capacity warning.
+  8 GiB is a warning threshold, not a hard ceiling, because the process may still run out of
+  memory.
+- These budgets apply to an import's **aggregate peak estimate**, not to one allocation: a peak
+  may sum many layer, mask, merged and workspace buffers. Each individual buffer must still fit
+  the target's layout limit (`isize::MAX`) and the decoder's own per-buffer allowance
+  (`photocraft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
+  enforced by fallible allocation or an explicit cap where that buffer is created. A 64-bit
+  native process has no measurable aggregate address-space cap, so admission relies on explicit
+  approval plus those per-buffer checks; 32-bit native uses a 2 GiB project cap
+  (`NATIVE_32BIT_PEAK_CAP`), a product choice below its 4 GiB address space.
+- WebAssembly (wasm32): automatic admission is 1 GiB; estimates above it use the same explicit
+  approval. The architectural linear-memory limit is 4 GiB (65,536 × 64 KiB pages), shared with
+  the runtime, stack, allocator, resident document and history, and one Rust allocation cannot
+  exceed `isize::MAX` (2 GiB − 1). Admission uses a **project cap of 2 GiB**
+  (`WASM_MAX_PEAK_BUDGET`) for the aggregate peak, chosen below the address space to leave room
+  for the rest; it is not an architectural maximum, browsers often allow less, and allocation can
+  still fail.
+- macOS reads a conservative reclaimable-memory measurement through `sysinfo`'s safe API:
+  $\min(\text{total} - \text{used}, \text{available})$, never below `free`. `total` is
+  `HW_MEMSIZE`; `used` is `internal_page_count - purgeable_count + wire_count +
+  compressor_page_count`; `available` is sysinfo's `available_memory` (`active + inactive +
+  free_count`, where XNU counts speculative pages inside `free_count`); `free` is its
+  `free_memory` (`free_count - speculative`). XNU documents *available memory* (active +
+  inactive + free + speculative) as everything not wired, compressed or stolen, which counts
+  anonymous working sets, while $\text{total} - \text{used}$ is the pool that can be handed out
+  without evicting one: free + file-backed + purgeable pages, close to the fully-reclaimable
+  pool jetsam monitors. Taking the smaller of the two keeps a counter disagreement
+  conservative, and `free` is a measured floor because those pages are allocatable by
+  definition. Swap is excluded. A genuine zero reading stays zero; unknown memory is reported
+  only when the provider query demonstrably failed (zero installed size or zero used memory,
+  which a live host cannot report). Linux reads `MemAvailable` from `/proc/meminfo` and
+  constrains it by the memory cgroup: v2 from the unified hierarchy's
+  `memory.max`/`memory.current`/`memory.swap.max`, using `cgroup.controllers` and
+  `cgroup.subtree_control` to distinguish a genuinely disabled controller (and the interface-file
+  exemption of the hierarchy root) from a view that is missing files it should expose; v1 from the
+  `memory` controller mount found in `/proc/self/mountinfo` (including dedicated mounts, bind
+  mounts and non-root process paths), applying every visible ancestor limit. When several mounts
+  match, the widest view (the shortest cgroup mount root) is used so a deep bind mount cannot hide
+  a constrained ancestor. Inactive page cache counts as reclaimable (`inactive_file` on v2,
+  `total_inactive_file` on v1). A v1 `memsw` limit also caps RAM; per ancestor its swap allowance
+  is `memsw limit - memory limit - swap already used`, and those allowances are combined
+  separately from RAM headroom. A memory cgroup whose mount, path, membership, limit or usage
+  cannot be read, or whose membership file is malformed or empty, fails closed (available memory
+  is treated as zero, `Some(0)`) rather than falling back to unrestricted host RAM. That reading
+  gives H = 0 from the formula, so it stays refused (only a credited tile share can pass), and
+  the refusal says PhotoCraft measured no free memory or could not read the system's memory limit.
+- Applications can lower the admission threshold with `ImportOptions::psd_max_pixel_bytes`; explicit caller limits may lower admission, never bypass the hard boundary.
+- Concurrent PSD decodes are serialized using a process-wide, cancellation-aware admission gate, with nested decodes sharing the enclosing allowance.
+- A pending high-memory approval is bound to one source and one estimate. The engine keeps at
+  most 32 pending preflights and, separately, at most 1 GiB of source bytes
+  (`Session::MAX_PENDING_PREFLIGHT_BYTES`): only an in-memory source holds data (a path streams
+  from its file once opened), and an `Arc` shared by several preflights is counted once. The
+  retention cap is not a pixel budget or an admission limit; it keeps an unanswered prompt from
+  pinning unbounded memory, and is deliberately below the 2 GiB web hard cap. The charge is
+  computed from the queue, so answering, cancelling, refusing or clearing releases it.
+- The approval verifies the file it decodes, not the path it was told about: the importer opens
+  the path once, reads `photocraft_io::FileIdentity` from that handle (Unix: device, inode,
+  length, mtime and ctime with nanoseconds), refuses with `SourceChanged` when it is not the
+  approved file, and re-reads the identity from the same handle when the memory preflight pauses
+  for approval. Windows has no stable file-index API in `std`, so its identity is the length and
+  modification time (a different file with both preserved is not distinguished there). The
+  `file.approveMemory` permission is one-shot and is not journaled or recorded in an action. A
+  refusal above the hard ceiling is the typed `PsdHardBudget` error (name, required, limit,
+  `free_memory`), not a string, and it releases the queued source. Its message says where the
+  limit comes from: the computer's memory on 64-bit desktop; the web build names its fixed cap;
+  on 32-bit desktop the limit may be either, so the message mentions the 2 GiB cap and that the
+  64-bit build may open the file. Those two also link the releases page. Sizes appear in GiB
+  or MiB next to the exact bytes. When measured memory set the limit, the message also gives
+  the free-memory reading and advises closing other apps.
+- A layered TIFF (Photoshop layer data in tags 37724/34377) is admitted by the same policy
+  before its composite is decoded. The page's tags are read into the PSD model first, without
+  pixels; then that model's layer/workspace estimate, the decoded composite and its
+  extra-sample planes, the planar big-endian merged copy, a 16-bit-float conversion's extra
+  copies, the decoder's scratch buffers (one strip or tile per worker, see
+  `codecs::TiffBands::decode_scratch_bytes`) and the decoder's copy of the tags are charged
+  together, with the caller limit and approval flags from `ImportOptions`. A zero caller limit
+  means the adaptive budget, as for a PSD. A TIFF whose layer tag cannot be read still opens
+  flattened with the same warning as before, and that whole-image decode and conversion are
+  bounded the same way. A layered TIFF opened inside another import spends the enclosing
+  attempt's remaining allowance instead of resolving a fresh budget, and its admission guard is
+  held across the composite decode and the PSD conversion, so a top-level import is charged
+  once and a same-file continuation is never charged again.
+- Before waiting for the decode gate, an import checks admission; it checks again with a fresh
+  measurement once admitted, and only then decodes. This holds for the ordinary PSD and layered
+  TIFF paths and for the standalone legacy `psd_to_document` conversion, so an ineligible file
+  never waits behind an active decode. A nested import checks cancellation before consuming its
+  parent's remaining allowance and takes the reentrant admission guard first, so a cancelled or
+  refused nested import never spends the parent's budget. Hiding a large estimate behind a
+  destroyed composite or a malformed layer tag does not bypass the obvious bound: the
+  codecs' per-buffer limit (`Limits::max_alloc`) and the flat band check still apply to a page
+  opened without Photoshop layers.
+
+Headless RPC and MCP report approval-required memory errors with byte counts (`required`,
+`softLimit`, `hardLimit`, and `availableRam` when known); here `availableRam` means available
+physical RAM. A hard-budget refusal reports
+`required` and `hardLimit`, plus `available` and `availableRam` when measured free memory set the
+limit (the typed `free_memory` field). Both fields then contain the smaller of available RAM and
+commit headroom (or the one measurement available), so `availableRam` can represent commit
+headroom rather than physical RAM. There is never a soft limit, because no approval can raise
+that ceiling. A limit set by the caller, the platform cap, or an unknown capacity carries no
+free-memory figure. This holds for `doc.open` and `doc.place` and for the MCP `doc_open` and
+`doc_place` tools, including a refusal from `file.openAs`/`file.placeEmbedded` reached through a
+command. GUI automation imports currently cross a service boundary that returns string errors.
+
+When measured free memory set the limit, the refusal message gives the free amount and ends with
+"Close other apps and try again"; a reading of zero says PhotoCraft measured no free memory or
+could not read the system's memory limit. The approval prompt warns that PhotoCraft may run out of
+memory when opening the file would leave less than 1 GiB of the measured free RAM
+(`LOW_MEMORY_WARNING_MARGIN`).
+
+An import exceeding the hard budget returns `IoError::PsdImportBudget` with the estimated
+and allowed byte counts (and `free_memory` when measured memory set the limit); imports requiring
+confirmation return `IoError::PsdApprovalRequired` when unapproved. Damaged-file recovery never bypasses these memory guards. The legacy
 `psd_to_document` conversion APIs cannot return an error, so they return an empty document and
 an explicit warning on preflight refusal. Layer and mask pixel allocation failures also fail
 ordinary imports instead of opening partial content.
@@ -685,6 +980,12 @@ RSS: encoded input, parser metadata, smart-filter caches, embedded smart-object
 contents, generated vector caches, and text preparation are outside it and retain their
 existing limits. Joining these paths to a shared budget and streaming ZIP inflation are follow-up work. An accepted
 estimate does not guarantee allocation success on a memory-constrained host.
+
+The legacy `memory::available()` helper used by flat TIFF conversion keeps its established
+meaning: on Linux it reports `MemAvailable + SwapFree`, now bounded by cgroup v2 swap limits or
+v1 `memsw`, and it is `None` on Windows and macOS. The adaptive budget is the only consumer of
+the macOS physical-memory provider. Banded flat TIFF pages keep that helper; a layered TIFF's
+whole-image work is admitted by the adaptive policy above.
 
 ## Test corpora
 
@@ -750,6 +1051,50 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
   manifest gives the same reproducibility.
 - The third-party sets (psd-tools, ag-psd, PngSuite) are fetched from their upstreams the same way,
   and are never copied into photocraft-corpus.
+
+## PSD write recipes
+
+The PSD write oracle exercises actual edits before export. The recipe runner opens each
+base with `photocraft-cli`, applies its commands to a uniquely selected layer, exports
+and reopens the PSD, and checks the specified properties (it reads layers with
+`photocraft-cli info --detail`). It records the generated
+files and results for a later independent Photoshop verification (#6130).
+
+```sh
+cargo xtask corpus --photoshop
+cargo build -p photocraft-cli --release
+cargo xtask psd-write-oracle xtask/psd-write-oracle/starter.json corpus/photoshop target/release/photocraft-cli target/psd-write-oracle
+```
+
+The output directory must not exist. It contains `report.json`, `manifest.json`, a
+candidate PSD per successful export, a `base.psd` copy of the hashed base bytes, and
+CLI stdout/stderr for diagnosis. The CLI runs on that copy, so it never opens the corpus.
+A failed case does not prevent the other cases from running, but the command exits nonzero.
+Once an export succeeded, a failing case keeps its candidate in the manifest, with an
+`exported file: ...` error if reopening or checking it failed.
+The manifest records the checkout revision, whether tracked files were modified, the
+CLI binary hash, recipe hash, corpus revision and candidate hashes (revision and
+dirty state are `unknown` outside a git checkout). The checkout
+revision does not establish where a supplied binary was built; use a binary built from
+that revision and preserve the CI run's provenance. Missing fonts and other warnings
+are recorded. The runner never overwrites or opens its input PSDs beyond hashing them.
+
+Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has an `id` that is unique ignoring letter case (it names the case's output directory), a relative `base` PSD path,
+its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
+An optional list of `commands` contains a `command` id and `params`; the runner
+supplies the resolved `layer` id. Targets that match zero or multiple layers fail.
+Only `type.*` and `layer.layerStyle.*` commands are accepted, except `layer.layerStyle.contours.*`,
+which edit the contour library rather than the document and can read or write any file. Checks use JSON pointers
+relative to the inspected layer: `unchanged` requires a present, equal value before
+and after; `equals` checks the exported value; `changed_to` requires the exported
+value to match and differ from the base. Numbers compare by exact value, so `17` equals `17.0`. Every edited case needs a `changed_to` check.
+Every check is run and reported (not only the first failure), each result naming the layer and the property path. See the starter recipes for examples. Regenerate hashes when deliberately changing
+the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
+
+These checks use PhotoCraft's own importer and inspector; they do **not** prove that
+Photoshop can open the output or interprets it correctly. The report marks those
+stages `not_run`. The ordinary CI corpus job does not yet run this recipe command or
+upload its artifacts; that integration and the Photoshop judge are separate work.
 
 ## Rendering fidelity (PSD oracle)
 
