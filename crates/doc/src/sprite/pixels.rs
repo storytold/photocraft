@@ -6,7 +6,8 @@ use super::{MAX_BYTES, PaletteEntry, SpriteCel};
 
 /// Reject inverted, oversized or over-budget cel bounds before allocating tiles.
 pub fn checked_rect(rect: Rect, bpp: usize) -> Result<(), String> {
-    let cost = rect.tile_count().checked_mul((256 * 256 * bpp) as u64).ok_or("sprite cel rectangle overflow")?;
+    let tile_bytes = bpp.checked_mul(256 * 256).and_then(|n| u64::try_from(n).ok()).ok_or("sprite cel rectangle overflow")?;
+    let cost = rect.tile_count().checked_mul(tile_bytes).ok_or("sprite cel rectangle overflow")?;
     if rect.x1 < rect.x0 || rect.y1 < rect.y0 || rect.width() > 65_535 || rect.height() > 65_535 || cost > MAX_BYTES as u64 {
         return Err("sprite cel rectangle exceeds the decoded tile limit".into());
     }

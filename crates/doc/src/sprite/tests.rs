@@ -322,3 +322,14 @@ fn unindexed_cel_quantizes_samples_with_or_without_repainting() {
         assert_eq!(cel.pixels, edited);
     }
 }
+
+/// The byte stride is public input; reject an overflowing tile cost before multiplying it.
+#[test]
+fn checked_sprite_bounds_reject_byte_count_overflow() {
+    let rect = Rect::from_xywh(0, 0, 1, 1);
+    for bpp in [usize::MAX, usize::MAX / (256 * 256) + 1] {
+        assert!(pixels::checked_rect(rect, bpp).is_err());
+        assert!(pixels::checked_rect(Rect::EMPTY, bpp).is_err());
+    }
+    pixels::checked_rect(rect, 4).unwrap();
+}
