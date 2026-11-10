@@ -244,12 +244,19 @@ pub fn add_anchor(path: &mut Path, knot: [usize; 2], t: f64) -> Result<[usize; 2
 /// previous anchor's out handle and the next anchor's in handle; a closed subpath stays closed.
 /// Removing a subpath's last anchor removes the subpath. Refused (unchanged) when it would leave
 /// the path with no anchors at all. Returns whether the subpath was removed.
-pub fn delete_anchor(path: &mut Path, [s, k]: [usize; 2]) -> Result<bool, String> {
-    knot_mut(path, [s, k])?;
+pub fn delete_anchor(path: &mut Path, k: [usize; 2]) -> Result<bool, String> {
+    knot_mut(path, k)?;
     let total: usize = path.subpaths.iter().map(|sp| sp.knots.len()).fold(0, usize::saturating_add);
     if total <= 1 {
         return Err("can't delete the path's only anchor point; delete the path instead".into());
     }
+    delete_anchor_allow_empty(path, k)
+}
+
+/// [`delete_anchor`] that also takes the path's only anchor, leaving a path with no subpaths: a
+/// saved path, which Photoshop keeps in the Paths panel empty (#12764).
+pub fn delete_anchor_allow_empty(path: &mut Path, [s, k]: [usize; 2]) -> Result<bool, String> {
+    knot_mut(path, [s, k])?;
     let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
     if sp.knots.len() <= 1 {
         path.subpaths.remove(s);
@@ -626,3 +633,7 @@ mod tests {
         assert!(subpath_anchors(&p, 4).is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "edit_delete_last_anchor_tests.rs"]
+mod edit_delete_last_anchor_tests;
