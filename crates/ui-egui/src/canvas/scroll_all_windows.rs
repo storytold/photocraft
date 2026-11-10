@@ -101,6 +101,13 @@ pub fn follow(app: &mut PhotocraftApp, source: Source, delta: [f32; 2]) {
     }
     for w in app.ui.windows.iter_mut().filter(|w| w.open && source != Source::Window(w.id)) {
         place(&mut w.view);
+        // A window that owns its document (no tab) draws the document's stored view
+        // (`tabs::extra_windows`), so that is the view to move.
+        if w.floating
+            && let Some(v) = app.ui.views.get_mut(w.document)
+        {
+            place(v);
+        }
     }
 }
 
@@ -213,6 +220,26 @@ mod tests {
         follow(&mut app, Source::Window(window_id), [-100.0, -90.0]);
         assert!(near(app.ui.views[1].center, [300.0, 210.0]), "{:?}", app.ui.views[1].center);
         assert_eq!(app.ui.views[0].center, [200.0, 150.0], "the floated document's hidden main view stays");
+    }
+
+    /// A floated document's window draws the document's stored view (`tabs::extra_windows`): a
+    /// drag elsewhere moves that view, so the floating window follows.
+    #[test]
+    fn a_drag_in_the_main_window_scrolls_a_floated_documents_window() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+        app.sync_views();
+        app.ui.views[0] = view(1.0, [200.0, 150.0], 0.0);
+        app.ui.views[1] = view(1.0, [400.0, 300.0], 0.0);
+        crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+        app.session.set_active(1);
+        assert_eq!(super::super::main_canvas_document(&app), Some(1));
+
+        // The main window's 800 × 600 view moved 100 document pixels left and 90 up.
+        follow(&mut app, Source::Main(1), [-100.0, -90.0]);
+        assert!(near(app.ui.views[0].center, [100.0, 60.0]), "the floated window's view follows: {:?}", app.ui.views[0].center);
+        assert_eq!(app.ui.views[1].center, [400.0, 300.0], "the dragged view's canvas stores its own view");
     }
 
     #[test]
