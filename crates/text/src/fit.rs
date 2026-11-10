@@ -1,8 +1,8 @@
 //! Dynamic Text: chooses a box or area layer's lines and sizes each one to span its width
-//! (Photoshop's Dynamic Text).
+//! (Photoshop's Dynamic Text), and bakes the result into ordinary type.
 
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{FitLine, TextFit, TextShape};
+use photocraft_doc::text::{FitLine, TextFit, TextRun, TextShape};
 
 pub const MIN_PT: f32 = 0.1;
 pub const MAX_PT: f32 = 1296.0;
@@ -100,6 +100,397 @@ pub fn refit(engine: &mut crate::TextEngine, layer: &mut TextLayer, dpi: f32) ->
         f.lines = solved.lines;
     }
     FitResult { scale: 1.0, fits: solved.fits, probes: solved.probes }
+}
+
+/// Whether `layer` is Dynamic Text box or area type with solved lines: what [`bake`] turns into
+/// plain type.
+pub fn is_fitted_lines(layer: &TextLayer) -> bool {
+    layer.fit.as_ref().is_some_and(|f| !f.valid_lines(&layer.text).is_empty()) && matches!(layer.shape, TextShape::Box { .. } | TextShape::Area { .. })
+}
+
+/// Whether every glyph of `b` is within 0.5 px of the same glyph of `a`, in order. A fitted
+/// layout shapes each solved line alone and has an invisible direction mark per line (and the
+/// spaces a break replaced) that the baked layout lacks: those are skipped, at most two per line
+/// of `a`, so a baked text that lost a word does not pass.
+fn same_glyphs(a: &crate::TextLayout, b: &crate::TextLayout) -> bool {
+    if a.glyphs.len().saturating_sub(b.glyphs.len()) > 2 * a.lines.len().max(1) {
+        return false;
+    }
+    let mut from = 0;
+    for q in &b.glyphs {
+        let found = a.glyphs.get(from..).and_then(|rest| rest.iter().position(|p| p.id == q.id && (p.x - q.x).abs() <= 0.5 && (p.y - q.y).abs() <= 0.5));
+        let Some(off) = found else { return false };
+        from += off + 1;
+    }
+    true
+}
+
+/// Line shrink factors `bake` tries in turn. A larger shrink moves a wide line's far glyphs
+/// more than half a pixel, which the verification refuses anyway.
+const MARGINS: [f32; 2] = [1.0 - 1e-5, 0.999];
+
+/// Why [`bake`] cannot keep the fitted look as ordinary type.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BakeError {
+    /// A run is condensed (Horizontal Scale below 100%). Box wrapping measures the unscaled
+    /// width, so the baked lines would wrap early.
+    Condensed,
+    /// The baked text lays out in a different number of lines than the fitted look.
+    LineCount { baked: usize, fitted: usize },
+    /// The baked text keeps the lines, but glyphs move more than 0.5 px.
+    Drift,
+    /// The text cannot be cut at a byte range.
+    Cut { start: usize, end: usize },
+}
+
+impl std::fmt::Display for BakeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Condensed => f.write_str("condensed type (Horizontal Scale below 100%) can't be kept yet"),
+            Self::LineCount { baked, fitted } => write!(f, "the baked text lays out in {baked} lines, not the fitted {fitted}"),
+            Self::Drift => f.write_str("the baked text lays out with glyphs more than 0.5 px from the fitted look"),
+            Self::Cut { start, end } => write!(f, "the text cannot be cut at byte {start}..{end}"),
+        }
+    }
+}
+
+impl std::error::Error for BakeError {}
+
+/// Whether a run of `layer`'s text is condensed (Horizontal Scale below 100%), which [`bake`]
+/// refuses. Non-positive and non-finite scales lay out at 100%, so they don't count.
+pub fn has_condensed_type(layer: &TextLayer) -> bool {
+    layer.char_runs().iter().any(|r| r.len > 0 && r.style.horizontal_scale > 0.0 && r.style.horizontal_scale < 1.0)
+}
+
+/// Bakes a solved Dynamic Text box into ordinary type: each line's runs get their size times the
+/// line's scale (leading and baseline shift follow, as layout does), and a forced line break
+/// takes the place of the space each line ends with (or is inserted where the line follows no
+/// space). Wrapped text counts a trailing space against the box, and the solved lines span it
+/// exactly, so keeping the space would wrap a word early; the break replaces it and the runs
+/// stay plain. The line gap becomes each line's explicit leading.
+///
+/// Area text is baked the same way, except that every solved line becomes its own paragraph (a
+/// paragraph break, not a forced line break, ends each line; a forced line break a line follows
+/// becomes one too). Area type plans all the rows of a paragraph with its tallest line, so lines
+/// of different sizes keep their own spacing only as separate paragraphs. Each piece keeps the
+/// paragraph's style, with the first-line indent and space before only on its first piece and
+/// the space after only on its last.
+///
+/// Known limitation: the word gap becomes extra tracking on each space inside a line (read from
+/// the difference in that space's measured advance), an approximation of word spacing: it also
+/// shows if text is typed in front of that space.
+///
+/// The result has no `fit` and lays out like the fitted layer (glyphs within 0.5 px); this is
+/// what Release and PSD export use. It is verified: when the baked layout does not have the
+/// fitted layout's lines, or the text cannot be cut cleanly, the result is an error naming the
+/// cause and nothing is returned. When every margin fails and one of them changed the line
+/// count, that is the cause reported: it is what a later margin's drift came from. Area text
+/// whose first line was moved down past the shape's top row is baked behind an empty first
+/// paragraph at the smallest size, with the first line's leading carrying the distance.
+///
+/// Condensed type (a run with Horizontal Scale below 100%) is refused before baking with
+/// [`BakeError::Condensed`]: box wrapping measures its unscaled width.
+///
+/// Anything that is not fitted box or area text with solved lines (no lines yet) only loses its
+/// `fit`. `engine` measures the layout.
+pub fn bake(engine: &mut crate::TextEngine, layer: &TextLayer, dpi: f32) -> Result<TextLayer, BakeError> {
+    use crate::layout::{FORCED_LINE_BREAK, scaled_style};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut out = layer.clone();
+    let lines: Vec<FitLine> = match &layer.fit {
+        Some(f) if matches!(layer.shape, TextShape::Box { .. } | TextShape::Area { .. }) => f.valid_lines(&layer.text).to_vec(),
+        _ => Vec::new(),
+    };
+    out.fit = None;
+    if lines.is_empty() || layer.text.is_empty() {
+        return Ok(out);
+    }
+    if has_condensed_type(layer) {
+        return Err(BakeError::Condensed);
+    }
+    replace_non_finite(&mut out);
+    let text = &layer.text;
+    let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
+    let (word_gap, line_gap) = layer.fit.as_ref().map_or((0.0, 0.0), TextFit::gaps);
+
+    // Where each line break goes: the spaces before a line start (possibly none) become one
+    // forced break, unless the line follows a break already (or nothing). Area text: a paragraph
+    // break, which also replaces a forced line break the line follows.
+    let area = matches!(layer.shape, TextShape::Area { .. });
+    let break_char = if area { '\r' } else { FORCED_LINE_BREAK };
+    let mut breaks: BTreeMap<usize, usize> = BTreeMap::new();
+    for l in lines.iter().skip(1) {
+        let p = l.start as usize;
+        let mut q = p;
+        while q > 0 && text.as_bytes().get(q - 1) == Some(&b' ') {
+            q -= 1;
+        }
+        if area && text.get(..q).is_some_and(|s| s.ends_with(FORCED_LINE_BREAK)) && p < text.len() {
+            breaks.insert(q - FORCED_LINE_BREAK.len_utf8(), p);
+            continue;
+        }
+        if p == 0 || p >= text.len() || text.get(..q).is_none_or(|s| s.is_empty() || s.ends_with(['\r', '\n', FORCED_LINE_BREAK])) {
+            continue;
+        }
+        breaks.insert(q, p);
+    }
+
+    // The fitted layout, and the same without the word gap: the difference of a space advance is
+    // what the gap added.
+    let fitted = engine.layout(layer, dpi);
+    let mut space_extra: BTreeMap<usize, (usize, f32)> = BTreeMap::new();
+    if word_gap != 0.0 {
+        let mut plain_layer = layer.clone();
+        plain_layer.cache = None;
+        plain_layer.psd_raw = None;
+        if let Some(f) = plain_layer.fit.as_mut() {
+            f.word_gap = 0.0;
+        }
+        let plain = engine.layout(&plain_layer, dpi);
+        let by_start: std::collections::HashMap<usize, f32> = plain.clusters.iter().map(|c| (c.range.start, c.advance)).collect();
+        for c in fitted.clusters.iter().filter(|c| matches!(text.get(c.range.clone()), Some(" " | "\u{a0}"))) {
+            // A space that a break replaces is gone: no tracking for it.
+            if breaks.iter().any(|(&q, &p)| c.range.start >= q && c.range.start < p) {
+                continue;
+            }
+            if let Some(delta) = by_start.get(&c.range.start).map(|p| c.advance - p).filter(|d| d.is_finite() && d.abs() > 1e-4) {
+                space_extra.insert(c.range.start, (c.range.end, delta));
+            }
+        }
+    }
+
+    // Pieces: cut at run edges, line starts, break ranges and the spaces that get extra tracking.
+    let runs = out.char_runs();
+    let mut cuts: BTreeSet<usize> = BTreeSet::from([0, text.len()]);
+    let mut at = 0usize;
+    for r in &runs {
+        at = at.saturating_add(r.len).min(text.len());
+        cuts.insert(at);
+    }
+    cuts.extend(lines.iter().map(|l| l.start as usize).filter(|&p| p <= text.len()));
+    for (&q, &p) in &breaks {
+        cuts.extend([q, p]);
+    }
+    for (&a, &(z, _)) in &space_extra {
+        cuts.extend([a, z]);
+    }
+    // A last empty paragraph (the text ends with a paragraph break) has no character of its own
+    // and takes the style of the break before it: that break gets the empty line's own style.
+    let break_len = if text.ends_with("\r\n") { 2 } else { 1 };
+    let terminal = (lines.last().is_some_and(|l| l.start as usize >= text.len()) && text.ends_with(['\r', '\n'])).then(|| text.len().saturating_sub(break_len));
+    cuts.extend(terminal);
+    let cuts: Vec<usize> = cuts.into_iter().collect();
+    let mut run_ends = Vec::with_capacity(runs.len());
+    let mut at = 0usize;
+    for r in &runs {
+        at = at.saturating_add(r.len);
+        run_ends.push(at);
+    }
+    let run_at = |off: usize| run_ends.partition_point(|&e| e <= off).min(runs.len().saturating_sub(1));
+    let line_at = |off: usize| match terminal {
+        Some(t) if off >= t => lines.len().saturating_sub(1),
+        _ => lines.partition_point(|l| l.start as usize <= off).saturating_sub(1),
+    };
+    let removed = |off: usize| breaks.iter().any(|(&q, &p)| off >= q && off < p);
+
+    // Each line's leading, as layout stacks solved lines: the previous line's descent, its own
+    // ascent and the gap, a percent of the larger of the two lines' largest sizes. The first
+    // line: its own height plus the gap (it only matters if text is typed above it).
+    let mut line_size = vec![0.0f32; lines.len()];
+    for w in cuts.windows(2) {
+        let Some(run) = runs.get(run_at(w[0])) else { continue };
+        let li = line_at(w[0]);
+        if let Some(sz) = line_size.get_mut(li) {
+            let scale = lines.get(li).map_or(1.0, |l| l.scale);
+            *sz = sz.max(scaled_style(&run.style, scale).size_pt);
+        }
+    }
+    let info_of = |l: &FitLine| fitted.lines.iter().find(|i| i.range.start == l.start as usize);
+    let leading: Vec<Option<f32>> = lines
+        .iter()
+        .zip(&line_size)
+        .enumerate()
+        .map(|(i, (l, &size))| {
+            let info = info_of(l)?;
+            let prev = i.checked_sub(1).and_then(|p| Some((info_of(&lines[p])?, line_size[p])));
+            let v = match prev {
+                Some((p, prev_size)) => (p.descent + info.ascent) / k + line_gap / 100.0 * size.max(prev_size),
+                None => (info.ascent + info.descent) / k + line_gap / 100.0 * size,
+            };
+            Some(v.clamp(-MAX_PT, MAX_PT * 4.0))
+        })
+        .collect();
+
+    // Area text: how far (pt) a line sits below where it stacks on the line above (the solver
+    // skipped rows too narrow for it). Its paragraph gets that as extra space before.
+    let para_space = |off: usize, after: bool| {
+        let mut at = 0usize;
+        for p in layer.paragraph_runs() {
+            let end = at.saturating_add(p.len);
+            if off < end || end >= text.len() {
+                let v = if after { p.style.space_after_pt } else { p.style.space_before_pt };
+                return if v.is_finite() { v } else { 0.0 };
+            }
+            at = end;
+        }
+        0.0
+    };
+    let para_starts: BTreeSet<usize> = crate::layout::split_paragraphs(text).iter().map(|r| r.start).collect();
+    let skip: Vec<f32> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            if !area || i == 0 {
+                return 0.0;
+            }
+            let (Some(info), Some(prev), Some(Some(lead))) = (info_of(l), info_of(&lines[i - 1]), leading.get(i)) else { return 0.0 };
+            let start = l.start as usize;
+            let spacing = if para_starts.contains(&start) { para_space(lines[i - 1].start as usize, true) + para_space(start, false) } else { 0.0 };
+            let dy = (info.baseline - prev.baseline) / k - lead - spacing;
+            if dy > 1e-3 { dy } else { 0.0 }
+        })
+        .collect();
+
+    // The solved lines span the box exactly, and wrapped text breaks a line that is a hair wider
+    // than its width: every line shrinks by a margin, the smallest of MARGINS that keeps the
+    // fitted line count. Each try is verified; none fitting is an error.
+    //
+    // Area text whose first line sits below the row area type would give it (the solver moved
+    // it down past a narrow top): `lead_in` is Some(leading, pt) and the text starts with an
+    // empty paragraph at the smallest size, which takes the top row; the first line, with that
+    // leading, stacks on it where it was fitted.
+    let build = |margin: f32, lead_in: Option<f32>| -> Result<TextLayer, BakeError> {
+        let mut out = out.clone();
+        let mut new_text = String::with_capacity(text.len() + 1);
+        let mut new_runs: Vec<(usize, photocraft_doc::text::CharStyle)> = Vec::new();
+        let mut new_paras = Vec::new();
+        if lead_in.is_some() {
+            let mut style = runs.first().map(|r| r.style.clone()).unwrap_or_default();
+            style.size_pt = MIN_PT;
+            style.leading_pt = None;
+            let mut ps = layer.paragraph_runs().first().map(|p| p.style.clone()).unwrap_or_default();
+            ps.first_line_indent_pt = 0.0;
+            ps.space_before_pt = 0.0;
+            ps.space_after_pt = 0.0;
+            new_text.push('\r');
+            new_runs.push((1, style));
+            new_paras.push(photocraft_doc::text::ParagraphRun { len: 1, style: ps });
+        }
+        let lead = new_text.len();
+        for w in cuts.windows(2) {
+            let (a, z) = (w[0], w[1]);
+            if a == z || removed(a) {
+                continue;
+            }
+            let piece = text.get(a..z).ok_or(BakeError::Cut { start: a, end: z })?;
+            let li = line_at(a);
+            let base = runs.get(run_at(a)).map(|r| r.style.clone()).unwrap_or_default();
+            let mut style = scaled_style(&base, lines.get(li).map_or(1.0, |l| l.scale) * margin);
+            if let Some(lead) = lead_in.filter(|_| li == 0).or_else(|| leading.get(li).copied().flatten()) {
+                style.leading_pt = Some(lead);
+            }
+            if let Some(&(_, delta)) = space_extra.get(&a) {
+                // Word spacing is added to the shaped advance, before the horizontal scale stretches
+                // it; tracking is added after shaping and scaled with it. Divide the scale back out.
+                let px = style.size_pt * k * if style.horizontal_scale > 0.0 { style.horizontal_scale } else { 1.0 };
+                if px > 0.0 {
+                    style.tracking += delta / px * 1000.0;
+                }
+            }
+            new_text.push_str(piece);
+            let mut len = piece.len();
+            if breaks.contains_key(&z) {
+                new_text.push(break_char);
+                len += break_char.len_utf8();
+            }
+            match new_runs.last_mut() {
+                Some(last) if last.1 == style => last.0 += len,
+                _ => new_runs.push((len, style)),
+            }
+        }
+        // An original offset in the new text: each break before it replaces its spaces by one char.
+        let moved = |off: usize| {
+            let shift: isize = breaks.iter().filter(|&(_, &p)| p <= off).map(|(&q, &p)| 1 - (p - q) as isize).sum();
+            off.saturating_add_signed(shift) + lead
+        };
+        let mut at = 0usize;
+        for p in layer.paragraph_runs() {
+            let end = at.saturating_add(p.len);
+            // Area text: a piece per paragraph break inserted inside this paragraph.
+            let mut starts = vec![moved(at)];
+            if area {
+                starts.extend(breaks.iter().filter(|&(&q, _)| q >= at && q < end).map(|(_, &p)| moved(p)));
+            }
+            let n = starts.len();
+            for (i, &a) in starts.iter().enumerate() {
+                let z = starts.get(i + 1).copied().unwrap_or_else(|| moved(end));
+                let mut style = p.style.clone();
+                if i > 0 {
+                    style.first_line_indent_pt = 0.0;
+                    style.space_before_pt = 0.0;
+                }
+                if i + 1 < n {
+                    style.space_after_pt = 0.0;
+                }
+                // The line this piece holds: the first solved line starting in it.
+                if area && let Some(li) = lines.iter().position(|l| moved(l.start as usize) >= a && moved(l.start as usize) < z.max(a + 1)) {
+                    style.space_before_pt += skip.get(li).copied().unwrap_or(0.0);
+                }
+                new_paras.push(photocraft_doc::text::ParagraphRun { len: z.saturating_sub(a), style });
+            }
+            at = end;
+        }
+        out.text = new_text;
+        out.runs = new_runs.into_iter().map(|(len, style)| TextRun { len, style }).collect();
+        out.paragraphs = new_paras;
+        out.sync_summary();
+        Ok(out)
+    };
+    let assemble = |engine: &mut crate::TextEngine, margin: f32, lead_in: Option<f32>| -> Result<TextLayer, BakeError> {
+        let out = build(margin, lead_in)?;
+        let baked = engine.layout(&out, dpi);
+        // The empty lead-in paragraph lays out as a line of its own.
+        let lines = baked.lines.len() - usize::from(lead_in.is_some() && !baked.lines.is_empty());
+        if lines != fitted.lines.len() {
+            return Err(BakeError::LineCount { baked: lines, fitted: fitted.lines.len() });
+        }
+        if !same_glyphs(&fitted, &baked) {
+            return Err(BakeError::Drift);
+        }
+        Ok(out)
+    };
+    // The cause reported: the first line-count failure, else the last failure.
+    let mut cause = BakeError::Drift;
+    let mut keep = |r: Result<TextLayer, BakeError>| match r {
+        Ok(b) => Some(b),
+        Err(e) => {
+            if !matches!(cause, BakeError::LineCount { .. }) {
+                cause = e;
+            }
+            None
+        }
+    };
+    for margin in MARGINS {
+        if let Some(b) = keep(assemble(engine, margin, None)) {
+            return Ok(b);
+        }
+    }
+    // Area text: the first line's leading is its distance below the lead-in paragraph's row,
+    // read from where the empty paragraph lays out (any leading puts it there).
+    let first = lines.first().and_then(info_of).map(|i| i.baseline);
+    if area && let Some(b1) = first {
+        let probe = build(MARGINS[0], Some(1.0))?;
+        let at = engine.layout(&probe, dpi).lines.first().map(|l| l.baseline);
+        if let Some(lead) = at.map(|b0| (b1 - b0) / k).filter(|v| v.is_finite() && *v > 0.0) {
+            for margin in MARGINS {
+                if let Some(b) = keep(assemble(engine, margin, Some(lead))) {
+                    return Ok(b);
+                }
+            }
+        }
+    }
+    Err(cause)
 }
 
 /// Exact layouts after the search: each lays out the chosen lines and corrects every scale by
@@ -974,7 +1365,8 @@ mod tests {
     use super::*;
     use crate::TextEngine;
     use crate::tests::{area_ellipse_layer, box_layer};
-    use photocraft_doc::text::{TextFit, TextRun};
+    use photocraft_doc::text::TextFit;
+    const FORCED_BREAK: &str = "\u{3}";
 
     fn fit_box(text: &str, size: f32, w: f32, h: f32) -> TextLayer {
         let mut t = box_layer(text, size, (0.0, 0.0, w, h));
@@ -1607,6 +1999,188 @@ THREE",
         assert!(refit(&mut e, &mut big, 72.0).fits);
     }
 
+    /// Every glyph of `b` sits within 0.5 px of the same glyph of `a`, in order. A fitted layout
+    /// shapes each solved line on its own and so has an invisible direction mark glyph per line
+    /// that the baked paragraph does not: those are skipped.
+    fn assert_same_look(a: &crate::TextLayout, b: &crate::TextLayout) {
+        assert!(!b.glyphs.is_empty());
+        let mut from = 0;
+        for (i, q) in b.glyphs.iter().enumerate() {
+            let found = a.glyphs.get(from..).and_then(|rest| rest.iter().position(|p| p.id == q.id && (p.x - q.x).abs() <= 0.5 && (p.y - q.y).abs() <= 0.5));
+            let Some(off) = found else { panic!("glyph {i} at ({}, {}) has no match in the fitted layout", q.x, q.y) };
+            from += off + 1;
+        }
+        // A direction mark per fitted line, and the space each baked break replaced.
+        assert!(a.glyphs.len() - b.glyphs.len() <= 2 * a.lines.len(), "{} vs {} glyphs", a.glyphs.len(), b.glyphs.len());
+    }
+
+    fn baked_matches(t: TextLayer) -> TextLayer {
+        let mut e = TextEngine::new();
+        let (t, fitted) = solved(&mut e, t);
+        let baked = bake(&mut e, &t, 72.0).unwrap();
+        assert!(baked.fit.is_none());
+        assert_same_look(&fitted, &e.layout(&baked, 72.0));
+        baked
+    }
+
+    fn sizes(t: &TextLayer) -> Vec<f32> {
+        let mut v: Vec<f32> = t.char_runs().iter().map(|r| r.style.size_pt).collect();
+        v.dedup();
+        v
+    }
+
+    #[test]
+    fn bake_keeps_the_look_and_gives_each_line_its_size() {
+        let baked = baked_matches(fit_box(FOX, 12.0, 400.0, 300.0));
+        assert!(sizes(&baked).len() >= 2, "{:?}", sizes(&baked));
+        assert!(baked.text.contains(FORCED_BREAK), "{:?}", baked.text);
+        assert_eq!(baked.text.replace(FORCED_BREAK, " "), FOX, "each break replaces a space");
+        let total: usize = baked.char_runs().iter().map(|r| r.len).sum();
+        assert_eq!(total, baked.text.len());
+        let para: usize = baked.paragraph_runs().iter().map(|r| r.len).sum();
+        assert_eq!(para, baked.text.len());
+    }
+
+    #[test]
+    fn bake_keeps_the_look_with_gaps() {
+        for (word, line) in [(50.0, 0.0), (-100.0, 25.0), (0.0, -30.0), (120.0, 80.0)] {
+            let mut t = fit_box(FOX, 12.0, 400.0, 400.0);
+            if let Some(f) = t.fit.as_mut() {
+                f.word_gap = word;
+                f.line_gap = line;
+            }
+            baked_matches(t);
+        }
+    }
+
+    #[test]
+    fn bake_does_not_double_existing_breaks() {
+        let text = "ONE TWO\n\nTHREE\u{3}FOUR FIVE\n";
+        let baked = baked_matches(fit_box(text, 12.0, 300.0, 600.0));
+        assert!(!baked.text.contains("\u{3}\u{3}") && !baked.text.contains("\n\u{3}") && !baked.text.contains("\u{3}\n"), "{:?}", baked.text);
+        assert!(baked.text.contains("THREE\u{3}FOUR"));
+    }
+
+    #[test]
+    fn bake_keeps_mixed_runs_and_paragraph_styles() {
+        let mut t = fit_box(FOX, 12.0, 300.0, 400.0);
+        set_run_sizes(&mut t, &[(10, 20.0), (FOX.len() - 10, 12.0)]);
+        let style = photocraft_doc::text::ParagraphStyle { first_line_indent_pt: 20.0, space_after_pt: 6.0, ..Default::default() };
+        t.paragraphs = vec![photocraft_doc::text::ParagraphRun { len: FOX.len(), style }];
+        let baked = baked_matches(t);
+        assert_eq!(baked.paragraph_runs().len(), 1);
+    }
+
+    #[test]
+    fn bake_of_text_without_solved_lines_only_drops_the_fit() {
+        let mut e = TextEngine::new();
+        let mut t = box_layer(FOX, 12.0, (0.0, 0.0, 300.0, 100.0));
+        assert_eq!(bake(&mut e, &t, 72.0).unwrap(), t);
+        t.fit = Some(TextFit::default());
+        let b = bake(&mut e, &t, 72.0).unwrap();
+        assert!(b.fit.is_none() && b.text == t.text, "no solved lines: nothing to bake");
+        // Area text with no solved lines yet: the same.
+        let mut a = area_ellipse_layer("Hello world", 12.0, 200.0, 100.0);
+        a.fit = Some(TextFit::default());
+        let b = bake(&mut e, &a, 72.0).unwrap();
+        assert!(b.fit.is_none() && b.text == a.text);
+    }
+
+    #[test]
+    fn bake_sizes_are_clamped_and_finite() {
+        let mut e = TextEngine::new();
+        let mut t = fit_box("hi", 1000.0, 5000.0, 5000.0);
+        if let Some(f) = t.fit.as_mut() {
+            f.lines = vec![FitLine { start: 0, scale: 50.0 }];
+        }
+        let b = bake(&mut e, &t, 72.0).unwrap();
+        assert!(b.char_runs().iter().all(|r| r.style.size_pt <= MAX_PT && r.style.size_pt >= MIN_PT));
+    }
+
+    #[test]
+    fn bake_replaces_line_ending_spaces_with_the_break() {
+        let baked = baked_matches(fit_box(FOX, 12.0, 400.0, 300.0));
+        assert!(!baked.text.contains(" \u{3}"), "{:?}", baked.text);
+        assert!(
+            baked.char_runs().iter().all(|r| r.style.tracking == 0.0),
+            "plain runs: {:?}",
+            baked.char_runs().iter().map(|r| r.style.tracking).collect::<Vec<_>>()
+        );
+        // Typing at a former line end after a release: type_fit_cmds' tests type there.
+    }
+
+    #[test]
+    fn bake_keeps_the_look_with_horizontal_scale_and_word_gap() {
+        let make = |hs: f32| {
+            let mut t = fit_box(FOX, 12.0, 400.0, 400.0);
+            t.runs = vec![TextRun { len: FOX.len(), style: photocraft_doc::text::CharStyle { horizontal_scale: hs, ..t.char_runs()[0].style.clone() } }];
+            if let Some(f) = t.fit.as_mut() {
+                f.word_gap = 60.0;
+            }
+            t
+        };
+        // Wider type: the word gap tracking is not scaled twice.
+        baked_matches(make(1.3));
+        // Condensed type: box wrapping measures the unscaled width, which is wider than the box,
+        // so baked lines would wrap. It is refused before baking, naming the cause.
+        let mut e = TextEngine::new();
+        let (t, _) = solved(&mut e, make(0.8));
+        let m = bake(&mut e, &t, 72.0).unwrap_err().to_string();
+        assert!(m.contains("condensed type (Horizontal Scale below 100%)"), "{m}");
+    }
+
+    #[test]
+    fn same_glyphs_allows_only_a_few_unmatched_glyphs_per_line() {
+        let mut e = TextEngine::new();
+        let full = e.layout(&box_layer("Hello world and more words", 12.0, (0.0, 0.0, 400.0, 100.0)), 72.0);
+        assert_eq!(full.lines.len(), 1);
+        // Dropping a whole word leaves many fitted glyphs unmatched: not the same look.
+        let short = e.layout(&box_layer("Hello world", 12.0, (0.0, 0.0, 400.0, 100.0)), 72.0);
+        assert!(!same_glyphs(&full, &short));
+        // Dropping one trailing space (as a baked break does) still is.
+        let spaced = e.layout(&box_layer("Hello world ", 12.0, (0.0, 0.0, 400.0, 100.0)), 72.0);
+        assert!(same_glyphs(&spaced, &short));
+    }
+
+    #[test]
+    fn bake_reports_the_line_count_when_every_margin_fails() {
+        let mut e = TextEngine::new();
+        // A line 0.05 % wider than a wide box: the first margin leaves it wrapping, the second
+        // keeps the line count but moves the far glyphs more than half a pixel.
+        let (mut t, _) = solved(&mut e, fit_box(FOX, 12.0, 1500.0, 300.0));
+        if let Some(f) = t.fit.as_mut() {
+            f.lines.iter_mut().for_each(|l| l.scale *= 1.0005);
+        }
+        let m = bake(&mut e, &t, 72.0).unwrap_err().to_string();
+        assert!(m.contains("lays out in"), "{m}");
+    }
+
+    #[test]
+    fn bake_refuses_a_look_it_cannot_keep() {
+        let mut e = TextEngine::new();
+        // One solved line for text far wider than the box: the fitted layout never wraps, baked text would.
+        let mut t = fit_box(FOX, 12.0, 100.0, 300.0);
+        if let Some(f) = t.fit.as_mut() {
+            f.lines = vec![FitLine { start: 0, scale: 1.0 }];
+        }
+        let err = bake(&mut e, &t, 72.0).unwrap_err().to_string();
+        assert!(err.contains("lays out in"), "{err}");
+    }
+
+    #[test]
+    fn bake_goes_past_the_first_margin_and_keeps_half_a_pixel() {
+        let mut e = TextEngine::new();
+        let (mut t, _) = solved(&mut e, fit_box(FOX, 12.0, 400.0, 400.0));
+        // Lines 0.05 % wider than the box: the first margin (0.001 %) leaves them wrapping.
+        if let Some(f) = t.fit.as_mut() {
+            f.lines.iter_mut().for_each(|l| l.scale *= 1.0005);
+        }
+        let fitted = e.layout(&t, 72.0);
+        let baked = bake(&mut e, &t, 72.0).expect("a later margin keeps the lines");
+        let bl = e.layout(&baked, 72.0);
+        assert_same_look(&fitted, &bl);
+    }
+
     // Dynamic Text in shapes: per-line sizing (spec: Behaviour 4).
 
     /// Area type in the polygon `pts`.
@@ -1723,6 +2297,16 @@ THREE",
     }
 
     #[test]
+    fn area_release_bakes_within_half_a_pixel() {
+        let mut eng = engine();
+        let mut t = ellipse_area(CAFE, 12.0);
+        refit(&mut eng, &mut t, 72.0);
+        let baked = bake(&mut eng, &t, 72.0).expect("area bake");
+        assert!(baked.fit.is_none() && matches!(baked.shape, TextShape::Area { .. }));
+        assert!(baked.runs.iter().any(|r| r.style.size_pt != 12.0), "explicit per-line sizes");
+    }
+
+    #[test]
     fn area_hostile_shapes_finish_within_bounds() {
         let mut eng = engine();
         // A 1×1 shape, a 500-character word, empty text and a 4096-anchor path.
@@ -1800,6 +2384,30 @@ THREE",
     }
 
     #[test]
+    fn oval_top_line_is_not_tiny_and_release_keeps_it() {
+        // An oval's narrow top used to take the first line at a sixteenth of the largest size:
+        // the line moves down to where it is at least MIN_ROW_SHARE of the largest instead.
+        let mut eng = engine();
+        let mut lead_in = false;
+        for text in [BUBBLE, CAFE, "Wow! Look at this amazing thing we made today", "Hi there, this is a short one"] {
+            let mut t = ellipse_area(text, 18.0);
+            refit(&mut eng, &mut t, 72.0);
+            let out = eng.layout(&t, 72.0);
+            assert!(!out.lines.is_empty() && !out.hidden, "{text}");
+            assert_no_line_is_tiny(&t, &out);
+            let shape = area_shape(&t);
+            for g in &out.glyphs {
+                assert!(shape.contains(g.x, g.y), "{g:?}");
+            }
+            // Release keeps the look; a first line below the top row gets an empty paragraph
+            // above it.
+            let baked = bake(&mut eng, &t, 72.0).unwrap_or_else(|e| panic!("{text}: {e}"));
+            lead_in |= baked.text.starts_with('\r') && !t.text.starts_with('\r');
+        }
+        assert!(lead_in, "some first line sits below the top row");
+    }
+
+    #[test]
     fn layout_puts_each_area_line_where_the_solver_planned_it() {
         let mut eng = engine();
         for t in [ellipse_area(CAFE, 12.0), bubble_area(BUBBLE, 18.0), bubble_area(CAFE, 18.0), ring_area(CAFE, 12.0), ellipse_area(&CAFE.repeat(30), 12.0)] {
@@ -1814,5 +2422,15 @@ THREE",
                 assert!((l.baseline - planned).abs() <= 1.0, "line {i}: laid out at {} planned {planned}", l.baseline);
             }
         }
+    }
+
+    #[test]
+    fn area_bubble_release_bakes_within_half_a_pixel() {
+        let mut eng = engine();
+        let mut t = bubble_area(CAFE, 18.0);
+        refit(&mut eng, &mut t, 72.0);
+        let baked = bake(&mut eng, &t, 72.0).expect("area bake");
+        assert!(baked.fit.is_none() && matches!(baked.shape, TextShape::Area { .. }));
+        assert!(baked.paragraph_runs().len() > 1, "a paragraph per line");
     }
 }
