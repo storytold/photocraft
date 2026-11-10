@@ -45,6 +45,25 @@ pub(super) fn deselect_finished_work_path(app: &mut PhotocraftApp) {
     }
 }
 
+/// Whether ↩ with the Freeform Pen now follows a stroke into the Work Path. The stroke was committed
+/// on release, so there is no draft to finish: as in Photoshop, ↩ deselects the Work Path and the
+/// next stroke replaces it instead of joining it (#12833). Once per stroke: in any other case (not
+/// measured) ↩ changes nothing here: the Work Path selected in the Paths panel or after Undo or
+/// Redo, a saved path or a layer's path, or a ⌥-click trace still being drawn, which keeps its own ↩.
+pub(super) fn freeform_enter_armed(app: &PhotocraftApp) -> bool {
+    let ready = app.ui.freeform_enter_ready;
+    let after_stroke = app.session.active().is_some_and(|st| ready == Some((st.doc.id, st.revision)) && st.doc.work_path.is_some());
+    after_stroke && app.ui.tool == Tool::FreeformPen && app.ui.pen.is_none() && app.ui.selected_path.as_deref() == Some("work")
+}
+
+/// ↩ the Freeform Pen took while [`freeform_enter_armed`]: deselects the Work Path.
+pub(super) fn freeform_enter(app: &mut PhotocraftApp) {
+    if freeform_enter_armed(app) {
+        app.ui.freeform_enter_ready = None;
+        deselect_finished_work_path(app);
+    }
+}
+
 /// Finish the draft as [`pen_commit`] does. On failure the draft stays as it was, marked
 /// `commit_failed`, and the error is shown and returned.
 pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<(), String> {
@@ -882,10 +901,17 @@ pub(super) fn freeform_finish_continued(app: &mut PhotocraftApp, points: &[[f64;
         pen = joined;
     }
     pen.owner = Some(owner);
-    if let Err(e) = commit_path_named(app, &pen, closed, true) {
-        app.ui.pen = Some(PenPath { commit_failed: true, freeform_origin: true, ..pen });
-        app.ui.status = e;
-        app.ui.status_error = true;
+    let work_path = app.session.active().map(|st| st.doc.work_path.clone());
+    match commit_path_named(app, &pen, closed, true) {
+        // Only a stroke into the Work Path arms ↩: a saved path or a new shape layer does not.
+        Ok(()) => {
+            app.ui.freeform_enter_ready = app.session.active().filter(|st| Some(&st.doc.work_path) != work_path.as_ref()).map(|st| (st.doc.id, st.revision));
+        }
+        Err(e) => {
+            app.ui.pen = Some(PenPath { commit_failed: true, freeform_origin: true, ..pen });
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
 }
 

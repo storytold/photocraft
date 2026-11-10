@@ -85,6 +85,7 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
                 Admit::Open
             };
             state.freeform.admission(admit);
+            state.freeform.enter_after_stroke(pen::freeform_enter_armed(app));
             Which::Freeform
         }
         Tool::PathSelection => Which::PathSelection,
@@ -173,6 +174,9 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
     if state.freeform.owner.is_none() && (state.freeform.draft.is_open() || state.freeform.closed.is_some()) {
         state.freeform.owner = capture_pen_owner(app);
         state.freeform.target = VectorOwner::capture(app);
+    }
+    if state.freeform.take_entered() {
+        pen::freeform_enter(app);
     }
     if let Some((points, straight, owner, target)) = state.freeform.take_finished()
         && target.is_none_or(|t| t.valid(app))

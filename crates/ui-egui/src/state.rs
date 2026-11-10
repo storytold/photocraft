@@ -300,6 +300,11 @@ pub struct UiState {
     /// Work Path changes.
     #[serde(default)]
     pub hidden_work_path: Option<(u64, photocraft_doc::Path)>,
+    /// The document and its revision right after a Freeform Pen stroke changed its Work Path,
+    /// until ↩ deselects it (#12833). Another document's ↩, or one after any later change
+    /// (Undo, Redo, another edit), leaves it alone.
+    #[serde(skip)]
+    pub freeform_enter_ready: Option<(photocraft_doc::DocId, u64)>,
     /// The Layers panel filter: what it filters by (kind, name, effect, mode, attribute, colour,
     /// smart object) and each type's value (#5048, #5898, #10880, #10881).
     #[serde(default)]
@@ -524,6 +529,7 @@ impl Default for UiState {
             type_path_geometry_cache: Default::default(),
             selected_path: None,
             hidden_work_path: None,
+            freeform_enter_ready: None,
             panels: Panels::default(),
             views: Vec::new(),
             windows: Vec::new(),
