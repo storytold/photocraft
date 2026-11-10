@@ -698,10 +698,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
-    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
-    // When the document refuses it, ↩ keeps the draft to commit again; Esc keeps it as the Work Path.
+    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769);
+    // ↩ also deselects the Work Path. When the document refuses it, ↩ keeps the draft to commit
+    // again; Esc keeps it as the Work Path.
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
-        crate::vector_ui::pen_commit(app, false);
+        crate::vector_ui::pen_enter(app);
         return true;
     }
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -712,6 +713,29 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if app.ui.shape_box.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         crate::shape_bounds_box::cancel(app);
         return true;
+    }
+    // An anchor selected with the Add Anchor Point tool: ⌫/Delete removes it and its two segments,
+    // as in Photoshop (#12703), never the active layer.
+    if focus != crate::shortcut_dispatch::Focus::DeletingWidget
+        && let Some((target, [s, k])) = crate::vector_ui::delete_key_deletes_anchor(app)
+    {
+        let mods = ctx.input(|i| i.modifiers);
+        if !mods.command && !mods.ctrl && !mods.shift && !mods.alt && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete))
+        {
+            let mut params = json!({"subpath": s, "knot": k, "segments": true});
+            if let (Some(p), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
+                p.extend(t.clone());
+            }
+            match app.run("path.deleteAnchor", params) {
+                // The anchors shift: the selection would point at the wrong ones.
+                Ok(_) => app.ui.direct_selection = crate::direct_select::DirectSelection::default(),
+                Err(e) => {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                }
+            }
+            return true;
+        }
     }
     // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
     // Photoshop (#5702), never Edit › Clear on the pixels under it.
