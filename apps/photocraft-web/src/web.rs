@@ -433,10 +433,15 @@ impl eframe::App for WebShell {
             // as layers (as on the desktop), elsewhere opened.
             let places = self.app.dropped_on_canvas(ctx, &names);
             let target_doc = self.app.session.active().map(|st| st.doc.id);
-            let files: Vec<_> = dropped.into_iter().zip(names).zip(places).map(|((f, name), place)| (f, name, place, target_doc)).collect();
+            let mut files: Vec<_> = dropped.into_iter().zip(names).zip(places).map(|((f, name), place)| (f, name, place, target_doc)).collect();
+            // Files to open go in name order (`page_2` before `page_10`), as on the desktop, not
+            // the order the browser lists them in (#12806); placed ones stay in drop order.
+            if files.iter().all(|(_, _, place, _)| !place) {
+                files.sort_by(|a, b| photocraft_ui_egui::file_open::natural_cmp(&a.1, &b.1));
+            }
             let (inbox, place_inbox) = (self.inbox.clone(), self.place_inbox.clone());
             let ctx = ctx.clone();
-            // One after another, so they open or place in the order they were dropped.
+            // One after another, so they open or place in this order.
             wasm_bindgen_futures::spawn_local(async move {
                 for (f, name, place, target_doc) in files {
                     match f.bytes_async().await {
