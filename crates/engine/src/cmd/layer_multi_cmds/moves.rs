@@ -169,6 +169,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let mut shift = (0, 0);
     let nested = s.edit("Move", |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));
         let mut ids = move_targets(doc, &rest);
@@ -192,7 +193,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // A board moved past any canvas edge grows the canvas, as a new one does (#1531, #3070).
         if ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some())) {
-            crate::artboard_cmds::fit_canvas(doc);
+            shift = crate::artboard_cmds::fit_canvas(doc);
         }
         // The Move tool carries the selection along when it moves several layers whole, as
         // Photoshop does (#7538): one step, so Undo takes both back.
@@ -201,6 +202,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(nested)
     })?;
+    crate::artboard_cmds::follow_shift(s, shift);
     if nested.is_empty() {
         return Ok(Value::Null);
     }

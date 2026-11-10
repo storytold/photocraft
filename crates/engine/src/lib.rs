@@ -110,6 +110,7 @@ pub use cmd::history_select_cmds;
 pub use cmd::history_source_cmds;
 pub use cmd::image_cmds;
 pub use cmd::layer_copy_cmds;
+pub use cmd::layer_css_cmds;
 pub use cmd::layer_label_cmds;
 pub use cmd::layer_list_cmds;
 pub use cmd::layer_mask_props_cmds;
@@ -338,6 +339,9 @@ pub struct Session {
     /// command reporting too narrow a redraw area (#4053). Counted in debug and test builds only;
     /// tests read it.
     pub damage_misses: usize,
+    /// Commands that left the whole document to redraw (`last_damage` None) while changing under
+    /// 25 % of it ([`Session::dispatch`]). Counted in debug and test builds only; tests read it.
+    pub whole_redraws: usize,
 }
 
 #[cfg(test)]
@@ -358,4 +362,6 @@ mod tests;
 #[cfg(test)]
 mod fx_mode_tests;
 
+#[cfg(test)]
+mod brush_clear_background_tests;
 pub mod command_hints;

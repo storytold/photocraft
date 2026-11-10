@@ -24,6 +24,7 @@ mod batch_run;
 mod export;
 mod info;
 mod open;
+mod open_as_smart_object;
 mod paths;
 mod place_steps;
 mod processing;
@@ -51,6 +52,8 @@ pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 pub(crate) use open::place;
 use open::{approve_memory, close_all, close_others, open_as, revert};
+pub use open_as_smart_object::admit_as_smart_object;
+use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
 #[cfg(test)]
 use paths::openable_name;
@@ -286,6 +289,15 @@ pub fn specs() -> Vec<CommandSpec> {
             native,
             open_as
         ),
+        spec!(
+            "file.openAsSmartObject",
+            "Open as Smart Object…",
+            &["File"],
+            None,
+            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a prompt waits)"##,
+            native,
+            open_as_smart_object
+        ),
         // One-shot permission for one file, not something to replay later: never journaled or
         // recorded in an action, since replaying it in another session/on another file would
         // grant memory use nobody approved (#10897). It also releases the queued source on both
@@ -421,6 +433,10 @@ mod tests;
 #[cfg(test)]
 #[path = "file_cmds/place_job_tests.rs"]
 mod place_job_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/open_as_smart_object_tests.rs"]
+mod open_as_smart_object_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {
