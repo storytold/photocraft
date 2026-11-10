@@ -264,3 +264,53 @@ fn a_paste_after_a_copy_during_the_box_keeps_the_scaled_size() {
     let pasted = st.doc.layers.last().expect("the pasted layer").surface().expect("its pixels").content_bounds();
     assert_eq!(pasted, photocraft_geom::Rect::new(50, 70, 250, 190), "the pasted layer keeps the scaled size");
 }
+
+/// The desktop app applies a big transform on a worker thread, so the copy waits for it (the
+/// click is deferred, #9974). The copy still holds the scaled pixels: the transform lands first.
+#[test]
+fn a_copy_during_a_background_commit_still_takes_the_transformed_pixels() {
+    let mut h = app();
+    h.state_mut().background_jobs = true;
+    transform_and_scale(&mut h);
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    // The copy waits for the commit to land.
+    wait_for_job(&mut h);
+    let clip = h.state().session.clipboard.as_ref().expect("the clipboard holds the copy");
+    assert_eq!(clip.bounds, photocraft_geom::Rect::new(50, 70, 250, 190), "the copy holds the scaled pixels");
+}
+
+/// A deferred clipboard command runs on the layer that is active when it lands. The engine
+/// refuses a layer change while the transform commits (its job conflict), so that is the layer
+/// the command was asked for: a deferred Cut cannot clear another layer.
+#[test]
+fn a_layer_change_is_refused_while_the_transform_commits() {
+    let mut h = app();
+    h.state_mut().background_jobs = true;
+    let red = red_id(&h);
+    h.state_mut().run("layer.new.layer", json!({"name": "Other"})).unwrap();
+    let other = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().run("layer.select", json!({"layer": red})).unwrap();
+    transform_and_scale(&mut h);
+    h.state_mut().run("edit.cut", json!({})).unwrap();
+    let refused = h.state_mut().run("layer.select", json!({"layer": other.0}));
+    assert!(refused.is_err(), "the layer cannot be changed while the transform commits: {refused:?}");
+    wait_for_job(&mut h);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.active_layer, Some(photocraft_doc::LayerId(red)), "the layer the cut was asked for is still active");
+}
+
+/// Run the harness until the background job has landed and its deferred command has run.
+fn wait_for_job(h: &mut Harness<'static, PhotocraftApp>) {
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().after_transform_commit.is_none() && h.state().session.clipboard.is_some() {
+            return;
+        }
+    }
+    panic!("the background job did not land");
+}
+
+/// The id of the red layer the fixture made.
+fn red_id(h: &Harness<'static, PhotocraftApp>) -> u64 {
+    h.state().session.active().unwrap().doc.layers.last().unwrap().id.0
+}
