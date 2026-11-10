@@ -1612,6 +1612,33 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 }
             }
         };
+        // One premultiplied bilinear sample with plain weights at (u, v) (pixel centres at
+        // integers): a subsample of a footprint's average. The reference's weight steps and 8-bit
+        // rounding were measured on its single sample per pixel, and cost a footprint a quarter of
+        // its time.
+        let subsample = |win: &Win, u: f64, v: f64, acc: &mut [f64; 8]| {
+            acc[..n].fill(0.0);
+            let (ix, iy) = (u.floor() as i32, v.floor() as i32);
+            let (fx, fy) = (u - f64::from(ix), v - f64::from(iy));
+            if let Some(o) = base(win, ix, iy, 2) {
+                for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
+                    for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
+                        let p = &win.px[o + (dy * win.fw + dx) * n..][..n];
+                        for (s, v) in acc.iter_mut().zip(p) {
+                            *s += f64::from(*v) * wx * wy;
+                        }
+                    }
+                }
+                return;
+            }
+            for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
+                for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
+                    for (c, s) in acc.iter_mut().enumerate().take(n) {
+                        *s += at(win, ix + dx, iy + dy, c) * wx * wy;
+                    }
+                }
+            }
+        };
         // One premultiplied bilinear tap of `win`'s mip level `l` (>= 1) at source position `q`,
         // with the reference's 1/256-step weights; texels past the source are transparent.
         let mip_tap = |win: &Win, l: u32, q: [f64; 2], acc: &mut [f64; 8]| {
@@ -1650,7 +1677,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 let t = (sy as f64 + 0.5) / ny as f64 - 0.5;
                 for sx in 0..nx {
                     let s = (sx as f64 + 0.5) / nx as f64 - 0.5;
-                    point(win, Interp::Bilinear, q[0] + s * j[0] + t * j[2] - 0.5, q[1] + s * j[1] + t * j[3] - 0.5, one);
+                    subsample(win, q[0] + s * j[0] + t * j[2] - 0.5, q[1] + s * j[1] + t * j[3] - 0.5, one);
                     for (c, v) in acc.iter_mut().zip(one.iter()).take(n) {
                         *c += v;
                     }
@@ -2617,6 +2644,25 @@ mod tests {
             let k = ((r * 256) / 6) as f64 / 255.0;
             let want = (3.0 * ix as f64 * (1.0 - k) + 3.0 * (ix + 1) as f64 * k).round();
             assert_eq!(f64::from(px[0] * 255.0).round(), want, "pixel ({x}, {y})");
+        }
+    }
+
+    /// A footprint's subsamples are averaged as they are: three of four at 0.6 of a level and one
+    /// at none average to 0.45 of a level, so none. Each rounded to a level first (as the single
+    /// sample of a smart object's warp is) would average to 0.75, so one.
+    #[test]
+    fn a_footprint_averages_unrounded_subsamples() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        src.fill_rect(Rect::new(0, 0, 16, 8), &[0.0, 0.0, 0.0, 1.0]);
+        for x in (0..16).filter(|x| x % 4 != 3) {
+            src.fill_rect(Rect::new(x, 3, x + 1, 4), &[1.0 / 255.0, 0.0, 0.0, 1.0]);
+        }
+        // A quarter as wide and 0.4 px down: a pixel of row 3 averages four source columns, each
+        // 0.6 of row 3 and 0.4 of row 2.
+        let f = |x: f64, y: f64| (x / 4.0, y + 0.4);
+        let out = warp_mesh_surface(&src, Rect::new(0, 0, 16, 8), &f, Interp::Bicubic);
+        for px in out.read_region(Rect::new(0, 3, 4, 4)).chunks(4) {
+            assert_eq!(px, &[0.0, 0.0, 0.0, 1.0]);
         }
     }
 }
