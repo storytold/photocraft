@@ -526,6 +526,41 @@ struct PenDrag {
     /// The last pass this was applied in, so the title bar and the edge zones can both call
     /// [`follow_pen_drag`].
     pass: u64,
+    /// The OS reports where the pen is on the screen ([`note_os_pointer`]): the drag follows that.
+    /// Otherwise it follows the window's inner rect plus the pointer, which can run ahead.
+    os: bool,
+}
+
+fn os_pointer_id() -> Id {
+    Id::unique("titlebar-os-pointer")
+}
+
+/// Read the pen's screen position from the OS for this pass while a pen or a finger is down. A
+/// [`PenDrag`] follows that: winit moves the window asynchronously (`SWP_ASYNCWINDOWPOS`), so a
+/// pointer position egui got before a move landed, added to the window position read after it,
+/// counted the move twice, and the window ran away from the pen (an injected pen on Windows 11:
+/// +687, +909 for a +200, +120 stroke). The pen's own pointer messages
+/// (`Services::pen_screen_px`) say where it is; failing that the OS cursor
+/// (`Services::cursor_pos`, relative to the window's inner rect, so the sum is the screen
+/// position), which a pen doesn't always move. Call before the title bar and the edge zones.
+pub(crate) fn note_os_pointer(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !PEN_DRAG || !ctx.input(|i| i.any_touches()) {
+        return;
+    }
+    let pen = app.services.pen_screen_px.as_ref().and_then(|f| f()).map(|[x, y]| pos2(x as f32, y as f32) / ctx.pixels_per_point());
+    let cursor = || {
+        let inner = ctx.input(|i| i.viewport().inner_rect)?;
+        app.services.cursor_pos.as_mut().and_then(|f| f(ctx)).map(|at| inner.min + at.to_vec2())
+    };
+    let Some(at) = pen.or_else(cursor) else { return };
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(os_pointer_id(), (pass, at)));
+}
+
+/// The screen position [`note_os_pointer`] read this pass.
+fn os_pointer(ctx: &egui::Context) -> Option<Pos2> {
+    let (pass, at) = ctx.data(|d| d.get_temp::<(u64, Pos2)>(os_pointer_id()))?;
+    (pass == ctx.cumulative_pass_nr()).then_some(at)
 }
 
 fn pen_drag_id() -> Id {
@@ -546,14 +581,20 @@ fn start_pen_drag(ctx: &egui::Context, kind: PenDragKind) -> bool {
         return false;
     };
     let pass = ctx.cumulative_pass_nr();
+    // Trust the OS's position only if it is where the pointer is: a finger leaves the cursor
+    // behind.
+    let latest = ctx.input(|i| i.pointer.latest_pos()).unwrap_or(press);
+    let os_now = os_pointer(ctx).filter(|s| (*s - (inner.min + latest.to_vec2())).length() <= 8.0);
+    let os = os_now.is_some();
     let drag = if maximized {
         if kind != PenDragKind::Move {
             return false;
         }
         ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
-        PenDrag { kind, start: None, grab: (press.x / inner.width().max(1.0), press.y), pass }
+        PenDrag { kind, start: None, grab: (press.x / inner.width().max(1.0), press.y), pass, os }
     } else {
-        PenDrag { kind, start: Some((inner.min + press.to_vec2(), outer, inner)), grab: (0.0, 0.0), pass }
+        let at = os_now.map_or(inner.min + press.to_vec2(), |s| s - (latest - press));
+        PenDrag { kind, start: Some((at, outer, inner)), grab: (0.0, 0.0), pass, os }
     };
     ctx.data_mut(|d| d.insert_temp(pen_drag_id(), drag));
     true
@@ -568,13 +609,24 @@ pub(crate) fn follow_pen_drag(ctx: &egui::Context) {
         return;
     }
     drag.pass = pass;
-    let (pos, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_down()));
+    // The pen is down while egui has the press and a touch. egui's pointer can be gone meanwhile:
+    // the mouse cursor, parked where the window was, leaves the window as it moves away (winit's
+    // `CursorLeft`), which only matters when the drag goes by that pointer.
+    let (pos, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_down() && i.any_touches()));
     let (inner, outer, maximized) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().outer_rect, i.viewport().maximized.unwrap_or(false)));
-    let (Some(pos), Some(inner), Some(outer), true) = (pos, inner, outer, down) else {
-        ctx.data_mut(|d| d.remove::<PenDrag>(pen_drag_id()));
-        return;
+    let end = |ctx: &egui::Context| ctx.data_mut(|d| d.remove::<PenDrag>(pen_drag_id()));
+    let (Some(inner), Some(outer), true) = (inner, outer, down) else { return end(ctx) };
+    let pen = if drag.os {
+        // No OS reading this pass (the service failed): wait for the next.
+        let Some(at) = os_pointer(ctx) else {
+            ctx.data_mut(|d| d.insert_temp(pen_drag_id(), drag));
+            return;
+        };
+        at
+    } else {
+        let Some(pos) = pos else { return end(ctx) };
+        inner.min + pos.to_vec2()
     };
-    let pen = inner.min + pos.to_vec2();
     let Some((press, outer0, inner0)) = drag.start else {
         // Restoring a maximized window: wait for its restored size, then put it under the pen.
         if !maximized {

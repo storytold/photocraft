@@ -30,6 +30,16 @@ struct Win {
     frame_offset: Vec2,
     time: f64,
     maximized: bool,
+    /// Windows moves the window asynchronously: with `lag`, the pointer positions of a frame are
+    /// relative to where the window was before the previous frame's commands, while the viewport
+    /// already reports where it is now.
+    lag: bool,
+    before_move: Pos2,
+    /// The OS cursor on the screen, when it follows the pen (`Services::cursor_pos`).
+    cursor: std::rc::Rc<std::cell::Cell<Option<Pos2>>>,
+    cursor_follows: bool,
+    /// A pen frame, by its index in the path, where egui's pointer also leaves the window.
+    pointer_gone_at: Option<usize>,
 }
 
 impl Win {
@@ -38,7 +48,30 @@ impl Win {
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
         app.custom_titlebar = true;
-        Self { ctx, app, width, height: 600.0, at: pos2(200.0, 100.0), frame_offset: vec2(-7.0, 0.0), time: 0.0, maximized: false }
+        let at = pos2(200.0, 100.0);
+        Self {
+            ctx,
+            app,
+            width,
+            height: 600.0,
+            at,
+            frame_offset: vec2(-7.0, 0.0),
+            time: 0.0,
+            maximized: false,
+            lag: false,
+            before_move: at,
+            cursor: Default::default(),
+            cursor_follows: true,
+            pointer_gone_at: None,
+        }
+    }
+
+    /// The OS cursor follows the pen, as Windows Ink moves it: `Services::cursor_pos` reports it
+    /// relative to the window's client area.
+    fn with_os_cursor(mut self) -> Self {
+        let cursor = self.cursor.clone();
+        self.app.services.cursor_pos = Some(Box::new(move |ctx: &egui::Context| Some(cursor.get()? - ctx.input(|i| i.viewport().inner_rect)?.min.to_vec2())));
+        self
     }
 
     fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
@@ -59,6 +92,8 @@ impl Win {
         release_after_os_resize(&self.ctx, &mut input);
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| {
+            // What `ui_body` does first.
+            note_os_pointer(app, ui.ctx());
             crate::panels::title_bar(app, ui);
             if modal {
                 egui::Modal::new(Id::unique("titlebar-drag-test-modal")).backdrop_color(Color32::TRANSPARENT).show(ui.ctx(), |ui| {
@@ -104,11 +139,18 @@ impl Win {
         let hover = path[0] - self.at.to_vec2();
         all.extend(self.obey(vec![Event::PointerMoved(hover)]));
         for (i, p) in path.iter().enumerate() {
-            let local = *p - self.at.to_vec2();
+            if self.cursor_follows {
+                self.cursor.set(Some(*p));
+            }
+            let local = *p - if self.lag { self.before_move } else { self.at }.to_vec2();
             let events = match i {
                 0 => vec![touch(egui::TouchPhase::Start, local), Event::PointerMoved(local), button(local, true, egui::PointerButton::Primary)],
                 _ => vec![touch(egui::TouchPhase::Move, local), Event::PointerMoved(local)],
             };
+            let mut events = events;
+            if self.pointer_gone_at == Some(i) {
+                events.push(Event::PointerGone);
+            }
             all.extend(self.obey(events));
             if i == last {
                 let events = vec![touch(egui::TouchPhase::End, local), button(local, false, egui::PointerButton::Primary), Event::PointerGone];
@@ -121,6 +163,7 @@ impl Win {
     /// One frame; the window then moves, resizes and restores as its commands say.
     fn obey(&mut self, events: Vec<Event>) -> Vec<ViewportCommand> {
         let cmds = self.frame(events).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        self.before_move = self.at;
         for c in &cmds {
             match c {
                 ViewportCommand::OuterPosition(p) => self.at = *p - self.frame_offset,
@@ -608,4 +651,57 @@ fn a_pen_drags_a_maximized_window_out_restored() {
     let pen = *path.last().unwrap();
     let held = pen - w.at;
     assert!((held.x - 1000.0 * 1200.0 / 1920.0).abs() < 0.01 && (held.y - 16.0).abs() < 0.01, "held at {held:?}, window at {:?}", w.at);
+}
+
+/// Windows moves the window asynchronously, so a frame's pointer positions can be relative to
+/// where the window was before the last move: added to where it is now they counted that move
+/// twice, and the window ran away from the pen (seen with an injected pen on Windows 11: +477,
+/// +783 for a +200, +120 stroke). With the OS cursor following the pen, the window follows the
+/// cursor's screen position instead and lands exactly under the pen.
+#[test]
+fn a_pen_move_follows_the_os_cursor_when_the_window_moves_late() {
+    let stroke = |w: &mut Win| {
+        w.lag = true;
+        w.frame(vec![]);
+        let start = w.at;
+        let on_screen = start + pos2(980.0, 16.0).to_vec2();
+        let path: Vec<Pos2> = (0..=10).map(|i| on_screen + vec2(20.0, 12.0) * i as f32).collect();
+        w.pen(&path);
+        w.at - start
+    };
+    assert_eq!(stroke(&mut Win::new(1440.0).with_os_cursor()), vec2(200.0, 120.0));
+    // Without the cursor the window can only go by egui's positions: it overshoots.
+    let moved = stroke(&mut Win::new(1440.0));
+    assert!(moved.x > 200.0 && moved.y > 120.0, "{moved:?}");
+}
+
+/// A finger leaves the OS cursor behind: a cursor that isn't where the pointer is isn't followed.
+#[test]
+fn a_cursor_away_from_the_pen_is_not_followed() {
+    let mut w = Win::new(1440.0).with_os_cursor();
+    w.cursor_follows = false;
+    w.cursor.set(Some(pos2(5.0, 5.0)));
+    w.frame(vec![]);
+    let start = w.at;
+    let on_screen = start + pos2(980.0, 16.0).to_vec2();
+    let path: Vec<Pos2> = (0..=10).map(|i| on_screen + vec2(-30.0, 12.0) * i as f32).collect();
+    w.pen(&path);
+    assert_eq!(w.at, start + vec2(-300.0, 120.0));
+}
+
+/// The mouse cursor, parked where the pen took the window, can end up outside the window as it
+/// moves away: winit reports the mouse leaving, and egui's pointer is gone for the rest of the
+/// stroke. Seen on Windows 11 after a mouse move: the pen move stopped after 2 of 20 steps. The
+/// drag follows the pen's own position, so it carries on.
+#[test]
+fn a_pen_move_survives_the_mouse_pointer_leaving_the_window() {
+    let mut w = Win::new(1440.0).with_os_cursor();
+    w.lag = true;
+    w.pointer_gone_at = Some(3);
+    w.frame(vec![]);
+    let start = w.at;
+    let on_screen = start + pos2(980.0, 16.0).to_vec2();
+    let path: Vec<Pos2> = (0..=10).map(|i| on_screen + vec2(20.0, 12.0) * i as f32).collect();
+    w.pen(&path);
+    assert_eq!(w.at - start, vec2(200.0, 120.0));
 }
