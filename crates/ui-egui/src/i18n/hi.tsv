@@ -702,3 +702,17 @@ cameraRaw	Yellow	पीला
 	RAW Develop Filter	RAW डेवलप फ़िल्टर
 	RAW Develop Filter…	RAW डेवलप फ़िल्टर…
 	Loaded RAW Develop settings from {file} ({n} not supported)	{file} से RAW डेवलप सेटिंग्स लोड की गईं ({n} समर्थित नहीं)
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	पहले से सेट पक्षानुपात या क्रॉप आकार चुनें
+	Set the aspect ratio for the crop box	क्रॉप फ़्रेम का पक्षानुपात सेट करें
+	Clear aspect ratio values	पक्षानुपात मान साफ़ करें
+	Set the overlay options for the Crop Tool	क्रॉप ओवरले के विकल्प सेट करें
+	Determines if pixel data outside the crop box is retained or deleted	निर्धारित करता है कि क्रॉप फ़्रेम के बाहर के पिक्सेल रखे जाएँ या हटाए जाएँ
+	How expanded crop area gets filled	विस्तारित क्रॉप क्षेत्र कैसे भरा जाता है
+	Displays pop-up help for the fill methods	भरण विधियों के लिए पॉप-अप सहायता दिखाता है
+	Fill options	भरण विकल्प
+	Background (default):	पृष्ठभूमि (डिफ़ॉल्ट):
+	Fill the expanded area with your background color or transparent pixels	विस्तारित क्षेत्र को पृष्ठभूमि रंग या पारदर्शी पिक्सेल से भरें
+	Content-aware fill	सामग्री-आधारित भरण
+	Sample content from part of the image and use it to fill a small area	छोटा क्षेत्र भरने के लिए छवि के हिस्से से सामग्री लें
+	Reset the crop box, image rotation, and aspect ratio settings	क्रॉप फ़्रेम, छवि घुमाव और पक्षानुपात रीसेट करें
