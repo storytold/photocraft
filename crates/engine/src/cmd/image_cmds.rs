@@ -369,7 +369,9 @@ fn resample_doc_with_styles(doc: &mut Document, cmd: &str, nw: u32, nh: u32, fil
     check_hidden_resample_budget(cmd, doc, sx, sy, filter)?;
     // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
     let canvas = Rect::from_xywh(0, 0, ow, oh);
-    rescale_doc(doc, nw, nh, scale_styles, &mut |surf, is_mask| resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas));
+    rescale_doc(doc, nw, nh, scale_styles, &mut |surf, is_mask| {
+        resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas)
+    });
     Ok(())
 }
 
