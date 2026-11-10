@@ -548,10 +548,19 @@ pub(crate) fn flush_finishing_stroke(app: &mut PhotocraftApp) -> bool {
     !continue_finishing_stroke(app)
 }
 
-/// Run the commands that waited for a released stroke ([`queue_while_finishing`]), in order.
+/// Run the commands that waited for a released stroke ([`queue_while_finishing`]), in order. A
+/// command that failed is reported in the status bar once they have all run, so a later one that
+/// succeeds doesn't hide it.
 pub(crate) fn run_queued_commands(app: &mut PhotocraftApp) {
+    let mut failed = None;
     for (id, params) in std::mem::take(&mut app.queued_commands) {
-        let _ = app.run(&id, params);
+        if let Err(e) = app.run(&id, params) {
+            failed = Some(e);
+        }
+    }
+    if let Some(e) = failed {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 

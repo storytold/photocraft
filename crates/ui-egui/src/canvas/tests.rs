@@ -3497,6 +3497,21 @@ fn automation_gets_an_error_while_a_stroke_finishes_and_a_command_by_hand_waits_
     assert_eq!(app.session.active().unwrap().history.past_len(), count + 2, "the stroke, then the queued command");
 }
 
+/// A queued command that fails is reported once the queue has run, even when a later queued
+/// command succeeds.
+#[test]
+fn a_queued_command_that_fails_is_reported_after_the_queue_runs() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let (held, count) = released_stroke_on_a_held_worker(&mut app);
+    for id in ["no.suchCommand", "layer.new.layer"] {
+        assert_eq!(app.run(id, json!({})).unwrap()["queued"], json!(true), "{id}: queued");
+    }
+    commit_after_the_held_step(&mut app, held);
+    assert_eq!(app.session.active().unwrap().history.past_len(), count + 2, "the stroke and the new layer");
+    assert!(app.ui.status_error, "the failed command is reported: {}", app.ui.status);
+    assert!(!app.ui.status.is_empty());
+}
+
 /// The reply to `engine.execute` of `actions.play` "Save a copy" over the control channel.
 fn play_over_control(app: &mut PhotocraftApp, ctx: &egui::Context) -> serde_json::Value {
     let (req, _rx) = crate::control::ControlRequest::new("engine.execute", json!({"command": "actions.play", "params": {"action": "Save a copy"}}));
