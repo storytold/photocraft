@@ -3437,27 +3437,47 @@ fn a_command_during_the_catch_up_lands_the_stroke_first() {
     assert!(st.doc.layer(id).unwrap().surface().unwrap().rgba(160, 50)[3] < 0.01, "the stroke was undone");
 }
 
+/// A Brush stroke on a new layer of a new document, released with a step still on its worker; the
+/// step stays running until the returned sender is dropped. Also returns the history length
+/// before the stroke. Leaves `TEST_WORKER` on: the caller turns it off.
+fn released_stroke_on_a_held_worker(app: &mut PhotocraftApp) -> (std::sync::mpsc::Sender<super::strokes::WorkerStep>, usize) {
+    super::strokes::TEST_WORKER.with(|w| w.set(true));
+    app.run("file.new", json!({"width":200,"height":100,"background":"#ffffff"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("tools.setBrush", json!({"brush":{"size":8,"smoothing":{"amount":0.0}}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let count = app.session.active().unwrap().history.past_len();
+    tool_event(app, ToolEvent::Down { x: 10.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let held = super::strokes::hold_worker_step(app).expect("the Brush is on a worker");
+    for i in 1..=40 {
+        tool_event(app, ToolEvent::Move { x: 10.0 + f64::from(i) * 4.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    }
+    tool_event(app, ToolEvent::Up { x: 170.0, y: 50.0 }, egui::Modifiers::NONE);
+    assert!(app.finishing_stroke.is_some(), "released with a step on the worker");
+    (held, count)
+}
+
+/// Let go of the held step (it fails: the commit renders the stroke itself) and wait for the
+/// stroke to commit.
+fn commit_after_the_held_step(app: &mut PhotocraftApp, held: std::sync::mpsc::Sender<super::strokes::WorkerStep>) {
+    drop(held);
+    let start = std::time::Instant::now();
+    while continue_finishing_stroke(app) {
+        assert!(start.elapsed() < std::time::Duration::from_secs(20), "the stroke commits");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    super::strokes::TEST_WORKER.with(|w| w.set(false));
+    assert!(app.finishing_stroke.is_none());
+}
+
 /// While a released stroke is still on its worker, a command from automation gets an error to
 /// retry instead of being queued: queued, it would run after the request returned, its result lost
 /// and outside the request's authorization (`actions.play` and its steps included). A command made
 /// by hand is queued, and runs once the stroke has committed.
 #[test]
 fn automation_gets_an_error_while_a_stroke_finishes_and_a_command_by_hand_waits_for_it() {
-    super::strokes::TEST_WORKER.with(|w| w.set(true));
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.run("file.new", json!({"width":200,"height":100,"background":"#ffffff"})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.run("tools.setBrush", json!({"brush":{"size":8,"smoothing":{"amount":0.0}}})).unwrap();
-    app.ui.tool = Tool::Brush;
-    let count = app.session.active().unwrap().history.past_len();
-    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    // The worker stays busy with the next step until `held` is dropped.
-    let held = super::strokes::hold_worker_step(&mut app).expect("the Brush is on a worker");
-    for i in 1..=40 {
-        tool_event(&mut app, ToolEvent::Move { x: 10.0 + f64::from(i) * 4.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    }
-    tool_event(&mut app, ToolEvent::Up { x: 170.0, y: 50.0 }, egui::Modifiers::NONE);
-    assert!(app.finishing_stroke.is_some(), "released with a step on the worker");
+    let (held, count) = released_stroke_on_a_held_worker(&mut app);
 
     app.automation_input = true;
     for id in ["layer.new.layer", "actions.play"] {
@@ -3472,18 +3492,67 @@ fn automation_gets_an_error_while_a_stroke_finishes_and_a_command_by_hand_waits_
     assert_eq!(queued["queued"], json!(true), "by hand: queued");
     assert_eq!(app.queued_commands.len(), 1);
 
-    // The step fails (its worker is gone): the stroke is rendered at the commit, then the queued
-    // command runs.
-    drop(held);
-    let start = std::time::Instant::now();
-    while continue_finishing_stroke(&mut app) {
-        assert!(start.elapsed() < std::time::Duration::from_secs(20), "the stroke commits");
-        std::thread::sleep(std::time::Duration::from_millis(2));
+    commit_after_the_held_step(&mut app, held);
+    assert!(app.queued_commands.is_empty());
+    assert_eq!(app.session.active().unwrap().history.past_len(), count + 2, "the stroke, then the queued command");
+}
+
+/// The reply to `engine.execute` of `actions.play` "Save a copy" over the control channel.
+fn play_over_control(app: &mut PhotocraftApp, ctx: &egui::Context) -> serde_json::Value {
+    let (req, _rx) = crate::control::ControlRequest::new("engine.execute", json!({"command": "actions.play", "params": {"action": "Save a copy"}}));
+    match crate::control::handle(app, ctx, &req) {
+        crate::control::Outcome::Done(v) => v,
+        _ => panic!("engine.execute: expected an immediate reply"),
     }
-    super::strokes::TEST_WORKER.with(|w| w.set(false));
-    assert!(app.finishing_stroke.is_none() && app.queued_commands.is_empty());
-    let st = app.session.active().unwrap();
-    assert_eq!(st.history.past_len(), count + 2, "the stroke, then the queued command");
+}
+
+/// An `actions.play` sent over the control channel while a stroke finishes is refused, and its
+/// retry once the stroke has committed runs under the request's automation gate: a
+/// `file.saveACopy` step outside the automation write root is refused, and nothing is written at
+/// any point.
+#[test]
+fn an_actions_play_over_control_never_writes_outside_the_write_root_during_or_after_a_stroke() {
+    fn deny_files(id: &str, _: &serde_json::Value) -> photocraft_engine::Result<()> {
+        if id.starts_with("file.") && id != "file.new" {
+            Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled")))
+        } else {
+            Ok(())
+        }
+    }
+    let written: std::rc::Rc<std::cell::RefCell<Vec<String>>> = std::rc::Rc::default();
+    let w = written.clone();
+    let services = crate::Services {
+        automation_authorize: Some(deny_files),
+        automation_command: Some(Box::new(|id, params| deny_files(id, params).map_err(|e| e.to_string()))),
+        export: Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new())))),
+        write: Some(Box::new(move |path: &str, _: &[u8]| {
+            w.borrow_mut().push(path.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let outside = std::env::temp_dir().join("outside").join("x.png").to_string_lossy().into_owned();
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action {
+        name: "Save a copy".into(),
+        steps: vec![("file.saveACopy".into(), json!({"path": outside}))],
+        ..Default::default()
+    });
+    let (held, _) = released_stroke_on_a_held_worker(&mut app);
+    let ctx = egui::Context::default();
+    let refused = play_over_control(&mut app, &ctx);
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["error"], super::still_finishing(), "an error to retry: {refused}");
+    assert!(app.queued_commands.is_empty(), "not queued");
+    assert!(app.session.authorize.is_none(), "the gate is only installed for the request");
+
+    commit_after_the_held_step(&mut app, held);
+    let retried = play_over_control(&mut app, &ctx);
+    assert_eq!(retried["result"]["ran"], 0, "{retried}");
+    assert_eq!(retried["result"]["failed"]["id"], "file.saveACopy", "{retried}");
+    assert!(retried["result"]["failed"]["error"].as_str().unwrap_or("").contains("disabled"), "{retried}");
+    assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());
+    assert!(app.session.authorize.is_none());
 }
 
 /// One dab of a very large brush on a storyboard took most of a second on the UI thread, and the

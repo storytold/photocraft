@@ -206,7 +206,7 @@ impl Busy {
 }
 
 /// A finished worker step: the Brush's stroke back, and what the step changed (or why it failed).
-type WorkerStep = (Box<photocraft_engine::brush_cmds::LiveStroke>, photocraft_engine::Result<DRect>);
+pub(super) type WorkerStep = (Box<photocraft_engine::brush_cmds::LiveStroke>, photocraft_engine::Result<DRect>);
 
 /// A Brush step running on a worker ([`send_to_worker`]).
 pub(super) struct StrokeWorker {
@@ -258,7 +258,7 @@ fn send_to_worker(l: &mut LiveStroke, pts: Vec<photocraft_engine::paint::StrokeP
 /// step then fails, and the release renders the stroke itself): for tests of what happens while a
 /// released stroke is still on its worker. Waits for a step already running first.
 #[cfg(test)]
-pub(crate) fn hold_worker_step(app: &mut PhotocraftApp) -> Option<std::sync::mpsc::Sender<WorkerStep>> {
+pub(super) fn hold_worker_step(app: &mut PhotocraftApp) -> Option<std::sync::mpsc::Sender<WorkerStep>> {
     let l = app.live_stroke.as_mut()?;
     let start = std::time::Instant::now();
     while land_worker(l, Some(std::time::Duration::from_millis(50))) == Landed::Running {
