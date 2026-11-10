@@ -4,6 +4,10 @@ use super::shapes::is_shape_tool;
 use super::{ArrowDefaultLink, arrow_default_link_id, copy_arrow_to_tool_defaults};
 use super::{GradientChoices, LayerContent, PaintChange, PhotocraftApp, Tokens, Tool, Value, json, paint_param, swatch};
 
+#[cfg(test)]
+#[path = "convert_point_options_bar_tests.rs"]
+mod convert_point_options_bar_tests;
+
 // ---------------------------------------------------------------------------------------------
 // Options bars
 
