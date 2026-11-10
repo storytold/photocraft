@@ -127,7 +127,7 @@ fn field_and_slider_pick_on_press_and_follow_small_moves() {
     press(&mut h, o + vec2(FIELD + gap + 9.0, FIELD * 0.95));
     assert_ne!(color(&h), before, "the slider picks on press");
     let hue = rgb_to_hsb(parse_hex(&color(&h)).unwrap())[0];
-    assert!(hue < 30.0 || hue > 330.0, "hue {hue}");
+    assert!(hue.is_finite() && !(30.0..=330.0).contains(&hue), "hue {hue}");
 }
 
 /// Only the primary button picks: a right or middle press (and its release) on the field or
@@ -348,7 +348,7 @@ fn web_colors_and_current_swatch_still_update_the_picker() {
     assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("003366"), "hex field follows the snap while it has focus");
     h.get_by_label("Only Web Colors").click();
     h.run_steps(2);
-    h.get_by_label("Click to restore the current colour").click();
+    h.get_by_label("Click to restore the current color").click();
     h.run_steps(2);
     assert_eq!(color(&h), "#123456");
 }

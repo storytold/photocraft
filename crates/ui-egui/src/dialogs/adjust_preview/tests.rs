@@ -3,7 +3,7 @@ use photocraft_color::{BlendMode, Color, PixelFormat, SampleType};
 use photocraft_doc::Size;
 use serde_json::json;
 
-const KINDS: [&str; 13] = crate::adjust_editors::KINDS;
+const KINDS: [&str; 14] = crate::adjust_editors::KINDS;
 
 /// Settings that move every kind well away from neutral.
 pub(crate) fn sample(kind: &str) -> Value {
@@ -21,6 +21,7 @@ pub(crate) fn sample(kind: &str) -> Value {
         "posterize" => json!({"levels": 3}),
         "threshold" => json!({"level": 90}),
         "gradientMap" => json!({"stops": [[0, "#200040"], [1, "#ffd080"]]}),
+        "selectiveColor" => json!({"method": "absolute", "reds": [10, -20, 30, 5], "blues": [-15, 0, 25, 0]}),
         _ => json!({}),
     }
 }
@@ -105,7 +106,7 @@ pub(crate) fn max_diff(a: &Document, b: &Document) -> f32 {
 }
 
 /// Kinds that make colour from gray: grayscale documents preview them on the CPU proxy.
-const GRAY_COLOUR: [&str; 6] = ["vibrance", "colorBalance", "blackWhite", "photoFilter", "channelMixer", "gradientMap"];
+const GRAY_COLOUR: [&str; 7] = ["vibrance", "colorBalance", "blackWhite", "photoFilter", "channelMixer", "gradientMap", "selectiveColor"];
 
 #[test]
 fn preview_composite_matches_the_destructive_command() {
@@ -460,4 +461,28 @@ fn a_reveal_all_mask_does_not_empty_the_damage_region() {
     let region = live_switch_region(&app, id, 3, k1, k2).expect("same session");
     assert_eq!(region, bounds, "the whole document, not the mask's empty content");
     assert!(!live_switch_damage(&mut app, k2, region, bounds).is_empty(), "something is composited");
+}
+
+#[test]
+fn captured_subset_preview_stays_on_the_command_path_when_the_panel_changes() {
+    for kind in ["levels", "curves"] {
+        let (doc, target) = document(ColorMode::Rgb, SampleType::U16, false);
+        let mut app = app_with(doc, target);
+        app.session.execute("channel.target", json!({"colors":[0,2]})).unwrap();
+        let command = format!("image.adjustments.{kind}");
+        let id = crate::adjust_dialog::open(&mut app, &command).unwrap();
+        if let Some(values) = sample(kind).as_object() {
+            app.ui.dialog_mut(id).unwrap().fields.extend(values.clone());
+        }
+        app.session.execute("channel.target", json!({"channel":"composite"})).unwrap();
+        assert!(!on_layer(&mut app, 0), "captured colour set cannot use an all-channel adjustment layer");
+        let params = crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields);
+        let doc = app.session.active().unwrap().doc.clone();
+        let preview = crate::filter_dialog::preview_document(&doc, Some(target), &command, &params, 1).unwrap();
+        let expected = destructive(&doc, target, kind, &params).unwrap();
+        assert!(max_diff(&preview, &expected) <= 1e-6);
+        app.session.execute("channel.target", json!({"colors":[0,2]})).unwrap();
+        app.ui.dialog_mut(id).unwrap().fields.insert("target".into(), json!("pixels"));
+        assert!(on_layer(&mut app, 0), "explicit composite target overrides the panel too");
+    }
 }

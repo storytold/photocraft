@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use photocraft_cms::{ColorSpace, TransformOptions};
+use photocraft_color::ColorMode;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
 use photocraft_engine::installed_profiles::InstalledProfile;
@@ -276,6 +278,23 @@ pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
         },
         _ => k,
     });
+    // Minimum and Maximum measure the radius in whole pixels (Squareness rounds it, Roundness
+    // floors it, and 0 is the identity), so at k = 4 a typed 1.5 px became 0.375 = 0 proxy px and
+    // the preview showed the untouched document while OK applied a real effect (#10474). Keep at
+    // least one proxy pixel of radius, and the largest k whose whole-pixel proxy radius, scaled
+    // back, is within 1 px of the one OK applies: Squareness at 6 px and k = 4 rounds 1.5 to 2 proxy
+    // px (8 px), and Roundness's disc reaches floor(1.5) = 1 proxy px along an axis (4 px).
+    // A large radius still previews on a proxy: at full size Roundness costs O(radius) per pixel.
+    if matches!(command, "filter.other.minimum" | "filter.other.maximum") {
+        let Some(r) = params.get("radius").and_then(Value::as_f64).filter(|r| r.is_finite()) else { return k };
+        let r = r.clamp(0.2, 500.0);
+        let whole: fn(f64) -> f64 = if params.get("preserve").and_then(Value::as_str) == Some("roundness") { f64::floor } else { f64::round };
+        let fits = |d: u32| {
+            let d = f64::from(d);
+            d <= r.floor() && (whole(r / d) * d - whole(r)).abs() <= 1.0
+        };
+        return (1..=k).rev().find(|&d| fits(d)).unwrap_or(1);
+    }
     // Mosaic rounds its cells to whole pixels: 10 px cells at k = 4 became 3 proxy px = 12 px.
     // Divide the cell size evenly instead.
     match params.get("cellSize").and_then(Value::as_f64) {
@@ -289,7 +308,6 @@ pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
 
 /// Commands outside `filter.*` that get the schema dialog *with* live preview.
 pub const PREVIEWED: &[&str] = &[
-    "image.adjustments.selectiveColor",
     "image.adjustments.colorLookup",
     "image.adjustments.shadowsHighlights",
     "image.adjustments.replaceColor",
@@ -306,6 +324,8 @@ pub const PREVIEWED: &[&str] = &[
     // The preview shows the image through the chosen profile, as Photoshop's Preview does.
     "edit.assignProfile",
     "edit.convertToProfile",
+    // Previewed from the session's history (`canvas::filter_preview`), at full size (#8230).
+    "edit.fade",
 ];
 
 pub fn has_dialog(command: &str) -> bool {
@@ -413,6 +433,9 @@ fn default_value(app: &PhotocraftApp, command: &str, p: &Param) -> Option<Value>
 
 /// Command-specific open defaults (ruler straighten, warp from layer, …), not remembered prefs.
 fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<String, Value>) {
+    if command == "image.mode.indexedColor" {
+        indexed_matte_defaults(app, fields);
+    }
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, fields);
     }
@@ -492,6 +515,8 @@ pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     // Drop user params; keep private `__` chrome (and fixed keys outside the schema for `__spec`).
     let schema_keys: std::collections::HashSet<String> = parse_spec(&spec).into_iter().map(|p| p.key).collect();
     fields.retain(|k, _| k.starts_with("__") || !schema_keys.contains(k));
+    // The eyedroppers' click order goes with the samples just dropped (Replace Color, #6280).
+    fields.remove("__order");
     for p in parse_spec(&spec) {
         if let Some(v) = default_value(app, &command, &p) {
             fields.insert(p.key, v);
@@ -521,6 +546,15 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     }
     restore_remembered(app, command, spec.params, &mut fields);
     apply_command_defaults(app, command, &mut fields);
+    if photocraft_engine::channel_cmds::follows_target(command) {
+        if app.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(command) {
+            fields.insert("target".into(), json!("filterMask"));
+        } else if app.layer_mask_targeted() {
+            fields.insert("target".into(), json!("mask"));
+        } else if let Some(colors) = photocraft_engine::color_channels::selected(&app.session) {
+            fields.insert("target".into(), colors.params());
+        }
+    }
     if crate::blur_pins::handles(command) {
         crate::blur_pins::init(app, &mut fields);
     }
@@ -609,6 +643,15 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
             _ => continue,
         };
         fields.insert(p.key, v);
+    }
+    if !fields.contains_key("target") && !fields.contains_key("__smartFilter") {
+        if photocraft_engine::channel_cmds::follows_filter_mask(command) && app.filter_mask_targeted() {
+            fields.insert("target".into(), json!("filterMask"));
+        } else if photocraft_engine::channel_cmds::follows_target(command) && app.layer_mask_targeted() {
+            fields.insert("target".into(), json!("mask"));
+        } else if let Some(colors) = photocraft_engine::color_channels::selected(&app.session).filter(|c| c.len() > 1) {
+            fields.insert("target".into(), colors.params());
+        }
     }
     app.ui.open_dialog(crate::state::DialogKind::Command, fields)
 }
@@ -749,16 +792,31 @@ pub(crate) fn color_eyedropper_armed(app: &PhotocraftApp) -> bool {
 /// Sample the merged image at document point (x, y) into the armed dialog's "From" colour.
 /// Returns true when the click was consumed, even off-image or over transparency, where nothing
 /// changes and the eyedropper stays armed (like the Curves picker).
-pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
+/// With the Add to Sample eyedropper (or Shift) the click adds a sample, with Subtract from
+/// Sample (or Alt) it subtracts one, as in Photoshop and Select › Color Range (#6280).
+pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) -> bool {
     let Some(id) = app.ui.dialogs.last().filter(|d| color_eyedropper_owns(&d.fields)).map(|d| d.id) else {
         return false;
     };
-    if let Some(rgb) = crate::canvas::composite_color(app, x, y)
-        && let Some(d) = app.ui.dialog_mut(id)
-    {
-        d.fields.insert("color".into(), json!(crate::color_picker_ui::hex(rgb)));
-        // Where it was picked: Localized Color Clusters match the colour near this point (#4457).
-        d.fields.insert("points".into(), json!([[x.floor(), y.floor()]]));
+    let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return true };
+    let Some(mut f) = app.ui.dialogs.last().map(|d| d.fields.clone()) else { return true };
+    let tool = f.get("__tool").and_then(Value::as_str);
+    let sample = !mods.shift && !mods.alt && tool.is_none_or(|t| t == "sample");
+    // A first Add to Sample, before any sample, starts from the clicked colour too: one point
+    // matches through `color`, and Color Range's matcher starts its range there as well.
+    let add = mods.shift || (!mods.alt && tool == Some("add"));
+    let first_add = add && f.get("points").and_then(Value::as_array).is_none_or(Vec::is_empty);
+    if sample || first_add {
+        f.insert("color".into(), json!(crate::color_picker_ui::hex(rgb)));
+    }
+    // Where it was picked: Localized Color Clusters match the colour near this point (#4457);
+    // added and subtracted samples go to `points` / `subtractPoints` in click order.
+    crate::color_range_ui::pick(app, &mut f, [x, y], mods);
+    if let Some(order) = f.get("__order").cloned() {
+        f.insert("order".into(), order);
+    }
+    if let Some(d) = app.ui.dialog_mut(id) {
+        d.fields = f;
     }
     true
 }
@@ -806,6 +864,109 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+const INDEXED_MATTE_FOREGROUND: &str = "__indexedMatteForeground";
+const INDEXED_MATTE_BACKGROUND: &str = "__indexedMatteBackground";
+const INDEXED_MATTE_COLOR_ERROR: &str = "__indexedMatteColorError";
+
+/// Resolve a tool colour into the encoded samples used by Indexed Color's matte.
+///
+/// The picker and command fields carry document RGB coordinates. Tool swatches are
+/// working-RGB coordinates, so only the named tool choices need this conversion here.
+fn indexed_matte_document_color(app: &PhotocraftApp, doc: &Document, color: [f32; 4]) -> Result<[f32; 3], String> {
+    let destination = match photocraft_engine::color_cmds::mode_space(doc.mode) {
+        ColorSpace::Rgb | ColorSpace::Gray => photocraft_engine::color_cmds::document_profile(doc),
+        _ => photocraft_engine::color_cmds::composite_profile(doc),
+    };
+    let source = app.session.color.working(ColorMode::Rgb);
+    let options = TransformOptions { intent: app.session.color.settings.intent(), bpc: app.session.color.settings.bpc, ..Default::default() };
+    let transform = photocraft_cms::transform::cached(&source, &destination, options).map_err(|e| e.to_string())?;
+    let mut output = [0.0; 16];
+    transform.eval(&color[..3], &mut output);
+    let rgb = if destination.color_space == ColorSpace::Gray { [output[0]; 3] } else { [output[0], output[1], output[2]] };
+    if rgb.iter().any(|v| !v.is_finite()) {
+        return Err("cannot convert matte colour to finite document samples".into());
+    }
+    Ok(rgb.map(|v| v.clamp(0.0, 1.0)))
+}
+
+fn indexed_matte_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    let Some(doc) = app.session.active().map(|state| state.doc.as_ref()) else { return };
+    for (key, color) in [(INDEXED_MATTE_FOREGROUND, app.session.tools.foreground), (INDEXED_MATTE_BACKGROUND, app.session.tools.background)] {
+        match indexed_matte_document_color(app, doc, color) {
+            Ok(rgb) => {
+                fields.insert(key.into(), json!(crate::color_picker_ui::hex(rgb)));
+            }
+            Err(error) => {
+                fields.insert(INDEXED_MATTE_COLOR_ERROR.into(), json!(error));
+            }
+        }
+    }
+}
+
+fn indexed_matte_seed(fields: &Map<String, Value>, value: &str) -> Option<[f32; 3]> {
+    match value {
+        "foreground" => fields.get(INDEXED_MATTE_FOREGROUND).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex),
+        "background" => fields.get(INDEXED_MATTE_BACKGROUND).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex),
+        "black" => Some([0.0; 3]),
+        "gray" => Some([128.0 / 255.0; 3]),
+        "netscapeGray" => Some([192.0 / 255.0; 3]),
+        "none" | "white" => Some([1.0; 3]),
+        _ => crate::color_picker_ui::parse_hex(value),
+    }
+}
+
+fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    let value = fields.get("matte").and_then(Value::as_str).unwrap_or("none");
+    let mut choice = if value.starts_with('#') { "custom" } else { value };
+    let color = indexed_matte_seed(fields, value);
+    let mut changed = false;
+    let mut pick = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Matte")).color(Tokens::get(ui.ctx()).text_dim));
+        changed = crate::widgets::dropdown(
+            ui,
+            "indexed-matte",
+            "Matte",
+            &mut choice,
+            &[
+                ("none", "None"),
+                ("foreground", "Foreground Color"),
+                ("background", "Background Color"),
+                ("white", "White"),
+                ("black", "Black"),
+                ("gray", "50% Gray"),
+                ("netscapeGray", tl!("Netscape Gray")),
+                ("custom", "Other…"),
+            ],
+            170.0,
+        );
+        if choice == "custom"
+            && let Some(color) = color
+        {
+            let bytes = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            pick = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), tl!("Matte")).clicked();
+        }
+    });
+    if color.is_none()
+        && let Some(error) = fields.get(INDEXED_MATTE_COLOR_ERROR).and_then(Value::as_str)
+    {
+        ui.colored_label(Tokens::get(ui.ctx()).danger, error);
+    }
+    let custom = choice == "custom";
+    if changed {
+        if custom && let Some(color) = color {
+            // Keep the previous matte until the picker confirms; the picker uses this only as
+            // its initial document-encoded colour when switching from a named matte or None.
+            fields.insert("__pickColorDefault".into(), json!(crate::color_picker_ui::hex(color)));
+        } else if !custom {
+            fields.insert("matte".into(), json!(choice.to_owned()));
+        }
+    }
+    if custom && color.is_some() && (changed || pick) {
+        crate::color_picker_ui::request_field(fields, "matte", &crate::color_picker_ui::title_for("Matte"));
+    }
+}
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
@@ -822,6 +983,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::select_mask_view::controls(ui, f);
     }
     for p in parse_spec(&spec) {
+        if cmd == "image.mode.indexedColor" && p.key == "matte" {
+            indexed_matte_row(ui, f);
+            continue;
+        }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
             if p.key == "centerX" {
                 zoom_center::row(ui, f);
@@ -1000,9 +1165,21 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         // PhotoCraft's Color Picker, as everywhere else (#2144).
                         clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), &name).clicked();
                         if eyedropper {
+                            // Photoshop's three eyedroppers (#6280), right to left here: Subtract
+                            // from Sample, Add to Sample, Eyedropper. Clicking the chosen one again
+                            // puts it away.
                             let armed = f.get(COLOR_EYEDROPPER).and_then(Value::as_bool).unwrap_or(false);
-                            if crate::icons::button(ui, "pipette", 24.0, armed, "Pick Color From Image").clicked() {
-                                f.insert(COLOR_EYEDROPPER.into(), json!(!armed));
+                            let tool = f.get("__tool").and_then(Value::as_str).unwrap_or("sample").to_string();
+                            for (id, badge, label) in [
+                                ("subtract", "−", tl!("Subtract from Sample")),
+                                ("add", "+", tl!("Add to Sample")),
+                                ("sample", "", tl!("Pick Color From Image")),
+                            ] {
+                                let on = armed && tool == id;
+                                if crate::color_range_ui::eyedropper(ui, badge, on, label).clicked() {
+                                    f.insert(COLOR_EYEDROPPER.into(), json!(!on));
+                                    f.insert("__tool".into(), json!(id));
+                                }
                             }
                         }
                         ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
@@ -1094,7 +1271,7 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields:
         fields.insert("mapPath".into(), json!(path));
         app.refocus(doc)?;
         let (cmd, params) = crate::smart_ui::confirm_command(app, &fields, command, params_of(&fields))?;
-        let result = app.run(&cmd, params);
+        let result = crate::actions::run_step_dialog(app, &fields, &cmd, params);
         if result.is_ok() {
             remember(app, &cmd, &fields);
             let _ = crate::actions::resume(app, &fields);
@@ -1128,6 +1305,7 @@ pub fn preview_document_with(
         photocraft_engine::channel_cmds::ChannelTarget::Composite,
         &[],
         &ColorSettings::default(),
+        None,
     )
 }
 
@@ -1135,6 +1313,8 @@ pub fn preview_document_with(
 /// `documents` are the open documents in session order: document params (Match Color's Source,
 /// Displace's map) index into them. `color` is the app's Edit › Color Settings: Assign and Convert
 /// to Profile's `working` is the working space chosen there, not the built-in default.
+/// `tool_colors` carries the caller's working-space foreground/background values; standalone
+/// previews without a session use the engine's default tool colors.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preview_document_for_target(
     doc: &Document,
@@ -1146,6 +1326,7 @@ pub(crate) fn preview_document_for_target(
     target: photocraft_engine::channel_cmds::ChannelTarget,
     documents: &[Arc<Document>],
     color: &ColorSettings,
+    tool_colors: Option<([f32; 4], [f32; 4])>,
 ) -> Option<Document> {
     if command == crate::select_mask_view::COMMAND {
         return crate::select_mask_view::preview_document(doc, active, params, k, cancel);
@@ -1181,6 +1362,10 @@ pub(crate) fn preview_document_for_target(
     }
     let mut s = photocraft_engine::Session::new();
     s.color.settings = color.clone();
+    if let Some((foreground, background)) = tool_colors {
+        s.tools.foreground = foreground;
+        s.tools.background = background;
+    }
     s.set_inline_job_ctx(cancel.cloned());
     let doc_id = proxy.id;
     s.add_document(proxy, None);
@@ -1323,11 +1508,12 @@ pub struct FilterPreviewKey {
     pub command: String,
     pub params: Value,
     pub k: u32,
+    pub tool_colors: ([f32; 4], [f32; 4]),
 }
 
 impl FilterPreviewKey {
     /// Everything except the parameters: same dialog, document, revision, layer, channel target,
-    /// command and proxy factor.
+    /// command, proxy factor and tool colors.
     ///
     /// The canvas shows whatever this preview was computed for, so a result whose parameters are
     /// a few frames old still belongs on screen while a slider is moving; matching on everything
@@ -1335,15 +1521,117 @@ impl FilterPreviewKey {
     /// parameters moved on. A reopened dialog has a new id, a different command or a different
     /// document, and a committed document a new revision, so neither survives this test.
     pub fn same_target(&self, other: &Self) -> bool {
+        self.k == other.k && self.same_target_at_any_scale(other)
+    }
+
+    /// [`Self::same_target`] at any proxy factor: whether the canvas may keep showing this frame,
+    /// drawn at its own `k`, while the factor moves under a drag. A parameter can set the factor
+    /// (Minimum and Maximum's radius, Mosaic's cell size, #10474), and the frame for the old one is
+    /// still the closest thing to the result until the new one lands.
+    pub fn same_target_at_any_scale(&self, other: &Self) -> bool {
         self.doc == other.doc
             && self.revision == other.revision
             && self.dialog == other.dialog
             && self.active == other.active
             && self.target == other.target
             && self.command == other.command
-            && self.k == other.k
+            && self.tool_colors == other.tool_colors
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod multi_channel_dialog_tests {
+    use super::*;
+    #[test]
+    fn filter_mask_dialog_keeps_its_target_when_color_channels_change() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":32,"height":24,"mode":"lab","depth":16})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius":2})).unwrap();
+        app.run("paint.stroke", json!({"points":[[8,0],[8,23]],"size":8,"hardness":1,"color":"#000000","target":"filterMask"})).unwrap();
+        app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        app.run("view.layerMask", json!({"mode":"gray","mask":"filter"})).unwrap();
+        let command = "filter.blur.gaussianBlur";
+        let id = open(&mut app, command).unwrap();
+        let params = params_of(&app.ui.dialog_mut(id).unwrap().fields);
+        assert_eq!(params["target"], "filterMask");
+        app.run("channel.target", json!({"channel":"composite"})).unwrap();
+        let st = app.session.active().unwrap();
+        let layer = st.active_layer.unwrap();
+        let preview = preview_document(&st.doc, Some(layer), command, &params, 1).unwrap();
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        let mask = |doc: &Document| match &doc.layer(layer).unwrap().content {
+            photocraft_doc::LayerContent::Smart(sm) => sm.filter_mask.clone(),
+            _ => panic!("expected a smart object"),
+        };
+        assert_eq!(mask(&app.session.active().unwrap().doc), mask(&preview));
+    }
+    #[test]
+    fn mask_view_dialogs_capture_the_mask_for_preview_and_confirmation() {
+        for mode in ["rgb", "cmyk", "lab"] {
+            for depth in [8, 16, 32] {
+                for command in ["image.adjustments.levels", "image.adjustments.curves", "filter.blur.gaussianBlur"] {
+                    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                    app.run("file.new", json!({"width":32,"height":24,"mode":mode,"depth":depth})).unwrap();
+                    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+                    app.session
+                        .edit("Mask edge", |doc, id| {
+                            doc.layer_mut(id.unwrap()).unwrap().mask.as_mut().unwrap().surface.fill_rect(photocraft_geom::Rect::new(0, 0, 16, 24), &[0.25]);
+                            Ok(())
+                        })
+                        .unwrap();
+                    app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+                    app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
+                    let id = if command.starts_with("image.") { crate::adjust_dialog::open(&mut app, command) } else { open(&mut app, command) }.unwrap();
+                    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+                    let (key, value) = match command {
+                        "image.adjustments.levels" => ("gamma", json!(1.4)),
+                        "image.adjustments.curves" => ("points", json!([[0, 0], [100, 160], [255, 255]])),
+                        _ => ("radius", json!(2)),
+                    };
+                    fields.insert(key.into(), value);
+                    let params = params_of(fields);
+                    assert_eq!(params["target"], json!("mask"));
+                    app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
+                    let st = app.session.active().unwrap();
+                    let layer = st.active_layer.unwrap();
+                    let before = st.doc.layer(layer).unwrap().clone();
+                    let preview = preview_document(&st.doc, Some(layer), command, &params, 1).unwrap();
+                    let shown = preview.layer(layer).unwrap();
+                    assert_eq!(shown.surface(), before.surface());
+                    assert_ne!(shown.mask.as_ref().unwrap().surface, before.mask.as_ref().unwrap().surface);
+                    crate::dialogs::confirm(&mut app, id).unwrap();
+                    let actual = app.session.active().unwrap().doc.layer(layer).unwrap();
+                    assert_eq!(actual.surface(), before.surface());
+                    assert_eq!(actual.mask.as_ref().unwrap().surface, shown.mask.as_ref().unwrap().surface);
+                }
+            }
+        }
+    }
+    #[test]
+    fn ordinary_filter_captures_the_set_and_preview_equals_confirmation() {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":32,"height":24,"depth":16})).unwrap();
+        session
+            .edit("edge", |doc, id| {
+                doc.layer_mut(id.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 16, 24), &[0.2, 0.4, 0.6, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        session.execute("channel.target", json!({"colors":[0,2]})).unwrap();
+        let mut app = PhotocraftApp::new(session, Default::default());
+        let command = "filter.blur.gaussianBlur";
+        let id = open(&mut app, command).unwrap();
+        let params = params_of(&app.ui.dialog_mut(id).unwrap().fields);
+        assert_eq!(params["target"], json!({"colors":[0,2]}));
+        app.session.execute("channel.target", json!({"channel":"green"})).unwrap();
+        let st = app.session.active().unwrap();
+        let layer = st.active_layer.unwrap();
+        let preview = preview_document(&st.doc, Some(layer), command, &params, 1).unwrap();
+        app.session.execute(command, params).unwrap();
+        assert_eq!(preview.layer(layer).unwrap().surface(), app.session.active().unwrap().doc.layer(layer).unwrap().surface());
+    }
+}

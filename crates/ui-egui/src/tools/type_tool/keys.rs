@@ -255,7 +255,11 @@ fn handle_pressed_key(
             insert(app, "\t");
         }
         Key::Escape if crate::type_transform::active(app) => crate::type_transform::cancel_drag(app),
-        Key::Escape if edit.edit.mask => cancel(app),
+        // A Type Mask commits on Escape as on ⌘↩, whatever "Use ESC to commit" says; the options bar's
+        // Cancel still throws it away (#12070). Escape on an empty mask text, or while an input
+        // method is composing, was not measured and still cancels.
+        Key::Escape if edit.edit.mask && (edit.text.is_empty() || edit.edit.preedit.is_some()) => cancel(app),
+        Key::Escape if edit.edit.mask => commit(app),
         Key::Escape if app.session.prefs().type_.use_esc_to_commit => commit(app),
         Key::Escape => cancel(app),
         Key::A if modifiers.command => {
