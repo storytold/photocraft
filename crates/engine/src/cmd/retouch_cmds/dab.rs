@@ -691,3 +691,7 @@ impl LiveDab {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "dodge_refuses_indexed_tests.rs"]
+mod dodge_refuses_indexed_tests;
