@@ -74,6 +74,7 @@ pub(crate) fn prepare(doc: &mut Document, txt2: Option<&photocraft_text::engine_
     }
     let dpi = doc.resolution_dpi;
     let format = doc.pixel_format();
-    let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+    // Tracked: an Open on a background job renders type here, and the panels skip font reads meanwhile.
+    let mut eng = photocraft_text::lock_shared();
     visit(&mut doc.layers, &mut eng, dpi, format, txt2);
 }
