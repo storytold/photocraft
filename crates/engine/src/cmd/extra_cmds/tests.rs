@@ -1216,3 +1216,72 @@ fn rasterize_smart_object_layer() {
     assert!(matches!(active(&s4).content, LayerContent::Raster(_)));
     assert_eq!(pixel(&s4, 30, 30), vec![1.0, 1.0, 0.0, 1.0]);
 }
+
+#[test]
+/// Compare editable Smart Average pixels to a separately executed raster command across depths, native reopen and
+/// undo.
+fn native_average_smart_filter_matches_raster_undo_and_persistence() {
+    for depth in [8, 16, 32] {
+        let mut raster = session(depth);
+        paint_square(&mut raster, Rect::new(0, 0, 20, 30), [1., 0., 0., 0.5]);
+        paint_square(&mut raster, Rect::new(20, 0, 40, 30), [0., 0., 1., 1.]);
+        let raster_before = doc(&raster).clone();
+        let mut smart = session(depth);
+        paint_square(&mut smart, Rect::new(0, 0, 20, 30), [1., 0., 0., 0.5]);
+        paint_square(&mut smart, Rect::new(20, 0, 40, 30), [0., 0., 1., 1.]);
+        smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let before = doc(&smart).clone();
+        smart.execute("filter.blur.average", json!({})).unwrap();
+        raster.execute("filter.blur.average", json!({})).unwrap();
+        let LayerContent::Smart(object) = &active(&smart).content else { panic!("ordinary native Smart") };
+        assert_eq!(object.smart_filters[0].command, "filter.blur.average");
+        let expected = active(&raster).surface().unwrap().read_region(doc(&raster).bounds());
+        assert_eq!(object.cache.as_ref().unwrap().read_region(doc(&smart).bounds()), expected);
+        let raster_bytes = photocraft_format::save_to_bytes(doc(&raster), &Default::default()).unwrap();
+        let raster_reopened = photocraft_format::load_from_bytes(&raster_bytes).unwrap();
+        assert_eq!(raster_reopened.layer(active(&raster).id).unwrap().surface().unwrap().read_region(raster_reopened.bounds()), expected);
+        let bytes = photocraft_format::save_to_bytes(doc(&smart), &Default::default()).unwrap();
+        let mut reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+        let id = active(&smart).id;
+        if let LayerContent::Smart(object) = &mut reopened.layer_mut(id).unwrap().content {
+            object.cache = None;
+        }
+        Session::new().prepare_imported_document(&mut reopened, &crate::jobs::JobCtx::new()).unwrap();
+        let LayerContent::Smart(object) = &reopened.layer(id).unwrap().content else { panic!() };
+        assert_eq!(object.cache.as_ref().unwrap().read_region(reopened.bounds()), expected);
+        smart.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(doc(&smart), &before);
+        raster.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(doc(&raster), &raster_before);
+    }
+}
+
+#[test]
+fn average_feathered_selection_preserves_coverage_and_includes_hidden_color() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_raster::Surface;
+
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        s.edit("hidden color and feathered selection", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surf.write_pixel(0, 0, &[1., 0., 0., 0.]);
+            surf.write_pixel(1, 0, &[0., 0., 1., 1.]);
+            let mut mask = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+            mask.write_pixel(0, 0, &[0.5]);
+            mask.write_pixel(1, 0, &[1.]);
+            doc.selection = Some(mask);
+            Ok(())
+        })
+        .unwrap();
+        let before = doc(&s).clone();
+        s.execute("filter.blur.average", json!({})).unwrap();
+        let hidden = pixel(&s, 0, 0);
+        assert!((hidden[0] - 2. / 3.).abs() < 1. / 255., "{depth}: {hidden:?}");
+        assert!((hidden[2] - 1. / 3.).abs() < 1. / 255., "{depth}: {hidden:?}");
+        assert_eq!(hidden[3], 0., "{depth}: Average keeps original coverage");
+        assert_eq!(pixel(&s, 2, 0), vec![0.; 4], "{depth}: zero coverage stays untouched");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(doc(&s), &before);
+    }
+}

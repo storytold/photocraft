@@ -23,7 +23,8 @@ const LABEL: &str = "Open As Smart Object";
 pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", CMD)?.to_string();
     let name = file_name(&path);
-    let opts = crate::jobs::import_options(s.prefs());
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.historical_xcf_sample_order = super::historical_xcf_sample_order(p, CMD)?;
     // An interactive caller (the app) asks before opening a PSD that had damaged data, as File > Open does.
     let confirm_damage = p.get("confirmDamage").and_then(Value::as_bool).unwrap_or(false);
     crate::jobs::run(
@@ -35,14 +36,29 @@ pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> 
             let bytes = read_file(&path)?;
             ctx.check()?;
             ctx.progress(0.05, "Decoding");
-            let (r, damaged) = import_result_for_open(&name, &bytes, &opts)?;
+            let (mut r, damaged) = import_result_for_open(&name, &bytes, &opts)?;
+            ctx.check()?;
+            crate::import_prepare::prepare_imported_document(&mut r.document, ctx)?;
+            let normalize = if opts.historical_xcf_sample_order.is_some() {
+                ctx.stage(0.6, 0.7, "Checking historical sample order", |ctl| photocraft_io::historical_xcf_sample_order_request_with(&name, &bytes, ctl))
+                    .map_err(|e| crate::error::io_open_error(&name, e))?
+                    .is_some()
+            } else {
+                false
+            };
+            let source = if normalize {
+                crate::allocation::checkpoint("normalizing historical placed contents")?;
+                (format!("{}.pcraft", stem(&name)), Arc::new(crate::smart_cmds::encode_source(&r.document)?))
+            } else {
+                (name.clone(), Arc::new(bytes))
+            };
             ctx.check()?;
             ctx.progress(0.9, "Flattening");
             // The file as one image: the smart object's rendered contents.
             let pixels = flattened_checked(&r.document, r.document.pixel_format(), CMD)?;
-            Ok((path, name, Arc::new(bytes), r, pixels, confirm_damage && damaged))
+            Ok((path, name, source, r, pixels, confirm_damage && damaged))
         },
-        |s, (path, name, bytes, r, pixels, damaged)| apply(s, &path, &name, bytes, r, pixels, damaged),
+        |s, (path, name, source, r, pixels, damaged)| apply(s, &path, &name, source, r, pixels, damaged),
     )
 }
 
@@ -50,7 +66,7 @@ fn apply(
     s: &mut Session,
     path: &str,
     file: &str,
-    bytes: Arc<Vec<u8>>,
+    source: (String, Arc<Vec<u8>>),
     r: photocraft_io::ImportResult,
     pixels: photocraft_raster::Surface,
     damaged: bool,
@@ -70,7 +86,7 @@ fn apply(
     doc.duotone = src.duotone.clone();
 
     // Embedded (not linked): the original file name keeps its extension, so Edit Contents opens it.
-    let source = SmartSource::Embedded { file_name: file.to_string(), bytes };
+    let source = SmartSource::Embedded { file_name: source.0, bytes: source.1 };
     let so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
     let layer = Layer::new(layer_name, LayerContent::Smart(so));
     let layer_id = layer.id;
@@ -81,7 +97,7 @@ fn apply(
     let raw = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
     let question = s.color.open_question(&doc).filter(|_| !raw);
     if damaged || question.is_some() {
-        let held = s.hold_open(doc, false);
+        let held = s.hold_open(doc, false, None);
         return Ok(json!({"held": held, "name": name, "warnings": warnings, "color": question, "damaged": damaged, "smartObject": true}));
     }
     let color = s.color.open_policy(&mut doc, s.prefs().file_handling.ignore_exif_profile_tag);
