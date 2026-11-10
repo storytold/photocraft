@@ -2594,6 +2594,151 @@ fn layers_to_files_reports_skipped_layers_without_changing_files() {
     }
 }
 
+/// `groups: "layers"` walks into a group and writes each visible leaf as its own file.
+#[test]
+fn layers_to_files_exports_group_children_as_loose_files() {
+    let dir = tmp("layers-groups");
+    let mut s = session(8, 8, 8);
+    s.edit("Group", |doc, _| {
+        let fmt = doc.pixel_format();
+        let child = |name: &str| photocraft_doc::Layer::new(name, photocraft_doc::LayerContent::Raster(photocraft_doc::Surface::new(fmt)));
+        let sub = photocraft_doc::Layer::new(
+            "sub",
+            photocraft_doc::LayerContent::Group(photocraft_doc::Group { children: vec![child("c")], expanded: true, artboard: None, frame_stroke: None }),
+        );
+        doc.layers.push(photocraft_doc::Layer::new(
+            "expanded",
+            photocraft_doc::LayerContent::Group(photocraft_doc::Group {
+                children: vec![child("a"), child("b"), sub],
+                expanded: true,
+                artboard: None,
+                frame_stroke: None,
+            }),
+        ));
+        Ok(())
+    })
+    .unwrap();
+    let files = |r: &Value| -> Vec<String> { r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect() };
+
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "loose", "groups": "layers"})).unwrap();
+    assert_eq!(
+        files(&r),
+        vec![join(&dir, "loose_0000_c.png"), join(&dir, "loose_0001_b.png"), join(&dir, "loose_0002_a.png"), join(&dir, "loose_0003_Background.png")]
+    );
+    assert!(files(&r).iter().all(|f| std::path::Path::new(f).is_file()));
+
+    // The default still merges the group into one file.
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "merged"})).unwrap();
+    assert_eq!(files(&r), vec![join(&dir, "merged_0000_expanded.png"), join(&dir, "merged_0001_Background.png")]);
+
+    // naming: "layer" writes the bare layer names instead of prefix_index_name.
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": "layers", "naming": "layer"})).unwrap();
+    assert_eq!(files(&r), vec![join(&dir, "c.png"), join(&dir, "b.png"), join(&dir, "a.png"), join(&dir, "Background.png")]);
+
+    // A hidden child is skipped with visibleOnly and exported without it.
+    s.edit("Hide b", |doc, _| {
+        let group = doc.layers.last_mut().ok_or_else(|| EngineError::Other("no group".into()))?;
+        let LayerContent::Group(g) = &mut group.content else { return Err(EngineError::Other("not a group".into())) };
+        g.children[1].visible = false;
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "visible", "groups": "layers"})).unwrap();
+    assert_eq!(files(&r), vec![join(&dir, "visible_0000_c.png"), join(&dir, "visible_0001_a.png"), join(&dir, "visible_0002_Background.png")]);
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "all", "groups": "layers", "visibleOnly": false})).unwrap();
+    assert_eq!(
+        files(&r),
+        vec![join(&dir, "all_0000_c.png"), join(&dir, "all_0001_b.png"), join(&dir, "all_0002_a.png"), join(&dir, "all_0003_Background.png")]
+    );
+
+    // An unknown mode is rejected instead of silently merging.
+    assert!(s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": "folders"})).is_err());
+}
+
+/// Layer naming folds case (including Unicode, as Windows destinations do) and
+/// present-but-wrong-typed modes are rejected rather than silently taking the default. The
+/// advertised `groups: "single"` and `naming: "index"` names are accepted as the defaults.
+#[test]
+fn layers_to_files_folds_name_collisions_and_rejects_untyped_modes() {
+    let dir = tmp("layers-names");
+    // Canonically equivalent Hangul: composed syllables and their decomposed Jamo.
+    let composed = "한글";
+    let decomposed = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}";
+    let mut s = session(8, 8, 8);
+    s.edit("Names", |doc, _| {
+        let fmt = doc.pixel_format();
+        let child = |name: &str| photocraft_doc::Layer::new(name, photocraft_doc::LayerContent::Raster(photocraft_doc::Surface::new(fmt)));
+        doc.layers.push(photocraft_doc::Layer::new(
+            "Names",
+            photocraft_doc::LayerContent::Group(photocraft_doc::Group {
+                children: vec![child("Logo"), child("logo"), child("É"), child("é"), child(composed), child(decomposed)],
+                expanded: true,
+                artboard: None,
+                frame_stroke: None,
+            }),
+        ));
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": "layers", "naming": "layer"})).unwrap();
+    let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!(
+        files,
+        vec![
+            join(&dir, &format!("{decomposed}.png")),
+            join(&dir, &format!("{composed}-2.png")),
+            join(&dir, "é.png"),
+            join(&dir, "É-2.png"),
+            join(&dir, "logo.png"),
+            join(&dir, "Logo-2.png"),
+            join(&dir, "Background.png"),
+        ],
+        "layer order is top to bottom, and Logo/logo, É/é and composed/decomposed Hangul must not overwrite each other"
+    );
+
+    // The advertised default names are aliases for merged/numbered.
+    let merged = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "alias", "groups": "single", "naming": "index"})).unwrap();
+    let alias_files: Vec<String> = merged["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!(alias_files, vec![join(&dir, "alias_0000_Names.png"), join(&dir, "alias_0001_Background.png")]);
+
+    // Both modes are case-insensitive, like naming.
+    let upper = s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": "LAYERS", "naming": "Layer"})).unwrap();
+    let upper_files: Vec<String> = upper["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!(upper_files, files, "groups and naming match case-insensitively");
+    assert!(s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": 3})).is_err(), "groups must be a string");
+    assert!(s.execute("file.export.layersToFiles", json!({"dir": dir, "naming": true})).is_err(), "naming must be a string");
+}
+
+/// A hidden group with `groups: "layers"` reports its descendants as hidden rather than dropping
+/// them from the report.
+#[test]
+fn layers_to_files_reports_hidden_group_descendants() {
+    let mut s = session(8, 8, 8);
+    s.edit("Hidden", |doc, _| {
+        doc.layers.clear();
+        let fmt = doc.pixel_format();
+        let child = |name: &str| photocraft_doc::Layer::new(name, photocraft_doc::LayerContent::Raster(photocraft_doc::Surface::new(fmt)));
+        let mut group = photocraft_doc::Layer::new(
+            "G",
+            photocraft_doc::LayerContent::Group(photocraft_doc::Group {
+                children: vec![child("a"), child("b")],
+                expanded: true,
+                artboard: None,
+                frame_stroke: None,
+            }),
+        );
+        group.visible = false;
+        doc.layers.push(group);
+        Ok(())
+    })
+    .unwrap();
+    let report = export_layers_report_with(&s, &json!({"groups": "layers"}), |_, _| panic!("nothing may be written")).unwrap();
+    assert!(report.files.is_empty(), "a hidden group exports nothing");
+    let names: Vec<&str> = report.skipped.iter().map(|skipped| skipped.name.as_str()).collect();
+    assert_eq!(names, vec!["G", "b", "a"], "the group and every descendant are reported");
+    assert!(report.skipped.iter().all(|skipped| skipped.reason == "hidden by visibleOnly"));
+}
+
 #[test]
 fn layers_to_files_reports_groups_as_exports_and_failures_as_errors() {
     let mut s = session(4, 4, 8);

@@ -1,6 +1,7 @@
 use super::paths::{join, sanitize, stem, write_file};
 use super::save::{SaveOpts, encode};
 use super::{ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Rect, Result, Session, Surface, Value, from_rgba_into, json, str_param};
+use unicode_normalization::UnicodeNormalization;
 
 // ---------- Export ----------
 
@@ -20,7 +21,7 @@ pub fn export_layers_with(s: &Session, p: &Value, write: impl FnMut(&str, &[u8])
     export_layers_report_with(s, p, write).map(|report| report.files)
 }
 
-/// A top-level layer omitted from a successful Layers to Files export.
+/// A layer omitted from a successful Layers to Files export.
 #[derive(Debug, serde::Serialize)]
 pub struct SkippedExportLayer {
     /// Session layer id (names need not be unique).
@@ -38,14 +39,86 @@ pub struct LayerExportReport {
     pub skipped: Vec<SkippedExportLayer>,
 }
 
-/// The same export as [`export_layers_with`], with an explanation for every omitted top-level
-/// layer. Groups export merged, so their children are not separate exports or skips. Encoding
-/// and write failures remain errors, never successful skips. Existing numbering is preserved.
+/// One layer the export will write or explain, in top-to-bottom order.
+enum Planned<'a> {
+    Export(&'a Layer),
+    Skip(&'a Layer, &'static str),
+    Hidden(&'a Layer),
+}
+
+/// Flattens a layer (and, with `split_groups`, its group descendants) into export entries.
+fn plan_layer<'a>(layer: &'a Layer, split_groups: bool, visible_only: bool, plan: &mut Vec<Planned<'a>>) {
+    if !layer.visible && visible_only {
+        plan.push(Planned::Hidden(layer));
+        // A hidden group stops traversal, but its descendants are still omitted: report them so
+        // the export explains every layer it did not write.
+        if split_groups && let LayerContent::Group(group) = &layer.content {
+            for child in group.children.iter().rev() {
+                plan_hidden(child, plan);
+            }
+        }
+        return;
+    }
+    if let LayerContent::Group(group) = &layer.content
+        && split_groups
+    {
+        for child in group.children.iter().rev() {
+            plan_layer(child, split_groups, visible_only, plan);
+        }
+        return;
+    }
+    if matches!(layer.content, LayerContent::Adjustment(_)) {
+        plan.push(Planned::Skip(layer, "adjustment layer has no pixels of its own"));
+    } else {
+        plan.push(Planned::Export(layer));
+    }
+}
+
+/// Reports a hidden layer and every descendant as hidden, without exporting any of them.
+fn plan_hidden<'a>(layer: &'a Layer, plan: &mut Vec<Planned<'a>>) {
+    plan.push(Planned::Hidden(layer));
+    if let LayerContent::Group(group) = &layer.content {
+        for child in group.children.iter().rev() {
+            plan_hidden(child, plan);
+        }
+    }
+}
+
+/// The same export as [`export_layers_with`], with an explanation for every omitted layer.
+///
+/// `groups` chooses what a group produces: `"merged"` (the default) exports the group as one
+/// file, as before; `"layers"` walks into the group and exports each visible layer inside it as
+/// its own file (top to bottom), so no group is a file of its own. Encoding and write failures
+/// remain errors, never successful skips. Existing numbering is preserved.
 pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<LayerExportReport> {
     let cmd = "file.export.layersToFiles";
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let trim = p.get("trim").and_then(Value::as_bool).unwrap_or(false);
     let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
+    let split_groups = match p.get("groups") {
+        None => false,
+        Some(Value::String(value)) => match value.to_ascii_lowercase().as_str() {
+            // `single` is the name earlier docs used for the same non-splitting mode.
+            "merged" | "single" => false,
+            "layers" => true,
+            other => {
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("groups must be \"merged\", \"single\" or \"layers\", not {other:?}") });
+            }
+        },
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "groups must be a string: \"merged\", \"single\" or \"layers\"".into() }),
+    };
+    let layer_names = match p.get("naming") {
+        None => false,
+        Some(Value::String(value)) => match value.to_ascii_lowercase().as_str() {
+            // `index` is the name earlier docs used for the numbered mode.
+            "numbered" | "index" => false,
+            "layer" => true,
+            other => {
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("naming must be \"numbered\", \"index\" or \"layer\", not {other:?}") });
+            }
+        },
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "naming must be a string: \"numbered\", \"index\" or \"layer\"".into() }),
+    };
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate
     // into `encode`, so a PSD embeds no file a linked smart object names.
     let _authorization = crate::jobs::render_authorization_scope(s.authorize);
@@ -53,48 +126,73 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
+    let mut plan = Vec::new();
+    for l in doc.layers.iter().rev() {
+        plan_layer(l, split_groups, visible_only, &mut plan);
+    }
     let mut report = LayerExportReport::default();
+    let mut used = std::collections::HashSet::new();
+    // One layer-free template: each file only puts its own layer back, instead of cloning every
+    // other layer's pixel tree per file.
+    let mut template = (*doc).clone();
+    template.layers.clear();
     // Hidden layers never consumed a filename index; adjustments that pass the visibility
     // filter did. Keep those filenames stable while reporting both kinds of omission.
     let mut i = 0usize;
-    for l in doc.layers.iter().rev() {
-        if !l.visible && visible_only {
-            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
-            continue;
-        }
-        let index = i;
-        i += 1;
-        if matches!(l.content, LayerContent::Adjustment(_)) {
-            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "adjustment layer has no pixels of its own" });
-            continue;
-        }
-        let mut one = (*doc).clone();
-        let mut only = l.clone();
-        only.visible = true;
-        only.clipped = false;
-        one.layers = vec![only];
-        if trim {
-            let mut bounds = Rect::EMPTY;
-            let _ = photocraft_compose::render_bands(&one, one.bounds(), 0, |band| -> std::result::Result<(), ()> {
-                let width = band.rect.width() as usize;
-                for (i, rgba) in band.px.iter().enumerate() {
-                    if rgba[3] > 0.0 && width > 0 {
-                        let x = band.rect.x0 + (i % width) as i32;
-                        let y = band.rect.y0 + (i / width) as i32;
-                        bounds = bounds.union(&Rect::new(x, y, x + 1, y + 1));
+    for entry in plan {
+        match entry {
+            Planned::Hidden(l) => report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" }),
+            Planned::Skip(l, reason) => {
+                i += 1;
+                report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason });
+            }
+            Planned::Export(l) => {
+                let index = i;
+                i += 1;
+                let mut one = template.clone();
+                let mut only = l.clone();
+                only.visible = true;
+                only.clipped = false;
+                one.layers = vec![only];
+                if trim {
+                    let mut bounds = Rect::EMPTY;
+                    let _ = photocraft_compose::render_bands(&one, one.bounds(), 0, |band| -> std::result::Result<(), ()> {
+                        let width = band.rect.width() as usize;
+                        for (i, rgba) in band.px.iter().enumerate() {
+                            if rgba[3] > 0.0 && width > 0 {
+                                let x = band.rect.x0 + (i % width) as i32;
+                                let y = band.rect.y0 + (i / width) as i32;
+                                bounds = bounds.union(&Rect::new(x, y, x + 1, y + 1));
+                            }
+                        }
+                        Ok(())
+                    });
+                    if !bounds.is_empty() && bounds != one.bounds() {
+                        crate::image_cmds::crop_doc(&mut one, cmd, bounds, true, [0.0; 4])?;
                     }
                 }
-                Ok(())
-            });
-            if !bounds.is_empty() && bounds != one.bounds() {
-                crate::image_cmds::crop_doc(&mut one, cmd, bounds, true, [0.0; 4])?;
+
+                let name = if layer_names {
+                    let base = sanitize(&l.name);
+                    let mut name = format!("{base}.{format}");
+                    let mut n = 2;
+                    // Destinations are case-insensitive on Windows, and Unicode case folding
+                    // (É/é) and canonical equivalence (composed/decomposed Hangul) matter as much
+                    // as ASCII: `Logo.png` and `logo.png` would overwrite each other. Fold the
+                    // canonical form, then lowercase; the exported name is unchanged.
+                    while !used.insert(name.nfc().collect::<String>().to_lowercase()) {
+                        name = format!("{base}-{n}.{format}");
+                        n += 1;
+                    }
+                    name
+                } else {
+                    format!("{}_{:04}_{}.{format}", sanitize(&prefix), index, sanitize(&l.name))
+                };
+                let (bytes, _warnings) = encode(&one, &name, save)?;
+                write(&name, &bytes)?;
+                report.files.push(name);
             }
         }
-
-        let name = format!("{}_{:04}_{}.{format}", sanitize(&prefix), index, sanitize(&l.name));
-        let (bytes, _warnings) = encode(&one, &name, save)?;
-        write(&name, &bytes)?;
-        report.files.push(name);
     }
     Ok(report)
 }
