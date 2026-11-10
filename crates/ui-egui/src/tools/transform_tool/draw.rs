@@ -628,3 +628,7 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
         }
     }
 }
+
+#[cfg(test)]
+#[path = "warp_handles_visible_tests.rs"]
+mod warp_handles_visible_tests;
