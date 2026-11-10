@@ -49,6 +49,7 @@ struct Gpu {
     comp: photocraft_gpu::Compositor,
 }
 
+/// Request the app's GPU limits, retaining adapter identity for reports; absence selects the CPU canvas.
 fn gpu() -> Option<Gpu> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter =
@@ -416,6 +417,7 @@ fn write_report(b: &Bench, args: &[String], w: u32, h: u32) {
     std::fs::write(&out, serde_json::to_string_pretty(&report).unwrap()).expect("write json");
 }
 
+/// Run the selected benchmarks, handling exact `--only clipped` before unrelated fixture setup.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let (w, h) =
