@@ -76,6 +76,28 @@ fn a_hidden_or_locked_empty_layer_keeps_getting_a_new_layer() {
 }
 
 #[test]
+fn the_converted_layer_keeps_its_link_effects_and_fill_opacity() {
+    let mut s = session();
+    let top = add_layer(&mut s, "Top");
+    s.edit("layer properties", |d, _| {
+        let l = d.layer_mut(top).unwrap();
+        l.link_group = Some(7);
+        l.effects.enabled = true;
+        l.effects.reference = Some((3.0, 4.0));
+        l.fill_opacity = 0.5;
+        Ok(())
+    })
+    .unwrap();
+    s.execute(CREATE, drag()).unwrap();
+    let l = s.active().unwrap().doc.layer(top).unwrap();
+    assert!(matches!(l.content, LayerContent::Fill(_)));
+    assert_eq!(l.link_group, Some(7));
+    assert!(l.effects.enabled);
+    assert_eq!(l.effects.reference, Some((3.0, 4.0)));
+    assert_eq!(l.fill_opacity, 0.5);
+}
+
+#[test]
 fn with_a_selection_the_converted_layers_mask_is_the_selection() {
     let mut s = session();
     let top = add_layer(&mut s, "Top");
