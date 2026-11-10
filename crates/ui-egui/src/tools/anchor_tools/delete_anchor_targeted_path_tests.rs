@@ -46,6 +46,14 @@ pub(super) fn select_layer(app: &mut PhotocraftApp, id: u64) {
     app.run("layer.select", json!({"layer": id})).unwrap();
 }
 
+/// Moves `shape` into a new group and makes Red the active layer again; returns the group's id.
+pub(super) fn group_shape(app: &mut PhotocraftApp, shape: u64) -> u64 {
+    let red = app.session.active().unwrap().active_layer.unwrap();
+    let group = app.run("layer.groupLayers", json!({"layer": shape})).unwrap()["layer"].as_u64().unwrap();
+    select_layer(app, red.0);
+    group
+}
+
 #[test]
 fn a_click_on_the_corner_of_a_shape_that_is_not_active_changes_nothing() {
     let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
@@ -101,6 +109,28 @@ fn with_the_work_path_selected_a_click_on_the_active_shape_does_nothing() {
     let path = json!({"subpaths": [{"closed": true, "knots": [[50, 450], [150, 450], [150, 550], [50, 550]]}]});
     app.run("path.set", json!({"path": path})).unwrap();
     app.ui.selected_path = Some("work".into());
+    let (before, n) = (shape_path(&mut app, shape), steps(&app));
+    click(&mut app, [650.0, 250.0]);
+    assert_eq!(shape_path(&mut app, shape), before);
+    assert_eq!(steps(&app), n);
+}
+
+#[test]
+fn a_shape_inside_a_group_that_is_not_active_keeps_todays_behaviour() {
+    let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
+    group_shape(&mut app, shape);
+    let n = steps(&app);
+    click(&mut app, [650.0, 250.0]);
+    assert_eq!(shape_path(&mut app, shape)["subpaths"][0]["knots"].as_array().unwrap().len(), 3);
+    assert_eq!(steps(&app), n + 1);
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
+}
+
+#[test]
+fn a_shape_inside_a_hidden_group_is_not_edited() {
+    let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
+    let group = group_shape(&mut app, shape);
+    app.run("layer.setProps", json!({"layer": group, "visible": false})).unwrap();
     let (before, n) = (shape_path(&mut app, shape), steps(&app));
     click(&mut app, [650.0, 250.0]);
     assert_eq!(shape_path(&mut app, shape), before);

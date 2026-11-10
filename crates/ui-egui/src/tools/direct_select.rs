@@ -348,8 +348,9 @@ pub(crate) fn hit_target(app: &PhotocraftApp, p: [f64; 2], handles: bool) -> Opt
 }
 
 /// What the anchor tools edit at `p`: a hit on the targeted paths only (`active_paths`), never on
-/// a shape layer that is not active. A hidden active layer shows no path, so it is skipped
-/// (#12762, #12705); a layer inside a hidden group was not measured and keeps today's behaviour.
+/// a top-level shape layer that is not active. A hidden active layer shows no path, so it is skipped
+/// (#12762, #12705). Not measured, so as today: a layer inside a hidden group, and a shown shape layer
+/// inside a group, which stays a target without being active.
 pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     let st = app.session.active()?;
@@ -368,7 +369,21 @@ pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, P
                 .filter(|_| app.ui.pen_doc.is_none_or(|owner| Some(owner) == Some(st.doc.id)))
                 .filter(|p| !p.dragging && !p.knots.is_empty())
                 .map(|p| (PathRef::Pen, crate::vector_ui::pen_path(p)));
-            pen.into_iter().chain(active_paths(app)).collect()
+            let mut out: Vec<(PathRef, Path)> = pen.into_iter().chain(active_paths(app)).collect();
+            // Not measured (#12762, #12705): a shape layer inside a group keeps today's behaviour. Every shown,
+            // unlocked one stays a target after the targeted paths, front first, as `candidates` lists it.
+            // A top-level shape layer (depth 0) is a target only as the active layer.
+            let layers = st.doc.walk();
+            let grouped = layers.iter().rev().filter(|(at, depth, _)| *depth > 0 && st.doc.shown_at(at)).filter_map(|(_, _, l)| match &l.content {
+                photocraft_doc::LayerContent::Shape(sh) => Some((PathRef::Layer(l.id.0), sh.path.clone())),
+                _ => None,
+            });
+            for (r, path) in grouped {
+                if writable(app, &r) && !out.iter().any(|(have, _)| *have == r) {
+                    out.push((r, path));
+                }
+            }
+            out
         }
     };
     targets

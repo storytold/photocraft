@@ -1,7 +1,7 @@
 //! Add Anchor Point and Delete Anchor Point tools (P group with the Pen, #1044), as in Photoshop.
 //! They edit the targeted path only (#12762, #12705): the saved path selected in the Paths panel,
 //! the targeted vector mask or the active shape layer's path (not while that layer is hidden), or the work
-//! path. A shape layer that is not active is left alone, unlike Direct Selection.
+//! path. A top-level shape layer that is not active is left alone, unlike Direct Selection; one inside a group is still edited as before.
 //!
 //! * Add Anchor Point: hovering a segment highlights it and shows where the anchor would go; a
 //!   click inserts it there (`path.addAnchor`). A curve is split without changing its shape.
