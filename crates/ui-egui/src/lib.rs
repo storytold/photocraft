@@ -892,6 +892,9 @@ mod star_tool_tests;
 mod transform_several_tests;
 
 #[cfg(test)]
+mod transform_corner_projection_tests;
+
+#[cfg(test)]
 mod transform_selection_rules_tests;
 
 #[cfg(test)]
@@ -1041,6 +1044,8 @@ mod artboard_options_bar_tests;
 mod background_eraser_bar_angle_tests;
 #[cfg(test)]
 mod brush_opacity_minimum_tests;
+#[cfg(test)]
+mod burn_default_tip_tests;
 
 #[cfg(test)]
 mod pencil_shift_digit_opacity_tests;
