@@ -227,6 +227,12 @@ pub fn request(f: &mut Map<String, Value>, title: &str) {
 
 /// [`request`] for another `"#rrggbb"` field of the dialog: a top-level key (`vineColor`), or a
 /// JSON pointer into the fields (`/values/guidesGridAndSlices/guideColor`).
+/// The private key a dialog may set to the value it loaded into `field` (a recorded step's
+/// stand-in). OK in the Color Picker is an explicit choice, so it removes the marker.
+pub fn loaded_marker(field: &str) -> String {
+    format!("__loaded:{field}")
+}
+
 pub fn request_field(f: &mut Map<String, Value>, field: &str, title: &str) {
     f.insert(REQUEST.into(), json!({ "title": title, "field": field }));
 }
@@ -986,6 +992,7 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
         };
         let d = app.ui.dialog_mut(dialog).ok_or("the dialog this colour was for is closed")?;
         set_field(&mut d.fields, field, json!(color))?;
+        d.fields.remove(&loaded_marker(field));
         return Ok(json!({ "color": color }));
     }
     if target == "widget" {

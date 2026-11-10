@@ -28,9 +28,12 @@ pub const CONTENTS: [(&str, &str); 9] = [
     ("white", "White"),
 ];
 
-/// The colour field as `load_step` showed it for a step without `color`; while the field still
-/// equals it, `color` is left out of the params (the engine then uses the foreground itself).
-const LOADED_COLOR: &str = "__loadedColor";
+/// The marker holding the colour field as `load_step` showed it for a step without `color`; while
+/// the field still equals it, `color` is left out of the params (the engine then uses the
+/// foreground itself). OK in the Color Picker removes it.
+fn loaded_color() -> String {
+    crate::color_picker_ui::loaded_marker("color")
+}
 
 /// Params the dialog edits and remembers.
 const KEYS: [&str; 7] = ["contents", "color", "pattern", "colorAdaptation", "mode", "opacity", "preserveTransparency"];
@@ -140,17 +143,18 @@ pub fn load_step(f: &mut Map<String, Value>, step: &Value, foreground: &str, fir
         }
     }
     f.insert("contents".into(), json!(contents));
-    f.remove(LOADED_COLOR);
+    f.remove(&loaded_color());
     for (k, v) in [("mode", json!("normal")), ("opacity", json!(100.0)), ("preserveTransparency", json!(false)), ("colorAdaptation", json!(true))] {
         if !is_set(k) {
             f.insert(k.into(), v);
         }
     }
     if !is_set("color") {
-        // Shown as the foreground's hex, but not sent until the user changes it: headless
-        // playback uses the foreground itself (full precision and alpha).
+        // Shown as the foreground's hex, but not sent until the user changes it or picks a colour
+        // in the Color Picker: headless playback uses the foreground itself (full precision and
+        // alpha).
         f.insert("color".into(), json!(foreground));
-        f.insert(LOADED_COLOR.into(), json!(foreground));
+        f.insert(loaded_color(), json!(foreground));
     }
     if !is_set("pattern")
         && let Some(p) = first_pattern
@@ -187,7 +191,7 @@ fn own_params(f: &Map<String, Value>) -> Map<String, Value> {
     };
     if let Some(k) = extra
         && let Some(v) = f.get(k)
-        && !(k == "color" && f.get(LOADED_COLOR) == Some(v))
+        && !(k == "color" && f.get(&loaded_color()) == Some(v))
     {
         p.insert(k.into(), v.clone());
     }

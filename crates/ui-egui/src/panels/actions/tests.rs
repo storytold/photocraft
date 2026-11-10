@@ -3244,3 +3244,24 @@ fn fill_unedited_color_keeps_translucent_foreground() {
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert_eq!(pixel(&app), want, "OK sends what headless playback sends");
 }
+
+#[test]
+fn fill_picked_color_is_sent_even_if_it_equals_the_foreground() {
+    let pixel = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let walk = st.doc.walk();
+        walk.first().unwrap().2.surface().unwrap().pixel(12, 8)
+    };
+    let mut app = two_tone_app();
+    app.session.tools.foreground = [0.2, 0.9, 0.31, 0.5];
+    app.run("select.all", json!({})).unwrap();
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "color"})));
+    let shown = app.ui.dialog_mut(id).unwrap().fields["color"].as_str().unwrap().to_string();
+    // OK in the Color Picker on the very hex the field already shows.
+    let picker = crate::color_picker_ui::open_for_field(&mut app, "Color Picker", crate::color_picker_ui::parse_hex(&shown).unwrap(), id, "color");
+    crate::dialogs::confirm(&mut app, picker).unwrap();
+    let step = crate::fill_ui::params(&app.ui.dialog_mut(id).unwrap().fields);
+    assert_eq!(step.get("color"), Some(&json!(shown)), "a picked colour is sent: {step:?}");
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!((pixel(&app)[3] - 1.0).abs() < 1e-4, "filled with the opaque colour picked: {:?}", pixel(&app));
+}
