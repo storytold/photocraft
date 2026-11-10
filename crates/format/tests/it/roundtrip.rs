@@ -970,6 +970,12 @@ fn previews_embedded_and_readable() {
     assert!(read_thumbnail(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap().is_none());
 }
 
+fn persisted_version(bytes: &[u8]) -> u32 {
+    let r = zip::ZipReader::new(bytes).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap();
+    manifest["format_version"].as_u64().unwrap() as u32
+}
+
 /// The full-size composite is an optional manifest member: a bundle without it (every file saved
 /// before it was written) opens as before, at the same format version.
 #[test]
