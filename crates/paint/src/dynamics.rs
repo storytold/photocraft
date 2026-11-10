@@ -31,6 +31,9 @@ const MAX_AIRBRUSH_DABS_PER_SEGMENT: usize = 512;
 /// Most steps one distance-spaced segment emits: two far-apart points at a quarter-pixel spacing
 /// would otherwise be billions of steps, all buffered before the first is drawn.
 const MAX_DISTANCE_STEPS_PER_SEGMENT: usize = 1 << 20;
+/// Most steps one stroke emits in total, over all its segments and spacing modes; later ones are
+/// dropped (a real stroke is orders of magnitude shorter).
+const MAX_STEPS_PER_STROKE: u64 = 1 << 21;
 
 /// The dab centre of the pixel-grid cell holding `v` (see [`PathWalker::pixel_grid`]): the
 /// pixel's centre for `offset` 0.5, the nearest pixel corner for 0. A value within rounding
@@ -339,6 +342,9 @@ impl PathWalker {
     }
 
     fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
+        if self.step >= MAX_STEPS_PER_STROKE {
+            return;
+        }
         if let Some(g) = self.grid {
             self.cell = Some((grid_cell(point.x, g), grid_cell(point.y, g)));
         }
@@ -373,7 +379,7 @@ impl PathWalker {
                 None => {
                     if !self.grid.is_some_and(|g| self.grid_steps(&a, &p, g, out)) {
                         let mut emitted = 0usize;
-                        while self.next_at <= len + 1e-9 && emitted < MAX_DISTANCE_STEPS_PER_SEGMENT {
+                        while self.next_at <= len + 1e-9 && emitted < MAX_DISTANCE_STEPS_PER_SEGMENT && self.step < MAX_STEPS_PER_STROKE {
                             let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
                             self.emit(q, out);
                             self.next_at += step_len(&q).max(0.25);
@@ -389,7 +395,7 @@ impl PathWalker {
                     self.speed_acc += dt;
                     let max_n = (len / MIN_SPEED_STEP).ceil().max(1.0) as usize;
                     let mut n = 0;
-                    while self.speed_acc >= iv && n < max_n {
+                    while self.speed_acc >= iv && n < max_n && self.step < MAX_STEPS_PER_STROKE {
                         self.speed_acc -= iv;
                         let f = ((dt - self.speed_acc) / dt).clamp(0.0, 1.0);
                         self.emit(lerp_pt(&a, &p, f), out);
@@ -869,6 +875,27 @@ mod walker_budget_tests {
         let before = steps.get();
         walker.push(StrokePoint::new(1.0e9 + 10.0, 0.0, 1.0), &|_: &StrokePoint| 1.0, &mut count);
         assert!(steps.get() > before && steps.get() - before <= 11, "{} more steps", steps.get() - before);
+    }
+
+    #[test]
+    fn a_stroke_of_many_far_segments_stops_at_the_total_cap() {
+        let steps = std::cell::Cell::new(0u64);
+        let mut count = |_: StepInput| steps.set(steps.get() + 1);
+        let mut walker = PathWalker::new(None);
+        let quarter = |_: &StrokePoint| 0.25;
+        walker.push(StrokePoint::new(0.0, 0.0, 1.0), &quarter, &mut count);
+        for i in 1..=8 {
+            walker.push(StrokePoint::new(1.0e9 * f64::from(i), 0.0, 1.0), &quarter, &mut count);
+        }
+        assert!(steps.get() <= MAX_STEPS_PER_STROKE, "{}", steps.get());
+        // Speed spacing over absurd timestamps stops too, without iterating billions of times.
+        let mut speed = PathWalker::new(None).speed_spacing(1.0);
+        speed.push(StrokePoint::new(0.0, 0.0, 1.0), &quarter, &mut count);
+        let mut far = StrokePoint::new(1.0e9, 0.0, 1.0);
+        far.time = 1.0e12;
+        let before = steps.get();
+        speed.push(far, &quarter, &mut count);
+        assert!(steps.get() - before <= MAX_STEPS_PER_STROKE, "{}", steps.get() - before);
     }
 
     #[test]
