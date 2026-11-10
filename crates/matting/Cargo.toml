@@ -1,0 +1,31 @@
+[package]
+name = "photocraft-matting"
+description = "BiRefNet neural matting: ONNX Runtime with automatic GPU detection (DirectML/D3D12 on Windows, CPU fallback)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+photocraft-geom = { workspace = true }
+photocraft-color = { workspace = true }
+photocraft-raster = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ort = { workspace = true }
+log = { workspace = true }
+# GPU detection only (adapter enumeration); the session itself runs on ONNX
+# Runtime. Same wgpu major as the app's renderer (crates/gpu) so the backend
+# versions stay one build; the extra backends make enumeration honest on
+# machines where the app itself only ever sees Dx12.
+wgpu = { version = "30", default-features = false, features = ["std", "dx12", "vulkan", "gles"] }
+pollster = "0.4"
+
+[dev-dependencies]
+ndarray = "0.16"
