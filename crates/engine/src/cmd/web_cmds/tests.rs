@@ -1429,8 +1429,11 @@ fn quick_export_naming_override_is_local_and_validated() {
     assert_eq!(s.prefs().export.quick_export_naming, crate::prefs::QuickExportNaming::Timestamp);
     let invalid = dir.path().join("invalid.png");
     for naming in [json!("other"), json!(true), json!(2), Value::Null] {
+        let before = std::fs::read_dir(dir.path()).unwrap().map(|entry| entry.unwrap().file_name()).collect::<std::collections::BTreeSet<_>>();
         let error = s.execute("file.export.quickExport", json!({"path": invalid, "naming": naming})).unwrap_err().to_string();
         assert!(error.contains("`naming` must be `default` or `timestamp`"), "{error}");
+        let after = std::fs::read_dir(dir.path()).unwrap().map(|entry| entry.unwrap().file_name()).collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(before, after);
     }
     assert!(!invalid.exists());
 }
