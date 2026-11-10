@@ -49,19 +49,24 @@ fn reference_colours(case: Case, shown: &Buffer, cold: &Buffer) {
     }
 }
 
-/// Patch the previous display using public live damage and compare with a cold CPU render.
-/// The horizontal case also checks that committing the same live stroke preserves its pixels.
-fn run(case: Case) {
+fn raster_fixture(edit_label: &str) -> (Session, photocraft_doc::LayerId) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":1024,"height":64,"mode":"rgb","depth":32,"background":"white"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.tools.brush = Default::default();
     let id = s.active().unwrap().active_layer.unwrap();
-    s.edit("small opaque raster fixture", |doc, _| {
+    s.edit(edit_label, |doc, _| {
         doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(64, 8, 768, 56), &[0.5, 0.5, 0.5, 1.0]);
         Ok(())
     })
     .unwrap();
+    (s, id)
+}
+
+/// Patch the previous display using public live damage and compare with a cold CPU render.
+/// The horizontal case also checks that committing the same live stroke preserves its pixels.
+fn run(case: Case) {
+    let (mut s, id) = raster_fixture("small opaque raster fixture");
     if !matches!(case, Case::NoOverlay) {
         s.execute(
             "layer.layerStyle.gradientOverlay",
@@ -142,18 +147,9 @@ fn vertical_gradient_with_unchanged_y_frame_allows_local_live_redraw() {
     run(Case::Vertical);
 }
 
-// Additional repair coverage below. The original four-test literal oracle above is unchanged.
+// Additional gradient mapping coverage.
 fn mapping_session(style: &str, angle: f32, scale: f32) -> (Session, photocraft_doc::LayerId) {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width":1024,"height":64,"mode":"rgb","depth":32,"background":"white"})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.tools.brush = Default::default();
-    let id = s.active().unwrap().active_layer.unwrap();
-    s.edit("gradient damage fixture", |doc, _| {
-        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(64, 8, 768, 56), &[0.5, 0.5, 0.5, 1.0]);
-        Ok(())
-    })
-    .unwrap();
+    let (mut s, id) = raster_fixture("gradient damage fixture");
     s.execute(
         "layer.layerStyle.gradientOverlay",
         json!({"from":"#000000","to":"#ffffff","style":style,"angle":angle,"scale":scale,"opacity":100,"blend":"Normal"}),
