@@ -892,6 +892,9 @@ mod star_tool_tests;
 mod transform_several_tests;
 
 #[cfg(test)]
+mod transform_corner_projection_tests;
+
+#[cfg(test)]
 mod transform_selection_rules_tests;
 
 #[cfg(test)]
