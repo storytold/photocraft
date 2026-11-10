@@ -82,16 +82,22 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
 /// the commit would have made (with a vector mask targeted, only the drawn path, and the mask
 /// stays), see [`super::pen::make_shape_from_draft`]. A shape layer's own path or vector mask
 /// isn't copied. The Work Path becomes the shape's path, so it is no longer selected in the Paths
-/// panel.
+/// panel. With the Freeform Pen in an Indexed Color document Photoshop refuses with an alert and
+/// changes nothing (#12840); the Pen and the Curvature Pen there weren't measured.
 pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
     // #12910 measured: with the Pen in an Indexed Color document the reference application shows this
     // alert with OK and changes nothing, so return before the draft is touched or any command runs.
-    // The alert names the tool: #12840 measures the Freeform Pen with different wording, and the
-    // other tools that share this button were not measured and keep today's behaviour. The engine's
+    // The alert names the tool; #12840 measures the Freeform Pen with its own wording. The Curvature
+    // Pen, which shares this button, was not measured and keeps today's behaviour. The engine's
     // `path.toShape` is left alone, as the issue's alert is the button's.
     if app.ui.tool == Tool::Pen && indexed_document(app) {
         let message = crate::i18n::fmt(tl!(crate::tools::brush_refusal::INDEXED), &[("tool", tl!("pen tool"))]);
         crate::dialogs::alerts::alert(app, message);
+        return Ok(Value::Null);
+    }
+    if app.ui.tool == Tool::FreeformPen && indexed_document(app) {
+        const INDEXED: &str = "Could not fill because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+        crate::dialogs::alerts::alert(app, tl!(INDEXED));
         return Ok(Value::Null);
     }
     super::cancel_stale_pen(app);
