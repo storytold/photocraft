@@ -130,3 +130,22 @@ fn a_gray_document_tagged_with_the_default_profile_still_gets_the_measured_gray(
     let p = pixel(&mut s, 20, 16);
     assert!((level(p[0]) - 173).abs() <= 2, "erased pixel {p:?}");
 }
+
+#[test]
+fn the_live_eraser_on_a_gray_background_matches_the_committed_stroke() {
+    let mut direct = session("grayscale");
+    erase_at(&mut direct, 20, 16);
+    let expected = pixel(&mut direct, 20, 16);
+    assert!((level(expected[0]) - 173).abs() <= 2, "committed pixel {expected:?}");
+
+    let mut s = session("grayscale");
+    let mut p = json!({"points": [[20, 16]], "size": 9, "hardness": 1.0, "erase": true, "seed": 7});
+    let live = crate::brush_cmds::LiveStroke::begin_with(&s, "paint.stroke", &p).unwrap();
+    p["seed"] = json!(live.seed);
+    s.offer_live_stroke(live).unwrap();
+    let result = s.execute("paint.stroke", p).unwrap();
+    assert_eq!(result["fromLive"], true, "the commit took the live pixels");
+    let got = pixel(&mut s, 20, 16);
+    assert!((level(got[0]) - 173).abs() <= 2, "live pixel {got:?}");
+    assert_eq!(level(got[0]), level(expected[0]), "live pixel {got:?}, committed {expected:?}");
+}
