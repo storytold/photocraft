@@ -838,3 +838,7 @@ mod freeform_close_tolerance_tests;
 #[cfg(test)]
 #[path = "pen_shape_first_click_tests.rs"]
 mod pen_shape_first_click_tests;
+
+#[cfg(test)]
+#[path = "freeform_enter_deselects_tests.rs"]
+mod freeform_enter_deselects_tests;
