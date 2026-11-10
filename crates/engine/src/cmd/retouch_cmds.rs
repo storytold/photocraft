@@ -383,7 +383,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Smudge",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","strength":1..100=50,"fingerPainting":bool=false (starts with the foreground colour),"sampleAllLayers":bool=false"#),
+            params: brush_params!(
+                r#","strength":1..100=50,"fingerPainting":bool=false (starts with the foreground colour),"sampleAllLayers":bool=false,"mode":"normal|darken|lighten|hue|saturation|color|luminosity"="normal" (how the smudged colour replaces the pixel; 8-bit RGB, else Normal)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.smudge"),
             journal: true,
