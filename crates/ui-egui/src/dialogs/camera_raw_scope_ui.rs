@@ -331,14 +331,18 @@ pub(crate) fn prepare_control(params: &CameraRaw, has_selection: bool, view: &Ca
     Ok(ScopeUpdate { view: next, sample, tone, geometry_requested: obj.contains_key("floatingRect") })
 }
 
-fn readout_text(value: Option<Value>) -> String {
+/// A sampler row's readout. A component that is not a number shows `--`, as the hover badge does.
+pub(crate) fn readout_text(value: Option<Value>) -> String {
     let Some(v) = value else { return "—".into() };
     let a = v.get("values").and_then(Value::as_array);
-    let get = |i| a.and_then(|a| a.get(i)).and_then(Value::as_f64).unwrap_or(0.0);
+    let get = |i: usize, precision: usize| match a.and_then(|a| a.get(i)).and_then(Value::as_f64) {
+        Some(n) => format!("{n:.precision$}"),
+        None => "--".to_string(),
+    };
     if v.get("space").and_then(Value::as_str) == Some("lab") {
-        format!("L {:.1}  a {:.1}  b {:.1}", get(0), get(1), get(2))
+        format!("L {}  a {}  b {}", get(0, 1), get(1, 1), get(2, 1))
     } else {
-        format!("R {:.0}  G {:.0}  B {:.0}", get(0), get(1), get(2))
+        format!("R {}  G {}  B {}", get(0, 0), get(1, 0), get(2, 0))
     }
 }
 

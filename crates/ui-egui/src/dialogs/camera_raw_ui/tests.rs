@@ -1303,6 +1303,16 @@ fn hover_badge_shows_dashes_for_a_component_that_is_not_a_number() {
 }
 
 #[test]
+fn sampler_rows_show_dashes_for_a_component_that_is_not_a_number_as_the_badge_does() {
+    use crate::camera_raw_scope_ui::readout_text;
+    let rgb = serde_json::json!({"space": "rgb", "values": [12.4, null, 200.0]});
+    assert_eq!(readout_text(Some(rgb)), "R 12  G --  B 200");
+    let lab = serde_json::json!({"space": "lab", "values": [50.0, "x", 3.31]});
+    assert_eq!(readout_text(Some(lab)), "L 50.0  a --  b 3.3");
+    assert_eq!(readout_text(Some(serde_json::json!({"space": "rgb"}))), "R --  G --  B --");
+}
+
+#[test]
 fn hover_badge_font_shrinks_to_fit_but_not_below_eight() {
     use crate::camera_raw_scope_ui::badge_font_size;
     assert_eq!(badge_font_size(100.0, 150.0), 11.0);
