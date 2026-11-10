@@ -1436,3 +1436,6 @@ mod tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;
+
+#[cfg(test)]
+mod pen_free_transform_label_tests;
