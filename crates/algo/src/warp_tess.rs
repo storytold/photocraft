@@ -14,7 +14,8 @@
 //!   `P00 − P10 − P01 + P11` of its stored-degree net) by more than [`TWIST_TOL`] splits along its
 //!   longer side (a square cell: down the document); for an envelope, a split across counts only
 //!   the quads of the net's left column (the reference splits Arc Lower's top-left corner cell,
-//!   not its mirror image on the right);
+//!   not its mirror image on the right); a 3 × 3 envelope's cell splits across (never down) when
+//!   its left column twists downward by more than [`TWIST33_TOL`];
 //! * a first-level cell that splits across also splits down, and a down split anywhere on the
 //!   first level splits every first-level cell down;
 //! * for a mesh that is cubic in one direction, a cell split down for its columns' curvature splits
@@ -44,6 +45,9 @@ const TWIST_TOL: f64 = 1.0;
 /// a corner pulled out keeps its cell at (½..¾, 0..¼) whole up to a twist of 1.16 and splits it
 /// from 1.22 (a sweep of pulls), and an arc stored as a full mesh splits at 1.39.
 const ACROSS_TWIST_TOL: f64 = 1.2;
+/// The downward twist of a 3 × 3 envelope cell's left column past which it splits across: Inflate
+/// and Squeeze −46 (0.920) stay whole, −48 (0.960) split.
+const TWIST33_TOL: f64 = 0.92;
 /// Cells per side an envelope starts as.
 const START: usize = 4;
 /// Cells per side a full 4 × 4 mesh starts as.
@@ -98,6 +102,19 @@ impl Net {
         Net { nu: self.nu, nv: self.nv, p }
     }
     /// The largest `P00 − P10 − P01 + P11` (euclidean) of the net.
+    /// The largest downward twist (`−(P00 − P10 − P01 + P11)` in y) of the net's first column of
+    /// quads.
+    fn twist_left_down(&self) -> f64 {
+        let mut m = f64::NEG_INFINITY;
+        for j in 0..self.nv.saturating_sub(1) {
+            let (a, b, c, d) = (self.at(0, j), self.at(1, j), self.at(0, j + 1), self.at(1, j + 1));
+            let t = -(a[1] - b[1] - c[1] + d[1]);
+            if t.is_finite() {
+                m = m.max(t);
+            }
+        }
+        m
+    }
     /// The largest twist of the net's first column of quads (the cell's left edge).
     fn twist_left(&self) -> f64 {
         let mut m = 0.0f64;
@@ -439,6 +456,7 @@ fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
 
 /// The leaf cells and the record of splits, in the stored frame.
 fn cells(net: &Net, twisty: bool, swap: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
+    let quadratic = rules.twist_across_left && net.nu == 3 && net.nv == 3;
     let start = rules.start.max(1);
     let first = 1.0 / start as f64;
     let mut level_cells: Vec<Cell> = (0..start * start)
@@ -466,9 +484,9 @@ fn cells(net: &Net, twisty: bool, swap: bool, rules: &Rules) -> (Vec<Cell>, Vec<
             if twisty && down {
                 curved_rows.push((v0, v1, column(&c), u1 - u0));
             }
+            let (lu, lv) = (u1 - u0, v1 - v0);
+            let goes_across = lu > lv + EPS || (lu > lv - EPS && swap);
             if twisty {
-                let (lu, lv) = (u1 - u0, v1 - v0);
-                let goes_across = lu > lv + EPS || (lu > lv - EPS && swap);
                 let sub = net.sub(c);
                 let tw = if goes_across && rules.twist_across_left { sub.twist_left() } else { sub.twist() };
                 if tw > TWIST_TOL + EPS && (!across || tw > rules.across_twist + EPS) {
@@ -478,6 +496,14 @@ fn cells(net: &Net, twisty: bool, swap: bool, rules: &Rules) -> (Vec<Cell>, Vec<
                         twist_down = !down;
                         down = true;
                     }
+                }
+            } else if quadratic && goes_across {
+                // A 3 × 3 envelope's twist splits a wide cell across only, counting its left
+                // column's twist downward (Squeeze and Inflate below 0 split their left cells, the
+                // same bends above 0 do not, with the same twists turned up).
+                let tw = net.sub(c).twist_left_down();
+                if tw > TWIST33_TOL + EPS && (!across || tw > rules.across_twist + EPS) {
+                    across = true;
                 }
             }
             if rules.force_down && across && (u1 - u0 - first).abs() < EPS && (v1 - v0 - first).abs() < EPS {
@@ -1091,6 +1117,41 @@ mod tests {
         assert!(!split([0.75, 1.0, 0.0, 0.125]), "its mirror image on the right stays whole");
         let (_, sym) = cells(&net, true, false, &Rules { twist_across_left: false, ..rules });
         assert!(sym.iter().any(|s| s.cell == [0.75, 1.0, 0.0, 0.125] && s.across), "the whole net's twist would split it");
+    }
+
+    /// A 3 × 3 envelope's left cells split across for a downward twist of their left column:
+    /// Inflate −48 splits the left cell at v ⅜..½ (0.96) but not its mirror image; −46 (0.92)
+    /// and +48 (the same twists turned up) split neither.
+    #[test]
+    fn a_quadratic_envelope_splits_its_left_cells_for_a_downward_twist() {
+        use photocraft_geom::warp::{Warp, WarpStyle};
+        let b = [96.0, 96.0, 224.0, 224.0];
+        let split_at = |bend: f64, c: Cell| {
+            let w = Warp::preset(WarpStyle::Inflate, bend, b);
+            let at = |u: f64, v: f64| {
+                let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * v);
+                [x, y]
+            };
+            let net = net_of(&at, false);
+            assert_eq!((net.nu, net.nv), (3, 3));
+            let rules = Rules {
+                start: START,
+                force_down: true,
+                twist_spreads: false,
+                fixed_level: 2,
+                curved_makers: true,
+                cut_sides: true,
+                across_twist: TWIST_TOL,
+                twist_across_left: true,
+            };
+            let (_, log) = cells(&net, false, false, &rules);
+            log.iter().any(|s| s.cell == c && s.across)
+        };
+        let (left, right) = ([0.0, 0.25, 0.375, 0.5], [0.75, 1.0, 0.375, 0.5]);
+        assert!(split_at(-48.0, left), "the left cell splits");
+        assert!(!split_at(-48.0, right), "its mirror image stays whole");
+        assert!(!split_at(-46.0, left), "a smaller twist stays whole");
+        assert!(!split_at(48.0, left) && !split_at(48.0, right), "an upward twist splits nothing");
     }
 
     /// The 128 px square with its top-left corner pulled out to (48, 48), as a full mesh.
