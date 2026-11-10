@@ -19,10 +19,12 @@ pub const INDEXED: &str = "Could not use the {tool} because it does not work wit
 pub const BITMAP: &str = "Could not use the {tool} because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
 
 /// The tool's name in the colour-mode alerts, for the tools whose wording was measured: the Dodge
-/// tool. Kept apart from [`tool_name`]: the layer alerts weren't measured for these tools (#12685).
+/// and Sharpen tools. Kept apart from [`tool_name`]: the layer alerts aren't wired for these tools
+/// yet (#12685, #12952).
 fn mode_tool_name(tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Dodge => Some(tl!("dodge tool")),
+        Tool::Sharpen => Some(tl!("sharpen tool")),
         _ => None,
     }
 }
