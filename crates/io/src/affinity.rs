@@ -478,7 +478,18 @@ impl Builder<'_> {
         // The pixel cache is optional (the shape renders from its path without it), so charge the
         // area it would cover to the import's pixel budget and go without it when that is spent:
         // geometry across a 300000 px canvas would otherwise be rasterized for every shape.
+        // Once not even one tile is left nothing can be charged, so skip compiling the shape
+        // (flattening and stroking its path) just to throw the result away.
+        let tile = crate::text_import::cache_bytes(Rect::new(0, 0, 1, 1), self.format.bytes_per_pixel());
+        if self.cache_budget < tile {
+            if !sh.path.subpaths.is_empty() {
+                self.uncached_shapes += 1;
+            }
+            return sh;
+        }
         // The compiled bounds are what `render` covers, an acute miter reaching past the stroke width included.
+        #[cfg(test)]
+        COMPILED_SHAPES.with(|n| n.set(n.get() + 1));
         let compiled = photocraft_vector::CompiledShape::new(&sh, photocraft_vector::DEFAULT_TOLERANCE, self.canvas);
         let area = compiled.bounds().map_or(Rect::default(), |b| b.intersect(&self.canvas));
         // Whole tiles: even a 2x2 px shape keeps one, which 50 000 small shapes add up to gigabytes.
@@ -691,6 +702,12 @@ fn color(c: ap::Color) -> Color {
 }
 
 #[cfg(test)]
+thread_local! {
+    /// How many shapes this thread compiled for a pixel cache (for the exhausted-budget test).
+    static COMPILED_SHAPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -813,6 +830,19 @@ mod tests {
         assert_eq!(b.uncached_shapes, 7);
         assert_eq!(b.cache_budget, 0);
         assert_eq!(b.pixel_budget, MAX_PIXEL_BYTES, "caches don't draw on the pool images need");
+    }
+
+    #[test]
+    fn shapes_are_not_compiled_once_no_cache_tile_fits() {
+        // Three tiles pay for the first three shapes; the other 27 must not even be compiled.
+        let d = page((0..30).map(tiny_shape).collect());
+        let mut b = Builder::new("shapes", &d).unwrap();
+        b.cache_budget = 3 * 256 * 256 * 4;
+        COMPILED_SHAPES.with(|n| n.set(0));
+        b.document(&d).unwrap();
+        assert_eq!(COMPILED_SHAPES.with(std::cell::Cell::get), 3);
+        assert_eq!(b.uncached_shapes, 27, "the skipped-cache warning still counts them");
+        assert_eq!(b.doc.layers.len(), 30, "every shape still imports");
     }
 
     #[test]
