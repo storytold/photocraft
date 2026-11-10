@@ -4102,7 +4102,7 @@ layerLabel	No Color	Sin color
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Esta capa de texto debe rasterizarse antes de continuar. Su texto dejará de ser editable. ¿Rasterizar el texto?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Esta capa de forma debe rasterizarse antes de continuar. Dejará de ser editable como forma. ¿Rasterizar la forma?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Este objeto inteligente debe rasterizarse antes de continuar. Su contenido dejará de ser editable. ¿Rasterizar el objeto inteligente?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Esta capa de relleno debe rasterizarse antes de continuar. Su contenido de relleno dejará de ser editable. ¿Rasterizar la capa?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Esta capa de relleno debe rasterizarse antes de continuar. Su contenido de relleno dejará de ser editable. ¿Rasterizar la capa?
 	This layer must be rasterized before proceeding.	Esta capa debe rasterizarse antes de continuar.
 	Color Picker (Background Color)	Selector de color (color de fondo)
 	Color Picker (Foreground Color)	Selector de color (color frontal)

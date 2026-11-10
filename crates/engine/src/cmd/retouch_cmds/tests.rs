@@ -2290,7 +2290,7 @@ fn remove_to_a_new_layer_leaves_the_target_untouched() {
     assert_ne!(nid, target);
     let order: Vec<LayerId> = d.doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
     assert_eq!(order, vec![target, nid], "the new layer sits above the target");
-    assert_eq!(d.doc.layer(nid).unwrap().name, "Layer 1");
+    assert_eq!(d.doc.layer(nid).unwrap().name, "Remove tool edits");
     // The target keeps its pixels; the new layer carries the fill inside the hole only.
     let old = d.doc.layer(target).unwrap().surface().unwrap();
     assert!(near(old.rgba(46, 30), square, 0.001));

@@ -114,6 +114,7 @@ fn edit_section(i: usize, b: &mut BrushSettings) {
                 sample_all_layers: true,
                 load_after_stroke: false,
                 clean_after_stroke: false,
+                solid_colors_only: true,
             };
         }
         7 => {

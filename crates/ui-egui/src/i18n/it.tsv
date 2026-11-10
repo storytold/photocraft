@@ -4167,7 +4167,7 @@ layerLabel	No Color	Nessun colore
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Per procedere il livello di testo deve essere rasterizzato. Il testo non sarà più modificabile. Rasterizzare il testo?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Per procedere il livello forma deve essere rasterizzato. Non sarà più modificabile come forma. Rasterizzare la forma?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Per procedere l'oggetto avanzato deve essere rasterizzato. Il contenuto non sarà più modificabile. Rasterizzare l'oggetto avanzato?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Per procedere il livello di riempimento deve essere rasterizzato. Il riempimento non sarà più modificabile. Rasterizzare il livello?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	Per procedere il livello di riempimento deve essere rasterizzato. Il riempimento non sarà più modificabile. Rasterizzare il livello?
 	This layer must be rasterized before proceeding.	Per procedere il livello deve essere rasterizzato.
 	Color Picker (Background Color)	Selettore colore (colore sfondo)
 	Color Picker (Foreground Color)	Selettore colore (colore primo piano)

@@ -1297,6 +1297,16 @@ fn handle_canvas_tool_clicks(
         app.defer_live_stroke = false;
         crate::magnetic_lasso_ui::flush(app);
     }
+    // Perspective Crop: between corner clicks the preview quad follows the pointer (#11804).
+    if tool == Tool::PerspectiveCrop
+        && !app.pcrop.clicks.is_empty()
+        && !(buttons.started || buttons.dragged || buttons.stopped)
+        && response.hovered()
+        && let Some(p) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p))
+    {
+        let d = xf.to_doc(p);
+        tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: 1.0 }, mods);
+    }
     if buttons.clicked
         && let Some(p) = response.interact_pointer_pos()
     {
