@@ -4015,7 +4015,7 @@ layerLabel	No Color	بلا رنگ
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	آگے بڑھنے سے پہلے اس متن تہہ کو ریسٹرائز کرنا ضروری ہے۔ اس کا متن مزید قابل ترمیم نہیں رہے گا۔ کیا قسم کو ریسٹرائز کریں؟
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	آگے بڑھنے سے پہلے اس شکل تہہ کو ریسٹرائز کرنا ضروری ہے۔ یہ مزید شکل کے طور پر قابل ترمیم نہیں رہے گی۔ کیا شکل کو ریسٹرائز کریں؟
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	آگے بڑھنے سے پہلے اس سمارٹ آبجیکٹ کو ریسٹرائز کرنا ضروری ہے۔ اس کا مواد مزید قابل ترمیم نہیں رہے گا۔ کیا سمارٹ آبجیکٹ کو ریسٹرائز کریں؟
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	آگے بڑھنے سے پہلے اس بھرائی تہہ کو ریسٹرائز کرنا ضروری ہے۔ اس کا بھرائی مواد مزید قابل ترمیم نہیں رہے گا۔ کیا تہہ کو ریسٹرائز کریں؟
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	آگے بڑھنے سے پہلے اس بھرائی تہہ کو ریسٹرائز کرنا ضروری ہے۔ اس کا بھرائی مواد مزید قابل ترمیم نہیں رہے گا۔ کیا تہہ کو ریسٹرائز کریں؟
 	This layer must be rasterized before proceeding.	آگے بڑھنے سے پہلے اس تہہ کو ریسٹرائز کرنا ضروری ہے۔
 	Color Picker (Background Color)	رنگ چنندہ (پس منظر کا رنگ)
 	Color Picker (Foreground Color)	رنگ چنندہ (پیش منظر کا رنگ)
@@ -4573,3 +4573,17 @@ navigator	Zoom	زوم
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW ڈیولپمنٹ کی ترتیبات {file} میں محفوظ ہو گئیں
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	پہلے سے طے شدہ پہلو تناسب یا تراشنے کا سائز منتخب کریں
+	Set the aspect ratio for the crop box	تراشنے کے فریم کے لیے پہلو تناسب مقرر کریں
+	Clear aspect ratio values	پہلو تناسب کی اقدار صاف کریں
+	Set the overlay options for the Crop Tool	تراشنے کے اوورلے کے اختیارات مقرر کریں
+	Determines if pixel data outside the crop box is retained or deleted	طے کرتا ہے کہ تراشنے کے فریم سے باہر کے پکسل محفوظ رہیں یا حذف ہوں
+	How expanded crop area gets filled	پھیلائی گئی تراشنے کی جگہ کیسے بھری جائے
+	Displays pop-up help for the fill methods	بھرنے کے طریقوں کے لیے پاپ اپ مدد دکھاتا ہے
+	Fill options	بھرنے کے اختیارات
+	Background (default):	پس منظر (ڈیفالٹ):
+	Fill the expanded area with your background color or transparent pixels	پھیلائی گئی جگہ کو پس منظر کے رنگ یا شفاف پکسل سے بھریں
+	Content-aware fill	مواد کی بنیاد پر بھرنا
+	Sample content from part of the image and use it to fill a small area	چھوٹی جگہ بھرنے کے لیے تصویر کے حصے سے مواد لیں
+	Reset the crop box, image rotation, and aspect ratio settings	تراشنے کا فریم، تصویر کی گردش اور پہلو تناسب دوبارہ ترتیب دیں
