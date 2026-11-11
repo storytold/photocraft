@@ -205,6 +205,68 @@ pub fn bend_segment(path: &mut Path, knot: [usize; 2], t: f64, d: [f64; 2]) -> R
     Ok(())
 }
 
+/// After Delete Anchor Point removed knot `k` of subpath `s` from `before`: the new index of the knot
+/// whose segment now joins the two former neighbours (#12766). None where there is no such join: an
+/// end of an open subpath, or a closed subpath too small to keep two distinct neighbours.
+pub fn join_knot(before: &Path, [s, k]: [usize; 2]) -> Option<[usize; 2]> {
+    let sp = before.subpaths.get(s)?;
+    let n = sp.knots.len();
+    if k >= n {
+        return None;
+    }
+    let prev = if sp.closed {
+        if n < 4 {
+            return None;
+        }
+        k.checked_add(n.checked_sub(1)?)? % n
+    } else if k > 0 && k + 1 < n {
+        k - 1
+    } else {
+        return None;
+    };
+    Some([s, if prev < k { prev } else { prev.checked_sub(1)? }])
+}
+
+/// Delete Anchor Point dragged (#12766): bends the straight segment leaving `knot` (the join of the
+/// deleted anchor's neighbours) so it follows the pointer `to`. `press` is where the drag began. Q,
+/// the press projected onto the chord between the two anchors, sits at fraction t (clamped to
+/// [0.05, 0.95]) and D = `to` - Q; the leaving knot's out handle and the next knot's in handle move
+/// by D scaled with B1 / (B1^2 + B2^2) and B2 / (B1^2 + B2^2) (B1 = 3(1-t)^2t, B2 = 3(1-t)t^2), the
+/// smallest handle move that carries the curve's point at t onto the pointer. Both knots become smooth;
+/// every other handle stays. Refused (unchanged) when the join is not straight or the outer handles
+/// of the two knots are not retracted. Returns the two knots, leaving one first.
+pub fn bend_join(path: &mut Path, knot: [usize; 2], press: Point, to: Point) -> Result<[[usize; 2]; 2], String> {
+    if ![press.x, press.y, to.x, to.y].iter().all(|c| c.is_finite()) {
+        return Err("the pointer must be finite".into());
+    }
+    let end = segment_end(path, knot)?;
+    let a = *knot_mut(path, knot)?;
+    let b = *knot_mut(path, end)?;
+    let retracted = |k: &Knot, h: Handle| dist(handle(k, h), k.anchor) < 1e-9;
+    if !straight(&a, &b) || !retracted(&a, Handle::In) || !retracted(&b, Handle::Out) || knot == end {
+        return Err("the join is not a straight segment between plain corners".into());
+    }
+    let (cx, cy) = (b.anchor.x - a.anchor.x, b.anchor.y - a.anchor.y);
+    let len2 = cx * cx + cy * cy;
+    if !len2.is_finite() || len2 <= 1e-18 {
+        return Err("the neighbours coincide".into());
+    }
+    let f = ((press.x - a.anchor.x) * cx + (press.y - a.anchor.y) * cy) / len2;
+    let q = Point::new(a.anchor.x + cx * f, a.anchor.y + cy * f);
+    let t = f.clamp(0.05, 0.95);
+    let u = 1.0 - t;
+    let (b1, b2) = (3.0 * u * u * t, 3.0 * u * t * t);
+    let n = b1 * b1 + b2 * b2;
+    let d = [to.x - q.x, to.y - q.y];
+    let ka = knot_mut(path, knot)?;
+    ka.out_ctrl = add(ka.anchor, [d[0] * b1 / n, d[1] * b1 / n]);
+    ka.smooth = true;
+    let kb = knot_mut(path, end)?;
+    kb.in_ctrl = add(kb.anchor, [d[0] * b2 / n, d[1] * b2 / n]);
+    kb.smooth = true;
+    Ok([knot, end])
+}
+
 fn lerp(a: Point, b: Point, t: f64) -> Point {
     Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
 }
@@ -760,6 +822,49 @@ mod tests {
         assert_eq!(anchors_in(&p, [110.0, -5.0, 40.0, 5.0]), vec![[0, 1]]);
         assert_eq!(subpath_anchors(&p, 0), vec![[0, 0], [0, 1], [0, 2]]);
         assert!(subpath_anchors(&p, 4).is_empty());
+    }
+
+    /// The test square after Delete Anchor Point took (300,300): (100,300) joined to (300,500).
+    fn joined() -> Path {
+        Path::new(vec![Subpath::polygon(&[(100.0, 300.0), (300.0, 500.0), (100.0, 500.0)])])
+    }
+
+    #[test]
+    fn a_join_bend_passes_through_the_pointer_with_an_even_split_at_the_middle() {
+        let mut p = joined();
+        let [a, b] = bend_join(&mut p, [0, 0], Point::new(300.0, 300.0), Point::new(330.0, 280.0)).unwrap();
+        assert_eq!((a, b), ([0, 0], [0, 1]));
+        let (ka, kb) = (at(&p, 0, 0), at(&p, 0, 1));
+        assert!((ka.out_ctrl.x - 273.333_333).abs() < 1e-3 && (ka.out_ctrl.y - 140.0).abs() < 1e-3, "{ka:?}");
+        assert!((kb.in_ctrl.x - 473.333_333).abs() < 1e-3 && (kb.in_ctrl.y - 340.0).abs() < 1e-3, "{kb:?}");
+        assert!(ka.smooth && kb.smooth);
+        assert_eq!((ka.in_ctrl, kb.out_ctrl), (ka.anchor, kb.anchor), "the outer handles stay retracted");
+        let m = eval(&[ka.anchor, ka.out_ctrl, kb.in_ctrl, kb.anchor], 0.5);
+        assert!((m.x - 330.0).abs() < 1e-6 && (m.y - 280.0).abs() < 1e-6, "{m:?}");
+    }
+
+    #[test]
+    fn a_join_bend_refuses_curves_and_bad_numbers_and_leaves_the_path_alone() {
+        let mut curved = joined();
+        curved.subpaths[0].knots[0].out_ctrl = Point::new(150.0, 300.0);
+        let before = curved.clone();
+        assert!(bend_join(&mut curved, [0, 0], Point::new(300.0, 300.0), Point::new(330.0, 280.0)).is_err());
+        assert_eq!(curved, before);
+        let mut p = joined();
+        assert!(bend_join(&mut p, [0, 0], Point::new(300.0, 300.0), Point::new(f64::NAN, 1.0)).is_err());
+        assert!(bend_join(&mut p, [0, 9], Point::new(300.0, 300.0), Point::new(1.0, 1.0)).is_err());
+        assert_eq!(p, joined());
+    }
+
+    #[test]
+    fn the_join_knot_is_the_deleted_anchors_previous_neighbour_in_the_new_numbering() {
+        let sq = Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])]);
+        assert_eq!(join_knot(&sq, [0, 1]), Some([0, 0]));
+        assert_eq!(join_knot(&sq, [0, 0]), Some([0, 2]));
+        assert_eq!(join_knot(&sq, [0, 3]), Some([0, 2]));
+        assert_eq!(join_knot(&tri(), [0, 1]), None, "a closed triangle would be left with two anchors");
+        let open = Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)])]);
+        assert_eq!((join_knot(&open, [0, 0]), join_knot(&open, [0, 2]), join_knot(&open, [0, 1])), (None, None, Some([0, 0])));
     }
 }
 

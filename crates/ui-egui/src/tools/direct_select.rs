@@ -265,6 +265,9 @@ pub enum Edit {
     Segment([usize; 2], f64),
     /// Pen + ⌥ on an anchor: a click makes a corner, a drag pulls out smooth handles.
     Convert([usize; 2]),
+    /// Delete Anchor Point dragged (#12766): the straight segment that joined the deleted anchor's
+    /// neighbours, leaving this knot, bends with the pointer; the press point where it began.
+    Join([usize; 2], Point),
 }
 
 impl Edit {
@@ -273,10 +276,11 @@ impl Edit {
         if shift && matches!(self, Edit::Anchors(_)) { crate::stroke_constraint::snap45(start, p) } else { p }
     }
 
-    /// The edit for a drag from `start` to `end`, as a command and its params (without target).
-    fn command(&self, start: [f64; 2], end: [f64; 2]) -> (&'static str, Value) {
+    /// The edit for a drag from `start` to `end`, as a command and its params (without target). None
+    /// for a join, which `release_join` commits as several commands.
+    fn command(&self, start: [f64; 2], end: [f64; 2]) -> Option<(&'static str, Value)> {
         let d = [end[0] - start[0], end[1] - start[1]];
-        match self {
+        Some(match self {
             Edit::Anchors(a) => ("path.moveAnchors", json!({"anchors": a, "move": d})),
             Edit::Curvature(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "curvature": true})),
             Edit::Handle([s, k], h, from, independent) => {
@@ -284,7 +288,8 @@ impl Edit {
             }
             Edit::Segment([s, k], t) => ("path.bendSegment", json!({"subpath": s, "knot": k, "t": t, "move": d})),
             Edit::Convert([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end})),
-        }
+            Edit::Join(..) => return None,
+        })
     }
 
     /// `base` edited as the command would: the drag preview.
@@ -297,6 +302,7 @@ impl Edit {
             Edit::Handle(k, h, from, independent) => edit::move_handle(&mut p, *k, *h, Point::new(from.x + d[0], from.y + d[1]), *independent),
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
             Edit::Convert(k) => edit::convert_point(&mut p, *k, Some(Point::new(end[0], end[1]))),
+            Edit::Join(k, press) => edit::bend_join(&mut p, *k, *press, Point::new(end[0], end[1])).map(|_| ()),
         }
         .ok()?;
         Some(p)
@@ -730,6 +736,51 @@ pub(crate) fn grab_added(app: &mut PhotocraftApp, target: PathRef, base: Path, k
     app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Anchors(vec![k]), start: p, end: p, preview: None });
 }
 
+/// After Delete Anchor Point removed an anchor (a `coalesce` step) and joined its neighbours: start a
+/// drag from the press at `p` that bends the join (`k` is the knot the join leaves, in `base`). A click
+/// without a drag leaves just the straight join.
+pub(crate) fn grab_join(app: &mut PhotocraftApp, target: PathRef, base: Path, k: [usize; 2], p: [f64; 2], coalesce: String) {
+    app.ui.direct_selection = DirectSelection { target: Some(target), coalesce: Some(coalesce), owner: Owner::current(app), ..Default::default() };
+    app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Join(k, Point::new(p[0], p[1])), start: p, end: p, preview: None });
+}
+
+/// End of a join drag: the bent join as `path.convertPoint` and `path.moveHandle` commands on the two
+/// knots (smooth, the outer handle retracted again), all in the deletion's `coalesce` step.
+fn release_join(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, end: [f64; 2]) {
+    let Edit::Join(k, press) = edit else { return };
+    let mut bent = base.clone();
+    let Ok(knots) = edit::bend_join(&mut bent, *k, *press, Point::new(end[0], end[1])) else { return };
+    let [Some(a), Some(b)] = knots.map(|[s, k]| bent.subpaths.get(s).and_then(|sp| sp.knots.get(k)).copied()) else { return };
+    let [[sa, ka], [sb, kb]] = knots;
+    let xy = |p: Point| json!([p.x, p.y]);
+    let mirror = Point::new(2.0 * b.anchor.x - b.in_ctrl.x, 2.0 * b.anchor.y - b.in_ctrl.y);
+    let steps = [
+        ("path.convertPoint", json!({"subpath": sa, "knot": ka, "out": xy(a.out_ctrl)})),
+        ("path.moveHandle", json!({"subpath": sa, "knot": ka, "handle": "in", "to": xy(a.anchor)})),
+        ("path.convertPoint", json!({"subpath": sb, "knot": kb, "out": xy(mirror)})),
+        ("path.moveHandle", json!({"subpath": sb, "knot": kb, "handle": "out", "to": xy(b.anchor)})),
+    ];
+    let key = app.ui.direct_selection.coalesce.take();
+    let selection = std::mem::take(&mut app.ui.direct_selection);
+    for (id, mut params) in steps {
+        if let (Some(p), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
+            p.extend(t.clone());
+        }
+        if let (Some(p), Some(key)) = (params.as_object_mut(), &key) {
+            p.insert("coalesce".into(), json!(key));
+        }
+        if let Err(e) = app.run(id, params) {
+            if selection.owner.as_ref().is_some_and(|owner| owner.valid(app)) {
+                app.ui.direct_selection = selection;
+            }
+            app.ui.status = e;
+            app.ui.status_error = true;
+            return;
+        }
+    }
+    keep_after_command(app, selection);
+}
+
 /// End of an edit drag: commit it as one command. A click (no movement) commits nothing, except
 /// Pen + ⌥ on an anchor, which makes it a corner. The Pen path being drawn takes the edit directly.
 fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, start: [f64; 2], end: [f64; 2], mods: Modifiers) {
@@ -749,9 +800,18 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
         return;
     }
     let (id, mut params) = match edit {
+        Edit::Join(..) => {
+            if moved {
+                release_join(app, target, base, edit, end);
+            }
+            return;
+        }
         Edit::Convert([s, k]) if !moved => ("path.convertPoint", json!({"subpath": s, "knot": k})),
         _ if !moved => return,
-        e => e.command(start, end),
+        e => match e.command(start, end) {
+            Some(c) => c,
+            None => return,
+        },
     };
     // The Convert Point tool names its steps as the reference does; the Pen's ⌥ and Direct
     // Selection (Convert Point with ⌘ too) keep the commands' own names.

@@ -317,7 +317,7 @@ fn the_pen_cursor_shows_auto_add_delete_on_the_path_being_drawn() {
     assert_eq!(badge(&app, Tool::Pen, Modifiers::SHIFT), None);
 }
 
-fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
+pub(super) fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Modifiers::NONE);
     let mid = [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0];
     for at in [mid, to] {
