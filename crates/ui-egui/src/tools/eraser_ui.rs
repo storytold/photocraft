@@ -35,7 +35,21 @@ fn error_alert(error: &str) -> Option<&'static str> {
 /// Opens the alert: the message and one OK button, as a refused Move press does
 /// (`move_lock::prompt`).
 fn refuse(app: &mut PhotocraftApp, message: &str) {
-    app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(message)}).as_object().cloned().unwrap_or_default());
+    app.ui.open_dialog(DialogKind::Error, json!({"message": alert_text(message)}).as_object().cloned().unwrap_or_default());
+}
+
+/// The alert in the UI language. Literal keys, so the translation report lists both alerts for the
+/// translators; `alert_keys_match_the_engine_texts` keeps them equal to the engine's texts.
+fn alert_text(message: &str) -> &str {
+    match message {
+        MAGIC_ERASER_INDEXED_ERROR => {
+            tl!("Could not use the magic eraser because it does not work with Indexed Color images (convert image to RGB Color mode to edit).")
+        }
+        MAGIC_ERASER_BITMAP_ERROR => {
+            tl!("Could not use the magic eraser because it does not work with Bitmap images (convert image to Grayscale mode to edit).")
+        }
+        other => tl!(other),
+    }
 }
 
 /// Magic Eraser click at document `(x, y)`. Returns false for other tools.
@@ -366,6 +380,17 @@ pub(crate) fn open_range_alert(app: &mut PhotocraftApp) {
 mod tests {
     use super::*;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+
+    /// #12032: the literal translation keys are the engine's alert texts, so an English UI shows
+    /// exactly what `paint.magicEraser` answers and the catalogs translate the right string.
+    #[test]
+    fn alert_keys_match_the_engine_texts() {
+        crate::i18n::with_language(crate::i18n::Lang::EN, || {
+            for text in [MAGIC_ERASER_INDEXED_ERROR, MAGIC_ERASER_BITMAP_ERROR] {
+                assert_eq!(alert_text(text), text);
+            }
+        });
+    }
 
     /// The message of every open error dialog, in the order they were opened.
     fn alerts(app: &PhotocraftApp) -> Vec<&str> {
