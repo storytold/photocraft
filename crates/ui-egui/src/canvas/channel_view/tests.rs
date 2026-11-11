@@ -569,12 +569,12 @@ fn cmyk_inks_from_the_proxy_match_the_document() {
 fn bounded_cmyk_channel_previews_keep_native_inks_at_every_depth() {
     for depth in [8, 16, 32] {
         let mut s = Session::new();
-        s.execute("file.new", json!({"width": 17, "height": 23, "mode": "cmyk", "depth": depth})).unwrap();
+        s.execute("file.new", json!({"width": 17, "height": 131, "mode": "cmyk", "depth": depth})).unwrap();
         s.edit("native ink stripes", |doc, active| {
             let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
-            for y in 0..23 {
+            for y in 0..131 {
                 for x in 0..17 {
-                    surface.write_pixel(x, y, &[x as f32 / 16.0, y as f32 / 22.0, 0.4, 0.0, 1.0]);
+                    surface.write_pixel(x, y, &[x as f32 / 16.0, y as f32 / 130.0, 0.4, 0.0, 1.0]);
                 }
             }
             Ok(())
