@@ -528,7 +528,12 @@ pub fn read_with(
             scroll
         };
         match (classify(Input { scroll, raw, zoom_delta, alt, shift, zoom_with_wheel, pinch_zooms, animated_zoom, notch }), pan) {
-            (Some(Wheel::Pan(_)), Some(p)) if p != Vec2::ZERO => Some(Wheel::Pan(p)),
+            // The canvas notch only along the axes egui's pan moves: a zoom's wheel delta never
+            // leaks into it, and a pan that cancels out at the canvas notch stays still.
+            (Some(Wheel::Pan(s)), Some(p)) => {
+                let p = Vec2::new(if s.x != 0.0 { p.x } else { 0.0 }, if s.y != 0.0 { p.y } else { 0.0 });
+                (p != Vec2::ZERO).then_some(Wheel::Pan(p))
+            }
             (wheel, _) => wheel,
         }
     }

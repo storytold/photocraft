@@ -75,3 +75,26 @@ fn the_wheel_zooms_keep_their_notch() {
         Some(Wheel::SnapZoom(1))
     );
 }
+
+/// Line and point deltas that cancel out at the canvas notch pan nothing, even where they would
+/// not cancel at egui's notch (Alt with Zoom with Scroll Wheel pans).
+#[test]
+fn a_pan_that_cancels_at_the_canvas_notch_stays_still() {
+    let events = vec![event(MouseWheelUnit::Line, Vec2::new(0.0, 1.0), Modifiers::ALT), event(MouseWheelUnit::Point, Vec2::new(0.0, -16.0), Modifiers::ALT)];
+    assert_eq!(canvas_reads(events, true, false), None);
+}
+
+/// A sideways Ctrl pan in the same frame as plain zoom deltas that cancel at egui's notch (Zoom
+/// with Scroll Wheel, Animated Zoom) stays sideways: the zoom's deltas never reach the pan.
+#[test]
+fn zoom_deltas_stay_out_of_a_sideways_pan() {
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    let events = vec![
+        event(MouseWheelUnit::Line, Vec2::new(0.0, -1.0), ctrl),
+        event(MouseWheelUnit::Line, Vec2::new(0.0, 1.0), ctrl),
+        event(MouseWheelUnit::Point, Vec2::new(0.0, -40.0), ctrl),
+        event(MouseWheelUnit::Line, Vec2::new(0.0, -1.0), ctrl),
+    ];
+    let p = pan(canvas_reads(events, true, true));
+    assert_eq!(p.y, 0.0, "{p:?}");
+}
