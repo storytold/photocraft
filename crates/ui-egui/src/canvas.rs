@@ -1019,7 +1019,7 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     // Tools follow the left button; the right one opens the Brush Preset picker or erases
     // (Preferences › Tools, `paint_mouse`).
     crate::paint_mouse::sync_tool_brush(app);
-    let mut buttons = crate::paint_mouse::canvas_buttons(app, response, tool);
+    let mut buttons = crate::paint_mouse::canvas_buttons(app, response, tool, xf);
     if input.menu_dismiss_press {
         // Navigation and drags read `buttons` directly (zoom holds and drags, Rotate View):
         // starve them. The release click stays armed, so the click handling below consumes
