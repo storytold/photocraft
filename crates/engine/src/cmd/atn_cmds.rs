@@ -35,6 +35,7 @@ mod files;
 mod menu_item;
 
 mod steps_artboard;
+mod steps_artboard_section;
 mod steps_batch;
 mod steps_calculations;
 mod steps_channels;
@@ -202,3 +203,6 @@ mod render_tests;
 
 #[cfg(test)]
 mod recorded_tools_tests;
+
+#[cfg(test)]
+mod artboard_section_tests;
