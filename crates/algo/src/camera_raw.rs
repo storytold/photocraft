@@ -55,11 +55,14 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
-mod local_tone;
+pub mod local_tone;
 mod per_pixel;
 mod whites_blacks;
 
-pub use per_pixel::{CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, per_pixel, white_black_points};
+pub use local_tone::{LocalTone, ToneKind, TonePass};
+pub use per_pixel::{
+    CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, WhitesBlacksModel, per_pixel, white_black_points, whites_blacks_model,
+};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
 /// Adobe RGB's 2.2). The tone controls work on light, so the document's own curve decodes it.
@@ -885,11 +888,17 @@ fn balance(mut q: [f32; 4], g: [f32; 3]) -> [f32; 4] {
     q
 }
 
+/// The index of the `q` quantile (0 … 1) among `len` sorted values, as every percentile in the
+/// develop picks it.
+pub fn quantile_rank(len: usize, q: f32) -> usize {
+    (len.saturating_sub(1) as f32 * q).round() as usize
+}
+
 /// The image's black and white points as sRGB-encoded grey levels: the 3rd percentile of the
 /// luminance and the 99.5th of the brightest channel, on a copy at most 256 pixels across (so a
 /// preview proxy and the full image agree). `map` is applied to each pixel first.
 fn luminance_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding, map: impl Fn([f32; 4]) -> [f32; 4] + Sync) -> (f32, f32) {
-    let f = w.max(h).div_ceil(256).max(1);
+    let f = w.max(h).div_ceil(whites_blacks::POINTS_SIDE).max(1);
     let (sw, sh) = (w.div_ceil(f), h.div_ceil(f));
     // Each band of `f` rows sums into its own row of cells, in the same order as one pass would.
     let bands = crate::photo_util::par_map(sh, |sy| {
@@ -912,10 +921,10 @@ fn luminance_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding, map: imp
     }
     let pct = |mut v: Vec<f32>, q: f32| {
         v.sort_by(f32::total_cmp);
-        v[((v.len() - 1) as f32 * q).round() as usize]
+        v[quantile_rank(v.len(), q)]
     };
-    let bp = pct(cells.iter().map(|c| luma(*c)).collect(), 0.03);
-    let wp = pct(cells.iter().map(|c| c[0].max(c[1]).max(c[2])).collect(), 0.995);
+    let bp = pct(cells.iter().map(|c| luma(*c)).collect(), whites_blacks::POINT_QUANTILES[0]);
+    let wp = pct(cells.iter().map(|c| c[0].max(c[1]).max(c[2])).collect(), whites_blacks::POINT_QUANTILES[1]);
     (linear_to_srgb(bp), linear_to_srgb(wp))
 }
 
