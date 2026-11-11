@@ -2388,9 +2388,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     app.held_erase = crate::hold_keys::erase_held(app, &ctx);
     // Zoom direction: the temporary zoom key decides, else the Zoom tool's Zoom In / Zoom Out
     // mode, turned around by ⌥ held or latched in Window › Modifier Keys (the way around a
-    // desktop that takes Alt+click, `alt_grab`).
+    // desktop that takes Alt+click, `alt_grab`). A held Z is a temporary zoom key too: in, out
+    // with ⌥, whatever the mode (#12066).
     let sticky_alt = app.ui.shell.sticky_alt;
-    let out_mode = !app.ui.tool_options.zoom_in;
+    let out_mode = !app.ui.tool_options.zoom_in && !crate::spring_tools::holds(app, Tool::Zoom);
     let zoom_out = |alt: bool| match temporary {
         Some(crate::hold_keys::Temporary::ZoomOut) => true,
         Some(crate::hold_keys::Temporary::ZoomIn) => false,

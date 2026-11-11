@@ -205,6 +205,29 @@ fn temporary_zoom_keys_ignore_the_zoom_out_mode() {
     assert!(!h.state().ui.tool_options.zoom_in);
 }
 
+#[test]
+fn held_z_ignores_the_zoom_out_mode() {
+    let mut h = harness(Tool::Brush, false, true);
+    let p = h.state().last_canvas_rect.center();
+    let z_key = |h: &mut Harness<'static, PhotocraftApp>, pressed: bool| {
+        h.event(Event::Key { key: Key::Z, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    };
+    z_key(&mut h, true);
+    assert_eq!(h.state().ui.tool, Tool::Zoom, "Z held springs to the Zoom tool");
+    click(&mut h, p, Modifiers::NONE);
+    z_key(&mut h, false);
+    let z = h.state().current_zoom();
+    assert_eq!(z, crate::zoom_levels::step(1.0, 1, DOC), "a click with Z held still zooms in");
+    assert_eq!(h.state().ui.tool, Tool::Brush);
+    z_key(&mut h, true);
+    click(&mut h, p, Modifiers::ALT);
+    z_key(&mut h, false);
+    assert_eq!(h.state().current_zoom(), crate::zoom_levels::step(z, -1, DOC), "⌥+click with Z held still zooms out");
+    assert_eq!(h.state().ui.tool, Tool::Brush);
+    assert!(!h.state().ui.tool_options.zoom_in);
+}
+
 fn options_bar() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.tool = Tool::Zoom;
