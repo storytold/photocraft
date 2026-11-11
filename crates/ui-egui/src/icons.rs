@@ -95,7 +95,8 @@ pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
 fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
     const SIZE: f32 = 12.0;
     let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
-    let area = egui::Area::new(egui::Id::unique("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    let area =
+        egui::Area::new(egui::Id::unique(("pc-cursor-badge", name))).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
         let outline = image(name, SIZE, Color32::from_black_alpha(220));
         let halo = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
