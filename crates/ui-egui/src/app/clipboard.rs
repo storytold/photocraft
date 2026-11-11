@@ -8,7 +8,8 @@ fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     sig
 }
 
-/// Match the bitmap signature by sampling the bounded SVG mirror, without another full pixel buffer.
+/// Match the bitmap signature by sampling the bounded vector (SVG or PDF) mirror, without
+/// another full pixel buffer.
 fn svg_clip_signature(clip: &photocraft_engine::edit_cmds::Clip) -> u64 {
     let b = clip.bounds;
     let (w, h) = (b.width(), b.height());
@@ -71,10 +72,72 @@ impl PhotocraftApp {
         Ok(true)
     }
 
+    /// Capture PDF and its raster mirror together, as [`Self::import_os_svg_clipboard`] does for
+    /// SVG: a page-layout app's object copy (DesignCraft, say), only ever backing Pixels and
+    /// Smart Object (#2204 follow-up). Shares that same bookkeeping (`os_clip_sig`,
+    /// `clip_external`, `clip_unmirrored`): only one external vector source is mirrored at a time.
+    pub(super) fn import_os_pdf_clipboard(&mut self) -> Result<bool, String> {
+        let Some(get) = self.services.clipboard_get_pdf.as_mut() else { return Ok(false) };
+        let source = match get() {
+            Ok(source) => source,
+            Err(_) if self.clip_unmirrored && !self.clip_external && self.session.clipboard.is_some() => return Ok(false),
+            Err(error) => {
+                self.ui.status = error.clone();
+                self.ui.status_error = true;
+                return Err(error);
+            }
+        };
+        let Some(source) = source else {
+            self.os_clip_pdf = None;
+            if self.clip_external && self.session.clipboard.as_ref().is_some_and(|clip| clip.pdf.is_some()) {
+                self.session.clipboard = None;
+                self.os_clip_sig = None;
+                self.clip_external = false;
+                self.clip_unmirrored = true;
+            }
+            return Ok(false);
+        };
+        let holds_vectors_or_newer = self.session.clipboard.as_ref().is_some_and(|clip| clip.pdf.is_some() || !self.clip_external);
+        if self.os_clip_pdf.as_deref().is_some_and(|old| old == &source) && holds_vectors_or_newer {
+            return Ok(true);
+        }
+        let clip = photocraft_engine::edit_cmds::Clip::from_pdf(&source).map_err(|error| {
+            let error = error.to_string();
+            self.ui.status = error.clone();
+            self.ui.status_error = true;
+            error
+        })?;
+        self.os_clip_sig = Some(svg_clip_signature(&clip));
+        self.os_clip_pdf = clip.pdf.clone();
+        self.session.clipboard = Some(clip);
+        self.clip_external = true;
+        self.clip_unmirrored = false;
+        Ok(true)
+    }
+
+    /// Tries the clipboard's SVG first (richer: Path and Shape read it too), then its PDF
+    /// (Pixels and Smart Object only). `Ok(true)` when either imported a fresh vector source.
+    pub(super) fn import_os_vector_clipboard(&mut self) -> Result<bool, String> {
+        match self.import_os_svg_clipboard() {
+            Ok(true) => Ok(true),
+            Ok(false) => self.import_os_pdf_clipboard(),
+            Err(e) => match self.import_os_pdf_clipboard() {
+                Ok(true) => Ok(true),
+                _ => Err(e),
+            },
+        }
+    }
+
     /// The SVG bytes on the OS clipboard right now, read on an explicit paste without importing
     /// them; `None` when there is no SVG service or the read fails (nothing is known then).
     fn os_svg_now(&mut self) -> Option<Option<std::sync::Arc<Vec<u8>>>> {
         let get = self.services.clipboard_get_svg.as_mut()?;
+        get().ok().map(|source| source.map(std::sync::Arc::new))
+    }
+
+    /// [`Self::os_svg_now`], for PDF.
+    fn os_pdf_now(&mut self) -> Option<Option<std::sync::Arc<Vec<u8>>>> {
+        let get = self.services.clipboard_get_pdf.as_mut()?;
         get().ok().map(|source| source.map(std::sync::Arc::new))
     }
 
@@ -163,11 +226,13 @@ impl PhotocraftApp {
             resolution: None,
             source: None,
             svg: None,
+            pdf: None,
             board: None,
         });
-        // The SVG that came with this image (a vector app puts both): a later internal copy is
-        // newer than it, so Paste As must not bring it back while it is unchanged.
+        // The SVG or PDF that came with this image (a vector app puts both): a later internal
+        // copy is newer than it, so Paste As must not bring it back while it is unchanged.
         self.os_clip_svg = self.os_svg_now().flatten();
+        self.os_clip_pdf = self.os_pdf_now().flatten();
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;

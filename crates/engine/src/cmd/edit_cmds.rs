@@ -24,6 +24,10 @@ pub(crate) use paste_target;
 pub struct Clip {
     /// Original SVG snapshot, when available. The raster mirror belongs to the same source.
     pub svg: Option<std::sync::Arc<Vec<u8>>>,
+    /// Original PDF snapshot, when available (a page-layout app's object copy, say): like `svg`,
+    /// but raster-only (no editable Path or Shape mode; the PDF importer doesn't reconstruct
+    /// vectors), so Paste As offers only Pixels and Smart Object for it.
+    pub pdf: Option<std::sync::Arc<Vec<u8>>>,
     /// Native colour indices for a multi-component clip, in channel order. Singletons are grayscale.
     pub components: Option<Vec<usize>>,
     pub surface: Surface,
@@ -48,6 +52,11 @@ impl Clip {
     /// Prepare bounded original SVG and its raster mirror before installing the clipboard.
     pub fn from_svg(bytes: &[u8]) -> Result<Self> {
         super::vector_clipboard::from_svg(bytes)
+    }
+
+    /// Prepare original PDF and its raster mirror before installing the clipboard.
+    pub fn from_pdf(bytes: &[u8]) -> Result<Self> {
+        super::vector_clipboard::from_pdf(bytes)
     }
 }
 
@@ -214,7 +223,17 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     };
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Ok(Clip { svg: None, components: None, surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None, board: None });
+        return Ok(Clip {
+            svg: None,
+            pdf: None,
+            components: None,
+            surface: out,
+            bounds: Rect::EMPTY,
+            layers: None,
+            resolution: None,
+            source: None,
+            board: None,
+        });
     }
     // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
     // alpha) cost about a second per Layer via Copy (#668).
@@ -236,7 +255,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     out.put_tiles(shared);
     out.prune();
     let bounds = out.content_bounds();
-    Ok(Clip { svg: None, components: None, surface: out, bounds, layers: None, resolution: None, source: None, board: None })
+    Ok(Clip { svg: None, pdf: None, components: None, surface: out, bounds, layers: None, resolution: None, source: None, board: None })
 }
 
 /// [`lift`] over one rectangle: `src`'s pixels with alpha (`n` channels), the selection
@@ -451,7 +470,7 @@ fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     }
     let b = bounds;
     let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
-    s.clipboard = Some(Clip { svg: None, components: None, surface, bounds: b, layers: None, resolution, source, board: None });
+    s.clipboard = Some(Clip { svg: None, pdf: None, components: None, surface, bounds: b, layers: None, resolution, source, board: None });
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }
 

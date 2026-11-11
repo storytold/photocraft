@@ -126,8 +126,8 @@ impl PhotocraftApp {
                 None
             };
             if let Some(mode) = paste_as {
-                // Pixels can come from the bitmap when the SVG can't be read; vectors can't.
-                let (imported, svg_error) = match self.import_os_svg_clipboard() {
+                // Pixels can come from the bitmap when neither vector source can be read; vectors can't.
+                let (imported, vector_error) = match self.import_os_vector_clipboard() {
                     Ok(imported) => (imported, None),
                     Err(error) if mode == "pixels" => (false, Some(error)),
                     Err(error) => return Err(error),
@@ -137,9 +137,9 @@ impl PhotocraftApp {
                     && !clip_read
                     && let Err(error) = self.import_os_clipboard()
                 {
-                    return Err(svg_error.unwrap_or(error));
+                    return Err(vector_error.unwrap_or(error));
                 }
-                if let Some(error) = svg_error {
+                if let Some(error) = vector_error {
                     if self.session.clipboard.is_none() {
                         return Err(error);
                     }
@@ -148,9 +148,10 @@ impl PhotocraftApp {
                 }
             } else if !clip_read {
                 if id == "edit.paste" {
-                    // A vector source (an SVG app's clipboard) offers Paste As before falling
-                    // through to the ordinary bitmap route, which never keeps vectors (#4410).
-                    let _ = self.import_os_svg_clipboard();
+                    // A vector source (an SVG or PDF app's clipboard) offers Paste As before
+                    // falling through to the ordinary bitmap route, which never keeps vectors
+                    // (#4410, #2204 follow-up).
+                    let _ = self.import_os_vector_clipboard();
                     if let Some(result) = paste_as_prompt::offer(self) {
                         return result;
                     }

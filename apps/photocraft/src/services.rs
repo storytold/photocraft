@@ -702,6 +702,19 @@ fn svg_clipboard_source(text: Option<String>) -> Result<Option<Vec<u8>>, String>
     Ok(Some(text.into_bytes()))
 }
 
+/// The clipboard's PDF, read straight off the pasteboard (macOS only: no portable clipboard
+/// crate reads an arbitrary pasteboard type, and PDF, unlike SVG text, isn't readable through
+/// the ordinary text clipboard). A page-layout app's object copy (DesignCraft, say), for Paste
+/// As to offer Pixels and Smart Object the same way it already does for an SVG app's copy
+/// (#2204 follow-up).
+#[cfg(target_os = "macos")]
+fn mac_clipboard_pdf_bytes() -> Option<Vec<u8>> {
+    use objc2::rc::autoreleasepool;
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+    autoreleasepool(|_| Some(NSPasteboard::generalPasteboard().dataForType(&NSString::from_str("com.adobe.pdf"))?.to_vec()))
+}
+
 /// The shell command that starts this install under XWayland, where winit delivers file drops
 /// (winit 0.30 has none on Wayland, #386). A Flatpak gets the X11 socket only without the Wayland
 /// one, an AppImage relaunches by its own path, and anything else is `photocraft` on the PATH.
@@ -846,6 +859,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 svg_clipboard_source(clipboard_text(cb.get_text())?)
             })
         }),
+        #[cfg(target_os = "macos")]
+        clipboard_get_pdf: Some(guarded_clipboard_svg(|| Ok(mac_clipboard_pdf_bytes()))),
         clipboard_unreadable: Some(Box::new(move || clip_unreadable.get())),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
         photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),

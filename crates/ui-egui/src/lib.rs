@@ -647,6 +647,8 @@ pub struct PhotocraftApp {
     os_clip_sig: Option<u64>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.
     os_clip_svg: Option<std::sync::Arc<Vec<u8>>>,
+    /// Last observed PDF bytes, the same way for a page-layout app's object copy.
+    os_clip_pdf: Option<std::sync::Arc<Vec<u8>>>,
     /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept
     /// to recognize unchanged system contents when exporting a newer copy failed or was disabled.
     clip_unmirrored: bool,
