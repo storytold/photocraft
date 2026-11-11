@@ -114,7 +114,8 @@ what an agent can't finish alone.
   inside a closed path or shape, with holes (TYPE-218-10). 2026-10-16: Dynamic Text
   (TYPE-218-11, partial): box type sizes
   each line to span the box, Word Gap and Line Gap, Release and
-  PSD export bake the look. 2026-10-17: lines mix long and short like Photoshop's lockups, sizing
+  PSD export bake the look; a layer PSD export cannot bake (condensed type) is saved with its
+  base sizes and a warning. 2026-10-17: lines mix long and short like Photoshop's lockups, sizing
   follows width only (overflow hidden), and shapes size each line to its row. Known limitation: box wrapping ignores Horizontal Scale, so
   Release refuses condensed type. The Type tool froze the app for 60 s on one macOS machine
   (#2518).
