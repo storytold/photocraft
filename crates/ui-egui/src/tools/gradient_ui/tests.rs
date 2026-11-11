@@ -696,3 +696,152 @@ fn the_preview_of_a_new_gradient_goes_inside_the_selected_artboard() {
     let committed = app.session.active().unwrap().active_layer;
     assert_eq!(top(&app.session.active().unwrap().doc), committed, "and so does the committed layer");
 }
+
+/// CodeRabbit on #10722: a menu over the canvas owns Esc while it is open. The pending gradient
+/// stands, the menu closes, and Esc pressed again then drops the gradient.
+#[test]
+fn a_canvas_menu_takes_escape_before_the_pending_mask_gradient() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    assert!(pending.is_some(), "a gradient is pending");
+    app.ui.canvas_tool_menu = Some(crate::canvas::canvas_tool_menu::CanvasToolMenu {
+        pos: [40.0, 40.0],
+        tool: Tool::Gradient,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: false,
+        anchor: None,
+        text: false,
+        type_layer: false,
+        guide: false,
+        spelling: None,
+        crop: None,
+    });
+    let escape = |app: &mut PhotocraftApp| {
+        let ctx = egui::Context::default();
+        let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+        let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+        ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+    };
+    escape(&mut app);
+    assert_eq!(mask::pending(&app), pending, "the menu's Esc leaves the gradient pending");
+    app.ui.canvas_tool_menu = None;
+    escape(&mut app);
+    assert_eq!(mask::pending(&app), None, "with the menu closed, Esc drops it");
+}
+
+/// CodeRabbit on #10722: an open popup (the status bar's Show menu, an options bar list) owns Esc
+/// too. Its id lives in egui's memory from the last frame, which is what the keys see — the
+/// popups of this frame are drawn after them, so `ctx.any_popup_open` would still read false.
+#[test]
+fn an_open_popup_takes_escape_before_the_pending_mask_gradient() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    assert!(pending.is_some(), "a gradient is pending");
+    let ctx = egui::Context::default();
+    egui::Popup::open_id(&ctx, egui::Id::unique("a-list-in-the-options-bar"));
+    assert!(egui::Popup::is_any_open(&ctx), "the popup is open in egui's memory");
+    let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+    ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx())).textures_delta.clear();
+    assert_eq!(mask::pending(&app), pending, "the popup's Esc leaves the gradient pending");
+}
+
+/// CodeRabbit on #10722: a command the engine won't run leaves the gradient pending. Paste with
+/// nothing on the clipboard is refused by its own precondition (`has_clip_only`) in the precheck
+/// `before_command` runs, so no history step is written for a paste that does nothing.
+#[test]
+fn a_paste_with_an_empty_clipboard_leaves_the_pending_mask_gradient_alone() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    let revision = app.session.active().unwrap().revision;
+    assert!(app.session.clipboard.is_none(), "nothing copied yet");
+    assert!(app.run("edit.paste", json!({})).is_err(), "paste is refused");
+    assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (pending, revision), "nothing was painted");
+}
+
+/// CodeRabbit on #10722: the preview and the paint take one line length, handle drags included.
+/// A handle dragged until the line is shorter than the preview shows keeps the line the gradient
+/// already has, rather than leaving one waiting that nothing on screen draws.
+#[test]
+fn a_handle_dragged_shorter_than_the_preview_keeps_the_line_it_had() {
+    let (mut app, _) = app_on_mask();
+    app.ui.views[0].zoom = 8.0;
+    assert!(app.point_zoom() >= 7.9);
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let line = mask::pending(&app).expect("a gradient is pending");
+    // Grab the end handle and pull it onto the start: half a document pixel apart, which the
+    // preview does not show.
+    drag(&mut app, [120.0, 60.0], [20.5, 60.0]);
+    assert_eq!(mask::pending(&app), Some(line), "the line it had, not an invisible one");
+    // A handle drag that keeps the line long enough does move it.
+    drag(&mut app, [120.0, 60.0], [80.0, 60.0]);
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [80.0, 60.0])), "a visible line moves the end");
+}
+
+/// CodeRabbit on #10722: a drag ends with the tool it started on. Switching to another tool while
+/// the button is down leaves nothing for the release to store.
+#[test]
+fn a_mask_drag_ends_when_the_tool_changes_under_it() {
+    let (mut app, _) = app_on_mask();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 60.0, pressure: 1.0 }, mods());
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 120.0, y: 60.0, pressure: 1.0 }, mods());
+    assert!(app.gradient.mask.dragging(), "a drag is under way");
+    app.ui.tool = Tool::Brush;
+    mask::tick(&mut app);
+    assert!(!app.gradient.mask.dragging(), "the drag ended with the tool");
+    app.ui.tool = Tool::Gradient;
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 60.0 }, mods());
+    assert_eq!(mask::pending(&app), None, "the release stores nothing for a drag that ended");
+}
+
+/// CodeRabbit on #10722, the narrower case its first finding was reaching for: the engine
+/// clipboard holds an image mirrored from outside, the OS clipboard no longer does, and paste is
+/// reached directly rather than through the menu. The OS read then empties the stale copy and the
+/// paste does nothing, so the pending gradient must not have been painted for it.
+#[test]
+fn a_paste_whose_mirrored_clipboard_has_gone_leaves_the_pending_mask_gradient_alone() {
+    // An OS clipboard that holds an image for the copy and nothing afterwards.
+    type OsClip = std::sync::Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
+    let os: OsClip = std::sync::Arc::default();
+    let (set, get) = (os.clone(), os.clone());
+    let services = crate::Services {
+        clipboard_set_image: Some(Box::new(move |w: u32, h: u32, px: &[u8]| {
+            *set.lock().unwrap() = Some((w, h, px.to_vec()));
+            Ok(())
+        })),
+        clipboard_get_image: Some(Box::new(move || Ok(get.lock().unwrap().clone()))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+    app.ui.tool = Tool::Gradient;
+    app.ui.tool_options.gradient_style = "linear".into();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.tool_options.gradient_dither = false;
+    app.ui.tool_options.gradient_classic = false;
+    app.sync_views();
+    assert_eq!(crate::canvas::paint_target(&app), json!("mask"));
+
+    // An image from outside: imported, so mirrored and external.
+    *os.lock().unwrap() = Some((2, 1, vec![255; 8]));
+    assert!(app.import_os_clipboard().unwrap(), "the outside image is imported");
+    assert!(app.session.clipboard.is_some() && app.clip_external, "mirrored from outside");
+
+    // It is gone from the OS clipboard, and a gradient waits on the mask.
+    *os.lock().unwrap() = None;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app).expect("a gradient is pending");
+    let revision = app.session.active().unwrap().revision;
+
+    // Paste reached directly, as automation or a script does.
+    let refused = app.run("edit.paste", json!({})).is_err();
+    assert!(refused, "the paste is refused: the mirrored copy is gone");
+    assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (Some(pending), revision), "nothing was painted for it");
+}
