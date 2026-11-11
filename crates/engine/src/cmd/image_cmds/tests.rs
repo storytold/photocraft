@@ -1250,3 +1250,23 @@ fn trim_and_duplicate_merged_on_too_large_document_fail_gracefully_without_panic
     assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed duplicate");
     assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed duplicate");
 }
+
+/// The overflow guard in `translate_doc` has to measure what actually moves. A surface's visible
+/// content can sit inside the range while the colour stored under its clear pixels does not, and
+/// `translate_surface` shifts the stored extent (an overflowing target rectangle makes ShiftBuilder
+/// drop the pixels or wrap their coordinates, #959).
+#[test]
+fn moving_a_document_rejects_stored_pixels_that_would_wrap() {
+    let mut s = session();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("paint", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        surf.fill_rect(Rect::new(0, 0, 8, 8), &[1.0, 0.0, 0.0, 1.0]);
+        // White under zero alpha at the far end of the coordinate range: invisible, so not content.
+        surf.fill_rect(Rect::new(i32::MAX - 64, 0, i32::MAX - 1, 8), &[1.0, 1.0, 1.0, 0.0]);
+        Ok(())
+    })
+    .unwrap();
+    let err = s.edit("move", |doc, _| translate_doc(doc, "test", 100, 0)).unwrap_err();
+    assert!(err.to_string().contains("32-bit"), "{err}");
+}
