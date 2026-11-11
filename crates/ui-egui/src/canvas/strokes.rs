@@ -845,7 +845,7 @@ pub(crate) fn continue_finishing_stroke(app: &mut PhotocraftApp) -> bool {
         run_queued_commands(app);
         return false;
     }
-    if !take_steps(app, std::time::Duration::ZERO) {
+    if !take_finishing_steps(app, std::time::Duration::ZERO) {
         f.commit_now(app);
         run_queued_commands(app);
         return false;
@@ -871,7 +871,7 @@ pub(crate) fn continue_finishing_stroke(app: &mut PhotocraftApp) -> bool {
 
 /// Take the steps the finishing stroke's thread painted, waiting up to `wait`. False when a step
 /// failed or there is no live stroke: the commit then renders the stroke from its command.
-fn take_steps(app: &mut PhotocraftApp, wait: std::time::Duration) -> bool {
+fn take_finishing_steps(app: &mut PhotocraftApp, wait: std::time::Duration) -> bool {
     let Some(l) = app.live_stroke.as_mut() else { return false };
     for step in l.paint.catch_up(wait) {
         match step {
@@ -938,7 +938,7 @@ pub(crate) fn flush_finishing_stroke(app: &mut PhotocraftApp) -> bool {
             return false;
         }
         let wait = left.min(std::time::Duration::from_millis(10));
-        if app.finishing_stroke.as_ref().is_some_and(|f| f.preparing.is_some()) || !take_steps(app, wait) {
+        if app.finishing_stroke.as_ref().is_some_and(|f| f.preparing.is_some()) || !take_finishing_steps(app, wait) {
             std::thread::sleep(wait);
         }
     }
