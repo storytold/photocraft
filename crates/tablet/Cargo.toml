@@ -3,12 +3,12 @@ name = "photocraft-tablet"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Pen tablet pressure, tilt, rotation and eraser end on macOS (AppKit), Linux X11 (XInput2) and Windows (WinTab), and barrel button on Windows"
+description = "Pen tablet pressure, tilt, rotation and eraser end on macOS (AppKit), Linux X11 (XInput2) and Windows (WinTab), and barrel button and eraser end on Windows (Windows Ink)"
 
 # The one isolated `unsafe` helper crate (see AGENTS.md, Never crash): the AppKit event
-# monitor on macOS and the WH_GETMESSAGE pointer hook on Windows need platform interop. Only
-# `src/macos.rs` and `src/windows.rs` allow `unsafe`; everything else is denied, and every other
-# crate keeps the workspace's `unsafe_code = "forbid"`.
+# monitor on macOS and the WH_GETMESSAGE and WH_CALLWNDPROC pointer hooks on Windows need
+# platform interop. Only `src/macos.rs` and `src/windows.rs` allow `unsafe`; everything else is
+# denied, and every other crate keeps the workspace's `unsafe_code = "forbid"`.
 [lints.rust]
 unsafe_code = "deny"
 

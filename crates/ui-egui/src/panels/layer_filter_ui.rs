@@ -323,10 +323,7 @@ pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                 }
             }
-            FilterBy::Name => {
-                let width = ui.available_width().max(48.0);
-                widgets::text_field(ui, ui.scope_id().with("layer-filter-name"), &mut app.ui.layer_filter_name, tl!("Search"), width, false);
-            }
+            FilterBy::Name => find::name_field(app, ui),
             FilterBy::Effect => effect::controls(app, ui),
             FilterBy::Mode => {
                 // The 27 layer modes, without Pass Through: a group set to Pass Through is never
@@ -369,6 +366,7 @@ pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 pub mod effect;
+pub mod find;
 mod group;
 pub mod selection;
 
@@ -379,6 +377,8 @@ pub mod attribute;
 
 #[cfg(test)]
 mod attribute_tests;
+#[cfg(test)]
+mod find_tests;
 #[cfg(test)]
 mod selection_tests;
 #[cfg(test)]
