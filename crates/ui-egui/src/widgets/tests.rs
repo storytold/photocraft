@@ -196,6 +196,34 @@ fn drawn_texts(out: &egui::FullOutput) -> Vec<(String, egui::Rect, bool)> {
     texts
 }
 
+/// The Urdu Stroke heading has a negative left glyph bearing with the shipped fonts. Its ink
+/// must stay inside the panel at every scale, even though its logical advance starts at zero.
+#[test]
+fn section_labels_keep_glyph_bearings_inside_the_panel() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    for kind in crate::theme::ThemeKind::ALL {
+        crate::theme::apply(&ctx, kind);
+        for ppp in [1.0, 1.25, 2.0] {
+            ctx.set_pixels_per_point(ppp);
+            for label in ["Stroke", "\u{644}\u{6a9}\u{6cc}\u{631}", "Location"] {
+                let mut room = egui::Rect::NOTHING;
+                let mut out = ctx.run_ui(Default::default(), |ui| {
+                    ui.set_max_width(440.0);
+                    room = ui.max_rect();
+                    super::section_label(ui, label);
+                });
+                out.textures_delta.clear();
+                let texts = drawn_texts(&out);
+                assert_eq!(texts.len(), 1, "{kind:?} @{ppp}x: {label}");
+                let (_, ink, _) = &texts[0];
+                assert!(ink.left() >= room.left() - 0.01, "{kind:?} @{ppp}x: {label} ink {ink:?} in {room:?}");
+                assert!(ink.right() <= room.right() + 0.01, "{kind:?} @{ppp}x: {label} ink {ink:?} in {room:?}");
+            }
+        }
+    }
+}
+
 /// #9635: the shared dialog label column is as wide as its widest label, between the English
 /// width and a cap, and a label wider than the column elides inside it.
 #[test]
