@@ -544,7 +544,12 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             if !sets_source && press_refused(app, tool) {
                 return;
             }
-            if !sets_source && (crate::rasterize_prompt::intercept(app, tool, x, y, pressure) || refuse_group(app, tool)) {
+            // The Clone Stamp's no-source alert opens at the press, after any rasterize prompt.
+            if !sets_source
+                && (crate::rasterize_prompt::intercept(app, tool, x, y, pressure)
+                    || refuse_group(app, tool)
+                    || crate::retouch_ui::clone_stamp_without_source(app, tool))
+            {
                 return;
             }
             // ⌘ with a selection tool is the Move tool for the drag: outside the selection (or
