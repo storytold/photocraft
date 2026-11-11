@@ -1561,3 +1561,49 @@ fn printed_pdf_uses_winansi_for_labels_and_descriptions() {
     assert!(content.contains(r"(Price: \20020 \(proof\)) Tj"), "{content}");
     assert!(content.is_ascii(), "encoded bytes are escaped, never UTF-8 text operands");
 }
+
+/// The linked path is document data: a file the session's gate refuses is packaged as missing,
+/// never copied into the package (#sec).
+#[test]
+fn package_skips_links_the_session_refuses() {
+    fn deny_png_paths(_: &str, p: &Value) -> Result<()> {
+        match p.get("path").and_then(Value::as_str) {
+            Some(path) if path.ends_with(".png") => Err(other(format!("source path refused: {path}"))),
+            _ => Ok(()),
+        }
+    }
+    let dir = tmp("package_refused");
+    let link = format!("{dir}/art.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 20, "height": 20, "background": "#ff0000"})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = session("rgb", 8);
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    s.authorize = Some(deny_png_paths);
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    assert_eq!(r["links"], json!([]));
+    assert_eq!(r["missing"], json!([link]));
+    assert!(!std::path::Path::new(&format!("{dir}/pkg/Print Me/Links/art.png")).exists());
+}
+
+/// A gate that allows `file.package` but refuses the command the renderer reads linked files with
+/// still keeps the file out of the package.
+#[test]
+fn package_applies_the_source_read_gate() {
+    fn deny_source_reads(id: &str, _: &Value) -> Result<()> {
+        if id == "layer.smartObjects.updateModifiedContent" { Err(other("source reads are refused")) } else { Ok(()) }
+    }
+    let dir = tmp("package_read_gate");
+    let link = format!("{dir}/art.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 20, "height": 20, "background": "#ff0000"})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = session("rgb", 8);
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    s.authorize = Some(deny_source_reads);
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    assert_eq!(r["missing"], json!([link]));
+    s.authorize = None;
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg2")})).unwrap();
+    assert_eq!(r["links"].as_array().map(Vec::len), Some(1), "an ungated package still copies the link");
+}

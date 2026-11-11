@@ -1496,6 +1496,17 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                     missing.push(path.clone());
                     continue;
                 };
+                // The path lives in the document, not in the params: a file the session's policy
+                // refuses is packaged as missing, as smart-object renders refuse to read it. Both
+                // spellings are gated, the stored link path as well as the resolved one, and by the
+                // command the renderer reads the file with too.
+                let refused = |p: &str| {
+                    s.authorize.is_some_and(|gate| [cmd, "layer.smartObjects.updateModifiedContent"].iter().any(|c| gate(c, &json!({"path": p})).is_err()))
+                };
+                if refused(path.as_str()) || refused(&file.to_string_lossy()) {
+                    missing.push(path.clone());
+                    continue;
+                }
                 // Only a file PhotoCraft can place is copied; anything else is packaged as missing.
                 match read_file(&file.to_string_lossy()).ok().filter(|bytes| crate::file_cmds::import(&fname, bytes).is_ok()) {
                     Some(bytes) => {
