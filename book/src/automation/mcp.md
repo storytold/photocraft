@@ -38,13 +38,13 @@ The release packages ship `photocraft-cli` alongside the desktop app, so no buil
 
 | Install | CLI |
 |---|---|
-| Windows (MSI) | `C:\Program Files\PhotoCraft\photocraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Windows (MSI) | `%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft\photocraft-cli.exe` by default (`C:\Program Files\ArtCraft\PhotoCraft\photocraft-cli.exe` for an all-users install, under `Program Files (x86)` instead for the 32-bit build, or wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/photocraft-cli` |
 | macOS | the separate `photocraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
 
 ```sh
-# Windows, default install folder
-claude mcp add photocraft -- "C:\Program Files\PhotoCraft\photocraft-cli.exe" mcp --automation-read-root <dir> --automation-write-root <dir>
+# Windows (PowerShell), default install folder
+claude mcp add photocraft -- "$env:LOCALAPPDATA\Programs\ArtCraft\PhotoCraft\photocraft-cli.exe" mcp --automation-read-root <dir> --automation-write-root <dir>
 # Linux, or macOS with the CLI unzipped onto PATH
 claude mcp add photocraft -- photocraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>
 ```
@@ -63,6 +63,8 @@ Filesystem capabilities are implemented. General tool and method capabilities re
 
 The five shared core tools are `command_list`, `command_run`, `command_batch`, `doc_inspect`
 and `render_preview`. Existing documented tools, including `doc_render_preview`, remain
-listed. `photocraft://document` and `photocraft://commands` expose live JSON. Direct headless
-Render Video supports progress and cancellation using the granted write root; see
+listed. `photocraft://document` and `photocraft://commands` expose live JSON. Long commands
+that are waited on report progress and stop when the request is cancelled, headless and in
+bridge mode (where they may also outlast the bridge's reply timeout), and direct headless
+Render Video does too, using the granted write root; see
 [`docs/mcp.md`](../../../docs/mcp.md) for arguments, cleanup and transport behavior.

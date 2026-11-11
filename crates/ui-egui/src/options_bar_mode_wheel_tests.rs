@@ -56,11 +56,14 @@ fn the_wheel_over_the_brush_mode_dropdown_steps_the_painting_mode() {
     wheel(&mut h, at, -1.0);
     assert_eq!(brush_mode(&h), BlendMode::Dissolve);
     wheel(&mut h, at, -1.0);
-    assert!(h.state().ui.tool_options.brush_clear, "Clear follows Dissolve, as in Photoshop");
+    assert!(h.state().session.tools.brush.behind, "Behind follows Dissolve");
+    wheel(&mut h, at, -1.0);
+    assert!(h.state().ui.tool_options.brush_clear, "Clear follows Behind");
+    assert!(!h.state().session.tools.brush.behind);
     wheel(&mut h, at, -1.0);
     assert!(!h.state().ui.tool_options.brush_clear);
     assert_eq!(brush_mode(&h), BlendMode::Darken);
-    wheel(&mut h, at, 3.0);
+    wheel(&mut h, at, 4.0);
     assert_eq!(brush_mode(&h), BlendMode::Normal, "up steps back and stops at the first mode");
 }
 
@@ -77,6 +80,9 @@ fn the_wheel_over_the_pencil_mode_dropdown_steps_the_painting_mode() {
 #[test]
 fn the_wheel_over_the_gradient_mode_dropdown_steps_its_blend_mode() {
     let mut h = harness(Tool::Gradient);
+    // Only the Classic gradient has a blend Mode (#12007).
+    h.state_mut().ui.tool_options.gradient_classic = true;
+    h.run_steps(4);
     let at = mode_dropdown(&h).center();
     wheel(&mut h, at, -2.0);
     assert_eq!(h.state().ui.tool_options.gradient_blend_mode, BlendMode::Darken);

@@ -9,7 +9,7 @@ use crate::blend::BlendMode;
 use crate::descriptor::UnicodeString;
 use crate::error::{PsdError, Result};
 use crate::header::Version;
-use crate::io::{Reader, WriteExt};
+use crate::io::{Reader, Sink, WriteExt};
 
 /// Keys whose length field is 8 bytes in PSB files: the thirteen the Adobe
 /// specification lists, plus keys Photoshop also writes with 8-byte lengths
@@ -168,7 +168,7 @@ impl TaggedBlock {
         String::from_utf8_lossy(&self.key).into_owned()
     }
 
-    fn default_padding(len: usize, alignment: usize) -> usize {
+    pub(crate) fn default_padding(len: usize, alignment: usize) -> usize {
         (alignment - len % alignment) % alignment
     }
 
@@ -360,9 +360,14 @@ impl TaggedBlock {
 
     /// Serialized size in bytes as a layer block (two-byte alignment).
     pub fn encoded_len(&self, version: Version) -> usize {
+        self.encoded_len_aligned(version, 2)
+    }
+
+    /// Serialized size in bytes as [`Self::write`] writes it with `alignment`.
+    pub(crate) fn encoded_len_aligned(&self, version: Version, alignment: usize) -> usize {
         let l = if uses_long_length(version, &self.key) { 8 } else { 4 };
-        let p = self.padding.as_ref().map_or(Self::default_padding(self.data.len(), 2), Vec::len);
-        8 + l + self.data.len() + p
+        let p = self.padding.as_ref().map_or(Self::default_padding(self.data.len(), alignment), Vec::len);
+        (8 + l + p).saturating_add(self.data.len())
     }
 }
 
@@ -444,7 +449,7 @@ fn parse_section(d: &[u8]) -> Result<SectionDivider> {
 
 /// `8BIM` / `8B64`, or the markers `MIB8` / `46B8` that [`crate::tiff`] gives a block kept
 /// verbatim from a little-endian TIFF when its layout is unknown (its data is in that order).
-fn is_sig(b: &[u8]) -> bool {
+pub(crate) fn is_sig(b: &[u8]) -> bool {
     b.starts_with(b"8BIM") || b.starts_with(b"8B64") || TaggedBlock::is_foreign_order_signature(b)
 }
 
@@ -499,6 +504,29 @@ pub(crate) fn read_blocks_with(
 pub(crate) fn write_blocks(out: &mut Vec<u8>, blocks: &[TaggedBlock], version: Version, alignment: usize) -> Result<()> {
     for b in blocks {
         b.write(out, version, alignment)?;
+    }
+    Ok(())
+}
+
+/// [`write_blocks`] to a streaming [`Sink`]: each block's data goes straight through, so a large
+/// opaque block (an embedded smart object) is never copied whole.
+pub(crate) fn write_blocks_to<W: std::io::Write + std::io::Seek + ?Sized>(
+    out: &mut Sink<'_, W>,
+    blocks: &[TaggedBlock],
+    version: Version,
+    alignment: usize,
+) -> std::io::Result<()> {
+    for b in blocks {
+        out.small(|o| {
+            o.put(&b.signature);
+            o.put(&b.key);
+            o.put_len(b.data.len() as u64, uses_long_length(version, &b.key))
+        })?;
+        out.put(&b.data)?;
+        match &b.padding {
+            Some(p) => out.put(p)?,
+            None => out.zeros(TaggedBlock::default_padding(b.data.len(), alignment))?,
+        }
     }
     Ok(())
 }

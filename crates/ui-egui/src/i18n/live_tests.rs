@@ -15,6 +15,8 @@ fn lang(code: &str) -> Lang {
     Lang::from_code(code).expect("registered language")
 }
 
+/// Regional locale tags (`fr-CA`, `ko-KR`, `bs-BA` …) resolve to their registered catalog, as
+/// a preference and as a system tag.
 #[test]
 fn requested_languages_resolve_regional_preferences() {
     for (tag, code) in [
@@ -28,12 +30,88 @@ fn requested_languages_resolve_regional_preferences() {
         ("id-ID", "id"),
         ("vi-VN", "vi"),
         ("sr-RS", "sr"),
+        ("az-Latn-AZ", "az"),
+        ("bs-BA", "bs"),
     ] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }
     assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(lang("ko")));
     assert_eq!(lang_from_tag("FR-fr"), Some(lang("fr")));
     assert_eq!(lang_from_tag("ko"), Some(lang("ko")));
+}
+
+/// Switching redraws the menu and persists through the shell's save/load services on restart.
+#[test]
+fn azerbaijani_draw_after_switching_and_restore_after_restart() {
+    use std::{cell::RefCell, rc::Rc};
+
+    let code = "az";
+    let file = "Fayl";
+    with_language(Lang::EN, || {
+        let saved = Rc::new(RefCell::new(None::<String>));
+        let (load, store) = (saved.clone(), saved.clone());
+        let services = Services {
+            load_prefs: Some(Box::new(move || load.borrow().clone())),
+            save_prefs: Some(Box::new(move |text| {
+                *store.borrow_mut() = Some(text.to_owned());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut h = harness_with_services(services);
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("choose language");
+        h.run_steps(4);
+        assert_eq!(current(), lang(code));
+        assert_eq!(tr(current(), "File"), file);
+        assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang(code))));
+        let persisted = saved.borrow().clone().expect("shell saved preferences");
+        let value: serde_json::Value = serde_json::from_str(&persisted).expect("saved JSON");
+        assert_eq!(value["interface"]["language"], code);
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "en"})).expect("switch back");
+        h.run_steps(4);
+        assert_eq!(current(), Lang::EN);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&saved.borrow().clone().expect("saved English preferences")).expect("saved JSON")["interface"]["language"],
+            "en"
+        );
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("choose language again");
+        h.run_steps(4);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&saved.borrow().clone().expect("saved language preferences")).expect("saved JSON")["interface"]["language"],
+            code
+        );
+        drop(h);
+        // The restarted shell, not the old one's drawing language, must bring Azerbaijani back.
+        set_current(Lang::EN);
+        let services = Services { load_prefs: Some(Box::new(move || saved.borrow().clone())), ..Default::default() };
+        let restarted = harness_with_services(services);
+        assert_eq!(restarted.state().session.prefs().interface.language, code);
+        assert_eq!(current(), lang(code));
+        assert!(drawn_text(&restarted).iter().any(|text| *text == file_title(lang(code))));
+    });
+}
+
+/// Preferences draw the catalog terms verbatim and the bundled UI font covers their letters.
+#[test]
+fn azerbaijani_preferences_draw_terms_and_glyphs() {
+    let code = "az";
+    let interface = "İnterfeys";
+    let light = "Açıq mövzu";
+    with_language(Lang::EN, || {
+        let mut h = harness();
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("choose language");
+        crate::prefs_ui::open_preferences(h.state_mut(), "interface");
+        h.run_steps(4);
+        let text = drawn_text(&h);
+        for expected in [interface, light, tr(lang(code), "UI font size"), tr(lang(code), "UI scale")] {
+            assert!(text.iter().any(|text| text == expected), "{code}: missing {expected:?}");
+            h.ctx.fonts_mut(|fonts| {
+                for c in expected.chars().chain("ƏəĞğIıİiÖöŞşÜüÇç".chars()).filter(|c| c.is_alphabetic()) {
+                    assert!(fonts.has_glyph(&egui::FontId::proportional(12.0), c), "{code}: missing glyph {c}");
+                }
+            });
+        }
+    });
 }
 
 #[test]
@@ -188,7 +266,7 @@ fn cjk_font_order_follows_the_selected_language() {
 fn korean_glyphs_remain_available_after_repeated_language_switches() {
     use photocraft_text::cjk::{self, CjkChar, CjkScript};
     #[cfg(target_os = "linux")]
-    crate::cjk_fonts::wait_for_fontconfig_cjk_scan();
+    assert!(crate::cjk_fonts::wait_for_fontconfig_cjk_scan(), "Fontconfig CJK lookup did not finish within 10 seconds");
     if !cjk::font_files(CjkScript::Korean).iter().any(|font| font.path.is_file()) {
         eprintln!("skipping: no installed Korean font");
         return;
@@ -228,9 +306,23 @@ fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, P
     harness
 }
 
+/// Auto draws the detected system language on first launch while keeping the Auto preference.
 #[test]
 fn first_launch_renders_the_system_language_without_overwriting_auto() {
-    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("uk-UA", "uk"), ("fr-CA", "fr")] {
+    for (tag, code) in [
+        ("en-US", "en"),
+        ("zh-CN", "zh-hans"),
+        ("ja-JP", "ja"),
+        ("ko-KR", "ko"),
+        ("ru-RU", "ru"),
+        ("uk-UA", "uk"),
+        ("fr-CA", "fr"),
+        ("sv-SE", "sv"),
+        ("fi-FI", "fi"),
+        ("da-DK", "da"),
+        ("nb-NO", "nb"),
+        ("az-AZ", "az"),
+    ] {
         system::with_system_tags(&[tag], || {
             with_language(Lang::EN, || {
                 let h = harness();
@@ -244,7 +336,7 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
 
 #[test]
 fn missing_or_unsupported_system_languages_render_english() {
-    for tags in [vec![], vec!["sv-SE", "ar-SA"]] {
+    for tags in [vec![], vec!["sw-KE", "is-IS"]] {
         system::with_system_tags(&tags, || {
             with_language(Lang::EN, || {
                 let h = harness();
@@ -447,5 +539,46 @@ fn czech_shortcut_conflicts_keep_warning_state_and_shortcut_codes() {
             assert!(message.contains(piece), "{message:?} lacks {piece:?}");
         }
         assert_eq!(fields["overrides"]["file.new"], json!("Cmd+O"));
+    });
+}
+
+/// The catalog stays in logical order: egui puts a right-to-left label into display order itself,
+/// so the first word of an Arabic label lands to the right of its last, and a Latin brand name at
+/// the end of the sentence lands at the left.
+#[test]
+fn arabic_labels_are_laid_out_right_to_left() {
+    with_language(Lang::EN, || {
+        let mut h = harness();
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "ar"})).unwrap();
+        h.run_steps(4);
+        let x_of = |text: &str, c: char| {
+            let galley = h.ctx.fonts_mut(|f| f.layout_no_wrap(text.to_string(), egui::FontId::proportional(13.0), egui::Color32::WHITE));
+            galley.rows.iter().flat_map(|r| r.glyphs.iter()).find(|g| g.chr == c).map(|g| g.pos.x).expect("glyph")
+        };
+        let label = tr(lang("ar"), "No properties");
+        assert_eq!(label, "لا توجد خصائص");
+        assert!(x_of(label, 'ل') > x_of(label, 'ص'), "{label}: first word at the right");
+        let join = tr(lang("ar"), "Join us on Discord");
+        assert!(x_of(join, 'D') < x_of(join, 'ن'), "{join}: Discord at the left");
+    });
+}
+
+/// #5159 on egui 0.37: user names are handed to egui as typed, and egui orders the words. An
+/// Arabic layer name reads from the right; the title line keeps "— PhotoCraft" at the right of a
+/// right-to-left document name.
+#[test]
+fn arabic_names_are_laid_out_right_to_left() {
+    with_language(Lang::EN, || {
+        let h = harness();
+        let font = egui::FontId::proportional(13.0);
+        let x_in = |galley: &egui::Galley, c: char| galley.rows.iter().flat_map(|r| r.glyphs.iter()).find(|g| g.chr == c).map(|g| g.pos.x).expect("glyph");
+        let name = "لاشي مكتوب هنا";
+        let galley = h.ctx.fonts_mut(|f| f.layout_no_wrap(name.to_string(), font.clone(), egui::Color32::WHITE));
+        assert!(x_in(&galley, 'ل') > x_in(&galley, 'ه'), "{name}: first word at the right");
+        let title = "لاشي مكتوب.png — PhotoCraft";
+        let job = crate::panels::title_bar::title_job(title, font, egui::Color32::WHITE);
+        let galley = h.ctx.fonts_mut(|f| f.layout_job(job));
+        assert!(x_in(&galley, 'ل') > x_in(&galley, 'م'), "{title}: the name's first word right of its second");
+        assert!(x_in(&galley, 'P') > x_in(&galley, 'ل'), "{title}: PhotoCraft stays at the right");
     });
 }

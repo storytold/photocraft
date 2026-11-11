@@ -216,6 +216,13 @@ fn nesting_beyond_the_load_limit_is_refused_at_save() {
     assert!(matches!(e, FormatError::LimitExceeded(_)), "{e}");
 }
 
+/// craft-pcraft-format's default manifest nesting limit is computed from its own copy of the
+/// group depth, so the two must stay equal.
+#[test]
+fn group_depth_matches_craft_pcraft_format() {
+    assert_eq!(MAX_GROUP_DEPTH, craft_pcraft_format::MAX_GROUP_DEPTH);
+}
+
 #[test]
 fn empty_document_roundtrips() {
     let doc = Document::new("empty", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
@@ -280,10 +287,11 @@ fn text_run_baseline_roundtrips() {
 fn zip_incremental_only_new_tiles() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
     let mut w = PcraftWriter::new();
-    let (_, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (first, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert!(s1.tiles_total > 5);
     assert_eq!(s1.tiles_written, s1.tiles_total);
-    let (_, s2) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (cached, s2) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(first, cached);
     assert_eq!(s2.tiles_written, 0);
     assert_eq!(s2.tiles_reused, s2.tiles_total);
     assert_eq!(s2.blobs_written, 0);
@@ -293,6 +301,7 @@ fn zip_incremental_only_new_tiles() {
     let (bytes, s3) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(s3.tiles_written, 1);
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+    assert_eq!(bytes, PcraftWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap().0);
 }
 
 #[test]
@@ -488,7 +497,7 @@ fn previews_embedded_and_readable() {
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let mut thumb = Rgba8Image::new(4, 3);
     thumb.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = i as u8);
-    let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(thumb.clone()) };
+    let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(thumb.clone()), ..Default::default() };
     let bytes = save_to_bytes(&doc, &opts).unwrap();
     let png = read_thumbnail(&bytes).unwrap().unwrap();
     let img = photocraft_codecs::decode(&png).unwrap();
@@ -498,6 +507,45 @@ fn previews_embedded_and_readable() {
     assert_eq!(m.composite.as_deref(), Some("composite/preview.png"));
     assert_eq!(m.format_version, FORMAT_VERSION);
     assert!(read_thumbnail(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap().is_none());
+}
+
+/// The full-size composite is an optional manifest member: a bundle without it (every file saved
+/// before it was written) opens as before, at the same format version.
+#[test]
+fn bundles_without_the_full_composite_still_open() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let full = Rgba8Image::new(doc.size.width, doc.size.height);
+    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)), full_composite: Some(full), ..Default::default() };
+    let bytes = save_to_bytes(&doc, &opts).unwrap();
+    assert!(read_full_composite(&bytes).unwrap().is_some());
+    assert_eq!(read_manifest(&bytes).unwrap().format_version, 1);
+    // Rewrite the bundle as an older writer left it: no member in the manifest, no entry.
+    let r = zip::ZipReader::new(&bytes).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap();
+    assert!(manifest.as_object_mut().unwrap().remove("full_composite").is_some());
+    let mut z = zip::ZipWriter::new();
+    z.add("manifest.json", &serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    for e in r.entries.iter().filter(|e| e.name != "manifest.json" && e.name != "composite/full.png") {
+        z.add(&e.name, &r.read(e, usize::MAX).unwrap()).unwrap();
+    }
+    let older = z.finish().unwrap();
+    assert_eq!(read_full_composite(&older).unwrap(), None);
+    // A member that names any other entry is refused, and the document still opens.
+    manifest["full_composite"] = serde_json::Value::from("thumb.png");
+    let mut z = zip::ZipWriter::new();
+    z.add("manifest.json", &serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    for e in r.entries.iter().filter(|e| e.name != "manifest.json") {
+        z.add(&e.name, &r.read(e, usize::MAX).unwrap()).unwrap();
+    }
+    let other = z.finish().unwrap();
+    assert!(read_full_composite(&other).is_err());
+    assert_eq!(load_from_bytes(&other).unwrap(), doc);
+    assert_eq!(load_from_bytes(&older).unwrap(), load_from_bytes(&bytes).unwrap());
+    assert_eq!(load_from_bytes(&older).unwrap(), doc);
+    // A save without it writes no member at all, as older writers did.
+    let plain = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let text = zip::ZipReader::new(&plain).unwrap().read_by_name("manifest.json", usize::MAX).unwrap();
+    assert!(!String::from_utf8(text).unwrap().contains("full_composite"));
 }
 
 #[test]
@@ -520,6 +568,22 @@ fn save_is_deterministic() {
     let a = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     let b = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(a, b);
+}
+
+/// A bundle that is read and saved again gives the same bytes, previews included.
+#[test]
+fn save_load_save_gives_the_same_bytes() {
+    let mut preview = Rgba8Image::new(4, 3);
+    preview.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = i as u8);
+    for opts in [SaveOptions::default(), SaveOptions { thumbnail: Some(preview.clone()), composite: Some(preview.clone()), ..Default::default() }] {
+        for mode in MODES {
+            for depth in SampleType::ALL {
+                let first = save_to_bytes(&rich_doc(mode, depth), &opts).unwrap();
+                let again = save_to_bytes(&load_from_bytes(&first).unwrap(), &opts).unwrap();
+                assert!(first == again, "{mode:?} {depth:?}: the second save differs");
+            }
+        }
+    }
 }
 
 #[test]
@@ -618,7 +682,7 @@ fn text_kerning_roundtrips_and_defaults() {
     assert!(s.contains("\"kern\":0.0"), "kern defaults to 0");
 }
 
-/// Type on a path (#218): the path, start offset and flip survive .pcraft.
+/// Type on a path (#218): the path, start and end offsets, and flip survive .pcraft.
 #[test]
 fn path_text_shape_roundtrips() {
     use photocraft_doc::text::TextShape;
@@ -628,7 +692,7 @@ fn path_text_shape_roundtrips() {
     let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
     for id in ids {
         if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
-            t.shape = TextShape::Path { path: path.clone(), start: 12.5, flip: true };
+            t.shape = TextShape::Path { path: path.clone(), start: 12.5, end: Some(83.0), flip: true };
         }
     }
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
@@ -636,7 +700,7 @@ fn path_text_shape_roundtrips() {
         LayerContent::Text(t) => Some(t.shape.clone()),
         _ => None,
     });
-    assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, flip: true }));
+    assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, end: Some(83.0), flip: true }));
 }
 
 /// Area type (#218): the whole path, ops and fill rule included, survives .pcraft.
@@ -884,13 +948,32 @@ fn variables_follow_layer_id_remapping() {
     assert!(back.walk().into_iter().all(|(_, _, l)| l.id != gone), "dangling target must not address a live layer");
 }
 
+#[test]
+fn color_lookup_lut_file_round_trips_and_old_files_load() {
+    use photocraft_doc::Adjustment;
+    use photocraft_doc::adjust::{LutFormat, LutSource};
+    let lut = Some(std::sync::Arc::new(vec![0.5f32; 24]));
+    let source = Some(LutSource { format: LutFormat::ThreeDl, bytes: std::sync::Arc::new(b"0 1023\n0 0 0\n".to_vec()) });
+    let adj = Adjustment::ColorLookup { name: "Film.3dl".into(), lut, size: 2, tetrahedral: false, dither: false, source };
+    let mut doc = Document::new("d", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+    doc.insert_above(None, Layer::new("lookup", LayerContent::Adjustment(adj.clone())));
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back, doc, "the LUT file survives a .pcraft round trip (#6544)");
+    // A .pcraft written before the field existed has no `source`: it loads as None.
+    let mut v = serde_json::to_value(&adj).unwrap();
+    let removed = v.as_object_mut().and_then(|o| o.values_mut().next()).and_then(|f| f.as_object_mut()).and_then(|f| f.remove("source"));
+    assert!(removed.is_some(), "{v}");
+    let Adjustment::ColorLookup { source: None, name, .. } = serde_json::from_value(v).unwrap() else { panic!("old lookup must load") };
+    assert_eq!(name, "Film.3dl");
+}
+
 /// Removing previews is post-commit housekeeping, not part of publishing the new document.
 #[test]
 fn directory_save_without_previews_removes_stale_files_after_commit() {
     let mut doc = Document::new("before", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("preview-cleanup");
     let mut writer = PcraftWriter::new();
-    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)) };
+    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)), ..Default::default() };
     writer.save_dir(&doc, &dir, &opts).unwrap();
     doc.name = "after".into();
     writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
@@ -910,7 +993,7 @@ fn failed_manifest_commit_preserves_omitted_previews() {
         let mut doc = Document::with_background("before", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, depth, photocraft_color::Color::WHITE);
         let dir = temp_dir("locked-manifest-previews");
         let mut writer = PcraftWriter::new();
-        let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)) };
+        let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)), ..Default::default() };
         writer.save_dir(&doc, &dir, &opts).unwrap();
         let old_doc = doc.clone();
         let paths = ["manifest.json", "thumb.png", "composite/preview.png"];
@@ -941,7 +1024,7 @@ fn locked_stale_preview_does_not_fail_committed_save() {
     let mut doc = Document::new("before", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("locked-stale-preview");
     let mut writer = PcraftWriter::new();
-    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)) };
+    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)), ..Default::default() };
     writer.save_dir(&doc, &dir, &opts).unwrap();
     let held = std::fs::OpenOptions::new().read(true).share_mode(3).open(dir.join("thumb.png")).unwrap();
     doc.name = "after".into();
@@ -953,4 +1036,81 @@ fn locked_stale_preview_does_not_fail_committed_save() {
     writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert!(!dir.join("thumb.png").exists());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn arrow_document_is_backward_compatible() {
+    use photocraft_doc::{Fill, LiveShape, Path, ShapeLayer, Subpath};
+
+    let arrow =
+        LiveShape::ArrowLine { from: [12.0, 64.0], to: [140.0, 64.0], weight: 16.0, start: false, end: true, width: 52.0, length: 50.0, concavity: 20.0 };
+
+    let path = Path::new(vec![Subpath::polygon(&[(12.0, 56.0), (100.0, 56.0), (100.0, 44.0), (140.0, 64.0), (100.0, 84.0), (100.0, 72.0), (12.0, 72.0)])]);
+
+    let mut doc = Document::new("Arrow compatibility", photocraft_doc::Size::new(256, 256), ColorMode::Rgb, SampleType::U8);
+
+    doc.layers.push(Layer::new(
+        "Editable arrow",
+        LayerContent::Shape(ShapeLayer {
+            path: path.clone(),
+            fill: Some(Fill::Solid(photocraft_doc::Color::BLACK)),
+            live: Some(arrow.clone()),
+            ..Default::default()
+        }),
+    ));
+
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let manifest = read_manifest(&bytes).unwrap();
+    let json = serde_json::to_value(&manifest).unwrap();
+    let saved = &json["document"]["layers"][0]["content"];
+
+    assert_eq!(saved["kind"], "shape");
+    assert!(saved["live"].is_null());
+    assert_eq!(saved["arrow_live"]["kind"], "arrowLine");
+    assert_eq!(saved["path"], serde_json::to_value(&path).unwrap());
+
+    // Simulate an old reader that knows no ArrowLine or arrow_live.
+    #[derive(serde::Deserialize)]
+    struct LegacyShape {
+        live: Option<LegacyLive>,
+        path: Path,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "camelCase")]
+    #[allow(dead_code)]
+    enum LegacyLive {
+        Line { from: [f64; 2], to: [f64; 2], weight: f64 },
+    }
+
+    let legacy: LegacyShape = serde_json::from_value(saved.clone()).unwrap();
+    assert!(legacy.live.is_none());
+    assert_eq!(legacy.path, path);
+
+    // The new reader restores full parametric editability.
+    let loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded, doc);
+}
+
+/// `FileEncoding::source_images` is kept in `.pcraft` with the other encoder settings (#5733):
+/// the crash-recovery autosave is a `.pcraft` bundle reopened at the document's original path, so
+/// dropping the count would let Save write one frame over a multi-image file. A manifest written
+/// before the key existed loads with no count.
+#[test]
+fn file_encoding_source_images_roundtrips_and_defaults_when_absent() {
+    for count in [3, u32::MAX] {
+        let mut doc = Document::new("anim", photocraft_doc::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+        doc.file_encoding = photocraft_doc::FileEncoding { jpeg_quality: Some(80), source_images: Some(count), ..Default::default() };
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        let loaded = load_from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.file_encoding.source_images, Some(count));
+        assert_eq!(loaded, doc);
+
+        // The same manifest without the key, as an older build wrote it.
+        let mut json = serde_json::to_value(read_manifest(&bytes).unwrap().document).unwrap();
+        let encoding = json["file_encoding"].as_object_mut().unwrap();
+        assert_eq!(encoding.remove("sourceImages"), Some(serde_json::json!(count)));
+        let old: photocraft_format::manifest::DocM = serde_json::from_value(json).unwrap();
+        assert_eq!(old.file_encoding, photocraft_doc::FileEncoding { jpeg_quality: Some(80), ..Default::default() });
+    }
 }

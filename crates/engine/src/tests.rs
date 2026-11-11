@@ -265,8 +265,9 @@ fn new_adjustment_and_fill_layers_are_masked_by_the_selection() {
             assert_eq!(mask.value(10, 10), 1.0, "{id} at {depth}-bit: the mask hides the selected area");
             assert_eq!(mask.value(2, 2), 0.0, "{id} at {depth}-bit: the mask reveals outside the selection");
             assert!(mask.linked && mask.enabled, "{id}");
-            // The selection stays, as after Layer › Layer Mask › Reveal Selection.
-            assert!(d.doc.selection.is_some(), "{id} dropped the selection");
+            // The selection went into the mask, so Photoshop drops it, as Layer › Layer Mask ›
+            // Reveal Selection does (#5251, #8801).
+            assert!(d.doc.selection.is_none(), "{id} at {depth}-bit kept the selection");
             // The white canvas is untouched outside the selection.
             assert_eq!(px(&mut s, 2, 2), vec![1.0, 1.0, 1.0, 1.0], "{id} at {depth}-bit changed pixels outside the selection");
             if blackens {
@@ -274,6 +275,29 @@ fn new_adjustment_and_fill_layers_are_masked_by_the_selection() {
             }
             s.execute("edit.undo", json!({})).unwrap();
             assert!(s.active().unwrap().doc.layer(layer).is_none(), "{id}: undo keeps the layer");
+            let sel = s.active().unwrap().doc.selection.as_ref().unwrap_or_else(|| panic!("{id}: undo does not bring the selection back"));
+            assert_eq!(sel.content_bounds(), photocraft_geom::Rect::new(8, 8, 24, 24), "{id}: undo restores the same selection");
+        }
+    }
+}
+
+#[test]
+fn an_edit_after_a_new_fill_layer_on_a_selection_reaches_the_whole_layer() {
+    // #8801: the selection that masked a new fill or adjustment layer is gone, so the next
+    // pixel edit on another layer is not limited to it.
+    for (id, params) in [("layer.newFillLayer.solidColor", json!({"color": "#000000"})), ("layer.newAdjustmentLayer.invert", json!({}))] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#3366cc"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+        s.execute(id, params).unwrap();
+        s.execute("layer.setProps", json!({"visible": false})).unwrap();
+        s.execute("layer.selectBottom", json!({})).unwrap();
+        s.execute("layer.duplicate", json!({})).unwrap();
+        s.execute("image.adjustments.desaturate", json!({})).unwrap();
+        for x in [5, 35] {
+            let p = px(&mut s, x, 10);
+            assert!((p[0] - p[1]).abs() < 1e-3 && (p[1] - p[2]).abs() < 1e-3, "{id}: ({x}, 10) is not grey: {p:?}");
         }
     }
 }
@@ -351,6 +375,7 @@ fn new_fill_and_adjustment_layers_take_the_active_path_as_their_vector_mask() {
                 let want = if path_name == "work" { d.doc.work_path.clone().unwrap() } else { d.doc.paths[0].path.clone() };
                 assert_eq!(vm.path, want, "{id}: the vector mask is the path");
                 assert!(l.mask.is_none(), "{id}: the path wins over the selection");
+                assert!(d.doc.selection.is_some(), "{id}: an unused selection stays");
                 for (x, y) in [(2, 2), (42, 32), (30, 30)] {
                     assert_eq!(px(&mut s, x, y), vec![1.0, 1.0, 1.0, 1.0], "{id} ({path_name}) at {depth}-bit changed pixels outside the path at ({x}, {y})");
                 }
@@ -434,6 +459,34 @@ fn marquee_dragged_past_the_canvas_stops_at_its_edge() {
 }
 
 #[test]
+fn subtract_clears_selection_when_only_disjoint_off_canvas_pixels_remain() {
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+    let mut s = session_with_doc(); // 64 × 48
+    let mut selection = Surface::new(photocraft_color::PixelFormat::GRAY8);
+    // Simulate a moved sparse selection: one remnant on either side of the canvas and one
+    // in-canvas region that the subtract marquee will remove. The off-canvas bounds straddle
+    // the canvas, so testing only their bounding-box intersection would incorrectly keep it.
+    selection.fill_rect(Rect::new(-4, 10, 0, 14), &[1.0]);
+    selection.fill_rect(Rect::new(20, 10, 24, 14), &[1.0]);
+    selection.fill_rect(Rect::new(64, 10, 68, 14), &[1.0]);
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(selection);
+
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 64, "height": 48, "mode": "subtract"})).unwrap();
+
+    assert!(s.active().unwrap().doc.selection.is_none());
+}
+
+#[test]
+fn subtract_clears_selection_with_nonzero_default_when_canvas_is_empty() {
+    use photocraft_raster::Surface;
+    let mut s = session_with_doc();
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 64, "height": 48, "mode": "subtract"})).unwrap();
+    assert!(s.active().unwrap().doc.selection.is_none());
+}
+
+#[test]
 fn marquee_steps_are_named_after_their_tool() {
     // #513: the elliptical marquee shares `select.rect` but records its own step name.
     let mut s = session_with_doc();
@@ -504,6 +557,41 @@ fn undo_and_redo_restore_the_targeted_layers() {
     assert!(s.undo());
     assert!(s.redo());
     assert_eq!(target(&s), copies);
+}
+
+#[test]
+fn selection_inverse_preserves_coverage_history_and_empty_selection() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 530, "height": 270, "depth": depth})).unwrap();
+        s.execute("select.rect", json!({"x": 250, "y": 10, "width": 30, "height": 30, "ellipse": true})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let area = before.bounds();
+        let original = before.selection.as_ref().unwrap().to_interleaved(area);
+        s.execute("select.inverse", json!({})).unwrap();
+        let after = s.active().unwrap();
+        let inverted = after.doc.selection.as_ref().unwrap();
+        assert_eq!(inverted.to_interleaved(area), original.iter().map(|b| 255 - b).collect::<Vec<_>>());
+        assert_eq!(inverted.sample_channel(530, 269, 0), 0.0);
+        assert_eq!(inverted.sample_channel(529, 270, 0), 0.0);
+        assert_eq!(after.last_damage, Some(photocraft_geom::Rect::EMPTY));
+        assert_eq!(before.selection.as_ref().unwrap().to_interleaved(area), original);
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().to_interleaved(area), original);
+        assert!(s.redo());
+        s.execute("select.inverse", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().to_interleaved(area), original);
+
+        s.execute("select.all", json!({})).unwrap();
+        s.execute("select.inverse", json!({})).unwrap();
+        let empty = s.active().unwrap().doc.selection.as_ref().unwrap();
+        assert_eq!(empty.tile_count(), 0);
+        // Keep Some(empty), as before: the next Inverse selects the whole canvas again.
+        s.execute("select.inverse", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), area);
+    }
+    let mut s = Session::new();
+    assert!(s.execute("select.inverse", json!({})).is_err());
 }
 
 #[test]
@@ -593,6 +681,10 @@ fn arrange_and_group() {
     let names: Vec<String> = s.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect();
     assert_eq!(names, ["Background", "B", "A"]);
     assert!(s.execute("layer.arrange.bringForward", json!({})).is_err());
+    // Bring to Front of the front layer does nothing: no error (an action plays it), no step.
+    let steps = s.active().unwrap().history.past_len();
+    assert_eq!(s.execute("layer.arrange.bringToFront", json!({})).unwrap(), json!({"moved": false}));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
     s.execute("layer.groupLayers", json!({})).unwrap();
     let doc = s.execute("document.inspect", json!({})).unwrap();
     assert_eq!(doc["layers"][0]["kind"], "Group");
@@ -722,7 +814,7 @@ fn fill_layer_pixel_rewrites_refresh_the_effect_maps() {
     .unwrap();
     let render = |s: &Session| {
         let d = &s.active().unwrap().doc;
-        photocraft_compose::render(d, d.bounds()).px
+        photocraft_compose::render(d, d.bounds()).into_px()
     };
     // Give the layer the cached-pixels state a PSD import produces (the cache is what Image
     // › Transform & friends rewrite in place, without touching the Fill spec).
@@ -809,7 +901,7 @@ fn group_effect_maps_follow_child_visibility_and_opacity() {
     .unwrap();
     let render = |s: &Session| {
         let d = &s.active().unwrap().doc;
-        photocraft_compose::render(d, d.bounds()).px
+        photocraft_compose::render(d, d.bounds()).into_px()
     };
     let mut prev = render(&s); // populate the effect-map cache
     type Edit = (&'static str, fn(&mut photocraft_doc::Layer));
@@ -872,6 +964,27 @@ fn command_list_filter_finds_the_marquees_by_keyword() {
     assert!(rows.iter().find(|c| c["id"] == "file.new").unwrap().get("keywords").is_none());
     assert_eq!(found("gaussian blur"), ["filter.blur.gaussianBlur"]);
     assert!(found("no command is called this").is_empty());
+}
+
+/// The rename to "RAW Develop" is display only: the filter and RAW Defaults are still found by
+/// Photoshop's "Camera Raw" name, which their keywords carry (#12403).
+#[test]
+fn command_list_filter_finds_the_raw_commands_by_their_photoshop_name() {
+    let mut s = Session::new();
+    let list = s.execute("command.list", json!({})).unwrap();
+    let rows = list.as_array().unwrap();
+    let found = |needle: &str| -> Vec<String> {
+        rows.iter().filter(|c| crate::commands::list_entry_matches(c, needle)).map(|c| c["id"].as_str().unwrap().to_string()).collect()
+    };
+    for needle in ["camera raw", "Camera Raw", "CAMERA RAW"] {
+        let ids = found(needle);
+        assert!(ids.contains(&"filter.cameraRaw".to_string()), "{needle}: {ids:?}");
+        assert!(ids.contains(&"edit.preferences.rawDefaults".to_string()), "{needle}: {ids:?}");
+    }
+    // What the menus show is the new name, and the keywords are not a label.
+    let label = |id: &str| rows.iter().find(|c| c["id"] == id).unwrap()["label"].as_str().unwrap().to_string();
+    assert_eq!(label("filter.cameraRaw"), "RAW Develop Filter…");
+    assert_eq!(label("edit.preferences.rawDefaults"), "RAW Defaults…");
 }
 
 /// Every keyword entry names a real command, so a renamed id can't leave one behind.
@@ -1160,7 +1273,8 @@ fn move_selected_layers_keeps_selected_group_children_and_supports_above_below()
     let b = s.execute("layer.new.layer", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap();
     let c = s.execute("layer.new.layer", json!({"name": "C"})).unwrap()["layer"].as_u64().unwrap();
     let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
-    // Made before B moves into G: a new group goes above the active layer, which would then be inside G.
+    // Made from C, not from G: like Photoshop a new group goes inside an open active group.
+    s.execute("layer.select", json!({"layer": c})).unwrap();
     let target = s.execute("layer.new.group", json!({"name": "Target"})).unwrap()["layer"].as_u64().unwrap();
     s.execute("layer.moveTo", json!({"layer": b, "target": group, "position": "into"})).unwrap();
 
@@ -1573,11 +1687,10 @@ fn document_inspect_and_activate_invalid_index() {
     assert_eq!(err_act.to_string(), "no document at index 9");
 }
 
-/// #7103: Photoshop's Select Document by offset (previous is -1, next +1) walks the open
-/// documents in tab order from the active one. Past either end it is refused, not wrapped onto
-/// another document, and bad params leave the active document as it was.
+/// #7103: Photoshop's Select Document by offset (previous is -1, next +1) walks opening order
+/// from the active document, wrapping at both ends. Bad params preserve the active document.
 #[test]
-fn document_activate_by_offset_walks_the_tabs() {
+fn document_activate_by_offset_walks_opening_order() {
     let mut s = Session::new();
     for name in ["a", "b", "c"] {
         s.execute("file.new", json!({"width": 2, "height": 2, "name": name})).unwrap();
@@ -1595,17 +1708,17 @@ fn document_activate_by_offset_walks_the_tabs() {
     s.execute("document.activate", json!({"document": null, "offset": -1})).unwrap();
     assert_eq!(active(&s), "b");
 
-    let err = s.execute("document.activate", json!({"offset": 2})).unwrap_err().to_string();
-    assert_eq!(err, "no document 2 after the active one, which is 2 of 3");
-    let err = s.execute("document.activate", json!({"offset": -2})).unwrap_err().to_string();
-    assert_eq!(err, "no document 2 before the active one, which is 2 of 3");
+    for (offset, name) in [(2, "a"), (-2, "c"), (i64::MAX, "c"), (i64::MIN, "c")] {
+        s.execute("document.activate", json!({"document":1})).unwrap();
+        s.execute("document.activate", json!({"offset":offset})).unwrap();
+        assert_eq!(active(&s), name, "{offset}");
+    }
+    s.execute("document.activate", json!({"document":1})).unwrap();
     for bad in [
         json!({}),
         json!({"offset": null}),
         json!({"offset": 1.5}),
         json!({"offset": "1"}),
-        json!({"offset": i64::MAX}),
-        json!({"offset": i64::MIN}),
         json!({"offset": u64::MAX}),
         json!({"document": 0, "offset": 1}),
         json!({"document": -1}),
@@ -1613,11 +1726,60 @@ fn document_activate_by_offset_walks_the_tabs() {
         assert!(s.execute("document.activate", bad.clone()).is_err(), "{bad}");
         assert_eq!(active(&s), "b", "{bad}");
     }
-    // Tabs, not the order the documents were opened in: with "c" dragged to the front, two tabs
-    // before "b" is "c".
+    // Dragging "c" first changes tab indices, not the opening order a, b, c.
     s.execute("document.move", json!({"document": 2, "to": 0})).unwrap();
-    s.execute("document.activate", json!({"offset": -2})).unwrap();
+    assert_eq!(active(&s), "b");
+    assert_eq!(s.execute("document.activate", json!({"offset":-2})).unwrap(), json!({"document":0}));
+    assert_eq!(active(&s), "c", "wrapping follows opening order, not tab position");
+    s.execute("document.activate", json!({"document":2})).unwrap();
+    assert_eq!(s.execute("document.activate", json!({"offset": -1})).unwrap(), json!({"document": 1}));
+    assert_eq!(active(&s), "a");
+    assert_eq!(s.execute("document.activate", json!({"offset": 2})).unwrap(), json!({"document": 0}));
     assert_eq!(active(&s), "c");
+    // Absolute indices and the returned document index remain in visual-tab order.
+    s.execute("document.activate", json!({"document": 2})).unwrap();
+    assert_eq!(active(&s), "b");
+    assert_eq!(s.execute("document.activate", json!({"offset": 0})).unwrap(), json!({"document": 2}));
+    s.execute("document.activate", json!({"document": 0})).unwrap();
+    assert_eq!(active(&s), "c");
+}
+
+#[test]
+fn document_activate_opening_order_survives_close_and_reopen_with_persisted_ids() {
+    let mut s = Session::new();
+    // Persisted IDs can be non-monotonic or duplicated: opening order cannot be sorted by ID.
+    for (name, id) in [("a", 300), ("b", 100), ("c", 300)] {
+        let mut doc = Document::new(name, photocraft_geom::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        doc.id = photocraft_doc::DocId(id);
+        s.add_document(doc, None);
+    }
+    let a = s.documents()[0].doc.id;
+    let b = s.documents()[1].doc.id;
+    let c = s.documents()[2].doc.id;
+    assert_ne!(a, c, "admission replaces an already-open persisted ID");
+    s.move_document(2, 0).unwrap(); // Visual tabs c, a, b; opening order a, b, c.
+    assert_eq!(s.execute("document.activate", json!({"offset": -1})).unwrap(), json!({"document": 2}));
+    assert_eq!(s.active().unwrap().doc.id, b);
+    let closed = s.close(2).unwrap(); // Closing the middle opening leaves a, c.
+    assert_eq!(closed.doc.id, b);
+    s.set_active(0); // c is visually first, but a is still its predecessor.
+    assert_eq!(s.execute("document.activate", json!({"offset": -1})).unwrap(), json!({"document": 1}));
+    assert_eq!(s.active().unwrap().doc.id, a);
+    s.add_document((*closed.doc).clone(), None); // Reopened b goes last, even with the same ID.
+    assert_eq!(s.active().unwrap().doc.id, b);
+    assert_eq!(s.execute("document.activate", json!({"offset": -1})).unwrap(), json!({"document": 0}));
+    assert_eq!(s.active().unwrap().doc.id, c);
+    assert!(s.close(99).is_none(), "invalid close must leave both orders alone");
+    assert_eq!(s.execute("document.activate", json!({"offset": 1})).unwrap(), json!({"document": 2}));
+    assert_eq!(s.active().unwrap().doc.id, b);
+    while !s.documents().is_empty() {
+        s.close(0).unwrap();
+    }
+    s.execute("file.new", json!({"width": 2, "height": 2, "name": "fresh"})).unwrap();
+    assert_eq!(s.execute("document.activate", json!({"offset": 0})).unwrap(), json!({"document": 0}));
+    assert_eq!(s.execute("document.activate", json!({"offset": -1})).unwrap(), json!({"document": 0}));
+    assert_eq!(s.execute("document.activate", json!({"offset": 1})).unwrap(), json!({"document": 0}));
+    assert_eq!(s.active().unwrap().doc.name, "fresh");
 }
 
 /// #2166, measured in Photoshop 25.1: a layer mask and the layer pixels keep separate
@@ -1844,4 +2006,60 @@ fn the_document_activation_generation_bumps_on_switch_and_back() {
     s.execute("layer.new.layer", json!({})).unwrap();
     assert_eq!(s.active_generation(), g3);
     assert_eq!(s.active().unwrap().doc.id, first);
+}
+
+#[test]
+fn the_active_layer_change_count_moves_only_when_a_command_changes_the_active_layer() {
+    let mut s = session_with_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let a = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let b = s.active().unwrap().active_layer.unwrap();
+    let n = s.active_layer_changes();
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    assert_eq!(s.active_layer_changes(), n, "selecting the active layer again changes nothing");
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    assert!(s.active_layer_changes() > n);
+    let m = s.active_layer_changes();
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    assert!(s.active_layer_changes() >= m + 2, "a round trip back to the same layer still counts");
+}
+
+#[test]
+fn direct_selection_calls_count_active_layer_changes_only_when_the_layer_changes() {
+    let mut s = session_with_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let a = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let b = s.active().unwrap().active_layer.unwrap();
+    let count = |s: &Session| s.active_layer_changes();
+    let n = count(&s);
+    s.select_layer(b).unwrap();
+    assert_eq!(count(&s), n, "select_layer of the active layer");
+    s.select_layer(a).unwrap();
+    assert_eq!(count(&s), n + 1, "select_layer of another layer");
+    s.restore_layer_selection(Some(a), &[a], Some(a)).unwrap();
+    assert_eq!(count(&s), n + 1, "restore_layer_selection of the same active layer");
+    s.restore_layer_selection(Some(b), &[b], Some(b)).unwrap();
+    assert_eq!(count(&s), n + 2, "restore_layer_selection of another layer");
+    layer_multi_cmds::set_selection(&mut s, vec![b], Some(b), Some(b)).unwrap();
+    assert_eq!(count(&s), n + 2, "set_selection of the same active layer");
+    layer_multi_cmds::set_selection(&mut s, vec![a], Some(a), Some(a)).unwrap();
+    assert_eq!(count(&s), n + 3, "set_selection of another layer");
+    s.set_active_layer(Some(a));
+    assert_eq!(count(&s), n + 3, "set_active_layer of the same layer");
+    s.set_active_layer(Some(b));
+    assert_eq!(count(&s), n + 4, "set_active_layer of another layer");
+}
+
+#[test]
+fn the_active_layer_marker_advances_for_a_new_document_and_not_for_a_same_layer_select() {
+    let mut s = session_with_doc();
+    let before = s.active_layer_changes();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.select_layer(id).unwrap();
+    assert_eq!(s.active_layer_changes(), before, "re-selecting the active layer leaves the marker alone");
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    assert!(s.active_layer_changes() > before, "a new active document advances the marker");
 }
