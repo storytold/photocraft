@@ -1161,3 +1161,31 @@ fn migration_preserves_duplicate_names_but_refuses_duplicate_ids() {
     assert!(mem.read(PATTERNS_FILE, 1 << 20).is_err());
     assert_eq!(mem.read(LEGACY_PATTERNS_FILE, MAX_PATTERNS_BYTES).unwrap(), old);
 }
+
+#[test]
+fn a_group_that_cannot_be_saved_keeps_the_old_group_file_and_tips() {
+    let dir = TempDir::new("keep-old");
+    let (mut s, _) = session(&dir);
+    s.tools.presets.push(sampled("Keep", "Old", tip8(8, 8, 1)));
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let before = dir.files();
+    assert!(before.iter().any(|f| f.starts_with("tips/")), "{before:?}");
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let after = dir.files();
+    assert!(before.iter().all(|f| after.contains(f)), "{before:?} -> {after:?}");
+    // The names the commands accept (255 characters, multi-byte) are saved.
+    let name = "\u{754c}".repeat(255);
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = name.clone();
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let (t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(photocraft_paint::presets::find(&t.tools.presets, "Keep").map(|p| p.group.clone()), Some(name));
+}

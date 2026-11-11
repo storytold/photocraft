@@ -90,8 +90,9 @@ pub const MAX_TIP_SIDE: u32 = 16384;
 pub const MAX_TIP_SAMPLES: u64 = 1 << 26;
 /// Most group files loaded.
 pub const MAX_GROUPS: usize = 4096;
-/// Longest group name a group file may carry.
-pub const MAX_GROUP_NAME_BYTES: usize = 256;
+/// Longest group name a group file may carry: every name the commands accept (255 characters of
+/// up to 4 bytes each).
+pub const MAX_GROUP_NAME_BYTES: usize = 4 * 255;
 /// Most presets loaded from one group file.
 pub const MAX_PRESETS_PER_GROUP: usize = 50_000;
 
@@ -920,6 +921,7 @@ impl PresetStore {
                 None => order.push((p.group.clone(), vec![i])),
             }
         }
+        let warnings_before = self.warnings.len();
         let mut files = Vec::with_capacity(order.len());
         for (group, idx) in &order {
             let file = group_file_name(group);
@@ -943,8 +945,10 @@ impl PresetStore {
                 self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
             }
         }
-        // Groups that are gone.
-        let gone: Vec<String> = self.groups.keys().filter(|f| !files.contains(f)).cloned().collect();
+        // Groups that are gone. When a group could not be written (a rename to a name that failed,
+        // say), the old files stay: they may be the only copy of those presets and their tips.
+        let write_failed = self.warnings.len() > warnings_before;
+        let gone: Vec<String> = self.groups.keys().filter(|f| !write_failed && !files.contains(f)).cloned().collect();
         for f in gone {
             match self.backend.remove(&f) {
                 Ok(()) => drop(self.groups.remove(&f)),
