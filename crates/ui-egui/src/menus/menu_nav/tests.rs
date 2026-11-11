@@ -1864,3 +1864,32 @@ fn a_key_press_isnt_undone_by_an_earlier_let_go() {
     h.run_steps(2);
     assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i + 1), "Down moved the highlight, and it stays");
 }
+
+/// A pointer that reaches a scrolling submenu over its ▲ strip has arrived: the strips are part
+/// of the submenu, not the gap beside it, so a return to the parent menu doesn't hold it.
+#[test]
+fn reaching_a_scrolling_submenu_over_its_arrow_strip_counts_as_arrival() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 300.0)).with_step_dt(1.0 / 120.0).build_ui_state(
+        |ui, app| {
+            crate::menus::menu_bar(app, ui);
+        },
+        app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.ctx.all_styles_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::none());
+    h.run_steps(3);
+    open(&mut h, "Image");
+    let adjustments = h.get_by_label_contains("Adjustments").rect();
+    let from = egui::pos2(adjustments.right() - 40.0, adjustments.center().y);
+    glide(&mut h, 12, None, |t| from - egui::vec2(30.0 * (1.0 - t), 0.0));
+    h.run_steps(30);
+    assert_eq!(image_submenu(&h), "Adjustments", "resting on Adjustments opens it");
+    let nav = Nav::current(&h.ctx);
+    let view = nav.views[1];
+    assert!(nav.contents[1] > view.height() + 0.5, "Adjustments scrolls on a 300 pt window");
+    let strip = egui::pos2(view.left() + 20.0, view.top() - super::ARROW / 2.0);
+    glide(&mut h, 12, None, |t| from + (strip - from) * t);
+    h.run_steps(2);
+    let nav = Nav::current(&h.ctx);
+    assert!(nav.aims[0].as_ref().is_some_and(|a| a.arrived), "on the ▲ strip: {:?}", nav.aims[0].as_ref().map(|a| (a.held, a.arrived)));
+}

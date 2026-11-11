@@ -328,11 +328,20 @@ impl Nav {
         }
     }
 
+    /// Where the pointer has reached `level`: its view and, when its rows scroll, the scroll-arrow
+    /// strips above and below it.
+    fn reach(&self, level: usize) -> Option<Rect> {
+        let view = *self.views.get(level)?;
+        let scrolls = self.contents.get(level).is_some_and(|c| *c > view.height() + 0.5);
+        Some(if scrolls { view.expand2(vec2(0.0, ARROW)) } else { view })
+    }
+
     /// [`Self::aim`]: is this row's submenu open with the pointer off the row (held) now?
     fn hold(&mut self, level: usize, index: usize, root: Id, open: Option<Id>, p: Pos2, r: &egui::Response) -> bool {
         let ctx = &r.ctx;
         let sub = SubMenu::id_from_widget_id(r.id);
         let target = self.views.get(level + 1).copied();
+        let reach = self.reach(level + 1);
         // On this menu's rows or separators, not its border (egui's own test for "on the menu").
         let on_rows = ctx.layer_id_at(p) == Some(r.layer_id) && self.last_views.get(level).is_some_and(|v| v.contains(p));
         let Some(slot) = self.aims.get_mut(level) else { return false };
@@ -355,7 +364,7 @@ impl Nav {
         // Off this menu's rows (on the submenu, the menu's border, or anywhere else): egui
         // decides, and the row stays lit while the submenu is open.
         if kept && !on_rows {
-            aim.arrived |= target.is_some_and(|t| t.contains(p));
+            aim.arrived |= reach.is_some_and(|t| t.contains(p));
             aim.held = true;
             return true;
         }
