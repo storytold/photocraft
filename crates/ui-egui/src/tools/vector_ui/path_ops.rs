@@ -296,11 +296,12 @@ fn point_in_subpath(sp: &photocraft_doc::vector::Subpath, pt: [f64; 2]) -> bool 
 
 /// The topmost visible shape layer under `at` (document coordinates):
 /// hits the shape path or anchor within `tol`, or any non-transparent pixel of the shape's raster surface,
-/// or point inside the shape's filled geometry.
+/// or point inside the shape's filled geometry. A layer with Lock All is passed over like a hidden
+/// one: the reference application treats a click on it as a click on empty canvas (#13271).
 pub fn pick_shape_at(doc: &Document, at: [f64; 2], tol: f64) -> Option<photocraft_doc::LayerId> {
     let (x, y) = (at[0].floor() as i32, at[1].floor() as i32);
     for (path, _, l) in doc.walk().iter().rev() {
-        if !l.visible || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
+        if !l.visible || l.locks.all || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
             continue;
         }
         let board = path.first().and_then(|i| doc.layers.get(*i)).and_then(|t| t.artboard());
