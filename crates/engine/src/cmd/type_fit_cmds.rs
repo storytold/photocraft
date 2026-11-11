@@ -102,17 +102,17 @@ fn has_fit(s: &Session) -> std::result::Result<(), String> {
     fitted(active_text(s)?)
 }
 
-/// The precondition of a Dynamic Text command whose params name its `"layer"` (by id, as the
-/// session resolves it): that layer's own check, however many layers are selected. Only the
-/// menus, which act on the active layer, need one layer selected. `None` for other commands or
-/// calls.
+/// The precondition of a Dynamic Text command whose params name its `"layer"` (an id or a name,
+/// resolved as command admission resolves it): that layer's own check, however many layers are
+/// selected. Only the menus, which act on the active layer, need one layer selected. `None` for
+/// other commands or calls, and for a `"layer"` that names no layer (admission refuses it).
 pub(crate) fn named_layer_enabled(s: &Session, id: &str, params: &Value) -> Option<std::result::Result<(), String>> {
     let check: fn(&TextLayer) -> std::result::Result<(), String> = match id {
         CONVERT => convertible,
         RELEASE | SET => fitted,
         _ => return None,
     };
-    let layer = photocraft_doc::LayerId(params.get("layer")?.as_u64()?);
+    let layer = crate::commands::explicit_layer(s, params).ok().flatten()?;
     let d = s.active()?;
     Some(text_of(d.doc.layer(layer).map(|l| &l.content)).and_then(check))
 }
