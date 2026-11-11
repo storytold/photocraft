@@ -3,7 +3,7 @@
 //! pasteboard (outside the image), a guide and a pending crop.
 
 use egui::Context;
-use photocraft_doc::LayerContent;
+use photocraft_doc::{ColorMode, LayerContent};
 use photocraft_engine::prefs::{self, CanvasColor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -29,6 +29,10 @@ pub struct CanvasToolMenu {
     /// Zoom Out keep under the pointer.
     #[serde(default)]
     pub anchor: Option<[f64; 2]>,
+    /// The selected tool when Space holds the Hand over it (`tool` is then the Hand): the menu
+    /// closes when that tool changes (#11271).
+    #[serde(default)]
+    pub under: Option<Tool>,
     /// Opened while a Type tool edits text: the text and type rows instead of the tool's actions.
     #[serde(default)]
     pub text: bool,
@@ -59,6 +63,9 @@ pub struct CanvasToolMenu {
     /// the Sample Size, which its Copy Color rows put on the clipboard. `None` over transparency.
     #[serde(default)]
     pub color: Option<[f32; 3]>,
+    /// Opened with the Content-Aware Move tool inside the active selection (#12194).
+    #[serde(default)]
+    pub inside_selection: bool,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -311,6 +318,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -319,6 +327,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         sampler: None,
         sampler_at: None,
         color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -434,6 +443,9 @@ pub const NO_SELECTION_MENU: &[Row] = &[
     None,
     Some(("Load Selection…", "select.loadSelection")),
 ];
+
+/// Right-click with the Content-Aware Move tool inside an active selection (#12194).
+pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
 
 /// The Eyedropper's copy rows (#11747).
 pub const EYEDROPPER_COPY_HTML: &str = "canvasMenu.eyedropper.copyHtml";
@@ -567,8 +579,26 @@ fn sampler_menu(menu: &CanvasToolMenu) -> bool {
     menu.tool == Tool::ColorSampler && !menu.transform && !menu.pasteboard && !menu.guide && menu.crop.is_none() && menu.anchor.is_none()
 }
 
-/// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the path
-/// menu and the Color Sampler's.
+/// Is `menu` the Content-Aware Move tool's menu opened inside the active selection (#12194)?
+pub fn inside_selection(menu: &CanvasToolMenu) -> bool {
+    menu.tool == Tool::ContentAwareMove
+        && menu.has_selection
+        && menu.inside_selection
+        && !menu.transform
+        && !menu.pasteboard
+        && !menu.guide
+        && menu.crop.is_none()
+        && menu.anchor.is_none()
+}
+
+/// Content-Aware Move's canvas context menu requires an open document and leaves Bitmap, Duotone
+/// and Multichannel documents on their existing no-menu path (#12194).
+fn cam_allowed(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|s| !matches!(s.doc.mode, ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Multichannel))
+}
+
+/// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
+/// Content-Aware Move menu, the path menu and the Color Sampler's.
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -587,6 +617,7 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::ColorSampler
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
+            | Tool::ContentAwareMove
     ) || path_menu(tool)
 }
 
@@ -640,6 +671,8 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         SAMPLER_MENU
     } else if menu.tool == Tool::Eyedropper {
         EYEDROPPER_MENU
+    } else if inside_selection(menu) {
+        CAM_INSIDE_SELECTION_MENU
     } else {
         selection_rows(menu.has_selection)
     }
@@ -777,6 +810,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         transform: true,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -785,6 +819,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         sampler: None,
         sampler_at: None,
         color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -842,7 +877,7 @@ pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     let Some(st) = app.session.active() else { return false };
     let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
     let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
-    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && app.ui.text_edit.is_none()
+    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
 }
 
 /// Right-click on the pasteboard: its colour menu at screen point `pos`.
@@ -861,6 +896,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         transform: false,
         pasteboard: true,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -869,6 +905,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         sampler: None,
         sampler_at: None,
         color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -895,6 +932,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: true,
@@ -903,6 +941,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         sampler: None,
         sampler_at: None,
         color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -962,6 +1001,11 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if sampler_menu(menu) {
         return command == SAMPLER_DELETE && menu.sampler.is_some() && sampler_current(app, menu);
     }
+    // Inside the Content-Aware Move selection menu (#12194), Load Selection… stays greyed until a
+    // selection channel (non-spot alpha channel) has been saved.
+    if inside_selection(menu) && command == "select.loadSelection" {
+        return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
+    }
     if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
     }
@@ -1016,12 +1060,29 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     if !(applies(tool) || text || type_layer) {
         return false;
     }
+    // Without an active document or in Bitmap/Duotone/Multichannel modes, Content-Aware Move opens
+    // no menu (#12194); release any non-held control-channel HUD that would otherwise stay open.
+    if tool == Tool::ContentAwareMove && !cam_allowed(app) {
+        crate::color_hud::release(&mut app.ui);
+        return false;
+    }
     app.ui.brush_picker = None;
     app.ui.layer_menu = None;
     let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
+    let inside_selection = tool == Tool::ContentAwareMove
+        && doc.is_some_and(|d| {
+            d.iter().all(|v| v.is_finite())
+                && d[0] >= 0.0
+                && d[1] >= 0.0
+                && app.session.active().is_some_and(|s| {
+                    d[0] < f64::from(s.doc.size.width)
+                        && d[1] < f64::from(s.doc.size.height)
+                        && s.doc.selection.as_ref().is_some_and(|sel| sel.sample_channel(d[0].floor() as i32, d[1].floor() as i32, 0) >= 0.5)
+                })
+        });
     let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
     let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
     // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
@@ -1036,6 +1097,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text,
         type_layer,
         guide: false,
@@ -1044,13 +1106,15 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         sampler,
         sampler_at,
         color,
+        inside_selection,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
 }
 
 /// Right-click with the Zoom or Hand tool at screen point `pos`, over document point `doc`: the
-/// view menu.
+/// view menu. With the Hand held by Space over another tool, it closes when that tool changes
+/// (#11271).
 pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2], doc: [f64; 2]) -> bool {
     if !is_view_tool(tool) || !pos.iter().all(|v| v.is_finite()) || !doc.iter().all(|v| v.is_finite()) {
         return false;
@@ -1066,6 +1130,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         transform: false,
         pasteboard: false,
         anchor: Some(doc),
+        under: (tool != app.ui.tool).then_some(app.ui.tool),
         text: false,
         type_layer: false,
         guide: false,
@@ -1074,6 +1139,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         sampler: None,
         sampler_at: None,
         color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1391,7 +1457,7 @@ fn menu_id() -> egui::Id {
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let Some(menu) = app.ui.canvas_tool_menu.clone() else { return };
     if ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        || app.ui.tool != menu.tool
+        || app.ui.tool != menu.under.unwrap_or(menu.tool)
         || (menu.transform && app.ui.transform.is_none())
         || (menu.text && app.ui.text_edit.is_none())
         || (menu.type_layer && app.ui.text_edit.is_some())
@@ -1489,6 +1555,8 @@ pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rec
     Some(egui::Rect::from_min_size(pos, size))
 }
 
+#[cfg(test)]
+mod cam_menu_tests;
 #[cfg(test)]
 mod tests;
 
