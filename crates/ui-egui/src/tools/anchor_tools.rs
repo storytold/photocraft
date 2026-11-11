@@ -242,3 +242,6 @@ mod tests;
 
 #[cfg(test)]
 mod add_anchor_delete_key_tests;
+
+#[cfg(test)]
+mod delete_anchor_escape_tests;
