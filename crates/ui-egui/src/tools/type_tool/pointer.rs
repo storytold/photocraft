@@ -491,3 +491,7 @@ pub fn multi_click(app: &mut PhotocraftApp, egui_count: u32, x: f64, y: f64) {
 #[cfg(test)]
 #[path = "mask_placeholder_tests.rs"]
 mod mask_placeholder_tests;
+
+#[cfg(test)]
+#[path = "mask_click_text_layer_tests.rs"]
+mod mask_click_text_layer_tests;
