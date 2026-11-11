@@ -41,10 +41,12 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
-        // The Background Eraser, the Healing Brush, the Burn and Dodge tools and the Clone Stamp
-        // start with their own measured tips instead, as the whole brush Reset Tool gives them
-        // (#11911, #12099, #12671, #12684, #12601).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::CloneStamp) => fresh_brush(tool, &current),
+        // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools and the Clone
+        // Stamp start with their own measured tips instead, as the whole brush Reset Tool gives
+        // them (#11911, #12099, #12671, #12684, #13029, #12601).
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp) => {
+            fresh_brush(tool, &current)
+        }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
         // the outgoing opacity.
         None if tool == Tool::Pencil => BrushSettings { opacity: current.opacity, ..fresh_brush(tool, &current) },
@@ -84,8 +86,8 @@ const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
 /// The Pencil tool's starting and Reset Tool tip, as the reference measures it (#12200): size,
 /// hardness and spacing of a 1 px hard round at 25 % spacing.
 const PENCIL_TOOL_TIP: (f32, f32, f32) = (1.0, 1.0, 0.25);
-/// The Burn and Dodge tools' tip after Reset Tool (#12671, #12684): a 65 px soft round at 25 %
-/// spacing.
+/// The Burn, Dodge and Sponge tools' tip after Reset Tool (#12671, #12684, #13029): a 65 px soft
+/// round at 25 % spacing.
 const TONING_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
 /// The Clone Stamp's tip after Reset Tool (#12601): a 21 px soft round at 25 % spacing.
 const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
@@ -93,7 +95,7 @@ const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`], the Burn and Dodge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
+/// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] with no smoothing, and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools
 /// keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
@@ -103,7 +105,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
         Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
         Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
-        Tool::Burn | Tool::Dodge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
+        Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
         Tool::CloneStamp => {
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_TIP;
             brush.smoothing.amount = 0.0;
