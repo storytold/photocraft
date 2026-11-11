@@ -2827,15 +2827,9 @@ const HISTORY_STROKES: [(&[[f64; 2]], usize); 5] = [
 
 #[test]
 fn history_brush_converts_only_the_stroke_region_and_paints_as_a_full_conversion() {
-    let mut cases: Vec<(u64, String)> = Vec::new();
-    for src in DEPTHS {
-        for dst in DEPTHS.into_iter().filter(|d| *d != src) {
-            cases.push((src, format!("image.mode.bits{dst}")));
-        }
-    }
-    // A colour-model change: an RGB source painted onto the Grayscale layer.
-    cases.push((8, "image.mode.grayscale".into()));
-    cases.push((16, "image.mode.grayscale".into()));
+    // Colour-model changes the History Brush still paints across (a depth change alone and RGB to
+    // Grayscale are refused, #12842): an RGB source painted onto the CMYK or Lab layer.
+    let cases = [(8u64, "image.mode.cmyk"), (16, "image.mode.cmyk"), (8, "image.mode.lab"), (16, "image.mode.lab")];
     for (src, change) in &cases {
         let flat = active_pixels(&history_after_mode_change(*src, change));
         for (pts, most_tiles) in HISTORY_STROKES {
@@ -2866,7 +2860,7 @@ fn history_brush_converts_only_the_stroke_region_and_paints_as_a_full_conversion
 fn a_live_history_stroke_from_another_format_converts_as_it_grows() {
     let all = [[60.0, 60.0], [200.0, 80.0], [300.0, 200.0], [520.0, 260.0], [590.0, 290.0]];
     let pts = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
-    for (src, change) in [(8u64, "image.mode.bits16"), (16, "image.mode.bits32"), (32, "image.mode.bits8"), (8, "image.mode.grayscale")] {
+    for (src, change) in [(8u64, "image.mode.cmyk"), (16, "image.mode.lab"), (8, "image.mode.lab")] {
         let params = |v: &[[f64; 2]]| json!({"points": v, "size": 15, "hardness": 40, "opacity": 70, "state": 1});
         let run = || {
             let mut s = history_after_mode_change(src, change);
@@ -2901,7 +2895,7 @@ fn art_history_brush_from_another_format_paints_as_a_full_conversion() {
             cases.push((src, format!("image.mode.bits{dst}")));
         }
     }
-    cases.push((8, "image.mode.grayscale".into()));
+    // A colour-mode change is refused (#12826): only a depth change converts.
     for (src, change) in &cases {
         let flat = active_pixels(&history_after_mode_change(*src, change));
         for pts in [&[[100.0, 100.0], [280.0, 140.0]][..], &[[-6.0, 290.0], [30.0, 299.0]][..]] {
