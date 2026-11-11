@@ -46,8 +46,8 @@ fn answer(app: &mut PhotocraftApp) {
 
 /// Files named `names` (holding `bytes`) in a fresh directory for `tag`: (directory, paths).
 fn files(tag: &str, names: &[&str], bytes: &[u8]) -> (std::path::PathBuf, Vec<String>) {
-    let dir = std::env::temp_dir().join(format!("photocraft-file-open-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // A private, unpredictable directory (callers remove it): a planted symlink cannot redirect the writes.
+    let dir = tempfile::Builder::new().prefix(&format!("photocraft-file-open-{tag}-")).tempdir().unwrap().keep();
     let paths = names
         .iter()
         .map(|name| {

@@ -97,7 +97,8 @@ fn main() {
         let t = Instant::now();
         let img = photo(w, h);
         let jpeg = photocraft_codecs::encode(&img, photocraft_codecs::Format::Jpeg, &Default::default()).expect("jpeg");
-        std::fs::write(&src, jpeg).expect("write cache");
+        // `create_new` refuses an existing entry or symlink at the cache name instead of writing through it.
+        std::io::Write::write_all(&mut std::fs::OpenOptions::new().write(true).create_new(true).open(&src).expect("create cache"), &jpeg).expect("write cache");
         eprintln!("generated {} in {:.0} ms (run again to measure)", src.display(), ms(t));
         // `--json` (`cargo xtask perf`) measures in the same run.
         if arg(&args, "--json").is_none() {
@@ -109,7 +110,12 @@ fn main() {
     println!("document {w}×{h} ({:.0} MP), op {op}", (w as f64 * h as f64) / 1e6);
 
     let t = Instant::now();
-    let bytes = std::fs::read(&src).expect("read");
+    // A cache entry is a regular file of at most 1 GiB: a sparse or special file planted at the name is refused.
+    let mut file = std::fs::File::open(&src).expect("read");
+    let meta = file.metadata().expect("stat");
+    assert!(meta.is_file() && meta.len() <= 1 << 30, "{} is not a regular cache file", src.display());
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    std::io::Read::read_to_end(&mut std::io::Read::take(&mut file, 1 << 30), &mut bytes).expect("read");
     let doc = photocraft_io::import("photo.jpg", &bytes).expect("import").document;
     drop(bytes);
     let mut s = Session::new();

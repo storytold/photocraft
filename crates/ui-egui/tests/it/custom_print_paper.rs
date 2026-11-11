@@ -176,7 +176,8 @@ fn preview_drag_and_negative_fields_work_at_standard_and_retina_scale() {
 #[test]
 fn custom_paper_ui_edits_reach_preview_and_pdf_and_restore_when_reopened() {
     let (mut app, id) = app();
-    let output = std::env::temp_dir().join(format!("pc-custom-paper-{}.pdf", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap(); // private and unpredictable: the PDF writer follows symlinks
+    let output = tmp.path().join("custom-paper.pdf");
     let dialog = app.ui.dialog_mut(id).unwrap();
     dialog.fields.insert("output".into(), json!(output.to_string_lossy()));
     dialog.fields.insert("dryRun".into(), json!(true));
@@ -270,7 +271,8 @@ fn remembered_paper_alias_selects_the_canonical_preset() {
 #[test]
 fn invalid_custom_paper_is_rejected_without_printing_or_changing_the_document() {
     let (mut app, id) = app();
-    let output = std::env::temp_dir().join(format!("pc-invalid-custom-paper-{}.pdf", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let output = tmp.path().join("invalid-custom-paper.pdf");
     app.ui.dialog_mut(id).unwrap().fields.insert("output".into(), json!(output.to_string_lossy()));
     let before = app.session.active().unwrap().doc.clone();
     let mut h = harness(app);
