@@ -53,10 +53,20 @@ pub fn write_noreplace(path: &Path, bytes: &[u8]) -> Result<(), PublishNewError>
     let published = written
         .map_err(before)
         .and_then(|()| move_noreplace(&temp, path, platform, |from, to| std::fs::hard_link(from, to), |path| std::fs::remove_file(path)));
-    if published.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
+    let published = published.map_err(|failure| retry_stage_cleanup(failure, &temp, |path| std::fs::remove_file(path)));
     finish_publication(published, || RealFs.sync_dir(dir))
+}
+
+/// Retry removing the staging name after a failure; if that fails too, name the leftover
+/// staging file in the error so the caller can report or remove it.
+fn retry_stage_cleanup(failure: PublishNewError, temp: &Path, remove: impl FnOnce(&Path) -> io::Result<()>) -> PublishNewError {
+    match remove(temp) {
+        Err(cleanup) if cleanup.kind() != io::ErrorKind::NotFound => PublishNewError {
+            published: failure.published,
+            error: io::Error::new(failure.error.kind(), format!("{}; staging file {} remains", failure.error, temp.display())),
+        },
+        _ => failure,
+    }
 }
 
 /// Create a staging entry whose name cannot be the destination's native filename.
@@ -76,10 +86,12 @@ fn create_stage(dir: &Path, destination: &OsStr, next: &AtomicU64) -> io::Result
             Err(error) => return Err(error),
         }
     }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "no unused publication temp name"))
+    // Not `AlreadyExists`: that means the destination is taken, and callers may pick another name.
+    Err(io::Error::other("no unused publication temp name"))
 }
 
-/// Rename within one stable directory, refusing an existing destination atomically.
+/// Rename a file within one stable directory, refusing an existing destination atomically.
+/// Directories are not supported: the hard-link fallback cannot link them.
 /// The caller must ensure untrusted writers cannot replace the source entry.
 /// Unsupported rename primitives use a hard link followed by unlink, never an overwriting
 /// rename or cross-volume copy. If unlink fails, both names retain the same bytes and this
@@ -318,6 +330,33 @@ mod tests {
         let error = finish_publication(Ok(()), || Err(io::ErrorKind::Other.into())).unwrap_err();
         assert!(error.published);
         assert_eq!(std::fs::read(&to).unwrap(), b"original");
+    }
+
+    /// Running out of staging names must not look like a taken destination.
+    #[test]
+    fn staging_exhaustion_is_not_reported_as_an_existing_destination() {
+        let dir = Dir::new().unwrap();
+        let next = AtomicU64::new(0);
+        for _ in 0..32 {
+            drop(create_stage(&dir.0, OsStr::new("actions.atn"), &next).unwrap().1);
+        }
+        let error = create_stage(&dir.0, OsStr::new("actions.atn"), &AtomicU64::new(0)).unwrap_err();
+        assert_ne!(error.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    /// A staging name that cannot be removed is named in the error, keeping its kind and state.
+    #[test]
+    fn failed_staging_cleanup_names_the_leftover_file() {
+        let temp = Path::new("PC000001.TM1");
+        let failure = || PublishNewError { published: true, error: io::ErrorKind::PermissionDenied.into() };
+        let error = retry_stage_cleanup(failure(), temp, |_| Err(io::ErrorKind::PermissionDenied.into()));
+        assert!(error.published);
+        assert_eq!(error.error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.error.to_string().contains("PC000001.TM1"), "{}", error.error);
+        let error = retry_stage_cleanup(failure(), temp, |_| Ok(()));
+        assert!(!error.error.to_string().contains("PC000001.TM1"));
+        let error = retry_stage_cleanup(failure(), temp, |_| Err(io::ErrorKind::NotFound.into()));
+        assert!(!error.error.to_string().contains("PC000001.TM1"));
     }
 
     /// Ordinary rename failures must not trigger a second filesystem mutation route.
