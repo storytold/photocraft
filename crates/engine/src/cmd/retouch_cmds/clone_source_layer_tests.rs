@@ -209,18 +209,24 @@ fn clone_cross_document_color_profiles_and_modes_use_cms() {
 
 #[test]
 fn clone_closed_source_document_and_stale_live_pixels_fail_gracefully() {
-    let (mut s, _, _) = setup(8, "rgb");
+    let (mut s, source, _) = setup(8, "rgb");
     s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let target = s.active().unwrap().active_layer.unwrap();
     let p = params(false);
     let live = LiveRetouch::begin(&s, "paint.cloneStamp", &p).unwrap();
     assert!(s.set_active(0));
     s.edit("source changed", |doc, _| {
-        doc.name.push_str(" edited");
+        doc.layer_mut(source).unwrap().surface_mut().unwrap().fill_rect(Rect::new(16, 16, 17, 17), &[1.0, 0.0, 0.0, 1.0]);
         Ok(())
     })
     .unwrap();
     assert!(s.set_active(1));
     assert!(s.offer_live_retouch(live).is_err(), "a changed source revision invalidates offered pixels");
+    s.execute("paint.cloneStamp", p.clone()).unwrap();
+    let updated = pixel(&s, target, 48, 48);
+    assert_eq!(&updated[..3], &[1.0, 0.0, 0.0], "ordinary replay reads the edited source after rejecting stale live pixels");
+    assert!((updated[3] - 0.2).abs() < 0.01);
     s.close(0).unwrap();
     let revision = s.active().unwrap().revision;
     let anchor = s.presets.clone.active().anchor;
@@ -268,6 +274,32 @@ fn clone_source_document_json_and_legacy_slots_are_compatible() {
     legacy.as_object_mut().unwrap().remove("document");
     let old: crate::presets::clone_source::CloneSource = serde_json::from_value(legacy).unwrap();
     assert!(old.document.is_none());
+}
+
+#[test]
+fn clone_source_replies_keep_document_identity_when_resetting_transforms() {
+    let (mut s, _, _) = setup(8, "rgb");
+    s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let document_id = s.active().unwrap().doc.id;
+    assert!(s.set_active(0));
+    s.execute("cloneSource.set", json!({"index": 2, "source": [8,8], "document": 1, "width": 200, "rotation": 45})).unwrap();
+    let replies = [
+        s.execute("cloneSource.list", json!({})).unwrap()["sources"][2].clone(),
+        s.execute("cloneSource.select", json!({"index": 2})).unwrap(),
+        s.execute("cloneSource.set", json!({"index": 2, "width": 150})).unwrap(),
+        s.execute("cloneSource.resetTransform", json!({"index": 2})).unwrap(),
+    ];
+    for reply in replies {
+        assert_eq!(reply["document"], 1, "all slot replies expose the same source-document index: {reply}");
+        assert_eq!(reply["documentId"], json!(document_id));
+        assert_eq!(reply["source"], json!([8.0, 8.0]));
+    }
+    assert_eq!(s.presets.clone.active().scale, [100.0, 100.0]);
+    assert_eq!(s.presets.clone.active().rotation, 0.0);
+    s.close(0).unwrap();
+    let reset = s.execute("cloneSource.resetTransform", json!({"index": 2})).unwrap();
+    assert_eq!(reset["document"], 0, "closing an earlier tab changes the index, not the source identity");
+    assert_eq!(reset["documentId"], json!(document_id));
 }
 
 #[test]

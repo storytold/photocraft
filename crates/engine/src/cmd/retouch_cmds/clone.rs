@@ -68,6 +68,7 @@ pub fn clone_destination_preview(s: &Session, rect: Rect, wrap: bool) -> Result<
     preview_periodic(s, rect, &map, "all", wrap, false)
 }
 
+/// Sample a bounded overlay region from either the picked source or the destination composite.
 fn preview_periodic(
     s: &Session,
     rect: Rect,

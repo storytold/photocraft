@@ -1651,6 +1651,12 @@ fn clone_overlay_between_documents_updates_after_source_edits_and_blends_with_th
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(32, 32), [0.0, 1.0, 0.0, 1.0]);
     app.run("cloneSource.select", json!({"index": 1})).unwrap();
     assert!(crate::retouch_ui::clone_params(&app).is_none(), "an empty slot cannot reuse coordinates from another document");
+    let before = app.session.active().unwrap().doc.clone();
+    let revision = app.session.active().unwrap().revision;
+    tool_event(&mut app, ToolEvent::Down { x: 48.0, y: 48.0, pressure: 1.0 }, mods);
+    tool_event(&mut app, ToolEvent::Up { x: 48.0, y: 48.0 }, mods);
+    assert_eq!(app.session.active().unwrap().doc, before, "painting with an empty slot cannot sample stale coordinates");
+    assert_eq!(app.session.active().unwrap().revision, revision, "the refused gesture does not create a history edit");
 }
 
 /// A scaled Clone Source reads a larger source area than the overlay covers: a large brush's

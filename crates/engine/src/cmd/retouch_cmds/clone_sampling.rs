@@ -7,6 +7,7 @@ use photocraft_color::ColorMode;
 use super::sampling::{SampleLayers, composite_region, sample, sample_layers};
 use super::{Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleType, Session, Surface, Value, bad, periodic, targets_pixels};
 
+/// Frozen source-document and layer selection shared by preview and stroke sampling.
 #[derive(Clone, Default)]
 pub(super) struct CloneFrom {
     other: Option<(Arc<Document>, u64)>,
@@ -15,6 +16,7 @@ pub(super) struct CloneFrom {
 }
 
 impl CloneFrom {
+    /// Whether cached live pixels still refer to the same source snapshot and color transform.
     pub(super) fn unchanged(&self, other: &Self) -> bool {
         let document = match (&self.other, &other.other) {
             (Some((a, ar)), Some((b, br))) => ar == br && Arc::ptr_eq(a, b),
@@ -29,6 +31,7 @@ impl CloneFrom {
         document && self.layer == other.layer && colors
     }
 
+    /// Read a source region into the destination's native channels, optionally wrapping its canvas.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sample(
         &self,
@@ -65,6 +68,7 @@ impl CloneFrom {
     }
 }
 
+/// Convert only the sampled region; preserve alpha and skip identical-profile HDR conversion.
 fn convert_region(region: Region, from: PixelFormat, to: PixelFormat, transform: Option<&Transform>, cmd: &str) -> Result<Region> {
     // A malformed document can contain a surface whose model disagrees with its ICC profile.
     // Check the native strides before the transform indexes them or its bounded scratch buffer.
@@ -97,6 +101,7 @@ fn convert_region(region: Region, from: PixelFormat, to: PixelFormat, transform:
     Ok(out)
 }
 
+/// Resolve a picked slot or explicit local coordinates without anchoring or modifying a document.
 pub(super) fn resolve(s: &Session, p: &Value, cmd: &str) -> Result<CloneFrom> {
     if !targets_pixels(p) {
         // A local mask/channel has no corresponding surface in another document. Refuse this
@@ -138,6 +143,7 @@ pub(super) fn resolve(s: &Session, p: &Value, cmd: &str) -> Result<CloneFrom> {
     Ok(CloneFrom { other: external.then(|| (st.doc.clone(), st.revision)), layer, transform })
 }
 
+/// Choose the sampled pixel/composite profile and cache its conversion to the destination profile.
 fn color_transform(s: &Session, doc: &Document, which: SampleLayers, cmd: &str) -> Result<Option<Arc<Transform>>> {
     let source = if which == SampleLayers::Current { crate::color_cmds::document_profile(doc) } else { crate::color_cmds::composite_profile(doc) };
     let target = s.active().ok_or(EngineError::NoDocument)?;

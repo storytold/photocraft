@@ -292,6 +292,7 @@ fn index(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
     }
 }
 
+/// Describe a slot with both its stable document identity and its current open-tab index.
 fn slot_json(s: &Session, i: usize) -> Value {
     let slot = &s.presets.clone.slots[i.min(SLOTS - 1)];
     let mut result = slot.to_json(i);
@@ -392,7 +393,7 @@ fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index(s, p, "cloneSource.resetTransform")?;
     let slot = &mut s.presets.clone.slots[i];
     (slot.scale, slot.rotation, slot.flip_h, slot.flip_v) = ([100.0, 100.0], 0.0, false, false);
-    Ok(slot.to_json(i))
+    Ok(slot_json(s, i))
 }
 
 fn overlay(s: &mut Session, p: &Value) -> Result<Value> {
@@ -429,7 +430,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Clone Sources",
             menu: &[],
             shortcut: None,
-            params: "{} → {active,sources:[{index,source,anchor,offset,layer,width,height,linked,rotation,flipH,flipV}],overlay}",
+            params: "{} → {active,sources:[{index,source,anchor,offset,layer,document,documentId,width,height,linked,rotation,flipH,flipV}],overlay}",
             enabled: always,
             run: list,
             journal: false,
