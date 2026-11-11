@@ -106,13 +106,20 @@ pub struct Tile {
 }
 
 impl Tile {
+    /// Fill a new tile with one encoded pixel, reporting size or allocation failures.
     fn try_filled(format: &PixelFormat, pixel: &[u8]) -> Result<Self, AllocationError> {
         let n = (TILE_SIZE * TILE_SIZE) as usize;
         let bytes = n.checked_mul(format.bytes_per_pixel()).ok_or(AllocationError::SizeOverflow)?;
         let mut data = scratch::try_take_exact(bytes, 0u8).ok_or(AllocationError::NotEnoughMemory { bytes })?;
         if pixel.iter().any(|&b| b != 0) {
-            for px in data.chunks_exact_mut(pixel.len()) {
+            // Fill the first row, then copy it to the other rows without another allocation.
+            let row_len = TILE_SIZE as usize * format.bytes_per_pixel();
+            let (row, rest) = data.split_at_mut(row_len);
+            for px in row.chunks_exact_mut(pixel.len()) {
                 px.copy_from_slice(pixel);
+            }
+            for dst in rest.chunks_exact_mut(row_len) {
+                dst.copy_from_slice(row);
             }
         }
         Ok(Tile::from_vec(data))
@@ -510,6 +517,26 @@ fn decode_tile_row_rgba(fmt: &PixelFormat, t: &[u8], base: usize, dst: &mut [[f3
             for (d, s) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
                 let g = s[0] as f32 / 255.0;
                 *d = [g, g, g, s[1] as f32 / 255.0];
+            }
+        }
+        (ColorMode::Rgb, SampleType::U16, true) => {
+            let byte_base = base * 2;
+            let src = &t[byte_base..byte_base + dst.len() * 8];
+            for (d, s) in dst.iter_mut().zip(src.as_chunks::<8>().0) {
+                *d = [
+                    u16::from_ne_bytes([s[0], s[1]]) as f32 / 65535.0,
+                    u16::from_ne_bytes([s[2], s[3]]) as f32 / 65535.0,
+                    u16::from_ne_bytes([s[4], s[5]]) as f32 / 65535.0,
+                    u16::from_ne_bytes([s[6], s[7]]) as f32 / 65535.0,
+                ];
+            }
+        }
+        (ColorMode::Grayscale, SampleType::U16, true) => {
+            let byte_base = base * 2;
+            let src = &t[byte_base..byte_base + dst.len() * 4];
+            for (d, s) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
+                let g = u16::from_ne_bytes([s[0], s[1]]) as f32 / 65535.0;
+                *d = [g, g, g, u16::from_ne_bytes([s[2], s[3]]) as f32 / 65535.0];
             }
         }
         (ColorMode::Cmyk, SampleType::U8, _) => {
