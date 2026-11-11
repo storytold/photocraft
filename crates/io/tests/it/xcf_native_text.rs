@@ -32,7 +32,9 @@ mod published {
                 font_style: "Book".into(),
                 postscript_name: Some("DejaVuSans".into()),
                 size_pt: 24. * 72. / 300.,
-                kerning: Kerning::Off,
+                // Both pinned fixtures omit the inactive source kerning flag;
+                // default font shaping still applies metrics kerning.
+                kerning: Kerning::Metrics,
                 language: Some("en-US".into()),
                 ..Default::default()
             };
