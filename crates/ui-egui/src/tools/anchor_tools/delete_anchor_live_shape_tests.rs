@@ -82,6 +82,28 @@ fn yes_deletes_the_anchor_and_the_layer_is_no_longer_live() {
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
 }
 
+/// The question belongs to the document it was asked in: Yes after another document became active
+/// is refused and changes nothing there (layer ids are unique in a session, so this guards the
+/// binding the way the Color Picker's `__document` does), and the question's own document keeps
+/// its shape.
+#[test]
+fn yes_after_another_document_became_active_deletes_nothing() {
+    let (mut app, shape) = live(Tool::DeleteAnchorPoint);
+    click(&mut app, CORNER);
+    let id = question(&app).expect("the question");
+    let first = app.session.active_index();
+    app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
+    app.sync_views();
+    let other = app.run("shape.create", json!({"kind": "rect", "rect": [450, 100, 200, 150], "fill": "#3070c0"})).unwrap()["layer"].as_u64().unwrap();
+    assert_ne!(app.session.active_index(), first, "the new document is active");
+    let (before, n) = (shape_path(&mut app, other), steps(&app));
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_eq!((shape_path(&mut app, other), steps(&app)), (before, n));
+    assert!(app.session.set_active(first.unwrap()));
+    app.sync_views();
+    assert_eq!(corners(&mut app, shape), 4, "the first document's shape keeps its corner");
+}
+
 #[test]
 fn no_leaves_the_shape_its_parameters_and_history_unchanged() {
     let (mut app, shape) = live(Tool::DeleteAnchorPoint);
