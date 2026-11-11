@@ -837,14 +837,10 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if focused && !w.focused && app.session.active_index() != Some(w.document) {
                 app.session.set_active(w.document);
             }
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
-                let rect = ui.available_rect_before_wrap();
-                app.drawing_window = Some(w.id);
-                view = canvas_view(app, ui, w.document, rect, view.clone(), focused);
-                app.drawing_window = None;
-                // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
-                crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
-            });
+            let (shown, rect) = document_window_canvas(app, ui, &w, view.clone(), focused);
+            view = shown;
+            // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
+            crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
         });
         if shares && let Some(v) = app.ui.views.get_mut(w.document) {
             *v = view.clone();
@@ -858,6 +854,35 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     app.ui.windows.retain(|w| w.open);
+}
+
+/// The canvas of document window `w` (Window › New Window), drawn in its own viewport. Returns the
+/// view after this frame's input and the canvas rect.
+///
+/// Dialogs are modal, but their `egui::Modal` only blocks the viewport it is drawn in, the main
+/// window. Without a modal layer of its own, this window's canvas would take presses and drags
+/// under a dialog: a Move drag here committed a History step the dialog's Cancel never undid.
+/// So while a dialog is open the window gets an empty, transparent modal of its own, and its
+/// canvas is as inert as the main one's; the dialog's own gestures on the image (pan, zoom,
+/// eyedroppers) read the raw pointer and still work here, as they do there.
+pub(super) fn document_window_canvas(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    w: &crate::state::DocWindow,
+    view: crate::state::View,
+    focused: bool,
+) -> (crate::state::View, Rect) {
+    if !app.ui.dialogs.is_empty() {
+        egui::Modal::new(egui::Id::unique(("docwin-dialog-block", w.id))).backdrop_color(Color32::TRANSPARENT).frame(egui::Frame::NONE).show(ui.ctx(), |_| {});
+    }
+    let mut out = (view.clone(), Rect::NOTHING);
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
+        let rect = ui.available_rect_before_wrap();
+        app.drawing_window = Some(w.id);
+        out = (canvas_view(app, ui, w.document, rect, view, focused), rect);
+        app.drawing_window = None;
+    });
+    out
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the

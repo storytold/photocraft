@@ -433,42 +433,78 @@ pub(crate) fn hit_target(app: &PhotocraftApp, p: [f64; 2], handles: bool) -> Opt
 pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     let st = app.session.active()?;
-    // A path selected in the Paths panel (saved or Work Path) is the only target; otherwise the Pen draft first (as
-    // `candidates` builds it), then the active paths. The draft's destination is private to
-    // `vector_ui`, so it is not filtered here.
+    // A path selected in the Paths panel (saved or Work Path) is the only target; otherwise `targeted`.
     let targets: Vec<(PathRef, Path)> = match crate::vector_ui::selected_saved_path_index(app) {
         Some((i, path)) => Some((PathRef::Saved(i), path)).filter(|(r, _)| writable(app, r)).into_iter().collect(),
         // The Work Path selected in the Paths panel is the only target too, as for Path Selection.
         None if app.ui.selected_path.as_deref() == Some("work") => active_paths(app).into_iter().filter(|(r, _)| *r == PathRef::Work).collect(),
-        None => {
-            let pen = app
-                .ui
-                .pen
-                .as_ref()
-                .filter(|_| app.ui.pen_doc.is_none_or(|owner| Some(owner) == Some(st.doc.id)))
-                .filter(|p| !p.dragging && !p.knots.is_empty())
-                .map(|p| (PathRef::Pen, crate::vector_ui::pen_path(p)));
-            let mut out: Vec<(PathRef, Path)> = pen.into_iter().chain(active_paths(app)).collect();
-            // Not measured (#12762, #12705): a shape layer inside a group keeps today's behaviour. Every shown,
-            // unlocked one stays a target after the targeted paths, front first, as `candidates` lists it.
-            // A top-level shape layer (depth 0) is a target only as the active layer.
-            let layers = st.doc.walk();
-            let grouped = layers.iter().rev().filter(|(at, depth, _)| *depth > 0 && st.doc.shown_at(at)).filter_map(|(_, _, l)| match &l.content {
-                photocraft_doc::LayerContent::Shape(sh) => Some((PathRef::Layer(l.id.0), sh.path.clone())),
-                _ => None,
-            });
-            for (r, path) in grouped {
-                if writable(app, &r) && !out.iter().any(|(have, _)| *have == r) {
-                    out.push((r, path));
-                }
-            }
-            out
-        }
+        None => targeted(app),
     };
     targets
         .into_iter()
         .filter(|(r, _)| !matches!(r, PathRef::Layer(id) if !st.doc.layer(photocraft_doc::LayerId(*id)).is_some_and(|l| l.visible)))
         .find_map(|(r, path)| edit::hit(&path, Point::new(p[0], p[1]), tol, &[]).map(|h| (r, path, h)))
+}
+
+/// The Pen draft (as `candidates` builds it), then the active paths, then (not measured, so as today,
+/// #12762, #12705) every shown, unlocked shape layer inside a group, front first. A top-level shape
+/// layer is a target only as the active layer.
+fn targeted(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
+    let Some(st) = app.session.active() else {
+        return Vec::new();
+    };
+    // The draft's destination is private to `vector_ui`, so it is not filtered here.
+    let pen = app
+        .ui
+        .pen
+        .as_ref()
+        .filter(|_| app.ui.pen_doc.is_none_or(|owner| Some(owner) == Some(st.doc.id)))
+        .filter(|p| !p.dragging && !p.knots.is_empty())
+        .map(|p| (PathRef::Pen, crate::vector_ui::pen_path(p)));
+    let mut out: Vec<(PathRef, Path)> = pen.into_iter().chain(active_paths(app)).collect();
+    let layers = st.doc.walk();
+    let grouped = layers.iter().rev().filter(|(at, depth, _)| *depth > 0 && st.doc.shown_at(at)).filter_map(|(_, _, l)| match &l.content {
+        photocraft_doc::LayerContent::Shape(sh) => Some((PathRef::Layer(l.id.0), sh.path.clone())),
+        _ => None,
+    });
+    for (r, path) in grouped {
+        if writable(app, &r) && !out.iter().any(|(have, _)| *have == r) {
+            out.push((r, path));
+        }
+    }
+    out
+}
+
+/// What a Convert Point tool press at `p` works on: `hit_target` over the targeted paths only, so a
+/// top-level shape layer that is not active is left alone (#12735). Not measured, so as today: a
+/// shape layer inside a group, a hidden active layer, the active layer's path behind a path
+/// selected in the Paths panel, and a Work Path hidden after ⌘↩ or Load as Selection (#8459).
+fn hit_converting(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
+    let zoom = f64::from(app.point_zoom().max(0.01));
+    let tol = 6.0 / zoom;
+    // An anchor is in reach within 5 points (5 screen px at display scale 1, as measured, #12748);
+    // other display scales weren't measured and keep the points unit, like every canvas tolerance.
+    // The 0.01 point covers the f32 screen-to-document mapping, so a press 5 px away always hits.
+    // Shown handles and segments weren't measured and keep `tol`.
+    let reach = 5.01 / zoom;
+    let beyond = |path: &Path, k: [usize; 2]| {
+        path.subpaths.get(k[0]).and_then(|s| s.knots.get(k[1])).is_some_and(|kn| (kn.anchor.x - p[0]).hypot(kn.anchor.y - p[1]) > reach)
+    };
+    let ds = &app.ui.direct_selection;
+    let valid = still_valid(app, ds);
+    let mut paths = targeted(app);
+    if !paths.iter().any(|(r, _)| *r == PathRef::Work) {
+        paths.extend(app.session.active().and_then(|st| st.doc.work_path.clone()).map(|p| (PathRef::Work, p)));
+    }
+    paths
+        .into_iter()
+        .find_map(|(r, path)| {
+            let shown = if valid && ds.target.as_ref() == Some(&r) { shown_handles(ds, &path) } else { Vec::new() };
+            edit::hit(&path, Point::new(p[0], p[1]), tol.max(reach), &shown).map(|h| (r, path, h))
+        })
+        // The front path's anchor out of reach swallows the press, as today, rather than handing it
+        // to a path behind.
+        .filter(|(_, path, h)| !matches!(h, Hit::Anchor(k) if beyond(path, *k)))
 }
 
 fn retracted(k: &photocraft_doc::Knot, h: Handle) -> bool {
@@ -576,7 +612,9 @@ fn hits_pen(app: &PhotocraftApp, p: [f64; 2]) -> bool {
 /// that hit nothing; the Convert Point tool has nothing else to do, so it keeps the press.
 fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -> bool {
     let own_tool = app.ui.tool == Tool::ConvertPoint;
-    let Some((target, base, hit)) = hit_target(app, p, true) else {
+    // The tool's ⌘ is Direct Selection, which still reaches every visible shape layer.
+    let hit = if own_tool && convert { hit_converting(app, p) } else { hit_target(app, p, true) };
+    let Some((target, base, hit)) = hit else {
         if convert {
             return own_tool;
         }
@@ -899,6 +937,12 @@ mod tests;
 
 #[cfg(test)]
 mod convert_point_history_tests;
+
+#[cfg(test)]
+mod convert_point_targeted_path_tests;
+
+#[cfg(test)]
+mod convert_point_tolerance_tests;
 
 #[cfg(test)]
 mod freeform_command_tests {
