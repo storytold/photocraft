@@ -420,7 +420,8 @@ impl Ex<'_> {
         }
     }
 
-    /// Dynamic Text bakes to the plain type it looks like, with the baked layer's ink bounds.
+    /// Dynamic Text bakes to the plain type it looks like, with the baked layer's ink bounds; the
+    /// baked layer is kept for the document's `Txt2`.
     /// One warning per fitted layer: how it was saved, or why it could not be baked.
     fn bake_dynamic_text(&mut self, l: &Layer, t: &photocraft_doc::TextLayer) -> Option<(photocraft_doc::TextLayer, Option<[f32; 4]>)> {
         let baked = if photocraft_text::fit::is_fitted_lines(t) {
@@ -428,6 +429,7 @@ impl Ex<'_> {
             match photocraft_text::fit::bake(&mut eng, t, self.dpi) {
                 Ok(b) => {
                     let ink = eng.layout(&b, self.dpi).bounds();
+                    self.baked_text.insert(l.id, b.clone());
                     Some((b, ink))
                 }
                 Err(e) => {
@@ -550,9 +552,6 @@ impl Ex<'_> {
                 // it bakes to (a size and a line break per line). Stored TySh data of fitted text
                 // is from before the bake, so it is regenerated.
                 let baked = self.bake_dynamic_text(l, t);
-                if let Some((b, _)) = &baked {
-                    self.baked_text.insert(l.id, b.clone());
-                }
                 let t = baked.as_ref().map_or(t, |(b, _)| b);
                 // Text layers without PSD data (created here, or baked just now) get a generated TySh.
                 let generated = (baked.is_some() || t.psd_raw.is_none())
