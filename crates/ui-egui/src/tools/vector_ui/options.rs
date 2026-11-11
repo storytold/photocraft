@@ -1,10 +1,21 @@
 use super::path_ops::active_path_name;
 use super::pen::path_operations_menu;
 use super::shapes::is_shape_tool;
+use super::{ArrowDefaultLink, arrow_default_link_id, copy_arrow_to_tool_defaults};
 use super::{GradientChoices, LayerContent, PaintChange, PhotocraftApp, Tokens, Tool, Value, json, paint_param, swatch};
 
 // ---------------------------------------------------------------------------------------------
 // Options bars
+
+/// The Pen's gear, before Auto Add/Delete as in Photoshop: a popup with the Rubber Band check
+/// item, off by default and saved with the tool options (#12900).
+fn pen_gear(o: &mut crate::state::ToolOptions, ui: &mut egui::Ui) {
+    let gear = crate::icons::button_with_icon_size(ui, "settings", 28.0, 20.0, false, tl!("Set additional pen and path options"));
+    egui::Popup::menu(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(140.0);
+        ui.checkbox(&mut o.pen_rubber_band, tl!("Rubber Band"));
+    });
+}
 
 /// Options bar for vector tools; false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
@@ -43,13 +54,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         );
         return true;
     }
-    if matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint) {
-        let hint = if tool == Tool::AddAnchorPoint {
-            tl!("Click a segment to add an anchor point · {alt}-click an anchor to delete it")
-        } else {
-            tl!("Click an anchor point to delete it · {alt}-click a segment to add one")
-        };
-        lbl(ui, &crate::i18n::fmt(hint, &[("alt", &crate::shortcuts::pretty("Alt"))]));
+    if tool == Tool::AddAnchorPoint {
+        // Photoshop centres this in the rest of the bar after the preset picker (#12731).
+        let text = egui::RichText::new(tl!("No options for the Add Anchor Point Tool.")).color(t.text_dim).size(12.0);
+        ui.add_sized([ui.available_width(), ui.available_height()], egui::Label::new(text));
+        return true;
+    }
+    if tool == Tool::DeleteAnchorPoint {
+        // Photoshop centres this in the rest of the bar after the preset picker (#12827).
+        let text = egui::RichText::new(tl!("No options for the Delete Anchor Point Tool.")).color(t.text_dim).size(12.0);
+        ui.add_sized([ui.available_width(), ui.available_height()], egui::Label::new(text));
         return true;
     }
     if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
@@ -70,6 +84,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         let o = &mut app.ui.tool_options;
         if tool == Tool::Pen {
             crate::widgets::vline(ui, 22.0);
+            pen_gear(o, ui);
             crate::widgets::checkbox(ui, &mut o.pen_auto_add_delete, tl!("Auto Add/Delete"));
         }
         let enter = crate::shortcuts::pretty("Enter");
@@ -96,25 +111,103 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ),
             ),
         }
-        // Path mode: Make Selection from the path being drawn or the active path, as Photoshop's
-        // options bar's "Make: Selection…" does (#5703).
         if app.ui.tool_options.vector_mode == "path" {
             crate::widgets::vline(ui, 22.0);
-            let has_path = active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
-            if ui.add_enabled(has_path, egui::Button::new(tl!("Make Selection"))).clicked()
-                && let Err(e) = crate::canvas_tool_menu::make_selection(app)
-            {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
+            make_buttons(app, ui);
         }
         return true;
     }
-    let mut mode = "shape".to_string();
-    crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
+    if is_shape_tool(tool) {
+        // Shape draws a shape layer, Path adds the outline to the work path (#9453).
+        let opts = [("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path"))];
+        crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut app.ui.tool_options.shape_mode, &opts, 80.0);
+    } else {
+        // Path Selection and Direct Selection edit the selected shape layer: the Shape tools'
+        // Path mode isn't theirs to show or change.
+        let mut mode = "shape".to_string();
+        crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
+    }
     crate::widgets::vline(ui, 22.0);
-    crate::shape_options::options_bar(app, ui, tool);
+    // The Shape tools' Path mode hides Fill and Stroke (an outline has no paint); the tool's
+    // geometry, the Line's arrowheads included, stays.
+    let paint = !(is_shape_tool(tool) && draws_path(&app.ui.tool_options));
+    crate::shape_options::options_bar(app, ui, tool, paint);
+    // Photoshop-style arrowhead settings at the right of Line options.
+    if tool == Tool::Line {
+        crate::widgets::vline(ui, 22.0);
+        ui.menu_image_button(crate::icons::image("settings", 18.0, t.icon), |ui| {
+            let o = &mut app.ui.tool_options;
+            ui.set_min_width(170.0);
+            ui.label(tl!("Arrowheads"));
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut o.arrow_start, tl!("Start"));
+                ui.checkbox(&mut o.arrow_end, tl!("End"));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Width"));
+                ui.add(egui::DragValue::new(&mut o.arrow_width).range(1.0..=4096.0).suffix(" px"));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Length"));
+                ui.add(egui::DragValue::new(&mut o.arrow_length).range(1.0..=4096.0).suffix(" px"));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Concavity"));
+                ui.add(egui::DragValue::new(&mut o.arrow_concavity).range(0.0..=100.0).suffix(" %"));
+            });
+        })
+        .response
+        .on_hover_text(tl!("Arrowhead options"));
+    }
     true
+}
+
+/// Path mode's "Make:" row, as in Photoshop's options bar: Selection… (#5703), Mask (#12904) and
+/// Shape (#10934), from the path being drawn or the active path; all greyed without one.
+fn make_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(tl!("Make:")).color(t.text_dim).size(12.0));
+    let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
+    let has_path = pending || active_path_name(app).is_some();
+    // A draft that finishes into the targeted vector mask has no path of its own to make a mask
+    // from, as in the canvas menu's Create Vector Mask.
+    let has_mask_path = has_path && !(pending && super::path_ops::targeted_vector_mask(app).is_some());
+    // Make: Shape turns the path into a shape layer with the shape fill and stroke (#10934).
+    let has_shape_path = pending || super::path_ops::shape_source_path(app).is_some();
+    let selection = ui.add_enabled(has_path, egui::Button::new(tl!("Selection…"))).clicked();
+    let mask = ui.add_enabled(has_mask_path, egui::Button::new(tl!("Mask"))).clicked();
+    let shape = ui.add_enabled(has_shape_path, egui::Button::new(tl!("Shape"))).clicked();
+    let made = if selection {
+        crate::canvas_tool_menu::make_selection(app)
+    } else if mask {
+        make_mask(app)
+    } else if shape {
+        super::make_shape(app).map(|_| ())
+    } else {
+        Ok(())
+    };
+    if let Err(e) = made {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// Make: Mask (#12904): a vector mask on the active layer from the path being drawn (finished
+/// first, as the canvas menu's Create Vector Mask does) or the active path. The command records
+/// the History step Add Vector Mask and turns the Background into a normal layer in that edit.
+fn make_mask(app: &mut PhotocraftApp) -> Result<(), String> {
+    if app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2) && !super::pen::pen_commit(app, false) {
+        return Err(app.ui.status.clone());
+    }
+    let name =
+        active_path_name(app).ok_or_else(|| tl!("No path to make a mask from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
+    app.run("layer.vectorMask.fromPath", json!({"name": name})).map(|_| ())
+}
+
+/// Whether the Shape tools are in Path mode: a drag adds its outline to the work path.
+pub(crate) fn draws_path(o: &crate::state::ToolOptions) -> bool {
+    o.shape_mode == "path"
 }
 
 /// Whether the active layer supplies the selected-shape options.
@@ -176,6 +269,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     };
     let t = Tokens::get(ui.ctx());
     let mut edit: Option<Value> = None;
+    // A swatch picked in a Fill/Stroke popover joins the Recently Used Colors once the edit took it.
+    let mut recent: Option<[f32; 3]> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
     let key = |k: &str| format!("shape-{doc_id:?}-{}-{k}", id.0);
     let gesture_key = ui.scope_id().with(key("paint-gesture"));
@@ -184,9 +279,11 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     // The shared collapsible section headers (#155).
     // Prefs "Appearance" is theme chrome (Giao diện); shape fill/stroke is Diện mạo.
     if crate::props_layout::section(ui, "appearance", crate::i18n::tr_ctx(crate::i18n::current(), "shape", "Appearance")) {
+        let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+        let lib = crate::paint_picker::library(&app.session, ui.ctx());
+        let mut picks: Vec<(bool, PaintChange)> = Vec::new();
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Fill")).color(t.text_dim).size(12.0));
-            let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
             let mut gradients = GradientChoices {
                 presets: &app.session.presets.gradients,
                 current: &app.session.presets.gradient,
@@ -194,24 +291,32 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 fg,
                 bg,
             };
-            if let Some(change) = swatch(ui, sh.fill.as_ref(), fg, tl!("Set shape fill type"), &mut gradients) {
-                let fill = match change {
-                    PaintChange::None => Value::Null,
-                    PaintChange::Color(color) => json!(color),
-                    PaintChange::Gradient(g) => paint_param(&g),
+            if let Some(change) = swatch(ui, &lib, sh.fill.as_ref(), fg, tl!("Set shape fill type"), &mut gradients) {
+                let fill = match &change {
+                    PaintChange::None => Some(Value::Null),
+                    PaintChange::Color(color) => Some(json!(color)),
+                    PaintChange::Gradient(g) => Some(paint_param(g)),
+                    PaintChange::OpenPicker => None,
                 };
-                edit = Some(json!({"fill": fill, "coalesce": coalesce("fill")}));
+                if let Some(fill) = fill {
+                    edit = Some(json!({"fill": fill, "coalesce": coalesce("fill")}));
+                }
+                picks.push((false, change));
             }
             ui.add_space(12.0);
             ui.label(egui::RichText::new(tl!("Stroke")).color(t.text_dim).size(12.0));
-            if let Some(change) = swatch(ui, sh.stroke.as_ref().map(|s| &s.paint), fg, tl!("Set shape stroke type"), &mut gradients) {
+            if let Some(change) = swatch(ui, &lib, sh.stroke.as_ref().map(|s| &s.paint), fg, tl!("Set shape stroke type"), &mut gradients) {
                 let width = enabled_stroke_width(sh.stroke.as_ref().map_or(0.0, |s| s.width));
-                let stroke = match change {
-                    PaintChange::None => Value::Null,
-                    PaintChange::Color(color) => json!({"color": color, "width": width}),
-                    PaintChange::Gradient(g) => json!({"color": paint_param(&g), "width": width}),
+                let stroke = match &change {
+                    PaintChange::None => Some(Value::Null),
+                    PaintChange::Color(color) => Some(json!({"color": color, "width": width})),
+                    PaintChange::Gradient(g) => Some(json!({"color": paint_param(g), "width": width})),
+                    PaintChange::OpenPicker => None,
                 };
-                edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
+                if let Some(stroke) = stroke {
+                    edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
+                }
+                picks.push((true, change));
             }
             let mut w = sh.stroke.as_ref().map_or(0.0, |s| s.width);
             if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).accessible_name(tl!("Stroke:")).changed() && (sh.stroke.is_some() || w > 0.0) {
@@ -236,6 +341,16 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             }
             edit = Some(json!({"stroke": stroke, "coalesce": change.coalesce}));
         }
+        for (is_stroke, change) in picks {
+            match change {
+                PaintChange::OpenPicker => {
+                    let which = if is_stroke { crate::shape_fill_ui::Paint::Stroke } else { crate::shape_fill_ui::Paint::Fill };
+                    crate::shape_fill_ui::open_paint(app, which, Some(id), false, fg);
+                }
+                PaintChange::Color(c) => recent = Some([c[0], c[1], c[2]]),
+                PaintChange::None | PaintChange::Gradient(_) => {}
+            }
+        }
     }
     if let Some(live) = &sh.live
         && crate::props_layout::section(ui, "liveShape", tl!("Shape"))
@@ -257,7 +372,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     }
                 });
             }
-            photocraft_doc::vector::LiveShape::Line { .. } => {}
+            photocraft_doc::vector::LiveShape::Line { .. } | photocraft_doc::vector::LiveShape::ArrowLine { .. } => {}
         }
         ui.vertical(|ui| match live {
             photocraft_doc::vector::LiveShape::Rect { radii, .. } => {
@@ -301,6 +416,59 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 })
                 .inner
             }
+            photocraft_doc::vector::LiveShape::ArrowLine { weight, start, end, width, length, concavity, .. } => {
+                // This is a selected, saved Arrow; unlike the tool's defaults, edits update its geometry.
+                ui.horizontal(|ui| {
+                    let mut value = *start;
+                    if ui.checkbox(&mut value, tl!("Start")).changed() {
+                        edit = Some(json!({"arrowStart": value, "coalesce": key("arrow-start")}));
+                    }
+                    let mut value = *end;
+                    if ui.checkbox(&mut value, tl!("End")).changed() {
+                        edit = Some(json!({"arrowEnd": value, "coalesce": key("arrow-end")}));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let mut v = *width as f32;
+                    if num(ui, "Width", &mut v, 1.0..=4096.0, "px") {
+                        edit = Some(json!({"arrowWidth": v, "coalesce": key("arrow-width")}));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let mut v = *length as f32;
+                    if num(ui, "Length", &mut v, 1.0..=4096.0, "px") {
+                        edit = Some(json!({"arrowLength": v, "coalesce": key("arrow-length")}));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let mut v = *weight as f32;
+                    if num(ui, "Weight", &mut v, 1.0..=10000.0, "px") {
+                        edit = Some(json!({"weight": v, "coalesce": key("arrow-weight")}));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let mut v = *concavity as f32;
+                    if num(ui, "Concavity", &mut v, 0.0..=100.0, "%") {
+                        edit = Some(json!({"arrowConcavity": v, "coalesce": key("arrow-concavity")}));
+                    }
+                });
+
+                // Explicitly adopt this arrow's values as defaults for new arrows.
+                let target = app.session.active().map(|st| (st.doc.id.0, id.0));
+                let mut linked = ui.ctx().data(|data| {
+                    let state = data.get_temp::<ArrowDefaultLink>(arrow_default_link_id()).unwrap_or_default();
+                    state.target == target && state.enabled
+                });
+
+                if ui.checkbox(&mut linked, tl!("Set as default")).on_hover_text(tl!("Use these settings for new arrows")).changed() {
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(arrow_default_link_id(), ArrowDefaultLink { target, enabled: linked });
+                    });
+                    if linked {
+                        copy_arrow_to_tool_defaults(app, id);
+                    }
+                }
+            }
             photocraft_doc::vector::LiveShape::Line { weight, .. } => {
                 ui.horizontal(|ui| {
                     let mut w = *weight as f32;
@@ -315,9 +483,30 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     }
     if let Some(mut p) = edit {
         p["layer"] = json!(id.0);
-        if let Err(e) = app.run("shape.edit", p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
+
+        match app.run("shape.edit", p) {
+            Ok(_) => {
+                // Remember recently used colors after a successful edit.
+                if let Some(rgb) = recent {
+                    crate::paint_picker::remember(app, rgb);
+                }
+
+                // Only a successful Properties edit updates new-arrow defaults,
+                // and only while the user explicitly enables the checkbox.
+                let target = app.session.active().map(|st| (st.doc.id.0, id.0));
+                let linked = ui.ctx().data(|data| {
+                    let state = data.get_temp::<ArrowDefaultLink>(arrow_default_link_id()).unwrap_or_default();
+                    state.enabled && state.target == target
+                });
+
+                if linked {
+                    copy_arrow_to_tool_defaults(app, id);
+                }
+            }
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
         }
         if !ui.input(|i| i.pointer.any_down()) {
             ui.data_mut(|d| {
@@ -327,3 +516,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         }
     }
 }
+
+#[cfg(test)]
+#[path = "pen_make_mask_tests.rs"]
+mod pen_make_mask_tests;

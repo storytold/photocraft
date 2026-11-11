@@ -36,39 +36,40 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 }
 
 /// File › Open's file types after All Formats, as Photoshop lists them: one per format, so a folder
-/// of mixed files can be narrowed to one kind (#6337). Together they cover every extension of
+/// of mixed files can be narrowed to one kind (#6337). The document formats, the rest by name as in
+/// [`SAVE_FILTERS`], then the app's own resources. Together they cover every extension of
 /// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
 /// picker defaults to another filter.
 const OPEN_FILTERS: &[(&str, &[&str])] = &[
-    ("PhotoCraft", &["pcraft"]),
     ("Photoshop", &["psd", "psb", "psdt"]),
+    ("PhotoCraft", &["pcraft"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
-    ("Krita", &["kra", "krz"]),
+    ("Amiga IFF", &["iff", "lbm", "ilbm"]),
+    ("BMP", &["bmp", "dib"]),
+    ("DDS", &["dds"]),
+    ("DICOM", &["dcm", "dicom", "dc3"]),
+    ("DPX and Cineon", &["dpx", "cin"]),
+    ("FITS", &["fits", "fit", "fts"]),
+    ("GIF", &["gif"]),
     ("GIMP", &["xcf", "xcfgz", "gz"]),
+    ("HEIF", &["heic", "heif", "hif"]),
+    ("ICO", &["ico"]),
+    ("JPEG", &["jpg", "jpeg"]),
+    ("Krita", &["kra", "krz"]),
+    ("OpenEXR", &["exr"]),
     ("OpenRaster", &["ora"]),
     ("Paint.NET", &["pdn"]),
-    ("SVG", SVG_EXTS),
+    ("PCX", &["pcx"]),
     ("PNG", &["png"]),
-    ("JPEG", &["jpg", "jpeg"]),
-    ("HEIF", &["heic", "heif", "hif"]),
+    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"]),
+    ("QOI", &["qoi"]),
+    ("Radiance HDR", &["hdr"]),
+    ("RAW images", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
+    ("SVG", SVG_EXTS),
+    ("Targa", &["tga"]),
     ("TIFF", &["tif", "tiff"]),
     ("WebP", &["webp"]),
-    ("GIF", &["gif"]),
-    ("BMP", &["bmp", "dib"]),
-    ("Targa", &["tga"]),
-    ("ICO", &["ico"]),
-    ("QOI", &["qoi"]),
-    ("PCX", &["pcx"]),
-    ("DDS", &["dds"]),
     ("XPM", &["xpm"]),
-    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"]),
-    ("OpenEXR", &["exr"]),
-    ("Radiance HDR", &["hdr"]),
-    ("FITS", &["fits", "fit", "fts"]),
-    ("DPX and Cineon", &["dpx", "cin"]),
-    ("Amiga IFF", &["iff", "lbm", "ilbm"]),
-    ("DICOM", &["dcm", "dicom", "dc3"]),
-    ("Camera Raw", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
     ("Brushes", &["abr"]),
     ("Gradients", &["grd"]),
     ("Styles", &["asl"]),
@@ -82,35 +83,40 @@ fn open_filters() -> Vec<(&'static str, Vec<String>)> {
         .collect()
 }
 
-/// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
-/// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
-/// keeps defaulting to PSD.
+/// File › Save As formats: (filter name, extensions). PSD, PSB and PhotoCraft's own format, which
+/// keep the most of a document, then the rest by name, so a long list stays easy to search. The
+/// filter matching the suggested name's extension comes first, so a .pcraft document saves as
+/// .pcraft by default and everything else keeps defaulting to PSD. The PSD type takes `.psb` too:
+/// Windows adds the selected type's extension to a name whose extension isn't one of the type's,
+/// so `art.psb` typed under the PSD type would come back as `art.psb.psd`.
 const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PSD Document", &["psd", "psb"]),
-    ("PDF", &["pdf"]),
+    ("PSB Large Document", &["psb"]),
     ("PhotoCraft", &["pcraft"]),
-    ("OpenRaster", &["ora"]),
-    ("PNG", &["png"]),
+    ("Amiga IFF", &["iff"]),
+    ("BMP", &["bmp", "dib"]),
+    ("Cineon", &["cin"]),
+    // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
+    ("DDS", &["dds"]),
+    ("DPX", &["dpx"]),
+    ("FITS", &["fits", "fit"]),
+    ("GIF", &["gif"]),
+    // BMP and GIF are also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to
+    // 256×256, with alpha.
+    ("ICO", &["ico"]),
     ("JPEG", &["jpg", "jpeg"]),
     ("JPEG XL", &["jxl"]),
-    ("WebP", &["webp"]),
-    ("TIFF", &["tif", "tiff"]),
-    ("Targa", &["tga"]),
-    // Also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to 256×256, with alpha.
-    ("BMP", &["bmp", "dib"]),
-    ("GIF", &["gif"]),
-    ("ICO", &["ico"]),
-    ("OpenEXR", &["exr"]),
     // The encoder picks P5, P6, P7 or PFM from the image, not from the name, so only the neutral
     // .pnm is offered: a .pbm or .pgm name would hold pixmap data (CodeRabbit on #9775).
     ("Netpbm", &["pnm"]),
+    ("OpenEXR", &["exr"]),
+    ("OpenRaster", &["ora"]),
+    ("PDF", &["pdf"]),
+    ("PNG", &["png"]),
     ("Radiance HDR", &["hdr"]),
-    ("FITS", &["fits", "fit"]),
-    ("DPX", &["dpx"]),
-    // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
-    ("DDS", &["dds"]),
-    ("Cineon", &["cin"]),
-    ("Amiga IFF", &["iff"]),
+    ("Targa", &["tga"]),
+    ("TIFF", &["tif", "tiff"]),
+    ("WebP", &["webp"]),
 ];
 
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog
@@ -136,10 +142,14 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
         return vec![(name.to_string(), exts.iter().map(|e| e.to_string()).collect())];
     }
     let mut v: Vec<(String, Vec<String>)> = SAVE_FILTERS.iter().map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect())).collect();
-    match v.iter().position(|(_, exts)| exts.contains(&ext)) {
+    // The type the extension is first for (`.psb` starts on PSB, not on PSD's second extension),
+    // else any type that lists it.
+    let own = v.iter().position(|(_, exts)| exts.first() == Some(&ext));
+    match own.or_else(|| v.iter().position(|(_, exts)| exts.contains(&ext))) {
         Some(i) => {
             let (name, mut exts) = v.remove(i);
-            // Windows adds the first type's first extension to a bare name: `.psb`, not `.psd`.
+            // Windows adds the first type's first extension to a bare name: `cat.jpeg` stays
+            // `.jpeg`, and `sky.fit` stays `.fit`.
             exts.retain(|e| *e != ext);
             exts.insert(0, ext);
             v.insert(0, (name, exts));
@@ -156,13 +166,26 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
 /// dialog opened with (`opened_with`, `Untitled-1.psd` with PNG picked) or none gets the type's
 /// extension, as PolyMeilex/rfd#341 does. An extension the user typed that PhotoCraft saves
 /// (`art.png` with the PSD type untouched, the way to save a PNG before this) is theirs and stays,
-/// and so does one of the type's own (`.psb` for PSD). One PhotoCraft doesn't save (`scan.2024`)
-/// is part of the name, and the type's extension is added after it.
+/// and so does one of the type's own. One PhotoCraft doesn't save (`scan.2024`)
+/// is part of the name, and the type's extension is added after it. The exception: two of the
+/// type's own extensions (`art.psb.psd` under the PSD type) lose the last, since KDE's dialog adds
+/// it after a typed one; the returned name can't tell that from a typed `art.psb.psd`, which is
+/// rare, so that one is saved as `art.psb` too.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String]) -> PathBuf {
     let Some(first) = chosen.first() else { return path.to_path_buf() };
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     let opened_ext = opened_with.and_then(|n| Path::new(n).extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    // A name that already had one of the type's extensions, with the type's first one added after
+    // it (KDE's dialog does that: `art.psb` typed under the PSD type came back as `art.psb.psd`).
+    let inner = path.file_stem().map(Path::new).and_then(|s| s.extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    if let (Some(ext), Some(inner)) = (&ext, &inner)
+        && ext != inner
+        && chosen.contains(ext)
+        && chosen.contains(inner)
+    {
+        return path.with_extension("");
+    }
     match ext {
         Some(ext) if chosen.contains(&ext) => path.to_path_buf(),
         Some(ext) if opened_ext.as_ref() == Some(&ext) => path.with_extension(first),
@@ -341,6 +364,41 @@ pub fn prefs_file() -> Option<PathBuf> {
     config_dir().map(|d| d.join("preferences.json"))
 }
 
+fn gpu_memo_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("gpu-compositor.json"))
+}
+
+fn load_gpu_memo_text() -> Option<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(gpu_memo_file()?).ok()?;
+    let cap = photocraft_ui_egui::gpu_memo::MAX_GPU_MEMO_BYTES;
+    let mut bytes = Vec::new();
+    file.take((cap + 1) as u64).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > cap {
+        log::info!("ignoring oversized GPU compositor memo");
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+fn shader_compiler_identity() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let exe = std::env::current_exe().ok();
+        let exe_dir = exe.as_deref().and_then(Path::parent);
+        match crate::gpu_startup::dx12_compiler(std::env::var("WGPU_DX12_COMPILER").ok().as_deref(), exe_dir) {
+            eframe::wgpu::Dx12Compiler::Fxc => "fxc".into(),
+            eframe::wgpu::Dx12Compiler::DynamicDxc { dxc_path } => format!("dxc:{dxc_path}"),
+            eframe::wgpu::Dx12Compiler::StaticDxc => "static-dxc".into(),
+            eframe::wgpu::Dx12Compiler::Auto => "auto".into(),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        String::new()
+    }
+}
+
 /// The brush preset store (one file per preset group plus tip bitmaps; see
 /// `photocraft_engine::preset_store`).
 pub fn presets_dir() -> Option<PathBuf> {
@@ -361,9 +419,20 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
-/// [`write_atomic`] reporting the fraction written (a background save's progress, #3389).
-fn write_atomic_progress(path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> Result<(), String> {
-    photocraft_format::atomic_write_progress(path, bytes, progress).map_err(|e| e.to_string())
+/// [`write_atomic`] for an encoded save, reporting the fraction written (a background save's
+/// progress, #3389). A PSD/PSB is serialized straight into the temporary file, so the whole file
+/// is never held in memory next to its model (#6607).
+fn write_encoded_atomic(path: &Path, encoded: &photocraft_io::Encoded, progress: &dyn Fn(f32)) -> Result<(), String> {
+    match encoded {
+        photocraft_io::Encoded::Bytes(bytes) => photocraft_format::atomic_write_progress(path, bytes, progress),
+        photocraft_io::Encoded::Psd(_) => {
+            // Only the progress bar's scale: a model whose length can't be worked out fails the
+            // write the same way, through the atomic write's "not changed" error.
+            let len = encoded.encoded_len().unwrap_or(0);
+            photocraft_format::atomic_write_stream_progress(path, len, progress, &mut |w| encoded.write_to(w))
+        }
+    }
+    .map_err(|e| e.to_string())
 }
 
 /// Whether `a` and `b` reach the same file: the same device and inode on Unix, the same final path
@@ -413,26 +482,26 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
 const ENCODE_SHARE: f32 = 0.85;
 
 /// A save on a worker thread (`Services::save_file` and `Services::automation_save`, #2017):
-/// encode, then write through `write`. Cancelling while encoding leaves the target untouched;
-/// once writing starts the save can't be cancelled. The encoder's progress fills the first
+/// encode, then write through `write` (a PSD/PSB is serialized as it is written). Cancelling
+/// while encoding leaves the target untouched; once writing starts the save can't be cancelled. The encoder's progress fills the first
 /// [`ENCODE_SHARE`] of the job's progress, so the status bar and tab read "Saving NN%" (#3389).
 fn save_through(
     doc: &Document,
     path: &str,
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
-    write: impl Fn(&str, &[u8], &dyn Fn(f32)) -> Result<(), String>,
+    write: impl Fn(&str, &photocraft_io::Encoded, &dyn Fn(f32)) -> Result<(), String>,
 ) -> Result<Vec<String>, String> {
     ctl.progress(0.0, "Encoding");
     let opts = export_options(settings);
     let cancelled = || ctl.check().is_err();
     let progress = |f: f32| ctl.progress(f * ENCODE_SHARE, "");
     let interrupt = photocraft_raster::Interrupt::new(&cancelled, &progress);
-    let r = crate::crash_guard::guard("Save", || photocraft_io::export_with(doc, path, &opts, &interrupt).map_err(|e| e.to_string()))?;
+    let r = crate::crash_guard::guard("Save", || photocraft_io::encode_with(doc, path, &opts, &interrupt).map_err(|e| e.to_string()))?;
     ctl.commit()?;
     ctl.progress(ENCODE_SHARE, "Writing");
     // The last bit is the flush and rename after the last chunk: 100% only once they're done.
-    write(path, &r.bytes, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
+    write(path, &r.encoded, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
     ctl.progress(1.0, "");
     Ok(r.warnings)
 }
@@ -443,7 +512,7 @@ fn save_file(
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
 ) -> Result<Vec<String>, String> {
-    save_through(doc, path, settings, ctl, |p, b, progress| write_atomic_progress(Path::new(p), b, progress))
+    save_through(doc, path, settings, ctl, |p, encoded, progress| write_encoded_atomic(Path::new(p), encoded, progress))
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -494,6 +563,11 @@ fn recovery_services(dir: Option<PathBuf>) -> Services {
 /// panic in arboard, or in decoding a copied file, becomes the paste's (or copy's) error and the
 /// app keeps its documents.
 fn guarded_clipboard_get(mut read: impl FnMut() -> Result<Option<(u32, u32, Vec<u8>)>, String> + 'static) -> photocraft_ui_egui::ClipboardGetFn {
+    Box::new(move || crate::crash_guard::guard("Paste", &mut read))
+}
+
+/// SVG reads use the same recovery boundary as raster clipboard reads.
+fn guarded_clipboard_svg(mut read: impl FnMut() -> Result<Option<Vec<u8>>, String> + 'static) -> photocraft_ui_egui::ClipboardGetSvgFn {
     Box::new(move || crate::crash_guard::guard("Paste", &mut read))
 }
 
@@ -616,6 +690,18 @@ fn clipboard_text(read: Result<String, arboard::Error>) -> Result<Option<String>
     }
 }
 
+/// Keep SVG source for Paste As without accepting an unbounded clipboard string as a new copy.
+fn svg_clipboard_source(text: Option<String>) -> Result<Option<Vec<u8>>, String> {
+    let Some(text) = text else { return Ok(None) };
+    if !photocraft_io::svg::is_svg(text.as_bytes()) {
+        return Ok(None);
+    }
+    if text.len() > 16 << 20 {
+        return Err("SVG clipboard data exceeds the 16 MiB limit".into());
+    }
+    Ok(Some(text.into_bytes()))
+}
+
 /// The shell command that starts this install under XWayland, where winit delivers file drops
 /// (winit 0.30 has none on Wayland, #386). A Flatpak gets the X11 socket only without the Wayland
 /// one, an AppImage relaunches by its own path, and anything else is `photocraft` on the PATH.
@@ -640,9 +726,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
     let automation_read = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
-            let bytes = workspace.read(path).map_err(|error| error.to_string())?;
+            let (bytes, save_path) = workspace.read_with_save_path(path).map_err(|error| error.to_string())?;
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
-            Ok((name, bytes))
+            Ok(photocraft_ui_egui::AutomationReadResult { name, bytes, save_path })
         }) as photocraft_ui_egui::AutomationReadFn
     });
     let automation_write = automation.clone().map(|workspace| {
@@ -657,7 +743,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     let automation_save = automation.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
-            save_through(doc, path, settings, ctl, |p, b, _| workspace.write(p, b).map_err(|e| e.to_string()))
+            save_through(doc, path, settings, ctl, |p, encoded, _| workspace.write_stream(p, &mut |w| encoded.write_to(w)).map_err(|e| e.to_string()))
         }) as photocraft_ui_egui::SaveFileFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
@@ -700,6 +786,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
         beep: Some(platform_beep),
         check_updates: Some(crate::updates::service()),
+        last_update: Some(crate::updates::last_update),
         clipboard_set_image: Some({
             let clip = clip.clone();
             guarded_clipboard_set(move |w: u32, h: u32, px: &[u8]| {
@@ -711,6 +798,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 cb.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(px) }).map_err(|e| e.to_string())
             })
         }),
+        open_external_svg: Some(Box::new(crate::external_svg::open)),
         clipboard_get_image: Some({
             let clip = clip.clone();
             let unreadable = clip_unreadable.clone();
@@ -747,10 +835,29 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 )
             })
         }),
+        clipboard_get_svg: Some({
+            let clip = clip.clone();
+            guarded_clipboard_svg(move || {
+                let mut slot = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
+                let cb = match slot.as_mut() {
+                    Some(c) => c,
+                    None => slot.insert(arboard::Clipboard::new().map_err(|e| e.to_string())?),
+                };
+                svg_clipboard_source(clipboard_text(cb.get_text())?)
+            })
+        }),
         clipboard_unreadable: Some(Box::new(move || clip_unreadable.get())),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
         photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
         save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),
+        load_gpu_memo: Some(Box::new(load_gpu_memo_text)),
+        save_gpu_memo: Some(Box::new(|text: &str| {
+            if text.len() > photocraft_ui_egui::gpu_memo::MAX_GPU_MEMO_BYTES {
+                return Err("GPU compositor memo exceeds 64 KiB".into());
+            }
+            write_atomic(&gpu_memo_file().ok_or("no config directory")?, text.as_bytes())
+        })),
+        shader_compiler: Some(shader_compiler_identity()),
         system_theme: crate::appearance::service(),
         append_text: Some(Box::new(|path: &str, text: &str| {
             use std::io::Write;

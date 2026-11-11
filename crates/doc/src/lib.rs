@@ -14,6 +14,8 @@ pub mod analysis;
 pub mod blend_if;
 pub mod comps;
 pub mod effects;
+pub mod frame;
+pub mod import_conversion;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
@@ -35,6 +37,7 @@ pub use effects::{
     Bevel, BevelContour, BevelStyle, BevelTechnique, BevelTexture, Contour, Effect, FxCommon, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient,
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
+pub use frame::Frame;
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
@@ -503,12 +506,22 @@ fn normalize_runs<S: Clone>(text: &str, runs: Vec<(usize, S)>, base: S) -> Vec<(
     out
 }
 
+/// A bounded display preview for an embedded native vector, bound to its exact source bytes.
+/// The SVG is display data only; saving the object retains the native source format.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorPreview {
+    pub source_hash: [u8; 32],
+    pub svg: Arc<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
     pub contents_id: SmartContentsId,
     /// Embedded source file bytes (PSD, PNG, …) or linked path.
     pub source: SmartSource,
+    /// Optional source-pixel display preview for AI/PDF/EPS; ignored after source bytes change.
+    pub vector_preview: Option<VectorPreview>,
     pub transform: Affine,
     pub smart_filters: Vec<SmartFilter>,
     /// Rendered appearance.
@@ -540,6 +553,7 @@ impl SmartObject {
         Self {
             contents_id: SmartContentsId::fresh(),
             source,
+            vector_preview: None,
             transform,
             smart_filters: Vec::new(),
             cache,
@@ -550,6 +564,12 @@ impl SmartObject {
             stack_mode: None,
             perspective: None,
         }
+    }
+
+    /// Where the placed source lands (transform, perspective and warp), as JSON: the placement a
+    /// smart filter stored in document pixels (an imported Puppet Warp mesh) was made for.
+    pub fn placement_json(&self) -> serde_json::Value {
+        serde_json::json!({"transform": self.transform.m, "perspective": self.perspective, "warp": self.warp})
     }
 }
 
@@ -635,6 +655,9 @@ pub struct Layer {
     pub effects: Effects,
     pub label: LabelColor,
     pub content: LayerContent,
+    /// Frame Tool container; its clipping outline and image have independent placements. Boxed:
+    /// inline it grows every layer by 224 bytes, and deep documents recurse on small stacks.
+    pub frame: Option<Box<Frame>>,
     /// Preserved PSD additional-layer-info blocks (key, data) for lossless
     /// round-trip of anything not modelled above: vector masks, blending
     /// options, layer version, and the original adjustment/fill blocks (the
@@ -692,6 +715,7 @@ impl Layer {
             effects: Effects { enabled: true, ..Default::default() },
             label: LabelColor::None,
             content,
+            frame: None,
             psd_blocks: Vec::new(),
             psd_id: None,
             fill_cache: None,
@@ -850,6 +874,9 @@ pub type PsdGlobalBlock = ([u8; 4], [u8; 4], Arc<Vec<u8>>);
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Metadata {
+    /// Historical conversion information; never consulted by native rendering or editing.
+    /// Shared so document/history clones do not duplicate report entries, strings or retained payloads.
+    pub import_conversion: Option<Arc<import_conversion::ImportConversion>>,
     /// The XMP packet as stored, kept as text so properties PhotoCraft doesn't model survive.
     /// Shared like the other payloads here: cloning a document or a history state never copies
     /// it (#4535).
@@ -949,6 +976,13 @@ pub struct FileEncoding {
     /// side by side; saving a stereo PNG keeps this eye-order mark (#6063).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png_stereo: Option<u8>,
+    /// How many images (frames, pages, parts, icon sizes) the file held when it held more than
+    /// the one the document was opened from; `u32::MAX` when the count is unknown. File › Save
+    /// then goes through Save As rather than writing one image over all of them (#5733). Kept in
+    /// `.pcraft` on purpose: crash recovery reopens the autosaved bundle at the original path,
+    /// where the count must still hold. A document's own Save or Save As clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_images: Option<u32>,
 }
 
 impl FileEncoding {
@@ -1051,6 +1085,58 @@ impl Document {
             }
         }
         max
+    }
+
+    /// Every pixel surface the document holds: layer pixels and caches, masks, smart filter
+    /// masks, video frames (including the originals), channels, the quick mask, patterns and
+    /// the selection. History snapshots and saves cover exactly these tiles.
+    pub fn for_each_surface(&self, mut visit: impl FnMut(&Surface)) {
+        for (_, _, layer) in self.walk() {
+            if let Some(surface) = layer.surface() {
+                visit(surface);
+            }
+            if let Some(mask) = &layer.mask {
+                visit(&mask.surface);
+            }
+            if let Some(cache) = &layer.fill_cache {
+                visit(&cache.surface);
+            }
+            if let LayerContent::Smart(smart) = &layer.content
+                && let Some(mask) = &smart.filter_mask
+            {
+                visit(&mask.surface);
+            }
+            if let Some(video) = &layer.video {
+                for frame in video.frames.iter().chain(video.original_frames.iter().flatten()) {
+                    visit(frame);
+                }
+            }
+        }
+        for channel in self.channels.iter().chain(&self.quick_mask) {
+            visit(&channel.surface);
+        }
+        for pattern in &self.patterns {
+            visit(&pattern.surface);
+        }
+        if let Some(selection) = &self.selection {
+            visit(selection);
+        }
+    }
+
+    /// `Err` if any of this document's tiles is unreadable on the scratch disk. Edits, saves
+    /// and exports of this document check it; other documents are unaffected. Free when no
+    /// tile in the process has failed.
+    pub fn scratch_health(&self) -> Result<(), String> {
+        if !photocraft_raster::spill::any_failed() {
+            return Ok(());
+        }
+        let mut health = Ok(());
+        self.for_each_surface(|surface| {
+            if health.is_ok() {
+                health = surface.scratch_health();
+            }
+        });
+        health
     }
 
     /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top.
@@ -1186,20 +1272,29 @@ impl Document {
         Some((p.children_mut()?, last))
     }
 
-    /// Insert `layer` directly above the layer `above` (or at the top of the root if None).
+    /// Frames expose their image as an editable target, rather than as a layer-stack container.
+    /// New layers beside that image belong beside the frame, keeping the image slot intact.
+    pub fn insertion_path(&self, relative: LayerId) -> Option<LayerPath> {
+        let mut path = self.path_of(relative)?;
+        let end = (1..path.len()).find(|n| path.get(..*n).and_then(|p| self.layer_at(p)).is_some_and(|l| l.frame.is_some())).unwrap_or(path.len());
+        path.truncate(end);
+        Some(path)
+    }
+
+    /// Insert `layer` above `above` (beside its frame for frame content), or at the root's top.
     pub fn insert_above(&mut self, above: Option<LayerId>, layer: Layer) -> LayerId {
         let id = layer.id;
-        match above.and_then(|a| self.path_of(a)).and_then(|path| self.siblings_mut(&path)) {
+        match above.and_then(|a| self.insertion_path(a)).and_then(|path| self.siblings_mut(&path)) {
             Some((sib, idx)) => sib.insert(idx + 1, layer),
             None => self.layers.push(layer),
         }
         id
     }
 
-    /// Insert `layer` directly below the layer `below` (or at the bottom of the root if None).
+    /// Insert `layer` below `below` (beside its frame for frame content), or at the root's bottom.
     pub fn insert_below(&mut self, below: Option<LayerId>, layer: Layer) -> LayerId {
         let id = layer.id;
-        match below.and_then(|b| self.path_of(b)).and_then(|path| self.siblings_mut(&path)) {
+        match below.and_then(|b| self.insertion_path(b)).and_then(|path| self.siblings_mut(&path)) {
             Some((sib, idx)) => sib.insert(idx, layer),
             None => self.layers.insert(0, layer),
         }

@@ -153,7 +153,8 @@ fn type_controls_fill_the_panel_at_every_width_and_scale() {
                 .map(|n| n.rect())
                 .find(|r| r.top() >= header.bottom() && r.left() >= header.left() - 1.0)
                 .expect("editable family field");
-            let mut family = name.expand2(egui::vec2(6.0, 2.0));
+            // The editor covers the field's box but the popup arrow's space (#12302).
+            let mut family = name;
             family.max.x += crate::widgets::POPUP_ARROW_W;
             assert!((family.left() - header.left()).abs() <= 2.0 && (family.right() - header.right()).abs() <= 2.0, "{what}: {family:?} vs {header:?}");
             let combos: Vec<Rect> = h
@@ -203,7 +204,9 @@ fn layers_opacity_and_fill_rows_keep_a_gap() {
         let (s, layers) = kinds();
         let mut h = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            PhotocraftApp::new(s, crate::Services::default())
+            let mut app = PhotocraftApp::new(s, crate::Services::default());
+            app.ui.tool = crate::state::Tool::Brush;
+            app
         });
         set(&mut h, json!({"dockWidth": dw}));
         select(&mut h, layers[0].1);
