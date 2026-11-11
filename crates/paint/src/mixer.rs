@@ -31,11 +31,15 @@ pub struct MixerSettings {
     pub load_after_stroke: bool,
     /// Empty the brush after each stroke (the automatic Clean option).
     pub clean_after_stroke: bool,
+    /// Load Solid Colors Only (the load menu's checkable entry, `solidColorsOnly` in
+    /// `tools.setBrush`): ⌥-click loads the one colour under the hotspot instead of the sampled tip
+    /// image (#11952). Off by default. Load Brush and the load after each stroke ignore it.
+    pub solid_colors_only: bool,
 }
 
 impl Default for MixerSettings {
     fn default() -> Self {
-        Self { wet: 0.5, load: 0.5, mix: 0.5, flow: 1.0, sample_all_layers: false, clean_after_stroke: true, load_after_stroke: true }
+        Self { wet: 0.5, load: 0.5, mix: 0.5, flow: 1.0, sample_all_layers: false, clean_after_stroke: true, load_after_stroke: true, solid_colors_only: false }
     }
 }
 
@@ -190,12 +194,14 @@ pub fn apply_mixer_dab(
     state: &mut MixerState,
     lock_transparency: bool,
 ) {
+    // Only the dab's own rectangle is ever read from the sample, not the whole stroke rectangle.
     let sample = sample.filter(|_| m.samples_canvas(&fp.dab)).map(|surface| {
-        let source = crate::retouch::Region::read(surface, work.rect);
+        let rect = fp.rect.intersect(&work.rect);
+        let source = crate::retouch::Region::read(surface, rect);
         if surface.format().mode == fmt.mode && surface.format().alpha == fmt.alpha {
             source
         } else {
-            let mut native = crate::retouch::Region::new(work.rect, fmt.channels());
+            let mut native = crate::retouch::Region::new(rect, fmt.channels());
             for (src, dst) in source.data.chunks_exact(source.ch).zip(native.data.chunks_exact_mut(native.ch)) {
                 from_rgba_into(&fmt, to_rgba(&surface.format(), src), dst);
             }
@@ -205,9 +211,10 @@ pub fn apply_mixer_dab(
     apply_mixer_dab_region(work, fp, fmt, sample.as_ref(), m, state, lock_transparency);
 }
 
-/// Contiguous native-channel sample variant. `sample` must have the same rectangle and
-/// channel layout as `work`. The live compositor supplies it directly, avoiding a tiled
-/// temporary surface and a heap allocation for every sampled/deposited pixel.
+/// Contiguous native-channel sample variant. `sample` must have the channel layout of `work` and
+/// cover at least `fp.rect` clipped to `work.rect` (the only pixels read). The live compositor
+/// supplies it directly, avoiding a tiled temporary surface and a heap allocation for every
+/// sampled/deposited pixel.
 pub fn apply_mixer_dab_region(
     work: &mut crate::retouch::Region,
     fp: &crate::retouch::Footprint,
