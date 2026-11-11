@@ -217,6 +217,7 @@ impl PhotocraftApp {
             jpeg_options: None,
             dds_options: None,
             held_opens: Default::default(),
+            historical_opens: Default::default(),
             held_memory_prompts: Default::default(),
             prompt_order: Default::default(),
             held_preset_import: None,

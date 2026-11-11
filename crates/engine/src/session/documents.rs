@@ -205,6 +205,8 @@ impl Session {
 
     /// Takes a document a background open held back for the profile prompt: the document and
     /// whether its source is read-only. `None` when there is no such document (already taken).
+    /// This legacy method discards the saved initial view. Import hosts should use
+    /// [`Self::take_held_open_with_view`] to preserve native layer, channel and path selections.
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
         self.take_held_open_with_view(id).map(|(doc, read_only, _)| (doc, read_only))
     }

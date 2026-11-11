@@ -629,6 +629,8 @@ pub struct Jobs {
     cooperative: bool,
     /// How long [`Session::poll_jobs`] runs a cooperative job per call.
     step_budget: std::time::Duration,
+    historical_xcf: Vec<historical_xcf_open::Held>,
+    next_historical_xcf: u64,
 }
 
 // Derivable on a desktop, where `cooperative` starts off; wasm starts it on.
@@ -648,9 +650,14 @@ impl Default for Jobs {
             inline: None,
             cooperative: cfg!(target_arch = "wasm32"),
             step_budget: STEP_BUDGET,
+            historical_xcf: Vec::new(),
+            next_historical_xcf: 0,
         }
     }
 }
+
+#[path = "historical_xcf_open.rs"]
+mod historical_xcf_open;
 
 impl Jobs {
     /// Does a job started now run on a worker thread? (Not inline, and not stepped on this thread.)
@@ -1195,7 +1202,7 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background)
+        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1206,9 +1213,11 @@ impl Session {
     /// completion, since earlier handlers may have moved or closed tabs. When
     /// Color Settings ask about the file's profile, the document is held back instead and the
     /// result is `{held, name, warnings, color}` (`color` the question): take it with
-    /// [`Session::take_held_open`] once answered.
+    /// [`Session::take_held_open_with_view`] once answered. Validate the returned initial view
+    /// before admitting the document, then install it with [`Session::apply_import_initial_view`]
+    /// after admission so saved layer, channel and path selections survive the profile prompt.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false, false, None, None, true)
+        self.start_open_inner(name, source, false, false, None, None, true, None)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
@@ -1221,7 +1230,7 @@ impl Session {
     /// Interactive open with an explicit background/inline choice: damaged PSD content and
     /// high-memory preflights wait for the user instead of opening non-interactively.
     pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background)
+        self.start_open_inner(name, source, true, false, None, None, background, None)
     }
 
     /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
@@ -1255,16 +1264,18 @@ impl Session {
         approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
+        options: Option<photocraft_io::ImportOptions>,
     ) -> Result<Started> {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
-        let mut opts = import_options(self.prefs());
+        let mut opts = options.unwrap_or_else(|| import_options(self.prefs()));
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
             Decoded(Box<(photocraft_io::ImportResult, bool)>),
+            Historical(Arc<Vec<u8>>, photocraft_io::HistoricalXcfSampleOrderRequest),
             PreflightNeeded { required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64>, source: OpenSource, fingerprint: SourceFingerprint },
         }
         self.start_job_with_spawn(
@@ -1299,6 +1310,9 @@ impl Session {
                         let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
+                            Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if confirm_damage => {
+                                WorkResult::Historical(bytes, question)
+                            }
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
                                 // The buffer cannot change while it is decoded, so the identity
                                 // captured before reading is still exact.
@@ -1317,6 +1331,11 @@ impl Session {
                         let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
+                            Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if confirm_damage => {
+                                let identity = opened.ok_or_else(|| EngineError::Other("missing historical source identity".into()))?;
+                                let bytes = ctx.stage(0.02, 0.95, "Holding historical source", |ctl| historical_xcf_open::snapshot(&p, &identity, ctl))?;
+                                WorkResult::Historical(bytes, question)
+                            }
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
                                 // This identity is the one read from the handle that was
                                 // estimated, and the verified import refused a handle that is
@@ -1335,7 +1354,7 @@ impl Session {
                 };
 
                 match &outcome {
-                    WorkResult::PreflightNeeded { .. } => Ok(outcome),
+                    WorkResult::PreflightNeeded { .. } | WorkResult::Historical(..) => Ok(outcome),
                     WorkResult::Decoded(imported) => {
                         ctx.progress(0.95, "Preparing layers");
                         warm_layer_bounds(&imported.0.document, || ctx.check())?;
@@ -1349,6 +1368,7 @@ impl Session {
                 }
             },
             move |s, outcome| match outcome {
+                WorkResult::Historical(bytes, question) => historical_xcf_open::hold(s, name_a, bytes, question, opts),
                 WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source, fingerprint } => {
                     // The warning follows the capacity measured for this estimate: an unknown
                     // capacity carries no fabricated number, and above the threshold it also

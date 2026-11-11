@@ -58,6 +58,8 @@ pub const MEMORY_FIELD: &str = "__psdMemoryOpen";
 pub(crate) enum PromptKind {
     Memory,
     Open,
+    Historical(u64),
+    Resuming(u64),
 }
 
 /// An un-decoded PSD file whose preflight estimate requires user approval.
@@ -80,7 +82,7 @@ pub struct MemoryPrompt {
 
 /// Whether a file that just finished reading has to wait: one earlier in the queue does.
 pub fn waiting(app: &PhotocraftApp) -> bool {
-    !app.held_opens.is_empty() || !app.held_memory_prompts.is_empty()
+    !app.held_opens.is_empty() || !app.held_memory_prompts.is_empty() || !app.historical_opens.is_empty()
 }
 
 /// Opens `held` now, or queues it behind the file whose prompt is up.
@@ -92,7 +94,7 @@ pub fn arrive(app: &mut PhotocraftApp, held: Held) {
 
 /// Whether any open prompt (damage, profile or high-memory) is currently on screen.
 pub fn has_open_dialog(app: &PhotocraftApp) -> bool {
-    app.ui.dialogs.iter().any(|d| owns(&d.fields) || owns_damage(&d.fields) || owns_memory(&d.fields))
+    app.ui.dialogs.iter().any(|d| owns(&d.fields) || owns_damage(&d.fields) || owns_memory(&d.fields) || super::historical_xcf::owns(&d.fields))
 }
 
 /// Opens queued files in order until one needs its prompt, which is shown if it isn't yet.
@@ -108,6 +110,12 @@ pub fn advance(app: &mut PhotocraftApp) {
     loop {
         match app.prompt_order.front() {
             None => return,
+            Some(PromptKind::Historical(id)) => {
+                let id = *id;
+                super::historical_xcf::show(app, id);
+                return;
+            }
+            Some(PromptKind::Resuming(_)) => return,
             Some(PromptKind::Memory) => {
                 if let Some(front) = app.held_memory_prompts.front().cloned() {
                     show_memory(app, &front);
@@ -194,16 +202,20 @@ pub fn owns(fields: &serde_json::Map<String, Value>) -> bool {
 /// The prompt's answer: `Some(action)` (OK) opens the first queued file with it and moves on to
 /// the next; `None` (Cancel) drops every queued file and stops the reads still running.
 pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, String> {
+    if action.is_some() && matches!(app.prompt_order.front(), Some(PromptKind::Historical(_) | PromptKind::Resuming(_))) {
+        return Err("answer the historical XCF choice first".into());
+    }
     if app.held_opens.front().is_some_and(|h| h.damage_pending) {
         return Err("answer the damaged PSD confirmation first".into());
     }
     let Some(action) = action else {
-        let dropped = app.held_opens.len() + app.held_memory_prompts.len();
+        let dropped = app.held_opens.len() + app.held_memory_prompts.len() + app.historical_opens.len();
         let name = app.held_opens.front().map(|h| h.name.clone()).or_else(|| app.held_memory_prompts.front().map(|m| m.name.clone())).unwrap_or_default();
         for m in app.held_memory_prompts.drain(..) {
             app.session.cancel_pending_preflight(m.id);
         }
         app.session.clear_pending_preflights();
+        super::historical_xcf::cancel_all(app);
         app.held_opens.clear();
         app.prompt_order.clear();
         for job in app.jobs.opens.iter().map(|o| o.job).collect::<Vec<_>>() {
@@ -211,7 +223,7 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
         }
         app.jobs.opens.clear();
         app.jobs.batches.clear();
-        app.ui.dialogs.retain(|d| !owns(&d.fields) && !owns_damage(&d.fields) && !owns_memory(&d.fields));
+        app.ui.dialogs.retain(|d| !owns(&d.fields) && !owns_damage(&d.fields) && !owns_memory(&d.fields) && !super::historical_xcf::owns(&d.fields));
         app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
         return Ok(json!({"cancelled": dropped}));
@@ -231,6 +243,9 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
 /// already waiting with a mismatch in the same mode were asked before that and get the same
 /// answer; any other question still asks.
 pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value, String> {
+    if matches!(app.prompt_order.front(), Some(PromptKind::Historical(_) | PromptKind::Resuming(_))) {
+        return Err("answer the historical XCF choice first".into());
+    }
     if app.held_opens.front().is_some_and(|h| h.damage_pending) {
         return Err("answer the damaged PSD confirmation first".into());
     }

@@ -9,6 +9,17 @@ use photocraft_io::{BandRenderer, ExportOptions};
 
 use crate::AutomationError;
 
+/// Validate host open controls before any filesystem read or document admission.
+pub fn import_options_from_params(params: &serde_json::Value) -> Result<photocraft_io::ImportOptions, AutomationError> {
+    let approved = match params.get("approveHighMemory") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(value)) => *value,
+        _ => return Err(AutomationError::BadRequest("`approveHighMemory` must be a boolean".into())),
+    };
+    let order = photocraft_engine::file_cmds::historical_xcf_sample_order(params, "doc.open")?;
+    Ok(photocraft_io::ImportOptions { psd_high_memory_approved: approved, historical_xcf_sample_order: order, ..Default::default() })
+}
+
 /// Result of opening a file.
 pub struct Opened {
     pub document: Document,
@@ -254,4 +265,27 @@ pub fn render_png_with_warnings(doc: &Document, max_side: u32, mut renderer: Opt
         .map_err(|e| AutomationError::Other(e.to_string()))?;
     let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| AutomationError::Other(e.to_string()))?;
     Ok((png, warnings))
+}
+
+#[cfg(test)]
+mod historical_order_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn explicit_historical_order_options_are_strict_and_missing_stays_unset() {
+        for params in [json!({}), json!({"historicalXcfSampleOrder":null})] {
+            assert_eq!(import_options_from_params(&params).unwrap().historical_xcf_sample_order, None);
+        }
+        for (name, order) in
+            [("little-endian", photocraft_io::HistoricalXcfSampleOrder::LittleEndian), ("big-endian", photocraft_io::HistoricalXcfSampleOrder::BigEndian)]
+        {
+            let options = import_options_from_params(&json!({"historicalXcfSampleOrder":name,"approveHighMemory":true})).unwrap();
+            assert_eq!(options.historical_xcf_sample_order, Some(order));
+            assert!(options.psd_high_memory_approved);
+        }
+        for invalid in [json!("native"), json!("LE"), json!(1), json!(false)] {
+            assert!(import_options_from_params(&json!({"historicalXcfSampleOrder":invalid})).is_err());
+        }
+    }
 }

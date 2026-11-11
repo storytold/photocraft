@@ -178,6 +178,12 @@ impl Headless {
         self.open_with_options(path, &opts)
     }
 
+    /// Open with strictly validated per-import controls; missing sample order stays unset.
+    pub fn open_with_parameters(&mut self, path: &Path, params: &Value) -> Result<Value, AutomationError> {
+        let opts = files::import_options_from_params(params)?;
+        self.open_with_options(path, &opts)
+    }
+
     /// Open a file with custom import options and make it the active document.
     pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;

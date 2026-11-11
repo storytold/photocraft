@@ -744,6 +744,7 @@ pub struct PhotocraftApp {
     pub(crate) dds_options: Option<dds_options_ui::Prompt>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
+    pub(crate) historical_opens: Vec<dialogs::historical_xcf::Historical>,
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
     /// PSD files whose memory preflight requires user approval before pixel decoding (see `open_prompt`).
     pub(crate) held_memory_prompts: std::collections::VecDeque<open_prompt::MemoryPrompt>,
