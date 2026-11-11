@@ -1202,3 +1202,40 @@ fn history_brush_options_bar_shows_source_name() {
     h.run_steps(4);
     h.get_by_label("The History Brush source was deleted: set a new source in the History panel");
 }
+
+/// #12453: the Content-Aware Move Tool may drag the selection past the canvas edge (one pixel of it
+/// stays on the canvas); the Patch Tool keeps the whole outline on the canvas.
+#[test]
+fn content_aware_move_offset_may_reach_past_the_edge_but_patch_stays_inside() {
+    let mut app = app();
+    app.run("select.rect", json!({"x": 40, "y": 20, "width": 20, "height": 20})).unwrap();
+    app.ui.tool = Tool::ContentAwareMove;
+    // Selection x 40..60 on a 100 px canvas: left until its last column (x 59) sits at x 0.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-59, 0]);
+    // Right until its first column (x 40) sits at x 99.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [600.0, 30.0]), [59, 0]);
+    // Selection y 20..40 on a 60 px canvas.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [50.0, -500.0]), [0, -39]);
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [50.0, 500.0]), [0, 39]);
+    // A drag that stays within these limits is untouched.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [20.0, 35.0]), [-30, 5]);
+    // The Patch Tool keeps the strict clamp.
+    app.ui.tool = Tool::Patch;
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-40, 0]);
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [600.0, 30.0]), [40, 0]);
+}
+
+#[test]
+fn patch_offset_with_no_room_or_an_empty_selection_does_not_panic() {
+    let mut app = app();
+    app.ui.tool = Tool::ContentAwareMove;
+    // No selection at all.
+    assert_eq!(patch_offset(&mut app, [0.0, 0.0], [5.0, 5.0]), [5, 5]);
+    // A selection covering the whole canvas: at least one pixel stays on it, so any drag up to
+    // the canvas size is allowed, and a huge one is held there.
+    app.run("select.all", json!({})).unwrap();
+    assert_eq!(patch_offset(&mut app, [0.0, 0.0], [1e9, -1e9]), [99, -59]);
+    assert_eq!(patch_offset(&mut app, [0.0, 0.0], [f64::NAN, f64::INFINITY]), [0, 0]);
+    app.ui.tool = Tool::Patch;
+    assert_eq!(patch_offset(&mut app, [0.0, 0.0], [1e9, -1e9]), [0, 0]);
+}

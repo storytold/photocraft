@@ -348,8 +348,9 @@ pub fn patch_end(d: &crate::canvas::Drag, end: [f64; 2]) -> [f64; 2] {
     if dx.abs() >= dy.abs() { [end[0], d.start[1]] } else { [d.start[0], end[1]] }
 }
 
-/// Whole-pixel offset for a drag from `start` to `end`, limited so the dragged outline stays on the
-/// canvas (the engine rejects a patch or move that leaves it).
+/// Whole-pixel offset for a drag from `start` to `end`. The Patch Tool keeps the whole dragged
+/// outline on the canvas (the engine rejects a patch that leaves it); the Content-Aware Move Tool
+/// only needs one pixel of it there, and what goes past the edge is dropped.
 pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
     let (dx, dy) = ((end[0] - start[0]).round(), (end[1] - start[1]).round());
     let (dx, dy) = if dx.is_finite() && dy.is_finite() { (dx.clamp(-1e7, 1e7) as i32, dy.clamp(-1e7, 1e7) as i32) } else { (0, 0) };
@@ -360,6 +361,13 @@ pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> 
         return [dx, dy];
     }
     let clamp = |d: i32, lo: i32, hi: i32| if lo > hi { 0 } else { d.clamp(lo, hi) };
+    if app.ui.tool == Tool::ContentAwareMove {
+        // At least one pixel of the outline stays on the canvas; the rest may go past the edge.
+        let span = |lo: i32, hi: i32, c0: i32, c1: i32| (c0.saturating_sub(hi).saturating_add(1), c1.saturating_sub(lo).saturating_sub(1));
+        let (xl, xh) = span(b.x0, b.x1, canvas.x0, canvas.x1);
+        let (yl, yh) = span(b.y0, b.y1, canvas.y0, canvas.y1);
+        return [clamp(dx, xl, xh), clamp(dy, yl, yh)];
+    }
     [clamp(dx, canvas.x0 - b.x0, canvas.x1 - b.x1), clamp(dy, canvas.y0 - b.y0, canvas.y1 - b.y1)]
 }
 

@@ -27,8 +27,9 @@
 //! scale and rotate the content before the blend is computed. `scaleX` / `scaleY` (%) and
 //! `rotate` (degrees, clockwise) scale and turn the content about the centre of the selection's
 //! bounds before `offset` moves it, as `select.transformSelection` does; the selection is
-//! transformed with it. A transformed patch may reach past the canvas edge (Photoshop lets the
-//! box go there): what lands outside is dropped.
+//! transformed with it. A patch, transformed or plain, may reach past the canvas edge (Photoshop
+//! lets the box go there): what lands outside is dropped, and the selection that follows the
+//! content is cut off at the edge too. Only a move that leaves nothing on the canvas is refused.
 
 use photocraft_algo::content_aware::{FillOptions, color_amount, color_level, fill_with, level_transform};
 use photocraft_algo::transform::{Homography, Interp};
@@ -234,15 +235,16 @@ fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
 }
 
 /// Where the content of `area` lands on `canvas`: moved by `offset`, or (Transform On Drop) the
-/// bounds of the area mapped by `map`, clipped to the canvas.
+/// bounds of the area mapped by `map`; either way clipped to the canvas (what lands outside is
+/// dropped).
 fn landing(map: Option<&Homography>, area: Rect, (dx, dy): (i32, i32), canvas: Rect) -> Result<Rect> {
     match map {
         None => {
-            // Content dropped beyond the edge would be lost: keep it on the canvas, as the Patch
-            // Tool does.
-            let dest = area.translate(dx, dy);
-            if !canvas.contains_rect(&dest) {
-                return Err(bad(CMD, "the moved selection must stay inside the canvas"));
+            // A plain move may reach past the edge, as a transformed one does: what lands outside
+            // the canvas is dropped. Only a move that leaves nothing on the canvas is refused.
+            let dest = area.translate(dx, dy).intersect(&canvas);
+            if dest.is_empty() {
+                return Err(bad(CMD, "the moved selection must land on the canvas"));
             }
             Ok(dest)
         }
@@ -525,7 +527,13 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
                 if let Some(moved) = moved_sel {
                     doc.selection = Some(moved).filter(|s| !s.content_bounds().is_empty());
                 } else if let Some(sel) = doc.selection.as_ref() {
-                    doc.selection = Some(crate::layer_multi_cmds::shift_surface(sel, dx, dy));
+                    let shifted = crate::layer_multi_cmds::shift_surface(sel, dx, dy);
+                    // What was dragged past the canvas edge is dropped from the selection too.
+                    doc.selection = if plan.canvas.contains_rect(&shifted.content_bounds()) {
+                        Some(shifted)
+                    } else {
+                        Some(photocraft_algo::resample::crop_surface(&shifted, plan.canvas)).filter(|s| !s.content_bounds().is_empty())
+                    };
                 }
                 Ok(())
             })?;
@@ -675,10 +683,10 @@ fn run_scaled(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, scale: 
     }
     let mut offset = ((f64::from(dx) * f).round() as i32, (f64::from(dy) * f).round() as i32);
     if plan.map.is_none() {
-        // Rounding may push the scaled patch a pixel past the edge: keep it on the canvas.
+        // Rounding may push a patch that barely reaches the canvas off it: keep one pixel on it.
         let moved = area.translate(offset.0, offset.1);
-        offset.0 += (canvas.x0 - moved.x0).max(0) - (moved.x1 - canvas.x1).max(0);
-        offset.1 += (canvas.y0 - moved.y0).max(0) - (moved.y1 - canvas.y1).max(0);
+        offset.0 += (canvas.x0 + 1 - moved.x1).max(0) - (moved.x0 - (canvas.x1 - 1)).max(0);
+        offset.1 += (canvas.y0 + 1 - moved.y1).max(0) - (moved.y0 - (canvas.y1 - 1)).max(0);
     }
     let map = match plan.map {
         Some(_) => placement(p, area, offset)?,
