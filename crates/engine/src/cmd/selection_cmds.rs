@@ -814,7 +814,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.magicWand",
             "Magic Wand",
             [],
-            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture; an 8-bit Lab or CMYK document measures it on its own stored channels: Lightness/a/b, or the four inks with the largest difference counting)"##,
+            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture; an 8-bit Lab or CMYK document with sampleAllLayers off measures it on the active layer's own stored channels: Lightness/a/b, or the four inks with the largest difference counting; sampleAllLayers samples the RGB composite)"##,
             has_doc,
             magic_wand
         ),

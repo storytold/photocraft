@@ -69,14 +69,17 @@ fn ink_ramp() -> Session {
 }
 
 /// Fill the ten blocks across the canvas with one colour each, `pixel` of block `k` as the
-/// surface's own channels (a CMYK surface has five, an RGB one four; the extra is ignored).
+/// surface's own channels (a CMYK surface has five, an RGB one four; the extra is ignored). A
+/// grey surface has two, grey and alpha: it gets the first value and the fourth (the alpha), so
+/// the ramp stays opaque.
 fn paint_ramp(s: &mut Session, pixel: &dyn Fn(u8) -> [f32; 5]) {
     s.edit("paint", |doc, _| {
         let bg = doc.layers[0].surface_mut().unwrap();
         let n = bg.channels().min(5);
         for k in 0..10u8 {
             let v = pixel(k);
-            bg.fill_rect(Rect::new(X0 + BLOCK * i32::from(k), 0, X0 + BLOCK * (i32::from(k) + 1), H), &v[..n]);
+            let v: &[f32] = if n == 2 { &[v[0], v[3]] } else { &v[..n] };
+            bg.fill_rect(Rect::new(X0 + BLOCK * i32::from(k), 0, X0 + BLOCK * (i32::from(k) + 1), H), v);
         }
         Ok(())
     })
@@ -207,6 +210,10 @@ fn grayscale_documents_keep_their_selection_at_every_depth() {
     for depth in [8u32, 16, 32] {
         let mut s = ramp("gray", depth, None);
         assert_eq!(s.active().unwrap().doc.mode, ColorMode::Grayscale);
+        let bg = s.active().unwrap().doc.layers[0].surface().unwrap();
+        for k in 0..10 {
+            assert_eq!(bg.rgba(X0 + BLOCK * k + 1, 1)[3], 1.0, "gray {depth}: block {k} is opaque");
+        }
         wand(&mut s, 5.0);
         assert_eq!(reach(&s), Some((100, 180)), "gray {depth}");
         wand(&mut s, 32.0);
