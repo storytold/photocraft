@@ -564,6 +564,12 @@ impl SmartObject {
             perspective: None,
         }
     }
+
+    /// Where the placed source lands (transform, perspective and warp), as JSON: the placement a
+    /// smart filter stored in document pixels (an imported Puppet Warp mesh) was made for.
+    pub fn placement_json(&self) -> serde_json::Value {
+        serde_json::json!({"transform": self.transform.m, "perspective": self.perspective, "warp": self.warp})
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -966,6 +972,13 @@ pub struct FileEncoding {
     /// side by side; saving a stereo PNG keeps this eye-order mark (#6063).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png_stereo: Option<u8>,
+    /// How many images (frames, pages, parts, icon sizes) the file held when it held more than
+    /// the one the document was opened from; `u32::MAX` when the count is unknown. File › Save
+    /// then goes through Save As rather than writing one image over all of them (#5733). Kept in
+    /// `.pcraft` on purpose: crash recovery reopens the autosaved bundle at the original path,
+    /// where the count must still hold. A document's own Save or Save As clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_images: Option<u32>,
 }
 
 impl FileEncoding {
