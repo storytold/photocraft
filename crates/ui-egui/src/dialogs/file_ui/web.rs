@@ -566,6 +566,10 @@ fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     app.sync_views();
     app.ui.status =
         crate::i18n::trn(crate::i18n::current(), r["files"].as_array().map_or(0, Vec::len) as u64, "Saved for Web: {n} file", "Saved for Web: {n} files");
+    // Warnings (such as ignored slices) go in the status line: the dialog closes on success.
+    if let Some(w) = r["warnings"].as_array().filter(|w| !w.is_empty()) {
+        app.ui.status = format!("{} ({})", app.ui.status, w.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; "));
+    }
     app.ui.status_error = false;
     Ok(r)
 }
