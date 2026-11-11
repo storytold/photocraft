@@ -665,3 +665,6 @@ mod tests;
 mod object_mode_refusal_tests;
 #[cfg(test)]
 mod quick_group_target_tests;
+
+#[cfg(test)]
+mod quick_mode_refusal_tests;
