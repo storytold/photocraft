@@ -156,6 +156,10 @@ pub(crate) fn selected_action_row(app: &PhotocraftApp) -> Option<usize> {
 pub(crate) const BATCH_OCCURRENCE: &str = "__batchOccurrence";
 pub(crate) const BATCH_OCCURRENCES: &str = "__batchOccurrences";
 
+pub(crate) fn has_batch_dialog_binding(app: &PhotocraftApp, dialog: u64) -> bool {
+    app.ui.actions.batch_dialog_targets.contains_key(&dialog)
+}
+
 pub(crate) fn bind_batch_dialog(app: &mut PhotocraftApp, dialog: u64, row: usize) {
     let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
     for (index, action) in app.session.actions.list.iter().enumerate() {

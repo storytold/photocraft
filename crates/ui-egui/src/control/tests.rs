@@ -20,6 +20,16 @@ fn batch_occurrence_fields_are_read_only_through_control() {
     assert_eq!(original["__command"], "file.automate.batch");
     assert!(original.contains_key(crate::actions::BATCH_OCCURRENCE));
     assert!(original.contains_key(crate::actions::BATCH_OCCURRENCES));
+
+    // The public form command is mutable, but it cannot disable the private dialog binding.
+    let changed_command = "file.automate.createDroplet";
+    assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": "__command", "value": changed_command}))["ok"], true);
+    let reply = call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": crate::actions::BATCH_OCCURRENCE, "value": 1}));
+    assert_eq!(reply["ok"], false, "changing __command cannot unlock occurrence fields: {reply}");
+    assert!(reply["error"].as_str().unwrap().contains("Batch occurrence fields are read-only"));
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields[crate::actions::BATCH_OCCURRENCE], original[crate::actions::BATCH_OCCURRENCE]);
+    assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": "__command", "value": "file.automate.batch"}))["ok"], true);
+
     for (field, value) in [(crate::actions::BATCH_OCCURRENCE, json!(1)), (crate::actions::BATCH_OCCURRENCES, json!([{"action": "Forged", "row": 1}]))] {
         let reply = call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}));
         assert_eq!(reply["ok"], false, "{reply}");
@@ -33,6 +43,12 @@ fn batch_occurrence_fields_are_read_only_through_control() {
     for field in [crate::actions::BATCH_OCCURRENCE, crate::actions::BATCH_OCCURRENCES] {
         assert_eq!(fields[field], original[field]);
     }
+
+    // An unrelated, real dialog still accepts its ordinary fields.
+    let other = call(&mut app, &ctx, "ui.dialog.open", json!({"kind": "newDocument"}))["dialog"].as_u64().unwrap();
+    let width = json!(16);
+    assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": other, "field": "width", "value": width}))["ok"], true);
+    assert_eq!(app.ui.dialog_mut(other).unwrap().fields["width"], width);
 }
 
 /// #3674: a guessed name gets a pointer to the right one, in both directions; and every

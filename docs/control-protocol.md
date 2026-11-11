@@ -200,14 +200,15 @@ Select an action and press Record to append steps; the plus button starts a new 
 A final `["view.fitOnScreen", {}]` step fits the resized document when the canvas is laid out.
 Headless playback reports unsupported view commands as failed steps.
 
-In the desktop Actions panel, right-click an action to assign a function key (F1–F12),
-or choose None to remove it. The binding follows the action name, regardless of the selected
-row, and is saved in preferences. For example, the existing `edit.keyboardShortcuts` command
-accepts `{"set":{"actions.play:My action":"F6"},"allowUnknown":true,"removeConflicts":false}`.
-A named action takes precedence over the ordinary menu shortcut while it exists and is bound;
-removing its binding or deleting it restores that menu shortcut. The panel moves a key away
-from another action when assigning it. Action playback still checks each nested command's
-automation permissions.
+In the desktop Actions panel, right-click an action occurrence to assign a function key (F1–F12),
+or choose None to remove it. The panel stores the binding by stable occurrence ID (`actions.playById:<id>`),
+so duplicate names can have independent shortcuts. The name-based `actions.play:<name>` form remains
+supported for legacy bindings; for an action with both keys, its valid occurrence binding takes
+precedence. For example, `edit.keyboardShortcuts` accepts
+`{"set":{"actions.play:My action":"F6"},"allowUnknown":true,"removeConflicts":false}`
+for a legacy name-based binding. Removing the applicable binding or deleting the action restores
+the ordinary menu shortcut. The panel moves a key away from another action when assigning it.
+Action playback still checks each nested command's automation permissions.
 
 UI-level commands (`view.zoomIn`, `window.theme.pro`, `edit.search`, …) are also accepted by `engine.execute` and `ui.menu.invoke`.
 
