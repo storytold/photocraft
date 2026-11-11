@@ -596,12 +596,17 @@ impl<'a> Image<'a> {
                 let record = if let Some(record) = decoded_masks.get(&start) {
                     record
                 } else {
+                    // Reporting retains configuration only; successful and failed
+                    // fallback decodes must release their temporary pixel charge.
+                    let pixel_budget = self.budget;
                     fallback = match self.channel(start, ctl) {
                         Ok((name, properties, pixels, children)) => {
+                            self.budget = pixel_budget;
                             CoverageMaskRecord { name, properties, width: pixels.width, height: pixels.height, children }
                         }
                         Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                         Err(error) => {
+                            self.budget = pixel_budget;
                             self.outcomes.push(ConversionEntry {
                                 feature_code: "xcf.coverage_effect_mask".into(),
                                 source: conversion::source("coverage_effect_mask", ordinal as usize, start, "", &current_owner.source.item_path, None),

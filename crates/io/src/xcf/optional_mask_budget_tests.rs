@@ -106,3 +106,75 @@ fn successful_optional_mask_keeps_its_sample_and_tile_charges() {
     assert!(!state.active_masks.contains(&channel));
     assert_eq!(image.budget, 0, "successful native mask storage must stay charged");
 }
+
+fn coverage_owner(image: &mut Image<'_>) -> usize {
+    image
+        .outcomes
+        .push(ConversionEntry {
+            feature_code: "xcf.channel".into(),
+            source: conversion::source("channel", 0, 0, "Coverage owner", &[], None),
+            targets: Vec::new(),
+            disposition: ConversionDisposition::RetainedUnapplied,
+            reason: ConversionReason::MissingMapping,
+            source_description: "Saved coverage owner".into(),
+            native_description: "Preserved native coverage".into(),
+            attachments: Vec::new(),
+        })
+        .unwrap()
+}
+
+fn later_layer_allowance() -> usize {
+    16 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::RGBA8)).unwrap()
+}
+
+fn admit_later_layer(image: &mut Image<'_>, layer: usize) {
+    let format = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    let (layers, _) = image
+        .import_layers(&[layer], PixelFormat::RGBA8, format, &Interrupt::NONE)
+        .expect("conversion and reporting must preserve the exact allowance for the later valid layer");
+    assert_eq!(layers[0].surface().unwrap().read_region(Rect::new(0, 0, 1, 1)), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
+    assert_eq!(image.budget, 0);
+}
+
+#[test]
+fn failed_optional_mask_translation_and_report_leave_budget_for_later_layer() {
+    let (bytes, _, layer, effect) = fixture(false);
+    let mut image = image(&bytes, later_layer_allowance());
+    let owner = coverage_owner(&mut image);
+    let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+    image.translate_coverage_effects(owner, &[effect], &mut surface, Rect::new(0, 0, 1, 1), &Interrupt::NONE).unwrap();
+    assert_eq!(surface.tile_count(), 0);
+    admit_later_layer(&mut image, layer);
+    let photocraft_doc::import_conversion::ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("conversion report") };
+    assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.coverage_effect_mask"
+        && entry.reason == ConversionReason::InvalidOptionalData
+        && entry.disposition == ConversionDisposition::RetainedUnapplied));
+}
+
+#[test]
+fn reporting_a_converted_mask_does_not_refund_retained_pixel_charges() {
+    let (bytes, _, layer, effect) = fixture(true);
+    let mask_format = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    let mask_charge = 4 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &mask_format)).unwrap();
+    let mut image = image(&bytes, later_layer_allowance() + mask_charge);
+    let owner = coverage_owner(&mut image);
+    let mut surface = Surface::new(mask_format);
+    image.translate_coverage_effects(owner, &[effect], &mut surface, Rect::new(0, 0, 1, 1), &Interrupt::NONE).unwrap();
+    assert_eq!(image.budget, later_layer_allowance(), "reporting must reuse the decoded mask without refunding its retained sample/tile charge");
+    admit_later_layer(&mut image, layer);
+}
+
+#[test]
+fn report_only_mask_decode_releases_pixels_but_keeps_configuration_charges() {
+    let (bytes, _, layer, effect) = fixture(true);
+    let mut image = image(&bytes, later_layer_allowance());
+    let owner = coverage_owner(&mut image);
+    let metadata_before = image.meta_budget;
+    // A visible effect can have no decoded mask when conversion was not attempted.
+    // This is the inventory fallback: its pixels are discarded, configuration is reported.
+    image.report_converted_coverage(owner, &[effect], &CoverageTranslation::default(), true, &Interrupt::NONE).unwrap();
+    assert!(image.meta_budget < metadata_before);
+    admit_later_layer(&mut image, layer);
+    let photocraft_doc::import_conversion::ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("conversion report") };
+    assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.coverage_effect_mask" && entry.source.name == "Optional mask"));
+}
