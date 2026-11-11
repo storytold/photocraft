@@ -2973,6 +2973,20 @@ fn warp_mesh(app: &PhotocraftApp) -> BezierMesh {
 }
 
 #[test]
+fn leaving_warp_mid_drag_drops_the_drag() {
+    let mut app = warping_square();
+    warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+    assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_some());
+    leave_warp(&mut app);
+    assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none());
+    begin_warp(&mut app, &egui::Context::default()).unwrap();
+    let before = warp_mesh(&app);
+    warp_pointer(&mut app, ToolEvent::Move { x: 30.0, y: 14.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+    warp_pointer(&mut app, ToolEvent::Up { x: 30.0, y: 14.0 }, 2.0, egui::Modifiers::NONE);
+    assert_eq!(warp_mesh(&app).points, before.points, "the old drag moved the new mesh");
+}
+
+#[test]
 fn warp_drag_from_inside_the_grid_pulls_the_surface_under_the_pointer() {
     let mut app = warping_square();
     let before = warp_mesh(&app);
