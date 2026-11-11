@@ -1196,20 +1196,21 @@ actual printer imageable margins, proof-color preview and interactive resize han
 | Linux (X11 / Wayland) | XDG desktop Print portal | CUPS `lp` |
 | Windows | Windows Forms Print dialog; in-box Windows.Data.Pdf rendering | Windows.Data.Pdf plus the Windows spooler |
 
-The desktop Print button always hands the composed PDF to the operating system for confirmation:
-the macOS print sheet, the XDG Print portal on Linux, or the Windows Print dialog. Cancelling that
-dialog submits no job and fires no print event. `file.printOneCopy` remains the deliberate direct
-route through `craft-print`. Entering an output path also keeps a PDF copy. Grayscale is composed
-into the print PDF and represented in the PhotoCraft preview.
+Without an output path, the desktop Print button hands the composed PDF to the operating system for
+confirmation: the macOS print sheet, the XDG Print portal on Linux, or the Windows Print dialog.
+Cancelling that dialog submits no job and fires no print event. With an output path, Print saves the
+PDF only and does not open a system dialog or submit a print job. `file.printOneCopy` remains the
+deliberate direct route through `craft-print`. Grayscale is composed into the print PDF and
+represented in the PhotoCraft preview.
+
+On macOS, Preview's public AppleScript print settings seed copies, collation and the selected target
+printer before showing its print sheet. Preview exposes no duplex property there, so choose duplex
+in the system print sheet when it differs from the printer default.
 
 The shared Windows direct backend bounds DEVMODE sheet dimensions to 128 inches per side;
 PhotoCraft validates that limit before rendering a direct job, including dry runs. PDF-only
 output retains the PDF 1.4 limit of 200 inches per side on every desktop platform.
 
-`.github/workflows/printing.yml` runs the focused print engine, UI controls and real-control
-PDF tests plus clippy on macOS, Linux and Windows whenever print sources/manifests change.
-The Windows job also loads and rasterizes RGB, Gray and CMYK print PDFs through Windows.Data.Pdf
-without creating a printer, queue or print job.
 These tests do not submit physical jobs or open print dialogs. Release acceptance still
 requires, on each platform: open Print, save and inspect a PDF, then print a measured layout and
 a profiled image on the intended printer, checking dimensions, orientation,

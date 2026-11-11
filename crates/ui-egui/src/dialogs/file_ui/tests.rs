@@ -1149,6 +1149,31 @@ fn orientation_follows_the_driver_paper() {
     assert!(!driver_paper_is_wide(&Map::new()));
 }
 
+/// Switching a landscape Windows driver page to PDF keeps its direction, then restores normal
+/// orientation handling instead of forcing landscape after the user changes the dropdown.
+#[test]
+fn print_leaving_a_driver_page_restores_editable_pdf_orientation() {
+    let mut f = json!({
+        "paper": [1191.14, 842.29],
+        "orientation": "portrait",
+        "printable": [12.0, 12.0, 1167.14, 818.29],
+        "__paperAlreadyOriented": true,
+        "__driverPageInitialized": true
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    leave_driver_page(&mut f);
+    assert_eq!(f.get("orientation"), Some(&json!("landscape")));
+    assert!(!f.contains_key("__paperAlreadyOriented"));
+    assert!(!f.contains_key("__driverPageInitialized"));
+    assert!(!f.contains_key("printable"));
+
+    f.insert("orientation".into(), json!("portrait"));
+    assert_eq!(print_params(&f)["orientation"], "portrait");
+}
+
 /// Turning a printer whose driver can't be asked keeps its settings and says why on the dialog.
 #[test]
 fn turning_without_a_driver_keeps_the_settings_and_shows_the_error() {

@@ -17,6 +17,8 @@ use crate::theme::Tokens;
 mod print;
 mod web;
 
+#[cfg(test)]
+use print::leave_driver_page;
 pub use print::open_print;
 pub(crate) use print::print_status;
 #[cfg(test)]
