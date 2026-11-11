@@ -12,6 +12,11 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
 }
 
+/// Numeric field whose displayed text round-trips through its f32 value without rounding.
+pub(crate) fn value_field_exact(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> Response {
+    value_field_in(ui, value, range, "", width, 0.0, FieldOpts { round_trip: true, ..Default::default() }, None).0
+}
+
 /// A [`value_field_named`] for whole numbers that says when a typed value was past `range`
 /// (Photoshop's "Closest value inserted" alerts, #11938): it stores the closest whole number in
 /// range, and returns true once the field is left after such a value was typed, so the caller
@@ -106,6 +111,7 @@ pub(crate) fn compact_wrapping_value_field(ui: &mut Ui, value: &mut f32, range: 
 pub(super) struct FieldOpts {
     /// Decimal places shown (default: one, or two for a small range).
     pub(super) decimals: Option<u32>,
+    pub(super) round_trip: bool,
     /// Arrow-key and scrub step follow `decimals` (adjustment rows via [`slider_row_prec`], #5914).
     pub(super) step_from_decimals: bool,
     /// The unit typed units convert into (default: the suffix's, at [`set_field_resolution`]).
@@ -165,7 +171,7 @@ fn value_field_box(
     opts: FieldOpts,
     name: Option<&str>,
 ) -> (Response, Rect) {
-    let FieldOpts { decimals, step_from_decimals, units, extent, .. } = opts;
+    let FieldOpts { decimals, round_trip, step_from_decimals, units, extent, .. } = opts;
     let t = Tokens::get(ui.ctx());
     let (rect, slot) = ui.allocate_exact_size(size, Sense::hover());
     let last_editor = ui.data(|d| d.get_temp::<egui::Id>(slot.id));
@@ -291,10 +297,12 @@ fn value_field_box(
         ui.painter().text(pos2(rect.right() - 6.0 - trailing, rect.center().y), Align2::RIGHT_CENTER, suffix, suffix_font, t.text_faint);
     }
     if step != 0.0 {
-        // Round to the step before adding it, so whole-number fields drop decimals (55.4 + 1 = 56).
-        let v = (*value / grid).round() * grid + step;
-        // Round to 4 decimal places, so repeated 0.1 steps don't leave float errors.
-        let v = (v * 1e4).round() / 1e4;
+        let v = if round_trip {
+            *value + step
+        } else {
+            // Ordinary fields snap to the step and round to avoid accumulated float error.
+            (((*value / grid).round() * grid + step) * 1e4).round() / 1e4
+        };
         // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
         let v = if lo <= hi { v.clamp(lo, hi) } else { v };
         // A wild wheel delta must not leave infinity in the field.
@@ -309,7 +317,14 @@ fn value_field_box(
                 ui.memory_mut(|m| m.request_focus(resp.id));
             }
             // The text stays selected, as in Photoshop: typing after a step replaces the value.
-            crate::field_tab::select_all(ui.ctx(), resp.id, &if fine { fmt_num2(f64::from(*value)) } else { fmt_num(f64::from(*value)) });
+            let text = if round_trip {
+                format_round_trip(*value)
+            } else if fine {
+                fmt_num2(f64::from(*value))
+            } else {
+                fmt_num(f64::from(*value))
+            };
+            crate::field_tab::select_all(ui.ctx(), resp.id, &text);
         }
         resp.mark_changed();
     }
@@ -450,6 +465,12 @@ fn drop_oversized_input(ui: &Ui) {
     });
 }
 
+/// Formats an exact f32 for display and for the selected text after a step.
+fn format_round_trip(v: f32) -> String {
+    let magnitude = v.abs();
+    if magnitude >= 1.0e7 || (magnitude > 0.0 && magnitude < 1.0e-4) { format!("{v:e}") } else { v.to_string() }
+}
+
 /// The number in a [`value_field`]. A typed number applies as it's typed, unless `opts.hold_typed`;
 /// arithmetic always waits for Enter, Tab or click-away, because per keystroke `5/2` would land
 /// first and a caller that rounds it would cut `5/2*2` short. `changed()` means a new value, not
@@ -462,7 +483,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, .. } = opts;
+    let FieldOpts { decimals, round_trip, wrap_drag, hold_typed, blank_when_zero, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -481,10 +502,14 @@ fn number_edit(
         if blank_when_zero && v == 0.0 {
             return String::new();
         }
-        let text = match decimals {
-            Some(d) => fmt_num_prec(v, d),
-            None if fine => fmt_num2(v),
-            None => fmt_num(v),
+        let text = if round_trip {
+            format_round_trip(v as f32)
+        } else {
+            match decimals {
+                Some(d) => fmt_num_prec(v, d),
+                None if fine => fmt_num2(v),
+                None => fmt_num(v),
+            }
         };
         if hold_typed { crate::zoom_field::localize(text) } else { text }
     };
