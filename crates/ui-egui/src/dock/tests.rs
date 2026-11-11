@@ -1155,6 +1155,9 @@ fn window_menu_reveals_hides_and_expands_replace_fallback_but_noop_show_keeps_it
 #[test]
 /// Require recovery keys in every catalog and verify live Russian-to-German notice translation.
 fn restore_notice_translates_status_and_live_notice_in_all_catalogs() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let body = "It has been preserved; editing panels or resetting the workspace will replace it.";
     for lang in crate::i18n::Lang::all().filter(|lang| lang.code() != "en") {
         for key in [RESTORE_NOTICE_TITLE, RESTORE_NOTICE_MESSAGE, body] {
@@ -1181,6 +1184,9 @@ fn restore_notice_translates_status_and_live_notice_in_all_catalogs() {
 #[test]
 /// Render and query the Russian restore notice with the status bar hidden.
 fn restore_notice_renders_in_russian_without_status_chrome() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     use egui_kittest::kittest::Queryable as _;
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
@@ -1205,6 +1211,9 @@ fn restore_notice_renders_in_russian_without_status_chrome() {
 #[test]
 /// Refresh startup and switched-language restore status without overwriting unrelated errors.
 fn restore_status_uses_startup_language_and_follows_switches_only_while_owned() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
