@@ -2987,6 +2987,23 @@ fn leaving_warp_mid_drag_drops_the_drag() {
 }
 
 #[test]
+fn undo_after_leaving_warp_mid_drag_keeps_the_drag() {
+    let ctx = egui::Context::default();
+    let mut app = warping_square();
+    super::commit::track_steps(&mut app, &ctx);
+    let untouched = warp_mesh(&app);
+    warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+    warp_pointer(&mut app, ToolEvent::Move { x: 30.0, y: 14.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+    let dragged = warp_mesh(&app);
+    assert_ne!(dragged.points, untouched.points, "the drag moved the mesh");
+    leave_warp(&mut app);
+    super::commit::track_steps(&mut app, &ctx);
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_none(), "back on the box");
+    crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(warp_mesh(&app).points, dragged.points, "Undo took back the mode switch alone");
+}
+
+#[test]
 fn warp_drag_from_inside_the_grid_pulls_the_surface_under_the_pointer() {
     let mut app = warping_square();
     let before = warp_mesh(&app);

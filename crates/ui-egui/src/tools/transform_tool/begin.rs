@@ -1207,9 +1207,12 @@ pub fn holds_warp(app: &PhotocraftApp) -> bool {
 
 pub fn leave_warp(app: &mut PhotocraftApp) {
     // A drag in flight belongs to this mesh: a control client can switch modes between Down and Up,
-    // and a kept drag would move the next Warp's mesh and block the session's undo.
-    if let Some(pv) = app.transform_preview.as_mut() {
-        pv.warp_drag = None;
+    // and a kept drag would move the next Warp's mesh and block the session's undo. What it moved
+    // is a step of its own, as on release, so Undo takes back the mode switch alone.
+    if let (Some(t), Some(pv)) = (app.ui.transform.as_ref(), app.transform_preview.as_mut())
+        && pv.warp_drag.take().is_some()
+    {
+        pv.steps.settle(super::Step::of(t));
     }
     // A stored warp edited in document space over its source without it (#9798): untouched, the box
     // shows the render with it again; changed, it is held like any other (its preview already
