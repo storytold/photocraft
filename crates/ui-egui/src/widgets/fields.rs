@@ -25,8 +25,34 @@ pub fn value_field_whole_alerting(
     suffix: &str,
     width: f32,
 ) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, true)
+}
+
+/// [`value_field_whole_alerting`] for a field that takes decimals (a corner radius, #13336): a
+/// typed value past `range` becomes the closest end, unrounded.
+pub fn value_field_alerting(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, false)
+}
+
+fn value_field_alerting_in(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    whole: bool,
+) -> (Response, bool) {
     let (lo, hi) = (*range.start(), *range.end());
-    let fit = |v: f32| if v.is_finite() { v.round().clamp(lo, hi) } else { lo };
+    let fit = |v: f32| {
+        if !v.is_finite() {
+            lo
+        } else if whole {
+            v.round().clamp(lo, hi)
+        } else {
+            v.clamp(lo, hi)
+        }
+    };
     *value = fit(*value);
     let draft_id = ui.make_persistent_id(egui::IdSalt::new(("whole-alerting-typed", name)));
     // Typed text only while its field still has the keyboard: one left without being drawn (a
