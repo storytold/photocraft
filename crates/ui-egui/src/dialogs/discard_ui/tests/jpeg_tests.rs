@@ -444,6 +444,10 @@ fn jpeg_quality_left_and_right_do_not_change_quality() {
     h.key_press(Key::ArrowLeft);
     h.run_steps(3);
     assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(6));
+    // The focus stayed on the field: only the focused field steps.
+    h.key_press(Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(7));
 }
 
 /// With the focus elsewhere, the arrows leave Quality alone.
