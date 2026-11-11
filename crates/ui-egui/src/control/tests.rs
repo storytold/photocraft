@@ -45,7 +45,9 @@ fn batch_occurrence_fields_are_read_only_through_control() {
     }
 
     // An unrelated, real dialog still accepts its ordinary fields.
-    let other = call(&mut app, &ctx, "ui.dialog.open", json!({"kind": "newDocument"}))["dialog"].as_u64().unwrap();
+    let reply = call(&mut app, &ctx, "ui.dialog.open", json!({"kind": "newDocument"}));
+    assert_eq!(reply["ok"], true, "the unrelated New Document dialog opens: {reply}");
+    let other = reply["result"]["dialog"].as_u64().unwrap();
     let width = json!(16);
     assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": other, "field": "width", "value": width}))["ok"], true);
     assert_eq!(app.ui.dialog_mut(other).unwrap().fields["width"], width);
