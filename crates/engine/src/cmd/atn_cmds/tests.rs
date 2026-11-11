@@ -742,6 +742,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
         ("file.automate.createDroplet", json!({"path": "/d/Sharpen.pcdroplet", "action": "Sharpen", "set": "Tools", "output": "/d/out", "overrideOpen": true})),
+        ("filter.distort.displace", json!({"horizontal":-999,"vertical":999,"fit":"stretch","undefinedAreas":"repeat","mapPath":LOCAL_MAP})),
         ("filter.distort.shear", json!({"points": [[0,0], [0.5,0.25], [1,0]], "undefinedAreas": "repeat"})),
         ("filter.distort.pinch", json!({"amount": -30})),
         ("filter.distort.polarCoordinates", json!({"mode": "polarToRectangular"})),
@@ -858,6 +859,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("type.loadDefaultTypeStyles", json!({})),
         ("type.saveDefaultTypeStyles", json!({})),
         ("image.analysis.recordMeasurements", json!({})),
+        ("image.analysis.setMeasurementScale", json!({"preset": "custom", "pixelLength": 120, "logicalLength": 2.5, "units": "mm"})),
         ("layer.videoLayers.insertBlankFrame", json!({})),
         ("layer.videoLayers.duplicateFrame", json!({})),
         ("layer.videoLayers.deleteFrame", json!({})),
@@ -3832,13 +3834,16 @@ fn loaded_camera_raw_filter_steps_save_back_unchanged() {
     assert_eq!(s.actions.list[0].steps[0].0, "filter.cameraRaw");
     let saved_step = |r: &Value| {
         let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
-        saved.actions[0].items.first().map(|i| (i.event.clone(), i.descriptor.clone()))
+        saved.actions[0].items.first().map(|i| (i.event.clone(), i.dictionary.clone(), i.descriptor.clone()))
     };
-    // Strict save, and the Actions panel's save (which skips what can't be written).
+    // Strict save, and the Actions panel's save (which skips what can't be written). The step's
+    // dictionary is stored action data, so it keeps Photoshop's wording and not the menu label
+    // ("RAW Develop Filter"): a loaded step reads the same in Photoshop's Actions panel.
     for skip in [false, true] {
         let r = s.execute("actions.save", json!({"action": "A", "skipUnsupported": skip})).unwrap();
         assert_eq!(r["skipped"], json!([]), "{r}");
-        assert_eq!(saved_step(&r), Some((AtnEvent::name("Adobe Camera Raw Filter"), Some(recorded.clone()))));
+        let expected = (AtnEvent::name("Adobe Camera Raw Filter"), b"Camera Raw Filter".to_vec(), Some(recorded.clone()));
+        assert_eq!(saved_step(&r), Some(expected));
     }
     // It plays.
     s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
@@ -5629,6 +5634,216 @@ fn custom_outside_the_commands_range_is_kept_and_refused() {
     for params in [json!({"scale": 0}), json!({"scale": 10_000}), json!({"offset": -10_000}), json!({"offset": 10_000}), json!({"kernel": cells})] {
         assert!(export_item("filter.other.custom", &params, "S").is_none(), "{params} exported");
     }
+}
+
+/// A local absolute map path on this platform: playback may read only such a path.
+#[cfg(windows)]
+const LOCAL_MAP: &str = r"C:\máp.psd";
+#[cfg(not(windows))]
+const LOCAL_MAP: &str = "/máp.psd";
+/// [`LOCAL_MAP`] as a `txtu` path, encoded independently of the production path writer.
+#[cfg(windows)]
+const LOCAL_MAP_WIRE: &[u8] = b"txtu\x22\0\0\0\x0b\0\0\0C\0:\0\\\0m\0\xe1\0p\0.\0p\0s\0d\0\0\0";
+#[cfg(not(windows))]
+const LOCAL_MAP_WIRE: &[u8] = b"txtu\x1e\0\0\0\x09\0\0\0/\0m\0\xe1\0p\0.\0p\0s\0d\0\0\0";
+
+/// The selected-map descriptor measured in a Windows Displace recording.
+fn displace_descriptor(path: D) -> Descriptor {
+    desc("null")
+        .with("HrzS", D::Integer(10))
+        .with("VrtS", D::Integer(10))
+        .with("DspM", enm("DspM", "StrF"))
+        .with("UndA", enm("UndA", "RptE"))
+        .with("DspF", path)
+}
+
+/// Preserve the typed path and materialize native defaults when saving sparse steps.
+#[test]
+fn recorded_displace_round_trips_text_event_and_typed_path() {
+    let descriptor = displace_descriptor(D::Path(LOCAL_MAP_WIRE.to_vec()));
+    let data = set_of("Maps", vec![("A", vec![item("displace", "Displace", Some(descriptor.clone()))])]);
+    let imported = import(&photocraft_paint::tile::b64_decode(&data).unwrap()).unwrap();
+    assert!(imported.unsupported.is_empty());
+    let (id, params) = &imported.actions[0].steps[0];
+    assert_eq!(id, "filter.distort.displace");
+    assert_eq!(*params, json!({"horizontal":10,"vertical":10,"fit":"stretch","undefinedAreas":"repeat","mapPath":LOCAL_MAP}));
+    let exported = export_item(id, params, "Maps").unwrap();
+    assert_eq!(exported.event, AtnEvent::name("displace"));
+    assert_eq!(exported.descriptor, Some(descriptor.clone()));
+    let minimal = json!({"mapPath":LOCAL_MAP});
+    assert_eq!(export_item(id, &minimal, "Maps").unwrap().descriptor, Some(descriptor.clone()));
+    for key in ["horizontal", "vertical", "fit", "undefinedAreas"] {
+        let mut sparse = params.clone();
+        sparse.as_object_mut().unwrap().remove(key);
+        assert_eq!(export_item(id, &sparse, "Maps").unwrap().descriptor, Some(descriptor.clone()), "{key}");
+    }
+    let custom = json!({"horizontal":-7,"mapPath":LOCAL_MAP});
+    let mut expected = descriptor;
+    expected.items[0].1 = D::Integer(-7);
+    assert_eq!(export_item(id, &custom, "Maps").unwrap().descriptor, Some(expected));
+}
+
+/// A shared action file must not make playback open a network share, a device or a path taken
+/// from the working directory: such a map path stays a kept step with its bytes.
+#[test]
+fn displace_map_paths_a_document_may_not_name_stay_kept_steps() {
+    let refused = [r"\\server\share\map.psd", "//server/share/map.psd", r"\\?\UNC\server\share\map.psd", r"\\.\COM1", "file://server/share/map.psd", "map.psd"];
+    let cases: Vec<_> = refused.iter().map(|path| item("displace", "Displace", Some(displace_descriptor(path_value(path))))).collect();
+    let data = set_of("Maps", vec![("A", cases.clone())]);
+    let imported = import(&photocraft_paint::tile::b64_decode(&data).unwrap()).unwrap();
+    assert_eq!(imported.unsupported.len(), cases.len());
+    for ((id, params), expected) in imported.actions[0].steps.iter().zip(cases) {
+        assert_eq!(id, PHOTOSHOP_STEP, "{params}");
+        assert_eq!(export_item(id, params, "Maps").unwrap().descriptor, expected.descriptor);
+    }
+}
+
+/// Keep unmeasured inputs intact and refuse settings that would be changed by export.
+#[test]
+fn unmeasured_displace_stays_opaque_and_lossy_export_is_refused() {
+    assert!(!super::menu_item_commands().contains(&"filter.distort.displace"));
+    let path = r"C:\map.psd";
+    let wire = path_value(path);
+    let descriptor = displace_descriptor(wire.clone());
+    let replace = |key: &str, value: D| {
+        let mut d = descriptor.clone();
+        d.items.iter_mut().find(|(id, _)| id.is(key)).unwrap().1 = value;
+        d
+    };
+    let alter_path = |i: usize, pair: [u8; 2]| {
+        let D::Path(mut bytes) = wire.clone() else { panic!("expected a path") };
+        bytes[i..i + 2].copy_from_slice(&pair);
+        D::Path(bytes)
+    };
+    let mut without_path = descriptor.clone();
+    without_path.items.retain(|(id, _)| !id.is("DspF"));
+    let mut string_key = descriptor.clone();
+    string_key.items[0].0 = Id::Str(b"HrzS".to_vec());
+    let cases = [
+        item("displace", "Displace", None),
+        item("displace", "Displace", Some(without_path)),
+        item("displace", "Displace", Some(string_key)),
+        item("displace", "Displace", Some(descriptor.clone().with("HrzS", D::Integer(10)))),
+        item("displace", "Displace", Some(replace("HrzS", D::Double(10.0)))),
+        item("displace", "Displace", Some(replace("VrtS", D::Integer(1000)))),
+        item("displace", "Displace", Some(replace("DspM", enm("DspM", "Tile")))),
+        item("displace", "Displace", Some(replace("UndA", enm("OtherEnum", "RptE")))),
+        item("displace", "Displace", Some(replace("DspF", D::Alias(vec![1, 2, 3])))),
+        item("displace", "Displace", Some(replace("DspF", alter_path(4, [0, 0])))),
+        item("displace", "Displace", Some(replace("DspF", alter_path(8, [9, 0])))),
+        item("displace", "Displace", Some(replace("DspF", alter_path(12, [0, 0])))),
+        item("displace", "Displace", Some(replace("DspF", alter_path(12, [0, 0xd8])))),
+        item("Dspl", "Displace", Some(descriptor)),
+    ];
+    let data = set_of("Maps", vec![("A", cases.to_vec())]);
+    let imported = import(&photocraft_paint::tile::b64_decode(&data).unwrap()).unwrap();
+    assert_eq!(imported.unsupported.len(), cases.len());
+    assert_eq!(imported.actions[0].steps.len(), cases.len());
+    for ((id, params), expected) in imported.actions[0].steps.iter().zip(cases) {
+        assert_eq!(id, PHOTOSHOP_STEP);
+        let exported = export_item(id, params, "Maps").unwrap();
+        assert_eq!(exported.event, expected.event);
+        assert_eq!(exported.descriptor, expected.descriptor);
+    }
+
+    let good = json!({"horizontal":10,"vertical":10,"fit":"stretch","undefinedAreas":"repeat","mapPath":path});
+    for (key, value) in [
+        ("horizontal", json!(10.5)),
+        ("horizontal", json!(1000)),
+        ("vertical", json!(-1000)),
+        ("vertical", json!("10")),
+        ("fit", json!("tile")),
+        ("fit", Value::Null),
+        ("undefinedAreas", json!("wrap")),
+        ("undefinedAreas", json!(false)),
+        ("mapPath", json!("x\0y.psd")),
+        ("mapPath", json!("")),
+        ("mapLayer", json!(1)),
+        ("mapDocument", json!(0)),
+        ("target", json!("mask")),
+    ] {
+        let mut params = good.clone();
+        params[key] = value;
+        assert!(export_item("filter.distort.displace", &params, "Maps").is_none(), "{params}");
+    }
+}
+
+/// Loading needs no map; playback reads it only after authorization and stretches it.
+#[test]
+fn recorded_displace_loads_without_map_and_plays_through_the_step_gate() {
+    use photocraft_geom::Rect;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("synthetic-map.psd");
+    let wire = displace_descriptor(path_value(path.to_str().unwrap()));
+    let data = set_of("Maps", vec![("A", vec![item("displace", "Displace", Some(wire))])]);
+    let mut source = Session::new();
+    let loaded = source.execute("actions.load", json!({"data":data})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]));
+    assert!(!path.exists(), "loading the ATN needs no map");
+
+    let paint_split = |s: &mut Session, side: i32, split: i32, right: [f32; 4]| {
+        s.execute("file.new", json!({"width":side,"height":side})).unwrap();
+        s.edit("Two-tone fixture", |doc, _| {
+            let id = doc.layers[0].id;
+            let surface = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+            surface.fill_rect(Rect::new(0, 0, split, side), &[0.0, 0.0, 0.0, 1.0]);
+            surface.fill_rect(Rect::new(split, 0, side, side), &right);
+            Ok(())
+        })
+        .unwrap();
+    };
+    // Offset the source edge so the positive shift crosses it within the white part of the map.
+    paint_split(&mut source, 64, 48, [1.0, 0.0, 0.0, 1.0]);
+    source
+        .edit("Bottom edge fixture", |doc, _| {
+            let id = doc.layers[0].id;
+            let surface = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+            surface.fill_rect(Rect::new(0, 48, 64, 64), &[0.0, 1.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    let snapshot = |s: &Session| {
+        let active = s.active().unwrap();
+        (active.revision, active.history.past_len(), photocraft_compose::render(&active.doc, active.doc.bounds()).into_px())
+    };
+    let before = snapshot(&source);
+    let missing = source.execute("actions.play", json!({"action":"A"})).unwrap();
+    assert_eq!(missing["ran"], 0);
+    assert_eq!(missing["failed"]["id"], "filter.distort.displace");
+    assert!(missing["failed"]["error"].as_str().unwrap().contains("cannot read displacement map"));
+    assert_eq!(snapshot(&source), before);
+
+    // Leave the map absent so a read before authorization would report the same I/O failure.
+    source.authorize = Some(|id, p| {
+        if id == "filter.distort.displace" && p["mapPath"].is_string() {
+            return Err(EngineError::Other("test denied the map path".into()));
+        }
+        Ok(())
+    });
+    let denied = source.execute("actions.play", json!({"action":"A"})).unwrap();
+    assert_eq!(denied["ran"], 0);
+    assert_eq!(denied["failed"]["id"], "filter.distort.displace");
+    assert!(denied["failed"]["error"].as_str().unwrap().contains("test denied the map path"));
+    assert_eq!(snapshot(&source), before);
+
+    source.authorize = None;
+    let mut map = Session::new();
+    paint_split(&mut map, 16, 8, [1.0, 1.0, 1.0, 1.0]);
+    let encoded = photocraft_io::export(&map.active().unwrap().doc, "psd", &Default::default()).unwrap();
+    std::fs::write(&path, encoded.bytes).unwrap();
+    let played = source.execute("actions.play", json!({"action":"A"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+    assert!(played.get("failed").is_none(), "{played}");
+    let pixels = snapshot(&source).2;
+    // With stretch, x=38 samples the white half and shifts into red; tiling samples black.
+    assert_eq!(before.2[32 * 64 + 38], [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(pixels[32 * 64 + 38], [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(pixels[32 * 64 + 20], [0.0, 0.0, 0.0, 1.0]);
+    // The vertical shift crosses into green, then repeats the bottom edge instead of wrapping to red.
+    assert_eq!(before.2[40 * 64 + 38], [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(pixels[40 * 64 + 38], [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(pixels[60 * 64 + 38], [0.0, 1.0, 0.0, 1.0]);
 }
 
 /// The step `d` of Photoshop event `code`, as PhotoCraft loads it.
