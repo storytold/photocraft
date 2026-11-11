@@ -1181,7 +1181,12 @@ fn csv_field(v: &Value) -> String {
     let s = match v {
         // A text cell a spreadsheet would read as a formula gets a leading apostrophe (OWASP CSV
         // injection); plain numbers in text keep their sign.
-        Value::String(s) if s.starts_with(['=', '@', '\t', '\r']) || (s.starts_with(['+', '-']) && s.parse::<f64>().is_err()) => format!("'{s}"),
+        Value::String(s)
+            if s.starts_with(['=', '@', '\t', '\r', '\n', '\u{ff1d}', '\u{ff20}'])
+                || (s.starts_with(['+', '-', '\u{ff0b}', '\u{ff0d}']) && s.parse::<f64>().is_err()) =>
+        {
+            format!("'{s}")
+        }
         Value::String(s) => s.clone(),
         Value::Array(a) => a.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" "),
         Value::Null => String::new(),

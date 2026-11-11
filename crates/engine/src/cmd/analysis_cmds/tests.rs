@@ -558,7 +558,18 @@ fn iso_from_unix_matches_the_old_cycle_conversion_including_beyond_chrono() {
 
 #[test]
 fn csv_text_cells_that_read_as_formulas_are_neutralised() {
-    for (cell, want) in [("=1+1", "'=1+1"), ("@SUM(A1)", "'@SUM(A1)"), ("-2+3", "'-2+3"), ("+cmd|x", "'+cmd|x"), ("-5.5", "-5.5"), ("px", "px")] {
+    for (cell, want) in [
+        ("=1+1", "'=1+1"),
+        ("@SUM(A1)", "'@SUM(A1)"),
+        ("-2+3", "'-2+3"),
+        ("+cmd|x", "'+cmd|x"),
+        ("-5.5", "-5.5"),
+        ("px", "px"),
+        ("\n=1+1", "\"'\n=1+1\""),
+        ("\u{ff1d}1+1", "'\u{ff1d}1+1"),
+        ("\u{ff0b}1", "'\u{ff0b}1"),
+        ("\u{ff20}SUM(A1)", "'\u{ff20}SUM(A1)"),
+    ] {
         assert_eq!(csv_field(&json!(cell)), want, "{cell}");
     }
     assert_eq!(csv_field(&json!(-5.5)), "-5.5", "numbers are not text cells");
