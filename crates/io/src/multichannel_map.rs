@@ -48,6 +48,7 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
         return Err(crate::IoError::Unsupported("multichannel channel depth does not match its pixel layout".into()));
     }
     let fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
+    // The PSD preflight (`psd_budget`) already admitted these channels' tile storage, at whatever limit it was given.
     for k in 0..usize::from(h.channels) {
         let start = k.checked_mul(plane).ok_or_else(invalid)?;
         let end = start.checked_add(plane).ok_or_else(invalid)?;
