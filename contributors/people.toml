@@ -14,9 +14,6 @@
 # To remove your names, delete your entry (or set fields empty) in a PR. The next
 # contributors.py run, and the next build, drop them.
 
-[people.mlo0352]
-sync_github_name = true
-
 [people.brianblakely]
 sync_github_name = true
 
@@ -332,3 +329,6 @@ sync_github_name = false
 [people.tomgardenart]
 display_name = "Nostella"
 sync_github_name = false
+
+[people.mlo0352]
+sync_github_name = true
