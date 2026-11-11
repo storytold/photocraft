@@ -485,15 +485,24 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     let Some(step) = from.pop() else { return serde_json::Value::Null };
     to.push(Step::of(t));
     s.settled = Some(step.clone());
-    let (had_warp, rect, quad) = (t.warp.is_some(), t.rect, t.quad);
+    let (had_warp, had_held, rect, quad) = (t.warp.is_some(), t.held_warp.is_some(), t.rect, t.quad);
     step.restore(t);
     // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs): the step
     // brings its own box, so only the texels swap, and the other mode keeps the box it left.
-    if had_warp != t.warp.is_some()
-        && let Some(o) = pv.other_texels.as_mut()
-    {
-        std::mem::swap(&mut pv.texture, &mut o.texture);
-        (o.rect, o.quad) = (rect, quad);
+    // Once a changed warp was kept, the render with the stored warp belongs to the box before
+    // Warp alone: every state since (in Warp, or holding its warp) shows the source without it.
+    match pv.other_texels.as_mut() {
+        Some(o) if o.kept => {
+            let before = !had_warp && !had_held;
+            if before != (t.warp.is_none() && t.held_warp.is_none()) {
+                std::mem::swap(&mut pv.texture, &mut o.texture);
+            }
+        }
+        Some(o) if had_warp != t.warp.is_some() => {
+            std::mem::swap(&mut pv.texture, &mut o.texture);
+            (o.rect, o.quad) = (rect, quad);
+        }
+        _ => {}
     }
     json!({"transform": t})
 }

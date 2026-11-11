@@ -3998,6 +3998,71 @@ fn leaving_warp_mode_restores_the_stored_warps_render() {
     assert_eq!((texels(&app), rect(&app)), (warped, box0), "leaving after a redo");
 }
 
+/// A stored warp changed in Warp and kept under the box: Undo back to the box before Warp shows
+/// the render with the stored warp again, and Redo goes back to the source without it.
+#[test]
+fn undo_past_a_kept_warp_edit_shows_the_stored_warps_render() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("layer.smartObjects.warp", json!({"style": "cylinder", "values": [8, 32, 32, 8, 0.5, 0.5, 0.85], "rect": [8, 8, 32, 32]})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let texels = |app: &PhotocraftApp| app.transform_preview.as_ref().unwrap().texture.level_image(0).unwrap().0.size;
+    let warped = texels(&app);
+    enter_warp(&mut app, &ctx);
+    track_steps(&mut app, &ctx);
+    assert_eq!(texels(&app), [24, 24], "the source over the warp box");
+    // The warp changed: its mesh nudged.
+    let t = app.ui.transform.as_mut().unwrap();
+    let w = t.warp.clone().unwrap();
+    let mut m = w.to_mesh(1, 1);
+    m.points[5][0] += 2.0;
+    t.warp = Some(Warp::custom(m, w.bounds));
+    track_steps(&mut app, &ctx);
+    leave_warp(&mut app);
+    track_steps(&mut app, &ctx);
+    assert!(app.ui.transform.as_ref().unwrap().held_warp.is_some(), "the changed warp is held");
+    assert_eq!(texels(&app), [24, 24], "held: still the source without the stored warp");
+    for _ in 0..3 {
+        if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.held_warp.is_none()) {
+            break;
+        }
+        let _ = intercept(&mut app, "edit.undo");
+    }
+    let t = app.ui.transform.as_ref().unwrap();
+    assert!(t.warp.is_none() && t.held_warp.is_none(), "back to the box before Warp");
+    assert_eq!(texels(&app), warped, "the render with the stored warp");
+    let _ = intercept(&mut app, "edit.redo");
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_some(), "redo into Warp");
+    assert_eq!(texels(&app), [24, 24], "redo: the source again");
+}
+
+/// Leaving an untouched Warp on a stored warp whose box opened on a start quad (a Flag's mesh
+/// reaches past its render) gives the box back as it opened, start quad and all, so the render
+/// is drawn where it is rather than stretched to the mesh's box; and so does entering again.
+#[test]
+fn an_untouched_warp_toggle_keeps_the_boxs_start_quad() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("layer.smartObjects.warp", json!({"style": "flag", "bend": 50})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let state = |app: &PhotocraftApp| {
+        let t = app.ui.transform.as_ref().unwrap();
+        (t.rect, t.quad, t.start)
+    };
+    let opened = state(&app);
+    assert!(opened.2.is_some(), "the box opens on a start quad: {opened:?}");
+    for round in 0..2 {
+        enter_warp(&mut app, &ctx);
+        track_steps(&mut app, &ctx);
+        assert!(app.ui.transform.as_ref().unwrap().warp.is_some(), "round {round}: in Warp");
+        leave_warp(&mut app);
+        track_steps(&mut app, &ctx);
+        assert_eq!(state(&app), opened, "round {round}: the box as it opened");
+    }
+}
+
 /// A cylinder on a pixel layer commits as previewed: the pixels wrap round between the
 /// silhouettes and the ones on the back are hidden.
 #[test]
@@ -4594,6 +4659,25 @@ fn a_held_warp_under_a_perspective_applies_what_it_shows() {
     let got = app.session.active().unwrap().doc.layers.last().unwrap().surface().unwrap().content_bounds();
     let near = |a: i32, b: f64| (f64::from(a) - b).abs() <= 2.0;
     assert!(near(got.x0, want[0]) && near(got.y0, want[1]) && near(got.x1, want[2]) && near(got.y1, want[3]), "{got:?} vs {want:?}");
+}
+
+/// Warp mode again over a warp held under a Perspective box edits the warp the box showed (its
+/// mesh split as the preview and the commit split it), not the unsplit one moved by the box.
+#[test]
+fn warp_mode_over_a_held_warp_under_a_perspective_edits_what_it_showed() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(100, photocraft_geom::Rect::new(30, 40, 70, 60));
+    begin_warp(&mut app, &ctx).unwrap();
+    if let Some(m) = app.ui.transform.as_mut().unwrap().warp.as_mut().and_then(|w| w.mesh.as_mut()) {
+        m.points[5][1] -= 8.0;
+    }
+    leave_warp(&mut app);
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad[1] = [t.quad[1][0] - 12.0, t.quad[1][1] + 6.0];
+    t.quad[2] = [t.quad[2][0] - 12.0, t.quad[2][1] - 6.0];
+    let shown = app.ui.transform.as_ref().unwrap().held_doc_warp().unwrap();
+    enter_warp(&mut app, &ctx);
+    assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref(), Some(&shown), "the warp the box showed");
 }
 
 /// A smart object's warp held under an untouched box keeps its placement exactly: the box's

@@ -310,6 +310,10 @@ struct OtherTexels {
     texture: crate::transform_tex::PreviewTextures,
     rect: [f64; 4],
     quad: [[f64; 2]; 4],
+    /// Kept past a Warp visit that changed the warp: the box then holds that warp and shows the
+    /// source without the stored one, so `texture` is the render with it, for Undo back to the
+    /// box before Warp ([`commit::step`]). Leaving or entering Warp no longer swaps it.
+    kept: bool,
 }
 
 /// Swaps the session's texels and box with the other mode's (`t` holds the box the texels

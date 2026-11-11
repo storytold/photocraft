@@ -591,8 +591,9 @@ fn contents_warp(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let placement = match p.get("placement") {
         None | Some(Value::Null) => None,
         Some(v) => {
-            let m: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
-            let h = <[f64; 9]>::try_from(m.as_slice()).ok().filter(|m| m.iter().all(|v| v.is_finite())).map(Homography);
+            // Nine numbers exactly: an entry that isn't one fails the whole matrix.
+            let m: Option<Vec<f64>> = v.as_array().and_then(|a| a.iter().map(Value::as_f64).collect());
+            let h = m.and_then(|m| <[f64; 9]>::try_from(m.as_slice()).ok()).filter(|m| m.iter().all(|v| v.is_finite())).map(Homography);
             Some(h.filter(|h| h.inverse().is_some()).ok_or_else(|| bad(cmd, "`placement` must be an invertible 3×3 matrix (9 numbers)"))?)
         }
     };
@@ -621,45 +622,73 @@ fn contents_warp(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let src = Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32);
     crate::transform_cmds::check_budget(src, &placement.unwrap_or(old), "Warp", st.doc.pixel_format())?;
     let moved = contents_move(old, sm.warp.clone(), placement.unwrap_or(old), new_warp.clone())?;
+    // What moves with the contents is priced too: a filter mask, a linked mask or the selection
+    // can reach far past the smart object.
+    let mut follows: Vec<(&Surface, &str)> = Vec::new();
+    if let Some(m) = &sm.filter_mask {
+        follows.push((&m.surface, "filter mask"));
+    }
+    if let Some(m) = layer.mask.as_ref().filter(|m| m.linked) {
+        follows.push((&m.surface, "layer mask"));
+    }
+    if let Some(sel) = &st.doc.selection {
+        follows.push((sel, "selection"));
+    }
+    for (surface, what) in follows {
+        crate::transform_cmds::check_mapped_budget(surface.content_bounds(), &moved, what, surface.format())?;
+    }
     // A background job when started with `Session::start` (as Free Transform's commit is): the
     // smart object's render from its source can be long, with progress and Cancel.
     crate::jobs::edit_job(
         s,
         "Warp",
-        move |doc, _, ctx| {
-            ctx.progress(0.0, "Warping");
-            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-            let LayerContent::Smart(sm) = &mut l.content else { return Err(EngineError::Other("not a smart object".into())) };
-            sm.warp = new_warp.clone();
-            if let Some(h) = placement {
-                crate::smart_cmds::set_placement(sm, h);
-            }
-            // What showed the contents in the document follows them exactly: the filter mask,
-            // the linked masks and the selection outline.
-            if let Some(m) = &mut sm.filter_mask {
-                m.surface = warp_mesh_gray_with(&m.surface, &moved, Fold::IN_PLACE, Interp::Bilinear);
-            }
-            move_linked_masks(l, &moved);
-            ctx.check()?;
-            if let Some(sel) = doc.selection.as_ref() {
-                doc.selection = Some(warp_mesh_gray_with(sel, &moved, Fold::IN_PLACE, Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
-            }
-            ctx.check()?;
-            // Rendered again from the source, through the warp and the placement; without the
-            // source, the appearance it had is moved as the contents moved.
-            if !crate::smart_cmds::refresh_in(doc, id, ctx)?
-                && let Some(LayerContent::Smart(sm)) = doc.layer_mut(id).map(|l| &mut l.content)
-                && let Some(c) = &mut sm.cache
-            {
-                // Never cancelled (no interrupt), so always Some.
-                if let Some(w) = warp_mesh_surface_with(c, c.content_bounds(), &moved, Fold::IN_PLACE, Interp::Bicubic, &Interrupt::NONE) {
-                    *c = w;
-                }
-            }
-            Ok(())
-        },
+        move |doc, _, ctx| warp_contents_in(doc, id, new_warp.clone(), placement, &moved, ctx),
         move |()| json!({"layer": id.0, "changed": true}),
     )
+}
+
+/// The job of a smart object's contents warp: the new warp and placement, the masks and the
+/// selection moved with them, and the contents rendered again (or, without a source, moved).
+fn warp_contents_in(
+    doc: &mut Document,
+    id: LayerId,
+    new_warp: Option<Warp>,
+    placement: Option<Homography>,
+    moved: &(dyn Fn(f64, f64) -> (f64, f64) + Sync),
+    ctx: &crate::jobs::JobCtx,
+) -> Result<()> {
+    ctx.progress(0.0, "Warping");
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Smart(sm) = &mut l.content else { return Err(EngineError::Other("not a smart object".into())) };
+    sm.warp = new_warp;
+    if let Some(h) = placement {
+        crate::smart_cmds::set_placement(sm, h);
+    }
+    // What showed the contents in the document follows them exactly: the filter mask,
+    // the linked masks and the selection outline.
+    if let Some(m) = &mut sm.filter_mask {
+        m.surface = warp_mesh_gray_with(&m.surface, moved, Fold::IN_PLACE, Interp::Bilinear);
+    }
+    move_linked_masks(l, moved);
+    ctx.check()?;
+    if let Some(sel) = doc.selection.as_ref() {
+        doc.selection = Some(warp_mesh_gray_with(sel, moved, Fold::IN_PLACE, Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
+    }
+    ctx.check()?;
+    // Rendered again from the source, through the warp and the placement; without the
+    // source, the appearance it had is moved as the contents moved.
+    if !crate::smart_cmds::refresh_in(doc, id, ctx)?
+        && let Some(LayerContent::Smart(sm)) = doc.layer_mut(id).map(|l| &mut l.content)
+        && let Some(c) = &mut sm.cache
+    {
+        // Cancel stops this warp too: `None` is a cancelled one, and the job's check
+        // turns it into the cancelled result.
+        match ctx.stage(0.5, 1.0, "Warping", |stop| warp_mesh_surface_with(c, c.content_bounds(), moved, Fold::IN_PLACE, Interp::Bicubic, stop)) {
+            Some(w) => *c = w,
+            None => ctx.check()?,
+        }
+    }
+    Ok(())
 }
 
 /// Where a change of a smart object's placement and warp moves a document point that showed its
@@ -672,13 +701,16 @@ pub fn contents_move(old: Homography, old_warp: Option<Warp>, new: Homography, n
     let old_mesh = old_warp.filter(|w| !w.is_identity()).map(|w| (photocraft_geom::warp::MeshInverse::new(w.to_mesh(1, 1)), w.bounds));
     Ok(move |x: f64, y: f64| -> (f64, f64) {
         let q = hom_apply(&old_inv, [x, y]);
-        let q = match &old_mesh {
+        // Back onto the contents: a point outside the old warp goes to the warp's nearest edge
+        // point, and keeps its offset from it as the warp left it (`rest`, in the warp's output
+        // space), so the new warp moves it with that edge and only then adds the offset.
+        let (q, rest) = match &old_mesh {
             Some((m, b)) => {
                 let (s, t) = m.param_at(q);
                 let on = m.mesh().eval(s, t);
-                [b[0] + s * (b[2] - b[0]) + q[0] - on[0], b[1] + t * (b[3] - b[1]) + q[1] - on[1]]
+                ([b[0] + s * (b[2] - b[0]), b[1] + t * (b[3] - b[1])], [q[0] - on[0], q[1] - on[1]])
             }
-            None => q,
+            None => (q, [0.0, 0.0]),
         };
         let q = match &new_warp {
             Some(w) => {
@@ -690,7 +722,7 @@ pub fn contents_move(old: Homography, old_warp: Option<Warp>, new: Homography, n
             }
             None => q,
         };
-        new.apply(q[0], q[1])
+        new.apply(q[0] + rest[0], q[1] + rest[1])
     })
 }
 
