@@ -924,6 +924,10 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     if !app.ui.timeline.open {
         app.ui.timeline.playing = false;
     }
+    if app.ui.panel_presentation.migrated {
+        app.ui.panel_presentation.migrated = false;
+        let _ = crate::panel_docking::compat::initialize(app);
+    }
 }
 
 /// Pointer-dependent shell command; pixel picking and selection remain engine commands.

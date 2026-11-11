@@ -515,3 +515,29 @@ fn launcher_migration_preserves_hidden_dock_visibility() {
     assert!(app.ui.docking.is_some());
     assert!(!app.ui.panels.dock);
 }
+
+#[test]
+fn preset_reset_rebuilds_launcher_and_preserves_visibility() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.ui.panels.rail = true;
+    compat::initialize(&mut app).unwrap();
+    assert!(app.ui.panel_presentation.migrated);
+    assert!(app.ui.docking.is_some());
+
+    app.ui.workspace = "Photography".into();
+    crate::menus::apply_workspace(&mut app);
+    assert!(app.ui.panel_presentation.migrated);
+    assert!(app.ui.docking.is_some());
+    assert!(app.ui.panels.navigator);
+    assert!(!app.ui.panels.color);
+    assert!(app.ui.panels.layers);
+    assert!(app.ui.panels.history);
+    assert!(app.ui.panels.properties);
+
+    crate::menus::apply_workspace(&mut app);
+    assert!(app.ui.panel_presentation.migrated);
+    assert!(app.ui.docking.is_some());
+    assert!(app.ui.panels.navigator);
+    assert!(!app.ui.panels.color);
+    assert!(app.ui.panels.layers);
+}
