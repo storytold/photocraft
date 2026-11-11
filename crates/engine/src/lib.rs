@@ -338,6 +338,9 @@ pub struct Session {
     /// command reporting too narrow a redraw area (#4053). Counted in debug and test builds only;
     /// tests read it.
     pub damage_misses: usize,
+    /// Commands that left the whole document to redraw (`last_damage` None) while changing under
+    /// 25 % of it ([`Session::dispatch`]). Counted in debug and test builds only; tests read it.
+    pub whole_redraws: usize,
 }
 
 #[cfg(test)]
@@ -361,3 +364,5 @@ mod fx_mode_tests;
 #[cfg(test)]
 mod brush_clear_background_tests;
 pub mod command_hints;
+#[cfg(test)]
+mod pencil_auto_erase_exact_tests;

@@ -224,7 +224,7 @@
 	Plug-ins…	תוספים…
 	Type…	טקסט…
 	Enhanced Controls…	פקדים משופרים…
-	Camera Raw…	Camera Raw…
+	RAW Defaults…	ברירות מחדל RAW…
 	Raw Defaults…	ברירות מחדל ל-Raw…
 	Integrations…	שילובים…
 	AI Integrations…	שילובי בינה מלאכותית…
@@ -554,7 +554,7 @@
 	Last Filter	המסנן האחרון
 	Filter Gallery…	גלריית מסננים…
 	Adaptive Wide Angle…	זווית רחבה אדפטיבית…
-	Camera Raw Filter…	מסנן Camera Raw…
+	RAW Develop Filter…	מסנן פיתוח RAW…
 	Liquify…	נזילות…
 	Vanishing Point…	נקודת היעלמות…
 	Blur	טשטוש
@@ -902,8 +902,8 @@
 	Load Settings…	טען הגדרות…
 	Save these settings as a Camera Raw .xmp file	שמור הגדרות אלה כקובץ ‎.xmp של Camera Raw
 	Load settings from a Camera Raw .xmp file	טען הגדרות מקובץ ‎.xmp של Camera Raw
-	Loaded Camera Raw settings from {file}	נטענו הגדרות Camera Raw מתוך {file}
-	Loaded Camera Raw settings from {file} ({n} not supported)	נטענו הגדרות Camera Raw מתוך {file} ({n} לא נתמכות)
+	Loaded RAW Develop settings from {file}	נטענו הגדרות פיתוח RAW מתוך {file}
+	Loaded RAW Develop settings from {file} ({n} not supported)	נטענו הגדרות פיתוח RAW מתוך {file} ({n} לא נתמכות)
 	Begin recording	התחל הקלטה
 	Bend:	כיפוף:
 	Bicubic	דו-מעוקב (Bicubic)
@@ -931,7 +931,7 @@
 	Brush Reconstruct Options	אפשרויות שחזור מברשת
 	Brush Tool Options	אפשרויות כלי מברשת
 	Cache Level:	רמת מטמון:
-	Camera Raw isn't open	Camera Raw אינו פתוח
+	RAW Develop isn't open	פיתוח RAW אינו פתוח
 	Cancel	ביטול
 	Cancel (Esc)	ביטול (Esc)
 	Manage submitted jobs in the system print queue	נהל עבודות שנשלחו בתור ההדפסה של המערכת
@@ -1902,7 +1902,7 @@
 	Brush preview color	צבע תצוגה מקדימה של מברשת
 	Cache levels	רמות מטמון
 	Cache tile size	גודל אריח מטמון
-	Camera Raw Defaults	ברירות מחדל של Camera Raw
+	RAW Defaults	ברירות מחדל RAW
 	Canvas border	גבול קנבס
 	Show canvas dots	הצג נקודות קנבס
 	Clip thumbnails to layer bounds	גזור תמונות ממוזערות לגבולות השכבה
@@ -1984,7 +1984,6 @@
 	Never	לעולם לא
 	Normal tip	קצה רגיל
 	Open as smart object	פתח כאובייקט חכם
-	Open in camera raw	פתח ב-Camera Raw
 	Open documents as tabs	פתח מסמכים כלשוניות
 	Overscroll	גלילת יתר
 	Performance	ביצועים
@@ -2345,8 +2344,8 @@
 	Tone Histogram	היסטוגרמת גוון
 	Show Selected Region	הצג אזור נבחר
 cameraRaw	Light	אור
-	Camera Raw Filter ({layer})	מסנן Camera Raw ‏({layer})
-	Camera Raw ({name})	Camera Raw ‏({name})
+	RAW Develop Filter ({layer})	מסנן פיתוח RAW ‏({layer})
+	RAW Develop ({name})	פיתוח RAW ‏({name})
 cameraRaw	Lights	בהירים
 cameraRaw	Darks	כהים
 cameraRaw	Red	אדום
@@ -2943,8 +2942,6 @@ curves	Smooth	החלק
 	Roman Hanging Punctuation	פיסוק תלוי רומי
 	Avoid Widows/Orphans	הימנע משורות יתומות/אלמנות
 	Compose	הרכב
-	Adobe Single-line Composer	מרכיב שורה בודדת של Adobe
-	Adobe Every-line Composer	מרכיב כל השורות של Adobe
 	Word Spacing	ריווח מילים
 	Letter Spacing	ריווח אותיות
 	Glyph Scaling	שינוי קנה מידה של גליפים
@@ -3140,7 +3137,6 @@ curves	Smooth	החלק
 	Intersect with	חתוך עם
 	Capture Comp	לכוד קומפ
 	No Layer Comps	אין קומפים של שכבות
-	Adobe PDF Presets…	ערכות PDF של Adobe…
 	3D…	3D…
 	Technology Previews…	תצוגות מקדימות של טכנולוגיה…
 	Add a mask  (from the selection; ⌥ inverts)	הוסף מסכה  (מהבחירה; ⌥ הופך)
@@ -3757,8 +3753,8 @@ layerLabel	No Color	בלי צבע
 	Border	גבול
 	Box Blur	טשטוש קופסה
 	Calculations	חישובים
-	Camera Raw	Camera Raw
-	Camera Raw Filter	מסנן Camera Raw
+	RAW Develop	פיתוח RAW
+	RAW Develop Filter	מסנן פיתוח RAW
 	Channel1	ערוץ1
 	Channel2	ערוץ2
 	Channel3	ערוץ3
@@ -4019,7 +4015,7 @@ layerLabel	No Color	בלי צבע
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	שכבת הטקסט הזו חייבת להיות מרוסטרת לפני ההמשך. הטקסט שלה לא יהיה עוד עריך. לרסטר את הטקסט?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	שכבת הצורה הזו חייבת להיות מרוסטרת לפני ההמשך. היא לא תהיה עוד עריכה כצורה. לרסטר את הצורה?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	האובייקט החכם הזה חייב להיות מרוסטר לפני ההמשך. התוכן שלו לא יהיה עוד עריך. לרסטר את האובייקט החכם?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	שכבת המילוי הזו חייבת להיות מרוסטרת לפני ההמשך. תוכן המילוי שלה לא יהיה עוד עריך. לרסטר את השכבה?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	שכבת המילוי הזו חייבת להיות מרוסטרת לפני ההמשך. תוכן המילוי שלה לא יהיה עוד עריך. לרסטר את השכבה?
 	This layer must be rasterized before proceeding.	השכבה הזו חייבת להיות מרוסטרת לפני ההמשך.
 	Color Picker (Background Color)	בוחר צבעים (צבע רקע)
 	Color Picker (Foreground Color)	בוחר צבעים (צבע חזית)
@@ -4572,3 +4568,22 @@ navigator	Zoom	תקריב
 @plural	{n} action file loaded|{n} action files loaded	נטען {n} קובץ פעולות|נטענו {n} קובצי פעולות
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	לא ניתן היה לטעון {n} קובץ: {errors}|לא ניתן היה לטעון {n} קבצים: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} פלט נכסי תמונה נכשל|{what}: {n} פלטי נכסי תמונה נכשלו
+	Move Toolbar to the Right	העבר את סרגל הכלים ימינה
+	Move Toolbar to the Left	העבר את סרגל הכלים שמאלה
+
+# RAW Develop feature labels
+	Saved RAW Develop settings to {file}	הגדרות פיתוח RAW נשמרו ב־{file}
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	בחר יחס גובה-רוחב או גודל חיתוך מוגדרים מראש
+	Set the aspect ratio for the crop box	הגדר את יחס הגובה-רוחב של מסגרת החיתוך
+	Clear aspect ratio values	נקה ערכי יחס גובה-רוחב
+	Set the overlay options for the Crop Tool	הגדר אפשרויות שכבת־על לחיתוך
+	Determines if pixel data outside the crop box is retained or deleted	קובע אם פיקסלים מחוץ למסגרת החיתוך נשמרים או נמחקים
+	How expanded crop area gets filled	כיצד מתמלא אזור החיתוך המורחב
+	Displays pop-up help for the fill methods	מציג עזרה קופצת על שיטות המילוי
+	Fill options	אפשרויות מילוי
+	Background (default):	רקע (ברירת מחדל):
+	Fill the expanded area with your background color or transparent pixels	מלא את האזור המורחב בצבע הרקע או בפיקסלים שקופים
+	Content-aware fill	מילוי לפי תוכן
+	Sample content from part of the image and use it to fill a small area	דגום תוכן מחלק מהתמונה כדי למלא אזור קטן
+	Reset the crop box, image rotation, and aspect ratio settings	אפס את מסגרת החיתוך, סיבוב התמונה ויחס הגובה-רוחב
