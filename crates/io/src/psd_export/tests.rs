@@ -319,7 +319,10 @@ fn photo_filter_version_3_is_kept_until_edited() {
 #[test]
 fn light_adjustment_is_kept_verbatim_and_warned() {
     // #6542: Photoshop 2026's Light layer is a `brit` block whose `CgEd` descriptor carries
-    // more than Brightness/Contrast. Synthetic block: the extra key names are placeholders.
+    // more than Brightness/Contrast. This block has no `brightnessMode` key at all (unlike a
+    // real Light layer's, see `adjust_map::tests::roundtrips`), so it stays unreadable: the
+    // fallback this test checks for whatever an extended `brit`/`CgEd` doesn't actually say is
+    // the Light mode PhotoCraft now understands.
     use photocraft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
     let brit = vec![0, 0, 0xff, 0xfe, 0, 127, 0, 0];
     let d = Descriptor::new("null")

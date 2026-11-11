@@ -32,7 +32,8 @@ use tone::LUT_SIZE;
 pub(crate) use tone::apply_tone;
 pub use tone::{
     TONE_SLOPE_SPAN, contour_curve_lut, curve_lut, curve_lut_mode, curve_map_lut, curve_samples, float_tone_extrapolates, float_tone_identity, levels,
-    levels_float, levels_gamma, levels_q, modern_brightness, modern_contrast, modern_lut, posterize, posterize_in, tone_luts, tone_luts_depth, tone_luts_q,
+    levels_float, levels_gamma, levels_q, light_lut, modern_brightness, modern_contrast, modern_lut, posterize, posterize_in, tone_luts, tone_luts_depth,
+    tone_luts_q,
 };
 use tone::{lut, map_rgb};
 
@@ -133,6 +134,17 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
             // (see `modern_brightness` and `modern_contrast`), applied brightness then contrast
             // through one lookup table.
             let table = modern_lut(*brightness, *contrast);
+            map_rgb(buf, |px| px.map(|v| lut(&table, v)))
+        }
+        Adjustment::Light { exposure, contrast, highlights, shadows, whites, blacks } => {
+            // The same lookup table the GPU plan builds (compose::adjust::light_lut), so a tile
+            // composited on its own (as this engine's renderer does) reads the same whichever
+            // region is given it, and the live preview matches a flattened or exported result
+            // exactly. Exposure, Contrast and Whites/Blacks reuse Camera Raw's own math and its
+            // measured curves; Highlights/Shadows approximate its spatial local Laplacian filter
+            // with a per-pixel curve, since that filter needs neighbouring pixels a LUT doesn't
+            // have.
+            let table = light_lut(*exposure, *contrast, *highlights, *shadows, *whites, *blacks, transfer);
             map_rgb(buf, |px| px.map(|v| lut(&table, v)))
         }
         Adjustment::Exposure { exposure, offset, gamma } => {

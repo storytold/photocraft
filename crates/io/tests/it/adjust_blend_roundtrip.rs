@@ -66,6 +66,7 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
             true,
         ),
         (Adjustment::Exposure { exposure: 0.75, offset: -0.0125, gamma: 0.9 }, true),
+        (Adjustment::Light { exposure: -0.71, contrast: 100.0, highlights: 26.0, shadows: 50.0, whites: 13.0, blacks: 100.0 }, true),
         (Adjustment::Vibrance { vibrance: 60.0, saturation: -25.0 }, true),
         (Adjustment::HueSaturation { hue: 40.0, saturation: -30.0, lightness: 10.0, colorize: false, ranges: HueRange::defaults() }, true),
         (Adjustment::HueSaturation { hue: 200.0, saturation: 50.0, lightness: -10.0, colorize: true, ranges: HueRange::defaults() }, true),
@@ -121,6 +122,7 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
             | Adjustment::Levels { .. }
             | Adjustment::Curves { .. }
             | Adjustment::Exposure { .. }
+            | Adjustment::Light { .. }
             | Adjustment::Vibrance { .. }
             | Adjustment::HueSaturation { .. }
             | Adjustment::ColorBalance { .. }

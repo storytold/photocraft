@@ -154,6 +154,27 @@ pub fn is_extended_brit(cged: Option<&[u8]>) -> bool {
         .is_some_and(|(v, _)| v.descriptor.items.iter().any(|(k, _)| !BRIT_CGED_KEYS.iter().any(|n| k.is(n))))
 }
 
+/// Reads an extended `brit`/`CgEd` pair (see [`is_extended_brit`]) as [`Adjustment::Light`]:
+/// `brightnessMode` must be `brightnessModeLight`, and the six sliders (`brightnessExposure`,
+/// `Cntr`, `brightnessHighlights`, `brightnessShadows`, `brightnessWhites`, `brightnessBlacks`)
+/// must all be present. `None` for any other `brightnessMode`, or a block missing a slider:
+/// those stay [`Adjustment::Unsupported`] rather than silently drop settings.
+fn parse_light(cged: &[u8]) -> Option<Adjustment> {
+    let (v, _) = VersionedDescriptor::parse_prefix(cged).ok()?;
+    let d = v.descriptor;
+    if desc_enum(&d, "brightnessMode") != Some(b"brightnessModeLight") {
+        return None;
+    }
+    Some(Adjustment::Light {
+        exposure: desc_num(&d, "brightnessExposure")?,
+        contrast: desc_num(&d, "Cntr")?,
+        highlights: desc_num(&d, "brightnessHighlights")?,
+        shadows: desc_num(&d, "brightnessShadows")?,
+        whites: desc_num(&d, "brightnessWhites")?,
+        blacks: desc_num(&d, "brightnessBlacks")?,
+    })
+}
+
 /// Why [`parse`] keeps a block as [`Adjustment::Unsupported`], when there is more to say than
 /// "it could not be read" (so far: Color Lookup).
 pub fn unreadable_reason(key: &[u8; 4], data: &[u8]) -> Option<String> {
@@ -219,8 +240,9 @@ fn parse_any(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>) -> Adjustment {
         b"nvrt" => Some(Adjustment::Invert),
         b"thrs" => be16(data, 0).map(|v| Adjustment::Threshold { level: f32::from(v) / 255.0 }),
         b"post" => be16(data, 0).map(|v| Adjustment::Posterize { levels: u32::from(v) }),
-        // Kept raw (with its `CgEd`, which the PSD writer keeps while the layer is unchanged).
-        b"brit" if is_extended_brit(cged) => None,
+        // Photoshop 2026's Light adjustment (#6542); kept raw if its `CgEd` doesn't parse, so
+        // nothing is silently dropped.
+        b"brit" if is_extended_brit(cged) => cged.and_then(parse_light),
         b"brit" => {
             let modern = cged.and_then(|c| VersionedDescriptor::parse_prefix(c).ok()).and_then(|(v, _)| {
                 let d = v.descriptor;
@@ -676,6 +698,9 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         Adjustment::Threshold { level } => return block(b"thrs", encode::words(&[q255(*level).max(1), 0])),
         Adjustment::Posterize { levels } => return block(b"post", encode::words(&[(*levels).clamp(2, 255) as u16, 0])),
         Adjustment::BrightnessContrast { brightness, contrast, legacy } => return encode::brightness_contrast(*brightness, *contrast, *legacy),
+        Adjustment::Light { exposure, contrast, highlights, shadows, whites, blacks } => {
+            return encode::light(*exposure, *contrast, *highlights, *shadows, *whites, *blacks);
+        }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
             return block(b"hue2", encode::hue_saturation([*hue, *saturation, *lightness], *colorize, ranges));
         }

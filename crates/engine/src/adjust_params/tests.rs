@@ -1,11 +1,12 @@
 use super::*;
 
-const KINDS: [&str; 15] = [
+const KINDS: [&str; 16] = [
     "invert",
     "brightnessContrast",
     "threshold",
     "posterize",
     "exposure",
+    "light",
     "vibrance",
     "hueSaturation",
     "levels",
@@ -25,6 +26,7 @@ pub(crate) fn sample(kind: &str) -> Value {
         "threshold" => json!({"level": 100}),
         "posterize" => json!({"levels": 7}),
         "exposure" => json!({"exposure": 1.5, "offset": 0.1, "gamma": 1.4}),
+        "light" => json!({"exposure": -0.71, "contrast": 100, "highlights": 26, "shadows": 50, "whites": 13, "blacks": 100}),
         "vibrance" => json!({"vibrance": 30, "saturation": -20}),
         "hueSaturation" => {
             json!({"hue": 25, "saturation": -20, "lightness": 10, "reds": {"hue": 10, "saturation": -30, "lightness": 5, "range": [300, 340, 20, 50]}})

@@ -57,7 +57,7 @@ use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
 mod local_tone;
 mod per_pixel;
-mod whites_blacks;
+pub mod whites_blacks;
 
 pub use per_pixel::{CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, per_pixel, white_black_points};
 

@@ -101,6 +101,7 @@ fn keeps_gray(adj: &Adjustment) -> bool {
         | Adjustment::Levels { .. }
         | Adjustment::Curves { .. }
         | Adjustment::Exposure { .. }
+        | Adjustment::Light { .. }
         | Adjustment::Posterize { .. }
         | Adjustment::Threshold { .. }
         | Adjustment::Invert => true,

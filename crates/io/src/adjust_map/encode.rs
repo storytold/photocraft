@@ -35,6 +35,33 @@ pub(super) fn brightness_contrast(brightness: f32, contrast: f32, legacy: bool) 
     vec![(*b"brit", v), (*b"CgEd", VersionedDescriptor::new(d).to_bytes())]
 }
 
+/// Photoshop 2026's Light adjustment (#6542): the same `brit`/`CgEd` pair as
+/// [`brightness_contrast`], but with `brightnessMode` set to `Light` and the four extra sliders.
+/// The classic `brit` record keeps only Contrast, rounded, for an older reader that ignores
+/// `CgEd`; Photoshop itself always reads the descriptor when `brightnessMode` says to.
+pub(super) fn light(exposure: f32, contrast: f32, highlights: f32, shadows: f32, whites: f32, blacks: f32) -> Vec<([u8; 4], Vec<u8>)> {
+    let mut v = Vec::new();
+    push_i16(&mut v, 0.0);
+    push_i16(&mut v, contrast);
+    put16(&mut v, 127);
+    v.push(0);
+    let d = Descriptor::new("null")
+        .with("Vrsn", Value::Integer(1))
+        .with("brightnessExposure", Value::Double(f64::from(exposure)))
+        .with("Brgh", Value::Integer(0))
+        .with("Cntr", Value::Integer(contrast.round() as i32))
+        .with("brightnessWhites", Value::Integer(whites.round() as i32))
+        .with("brightnessBlacks", Value::Integer(blacks.round() as i32))
+        .with("brightnessHighlights", Value::Integer(highlights.round() as i32))
+        .with("brightnessShadows", Value::Integer(shadows.round() as i32))
+        .with("means", Value::Integer(127))
+        .with("Lab ", Value::Boolean(false))
+        .with("brightnessMode", Value::Enumerated { type_id: Id::new("brightnessModeType"), value: Id::new("brightnessModeLight") })
+        .with("useLegacy", Value::Boolean(false))
+        .with("Auto", Value::Boolean(false));
+    vec![(*b"brit", v), (*b"CgEd", VersionedDescriptor::new(d).to_bytes())]
+}
+
 /// Hue/Saturation payload: the master values, then the six hue ranges.
 pub(super) fn hue_saturation(hsl: [f32; 3], colorize: bool, ranges: &[HueRange; 6]) -> Vec<u8> {
     let mut v = words(&[2]);

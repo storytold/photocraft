@@ -55,11 +55,12 @@ use selective_color::selective_color;
 pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
 
 /// Kinds edited here (Color Lookup has its own editor in `adjust_ui`; Invert has none).
-pub const KINDS: [&str; 14] = [
+pub const KINDS: [&str; 15] = [
     "brightnessContrast",
     "levels",
     "curves",
     "exposure",
+    "light",
     "vibrance",
     "hueSaturation",
     "colorBalance",
@@ -161,6 +162,18 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
                 ("exposure", tl!("Exposure"), -20.0, 20.0, 0.0, "", Some(2)),
                 ("offset", tl!("Offset"), -0.5, 0.5, 0.0, "", Some(4)),
                 ("gamma", tl!("Gamma Correction"), 0.01, 9.99, 1.0, "", None),
+            ],
+        ),
+        "light" => sliders(
+            ui,
+            v,
+            &[
+                ("exposure", tl!("Exposure"), -5.0, 5.0, 0.0, "", Some(2)),
+                ("contrast", tl!("Contrast"), -100.0, 100.0, 0.0, "", None),
+                ("highlights", tl!("Highlights"), -100.0, 100.0, 0.0, "", None),
+                ("shadows", tl!("Shadows"), -100.0, 100.0, 0.0, "", None),
+                ("whites", tl!("Whites"), -100.0, 100.0, 0.0, "", None),
+                ("blacks", tl!("Blacks"), -100.0, 100.0, 0.0, "", None),
             ],
         ),
         "vibrance" => sliders(ui, v, &[("vibrance", "Vibrance", -100.0, 100.0, 0.0, "%", None), ("saturation", "Saturation", -100.0, 100.0, 0.0, "%", None)]),
