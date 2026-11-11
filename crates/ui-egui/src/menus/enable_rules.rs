@@ -117,6 +117,25 @@ pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Opti
 pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     let Some(st) = app.session.active() else { return false };
     let active = st.active_layer.and_then(|a| st.doc.layer(a));
+    // The split warps edit the open Warp box's grid, or a smart object's stored warp: without
+    // either there is no grid to split (#12494).
+    if matches!(
+        id,
+        "edit.transform.splitWarpCrosswise" | "edit.transform.splitWarpHorizontally" | "edit.transform.splitWarpVertically" | "edit.transform.removeWarpSplit"
+    ) && !crate::transform_tool::warps_active_layer(app)
+    {
+        return true;
+    }
+    // Remove Warp Split takes out a split line of the open grid; with none (a single patch, as
+    // the engine's `Split::Remove` sees it) there is nothing to remove.
+    if id == "edit.transform.removeWarpSplit"
+        && app.ui.transform.as_ref().and_then(|t| t.warp.as_ref()).is_some_and(|w| {
+            let m = w.to_mesh(1, 1);
+            m.us.len() <= 2 && m.vs.len() <= 2
+        })
+    {
+        return true;
+    }
     // Free Transform Path works on the Background too: it moves the path, not the pixels.
     let transform = id == "edit.freeTransform" || (id.starts_with("edit.transform.") && id != "edit.transform.again");
     if transform && crate::vector_ui::free_transform_path(app).is_some() {
@@ -417,3 +436,7 @@ mod tests {
         assert!(off(&s, "layer.layerStyle.copyLayerStyle"));
     }
 }
+
+#[cfg(test)]
+#[path = "warp_split_enable_tests.rs"]
+mod warp_split_enable_tests;

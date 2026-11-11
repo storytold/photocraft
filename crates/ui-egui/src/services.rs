@@ -209,8 +209,53 @@ impl ExportSettings {
     }
 }
 
+/// Whether File › Save writes straight back to `path`, the flat file (JPEG, PNG, TIFF…) the
+/// document came from, as Photoshop's Save does (#5733): only while that file keeps everything,
+/// i.e. the document is one plain raster layer ([`plain_raster`]) with no extra channels, in RGB
+/// or Grayscale at a depth (and, for Grayscale, a gray layout) the format stores, and either the
+/// format keeps transparency or the layer is opaque (the Background, or a layer made from it with
+/// no pixels deleted, as checked in Photoshop, #2223). The file itself must have held only
+/// this one image (not an animation, a multi-page TIFF or a multi-size icon), and its encoder
+/// must not quantise (GIF's palette and on/off transparency); a JPEG is rewritten at its own
+/// quality (#4032). An embedded colour profile needs a format that keeps one. Anything else still
+/// goes through Save As, so the original is never overwritten with less than the document has.
+pub(crate) fn saves_flat_in_place(doc: &Document, path: &str) -> bool {
+    let Some(layer) = plain_raster(doc) else { return false };
+    let Some(format) = photocraft_engine::file_cmds::extension(path).and_then(|e| photocraft_codecs::from_extension(&e)) else {
+        return false;
+    };
+    let caps = format.caps();
+    // Transparency is kept where the format's plan writes alpha for this document: DPX has no
+    // gray + alpha, and float PNM (PFM) no alpha at all.
+    let keeps_alpha = caps.alpha
+        && !(format == photocraft_codecs::Format::Dpx && doc.mode == photocraft_doc::ColorMode::Grayscale)
+        && !(format == photocraft_codecs::Format::Pnm && doc.depth == photocraft_color::SampleType::F32);
+    !photocraft_engine::file_cmds::saves_in_place(path)
+        && doc.file_encoding.source_images.is_none()
+        && (!caps.lossy || format == photocraft_codecs::Format::Jpeg)
+        && (doc.mode != photocraft_doc::ColorMode::Grayscale || caps.layouts.iter().any(|l| l.is_gray()))
+        && caps.write
+        && caps.depths.contains(&match doc.depth {
+            photocraft_color::SampleType::U8 => photocraft_codecs::SampleType::U8,
+            photocraft_color::SampleType::U16 => photocraft_codecs::SampleType::U16,
+            photocraft_color::SampleType::F32 => photocraft_codecs::SampleType::F32,
+        })
+        && (doc.icc_profile.is_none() || caps.icc)
+        && doc.channels.is_empty()
+        && matches!(doc.mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale)
+        // Last: it may read every tile.
+        && (keeps_alpha || doc.is_background(layer.id) || opaque_layer(doc, layer))
+}
+
+/// Whether `layer` is fully opaque over the canvas, so a format without transparency (JPEG)
+/// keeps all of it. Read from its tiles, stopping at the first transparent pixel (#2223).
+pub(crate) fn opaque_layer(doc: &Document, layer: &photocraft_doc::Layer) -> bool {
+    layer.surface().is_some_and(|s| !s.format().alpha || photocraft_io::opaque_surface(s, doc.bounds()))
+}
+
 /// The document's lone layer when it is a plain raster a flat file keeps: visible, at full
-/// opacity, in Normal mode, with no masks, effects or blending restrictions (#2234).
+/// opacity, in Normal mode, with no masks, effects, clipping, advanced blending, blending
+/// restrictions or video frames (#2234).
 pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
     match doc.layers.as_slice() {
         [layer]
@@ -224,7 +269,10 @@ pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
                 && layer.effects.psd_raw.is_none()
                 && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
                 && photocraft_compose::channel_weights(layer, doc.mode).is_none()
-                && !photocraft_compose::blend_if_active(layer, doc.mode) =>
+                && !photocraft_compose::blend_if_active(layer, doc.mode)
+                && !layer.clipped
+                && layer.advanced.is_default()
+                && layer.video.is_none() =>
         {
             Some(layer)
         }
@@ -272,8 +320,15 @@ pub(crate) enum SaveKind {
     Automation,
 }
 
-/// Read bytes through the desktop control session's authorized read root.
-pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
+/// Bytes and save provenance selected together by the automation read capability.
+pub struct AutomationReadResult {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    /// None means an explicit Save As is required, even for a layered document.
+    pub save_path: Option<String>,
+}
+/// Read bytes through the desktop control session's authorized read roots.
+pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<AutomationReadResult, String>>;
 
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
@@ -422,6 +477,9 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Where the pen in range is on the screen, in physical pixels ([`Services::pen_screen_px`]).
+pub type PenScreenFn = Box<dyn Fn() -> Option<[i32; 2]> + Send + Sync>;
+
 /// Which end of the pen is in use, `Some(true)` = eraser, `None` = no pen ([`Services::pen_end`]).
 pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
 
@@ -561,6 +619,9 @@ pub struct Services {
     /// Which end of the pen is in use, where the platform reports it outside the stylus feed
     /// (Windows: the feed carries no pen samples there). Read for the eraser-end tool switch.
     pub pen_end: Option<PenEndFn>,
+    /// Where the pen is on the screen, independent of where the window is (Windows: the pen's
+    /// pointer messages). A pen moving the window by its title bar follows it (`titlebar`).
+    pub pen_screen_px: Option<PenScreenFn>,
     /// WinTab packet poll (Windows with Windows Ink disabled; see `photocraft_tablet::wintab`).
     pub tablet_poll: Option<TabletPollFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
