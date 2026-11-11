@@ -73,3 +73,6 @@ mod gradient_options_bar_mode_tests;
 mod gradient_refusal_messages_tests;
 #[cfg(test)]
 mod line_tool_defaults_tests;
+
+#[cfg(test)]
+mod remove_default_size_tests;
