@@ -16,7 +16,8 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
 /// (Photoshop's "Closest value inserted" alerts, #11938): it stores the closest whole number in
 /// range, and returns true once the field is left after such a value was typed, so the caller
 /// shows its alert. While the field has the keyboard it keeps the typed text (a `0` on the way to
-/// `05` stays). A scrub past the ends just stops there and says nothing.
+/// `05` stays). A scrub, an arrow-key or a wheel step past the ends just stops there and says
+/// nothing.
 pub fn value_field_whole_alerting(
     ui: &mut Ui,
     name: &str,
@@ -60,6 +61,9 @@ fn value_field_alerting_in(
     let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
     let draft = draft.filter(|(_, stored, field)| *stored == *value && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
     let mut typed = draft.map_or(*value, |(typed, _, _)| typed);
+    // Read before the field: it consumes the arrow keys it steps with, and the wheel it steps
+    // with while focused never shows in the scroll delta. A step past the ends is no typing.
+    let stepped = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_field_wheeled(ui.ctx());
     // The field's own range is wide, so the typed value reaches here unclamped.
     let r = value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, suffix, width);
     let out_id = r.id.with("out-of-range");
@@ -68,7 +72,7 @@ fn value_field_alerting_in(
     }
     if r.changed() && typed.is_finite() {
         *value = fit(typed);
-        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !stepped;
         let out = typing && !(lo..=hi).contains(&typed);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
         if typing && r.has_focus() {

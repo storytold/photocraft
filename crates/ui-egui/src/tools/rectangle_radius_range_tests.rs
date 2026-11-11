@@ -93,3 +93,70 @@ fn path_selection_radius_keeps_its_own_range_without_an_alert() {
         assert!(alerts(&h).is_empty(), "{tool:?}: no alert");
     }
 }
+
+/// Focuses Radius, presses `key` `n` times, then Tabs out.
+fn step_radius(h: &mut Harness<'static, PhotocraftApp>, key: egui::Key, n: usize) {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    for _ in 0..n {
+        h.key_press(key);
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+}
+
+#[test]
+fn arrow_steps_stop_at_the_ends_without_the_alert() {
+    let mut h = bar();
+    type_radius(&mut h, "149998");
+    step_radius(&mut h, egui::Key::ArrowUp, 5);
+    assert_eq!(radius(&h), 150_000.0);
+    type_radius(&mut h, "2");
+    step_radius(&mut h, egui::Key::ArrowDown, 5);
+    assert_eq!(radius(&h), 0.0);
+    assert!(alerts(&h).is_empty(), "stepping is not typing: {:?}", alerts(&h));
+}
+
+#[test]
+fn wheel_steps_with_the_focus_stop_at_the_end_without_the_alert() {
+    // As in the app: the focused field takes the wheel before the bar is laid out.
+    let mut app = new_app();
+    app.ui.tool = Tool::Rectangle;
+    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_ui_state(
+        |ui, app| {
+            crate::field_wheel::begin_frame(ui.ctx());
+            crate::panels::options_bar(app, ui)
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(4);
+    type_radius(&mut h, "149998");
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    for _ in 0..5 {
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(radius(&h), 150_000.0);
+    assert!(alerts(&h).is_empty(), "a wheel step is not typing: {:?}", alerts(&h));
+}
+
+#[test]
+fn a_saved_radius_up_to_the_range_end_is_restored() {
+    let mut o = crate::state::ToolOptions { corner_radius: 150_000.0, ..Default::default() };
+    crate::tool_memory::sanitize(&mut o);
+    assert_eq!(o.corner_radius, 150_000.0);
+    o.corner_radius = 200_000.0;
+    crate::tool_memory::sanitize(&mut o);
+    assert_eq!(o.corner_radius, 150_000.0, "past the range takes the end");
+}

@@ -204,7 +204,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
 }
 
 /// The Rectangle tool's corner radius in px, as the reference takes it (#13336).
-const RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=150_000.0;
+pub(crate) const RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=150_000.0;
 
 /// The reference's alert for a Rectangle tool Radius typed past [`RADIUS_RANGE`] (#13336).
 pub(crate) const RADIUS_RANGE_ALERT: &str = "A value between 0.000 pixel and 150000.000 Pixels is required. Closest value inserted.";
