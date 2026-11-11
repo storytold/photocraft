@@ -18,6 +18,9 @@ use crate::theme::Tokens;
 
 mod zoom_center;
 
+const MATCH_COLOR: &str = "image.adjustments.matchColor";
+pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     Range {
@@ -311,7 +314,7 @@ pub const PREVIEWED: &[&str] = &[
     "image.adjustments.colorLookup",
     "image.adjustments.shadowsHighlights",
     "image.adjustments.replaceColor",
-    "image.adjustments.matchColor",
+    MATCH_COLOR,
     "image.adjustments.hdrToning",
     "image.rotation.arbitrary",
     "image.mode.indexedColor",
@@ -474,6 +477,42 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     if command == REPLACE_COLOR {
         fields.insert(COLOR_EYEDROPPER.into(), json!(true));
     }
+    if command == COLOR_LOOKUP {
+        fields.insert(LUT_FOLDER.into(), json!(app.session.prefs().file_handling.lut_folder));
+    }
+}
+
+/// Image › Adjustments › Color Lookup: its 3D LUT menu lists the LUT folder's files after the
+/// built-in looks (#9754), as the adjustment layer's Properties do. `__lutFolder` is the folder
+/// (Preferences › File Handling › LUT Folder); a file picked from it goes to `file`, and
+/// `__folderLut` remembers that pick, so it stays a menu entry even once the file has left the
+/// folder.
+const COLOR_LOOKUP: &str = "image.adjustments.colorLookup";
+const LUT_FOLDER: &str = "__lutFolder";
+const FOLDER_LUT_PICK: &str = "__folderLut";
+
+/// The `lut` value to keep after the Color Lookup menu chose `cur`: a LUT folder file is set as
+/// `file` with `lut` at `none`. Leaving a folder file the menu showed (`was_folder`) for another
+/// entry clears `file`, so the built-in look or None applies instead of the old file.
+fn pick_folder_lut(f: &mut Map<String, Value>, cur: String, was_folder: bool) -> String {
+    if let Some(path) = cur.strip_prefix(crate::adjust_ui::FOLDER_LUT) {
+        f.insert("file".into(), json!(path));
+        f.insert(FOLDER_LUT_PICK.into(), json!(path));
+        return "none".into();
+    }
+    if was_folder {
+        f.insert("file".into(), json!(""));
+        f.remove(FOLDER_LUT_PICK);
+    }
+    cur
+}
+
+/// Whether the Color Lookup menu shows `file` as a LUT folder entry: it is in the folder's scan
+/// (`luts`), or it was picked from the menu and has left the folder since.
+fn shows_folder_lut(f: &Map<String, Value>, cur: &str, luts: &[(String, String)]) -> bool {
+    let file = f.get("file").and_then(Value::as_str).unwrap_or_default();
+    let picked = f.get(FOLDER_LUT_PICK).and_then(Value::as_str) == Some(file);
+    cur == "none" && !file.is_empty() && (picked || luts.iter().any(|(_, path)| path == file))
 }
 
 /// Assign Profile offers only the profiles the document's colour mode can take (#4951): the
@@ -529,6 +568,7 @@ pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     }
 }
 
+/// Open the command's schema dialog using current settings and editing target.
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     let spec = photocraft_engine::commands::find(command)?;
     let mut fields = Map::new();
@@ -566,8 +606,83 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
         fields.insert("__docs".into(), json!(names));
     }
+    if command == MATCH_COLOR {
+        let destination = app.session.active().map(|st| (st.doc.id, st.active_layer));
+        fields.insert(MATCH_COLOR_DESTINATION.into(), json!(destination));
+        refresh_match_color_sources(&app.session, &mut fields);
+    }
     let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields);
     Some(id)
+}
+
+/// Match Color preview and OK may only edit the document and layer that opened the dialog.
+pub(crate) fn validate_match_color_destination(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<(), String> {
+    let is_match_color = fields.get("__command").and_then(Value::as_str) == Some(MATCH_COLOR);
+    let destination = fields.get(MATCH_COLOR_DESTINATION);
+    if !is_match_color && destination.is_none() {
+        return Ok(());
+    }
+    let st = app.session.active().ok_or("the Match Color destination is no longer open")?;
+    if !is_match_color
+        || destination != Some(&json!((st.doc.id, st.active_layer)))
+        || st.active_layer.is_some_and(|id| st.doc.layer(id).is_none())
+        || fields.get("layer").is_some_and(|layer| st.active_layer.is_none_or(|id| layer.as_u64() != Some(id.0)))
+    {
+        return Err("the Match Color destination changed while its dialog was open".into());
+    }
+    let params = app.with_mask_target(MATCH_COLOR, params_of(fields));
+    if let Some(reason) = app.session.disabled_reason_with(MATCH_COLOR, &params) {
+        return Err(reason);
+    }
+    Ok(())
+}
+
+/// Keep Match Color's source choices live without reinterpreting a shifted document index.
+/// Rebuild layer lists only when a document changes; a closed source remains visibly unavailable.
+pub(crate) fn refresh_match_color_sources(session: &photocraft_engine::Session, fields: &mut Map<String, Value>) {
+    if fields.get("__command").and_then(Value::as_str) != Some(MATCH_COLOR) {
+        return;
+    }
+    let documents = session.documents();
+    let state = json!(documents.iter().map(|st| (st.doc.id.0, st.revision, &st.doc.name)).collect::<Vec<_>>());
+    if fields.get("__sourceState") == Some(&state) {
+        return;
+    }
+    let old_index = fields.get("source").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+    let selected = old_index.and_then(|i| fields.get("__sourceDocuments")?.as_array()?.get(i)?.as_u64());
+    let mut ids: Vec<_> = documents.iter().map(|st| st.doc.id.0).collect();
+    let mut names: Vec<_> = documents.iter().map(|st| st.doc.name.clone()).collect();
+    let mut layers: Vec<Value> = documents
+        .iter()
+        .map(|st| json!(st.doc.walk().into_iter().rev().map(|(_, _, layer)| json!({"id": layer.id, "name": layer.name})).collect::<Vec<_>>()))
+        .collect();
+    if let Some(id) = selected {
+        let index = ids.iter().position(|current| *current == id).unwrap_or_else(|| {
+            let index = ids.len();
+            // Keep the missing identity at an invalid engine index, rather than sampling its successor.
+            ids.push(id);
+            names.push(tl!("Closed document").into());
+            layers.push(Value::Null);
+            index
+        });
+        fields.insert("source".into(), json!(index));
+    }
+    let source = fields.get("source").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+    if let Some(layer) = fields.get("sourceLayer").and_then(Value::as_u64) {
+        let contains_layer = |choices: Option<&Value>| {
+            choices.and_then(Value::as_array).is_some_and(|choices| choices.iter().any(|choice| choice.get("id").and_then(Value::as_u64) == Some(layer)))
+        };
+        // A deleted choice can reset to Merged. An explicitly unavailable reference must
+        // survive refresh and reach the engine, which rejects it.
+        let previous = old_index.and_then(|i| fields.get("__sourceLayers")?.as_array()?.get(i));
+        if contains_layer(previous) && !contains_layer(source.and_then(|i| layers.get(i))) {
+            fields.remove("sourceLayer");
+        }
+    }
+    fields.insert("__docs".into(), json!(names));
+    fields.insert("__sourceDocuments".into(), json!(ids));
+    fields.insert("__sourceLayers".into(), json!(layers));
+    fields.insert("__sourceState".into(), state);
 }
 
 /// Arbitrary rotation starts at the angle that straightens the ruler line, when there is one.
@@ -770,6 +885,26 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
     key == "angle" && ANGLE_DIAL.contains(&command)
 }
 
+/// Wide-range number fields that still show two decimals: the Rotate Canvas angle keeps
+/// hundredths of a degree, so the ruler's straightening angle reaches the dialog as 33.69 and
+/// not 33.7 (#12035). The arrow and drag step follow the shown precision, as elsewhere.
+fn wide_field_decimals(command: &str, key: &str) -> Option<u32> {
+    match (command, key) {
+        ("image.rotation.arbitrary", "angle") => Some(2),
+        _ => None,
+    }
+}
+
+/// The scale a drawn number field rounds to: two decimals for small ranges (0–1 thresholds and
+/// centres) and for the wide fields that show them (#12035), one decimal for the other wide ones.
+fn field_scale(command: &str, key: &str, min: f32, max: f32) -> f32 {
+    match wide_field_decimals(command, key) {
+        Some(d) => 10f32.powi(d.min(6) as i32),
+        None if max - min <= 10.0 => 100.0,
+        None => 10.0,
+    }
+}
+
 /// Replace Color (#4143): the dialog's "From" colour, sampled from the image with a canvas
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
@@ -861,6 +996,34 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert(RESULT_PICKED.into(), hex.clone());
         f.insert(RESULT_FROM.into(), hex);
         crate::color_picker_ui::request_field(f, RESULT_PICKED, &crate::color_picker_ui::title_for(name));
+    }
+}
+
+/// Match Color samples a layer from its Source document, or the merged image by default.
+fn match_color_layer(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let source = f.get("source").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+    let layers = source.and_then(|i| f.get("__sourceLayers")?.as_array()?.get(i)?.as_array());
+    let enabled = layers.is_some();
+    let layers: Vec<(u64, String)> =
+        layers.into_iter().flatten().filter_map(|layer| Some((layer.get("id")?.as_u64()?, layer.get("name")?.as_str()?.to_owned()))).collect();
+    let mut selected = f.get("sourceLayer").and_then(Value::as_u64);
+    let mut choices = vec![(None, tl!("Merged"))];
+    choices.extend(layers.iter().map(|(id, name)| (Some(*id), name.as_str())));
+    let changed = ui
+        .add_enabled_ui(enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tl!("Source Layer")).color(Tokens::get(ui.ctx()).text_dim));
+                crate::widgets::dropdown_literal(ui, "match-color-source-layer", tl!("Source Layer"), &mut selected, &choices, 170.0)
+            })
+            .inner
+        })
+        .inner;
+    if changed {
+        if let Some(id) = selected {
+            f.insert("sourceLayer".into(), json!(id));
+        } else {
+            f.remove("sourceLayer");
+        }
     }
 }
 
@@ -995,7 +1158,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         match p.kind {
             Kind::Range { min, max, default } => {
-                let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
+                let src = f.get(&p.key).and_then(Value::as_f64);
+                let mut v = src.unwrap_or(default as f64) as f32;
+                // A widget edit this frame makes the field's f32 value authoritative (#12035).
+                let mut edited = false;
                 if cmd == "image.mode.indexedColor" && p.key == "colors" {
                     let mut count = v.round().clamp(2.0, 256.0) as u32;
                     crate::widgets::color_count_row(ui, &label(&p.key), &mut count);
@@ -1038,12 +1204,23 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     } else {
                         // A double-click on the slider puts it back to the filter's default.
                         let gestures = crate::widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
-                        crate::widgets::slider_row_with(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures);
+                        edited =
+                            crate::widgets::slider_row_prec(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures, wide_field_decimals(&cmd, &p.key))
+                                .changed();
                     }
                 });
-                // Small ranges (0–1 thresholds and centres) keep the two decimals their field shows.
-                let scale = if max - min <= 10.0 { 100.0 } else { 10.0 };
-                f.insert(p.key, json!((v * scale).round() / scale));
+                // The field's shown precision: small ranges keep their two decimals, and so
+                // does the Arbitrary angle; the other wide fields round to one (#12035).
+                let scale = field_scale(&cmd, &p.key, min, max);
+                // A field showing two decimals rounds while the value is still f64: a 43x27
+                // ruler is 32.1249984°, whose f32 cast lands exactly on 32.125, and rounding
+                // that widened value half-away shows 32.13 where the pre-fill says 32.12.
+                // Values the user typed or dragged are f32 already, so they round as before.
+                let w = match (wide_field_decimals(&cmd, &p.key), src) {
+                    (Some(_), Some(raw)) if !edited => ((raw * f64::from(scale)).round() / f64::from(scale)) as f32,
+                    _ => (v * scale).round() / scale,
+                };
+                f.insert(p.key, json!(w));
             }
             Kind::Choice { options, default } => {
                 ui.horizontal(|ui| {
@@ -1087,7 +1264,26 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     if lists_installed && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
+                    let folder_lut = cmd == COLOR_LOOKUP && p.key == "lut";
+                    let lut_folder = f.get(LUT_FOLDER).and_then(Value::as_str).filter(|d| folder_lut && !d.is_empty());
+                    let luts = lut_folder.map(|d| crate::adjust_ui::folder_luts(d, ui.ctx())).unwrap_or_default();
+                    let lut_keys: Vec<String> = luts.iter().map(|(_, path)| format!("{}{path}", crate::adjust_ui::FOLDER_LUT)).collect();
+                    opts.extend(lut_keys.iter().cloned().zip(luts.iter().map(|(name, _)| name.as_str())));
+                    // A folder file is kept as `lut: none` + `file`: show it by its name, also once
+                    // it has left the folder, so picking another entry still clears `file`.
+                    let file = f.get("file").and_then(Value::as_str).unwrap_or_default();
+                    let was_folder = shows_folder_lut(f, &cur, &luts);
+                    let gone_name = std::path::Path::new(file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if was_folder {
+                        cur = format!("{}{file}", crate::adjust_ui::FOLDER_LUT);
+                        if !opts.iter().any(|(v, _)| *v == cur) {
+                            opts.push((cur.clone(), gone_name.as_str()));
+                        }
+                    }
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut cur, &opts, 170.0);
+                    if folder_lut {
+                        cur = pick_folder_lut(f, cur, was_folder);
+                    }
                     if let Some(i) = cur.strip_prefix("channel:").filter(|_| depth).and_then(|i| i.parse::<usize>().ok()) {
                         f.insert("depthChannel".into(), json!(i));
                         cur = "channel".into();
@@ -1129,10 +1325,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut sel, &opts, 170.0);
                 });
-                match sel.parse::<i64>() {
-                    Ok(i) if i >= 0 => f.insert(p.key, json!(i)),
-                    _ => f.insert(p.key, json!(-1)),
-                };
+                let selected = sel.parse::<i64>().ok().filter(|i| *i >= 0).unwrap_or(-1);
+                if cmd == MATCH_COLOR && p.key == "source" && selected != cur {
+                    f.remove("sourceLayer");
+                }
+                f.insert(p.key, json!(selected));
             }
             Kind::Grid(n) => {
                 let side = (n as f32).sqrt().round().max(1.0) as usize;
@@ -1150,6 +1347,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 });
                 f.insert(p.key, json!(vals.iter().map(|v| v.round() as i64).collect::<Vec<_>>()));
             }
+            Kind::Json if cmd == MATCH_COLOR && p.key == "sourceLayer" => match_color_layer(ui, f),
             Kind::Json => {}
             Kind::Color(default) => {
                 let set = f.get(&p.key).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
@@ -1482,6 +1680,26 @@ fn add_source_documents(s: &mut photocraft_engine::Session, doc_id: photocraft_d
     s.set_active(0);
 }
 
+/// The same document parameters the preview imports also identify its pixel dependencies.
+/// Keep their revisions separate from command params and slider changes.
+pub(crate) fn preview_source_revisions(session: &photocraft_engine::Session, command: &str, params: &Value) -> Vec<(photocraft_doc::DocId, u64)> {
+    let Some(spec) = photocraft_engine::commands::find(command) else { return Vec::new() };
+    let mut indices: Vec<_> = parse_spec(spec.params).into_iter().filter(|p| p.kind == Kind::Document).filter_map(|p| params.get(&p.key)?.as_u64()).collect();
+    // Smart-filter Displace has its map document one level down, as in add_source_documents.
+    if command == SMART_FILTER_SET_PARAMS
+        && let Some(index) = params.get("params").and_then(|p| p.get("mapDocument")).and_then(Value::as_u64)
+    {
+        indices.push(index);
+    }
+    indices
+        .into_iter()
+        .filter_map(|index| {
+            let st = session.documents().get(usize::try_from(index).ok()?)?;
+            Some((st.doc.id, st.revision))
+        })
+        .collect()
+}
+
 /// Cached preview state on the app.
 pub struct FilterPreview {
     pub key: FilterPreviewKey,
@@ -1502,6 +1720,7 @@ pub struct FilterPreview {
 pub struct FilterPreviewKey {
     pub doc: photocraft_doc::DocId,
     pub revision: u64,
+    pub sources: Vec<(photocraft_doc::DocId, u64)>,
     pub dialog: u64,
     pub active: Option<photocraft_doc::LayerId>,
     pub target: photocraft_engine::channel_cmds::ChannelTarget,
@@ -1512,8 +1731,8 @@ pub struct FilterPreviewKey {
 }
 
 impl FilterPreviewKey {
-    /// Everything except the parameters: same dialog, document, revision, layer, channel target,
-    /// command, proxy factor and tool colors.
+    /// Same dialog, document and source revisions, layer, channel target, command, proxy factor
+    /// and tool colors. For Match Color, the selected source layer is also part of the target.
     ///
     /// The canvas shows whatever this preview was computed for, so a result whose parameters are
     /// a few frames old still belongs on screen while a slider is moving; matching on everything
@@ -1531,10 +1750,12 @@ impl FilterPreviewKey {
     pub fn same_target_at_any_scale(&self, other: &Self) -> bool {
         self.doc == other.doc
             && self.revision == other.revision
+            && self.sources == other.sources
             && self.dialog == other.dialog
             && self.active == other.active
             && self.target == other.target
             && self.command == other.command
+            && (self.command != MATCH_COLOR || self.params.get("sourceLayer") == other.params.get("sourceLayer"))
             && self.tool_colors == other.tool_colors
     }
 }
