@@ -346,7 +346,9 @@ mod tests {
         assert!(cov(&app, 100, 80) >= 0.5 && cov(&app, 5, 5) >= 0.5);
         click(&mut app, egui::Modifiers { alt: true, shift: true, ..Default::default() });
         assert!(cov(&app, 100, 80) >= 0.5 && cov(&app, 5, 5) < 0.5);
-        // Off: a click keeps the Quick Selection fallback.
+        // Off: a click keeps the Quick Selection fallback (outside the selection: a New-mode
+        // click inside it deselects, #12853).
+        app.run("select.deselect", json!({})).unwrap();
         app.ui.tool_options.object_finder = false;
         click(&mut app, egui::Modifiers::NONE);
         assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.quick"));

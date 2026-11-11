@@ -869,8 +869,13 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     // Click-driven selection tools (a press places a point or samples): only ⌘ drags the
     // selection, and not while a polygon is being drawn.
     let clicky = matches!(tool, Tool::PolygonLasso | Tool::MagicWand);
-    // Object Selection drags the outline like a marquee in New mode (#12853).
+    // Object Selection drags the outline like a marquee in New mode (#12853). Unlike the marquees,
+    // ⌘ with it is the Move tool (`hold_keys::cmd_moves`), which moves the pixels itself: a ⌘
+    // press must not start a cut here first.
     let marquee = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
+    if tool == Tool::ObjectSelection && mods.command {
+        return None;
+    }
     if !(clicky || marquee || tool == Tool::Lasso) || (clicky && !app.ui.polygon.is_empty()) {
         return None;
     }
