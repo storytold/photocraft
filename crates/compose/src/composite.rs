@@ -656,12 +656,27 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
     let Some(content) = render_content(layer, rect, cx) else { return };
     let opacity = layer.opacity * layer.fill_opacity;
     let gamma = text_gamma(layer);
+    // Transparency Shapes Layer off in the special eight: the layer's own transparency blends as
+    // Fill does, as for a layer that isn't clipped (`blend_layer_into`, #12412). The Fill slider
+    // itself stays coverage here, as it is for every clipped layer.
+    let alpha_as_fill = !layer.advanced.transparency_shapes && psblend::fill_is_special(layer.blend);
+    let mv = if alpha_as_fill { mask_vals(layer, rect, cx) } else { None };
     for (i, p) in base.px.iter_mut().enumerate() {
         let alpha = p[3];
         if alpha <= 0.0 {
             continue;
         }
         let s = content.px[i];
+        if alpha_as_fill {
+            // `content` carries alpha × masks; split them again.
+            let m = mv.as_ref().map_or(1.0, |v| v.get(i).copied().unwrap_or(1.0));
+            if s[3] > 0.0 && m > 0.0 {
+                let fill = (s[3] / m).clamp(0.0, 1.0);
+                let r = psblend::composite_fill(layer.blend, [p[0], p[1], p[2], 1.0], [s[0], s[1], s[2], m], opacity, fill, gamma);
+                *p = [r[0], r[1], r[2], alpha];
+            }
+            continue;
+        }
         if layer.blend == BlendMode::Dissolve {
             // Clipping preserves the opaque base's alpha. Dissolve still selects source
             // pixels by spatial coverage instead of continuously mixing the colours (#3052).
@@ -676,6 +691,7 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
         *p = [r[0], r[1], r[2], alpha];
     }
+    recycle_mask(mv);
 }
 
 /// Blend an isolated layer buffer into the backdrop.

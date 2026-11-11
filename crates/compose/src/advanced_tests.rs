@@ -673,6 +673,81 @@ fn transparency_shapes_off_ignores_masks_and_reaches_groups() {
     }
 }
 
+/// Transparency Shapes Layer off on a clipped layer of the special eight (#12412). Clipped to an
+/// opaque base that fills the canvas, the layer reads the same pixels as it would unclipped over
+/// them, so the numbers Photoshop gave for [`transparency_shapes_off_blends_alpha_as_fill`] hold
+/// here: a base of (90, 110, 130), the layer (200, 150, 80) at alpha 30 % and 70 %, Opacity 53 %.
+/// The base keeps its own alpha, and a mask on the clipped layer is still not its transparency.
+#[test]
+fn transparency_shapes_off_blends_a_clipped_layers_alpha_as_fill() {
+    const A30: f32 = 77.0 / 255.0;
+    const A70: f32 = 179.0 / 255.0;
+    let o53 = 135.0 / 255.0;
+    let px = |c: [u8; 3], a: f32| [f32::from(c[0]) / 255.0, f32::from(c[1]) / 255.0, f32::from(c[2]) / 255.0, a];
+    let make = |depth: SampleType, mode: BlendMode, base_alpha: f32, tsl: bool| {
+        let mut d = doc(depth, false);
+        let base = solid(&d, "base", full(&d), px([90, 110, 130], base_alpha));
+        let mut l = solid(&d, "a30", Rect::new(0, 0, 6, 8), px([200, 150, 80], A30));
+        l.surface_mut().unwrap().fill_rect(Rect::new(6, 0, 12, 8), &photocraft_raster::from_rgba(&d.pixel_format(), px([200, 150, 80], A70)));
+        l.clipped = true;
+        l.blend = mode;
+        l.opacity = o53;
+        l.advanced.transparency_shapes = tsl;
+        d.layers.extend([base, l]);
+        d
+    };
+    // (mode, off at 30 %, off at 70 %, on at 30 %, on at 70 %)
+    type Rgb = [u8; 3];
+    let measured: [(BlendMode, Rgb, Rgb, Rgb, Rgb); 5] = [
+        (BlendMode::ColorDodge, [105, 123, 137], [148, 151, 150], [117, 133, 139], [151, 164, 152]),
+        (BlendMode::ColorBurn, [84, 99, 113], [74, 79, 69], [83, 94, 109], [73, 72, 82]),
+        (BlendMode::LinearDodge, [122, 134, 143], [164, 166, 160], [117, 133, 143], [151, 164, 160]),
+        (BlendMode::HardMix, [98, 111, 119], [133, 117, 75], [117, 133, 109], [151, 164, 82]),
+        (BlendMode::Difference, [58, 86, 117], [69, 54, 100], [93, 99, 117], [97, 84, 100]),
+    ];
+    for depth in DEPTHS {
+        for (mode, off30, off70, on30, on70) in measured {
+            // A 32-bit document's Linear Dodge doesn't clip at 1 (psblend::HDR).
+            if depth == SampleType::F32 && mode == BlendMode::LinearDodge {
+                continue;
+            }
+            // The blend sees the base as opaque, then the base's alpha comes back.
+            for base_alpha in [1.0, 0.5] {
+                let what = format!("{mode:?} clipped to a base of alpha {base_alpha}");
+                let off = make(depth, mode, base_alpha, false);
+                check(&off, 2, 4, px(off30, base_alpha), &format!("{what}, off, alpha 30 %"));
+                check(&off, 9, 4, px(off70, base_alpha), &format!("{what}, off, alpha 70 %"));
+                let on = make(depth, mode, base_alpha, true);
+                check(&on, 2, 4, px(on30, base_alpha), &format!("{what}, on, alpha 30 %"));
+                check(&on, 9, 4, px(on70, base_alpha), &format!("{what}, on, alpha 70 %"));
+                assert!(advanced_active(&off.layers[1], &[]), "{what}: the GPU leaves it to the CPU");
+            }
+        }
+        // Modes outside the special eight look the same either way.
+        for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen, BlendMode::Overlay] {
+            let (off, on) = (make(depth, mode, 1.0, false), make(depth, mode, 1.0, true));
+            assert_eq!(render(&off, off.bounds()).px, render(&on, on.bounds()).px, "{mode:?}");
+        }
+        // An opaque clipped layer under a 30 % mask draws the same with the option on or off.
+        for mode in [BlendMode::ColorDodge, BlendMode::HardMix, BlendMode::Difference] {
+            let masked = |tsl: bool| {
+                let mut d = doc(depth, false);
+                let base = solid(&d, "base", full(&d), px([90, 110, 130], 1.0));
+                let mut l = solid(&d, "l", full(&d), px([200, 150, 80], 1.0));
+                l.clipped = true;
+                l.blend = mode;
+                l.opacity = o53;
+                l.mask = Some(LayerMask { surface: photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[A30]), ..LayerMask::reveal_all() });
+                l.advanced.transparency_shapes = tsl;
+                d.layers.extend([base, l]);
+                render(&d, d.bounds()).into_px()
+            };
+            let (off, on) = (masked(false), masked(true));
+            assert!(off.iter().zip(&on).all(|(a, b)| close(*a, *b)), "{mode:?} ({depth:?}): a mask is not the layer's transparency");
+        }
+    }
+}
+
 /// A clipped knockout in a Transparency Shapes Layer off base of the special eight: the knockout
 /// stops at the base's own content (Blend Clipped Layers as Group), so it gives back the base's
 /// colour without touching its alpha, and the base's transparency still blends as Fill under a
