@@ -74,7 +74,7 @@ fn actual_shared_live_damage_covers_initial_and_pushed_gradient_relayout() {
         let seen = if initial_only {
             0
         } else {
-            shown = render(first.stroke.doc(), first.stroke.doc().bounds());
+            shown = render(first.doc(), first.doc().bounds());
             first.display_key()
         };
         if !initial_only {
@@ -83,7 +83,7 @@ fn actual_shared_live_damage_covers_initial_and_pushed_gradient_relayout() {
         }
         let live = app.live_stroke.as_ref().unwrap();
         let id = app.session.active().unwrap().active_layer.unwrap();
-        let doc = live.stroke.doc();
+        let doc = live.doc();
         assert_eq!(effects_frame(doc.layer(id).unwrap(), doc.bounds()), Rect::new(64, 8, 906, 56));
         // Real cache keys fold in the display key; damage_since consumes that exact convention.
         let display_key = 0x13ab;
@@ -136,20 +136,20 @@ fn actual_history_retouch_frame_growth_covers_gradient_damage() {
 
         let seen = {
             let first = app.live_stroke.as_ref().expect("real Alt Down starts a live Retouch");
-            assert!(matches!(&first.stroke, super::EngineStroke::Retouch(_)));
+            assert!(first.paint.peek(|stroke| matches!(stroke, super::EngineStroke::Retouch(_))).expect("real Alt Down retains its engine stroke"));
             assert_eq!(first.damage.len(), 1, "the real Down publishes one damage step");
             if pushed {
                 assert_eq!(
-                    effects_frame(first.stroke.doc().layer(id).unwrap(), source.bounds()).x1,
+                    effects_frame(first.doc().layer(id).unwrap(), source.bounds()).x1,
                     768,
                     "the first Retouch remains inside the existing frame"
                 );
                 assert_eq!(
-                    first.stroke.doc().layer(id).unwrap().surface().unwrap().rgba(896, 32),
+                    first.doc().layer(id).unwrap().surface().unwrap().rgba(896, 32),
                     [0.0; 4],
                     "the later target is still transparent before Move"
                 );
-                shown = render(first.stroke.doc(), first.stroke.doc().bounds());
+                shown = render(first.doc(), first.doc().bounds());
                 first.display_key()
             } else {
                 0
@@ -162,8 +162,8 @@ fn actual_history_retouch_frame_growth_covers_gradient_damage() {
         }
 
         let live = app.live_stroke.as_ref().expect("live Retouch remains active after the damage step");
-        assert!(matches!(&live.stroke, super::EngineStroke::Retouch(_)));
-        let doc = live.stroke.doc();
+        assert!(live.paint.peek(|stroke| matches!(stroke, super::EngineStroke::Retouch(_))).expect("live Retouch retains its engine stroke"));
+        let doc = live.doc();
         let pixel = doc.layer(id).unwrap().surface().unwrap().rgba(896, 32);
         assert_eq!(pixel, [1.0; 4], "history paints the source Background into the raster");
         assert_eq!(effects_frame(doc.layer(id).unwrap(), doc.bounds()), Rect::new(64, 8, 897, 56));
@@ -186,7 +186,7 @@ fn actual_history_retouch_frame_growth_covers_gradient_damage() {
 
         if overlay {
             if pushed {
-                assert!(!live.stroke.bounds().contains_rect(&Rect::new(256, 32, 257, 33)), "raw live stroke bounds exclude the distant gradient pixel");
+                assert!(!live.paint.peek(|stroke| stroke.bounds()).expect("live Retouch retains its raw bounds").contains_rect(&Rect::new(256, 32, 257, 33)), "raw live stroke bounds exclude the distant gradient pixel");
             }
             assert!(damage.contains_rect(&Rect::new(256, 32, 257, 33)), "overlay damage includes the distant gradient pixel");
         } else {
