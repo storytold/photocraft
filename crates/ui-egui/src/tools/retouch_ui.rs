@@ -115,7 +115,8 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
             if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
             json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
         ),
-        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "vibrance": o.vibrance})),
+        // Flow as the bar's field stores it (#12976), so a restored fraction paints what the bar shows.
+        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "flow": crate::eraser_ui::stored_tolerance(o.sponge_flow), "vibrance": o.vibrance})),
         _ => return None,
     })
 }
@@ -968,7 +969,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Mode:"));
             let opts = [("desaturate".to_string(), tl!("Desaturate")), ("saturate".to_string(), tl!("Saturate"))];
             crate::widgets::dropdown(ui, "sponge-mode", tl!("Mode"), &mut o.sponge_mode, &opts, 110.0);
+            // Flow (#12976): whole numbers 1..100 with the "Closest value inserted" alert, and a slider arrow.
+            let label = tl!("Flow:");
+            opt(ui, label);
+            let (_, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut o.sponge_flow, 1.0..=100.0, "%", 58.0);
+            cam_amount_slider(ui, tl!("Flow"), &mut o.sponge_flow, 1.0, 100.0, "Flow");
             crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
+            }
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
             if tool == Tool::Smudge {
@@ -1163,3 +1172,7 @@ mod burn_bar_tooltips_tests;
 #[cfg(test)]
 #[path = "../smudge_mode_bar_tests.rs"]
 mod smudge_mode_bar_tests;
+
+#[cfg(test)]
+#[path = "../sponge_flow_field_tests.rs"]
+mod sponge_flow_field_tests;
