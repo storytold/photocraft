@@ -442,3 +442,7 @@ mod eraser_block_right_click_tests;
 #[cfg(test)]
 #[path = "pattern_stamp_behind_tests.rs"]
 mod pattern_stamp_behind_tests;
+
+#[cfg(test)]
+#[path = "paint_bucket_right_click_menu_tests.rs"]
+mod paint_bucket_right_click_menu_tests;
