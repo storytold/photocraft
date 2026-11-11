@@ -397,13 +397,18 @@ fn every_float_paint_tool_keeps_light_above_white_on_colour_only() {
     for (cmd, params) in [
         ("paint.bucket", json!({"x": 20, "y": 20, "color": half, "mode": "linearDodge", "tolerance": 0, "target": "mask"})),
         ("paint.stroke", json!({"points": [[20, 20], [21, 20]], "color": half, "size": 12, "hardness": 100, "mode": "linearDodge", "target": "mask"})),
+        ("edit.stroke", json!({"width": 4, "color": half, "location": "inside", "mode": "linearDodge", "target": "mask"})),
     ] {
         let mut s = base();
         s.execute("layer.layerMask.revealAll", json!({})).unwrap();
         s.execute("edit.fill", json!({"color": [0.75, 0.75, 0.75, 1.0], "mode": "normal", "target": "mask"})).unwrap();
+        if cmd == "edit.stroke" {
+            s.execute("select.all", json!({})).unwrap();
+        }
         s.execute(cmd, params).unwrap();
         let st = s.active().unwrap();
-        let m = st.doc.layers.last().unwrap().mask.as_ref().unwrap().surface.read_region(Rect::new(20, 20, 21, 21))[0];
+        let (x, y) = if cmd == "edit.stroke" { (1, 1) } else { (20, 20) };
+        let m = st.doc.layers.last().unwrap().mask.as_ref().unwrap().surface.read_region(Rect::new(x, y, x + 1, y + 1))[0];
         assert!(m <= 1.0 && m > 0.99, "{cmd} on a mask stops at full coverage: {m}");
     }
 }
