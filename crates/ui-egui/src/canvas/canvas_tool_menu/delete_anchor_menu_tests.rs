@@ -148,3 +148,20 @@ fn right_click_on_empty_canvas_opens_the_path_menu_without_a_top_entry() {
 fn opening_the_menu_adds_no_history_step_and_keeps_the_anchor_selection() {
     opening_changes_nothing(Tool::DeleteAnchorPoint);
 }
+
+/// A shape with only its own position lock is ignored by the anchor tools' click (#12730, #12825),
+/// so the menu offers no point entry on its corner either: the rest of the menu is as before.
+#[test]
+fn a_shape_with_only_its_position_lock_gets_no_point_entry() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+    let shape = app.run("shape.create", json!({"kind": "rect", "rect": [450, 100, 200, 150], "fill": "#3070c0"})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.select", json!({"layer": shape})).unwrap();
+    app.run("layer.lockLayers", json!({"position": true})).unwrap();
+    app.ui.tool = Tool::DeleteAnchorPoint;
+    let mut h = harness(app);
+    let p = screen_of(h.state(), [650.0, 250.0]);
+    right_click(&mut h, p, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "the menu opens");
+    assert!(h.query_by_label("Delete Anchor Point").is_none() && h.query_by_label("Add Anchor Point").is_none(), "no point entry on the locked shape");
+}

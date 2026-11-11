@@ -38,13 +38,9 @@ pub fn effective(tool: Tool, mods: Modifiers) -> Option<Tool> {
     }
 }
 
-/// What a click at `p` would edit with `tool`: the frontmost path under the pointer and the
-/// segment (Add) or anchor (Delete) hit on it. An anchor hit with Add, or a segment with Delete,
-/// edits nothing.
-fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
-    let (r, path, hit) = crate::direct_select::hit_active(app, p)?;
-    // The anchor tools ignore a click on a shape with only its own position lock set (#12730, #12825).
-    if let PathRef::Layer(id) = r
+/// The anchor tools ignore a click on a shape with only its own position lock set (#12730, #12825).
+pub(crate) fn ignores(app: &PhotocraftApp, r: &PathRef) -> bool {
+    if let PathRef::Layer(id) = *r
         && let Some(st) = app.session.active()
         && let Some(layer) = st.doc.layer(LayerId(id))
         && matches!(layer.content, LayerContent::Shape(_))
@@ -52,6 +48,17 @@ fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path
         && let Some(at) = st.doc.path_of(layer.id)
         && at.split_last().is_some_and(|(_, ancestors)| !st.doc.locks_at(ancestors).any())
     {
+        return true;
+    }
+    false
+}
+
+/// What a click at `p` would edit with `tool`: the frontmost path under the pointer and the
+/// segment (Add) or anchor (Delete) hit on it. An anchor hit with Add, or a segment with Delete,
+/// edits nothing.
+fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
+    let (r, path, hit) = crate::direct_select::hit_active(app, p)?;
+    if ignores(app, &r) {
         return None;
     }
     match (tool, hit) {

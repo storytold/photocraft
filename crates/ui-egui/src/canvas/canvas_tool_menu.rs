@@ -663,7 +663,7 @@ fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value)> {
         Hit::Segment([subpath, knot], t) => (POINT_ADD, json!({"subpath": subpath, "knot": knot, "t": t})),
         Hit::Handle(..) => return None,
     };
-    if target == PathRef::Pen {
+    if target == PathRef::Pen || crate::anchor_tools::ignores(app, &target) {
         return None;
     }
     if let (Some(o), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
