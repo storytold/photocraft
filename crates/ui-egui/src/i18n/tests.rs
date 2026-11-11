@@ -338,6 +338,48 @@ fn arabic_plural_rule_has_six_forms() {
 }
 
 #[test]
+fn persian_resolves_locales_and_preferences() {
+    let fa = Lang::from_code("fa").expect("fa registered");
+    assert_eq!(fa.name(), "فارسی");
+    assert!(fa.complete_menus());
+    for tag in ["fa", "FA", "fa-IR", "fa_IR", "fa-IR.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(fa), "{tag}");
+        assert_eq!(Lang::from_pref(tag), fa, "{tag}");
+    }
+    assert_eq!(dir_for_code("fa"), Dir::Rtl);
+    assert_eq!(tr(fa, "File"), "فایل");
+    assert_eq!(tr(fa, "Layer"), "لایه");
+    assert_eq!(tr(fa, "New document…"), "سند جدید…");
+    assert_eq!(tr(fa, "No properties"), "بدون ویژگی");
+    assert_eq!(tr_id(fa, "select.all", "All"), "انتخاب همه");
+    assert_eq!(tr_ctx(fa, "cameraRaw", "Light"), "نور");
+    assert_eq!(tr_ctx(fa, "fontWeight", "Light"), "سبک");
+    assert_eq!(fmt(tr(fa, "Camera Raw Filter ({layer})"), &[("layer", "Background")]), "فیلتر Camera Raw (Background)");
+    for key in ["Alt", "⌥"] {
+        assert_eq!(
+            fmt(tr(fa, "Add a mask  (from the selection; {key} inverts)"), &[("key", key)]),
+            format!("افزودن ماسک  (از ناحیه انتخابی؛ {key} معکوس می‌کند)")
+        );
+    }
+    assert_eq!(tr(fa, "unknown translation"), "unknown translation");
+}
+
+#[test]
+fn persian_plural_rules() {
+    let fa = Lang::from_code("fa").expect("fa registered");
+    // CLDR's Persian `one` category covers 0 and 1; everything from 2 on is `other`.
+    let forms: Vec<usize> = [0, 1, 2, 5, 11, 21, 101].into_iter().map(fa.0.plural).collect();
+    assert_eq!(forms, [0, 0, 1, 1, 1, 1, 1]);
+    assert_eq!(trn(fa, 1, "{n} item", "{n} items"), "1 آیتم");
+    assert_eq!(trn(fa, 0, "{n} item", "{n} items"), "0 آیتم");
+    assert_eq!(trn(fa, 2, "{n} item", "{n} items"), "2 آیتم");
+    assert_eq!(trn(fa, 5, "{n} item", "{n} items"), "5 آیتم");
+    assert_eq!(trn(fa, 11, "{n} item", "{n} items"), "11 آیتم");
+    assert_eq!(trn(fa, 21, "{n} item", "{n} items"), "21 آیتم");
+    assert_eq!(trn(fa, 101, "{n} item", "{n} items"), "101 آیتم");
+}
+
+#[test]
 fn serbian_resolves_locales_and_preferences() {
     let sr = Lang::from_code("sr").expect("sr registered");
     assert_eq!(sr.name(), "Srpski");

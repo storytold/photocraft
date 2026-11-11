@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-06 · **Change:** minor (Georgian interface catalog; previously minor: Azerbaijani UI catalog merged with current languages; native review pending; Bosnian UI catalog; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-08 · **Change:** minor (Persian UI catalog; previously minor: Georgian interface catalog; previously minor: Azerbaijani UI catalog merged with current languages; native review pending; Bosnian UI catalog; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -75,6 +75,10 @@ Complete menu keys, regional locale matching and English fallback are covered by
 Native-speaker review remains pending; validation results and limits are recorded in the
 [language notes](localization-az.md). Readiness estimates and G13 remain unchanged.
 
+Persian `fa` (3,191 rows, added 2026-11-02) covers every key of the current measured
+universe — 2368/2369 — with one term per
+concept and CLDR integer plurals (`one` = 0–1); no native-speaker review yet.
+
 Czech UI follow-up (2026-10-11): status and notice wrappers, hardware labels, brush and
 transform accessibility names, rasterization prompts, profile mismatch messages and preset
 counts now translate at their render/assignment sites. Navigator's zoom level uses a context
@@ -119,3 +123,4 @@ engine localization or native review is complete.
 | 2026-10-29 | minor | Swedish (`sv`) UI catalog: every measured key plus the dynamic labels, combined from #5985 and #9536 |
 | 2026-10-29 | minor | Finnish (`fi`), Danish (`da`) and Norwegian Bokmål (`nb`) UI catalogs: every measured key plus the dynamic labels, combined from #5666, #6961, #7267, #8072 and #9025 |
 | 2026-10-30 | minor | Bosnian (`bs`, Latin, Ijekavian) catalog: the same 4,552 keys as the newest catalogs, `bs-*` locales (Cyrillic included) and one/few/other plurals |
+| 2026-11-02 | minor | Persian (`fa`) UI catalog: every key of the current measured universe (2,221 / 2,221), CLDR `one` = 0–1, RTL direction covered by a test |
