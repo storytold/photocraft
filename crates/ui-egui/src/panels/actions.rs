@@ -701,37 +701,57 @@ fn pause_menu_item(app: &mut PhotocraftApp, action: &str, from: usize, id: &str,
 fn open_step_editor(app: &mut PhotocraftApp, command: &str) -> Result<u64, String> {
     if crate::sizing::is_sizing(command) {
         crate::sizing::open(app, command).ok_or_else(|| tl!("No document.").into())
-    } else if crate::filter_dialog::has_dialog(command) || crate::adjust_dialog::has_dialog(command) {
+    } else if crate::filter_dialog::has_dialog(command)
+        || crate::adjust_dialog::has_dialog(command)
+        || (command == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app))
+    {
         Ok(crate::dialogs::open_command_dialog(app, command, &label_of(command)))
     } else {
         crate::filter_dialog::open(app, command).ok_or_else(|| tl!("The step has no command editor.").into())
     }
 }
 
-/// Open the recorded step's editor and retain the receiver for confirmation.
-fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &str, p: &Value) -> Value {
-    let label = label_of(id);
+/// Initialize a recorded editor in its target's space before attaching playback or Record Again state.
+fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<u64, String> {
+    let adjustment = crate::adjust_dialog::has_dialog(id);
+    if adjustment && !params.is_object() && !params.is_null() {
+        return Err("adjustment parameters must be an object or null".into());
+    }
+    let mut values = params.clone();
+    if let Some(object) = values.as_object_mut() {
+        // Private keys belong to the dialog, not the recorded Action step.
+        object.retain(|key, _| !key.starts_with("__"));
+    }
+    let dialog = crate::adjust_dialog::open_with_params(app, id, &values).map(Ok).unwrap_or_else(|| open_step_editor(app, id))?;
+    // Adjustment dialogs normalized their effective target already. Raw parameters here
+    // would restore discarded Lab/CMYK records or override the normalized tone controls.
+    if !adjustment
+        && let Some(d) = app.ui.dialog_mut(dialog)
+        && let Some(object) = values.as_object()
+    {
+        d.fields.extend(object.iter().map(|(key, value)| (key.clone(), value.clone())));
+    }
+    Ok(dialog)
+}
+
+/// Open a recorded step's dialog and bind it to the paused playback.
+fn pause_for_dialog(app: &mut PhotocraftApp, action: &Action, step: usize, id: &str, params: &Value) -> Result<u64, String> {
     let active_layer = app.session.active().and_then(|st| st.active_layer);
-    let dialog = crate::dialogs::open_command_dialog(app, id, &label);
-    let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
+    let dialog = open_recorded_editor(app, id, params)?;
+    let token = app.paused_playbacks.pause(action.name.clone(), step + 1, app.session.authorize);
     let mut receiver = None;
     if let Some(d) = app.ui.dialog_mut(dialog) {
-        if let Some(o) = p.as_object() {
-            // `__` keys are the dialog's own markers (`params_of` drops them), not step values.
-            d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
-        }
         d.fields.insert(RESUME.into(), json!(token));
-        // Kept for every implicit step, also one opened on a document target: the dialog
-        // may switch it to a layer-owned one, and `run_step_dialog` checks the receiver
-        // for the target it confirms.
-        if p.get("layer").is_none_or(Value::is_null) {
+        // A dialog on a document target may switch to a layer-owned one, so remember the
+        // receiver of every implicit step for run_step_dialog's confirmation check.
+        if params.get("layer").is_none_or(Value::is_null) {
             receiver = Some(active_layer);
         }
     }
     if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
         paused.filter_receiver = receiver;
     }
-    json!({"step": i, "id": id, "dialog": dialog})
+    Ok(dialog)
 }
 
 /// `suspended` is the recording a paused part of the same call took ([`PausedPlayback::record`]); it comes
@@ -854,7 +874,10 @@ fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Suspend
                 || crate::adjust_dialog::has_dialog(id)
                 || (id == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app)))
         {
-            paused = Some(pause_recorded_step(app, &action, i, id, p));
+            match pause_for_dialog(app, &action, i, id, p) {
+                Ok(dialog) => paused = Some(json!({"step": i, "id": id, "dialog": dialog})),
+                Err(error) => failed = Some(json!({"step": i, "id": id, "error": error})),
+            }
             break;
         }
         // Check Spelling's dialog opens with Check All Layers as recorded; Done continues the action.
