@@ -219,6 +219,124 @@ fn pcraft_documents_save_in_place_but_flat_files_ask() {
     assert!(!app.ui.status_error);
 }
 
+/// #5733: like Photoshop's Save, a flat file still holding the whole document (one plain layer
+/// it can store) is written back in place; once it would lose something (a second layer, or
+/// transparency a JPEG can't keep) Save goes through Save As.
+#[test]
+fn a_flat_file_that_keeps_the_document_saves_in_place() {
+    let (mut app, written) = app_with(vec![None, None]);
+    let ctx = egui::Context::default();
+    app.open_file("/pics/flat.png", b"x").unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let r = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    assert_eq!(r["path"], "/pics/flat.png", "{r}");
+    assert_eq!(written.borrow().len(), 1);
+    // A second layer: PNG can't keep it, so Save asks (cancelled).
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    assert_eq!(written.borrow().len(), 1);
+    // A JPEG with one transparent-capable layer that isn't the Background: JPEG has no alpha.
+    app.open_file("/pics/photo.jpg", b"x").unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    assert_eq!(written.borrow().len(), 1);
+}
+
+/// #5733: Save doesn't write one image back over a file that held more (here a two-size icon;
+/// animations and multi-page TIFFs are recorded the same way), nor through an encoder that
+/// quantises (GIF), nor a Grayscale document into a format that stores only colour.
+#[test]
+fn save_in_place_skips_files_it_would_write_back_with_less() {
+    let (mut app, written) = app_with(vec![None, None, None]);
+    app.services.import = Some(Box::new(|name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
+        photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+    }));
+    let ctx = egui::Context::default();
+    let save = |app: &mut PhotocraftApp| menus::invoke(app, &ctx, "file.save", json!({})).unwrap();
+    // One icon size: written back.
+    app.open_file("/pics/one.ico", &ico(1)).unwrap();
+    assert_eq!(save(&mut app)["path"], "/pics/one.ico");
+    assert_eq!(written.borrow().len(), 1);
+    // Two sizes: the document holds one, so Save asks (cancelled).
+    app.open_file("/pics/two.ico", &ico(2)).unwrap();
+    assert_eq!(save(&mut app), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    // A recorded Save played on it doesn't write over the other sizes either.
+    assert!(app.replay_save("file.save", &json!({})).is_err());
+    // A GIF: its palette and on/off transparency would lose colours.
+    app.open_file("/pics/still.gif", &gif_bytes()).unwrap();
+    assert_eq!(save(&mut app), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    // Grayscale in a BMP, which stores only colour.
+    app.open_file("/pics/gray.bmp", &png_bytes(4, 3)).unwrap();
+    app.run("image.mode.grayscale", json!({})).unwrap();
+    assert_eq!(save(&mut app), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    assert_eq!(written.borrow().len(), 1);
+}
+
+/// #5733: Save doesn't write in place where the format's writer would drop what the document has:
+/// a gray layer's transparency in DPX, an embedded colour profile in BMP, or a clipped layer.
+#[test]
+fn save_in_place_skips_alpha_profiles_and_layer_state_the_file_would_drop() {
+    let (mut app, written) = app_with(vec![None, None, None]);
+    let ctx = egui::Context::default();
+    let edit = |app: &mut PhotocraftApp, f: &dyn Fn(&mut Document)| f(std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc));
+    // An RGB layer with transparency: DPX keeps its alpha, so it is written back.
+    app.open_file("/pics/rgb.dpx", b"x").unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap()["path"], "/pics/rgb.dpx");
+    assert_eq!(written.borrow().len(), 1);
+    // A gray one: DPX writes gray without alpha.
+    app.open_file("/pics/gray.dpx", b"x").unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    edit(&mut app, &|d| d.mode = ColorMode::Grayscale);
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    // A profile BMP can't embed.
+    app.open_file("/pics/tagged.bmp", b"x").unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    edit(&mut app, &|d| d.icc_profile = Some(std::sync::Arc::new(vec![0; 128])));
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    // A clipped layer: the flat file keeps only its pixels.
+    app.open_file("/pics/clipped.png", b"x").unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    edit(&mut app, &|d| d.layers[0].clipped = true);
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    assert_eq!(written.borrow().len(), 1);
+}
+
+/// An icon file whose `entries` directory entries all point at one 4×3 PNG image.
+fn ico(entries: u16) -> Vec<u8> {
+    let one = export_as(&png_bytes(4, 3), "i.ico");
+    // ICONDIR (6 bytes) + one 16-byte ICONDIRENTRY whose last 4 bytes are the image offset.
+    let (entry, image) = (&one[6..22], &one[22..]);
+    let offset = 6 + 16 * u32::from(entries);
+    let mut out = vec![0, 0, 1, 0];
+    out.extend(entries.to_le_bytes());
+    for _ in 0..entries {
+        out.extend(&entry[..12]);
+        out.extend(offset.to_le_bytes());
+    }
+    out.extend(image);
+    out
+}
+
+/// A one-frame GIF.
+fn gif_bytes() -> Vec<u8> {
+    export_as(&png_bytes(4, 3), "g.gif")
+}
+
+/// `bytes` (a PNG) re-encoded for the file name `name`.
+fn export_as(bytes: &[u8], name: &str) -> Vec<u8> {
+    let doc = photocraft_io::import("p.png", bytes).unwrap().document;
+    photocraft_io::export(&doc, name, &Default::default()).unwrap().bytes
+}
+
 #[test]
 fn templates_open_as_new_untitled_documents() {
     let (mut app, written) = app_with(Vec::new());
@@ -737,6 +855,72 @@ fn cancelling_a_background_place_continues_the_queue() {
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
     assert_eq!(layer_count(&app), layers + 1);
+}
+
+/// #8492: with Skip Transform when Placing on, dropped files still go through the background place
+/// job one at a time, but no Free Transform opens when a layer lands: the next file starts as soon
+/// as the previous one has landed, without waiting for ↩.
+#[test]
+fn skip_transform_when_placing_places_background_drops_without_free_transform() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.background_jobs = true;
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    app.open_dropped(&ctx, vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    let first = app.jobs.place.clone().expect("the first file is being placed");
+    assert_eq!(first.name, "first.png");
+    assert!(app.session.job(first.job).is_some(), "as a background job");
+    assert_eq!(app.drop_places.len(), 1, "the second file waits for the first job");
+    tick_until(&mut app, &ctx, |app| app.jobs.place.as_ref().is_some_and(|p| p.name == "second.png"));
+    assert!(app.ui.transform.is_none(), "no Free Transform on the first file");
+    assert_eq!(layer_count(&app), layers + 1);
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 2, steps + 2), "one Place Embedded step each");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Place Embedded"));
+}
+
+/// #8492: inline (background jobs off, as on the web) the preference places every queued drop
+/// without Free Transform, a file that can't be placed reported on the way.
+#[test]
+fn skip_transform_when_placing_places_inline_drops_without_free_transform() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    app.open_dropped(
+        &ctx,
+        vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("bad.png", Ok(b"bad".to_vec())), dropped("second.png", Ok(png_bytes(2, 2)))],
+        Some(egui::pos2(400.0, 300.0)),
+    );
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 2, steps + 2));
+    assert_eq!(app.ui.notices.iter().filter(|n| n.error && n.title.contains("bad.png")).count(), 1);
+}
+
+/// #8492: Skip Transform when Placing only concerns the interactive place. `file.placeEmbedded`
+/// with a `path` (actions, scripts, the control channel, MCP) runs the engine command, which never
+/// opens Free Transform, whatever the preference.
+#[test]
+fn a_scripted_place_never_opens_free_transform() {
+    let dir = std::env::temp_dir().join(format!("pc-scripted-place-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dot.png");
+    std::fs::write(&path, png_bytes(4, 3)).unwrap();
+    let mut app = app_with_canvas();
+    for skip in [false, true] {
+        app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": skip})).unwrap();
+        let layers = layer_count(&app);
+        app.run("file.placeEmbedded", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(layer_count(&app), layers + 1, "skip={skip}");
+        assert!(app.ui.transform.is_none(), "skip={skip}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Frames with nothing to wait for: jobs applied and the drop queue served.
@@ -1627,4 +1811,44 @@ fn queued_drop_waits_for_an_external_document_job() {
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
     assert!(app.drop_places.is_empty());
+}
+
+/// File › Open as Smart Object… (#11678) asks with File › Open's dialog and opens each chosen
+/// file as its own untitled document holding one embedded smart object.
+#[test]
+fn open_as_smart_object_dialog_opens_one_document_per_selected_file() {
+    let (dir, paths) = files("open-as-so", &["one.png", "two.png", "bad.png"], &png_bytes(8, 6));
+    std::fs::write(&paths[2], b"not an image").unwrap();
+    let (mut app, _) = app_with(vec![Some(FileDialogAnswer::Paths(paths.clone()))]);
+
+    menus::invoke(&mut app, &egui::Context::default(), "file.openAsSmartObject", json!({})).unwrap();
+    assert!(app.file_dialog_open(), "the menu item asks for files first");
+    answer(&mut app);
+
+    assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
+    assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// File > Open as Smart Object... runs each file as a tracked background job like File > Open
+/// does: a tab per file, the documents landing in name order, untitled, failures reported.
+#[test]
+fn open_as_smart_object_opens_in_the_background_in_name_order() {
+    let ctx = egui::Context::default();
+    let (dir, paths) = files("open-as-so-bg", &["two.png", "one.png", "bad.png"], &png_bytes(8, 6));
+    std::fs::write(&paths[2], b"not an image").unwrap();
+    let (mut app, _) = app_with(vec![Some(FileDialogAnswer::Paths(paths.clone()))]);
+    app.background_jobs = true;
+
+    menus::invoke(&mut app, &ctx, "file.openAsSmartObject", json!({})).unwrap();
+    answer(&mut app);
+    assert_eq!(app.jobs.opens.len(), 3, "a tab for each file while it opens");
+    assert!(app.session.documents().is_empty(), "nothing is on the UI thread's critical path");
+
+    tick_until(&mut app, &ctx, |app| app.jobs.opens.is_empty());
+    assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
+    assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
+    let _ = std::fs::remove_dir_all(&dir);
 }

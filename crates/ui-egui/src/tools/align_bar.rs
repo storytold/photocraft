@@ -1,6 +1,11 @@
 //! The Move tool's Align and Distribute controls (Photoshop shows them whenever the Move tool is
 //! active; they enable once enough layers are selected). Every button dispatches an existing
 //! `layer.align.*` / `layer.distribute.*` command.
+//!
+//! The bar reads, after Show Transform Controls: Align left, horizontal centres, right and
+//! Distribute vertically; Align top, vertical centres, bottom and Distribute horizontally; the
+//! "..." button (a compact icon panel); the gear (the Move tool's three hover and group toggles,
+//! #11381).
 
 use serde_json::{Value, json};
 
@@ -8,7 +13,7 @@ use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons};
 
 /// (command id, icon, label). The labels are the Layer menu's, already translated.
-const ALIGN: [(&str, &str, &str); 6] = [
+pub(crate) const ALIGN: [(&str, &str, &str); 6] = [
     ("layer.align.leftEdges", "align-edge-left", "Left Edges"),
     ("layer.align.horizontalCenters", "align-edge-hcenter", "Horizontal Centers"),
     ("layer.align.rightEdges", "align-edge-right", "Right Edges"),
@@ -17,16 +22,36 @@ const ALIGN: [(&str, &str, &str); 6] = [
     ("layer.align.bottomEdges", "align-edge-bottom", "Bottom Edges"),
 ];
 
-const DISTRIBUTE: [(&str, &str, &str); 8] = [
+/// The panel's Distribute group: top, vertical centres, bottom, left, horizontal centres, right.
+const DISTRIBUTE: [(&str, &str, &str); 6] = [
     ("layer.distribute.topEdges", "distribute-top", "Top Edges"),
     ("layer.distribute.verticalCenters", "distribute-vcenter", "Vertical Centers"),
     ("layer.distribute.bottomEdges", "distribute-bottom", "Bottom Edges"),
     ("layer.distribute.leftEdges", "distribute-left", "Left Edges"),
     ("layer.distribute.horizontalCenters", "distribute-hcenter", "Horizontal Centers"),
     ("layer.distribute.rightEdges", "distribute-right", "Right Edges"),
-    ("layer.distribute.horizontally", "distribute-horizontal", "Horizontally"),
-    ("layer.distribute.vertically", "distribute-vertical", "Vertically"),
 ];
+
+/// One bar button: (command id, icon, tooltip).
+type BarButton = (&'static str, &'static str, &'static str);
+
+/// The two button groups of the bar, in order. The tooltips are the reference application's.
+fn bar_groups() -> [[BarButton; 4]; 2] {
+    [
+        [
+            ("layer.align.leftEdges", "align-edge-left", tl!("Align left edges")),
+            ("layer.align.horizontalCenters", "align-edge-hcenter", tl!("Align horizontal centers")),
+            ("layer.align.rightEdges", "align-edge-right", tl!("Align right edges")),
+            ("layer.distribute.vertically", "distribute-vertical", tl!("Distribute vertically")),
+        ],
+        [
+            ("layer.align.topEdges", "align-edge-top", tl!("Align top edges")),
+            ("layer.align.verticalCenters", "align-edge-vcenter", tl!("Align vertical centers")),
+            ("layer.align.bottomEdges", "align-edge-bottom", tl!("Align bottom edges")),
+            ("layer.distribute.horizontally", "distribute-horizontal", tl!("Distribute horizontally")),
+        ],
+    ]
+}
 
 /// Whether the active document has artboards. The reference application greys Align To out
 /// there, showing Selection, and viewing such a document turns the setting back to Selection.
@@ -49,6 +74,12 @@ pub(crate) fn align_params(app: &PhotocraftApp) -> Value {
     if app.ui.tool_options.move_align_to_canvas && !align_to_off(app) { json!({"to": "canvas"}) } else { json!({}) }
 }
 
+/// The parameters a bar or panel button's command runs with: Align To for the aligns, none for
+/// the distributes.
+fn params_for(app: &PhotocraftApp, cmd: &str) -> Value {
+    if cmd.starts_with("layer.align.") { align_params(app) } else { json!({}) }
+}
+
 fn align_to_label(canvas: bool) -> &'static str {
     if canvas { tl!("Canvas") } else { tl!("Selection") }
 }
@@ -63,50 +94,95 @@ pub(crate) fn align_to(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_enabled_ui(on, |ui| crate::widgets::dropdown(ui, "align-to", tl!("Align To"), canvas, &[(false, "Selection"), (true, "Canvas")], 130.0));
 }
 
-/// The six align icons followed by a menu holding both groups with icons and names.
-/// Each icon uses 20 pt artwork inside a 28 pt hit target for high-DPI legibility
-/// without changing enabled-state or command dispatch (#8849).
+/// Whether the "..." panel is open: a click on the button toggles it and nothing else closes it
+/// (Escape included), as in the reference application.
+pub(crate) fn panel_open_id() -> egui::Id {
+    egui::Id::unique("move-align-panel-open")
+}
+
+pub(crate) fn panel_is_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(panel_open_id())).unwrap_or(false)
+}
+
+/// The two groups of four icons, then the "..." button and its panel. Each icon uses 20 pt
+/// artwork inside a 28 pt hit target for high-DPI legibility without changing enabled-state or
+/// command dispatch (#8849).
 pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
     sync_align_to(app);
     ui.spacing_mut().item_spacing.x = 0.0;
-    for (cmd, icon, label) in ALIGN {
-        let tip = format!("{}: {}", tl!("Align"), tl!(label));
-        let on = app.session.is_enabled(cmd);
-        if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 28.0, 20.0, false, &tip)).inner.clicked() {
-            let _ = app.run(cmd, align_params(app));
+    for group in bar_groups() {
+        for (cmd, icon, tip) in group {
+            let on = app.session.is_enabled(cmd);
+            if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 28.0, 20.0, false, tip)).inner.clicked() {
+                let _ = app.run(cmd, params_for(app, cmd));
+            }
         }
+        ui.add_space(6.0);
+    }
+    let more = icons::button_with_icon_size(ui, "ellipsis", 28.0, 20.0, false, tl!("Align and distribute"));
+    let ctx = ui.ctx().clone();
+    let open = panel_is_open(&ctx);
+    if more.clicked() {
+        ctx.data_mut(|d| d.insert_temp(panel_open_id(), !open));
+    }
+    if panel_is_open(&ctx) {
+        panel(app, &ctx, more.rect);
     }
     ui.add_space(6.0);
-    let more = icons::button_with_icon_size(ui, "ellipsis", 28.0, 20.0, false, tl!("Align and distribute"));
-    egui::Popup::menu(&more).show(|ui| {
+}
+
+/// The compact icon panel under the "..." button: Align (6) and Distribute (6). The Distribute
+/// Spacing group (#10715) goes below these as a further `group` row; Align To (#10358) is last.
+fn panel(app: &mut PhotocraftApp, ctx: &egui::Context, anchor: egui::Rect) {
+    let t = Tokens::get(ctx);
+    egui::Area::new(egui::Id::unique("move-align-panel")).order(egui::Order::Foreground).fixed_pos(anchor.left_bottom() + egui::vec2(0.0, 2.0)).show(
+        ctx,
+        |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
+                let mut group = |ui: &mut egui::Ui, title: &str, kind: &str, items: &[(&str, &str, &str)]| {
+                    ui.label(egui::RichText::new(title).small().color(t.text_dim));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        for (cmd, icon, label) in items {
+                            let tip = format!("{kind}: {}", tl!(label));
+                            let on = app.session.is_enabled(cmd);
+                            if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 28.0, 20.0, false, &tip)).inner.clicked() {
+                                let _ = app.run(cmd, params_for(app, cmd));
+                            }
+                        }
+                    });
+                };
+                group(ui, tl!("Align"), tl!("Align"), &ALIGN);
+                ui.add_space(4.0);
+                group(ui, tl!("Distribute"), tl!("Distribute"), &DISTRIBUTE);
+                // Align To, as in the reference application's Move tool (#10337): greyed out at
+                // Selection in a document with artboards.
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(tl!("Align To")).small().color(t.text_dim));
+                let on = !align_to_off(app);
+                ui.add_enabled_ui(on, |ui| {
+                    ui.horizontal(|ui| {
+                        for c in [false, true] {
+                            ui.radio_value(&mut app.ui.tool_options.move_align_to_canvas, c, align_to_label(c));
+                        }
+                    });
+                });
+            });
+        },
+    );
+}
+
+/// The gear after the "..." button: a menu of the Move tool's three check items, all on by
+/// default and saved with the tool options.
+pub fn gear(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let gear = icons::button_with_icon_size(ui, "settings", 28.0, 20.0, false, tl!("Options"));
+    egui::Popup::menu(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(200.0);
-        // Align To, as in the reference application's Move tool: radio rows, since a drop-down
-        // inside the menu would close it; greyed out at Selection in a document with artboards.
-        ui.label(egui::RichText::new(tl!("Align To")).small().color(t.text_dim));
-        let on = !align_to_off(app);
-        ui.add_enabled_ui(on, |ui| {
-            for c in [false, true] {
-                ui.radio_value(&mut app.ui.tool_options.move_align_to_canvas, c, align_to_label(c));
-            }
-        });
-        ui.separator();
-        let align = align_params(app);
-        let mut section = |ui: &mut egui::Ui, title: &str, items: &[(&str, &str, &str)], params: Value| {
-            ui.label(egui::RichText::new(title).small().color(t.text_dim));
-            for (cmd, icon, label) in items {
-                let on = app.session.is_enabled(cmd);
-                let tint = if on { t.icon } else { t.text_dim };
-                let button = egui::Button::image_and_text(icons::image(icon, 16.0, tint), tl!(label));
-                if ui.add_enabled(on, button).clicked() {
-                    let _ = app.run(cmd, params.clone());
-                    ui.close();
-                }
-            }
-        };
-        section(ui, tl!("Align"), &ALIGN, align);
-        ui.separator();
-        section(ui, tl!("Distribute"), &DISTRIBUTE, json!({}));
+        let o = &mut app.ui.tool_options;
+        ui.checkbox(&mut o.move_show_hover_bounds, tl!("Show layer bounds on hover"));
+        ui.checkbox(&mut o.move_expand_group_on_click, tl!("Expand layer group on click"));
+        ui.checkbox(&mut o.move_show_layers_hover_bounds, tl!("Show hover bounds from Layers"));
     });
 }
 
@@ -117,10 +193,13 @@ mod tests {
     #[test]
     fn every_button_is_a_live_command_with_an_icon() {
         let specs = photocraft_engine::command_specs();
-        for (cmd, icon, _) in ALIGN.iter().chain(DISTRIBUTE.iter()) {
-            assert!(specs.iter().any(|c| c.id == *cmd), "{cmd} is not a command");
+        let bar: Vec<BarButton> = bar_groups().into_iter().flatten().collect();
+        let panel = ALIGN.iter().chain(DISTRIBUTE.iter());
+        for (cmd, icon) in bar.iter().map(|b| (b.0, b.1)).chain(panel.map(|b| (b.0, b.1))) {
+            assert!(specs.iter().any(|c| c.id == cmd), "{cmd} is not a command");
             assert!(icons::exists(icon), "{icon} is not embedded");
         }
+        assert!(icons::exists("settings"));
     }
 
     /// #10337: the Move tool's Align To (radio rows in the ⋯ menu) sends its icons' aligns to the
@@ -159,7 +238,7 @@ mod tests {
                 h.key_press(egui::Key::Escape);
                 h.run_steps(3);
             }
-            h.get_by_label("Align: Left Edges").click();
+            h.get_by_label("Align left edges").click();
             h.run_steps(3);
             let st = h.state().session.active().unwrap();
             let lefts: Vec<i32> =
@@ -206,7 +285,7 @@ mod tests {
         );
         h.run_steps(3);
         assert!(!h.state().ui.tool_options.move_align_to_canvas, "Align To turns back to Selection");
-        h.get_by_label("Align: Left Edges").click();
+        h.get_by_label("Align left edges").click();
         h.run_steps(3);
         let lefts: Vec<i32> = ids.iter().map(|&id| left(h.state(), id)).collect();
         assert_eq!(lefts, [first, first], "aligned to each other, not to the canvas");
