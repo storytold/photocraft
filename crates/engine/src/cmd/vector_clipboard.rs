@@ -19,6 +19,7 @@ pub(super) enum Mode {
     Pixels,
     Path,
     Shape,
+    SmartObject,
 }
 
 fn bad(message: &str) -> EngineError {
@@ -33,9 +34,10 @@ pub(super) fn mode(p: &Value) -> Result<Option<Mode>> {
             "pixels" => Ok(Some(Mode::Pixels)),
             "path" => Ok(Some(Mode::Path)),
             "shape" => Ok(Some(Mode::Shape)),
-            _ => Err(bad("`as` must be pixels, path or shape")),
+            "smartObject" => Ok(Some(Mode::SmartObject)),
+            _ => Err(bad("`as` must be pixels, path, shape or smartObject")),
         },
-        Some(_) => Err(bad("`as` must be pixels, path or shape")),
+        Some(_) => Err(bad("`as` must be pixels, path, shape or smartObject")),
     }
 }
 
@@ -192,6 +194,16 @@ pub(super) fn layer_target(s: &Session) -> Result<()> {
 pub(super) fn paste(s: &mut Session, p: &Value, mode: Mode) -> Result<Value> {
     let center = validate(s, p, false)?;
     let bytes = s.clipboard.as_ref().and_then(|clip| clip.svg.clone()).ok_or_else(|| bad("this Paste mode requires original vector clipboard source"))?;
+    // Embeds the original source and keeps it editable (Layer ▸ Smart Objects ▸ Edit Contents),
+    // through the same place pipeline File ▸ Place Embedded uses, instead of flattening to pixels
+    // or extracting a path/shape: bytes already proved valid SVG once, when they reached the
+    // clipboard (`from_svg`'s own `prepare` call), so this skips a second parse.
+    if mode == Mode::SmartObject {
+        layer_target(s)?;
+        let mut result = crate::file_cmds::place_bytes(s, "Pasted SVG", (*bytes).clone(), None, &json!({"smartObject": true}))?;
+        result["as"] = json!("smartObject");
+        return Ok(result);
+    }
     let (mut copies, warnings) = prepare(&bytes)?;
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let destination = state.doc.clone();

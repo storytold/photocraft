@@ -172,6 +172,7 @@ pub use dialogs::new_guide_ui;
 pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
+pub use dialogs::paste_as_prompt;
 pub(crate) use dialogs::pattern_fill_ui;
 pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;

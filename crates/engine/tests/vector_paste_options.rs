@@ -19,7 +19,7 @@ fn raster_clip_cannot_silently_paste_as_path() {
 use std::sync::Arc;
 
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Fill, Layer, LayerContent, Path, Subpath};
+use photocraft_doc::{Fill, Layer, LayerContent, Path, SmartSource, Subpath};
 use photocraft_engine::{actions_cmds::Action, atn_cmds, edit_cmds::Clip};
 use photocraft_geom::{Point, Size};
 use photocraft_psd::{
@@ -213,11 +213,51 @@ fn invalid_modes_targets_and_capabilities_preserve_source_and_history() {
             Ok(())
         })
         .unwrap();
-    for mode in ["pixels", "shape"] {
+    for mode in ["pixels", "shape", "smartObject"] {
         rejected(&mut locked, json!({"as":mode}));
     }
     locked.clipboard.as_mut().unwrap().svg = None;
     rejected(&mut locked, json!({"as":"pixels"}));
+    rejected(&mut locked, json!({"as":"smartObject"}));
+}
+
+/// Smart Object keeps the original SVG editable (Layer ▸ Smart Objects ▸ Edit Contents), instead
+/// of flattening to pixels or extracting a path/shape, through the same place pipeline File ▸
+/// Place Embedded uses.
+#[test]
+fn smart_object_mode_embeds_the_original_svg_source() {
+    let mut s = scene(8);
+    let raw = source(&s).clone();
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    let result = s.execute("edit.paste", json!({"as": "smartObject"})).unwrap();
+    assert_eq!(result["as"], json!("smartObject"));
+    assert_eq!(result["smartObject"], json!(true));
+    let LayerContent::Smart(smart) = &output(&s).content else {
+        panic!("Paste As Smart Object must create a smart object layer, not {:?}", output(&s).content);
+    };
+    let SmartSource::Embedded { bytes, .. } = &smart.source else {
+        panic!("a pasted Smart Object embeds its source rather than linking to a path");
+    };
+    assert_eq!(bytes.as_ref(), raw.as_ref(), "the embedded source is the original clipboard bytes, not the raster mirror");
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1, "one undo step");
+    assert!(Arc::ptr_eq(source(&s), &raw), "the clipboard source itself is untouched");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
+/// A raster-only clipboard (no retained vector source) must refuse Paste As Smart Object rather
+/// than silently falling back to pixels, exactly as it already does for Path and Shape.
+#[test]
+fn raster_clip_cannot_silently_paste_as_smart_object() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6, "background": "white"})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    assert!(s.execute("edit.paste", json!({"as": "smartObject"})).is_err(), "a raster-only clipboard must refuse Paste As Smart Object");
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
 }
 
 /// Existing geometry and cache limits apply before publication, including intermediate caches.
