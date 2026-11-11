@@ -900,3 +900,7 @@ mod smudge_bar_angle_tests;
 #[cfg(test)]
 #[path = "../smudge_bar_pressure_size_tests.rs"]
 mod smudge_bar_pressure_size_tests;
+
+#[cfg(test)]
+#[path = "art_history_hold_tests.rs"]
+mod art_history_hold_tests;
