@@ -38,7 +38,7 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             b
         }
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing.
-        None => BrushSettings { smoothing: first_smoothing(), ..current },
+        None => fresh_brush(tool, &current),
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
     // that preset with this tool's brush.
@@ -62,9 +62,21 @@ fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettin
 }
 
 /// A tool's brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
-/// smoothing, with the session's own fields of `current`.
-pub(crate) fn fresh_brush(current: &BrushSettings) -> BrushSettings {
-    session_fields(current, &BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() })
+/// smoothing, with the session's own fields of `current`. The Brush tool's size is
+/// [`BRUSH_TOOL_TIP`], and Quick Selection's size is [`QUICK_SELECTION_TIP`]; the other tools
+/// keep their current hardness, spacing and angle.
+pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
+    let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
+    match tool {
+        Tool::Brush => {
+            brush.size = 13.0;
+            brush.hardness = 0.0;
+            brush.spacing = 0.25;
+        }
+        Tool::QuickSelection => brush.size = 30.0,
+        _ => {}
+    }
+    session_fields(current, &brush)
 }
 
 /// Photoshop's 10 % stroke smoothing, what a tool's brush starts at.
