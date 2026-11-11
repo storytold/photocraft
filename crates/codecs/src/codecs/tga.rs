@@ -62,30 +62,29 @@ pub(crate) fn encode(img: &Image) -> Result<Vec<u8>, CodecError> {
 /// One scanline as run-length packets that end with it: a run of two or more equal pixels is a
 /// run packet, anything else goes out in raw packets.
 fn rle_row(row: &[u8], bpp: usize, out: &mut Vec<u8>) {
-    let px: Vec<&[u8]> = row.chunks_exact(bpp).collect();
-    let n = px.len();
+    // Read pixels directly from the row instead of allocating a table of slices.
+    let n = row.len() / bpp;
+    let pixel = |i| row.get(i * bpp..(i + 1) * bpp).unwrap_or_default();
     let mut i = 0;
     while i < n {
         let mut run = 1;
-        while i + run < n && run < MAX_PACKET && px[i + run] == px[i] {
+        while i + run < n && run < MAX_PACKET && pixel(i + run) == pixel(i) {
             run += 1;
         }
         if run >= 2 {
             out.push(0x80 | (run - 1) as u8);
-            out.extend_from_slice(px[i]);
+            out.extend_from_slice(pixel(i));
             i += run;
             continue;
         }
         // Raw until two equal pixels start a run, the packet is full or the row ends. The first
         // pixel always goes in: it differs from the one after it, or it is the row's last.
         let start = i;
-        while i < n && i - start < MAX_PACKET && !(i > start && i + 1 < n && px[i] == px[i + 1]) {
+        while i < n && i - start < MAX_PACKET && !(i > start && i + 1 < n && pixel(i) == pixel(i + 1)) {
             i += 1;
         }
         out.push((i - start - 1) as u8);
-        for p in &px[start..i] {
-            out.extend_from_slice(p);
-        }
+        out.extend_from_slice(row.get(start * bpp..i * bpp).unwrap_or_default());
     }
 }
 
@@ -106,10 +105,11 @@ mod tests {
         }
     }
 
+    /// Raw packets preserve every byte in short rows and at the 128-pixel split.
     #[test]
     fn raw_packets_at_the_128_pixel_boundary() {
         for bpp in 1..=4 {
-            for pixels in [127usize, 128, 129] {
+            for pixels in [1usize, 2, 127, 128, 129] {
                 let row: Vec<u8> = (0..pixels).flat_map(|x| vec![x as u8; bpp]).collect();
                 let mut encoded = Vec::new();
                 rle_row(&row, bpp, &mut encoded);
