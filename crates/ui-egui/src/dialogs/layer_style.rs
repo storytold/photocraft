@@ -1306,9 +1306,11 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
     if resp.drag_started()
         && let Some(pos) = resp.interact_pointer_pos()
     {
-        let pair = nearest_pair(pos.x, &split);
+        // The handle is the one pressed: a drag only starts some way off it, maybe across a split.
+        let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+        let pair = nearest_pair(press.x, &split);
         let mode = if !solid(q, &split, pair) {
-            BlendDrag::Single(blend_half(q, pair, v_of(pos.x)))
+            BlendDrag::Single(blend_half(q, pair, v_of(press.x)))
         } else if alt {
             let h = if pair == 0 { usize::from(pos.x >= x_of(q[0])) } else { 2 + usize::from(pos.x > x_of(q[2])) };
             BlendDrag::Split { handle: h, origin: q[pair] }
