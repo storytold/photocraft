@@ -230,8 +230,28 @@ fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
         return Err(bad(CMD, "drag the selection to where the content should go"));
     }
     let dest = landing(map.as_ref(), area, (dx, dy), canvas)?;
+    if !selected_pixel_lands(sel, area, map.as_ref(), (dx, dy), dest) {
+        return Err(bad(CMD, "no selected pixel of the moved selection lands on the canvas"));
+    }
     let all_layers = flag(p, "sampleAllLayers", false) && targets_pixels(p);
     Ok(Plan { target: Target { id, all_layers }, canvas, area, offset: (dx, dy), map, dest, mode, structure, color, margin })
+}
+
+/// Whether any selected pixel of the moved (or transformed) selection falls inside `dest`, the
+/// part of its bounds that is on the canvas. A round selection dragged towards a corner can keep
+/// only a corner of its bounding box there; moving that would erase the old place and paste nothing.
+fn selected_pixel_lands(sel: &Surface, area: Rect, map: Option<&Homography>, (dx, dy): (i32, i32), dest: Rect) -> bool {
+    match map {
+        None => {
+            let src = dest.translate(-dx, -dy).intersect(&area);
+            !src.is_empty() && coverage(sel, src).iter().any(|c| *c > 0.0)
+        }
+        Some(h) => match h.inverse() {
+            Some(inv) => landed_mask(&coverage(sel, area), area, &inv, dest).iter().any(|b| *b),
+            // `run_move` reports the collapsed transform.
+            None => true,
+        },
+    }
 }
 
 /// Where the content of `area` lands on `canvas`: moved by `offset`, or (Transform On Drop) the
@@ -524,17 +544,20 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
             s.edit(label, |doc, _| {
                 *crate::channel_cmds::target_surface(doc, plan.target.id, &p)?.0 = surf;
                 // The selection follows the content, ready for another drag.
-                if let Some(moved) = moved_sel {
-                    doc.selection = Some(moved).filter(|s| !s.content_bounds().is_empty());
-                } else if let Some(sel) = doc.selection.as_ref() {
-                    let shifted = crate::layer_multi_cmds::shift_surface(sel, dx, dy);
-                    // What was dragged past the canvas edge is dropped from the selection too.
-                    doc.selection = if plan.canvas.contains_rect(&shifted.content_bounds()) {
-                        Some(shifted)
+                let followed = if let Some(moved) = moved_sel {
+                    Some(moved).filter(|s| !s.content_bounds().is_empty())
+                } else {
+                    doc.selection.as_ref().map(|sel| crate::layer_multi_cmds::shift_surface(sel, dx, dy))
+                };
+                // What was dragged past the canvas edge is dropped from the selection too, plain or
+                // transformed; nothing left means no selection.
+                doc.selection = followed.and_then(|f| {
+                    if plan.canvas.contains_rect(&f.content_bounds()) {
+                        Some(f)
                     } else {
-                        Some(photocraft_algo::resample::crop_surface(&shifted, plan.canvas)).filter(|s| !s.content_bounds().is_empty())
-                    };
-                }
+                        Some(photocraft_algo::resample::crop_surface(&f, plan.canvas)).filter(|s| !s.content_bounds().is_empty())
+                    }
+                });
                 Ok(())
             })?;
             s.hint_damage(damage);

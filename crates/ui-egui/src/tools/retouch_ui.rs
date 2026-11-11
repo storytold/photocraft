@@ -352,6 +352,13 @@ pub fn patch_end(d: &crate::canvas::Drag, end: [f64; 2]) -> [f64; 2] {
 /// outline on the canvas (the engine rejects a patch that leaves it); the Content-Aware Move Tool
 /// only needs one pixel of it there, and what goes past the edge is dropped.
 pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
+    // The drag in progress names its own tool; the toolbar may have changed since it started.
+    let tool = app.drag.as_ref().map_or(app.ui.tool, |d| d.tool);
+    patch_offset_for(app, tool, start, end)
+}
+
+/// [`patch_offset`] for a drag made with `tool` (the finishers know theirs; `app.drag` is gone by then).
+fn patch_offset_for(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
     let (dx, dy) = ((end[0] - start[0]).round(), (end[1] - start[1]).round());
     let (dx, dy) = if dx.is_finite() && dy.is_finite() { (dx.clamp(-1e7, 1e7) as i32, dy.clamp(-1e7, 1e7) as i32) } else { (0, 0) };
     let Some((canvas, sel)) = app.session.active().and_then(|st| Some((st.doc.bounds(), st.doc.selection.clone()?))) else { return [dx, dy] };
@@ -361,7 +368,7 @@ pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> 
         return [dx, dy];
     }
     let clamp = |d: i32, lo: i32, hi: i32| if lo > hi { 0 } else { d.clamp(lo, hi) };
-    if app.ui.tool == Tool::ContentAwareMove {
+    if tool == Tool::ContentAwareMove {
         // At least one pixel of the outline stays on the canvas; the rest may go past the edge.
         let span = |lo: i32, hi: i32, c0: i32, c1: i32| (c0.saturating_sub(hi).saturating_add(1), c1.saturating_sub(lo).saturating_sub(1));
         let (xl, xh) = span(b.x0, b.x1, canvas.x0, canvas.x1);
@@ -381,7 +388,7 @@ pub fn patch_hint(app: &mut PhotocraftApp) {
 
 /// Patch Tool: the patch was dragged from `start` to `end`.
 pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
-    let off = patch_offset(app, start, end);
+    let off = patch_offset_for(app, Tool::Patch, start, end);
     if off == [0, 0] {
         patch_hint(app);
         return;
@@ -418,7 +425,7 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
 /// a background job (progress dialog, Esc cancels); the selection follows the content. With
 /// Transform On Drop a transform box comes up on the dropped patch first ([`crate::cam_transform`]).
 pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
-    let off = patch_offset(app, start, end);
+    let off = patch_offset_for(app, Tool::ContentAwareMove, start, end);
     if off == [0, 0] {
         patch_hint(app);
         return;

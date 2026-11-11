@@ -2775,3 +2775,37 @@ fn content_aware_move_wholly_off_the_canvas_is_refused() {
     // One pixel on the canvas is enough.
     assert!(s.execute("paint.contentAwareMove", json!({"offset": [31, 0]})).is_ok());
 }
+
+#[test]
+fn content_aware_move_with_no_selected_pixel_on_the_canvas_is_refused() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20, "ellipse": true})).unwrap();
+    let probe = [(105, 31), (96, 41), (127, 0), (100, 26), (60, 10)];
+    let before: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let bounds = s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+    // The bounding box's bottom-left corner lands on the canvas's top-right pixel, where the
+    // ellipse has no selected pixel.
+    for mode in ["move", "extend"] {
+        let r = s.execute("paint.contentAwareMove", json!({"offset": [31, -41], "mode": mode}));
+        assert!(r.is_err(), "{mode}: {r:?}");
+    }
+    let after: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    assert_eq!(before, after, "the document is unchanged");
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), bounds, "so is the selection");
+    // The same selection, moved so that its middle row reaches the canvas, is fine.
+    assert!(s.execute("paint.contentAwareMove", json!({"offset": [31, -22]})).is_ok());
+}
+
+#[test]
+fn content_aware_move_transformed_selection_is_cut_at_the_edge_too() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20})).unwrap();
+    // Stretched to three times the width about its centre, then moved 20 px right: x 96..156.
+    let r = s.execute("paint.contentAwareMove", json!({"offset": [20, 0], "scaleX": 300})).unwrap();
+    assert_eq!(r["transformed"], json!(true));
+    let b = s.active().unwrap().doc.selection.as_ref().expect("part of the selection is still on the canvas").content_bounds();
+    assert!(b.x0 >= 0 && b.y0 >= 0 && b.x1 <= 128 && b.y1 <= 64, "the selection lies on the canvas: {b:?}");
+    assert!(b.x1 > 120, "and reaches the edge: {b:?}");
+}

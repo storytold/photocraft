@@ -1239,3 +1239,19 @@ fn patch_offset_with_no_room_or_an_empty_selection_does_not_panic() {
     app.ui.tool = Tool::Patch;
     assert_eq!(patch_offset(&mut app, [0.0, 0.0], [1e9, -1e9]), [0, 0]);
 }
+
+/// The clamp follows the tool the drag started with, not the toolbar's current one.
+#[test]
+fn patch_offset_follows_the_drags_own_tool() {
+    let mut app = app();
+    app.run("select.rect", json!({"x": 40, "y": 20, "width": 20, "height": 20})).unwrap();
+    app.ui.tool = Tool::ContentAwareMove;
+    app.drag = Some(crate::canvas::Drag::new(Tool::Patch, [50.0, 30.0], vec![[50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
+    // Strict: the whole outline stays on the canvas.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-40, 0]);
+    // And the other way round: a Content-Aware Move drag keeps the loose clamp.
+    app.ui.tool = Tool::Patch;
+    app.drag = Some(crate::canvas::Drag::new(Tool::ContentAwareMove, [50.0, 30.0], vec![[50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-59, 0]);
+    app.drag = None;
+}
