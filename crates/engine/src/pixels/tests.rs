@@ -443,8 +443,12 @@ fn channel_mixer_in_a_cmyk_document_mixes_the_inks() {
     let got = adjusted_pixel(cmyk, &ink, &black_from_cyan, None);
     let want = [0.2, 0.4, 0.6, 0.2, 1.0];
     assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "black: {got:?}");
-    // Monochrome: the mix goes to the black ink alone.
-    let mono = crate::adjust_params::from_params("channelMixer", &json!({"monochrome": true, "gray": [0, 0, 0, 100, 0]}), None, ColorMode::Cmyk).unwrap();
+    // An imported monochrome mixer (the command refuses to make one): the mix goes to the black
+    // ink alone.
+    let mut rows = photocraft_doc::adjust::CMYK_MIXER_IDENTITY;
+    rows[0] = [0.0, 0.0, 0.0, 1.0, 0.0];
+    let Adjustment::ChannelMixer { matrix, .. } = &adj else { panic!("{adj:?}") };
+    let mono = Adjustment::ChannelMixer { matrix: *matrix, monochrome: true, cmyk: Some(rows) };
     let got = adjusted_pixel(cmyk, &ink, &mono, None);
     let want = [0.0, 0.0, 0.0, 0.1, 1.0];
     assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "monochrome: {got:?}");

@@ -81,13 +81,53 @@ fn channel_mixer_outputs_follow_the_document_mode() {
     let b = from_params("channelMixer", &json!({"black": [10, 10, 10, 90, 0]}), Some(&a), ColorMode::Cmyk).unwrap();
     assert!(matches!(&b, Adjustment::ChannelMixer { cmyk: Some(r), .. } if r[1] == rows[1] && r[3] == [0.1, 0.1, 0.1, 0.9, 0.0]));
     assert_eq!(from_params("channelMixer", &to_params(&b), None, ColorMode::Rgb).unwrap(), b);
-    // Monochrome starts from the Black output's mix, and round-trips.
-    let m = from_params("channelMixer", &json!({"monochrome": true}), Some(&b), ColorMode::Cmyk).unwrap();
-    assert!(matches!(&m, Adjustment::ChannelMixer { cmyk: Some(r), monochrome: true, .. } if r[0] == [0.1, 0.1, 0.1, 0.9, 0.0]));
-    assert_eq!(from_params("channelMixer", &to_params(&m), None, ColorMode::Cmyk).unwrap(), m);
     // RGB keys over a CMYK base switch back to RGB outputs.
     let rgb = from_params("channelMixer", &json!({"red": [50, 50, 0, 0]}), Some(&b), ColorMode::Cmyk).unwrap();
     assert!(matches!(rgb, Adjustment::ChannelMixer { cmyk: None, matrix, .. } if matrix[0] == [0.5, 0.5, 0.0, 0.0] && matrix[1] == [0.0, 1.0, 0.0, 0.0]));
+}
+
+/// Monochrome on a CMYK Channel Mixer has no Photoshop sample yet (#8047), so turning it on is
+/// an unsupported error, never an inferred mixer: in a CMYK document, with CMYK keys, over a CMYK
+/// base, and over an imported monochrome CMYK mixer unless the edit turns Monochrome off. RGB
+/// mixers keep Monochrome.
+#[test]
+fn monochrome_cmyk_channel_mixer_is_refused_as_unsupported() {
+    let ink = default_for("channelMixer", ColorMode::Cmyk).unwrap();
+    let imported = Adjustment::ChannelMixer {
+        matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+        monochrome: true,
+        cmyk: Some([[0.3, 0.3, 0.3, 1.0, 0.0], [0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 0.0]]),
+    };
+    let cases: [(Value, Option<&Adjustment>, ColorMode); 6] = [
+        (json!({"monochrome": true}), None, ColorMode::Cmyk),
+        (json!({"monochrome": true, "gray": [0, 0, 0, 100, 0]}), None, ColorMode::Cmyk),
+        (json!({"monochrome": true, "cyan": [100, 0, 0, 0, 0]}), None, ColorMode::Rgb),
+        (json!({"monochrome": true}), Some(&ink), ColorMode::Cmyk),
+        (json!({"gray": [10, 10, 10, 90, 0]}), Some(&imported), ColorMode::Cmyk),
+        (to_params(&imported), None, ColorMode::Cmyk),
+    ];
+    for (p, base, mode) in cases {
+        let err = from_params("channelMixer", &p, base, mode).expect_err(&format!("{p} over {base:?}"));
+        assert!(matches!(&err, EngineError::BadParams { msg, .. } if msg == MONOCHROME_CMYK_UNSUPPORTED), "{err}");
+        assert!(err.to_string().contains("unsupported"), "{err}");
+    }
+    // Turning an imported one's Monochrome off is a supported CMYK mixer again.
+    let off = from_params("channelMixer", &json!({"monochrome": false}), Some(&imported), ColorMode::Cmyk).unwrap();
+    assert!(matches!(off, Adjustment::ChannelMixer { cmyk: Some(_), monochrome: false, .. }), "{off:?}");
+    // RGB keeps it, in any document.
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk] {
+        let rgb = from_params("channelMixer", &json!({"monochrome": true, "red": [100, 0, 0, 0]}), None, mode).unwrap();
+        assert!(matches!(rgb, Adjustment::ChannelMixer { cmyk: None, monochrome: true, .. }), "{mode:?}: {rgb:?}");
+    }
+    // The command refuses it and leaves the layer as it was.
+    let mut s = crate::Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "background": "white"})).unwrap();
+    s.execute("layer.newAdjustmentLayer.channelMixer", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let before = s.active().unwrap().doc.layer(id).unwrap().content.clone();
+    let err = s.execute("layer.setAdjustment", json!({"layer": id.0, "monochrome": true})).unwrap_err();
+    assert!(err.to_string().contains("unsupported"), "{err}");
+    assert_eq!(s.active().unwrap().doc.layer(id).unwrap().content, before);
 }
 
 #[test]

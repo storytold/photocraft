@@ -819,6 +819,34 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
     h
 }
 
+/// #8047: Monochrome has no Photoshop sample for a CMYK Channel Mixer yet, so its checkbox is
+/// disabled there (a click changes nothing); an imported monochrome CMYK mixer can still turn it
+/// off, and RGB mixers keep it.
+#[test]
+fn channel_mixer_monochrome_is_disabled_for_cmyk_mixers() {
+    let cmyk = photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for("channelMixer", photocraft_doc::ColorMode::Cmyk).unwrap());
+    let mut h = editor_harness("channelMixer", cmyk.clone());
+    assert!(h.get_by_label("Monochrome").accesskit_node().is_disabled(), "CMYK: disabled");
+    h.get_by_label("Monochrome").click();
+    h.run_steps(3);
+    assert_eq!(*h.state(), cmyk, "a click on the disabled checkbox changes nothing");
+
+    let mut imported = cmyk.clone();
+    imported["monochrome"] = json!(true);
+    imported["gray"] = json!([30, 30, 30, 100, 0]);
+    let mut h = editor_harness("channelMixer", imported);
+    assert!(!h.get_by_label("Monochrome").accesskit_node().is_disabled(), "imported monochrome CMYK: can turn it off");
+    h.get_by_label("Monochrome").click();
+    h.run_steps(3);
+    assert_eq!(h.state()["monochrome"], json!(false), "{}", h.state());
+
+    let mut h = editor_harness("channelMixer", json!({"red": [100, 0, 0, 0], "green": [0, 100, 0, 0], "blue": [0, 0, 100, 0], "monochrome": false}));
+    assert!(!h.get_by_label("Monochrome").accesskit_node().is_disabled(), "RGB: enabled");
+    h.get_by_label("Monochrome").click();
+    h.run_steps(3);
+    assert_eq!(h.state()["monochrome"], json!(true), "{}", h.state());
+}
+
 /// #9242: the Hue/Saturation spectrum bars stretch with the panel, like the sliders above them.
 #[test]
 fn hue_saturation_bars_fill_the_panel_width() {

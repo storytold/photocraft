@@ -382,9 +382,15 @@ fn mixer_row<const N: usize>(v: &[f32]) -> [f32; N] {
 /// Channel Mixer outputs of a CMYK mixer (each `[cyan, magenta, yellow, black, constant]` %).
 pub const MIXER_INKS: [&str; 4] = ["cyan", "magenta", "yellow", "black"];
 
+/// Why a CMYK Channel Mixer refuses `monochrome: true` (#8047); the UI shows it on the disabled
+/// Monochrome checkbox.
+pub const MONOCHROME_CMYK_UNSUPPORTED: &str =
+    "unsupported: Monochrome is not available for a CMYK Channel Mixer yet (no Photoshop sample to match)";
+
 /// Channel Mixer: RGB outputs (`red`, `green`, `blue`, each `[red, green, blue, constant]` %) or,
 /// in CMYK documents or with CMYK keys, Photoshop's four ink outputs ([`MIXER_INKS`]); `gray` is
-/// the monochrome mix in either.
+/// the monochrome mix. Monochrome on a CMYK mixer is refused as unsupported
+/// ([`MONOCHROME_CMYK_UNSUPPORTED`]).
 fn channel_mixer(r: &Reader<'_>, p: &Value, base: Option<&Adjustment>, mode: ColorMode) -> Result<Adjustment> {
     let rgb_identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
     let (mut matrix, mono0, cmyk0) = match base {
@@ -396,11 +402,13 @@ fn channel_mixer(r: &Reader<'_>, p: &Value, base: Option<&Adjustment>, mode: Col
     let cmyk = space_of(r, base_space, mode) == ToneSpace::Cmyk;
     let monochrome = r.boolean("monochrome", mono0)?;
     if cmyk {
-        let mut rows = cmyk0.unwrap_or(photocraft_doc::adjust::CMYK_MIXER_IDENTITY);
-        if monochrome && !mono0 && p.get("gray").is_none() {
-            // Turning Monochrome on starts from the Black output's mix.
-            rows[0] = rows[3];
+        if monochrome {
+            // No Photoshop sample of a monochrome CMYK mixer yet (#8047): its rendering and saved
+            // layout would be guesses. An imported one still renders and saves back verbatim, but
+            // can only be edited by turning Monochrome off.
+            return Err(bad(r.cmd, MONOCHROME_CMYK_UNSUPPORTED));
         }
+        let mut rows = cmyk0.unwrap_or(photocraft_doc::adjust::CMYK_MIXER_IDENTITY);
         for (i, key) in MIXER_INKS.iter().enumerate() {
             if let Some(v) = r.numbers(key, 5)? {
                 rows[i] = mixer_row(&v);

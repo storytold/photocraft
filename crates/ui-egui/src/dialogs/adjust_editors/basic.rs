@@ -300,12 +300,16 @@ pub(super) fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> 
         v[key] = json!(row.iter().map(|x| x.round()).collect::<Vec<_>>());
     }
     let mut m = mono;
-    if widgets::checkbox(ui, &mut m, tl!("Monochrome")).changed() {
+    // A CMYK mixer can't turn Monochrome on (no Photoshop sample yet, #8047; the engine refuses
+    // it); an imported monochrome one can still turn it off.
+    let toggle = ui.add_enabled_ui(!cmyk || mono, |ui| widgets::checkbox(ui, &mut m, tl!("Monochrome"))).inner;
+    let why = tl!("Monochrome is not available for CMYK Channel Mixers yet");
+    let toggle = if cmyk { toggle.on_hover_text(why).on_disabled_hover_text(why) } else { toggle };
+    if toggle.changed() {
         v["monochrome"] = json!(m);
         if m {
-            // RGB starts from Photoshop's grey mix, CMYK from the Black output's.
-            let start = if cmyk { row_of(v, "black", &[0.0, 0.0, 0.0, 100.0, 0.0]) } else { vec![40.0, 40.0, 20.0, 0.0] };
-            v["gray"] = json!(start);
+            // Photoshop's grey mix.
+            v["gray"] = json!([40.0, 40.0, 20.0, 0.0]);
         } else if let Some(o) = v.as_object_mut() {
             o.remove("gray");
         }
