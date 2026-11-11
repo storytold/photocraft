@@ -35,6 +35,23 @@ pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraf
     }
 }
 
+/// The Pattern Stamp's Mode dropdown: the blend modes with Behind after Dissolve and no Clear, as
+/// the reference application lists them (#12879). Behind is the tool's own brush's, as its mode;
+/// picking another mode leaves it. The wheel steps it as it steps the other Mode dropdowns.
+/// Without `behind_enabled` (the Background is the active layer) Behind is greyed, as in the
+/// Shift+right-click menu, and the wheel and the keys step past it.
+pub(super) fn pattern_stamp_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraft_engine::BrushSettings, behind_enabled: bool) {
+    let opts = crate::brush_mode_menu::pattern_stamp_choices();
+    let before = if b.behind { (None, true) } else { (Some(b.mode), false) };
+    let mut mode = before;
+    let groups = |m: &(Option<BlendMode>, bool)| m.0.is_some_and(starts_blend_group);
+    if !widgets::dropdown_wheel_grouped_enabled(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, groups, |m| behind_enabled || !m.1).0.is_empty() {
+        let mode = crate::brush_mode_menu::pattern_stamp_pick(before, mode, behind_enabled);
+        b.behind = mode.1;
+        b.mode = mode.0.unwrap_or(BlendMode::Normal);
+    }
+}
+
 /// The Eraser's Smoothing %: whole numbers 0..100 that say when a typed value was past them, for
 /// the reference's alert (#11938). Returns the field and whether to show the alert.
 pub(super) fn smoothing_field_alerting(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> (egui::Response, bool) {
