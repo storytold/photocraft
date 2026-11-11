@@ -1066,6 +1066,8 @@ mod background_eraser_bar_angle_tests;
 #[cfg(test)]
 mod brush_alt_digit_smoothing_tests;
 #[cfg(test)]
+mod brush_hud_rate_tests;
+#[cfg(test)]
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
 mod burn_default_tip_tests;
