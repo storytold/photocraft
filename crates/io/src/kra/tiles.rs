@@ -198,7 +198,8 @@ impl<'a> TileFile<'a> {
         if count > bytes.len() / 8 + 1 {
             return Err(invalid("tile count exceeds the file size"));
         }
-        let mut tiles = Vec::with_capacity(count);
+        // Not `count` up front: a compressed member can declare far more records than it holds.
+        let mut tiles = Vec::with_capacity(count.min(1 << 16));
         for _ in 0..count {
             let l = line(bytes, &mut pos)?;
             let mut f = l.split(',');
@@ -211,6 +212,10 @@ impl<'a> TileFile<'a> {
             };
             let data = bytes.get(pos..pos.checked_add(len).ok_or_else(|| invalid("tile size overflow"))?).ok_or_else(|| invalid("truncated tile data"))?;
             pos += len;
+            if tiles.len() == tiles.capacity() {
+                // Grow by at most what is still declared, so the vector never overshoots `count`.
+                tiles.try_reserve_exact(tiles.len().max(1).min(count - tiles.len())).map_err(|_| invalid("tile table allocation"))?;
+            }
             tiles.push((x, y, data));
         }
         Ok(TileFile { width, height, pixel_size, tiles })
