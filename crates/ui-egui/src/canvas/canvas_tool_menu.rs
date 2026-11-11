@@ -498,6 +498,29 @@ pub const NO_SELECTION_MENU: &[Row] = &[
     Some(("Load Selection…", "select.loadSelection")),
 ];
 
+/// The Count tool's canvas menu (#11772): Photoshop's generic layer menu, on a marker or off one,
+/// in its order for a pixel layer without a selection. Each row is enabled as the Layers panel
+/// menu enables it for the active layer (`menus::is_enabled`) and runs like the menu item.
+pub const COUNT_MENU: &[Row] = &[
+    Some(("Blending Options…", "layer.layerStyle.blendingOptions")),
+    None,
+    Some(("Duplicate Layer…", "layer.duplicate")),
+    Some(("Delete Layer", "layer.delete")),
+    Some(("Group from Layers…", "layer.new.groupFromLayers")),
+    None,
+    Some(("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")),
+    Some(("Convert to Layers", "layer.smartObjects.convertToLayers")),
+    None,
+    Some(("Rasterize Layer", "layer.rasterize.layer")),
+    Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")),
+    None,
+    Some(("Free Transform", "edit.freeTransform")),
+    None,
+    Some(("Color Range…", "select.colorRange")),
+    Some(("Load Selection…", "select.loadSelection")),
+    Some(("Reselect", "select.reselect")),
+];
+
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
 
@@ -669,6 +692,8 @@ pub fn applies(tool: Tool) -> bool {
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
             | Tool::ColorSampler
+            // The layer menu (#11772).
+            | Tool::Count
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
@@ -723,6 +748,8 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         PEN_MENU
     } else if sampler_menu(menu) {
         SAMPLER_MENU
+    } else if menu.tool == Tool::Count {
+        COUNT_MENU
     } else if menu.tool == Tool::Eyedropper {
         EYEDROPPER_MENU
     } else if inside_selection(menu) {
@@ -1677,6 +1704,9 @@ pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rec
 mod cam_menu_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod count_tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;

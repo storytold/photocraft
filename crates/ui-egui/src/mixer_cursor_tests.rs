@@ -56,8 +56,7 @@ fn hover(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
 
 /// The pipette uses its native bitmap, distinct from the Mixer Brush target and no-entry sign.
 fn pipette_shown(h: &Harness<'static, PhotocraftApp>) -> bool {
-    let output = &h.output().platform_output;
-    output.cursor_icon == egui::CursorIcon::Crosshair && output.cursor_image.as_ref() == Some(&crate::caps_lock_tests::pipette_bitmap())
+    crate::tool_cursor::pipette_shown(&h.ctx, &h.output().platform_output)
 }
 
 /// The OS cursor bitmap's size, hotspot and alpha channel.

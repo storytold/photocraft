@@ -31,12 +31,13 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 }
 
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
-/// Sharpen tool (#12952) and the Classic gradient (the live Gradient makes a fill layer and isn't
-/// measured, #12017).
+/// Sharpen tool (#12952), the Sponge (#13030) and the Classic gradient (the live Gradient makes a
+/// fill layer and isn't measured, #12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
         Tool::Sharpen => Some(tl!("sharpen tool")),
+        Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
     }
@@ -76,10 +77,10 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
 }
 
-/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen tool Lock Image Pixels as well
-/// (measured for it; the Brush keeps today's behaviour there).
+/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen and Sponge tools Lock Image Pixels
+/// as well (measured for them; the Brush keeps today's behaviour there).
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (tool == Tool::Sharpen && locks.pixels)
+    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge) && locks.pixels)
 }
 
 /// Opens the alert: ordinary dialog state, listed by `ui.inspect` and closed by `ui.dialog.confirm`.
@@ -94,3 +95,7 @@ mod brush_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../sharpen_refusal_alert_tests.rs"]
 mod sharpen_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../sponge_refusal_alert_tests.rs"]
+mod sponge_refusal_alert_tests;

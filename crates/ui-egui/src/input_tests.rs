@@ -722,7 +722,8 @@ fn a_notch_pans_the_canvas_at_once_without_a_glide() {
         let p = h.state().last_canvas_rect.center();
         h.hover_at(p);
         h.run_steps(2);
-        let notch = h.ctx.options(|o| o.input_options.line_scroll_speed);
+        // The canvas' own notch (#12028), not egui's.
+        let notch = crate::wheel_nav::CANVAS_PAN_PER_LINE;
         let (z, c0) = (zoom(&h), h.state().ui.views[0].center);
         wheel(&h, -1.0, m);
         h.run_steps(1);
