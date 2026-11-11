@@ -913,6 +913,26 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
+    // Delete Anchor Point (#12773): Esc first clears anchors selected on the saved path targeted in
+    // the Paths panel, then deselects that path, so clicks edit nothing. Not while its name is typed
+    // in the panel: egui has already dropped the field's focus, and the panel cancels on Esc.
+    if !esc_taken
+        && app.ui.tool == Tool::DeleteAnchorPoint
+        && !crate::vector_ui::path_renaming(app, ctx)
+        && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
+    {
+        let ds = &app.ui.direct_selection;
+        let selected = ds.target == Some(crate::direct_select::PathRef::Saved(index)) && (!ds.anchors.is_empty() || ds.segment.is_some());
+        if pressed(Key::Escape) {
+            if selected {
+                app.ui.direct_selection.anchors.clear();
+                app.ui.direct_selection.segment = None;
+            } else {
+                app.ui.selected_path = None;
+            }
+            return;
+        }
+    }
     // + / − pick a Path Operation with the Pen tools and Path Selection (`path_components`)…
     crate::path_components::handle_keys(app, ctx);
     // … and otherwise ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the

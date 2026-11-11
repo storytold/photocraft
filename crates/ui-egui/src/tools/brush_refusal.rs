@@ -19,8 +19,8 @@ pub const INDEXED: &str = "Could not use the {tool} because it does not work wit
 pub const BITMAP: &str = "Could not use the {tool} because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
 
 /// The tool's name in the colour-mode alerts, for the tools whose wording was measured: the Dodge
-/// and Sharpen tools. Kept apart from [`tool_name`]: the layer alerts aren't wired for these tools
-/// yet (#12685, #12952).
+/// and Sharpen tools. Kept apart from [`tool_name`]: the layer alerts aren't wired for the Dodge
+/// tool yet (#12685).
 fn mode_tool_name(tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Dodge => Some(tl!("dodge tool")),
@@ -29,10 +29,12 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// The tool's name in the alerts, for the tools whose wording was measured: the Brush.
+/// The tool's name in the alerts, for the tools whose wording was measured: the Brush and the
+/// Sharpen tool (#12952).
 pub fn tool_name(tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
+        Tool::Sharpen => Some(tl!("sharpen tool")),
         _ => None,
     }
 }
@@ -40,14 +42,15 @@ pub fn tool_name(tool: Tool) -> Option<&'static str> {
 /// The alert a press with `tool` gets, if any. `hidden` is the press-time hidden-target refusal
 /// (`canvas::tool_input`), which this only words; the lock and the group are checked here. Lock
 /// transparent pixels is no refusal, and a group's targeted mask paints. A tool with a
-/// [`mode_tool_name`] gets only its colour-mode alert, in an Indexed Color or Bitmap document.
+/// [`mode_tool_name`] gets its colour-mode alert first, in an Indexed Color or Bitmap document.
 pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
-    if let Some(name) = mode_tool_name(tool) {
-        let template = match app.session.active()?.doc.mode {
-            photocraft_doc::ColorMode::Indexed => INDEXED,
-            photocraft_doc::ColorMode::Bitmap => BITMAP,
-            _ => return None,
-        };
+    if let Some(name) = mode_tool_name(tool)
+        && let Some(template) = match app.session.active()?.doc.mode {
+            photocraft_doc::ColorMode::Indexed => Some(INDEXED),
+            photocraft_doc::ColorMode::Bitmap => Some(BITMAP),
+            _ => None,
+        }
+    {
         return Some(crate::i18n::fmt(tl!(template), &[("tool", name)]));
     }
     let name = tool_name(tool)?;
@@ -61,13 +64,19 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         }
         if layer.is_group() {
             GROUP
-        } else if st.doc.effective_locks(layer.id).all {
+        } else if locked(st.doc.effective_locks(layer.id), tool) {
             LOCKED
         } else {
             return None;
         }
     };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
+}
+
+/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen tool Lock Image Pixels as well
+/// (measured for it; the Brush keeps today's behaviour there).
+fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
+    locks.all || (tool == Tool::Sharpen && locks.pixels)
 }
 
 /// Opens the alert: ordinary dialog state, listed by `ui.inspect` and closed by `ui.dialog.confirm`.
@@ -78,3 +87,7 @@ pub fn prompt(app: &mut PhotocraftApp, message: &str) {
 #[cfg(test)]
 #[path = "../brush_refusal_alert_tests.rs"]
 mod brush_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../sharpen_refusal_alert_tests.rs"]
+mod sharpen_refusal_alert_tests;
