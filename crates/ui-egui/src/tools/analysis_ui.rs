@@ -669,19 +669,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if ui.add_enabled_ui(clearable, |ui| crate::widgets::secondary_button(ui, tl!("Clear"), 0.0)).inner.clicked() {
                 let _ = app.run("count.clear", json!({}));
             }
-            let rgb = g.color.to_rgb();
-            // PhotoCraft's Color Picker (sRGB), as everywhere else (#2144).
-            if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Count group color")).on_hover_text(tl!("Count group color")).clicked()
-                && let Some(gi) = group
-            {
-                crate::color_picker_ui::open_for_command(
-                    app,
-                    &crate::color_picker_ui::title_for(tl!("Count Color")),
-                    rgb,
-                    "count.setGroup",
-                    json!({"group": gi}),
-                );
-            }
             crate::widgets::vline(ui, 22.0);
             let (mut ms, mut ls) = (g.marker_size as f32, g.label_size as f32);
             // Scrubby captions with colons, as in Photoshop: the options bar's own caption, which

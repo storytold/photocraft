@@ -837,6 +837,27 @@ fn arrow_keys_step_a_focused_field_by_one_and_shift_by_ten() {
     assert_eq!(h.state().1, 6, "every step reports a change, so callers apply it");
 }
 
+/// #13055: a whole-number field steps whole. The tenth Ctrl/Cmd+arrow gave was rounded straight
+/// back out by the field's own rounding, so the shortcut did nothing at all.
+#[test]
+fn arrow_keys_on_a_whole_number_field_step_whole_numbers() {
+    let mut h = Harness::new_ui_state(
+        |ui, s: &mut (f32, u32)| {
+            if super::value_field_whole_alerting(ui, "Count", &mut s.0, 1.0..=100.0, "", 40.0).0.changed() {
+                s.1 += 1;
+            }
+        },
+        (7.0, 0),
+    );
+    h.run();
+    h.get_by_role(egui::accesskit::Role::SpinButton).click();
+    h.run();
+    assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowUp), 8.0, "Ctrl/Cmd steps a whole");
+    assert_eq!(press(&mut h, Modifiers::SHIFT, Key::ArrowUp), 18.0, "Shift steps ten");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowDown), 17.0, "and the plain arrow one");
+    assert_eq!(h.state().1, 3, "every step reports a change, so callers apply it");
+}
+
 #[test]
 fn arrow_keys_on_a_field_with_a_reversed_range_do_not_panic() {
     // The empty range is the case under test — arrow keys must not panic on it.
