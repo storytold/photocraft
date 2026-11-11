@@ -996,10 +996,10 @@ fn curves_on_a_targeted_filter_mask_is_a_gray_plane() {
     for size in [photocraft_geom::Size::new(32, 32), photocraft_geom::Size::new(6000, 4000), photocraft_geom::Size::new(6001, 4003)] {
         let mut doc = (*app.session.active().unwrap().doc).clone();
         doc.size = size;
-        let implicit = tone::compute_histograms(&doc, source, photocraft_doc::adjust::ToneSpace::Rgb);
+        let implicit = tone::compute_histograms(&doc, source, photocraft_doc::adjust::ToneSpace::Rgb, tone::HistScope::WholeInput);
         let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart fixture") };
         sm.filter_mask = Some(photocraft_doc::LayerMask::reveal_all());
-        let stored = tone::compute_histograms(&doc, source, photocraft_doc::adjust::ToneSpace::Rgb);
+        let stored = tone::compute_histograms(&doc, source, photocraft_doc::adjust::ToneSpace::Rgb, tone::HistScope::WholeInput);
         assert_eq!(implicit.ch, stored.ch, "{size:?}: implicit white has the same histogram as stored white");
         assert!(implicit.ch[0][255] > 0);
     }
