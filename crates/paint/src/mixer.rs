@@ -354,7 +354,9 @@ pub fn apply_mixer_dab_region(
     };
     let step = state.last_dab.filter(|(index, ..)| fp.index > *index).map_or(0.0, |(_, lx, ly)| (x - lx).hypot(y - ly) as f32);
     let after = before + if step.is_finite() { step } else { 0.0 };
-    amount *= supply_left(load, after) / supply_left(load, before);
+    // Far enough past the supply both shares underflow to zero; the load is then simply used up.
+    let left = supply_left(load, before);
+    amount = if left > 0.0 { amount * supply_left(load, after) / left } else { 0.0 };
     state.travelled = after;
     state.last_dab = Some((fp.index, x, y));
     state.amount = amount;

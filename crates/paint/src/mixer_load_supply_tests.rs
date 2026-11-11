@@ -88,3 +88,11 @@ fn each_stroke_measures_its_own_length() {
     apply_mixer_stroke(&mut s, None, &stroke(30.0, 330.0, 0.25), &m, &mut st, None, false);
     assert_eq!(st.amount, 1.0, "the second stroke starts its own 570 px");
 }
+
+#[test]
+fn a_very_long_stroke_keeps_the_amount_finite() {
+    // Thousands of px past the supply the remaining share underflows to zero; the amount must not
+    // turn into NaN (0 / 0).
+    let (_, amount) = paint(0.01, 0.0, 20_000.0, 1.0);
+    assert!(amount.is_finite() && amount >= 0.0, "{amount}");
+}
