@@ -681,6 +681,18 @@ fn encoded(format: photocraft_codecs::Format, w: u32, h: u32) -> Vec<u8> {
 }
 
 #[test]
+fn a_clipboard_png_keeps_its_embedded_profile() {
+    // A picture copied from a browser is offered as image/png with its profile inside; the paste
+    // converts from it, so the read must keep it (arboard's own read drops it).
+    let icc = photocraft_cms::Builtin::AdobeRgbCompat.profile().to_bytes().to_vec();
+    let mut img = Image::from_u8(4, 2, ChannelLayout::Rgba, [145u8, 85, 75, 255].repeat(8)).unwrap();
+    img.icc = Some(icc.clone());
+    let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).unwrap();
+    let got = image_from_offers(&["image/png".to_string()], |_| Some(png.clone()));
+    assert_eq!(got.map(|(w, h, _, profile)| (w, h, profile)), Some((4, 2, Some(icc))));
+}
+
+#[test]
 fn non_png_clipboard_images_paste() {
     // #2546: a screenshot tool that offers only image/bmp or image/jpeg pasted nothing.
     let bmp = encoded(photocraft_codecs::Format::Bmp, 3, 2);

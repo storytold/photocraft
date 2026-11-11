@@ -818,17 +818,18 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 clipboard_image(
                     cb,
                     |cb| clipboard_read(cb.get().file_list()),
-                    |cb| match cb.get_image() {
-                        Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned(), None))),
-                        Err(error) => {
-                            #[cfg(target_os = "linux")]
-                            if let Some(image) = wayland_clipboard_image() {
-                                return Ok(Some(image));
-                            }
-                            match error {
-                                arboard::Error::ContentNotAvailable => Ok(None),
-                                _ => Err(error.to_string()),
-                            }
+                    |cb| {
+                        // On Wayland the image is read with our own codecs first: arboard decodes
+                        // `image/png` but drops its embedded profile, so a picture copied from a
+                        // browser pasted without it, in the wrong colours. Off Wayland this is `None`.
+                        #[cfg(target_os = "linux")]
+                        if let Some(image) = wayland_clipboard_image() {
+                            return Ok(Some(image));
+                        }
+                        match cb.get_image() {
+                            Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned(), None))),
+                            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+                            Err(error) => Err(error.to_string()),
                         }
                     },
                     |cb| clipboard_text(cb.get_text()),
