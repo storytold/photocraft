@@ -204,7 +204,19 @@ fn landed_mask(cov: &[f32], area: Rect, inv: &Homography, rect: Rect) -> Vec<boo
         .collect()
 }
 
+/// The plan of the move, checked for its landing: [`plan_unchecked`] and the scan for a selected pixel on
+/// the canvas ([`selected_pixel_lands`]), which can read a whole large selection.
 fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
+    let plan = plan_unchecked(s, p, margin)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let sel = d.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to move first"))?;
+    check_lands(sel, &plan)?;
+    Ok(plan)
+}
+
+/// Everything [`plan`] checks except that a selected pixel lands on the canvas: cheap, so a live
+/// preview can call it on the UI thread and leave the scan to its job.
+fn plan_unchecked(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     let mode = match string(p, "mode", "move") {
         "move" => Mode::Move,
         "extend" => Mode::Extend,
@@ -230,11 +242,17 @@ fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
         return Err(bad(CMD, "drag the selection to where the content should go"));
     }
     let dest = landing(map.as_ref(), area, (dx, dy), canvas)?;
-    if !selected_pixel_lands(sel, area, map.as_ref(), (dx, dy), dest) {
-        return Err(bad(CMD, "no selected pixel of the moved selection lands on the canvas"));
-    }
     let all_layers = flag(p, "sampleAllLayers", false) && targets_pixels(p);
     Ok(Plan { target: Target { id, all_layers }, canvas, area, offset: (dx, dy), map, dest, mode, structure, color, margin })
+}
+
+/// The error of a move whose selection lands on no canvas pixel (see [`selected_pixel_lands`]).
+fn check_lands(sel: &Surface, plan: &Plan) -> Result<()> {
+    if selected_pixel_lands(sel, plan.area, plan.map.as_ref(), plan.offset, plan.dest) {
+        Ok(())
+    } else {
+        Err(bad(CMD, "no selected pixel of the moved selection lands on the canvas"))
+    }
 }
 
 /// Whether any selected pixel of the moved (or transformed) selection falls inside `dest`, the
@@ -646,10 +664,14 @@ pub struct ContentAwarePreview {
 
 impl ContentAwarePreview {
     /// The active document with the move applied (nothing is recorded, the session is not
-    /// touched) and the rectangle it changed. Stops with `Cancelled` once `ctx` is cancelled.
+    /// touched) and the rectangle it changed. Fails as the command does when no selected pixel of the
+    /// moved selection lands on the canvas: that check runs here, on the worker, not in [`preview`].
+    /// Stops with `Cancelled` once `ctx` is cancelled.
     pub fn run(&self, ctx: &crate::jobs::JobCtx) -> Result<(Document, Rect)> {
         let mut work = (*self.doc).clone();
         let sel = self.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to move first"))?;
+        // The scan for a selected pixel on the canvas runs here, off the UI thread (`preview` leaves it out).
+        check_lands(sel, &self.plan)?;
         let damage = if self.is_coarse() {
             run_scaled(&mut work, sel, &self.plan, &self.params, self.scale, ctx)?
         } else {
@@ -682,11 +704,13 @@ impl ContentAwarePreview {
 }
 
 /// Prepare the preview of `paint.contentAwareMove` with params `p` on the active document. Errors
-/// as the command does (bad params, nothing to move, a selection larger than the command takes).
+/// as the command does (bad params, nothing to move, a selection larger than the command takes), except
+/// that the landing check (a selected pixel on the canvas, which can scan the whole selection) runs in
+/// the job ([`ContentAwarePreview::run`]), off the UI thread.
 pub fn preview(s: &Session, p: &Value) -> Result<ContentAwarePreview> {
     let captured = crate::channel_cmds::inject_target(s, CMD, p.clone());
     let p = &captured;
-    let plan = plan(s, p, PREVIEW_MARGIN)?;
+    let plan = plan_unchecked(s, p, PREVIEW_MARGIN)?;
     let px = |r: Rect| u64::from(r.width()) * u64::from(r.height());
     let pixels = px(plan.area).max(px(plan.dest));
     let scale = if pixels > PREVIEW_MAX_PIXELS { (PREVIEW_MAX_PIXELS as f64 / pixels as f64).sqrt() } else { 1.0 };

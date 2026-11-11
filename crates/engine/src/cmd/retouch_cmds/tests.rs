@@ -2877,3 +2877,17 @@ fn content_aware_move_heavily_scaled_down_landing_on_no_pixel_is_refused() {
     assert_eq!(before, after, "the document is unchanged");
     assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), bounds, "so is the selection");
 }
+
+#[test]
+fn content_aware_move_preview_defers_the_landing_check_to_its_job() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20, "ellipse": true})).unwrap();
+    // The same drop the command refuses (its selection lands on no pixel centre): preparing the
+    // preview on the UI thread is cheap and succeeds, the job reports the error.
+    let p = json!({"offset": [-40, 0], "scaleX": 1, "scaleY": 1});
+    assert!(s.execute("paint.contentAwareMove", p.clone()).is_err());
+    let job = crate::retouch_cmds::content_aware_move_preview(&s, &p).expect("the preview is prepared without the landing scan");
+    let err = job.run(&crate::jobs::JobCtx::new()).unwrap_err();
+    assert!(err.to_string().contains("no selected pixel of the moved selection lands on the canvas"), "{err}");
+}
