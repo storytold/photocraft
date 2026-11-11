@@ -1520,12 +1520,15 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
 #[test]
 fn cjk_preload_flag_is_retried_from_ui_passes_until_settled() {
     let mut h = app_harness();
-    assert!(h.state().cjk_preload_pending, "the warm-up starts out pending");
+    // The harness already ran UI passes, so the startup warm-up has settled.
+    assert!(!h.state().cjk_preload_pending, "UI passes must settle the warm-up (Ready or JustInstalled)");
+    // A pending warm-up is retried by later UI passes, not by a logic-tick count.
+    h.state_mut().cjk_preload_pending = true;
     for _ in 0..8 {
         h.step();
         if !h.state().cjk_preload_pending {
             break;
         }
     }
-    assert!(!h.state().cjk_preload_pending, "UI passes must settle the warm-up (Ready or JustInstalled)");
+    assert!(!h.state().cjk_preload_pending, "a later UI pass must retry the warm-up");
 }
