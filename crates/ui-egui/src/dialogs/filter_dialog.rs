@@ -806,6 +806,26 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
     key == "angle" && ANGLE_DIAL.contains(&command)
 }
 
+/// Wide-range number fields that still show two decimals: the Rotate Canvas angle keeps
+/// hundredths of a degree, so the ruler's straightening angle reaches the dialog as 33.69 and
+/// not 33.7 (#12035). The arrow and drag step follow the shown precision, as elsewhere.
+fn wide_field_decimals(command: &str, key: &str) -> Option<u32> {
+    match (command, key) {
+        ("image.rotation.arbitrary", "angle") => Some(2),
+        _ => None,
+    }
+}
+
+/// The scale a drawn number field rounds to: two decimals for small ranges (0–1 thresholds and
+/// centres) and for the wide fields that show them (#12035), one decimal for the other wide ones.
+fn field_scale(command: &str, key: &str, min: f32, max: f32) -> f32 {
+    match wide_field_decimals(command, key) {
+        Some(d) => 10f32.powi(d.min(6) as i32),
+        None if max - min <= 10.0 => 100.0,
+        None => 10.0,
+    }
+}
+
 /// Replace Color (#4143): the dialog's "From" colour, sampled from the image with a canvas
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
@@ -1031,7 +1051,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         match p.kind {
             Kind::Range { min, max, default } => {
-                let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
+                let src = f.get(&p.key).and_then(Value::as_f64);
+                let mut v = src.unwrap_or(default as f64) as f32;
+                // A widget edit this frame makes the field's f32 value authoritative (#12035).
+                let mut edited = false;
                 if cmd == "image.mode.indexedColor" && p.key == "colors" {
                     let mut count = v.round().clamp(2.0, 256.0) as u32;
                     crate::widgets::color_count_row(ui, &label(&p.key), &mut count);
@@ -1074,12 +1097,23 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     } else {
                         // A double-click on the slider puts it back to the filter's default.
                         let gestures = crate::widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
-                        crate::widgets::slider_row_with(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures);
+                        edited =
+                            crate::widgets::slider_row_prec(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures, wide_field_decimals(&cmd, &p.key))
+                                .changed();
                     }
                 });
-                // Small ranges (0–1 thresholds and centres) keep the two decimals their field shows.
-                let scale = if max - min <= 10.0 { 100.0 } else { 10.0 };
-                f.insert(p.key, json!((v * scale).round() / scale));
+                // The field's shown precision: small ranges keep their two decimals, and so
+                // does the Arbitrary angle; the other wide fields round to one (#12035).
+                let scale = field_scale(&cmd, &p.key, min, max);
+                // A field showing two decimals rounds while the value is still f64: a 43x27
+                // ruler is 32.1249984°, whose f32 cast lands exactly on 32.125, and rounding
+                // that widened value half-away shows 32.13 where the pre-fill says 32.12.
+                // Values the user typed or dragged are f32 already, so they round as before.
+                let w = match (wide_field_decimals(&cmd, &p.key), src) {
+                    (Some(_), Some(raw)) if !edited => ((raw * f64::from(scale)).round() / f64::from(scale)) as f32,
+                    _ => (v * scale).round() / scale,
+                };
+                f.insert(p.key, json!(w));
             }
             Kind::Choice { options, default } => {
                 ui.horizontal(|ui| {
