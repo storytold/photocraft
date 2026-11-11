@@ -2,7 +2,11 @@
 //! that starts where no layer would be picked (an empty, transparent spot, or the pasteboard
 //! outside the canvas) draws a box instead of moving anything. Releasing selects every layer whose
 //! content touches the box (`layer.selectInRect`; Auto-Select: Group selects their outermost
-//! groups), ⇧ adds them to the layers already selected. A click there selects nothing.
+//! groups), ⇧ adds them to the layers already selected. A click on the pasteboard deselects every
+//! layer (`select.deselectLayers`, one undoable step), so nothing is left to move; ⇧-click keeps
+//! the selection, and a click on transparent pixels inside the canvas does not deselect. A release
+//! within a few screen points of the press is still a click. Locked-only hits follow
+//! `tool_input.rs` (Move Auto-Select clicks through Position and All locks).
 
 use serde_json::json;
 
@@ -56,20 +60,26 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
             let b = LayerBox { end: [x, y], ..*b };
             app.layer_box = None;
             let (w, h) = (b.end[0] - b.start[0], b.end[1] - b.start[1]);
-            if w == 0.0 && h == 0.0 && !b.add {
-                // A click on the pasteboard clears the layer target; a drag from there still
-                // uses the marquee, and a click on transparent pixels inside the canvas does not.
-                if let Some(st) = app.session.active() {
+            // A click (released within a few screen points of the press) on the pasteboard
+            // deselects every layer, unless ⇧ (adding) or nothing is selected. A click inside the
+            // canvas changes nothing here: a locked-only press already cleared the selection.
+            if w.hypot(h) * f64::from(app.point_zoom()) < 3.0 {
+                let selected = app.session.active().is_some_and(|st| st.active_layer.is_some() || !st.selected_layers.is_empty());
+                let outside = app.session.active().is_some_and(|st| {
                     let rect = st.doc.bounds();
-                    let outside = b.start[0] < f64::from(rect.x0)
-                        || b.start[1] < f64::from(rect.y0)
-                        || b.start[0] >= f64::from(rect.x1)
-                        || b.start[1] >= f64::from(rect.y1);
-                    if outside {
-                        let _ = app.run("select.deselectLayers", json!({}));
-                    }
+                    b.start[0] < f64::from(rect.x0) || b.start[1] < f64::from(rect.y0) || b.start[0] >= f64::from(rect.x1) || b.start[1] >= f64::from(rect.y1)
+                });
+                if !b.add
+                    && outside
+                    && selected
+                    && let Err(e) = app.run("select.deselectLayers", json!({}))
+                {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
                 }
+                return true;
             }
+            // A flat box touches nothing.
             if w == 0.0 || h == 0.0 {
                 return true;
             }
@@ -137,29 +147,43 @@ mod tests {
         assert_eq!(sel, ids);
     }
 
-    /// #4923: clicking the pasteboard, but not empty canvas pixels, clears layer targets.
-    /// A Shift-click preserves the selection, and a pasteboard drag remains a marquee.
+    /// A pasteboard click deselects in one undoable step; a transparent canvas click does not.
     #[test]
     fn pasteboard_click_deselects_layers_without_affecting_empty_canvas_clicks() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 64, "height": 64, "background": "transparent"})).unwrap();
-        app.run("layer.new.layer", json!({})).unwrap();
+        app.session.execute("file.new", json!({"width": 64, "height": 64, "background": "transparent"})).unwrap();
+        app.sync_views();
+        let mut ids = Vec::new();
+        for x in [8, 40] {
+            app.session.execute("layer.new.layer", json!({})).unwrap();
+            app.session.execute("select.rect", json!({"x": x, "y": 8, "width": 16, "height": 16})).unwrap();
+            app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            ids.push(app.session.active().unwrap().active_layer.unwrap());
+        }
+        app.session.execute("select.deselect", json!({})).unwrap();
+        app.session.execute("layer.select", json!({"layer": ids[0].0, "mode": "add"})).unwrap();
         app.ui.tool = Tool::Move;
         app.ui.tool_options.move_auto_select = true;
-        let layer = app.session.active().unwrap().active_layer.unwrap();
-        assert_eq!(app.session.active().unwrap().selected_layers(), vec![layer]);
-        let click = |app: &mut PhotocraftApp, p: [f64; 2], mods| {
-            tool_event(app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, mods);
-            tool_event(app, ToolEvent::Up { x: p[0], y: p[1] }, mods);
-        };
-        click(&mut app, [30.0, 30.0], egui::Modifiers::NONE);
-        assert_eq!(app.session.active().unwrap().selected_layers(), vec![layer], "empty pixels are still in the canvas");
-        click(&mut app, [-10.0, 30.0], egui::Modifiers::SHIFT);
-        assert_eq!(app.session.active().unwrap().selected_layers(), vec![layer], "Shift adds, not clears");
-        click(&mut app, [-10.0, 30.0], egui::Modifiers::NONE);
+        assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
+        // A transparent canvas click doesn't clear the selection; ⇧-clicking the pasteboard does
+        // not clear it either.
+        drag(&mut app, [32.0, 50.0], [32.0, 50.0], egui::Modifiers::NONE);
+        assert_eq!(app.session.active().unwrap().selected_layers().len(), 2, "transparent canvas click keeps the selection");
+        drag(&mut app, [-10.0, -10.0], [-10.0, -10.0], egui::Modifiers::SHIFT);
+        assert_eq!(app.session.active().unwrap().selected_layers().len(), 2, "⇧-click keeps the selection");
+        app.session.execute("layer.select", json!({"layer": ids[1].0})).unwrap();
+        // A pasteboard click with one point of jitter is still a click.
+        drag(&mut app, [-10.0, -10.0], [-9.0, -10.0], egui::Modifiers::NONE);
         let st = app.session.active().unwrap();
         assert!(st.selected_layers().is_empty() && st.active_layer.is_none());
         assert!(app.layer_box.is_none());
+        // Undo brings the selection back; a click with nothing selected records nothing.
+        assert!(app.session.undo());
+        assert_eq!(app.session.active().unwrap().selected_layers(), vec![ids[1]]);
+        app.session.execute("select.deselectLayers", json!({})).unwrap();
+        let n = app.session.active().unwrap().history.entries().len();
+        drag(&mut app, [-10.0, -10.0], [-10.0, -10.0], egui::Modifiers::NONE);
+        assert_eq!(app.session.active().unwrap().history.entries().len(), n);
     }
 
     /// #10665: a fill layer, or pixels hanging past the canvas edge, aren't drawn on the

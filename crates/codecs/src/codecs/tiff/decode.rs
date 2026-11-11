@@ -775,6 +775,50 @@ fn prepared_warnings(p: &Prepared) -> Vec<DecodeWarning> {
     warnings
 }
 
+/// Decompression-bomb guard for [`prepare`]: refuses a file far too small for its declared size.
+fn check_stored_bytes(
+    f: &File<'_>,
+    (w, h): (u32, u32),
+    (spp, bits): (u64, u64),
+    cw: u64,
+    compression: u64,
+    (offsets, sizes): (&ifd::Entry, &ifd::Entry),
+    expected: u64,
+) -> Result<(), CodecError> {
+    // Decompression-bomb guard: no compression method expands data by more than a few thousand
+    // times (Deflate at most ~1032:1, LZW ~2730:1, PackBits 128:1), so a file far too small for
+    // its declared size is refused before the image is allocated. CCITT Group 4 codes a blank row
+    // of a strip or tile in one bit (a V0 code), so its bound is the chunk width (the decoder
+    // reads at most 65535): a blank landscape A4 page at 600 dpi, 7016 px wide, compresses past
+    // 4096:1 (Groups 3 and 2 are not decoded). Uncompressed data may be up
+    // to three quarters missing (that decodes with a `Truncated` warning). Only the bytes the
+    // strip or tile tables point at inside the file count (and never more than the file), so
+    // padding the file while pointing the chunks past its end does not raise the bound: the
+    // banded decoder has no whole-image `max_alloc` to fall back on.
+    let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(spp).saturating_mul(bits).div_ceil(8);
+    let ratio: u64 = match compression {
+        1 => 4,
+        32773 => 130,
+        4 => cw.clamp(4096, 65_535),
+        _ => 4096,
+    };
+    let len = f.b.len() as u64;
+    let mut held = 0u64;
+    for i in 0..expected {
+        if held >= len {
+            break;
+        }
+        if let (Some(at), Some(n)) = (f.uint(offsets, i), f.uint(sizes, i)) {
+            held = held.saturating_add(n.min(len.saturating_sub(at)));
+        }
+    }
+    let held = held.min(len);
+    if stored > held.saturating_mul(ratio).saturating_add(1 << 20) {
+        return Err(err(format!("the strips or tiles in this file hold {held} bytes, too few for a {w}x{h} image")));
+    }
+    Ok(())
+}
+
 /// Checks one directory and lays it out for decoding. `whole`: the image is decoded into one
 /// buffer, which `limits.max_alloc` bounds; otherwise only its size is checked here. Chunk
 /// tables larger than `limits.max_alloc` are refused before the `tiff` crate reads them.
@@ -916,42 +960,12 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
     } else {
         limits.check_size(w, h)?;
     }
-    // Decompression-bomb guard: no compression method expands data by more than a few thousand
-    // times (Deflate at most ~1032:1, LZW ~2730:1, PackBits 128:1), so a file far too small for
-    // its declared size is refused before the image is allocated. CCITT Group 4 codes a blank row
-    // of a strip or tile in one bit (a V0 code), so its bound is the chunk width (the decoder
-    // reads at most 65535): a blank landscape A4 page at 600 dpi, 7016 px wide, compresses past
-    // 4096:1 (Groups 3 and 2 are not decoded). Uncompressed data may be up
-    // to three quarters missing (that decodes with a `Truncated` warning). Only the bytes the
-    // strip or tile tables point at inside the file count (and never more than the file), so
-    // padding the file while pointing the chunks past its end does not raise the bound: the
-    // banded decoder has no whole-image `max_alloc` to fall back on.
     let compression = f.tag_uint(dir, ifd::TAG_COMPRESSION).unwrap_or(1);
-    let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(spp).saturating_mul(bits).div_ceil(8);
-    let ratio: u64 = match compression {
-        1 => 4,
-        32773 => 130,
-        4 => cw.clamp(4096, 65_535),
-        _ => 4096,
-    };
-    let len = f.b.len() as u64;
     let (offsets, sizes) = (
         dir.get(offsets_tag).ok_or_else(|| err("missing strip or tile offsets"))?,
         dir.get(counts_tag).ok_or_else(|| err("missing strip or tile byte counts"))?,
     );
-    let mut held = 0u64;
-    for i in 0..expected {
-        if held >= len {
-            break;
-        }
-        if let (Some(at), Some(n)) = (f.uint(offsets, i), f.uint(sizes, i)) {
-            held = held.saturating_add(n.min(len.saturating_sub(at)));
-        }
-    }
-    let held = held.min(len);
-    if stored > held.saturating_mul(ratio).saturating_add(1 << 20) {
-        return Err(err(format!("the strips or tiles in this file hold {held} bytes, too few for a {w}x{h} image")));
-    }
+    check_stored_bytes(f, (w, h), (spp, bits), cw, compression, (offsets, sizes), expected)?;
 
     let (wu, hu) = (w as usize, h as usize);
     let (cw, ch) = (usize::try_from(cw).map_err(|_| err("tile too wide"))?, usize::try_from(ch).map_err(|_| err("tile too tall"))?);
@@ -1073,11 +1087,6 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
         per_worker,
     })
 }
-
-/// The JPEGTables tag: quantization and Huffman tables shared by every JPEG strip or tile.
-const TAG_JPEG_TABLES: u16 = 347;
-/// The Predictor tag (1 none, 2 horizontal differencing, 3 floating point).
-const TAG_PREDICTOR: u16 = 317;
 
 /// Steps [`jpeg_sof`] may take per strip or tile beyond the file's length: room to read again
 /// the few header segments of strips or tiles that share one stream (a sparse file pointing its

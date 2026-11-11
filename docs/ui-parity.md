@@ -102,6 +102,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | With several layers selected and a selection, the Move tool moves the layers whole and the selection with them (ants follow the drag; one Move step) | done | #7538, `move_ui.rs` `carries_selection`, engine `layer.translate` `selection` |
 | Auto-Select with hover outline, box-select layers, double-click fit | missing | TOOL-214-4 |
 | Auto-Select bounding box and snapping follow the picked layer | partial | follow the previous layer (#2666) |
+| Move tool Auto-Select: a pasteboard click deselects every layer in one undoable step (⇧-click keeps them; a release within a few screen points is still a click); transparent pixels inside the canvas do not deselect; a drag on an empty spot draws the layer marquee | done | `tools/move_box.rs` `pasteboard_click_deselects_layers_without_affecting_empty_canvas_clicks`; locked hits: `move_shift_click_tests.rs` |
 | View › Extras (⌘H) hides the Move tool's transform controls; Show Transform Controls keeps its setting | done | `canvas.rs` `transform_controls_layers`, `hiding_extras_hides_the_move_transform_controls` (#6699) |
 | Several layers selected (⇧-click adds, box-select): Show Transform Controls frames them all, with every selected shape's outline, and its handles transform them all | done | `canvas.rs` `transform_controls_layers`, `several_selected_layers_share_one_frame_that_transforms_them_all`; `move_auto_select_tests.rs`; #6501 |
 | ⌘-drag temporary Move shows the box and snaps | partial | #2681 |
@@ -277,6 +278,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Move tool: a pasteboard click deselects every layer as one undoable step, tolerates a few screen points of jitter, records nothing when no layer is selected and reports a failure in the status bar; transparent canvas clicks still keep the selection, and locked hits keep main's Move Auto-Select rules. No percentage changed |
 | 2026-10-28 | minor | Brush and Eraser options bar outside the Pro themes: Hardness moved beside Size, so Opacity follows Mode in every theme, as in Photoshop and the Pro bar (#9784). Scores unchanged. |
 | 2026-11-08 | minor | Actions panel: an action or step row dragged onto the trash is deleted, and one dragged onto Create new action is duplicated right after itself (#12373) |
 | 2026-11-08 | minor | ⇧ while moving a guide already placed lands it on the nearest ruler tick too, as a guide dragged out of a ruler does (#3770); a ⇧-click still only selects it, and a guide ⌥ turns snaps along its new axis. In a pixel ruler ⇧ snaps guides and the zero point to whole pixels at least, also deep in, where the minor ticks are fractions of a pixel |
