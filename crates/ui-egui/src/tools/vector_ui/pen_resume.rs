@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 use serde_json::json;
 
 use super::pen::closing;
-use super::{Document, PenPath, PhotocraftApp, Tool};
+use super::{DocId, Document, PenPath, PhotocraftApp, Tool};
 
 /// A Pen or Curvature Pen path finished: closed on its first anchor, ended with ↩/Esc or by
 /// another tool. It keeps the path being drawn as it was just before, and the document the finish
@@ -20,6 +20,8 @@ pub(crate) struct FinishedPen {
     /// the allocation, so a later document can't reuse its address and match by mistake, and
     /// dies once History lets go of that document.
     doc: Weak<Document>,
+    /// The document the path was finished in: a new step there clears only its own Redo.
+    document: DocId,
     /// The History state the finish made. Redo must bring back this state, not just a document
     /// (`Session::redo` may hand back a copy of it).
     state: Option<u64>,
@@ -62,14 +64,16 @@ pub(super) fn draft_before_finish(pen: &PenPath) -> PenPath {
 
 /// After a commit of `draft` that left the document `before`: when the commit made a History
 /// step, remember the finish so Undo can give the path back. Forgets the finishes whose documents
-/// History no longer holds and the resumed ones, whose Redo the new step has cleared.
+/// History no longer holds and this document's resumed ones, whose Redo the new step has cleared
+/// (another document's Redo is untouched).
 pub(super) fn remember_finish(app: &mut PhotocraftApp, draft: PenPath, before: &Weak<Document>) {
     if is_current(app, before) {
         return;
     }
+    let Some(document) = app.session.active().map(|st| st.doc.id) else { return };
     let (doc, state) = (current_doc(app), history_state(app, false));
-    app.finished_pens.retain(|f| !f.resumed && f.doc.strong_count() > 0);
-    app.finished_pens.push(FinishedPen { draft, doc, state, resumed: false });
+    app.finished_pens.retain(|f| !(f.resumed && f.document == document) && f.doc.strong_count() > 0);
+    app.finished_pens.push(FinishedPen { draft, doc, document, state, resumed: false });
 }
 
 /// The draft given back belongs to the document state Undo went back to: its owner moves to that
@@ -125,9 +129,15 @@ fn resumed_finish(app: &PhotocraftApp) -> Option<usize> {
     app.finished_pens.iter().rposition(|f| f.resumed && is_current(app, &f.doc) && f.state == Some(next))
 }
 
-/// The draft as Undo gave it back, ignoring what only ties it to a document state.
+/// The draft as Undo gave it back, ignoring what only ties it to a document state. Its target
+/// counts: the same anchors redrawn in Shape mode are a new draft, not the Work Path's.
 fn same_draft(a: &PenPath, b: &PenPath) -> bool {
-    a.knots == b.knots && a.unlinked == b.unlinked && a.curvature == b.curvature && a.resumes == b.resumes && a.fixed == b.fixed
+    a.knots == b.knots
+        && a.unlinked == b.unlinked
+        && a.curvature == b.curvature
+        && a.resumes == b.resumes
+        && a.fixed == b.fixed
+        && a.owner.as_ref().map(|o| &o.target) == b.owner.as_ref().map(|o| &o.target)
 }
 
 /// Edit › Redo would put back the finish of the path the Pen is drawing, edited since Undo gave
@@ -171,8 +181,47 @@ pub(crate) fn pen_finish_on_redo(app: &mut PhotocraftApp) -> Result<bool, String
     Ok(true)
 }
 
+/// Edit › Undo and Redo, and the History panel's Step Backward and Step Forward, which step the
+/// same way: a path being drawn loses its last anchor, Undo back to a finish gives the path back
+/// to the Pen, and Redo finishes it again. `None` leaves `id` to History.
+pub(crate) fn pen_history_step(app: &mut PhotocraftApp, id: &str) -> Option<Result<(), String>> {
+    let undo = match id {
+        "edit.undo" | "history.stepBackward" => true,
+        "edit.redo" | "history.stepForward" => false,
+        _ => return None,
+    };
+    if box_steps(app, id) {
+        return None;
+    }
+    if undo && super::pen_undo_last_point(app) {
+        return Some(Ok(()));
+    }
+    match if undo { pen_resume_on_undo(app) } else { pen_finish_on_redo(app) } {
+        Ok(false) => None,
+        r => Some(r.map(|_| ())),
+    }
+}
+
+/// Whether [`pen_history_step`] decides if `id` is enabled: Undo and Step Backward take back the
+/// anchors of a path being drawn even with no History step yet; Redo and Step Forward grey out
+/// while they would put a finished path back beside its edited draft ([`pen_blocks_redo`]).
+pub(crate) fn pen_history_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
+    let undo = match id {
+        "edit.undo" | "history.stepBackward" => true,
+        "edit.redo" | "history.stepForward" => false,
+        _ => return None,
+    };
+    if box_steps(app, id) {
+        return None;
+    }
+    if undo { app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()).then_some(true) } else { pen_blocks_redo(app).then_some(false) }
+}
+
 /// Do Free Transform's or the Crop tool's own box steps take `id` (Undo/Redo) rather than History
-/// (`transform_tool::intercept`, `crop_ui::intercept`)?
+/// (`transform_tool::intercept`, `crop_ui::intercept`)? An open Free Transform or a drawn crop
+/// frame also holds the History panel's steps (`panels::history`, `crop_ui::holds_history`).
 pub(crate) fn box_steps(app: &PhotocraftApp, id: &str) -> bool {
-    crate::transform_tool::is_enabled(app, id).is_some() || crate::crop_ui::is_enabled(app, id).is_some()
+    crate::transform_tool::is_enabled(app, id).is_some()
+        || crate::crop_ui::is_enabled(app, id).is_some()
+        || (id.starts_with("history.") && (app.ui.transform.is_some() || crate::crop_ui::holds_history(app, id)))
 }

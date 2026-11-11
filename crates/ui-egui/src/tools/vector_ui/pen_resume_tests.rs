@@ -197,7 +197,8 @@ fn undo_gives_every_finished_path_back_to_the_pen_not_just_the_last() {
     let mut app = app();
     app.ui.tool = Tool::Pen;
     let mut drafts = Vec::new();
-    // Three paths, finished by closing, by ↩ and by choosing another tool.
+    // Three paths, finished by closing, by Esc and by choosing another tool (↩ would deselect the
+    // Work Path, and the next path would replace it, #12892).
     for (n, dy) in [0.0, 50.0, 100.0].into_iter().enumerate() {
         crate::tool_memory::select(&mut app, Tool::Pen);
         for (x, y) in [(20.0, 20.0 + dy), (120.0, 20.0 + dy), (120.0, 60.0 + dy)] {
@@ -210,7 +211,7 @@ fn undo_gives_every_finished_path_back_to_the_pen_not_just_the_last() {
                 pen_down(&mut app, 20.0, 20.0 + dy, false);
                 pen_up(&mut app);
             }
-            1 => press(&mut app, egui::Key::Enter, egui::Modifiers::NONE),
+            1 => press(&mut app, egui::Key::Escape, egui::Modifiers::NONE),
             _ => {
                 crate::tool_memory::select(&mut app, Tool::Move);
                 pen_commit(&mut app, false);
@@ -422,7 +423,7 @@ fn work_path(app: &PhotocraftApp) -> Option<Path> {
 
 type Knots = Vec<[[f64; 2]; 3]>;
 
-/// An open path of two anchors ended with ↩, then carried on from its last anchor (#6593) by one
+/// An open path of two anchors ended with Esc (which keeps it selected, #12892), then carried on from its last anchor (#6593) by one
 /// more anchor and ended again. The open path and the carried-on draft's knots.
 fn carry_on_a_path(app: &mut PhotocraftApp) -> (Option<Path>, Knots, Knots) {
     app.ui.tool = Tool::Pen;
@@ -431,7 +432,7 @@ fn carry_on_a_path(app: &mut PhotocraftApp) -> (Option<Path>, Knots, Knots) {
         pen_up(app);
     }
     let first = app.ui.pen.as_ref().unwrap().knots.clone();
-    press(app, egui::Key::Enter, egui::Modifiers::NONE);
+    press(app, egui::Key::Escape, egui::Modifiers::NONE);
     let open = work_path(app);
     pen_down(app, 120.0, 20.0, false);
     pen_up(app);
@@ -440,7 +441,7 @@ fn carry_on_a_path(app: &mut PhotocraftApp) -> (Option<Path>, Knots, Knots) {
     pen_up(app);
     let carried = app.ui.pen.as_ref().unwrap().knots.clone();
     assert_eq!(carried.len(), 3);
-    press(app, egui::Key::Enter, egui::Modifiers::NONE);
+    press(app, egui::Key::Escape, egui::Modifiers::NONE);
     let work = work_path(app).unwrap();
     assert_eq!((work.subpaths.len(), work.subpaths[0].knots.len()), (1, 3), "the path grew in place");
     (open, first, carried)
@@ -510,4 +511,111 @@ fn a_path_given_back_by_undo_is_owned_by_the_current_document_state() {
     press(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
     assert!(app.ui.pen.is_none() && !app.ui.status_error, "{}", app.ui.status);
     assert_eq!(work_path(&app).unwrap().subpaths[0].knots.len(), 3);
+}
+
+/// Three anchors drawn with the Pen and ended with ↩; their knots.
+fn enter_path(app: &mut PhotocraftApp) -> Knots {
+    app.ui.tool = Tool::Pen;
+    for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+        pen_down(app, x, y, false);
+        pen_up(app);
+    }
+    let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+    press(app, egui::Key::Enter, egui::Modifiers::NONE);
+    assert!(app.ui.pen.is_none() && work_path(app).is_some());
+    knots
+}
+
+/// #6413 review: Edit › Step Backward and Step Forward (the History panel's too) step a Pen path
+/// as Undo and Redo do, instead of deleting the finished path whole.
+#[test]
+fn step_backward_and_forward_step_a_pen_path_as_undo_and_redo_do() {
+    let mut app = app();
+    let knots = closed_triangle(&mut app);
+    menu(&mut app, "history.stepBackward");
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots.clone()), "the open path is back on the Pen");
+    assert!(work_path(&app).is_none());
+    menu(&mut app, "history.stepForward");
+    assert!(app.ui.pen.is_none());
+    assert!(work_path(&app).unwrap().subpaths[0].closed, "Step Forward closes it again");
+    menu(&mut app, "history.stepBackward");
+    menu(&mut app, "history.stepBackward");
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots[..2].to_vec(), "then the last anchor goes");
+
+    // A first path's anchors step back with no History step to go back to.
+    let mut app = self::app();
+    app.ui.tool = Tool::Pen;
+    pen_down(&mut app, 20.0, 20.0, false);
+    pen_up(&mut app);
+    assert!(crate::menus::is_enabled(&app, "history.stepBackward"));
+    menu(&mut app, "history.stepBackward");
+    assert!(app.ui.pen.is_none());
+}
+
+/// #6413 review: a path finished in another document leaves this document's Redo of a path given
+/// back by Undo alone; the next Undo gives the path back again rather than deleting it.
+#[test]
+fn a_path_finished_in_another_document_keeps_this_documents_pen_redo() {
+    let mut app = app();
+    let knots = enter_path(&mut app);
+    let finished = work_path(&app);
+    menu(&mut app, "edit.undo");
+    for _ in 0..knots.len() {
+        menu(&mut app, "edit.undo");
+    }
+    assert!(app.ui.pen.is_none() && work_path(&app).is_none(), "every anchor taken back");
+
+    app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+    enter_path(&mut app);
+    assert!(app.session.set_active(0));
+
+    menu(&mut app, "edit.redo");
+    assert_eq!(work_path(&app), finished);
+    menu(&mut app, "edit.undo");
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots), "Undo gives the path back to the Pen");
+    assert!(work_path(&app).is_none());
+}
+
+/// #6413 review: the same anchors redrawn in Shape mode after Undo took the path given back apart
+/// are a new draft: Redo doesn't throw it away to bring back the Work Path.
+#[test]
+fn redo_leaves_the_same_anchors_redrawn_in_shape_mode_alone() {
+    let mut app = app();
+    let knots = enter_path(&mut app);
+    menu(&mut app, "edit.undo");
+    for _ in 0..knots.len() {
+        menu(&mut app, "edit.undo");
+    }
+    assert!(app.ui.pen.is_none());
+    app.ui.tool_options.vector_mode = "shape".into();
+    for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+        pen_down(&mut app, x, y, false);
+        pen_up(&mut app);
+    }
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots);
+    assert!(!crate::menus::is_enabled(&app, "edit.redo"), "Redo greys out over the new draft");
+    menu(&mut app, "edit.redo");
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots), "the Shape draft is still being drawn");
+    assert!(work_path(&app).is_none(), "no Work Path brought back beside it");
+}
+
+/// #6413 review: a draft the document refuses (a locked shape layer) and Esc keeps as the Work
+/// Path comes back to the Pen on Undo too.
+#[test]
+fn undo_gives_back_a_refused_draft_esc_kept_as_the_work_path() {
+    let mut app = app();
+    app.ui.tool_options.vector_mode = "shape".into();
+    close_triangle(&mut app);
+    app.run("layer.lockLayers", json!({"all": true})).unwrap();
+    app.ui.tool_options.pen_path_op = "subtract".into();
+    for (x, y) in [(40.0, 40.0), (100.0, 40.0), (100.0, 100.0)] {
+        pen_down(&mut app, x, y, false);
+        pen_up(&mut app);
+    }
+    let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+    press(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(app.ui.pen.is_none() && work_path(&app).is_some(), "kept as the Work Path: {}", app.ui.status);
+    menu(&mut app, "edit.undo");
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots), "the draft is back on the Pen");
+    assert!(work_path(&app).is_none());
 }

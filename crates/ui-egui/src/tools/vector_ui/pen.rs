@@ -423,13 +423,17 @@ pub fn pen_end(app: &mut PhotocraftApp) {
     if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
         app.ui.direct_selection = Default::default();
     }
+    let draft = super::pen_resume::draft_before_finish(&pen);
     if pen.curvature {
         curvature_refresh(&mut pen, false);
     }
     let refused = std::mem::take(&mut app.ui.status);
+    let before = super::pen_resume::current_doc(app);
     let kept = app.run("path.set", json!({"name": "work", "op": "combine", "path": pen_to_json(&pen, false)})).is_ok();
     if kept {
         app.ui.selected_path = Some("work".into());
+        // Undo gives the path back to the Pen here too (`pen_resume_on_undo`).
+        super::pen_resume::remember_finish(app, draft, &before);
     }
     let outcome = if kept { tl!("The path was kept as the Work Path") } else { tl!("The path was discarded") };
     app.ui.status = format!("{refused} ({outcome})");

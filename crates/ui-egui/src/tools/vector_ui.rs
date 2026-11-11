@@ -239,7 +239,9 @@ mod pen_enter_deselects_tests;
 mod pen_mode_menu_tests;
 
 pub(crate) use pen::freeform_locked_shape;
-pub(crate) use pen_resume::{FinishedPen, box_steps, pen_blocks_redo, pen_finish_on_redo, pen_resume_on_undo};
+#[cfg(test)]
+use pen_resume::pen_finish_on_redo;
+pub(crate) use pen_resume::{FinishedPen, box_steps, pen_history_enabled, pen_history_step};
 
 /// Where a Pen draft goes, captured at its first anchor.
 #[derive(Clone, Debug)]
