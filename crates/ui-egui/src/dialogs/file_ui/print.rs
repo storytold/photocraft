@@ -98,6 +98,18 @@ pub(super) fn driver_paper_is_wide(f: &Map<String, Value>) -> bool {
     matches!((side(0), side(1)), (Some(w), Some(h)) if w > h)
 }
 
+/// Leaves the Windows driver's already-oriented page representation for editable PDF paper.
+/// Preserve the page's visible direction before clearing the marker, so later orientation edits
+/// are applied once rather than being overridden by the stale driver state.
+pub(super) fn leave_driver_page(f: &mut Map<String, Value>) {
+    if f.remove("__paperAlreadyOriented") == Some(json!(true)) {
+        let orientation = if driver_paper_is_wide(f) { "landscape" } else { "portrait" };
+        f.insert("orientation".into(), json!(orientation));
+    }
+    f.remove("__driverPageInitialized");
+    f.remove("printable");
+}
+
 /// The Orientation buttons: the driver settings (or the printer's own) turned portrait or
 /// landscape through `file.print.page`. An error stays on the dialog, with the settings left as
 /// they were.
@@ -376,8 +388,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
         }
     } else {
         // PDF output and previews have no driver page: Scale to Fit Media uses the paper.
-        f.remove("__driverPageInitialized");
-        f.remove("printable");
+        leave_driver_page(f);
     }
     let p = print_params(f);
     let mut browse = false;
@@ -561,6 +572,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 });
                 number(ui, f, "copies", tl!("Copies"), 1.0..=999.0, "", 1.0);
                 check(ui, f, "collate", tl!("Collate"), true);
+                #[cfg(not(target_os = "macos"))]
                 dropdown_str(
                     ui,
                     "print-duplex",
@@ -570,6 +582,10 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     &[("printerDefault", tl!("Printer Default")), ("simplex", tl!("Off")), ("longEdge", tl!("Long Edge")), ("shortEdge", tl!("Short Edge"))],
                     220.0,
                 );
+                #[cfg(target_os = "macos")]
+                if !b(f, "dryRun", false) && s(f, "output", "").is_empty() {
+                    ui.label(egui::RichText::new(tl!("Choose two-sided settings in the macOS print sheet.")).color(t.text_dim).size(11.0));
+                }
                 print_paper_controls(ui, f);
             }
             check(ui, f, "autoRotate", tl!("Auto-Rotate Image"), true);

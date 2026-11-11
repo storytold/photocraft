@@ -939,6 +939,7 @@ pub fn preview_thumbnail(doc: &Document, grayscale: bool, max_side: u32) -> phot
     image
 }
 
+/// Converts linear RGB to an encoded grayscale preview sample.
 fn linear_gray_u8(r: f32, g: f32, b: f32) -> u8 {
     ((0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -1476,8 +1477,7 @@ fn native_rgb_compatible(page: &PrintPage, handling: &str) -> bool {
 /// Where the settings of the last print are kept in Preferences' remembered dialog settings.
 pub const REMEMBERED: &str = "file.print";
 
-/// Print One Copy repeats these, and Print opens with them. They are kept in the preferences as
-/// well, so they survive a relaunch, as Photoshop's do (#7410).
+/// Applies the tighter Windows direct-print paper limit without reducing portable PDF exports.
 fn validate_spool_paper(paper: (f64, f64), backend: Option<craft_print::Backend>, cmd: &str) -> Result<()> {
     // craft-print's Windows DEVMODE transport is bounded to 128 inches per side.
     // Saving a PDF still allows the PDF 1.4 limit of 200 inches on every platform.
@@ -1487,6 +1487,7 @@ fn validate_spool_paper(paper: (f64, f64), backend: Option<craft_print::Backend>
     Ok(())
 }
 
+/// Remembers repeatable print inputs while dropping one-shot output and transport choices.
 fn remember_print(s: &mut Session, p: &Value) {
     let mut remembered = p.clone();
     if let Some(o) = remembered.as_object_mut() {

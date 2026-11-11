@@ -242,15 +242,18 @@ fn page_setup_for(paper_pt: (f64, f64), landscape: bool) -> Vec<(String, Seed)> 
 }
 
 #[cfg(target_os = "linux")]
+/// Converts an engine print job into the portal's initial GtkPrintSettings values.
 fn settings(job: &PrintJob) -> Vec<(String, Seed)> {
     settings_for(job.copies, job.paper, job.landscape)
 }
 
 #[cfg(target_os = "linux")]
+/// Converts an engine print job into the portal's initial GtkPageSetup values.
 fn page_setup(job: &PrintJob) -> Vec<(String, Seed)> {
     page_setup_for(job.paper, job.landscape)
 }
 
+/// Converts native-confirmation settings to GtkPrintSettings, retaining safe CUPS options.
 fn system_settings(settings: &SystemPrintSettings) -> Vec<(String, Seed)> {
     let mut values = settings_for(settings.copies, settings.paper, settings.landscape);
     if let Some(printer) = settings.printer.as_deref() {
@@ -260,8 +263,8 @@ fn system_settings(settings: &SystemPrintSettings) -> Vec<(String, Seed)> {
     if let Some(duplex) = settings.duplex {
         let value = match duplex {
             SystemPrintDuplex::Simplex => "simplex",
-            SystemPrintDuplex::LongEdge => "vertical",
-            SystemPrintDuplex::ShortEdge => "horizontal",
+            SystemPrintDuplex::LongEdge => "horizontal",
+            SystemPrintDuplex::ShortEdge => "vertical",
         };
         values.push(("duplex".into(), text(value)));
     }
@@ -322,8 +325,12 @@ mod tests {
         assert!(values.contains(&("printer".into(), text("Studio"))));
         assert!(values.contains(&("n-copies".into(), text("3"))));
         assert!(values.contains(&("collate".into(), text("false"))));
-        assert!(values.contains(&("duplex".into(), text("vertical"))));
+        assert!(values.contains(&("duplex".into(), text("horizontal"))));
         assert!(values.contains(&("cups-InputSlot".into(), text("Tray2"))));
         assert!(!values.iter().any(|(key, _)| key == "cups-media"));
+
+        let mut short_edge = settings;
+        short_edge.duplex = Some(SystemPrintDuplex::ShortEdge);
+        assert!(system_settings(&short_edge).contains(&("duplex".into(), text("vertical"))));
     }
 }
