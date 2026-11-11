@@ -26,6 +26,22 @@ pub(crate) fn decode_page(bytes: &[u8], page: Option<usize>, limits: &Limits) ->
     Ok(img)
 }
 
+/// Inspect the selected directory's sample classification without decoding any pixels.
+/// Mirror document import: inspect bands first, then the default whole-image route when
+/// auxiliary channels are present. Preparation reads metadata, not strips or tiles.
+pub(crate) fn has_unretained_samples(bytes: &[u8], offset: u64) -> Result<bool, CodecError> {
+    let file = File::parse(bytes).ok_or_else(|| err("not a TIFF or BigTIFF header"))?;
+    let dir = file.ifd(offset).ok_or_else(|| err("image directory cut off"))?;
+    let bands = prepare(&file, &dir, &Limits::banded(), cfg!(target_pointer_width = "32"))?;
+    if bands.extras_over_limit > 0 || bands.extras_dropped > 0 {
+        return Ok(true);
+    }
+    if bands.lay.extra_at.is_empty() {
+        return Ok(false);
+    }
+    Ok(prepare(&file, &dir, &Limits::default(), true)?.extras_dropped > 0)
+}
+
 /// The file, page `page`'s directory (`None`: the default page) and the
 /// [`DecodeWarning::MorePages`] the page opens with when the file holds more.
 fn open_page(bytes: &[u8], page: Option<usize>) -> Result<(File<'_>, Ifd, Option<DecodeWarning>), CodecError> {
@@ -165,6 +181,18 @@ impl<'a> TiffBands<'a> {
         self.p.lay.out_row().checked_mul(rows).ok_or_else(|| CodecError::LimitExceeded("band size".into()))
     }
 
+    /// A conservative bound on the decoder's own scratch memory in a whole-image decode of this
+    /// page (as `decode_page` does it): one strip or tile per worker that decodes a band at
+    /// once. Zero when strips are decoded in place. Add the decoded image itself and any
+    /// extra-sample planes.
+    pub fn decode_scratch_bytes(&self) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        let workers = rayon::current_num_threads() as u64;
+        #[cfg(target_arch = "wasm32")]
+        let workers = 1;
+        scratch_bound(self.p.lay.direct(), self.p.scratch_bytes as u64, self.p.band_rows, self.p.h, workers)
+    }
+
     /// Decodes the image a group of bands at a time, in order, handing each group to `sink`
     /// with the position of its top-left pixel in the image [`TiffBands::dimensions`] gives. A
     /// group is about 64 MiB (at least one strip or row of tiles per worker, at most `max_alloc`;
@@ -217,6 +245,16 @@ impl<'a> TiffBands<'a> {
         }
         Ok(())
     }
+}
+
+/// [`TiffBands::decode_scratch_bytes`]'s bound: none when chunks are decoded in place,
+/// otherwise one chunk per worker that decodes a band, and never more chunks than the image has.
+fn scratch_bound(direct: bool, chunk_bytes: u64, band_rows: usize, h: u32, workers: u64) -> u64 {
+    if direct {
+        return 0;
+    }
+    let bands = u64::from(h).div_ceil(band_rows.max(1) as u64).max(1);
+    chunk_bytes.saturating_mul(workers.min(bands))
 }
 
 /// The Orientation (1–8) of page `page` (`None`: the default page); 1 when absent, malformed
@@ -458,6 +496,104 @@ fn multiband_layout(photometric: u64, has_alpha: bool, gray_alpha: bool) -> Chan
     }
 }
 
+const TAG_PREDICTOR: u16 = 317;
+const TAG_JPEG_TABLES: u16 = 347;
+/// Marker segments looked at before a JPEG chunk's frame header. Real chunks hold a handful
+/// (SOI, DRI, SOF, DHT, DQT, SOS); the cap keeps chunks that all point at one long run of
+/// segments from costing chunks x segments.
+const MAX_JPEG_CHUNK_MARKERS: usize = 256;
+
+/// Fill bytes (`0xFF` runs before a marker) all JPEG chunks of a TIFF may scan together. Each
+/// distinct chunk offset rescans its own run, so this bounds the total work.
+const MAX_JPEG_FILL_BYTES: usize = 1 << 24;
+
+/// The frame header (width, height, components) of a JPEG stream: `Ok(None)` when it has none
+/// before its first scan, `Err` when more than [`MAX_JPEG_CHUNK_MARKERS`] segments come first.
+fn jpeg_frame(b: &[u8], fill: &mut usize) -> Result<Option<(usize, usize, usize)>, CodecError> {
+    if b.get(..2) != Some(&[0xFF, 0xD8][..]) {
+        return Ok(None);
+    }
+    jpeg_frame_from(b, 2, fill)
+}
+
+/// [`jpeg_frame`] from byte `start` on, with no SOI check. `fill` counts the fill bytes scanned.
+fn jpeg_frame_from(b: &[u8], start: usize, fill: &mut usize) -> Result<Option<(usize, usize, usize)>, CodecError> {
+    let be16 = |at: usize| b.get(at..at + 2).and_then(|v| <[u8; 2]>::try_from(v).ok()).map(|v| usize::from(u16::from_be_bytes(v)));
+    let mut i = start;
+    for _ in 0..MAX_JPEG_CHUNK_MARKERS {
+        while b.get(i) == Some(&0xFF) && b.get(i + 1) == Some(&0xFF) {
+            i += 1;
+            *fill += 1;
+            if *fill > MAX_JPEG_FILL_BYTES {
+                return Err(CodecError::LimitExceeded("JPEG strips or tiles scan too many fill bytes".into()));
+            }
+        }
+        if b.get(i) != Some(&0xFF) {
+            return Ok(None);
+        }
+        let Some(&code) = b.get(i + 1) else { return Ok(None) };
+        match code {
+            0xC0..=0xCF if !matches!(code, 0xC4 | 0xC8 | 0xCC) => {
+                let frame = be16(i + 5).zip(be16(i + 7)).zip(b.get(i + 9));
+                return Ok(frame.map(|((h, w), &nc)| (w, h, usize::from(nc))));
+            }
+            0xD9 | 0xDA => return Ok(None),
+            0x01 | 0xD0..=0xD8 => i += 2,
+            _ => match be16(i + 2) {
+                Some(len) => i += 2 + len,
+                None => return Ok(None),
+            },
+        }
+    }
+    Err(err("a JPEG strip or tile has too many marker segments before its frame header"))
+}
+
+/// Refuses JPEG strips or tiles whose embedded frame is larger than the strip or tile
+/// (`nominal`, unclipped) or whose decoded frame exceeds `cap` bytes. Chunks sharing an offset
+/// are checked once.
+fn check_jpeg_chunks(
+    f: &File<'_>,
+    offsets: &ifd::Entry,
+    sizes: &ifd::Entry,
+    expected: u64,
+    tables: Option<&[u8]>,
+    nominal: (usize, usize),
+    cap: usize,
+) -> Result<(), CodecError> {
+    // The list below holds 16 bytes per chunk; bound it by the scratch cap, not only by the file size.
+    if expected.saturating_mul(16) > cap as u64 {
+        return Err(CodecError::LimitExceeded(format!("{expected} JPEG strips or tiles")));
+    }
+    // Reserve exactly the budgeted length: collecting from filter_map could over-allocate past `cap`.
+    let mut chunks: Vec<(u64, u64)> = Vec::with_capacity(expected as usize);
+    chunks.extend((0..expected).filter_map(|i| Some((f.uint(offsets, i)?, f.uint(sizes, i)?))));
+    chunks.sort_unstable();
+    // Entries sharing an offset but not a byte count are different chunks: check each one.
+    chunks.dedup();
+    let len = f.b.len() as u64;
+    let mut fill = 0;
+    for (at, n) in chunks {
+        let end = at.saturating_add(n).min(len);
+        let Some(data) = usize::try_from(at).ok().zip(usize::try_from(end).ok()).and_then(|(a, e)| f.b.get(a..e)) else { continue };
+        let mut frame = match jpeg_frame(data, &mut fill)? {
+            Some(frame) => Some(frame),
+            None => tables.map(|t| jpeg_frame(t, &mut fill)).transpose()?.flatten(),
+        };
+        // Without SOI, the tiff crate drops the chunk's first two bytes, so a frame at offset 2 is decoded.
+        if frame.is_none() && data.get(..2) != Some(&[0xFF, 0xD8][..]) {
+            frame = jpeg_frame_from(data, 2, &mut fill)?;
+        }
+        let Some((w, h, nc)) = frame else { continue };
+        if w > nominal.0 || h > nominal.1 {
+            return Err(err(format!("a {w}x{h} JPEG frame in a {}x{} strip or tile", nominal.0, nominal.1)));
+        }
+        if w.checked_mul(h).and_then(|px| px.checked_mul(nc.max(1))).is_none_or(|bytes| bytes > cap) {
+            return Err(CodecError::LimitExceeded(format!("a {w}x{h} JPEG strip or tile")));
+        }
+    }
+    Ok(())
+}
+
 /// The chunk tables must match the geometry. Checked in 64 bits, before the `tiff` crate does
 /// the same arithmetic in narrower types.
 fn check_chunk_tables(f: &File<'_>, dir: &Ifd, (w, h): (u32, u32), spp: u64, planar: bool, tiled: bool) -> Result<(u64, u64, u64), CodecError> {
@@ -559,6 +695,9 @@ pub(super) struct Prepared {
     extras_over_limit: usize,
     /// Extra samples left out because they did not fit the allocation budget beside the image.
     extras_dropped: u32,
+    /// Bytes one strip or tile decodes to, before clipping to the image: a worker's scratch
+    /// buffer. A strip is the full width; a tile keeps its declared size even at an edge.
+    scratch_bytes: usize,
 }
 
 impl Prepared {
@@ -631,6 +770,14 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
     // neither allocated nor read.
     if let Some(e) = dir.entries.iter().find(|e| ifd::STRUCTURAL_TAGS.contains(&e.tag) && f.data(e).is_none()) {
         return Err(err(format!("tag {} points past the end of the file", e.tag)));
+    }
+    // This parser reads the first entry of a tag and the `tiff` crate the last, so a repeated
+    // structural tag (a small SamplesPerPixel first, a large one last) would be checked here with
+    // one value and sized by the crate with another.
+    let mut structural: Vec<u16> = dir.entries.iter().map(|e| e.tag).filter(|t| ifd::STRUCTURAL_TAGS.contains(t)).collect();
+    structural.sort_unstable();
+    if let Some(w) = structural.windows(2).find(|w| w[0] == w[1]) {
+        return Err(err(format!("tag {} appears more than once", w[0])));
     }
     let need = |tag: u16, name: &str| f.tag_uint(dir, tag).ok_or_else(|| err(format!("missing or unreadable {name}")));
     let w = u32::try_from(need(ifd::TAG_WIDTH, "ImageWidth")?).map_err(|_| err("ImageWidth out of range"))?;
@@ -803,6 +950,28 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
         .and_then(|s| s.checked_mul(src.bytes()))
         .ok_or_else(|| CodecError::LimitExceeded("tile size".into()))?;
     let scratch_cap = chunk_bytes.saturating_mul(2).max(64 << 20).min(limits.alloc_usize());
+    // The floating-point predictor makes the `tiff` crate read each row of a tile at its full
+    // stored width (TileWidth, not clipped to the image) into a buffer of its own, outside the
+    // scratch buffer: that row must fit the same cap.
+    if f.tag_uint(dir, TAG_PREDICTOR) == Some(3) {
+        let stored_row = cw.checked_mul(chunk_spp).and_then(|n| n.checked_mul(src.bytes()));
+        if stored_row.is_none_or(|n| n > scratch_cap) {
+            return Err(CodecError::LimitExceeded(format!("a {cw} sample wide predicted tile row")));
+        }
+    }
+    // JPEG-compressed chunks (compression 7) are decoded by the `tiff` crate into a whole JPEG
+    // image sized by the embedded frame header, with no limits, before the chunk's bytes are
+    // taken. The frame must fit the strip or tile it stands for, as libtiff requires, and the
+    // scratch cap.
+    if compression == 7 {
+        let tables = dir.get(TAG_JPEG_TABLES).and_then(|e| f.data(e));
+        let (nominal_w, nominal_h) =
+            (cw, if tiled { ch } else { f.tag_uint(dir, ifd::TAG_ROWS_PER_STRIP).and_then(|r| usize::try_from(r).ok()).unwrap_or(hu) });
+        check_jpeg_chunks(f, offsets, sizes, expected, tables, (nominal_w, nominal_h), scratch_cap)?;
+    }
+    // One chunk as the decoder actually reads it: a tile keeps its declared size at an edge,
+    // which can be more than the clipped image bytes above.
+    let scratch_bytes = cw.saturating_mul(ch).saturating_mul(chunk_spp).saturating_mul(src.bytes());
     let (extra_at, extras_over_limit) = extra_sample_indices(spp as usize, color, alpha_at, out_layout.has_alpha());
     let mut lay = Layout {
         w: wu,
@@ -846,6 +1015,7 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
         extra_kinds: extra,
         extras_over_limit,
         extras_dropped,
+        scratch_bytes,
     })
 }
 
@@ -872,5 +1042,16 @@ mod tests {
         assert!(prepared_warnings(&prepare(&file, &dir, &Limits::default(), true).unwrap()).is_empty());
         let whole = decode(&bytes, &tight).unwrap();
         assert_eq!(whole.warnings, prepared_warnings(&p));
+    }
+
+    /// The scratch bound a whole-image decode reserves: none for chunks decoded in place, one
+    /// chunk per worker otherwise, never more chunks than the image has bands.
+    #[test]
+    fn whole_image_scratch_is_one_chunk_per_worker() {
+        assert_eq!(scratch_bound(true, 1 << 20, 16, 1024, 8), 0, "strips decoded in place need no scratch");
+        assert_eq!(scratch_bound(false, 1 << 20, 16, 1024, 8), 8 << 20, "one strip per worker");
+        assert_eq!(scratch_bound(false, 1 << 20, 16, 32, 8), 2 << 20, "never more strips than the image has");
+        assert_eq!(scratch_bound(false, 1 << 20, 0, 2, 8), 2 << 20, "a zero band height counts as one row");
+        assert_eq!(scratch_bound(false, u64::MAX, 1, 1, 8), u64::MAX, "the bound saturates");
     }
 }

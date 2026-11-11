@@ -153,7 +153,7 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
             .with_app_id(APP_ID)
             .with_title("PhotoCraft")
             .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([760.0, 480.0])
+            .with_min_inner_size(photocraft_ui_egui::MIN_WINDOW_SIZE)
             .with_drag_and_drop(true)
             .with_decorations(!custom_titlebar)
             .with_fullsize_content_view(true)
@@ -588,6 +588,7 @@ fn main() -> eframe::Result {
                     && app.session.prefs().performance.effective_rendering_mode() != photocraft_engine::prefs::RenderingMode::Cpu
                 {
                     app.set_wgpu(rs);
+                    app.start_compositor(&cc.egui_ctx);
                 } else {
                     // The window still draws with wgpu: record its errors instead of panicking,
                     // and notice when the device is lost (#3438).
@@ -669,9 +670,19 @@ fn main() -> eframe::Result {
             if let Some(monitor) = tablet::install_windows() {
                 let _ = tablet_monitor_win.set(monitor);
             }
+            // With Windows Ink disabled for the tablet, WinTab supplies the pen pressure, tilt,
+            // rotation and eraser end; the vendor driver still moves the cursor.
+            #[cfg(target_os = "windows")]
+            if let Some(poll) =
+                tablet::install_wintab(cc, &app.stylus.feed, app.session.prefs().tools.tablet_input == photocraft_engine::prefs::TabletInput::WinTab)
+            {
+                app.services.tablet_poll = Some(poll);
+            }
             #[cfg(target_os = "linux")]
             tablet::spawn_x11(&app.stylus.feed, display);
             app.services.right_button_down = tablet::right_button_service();
+            app.services.pen_end = tablet::pen_end_service();
+            app.services.pen_screen_px = tablet::pen_screen_service();
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if !unreadable_paths.is_empty() {
@@ -1030,7 +1041,7 @@ mod tests {
             read
         };
 
-        let r = read(r#"{"interface":{"enableAnimations":"nope"},"integrations":{"allowAgentControl":false,"controlPort":7878}}"#);
+        let r = read(r#"{"interface":{"showTooltips":"nope"},"integrations":{"allowAgentControl":false,"controlPort":7878}}"#);
         assert!(!r.allow_agent_control, "a bad value in another section");
         assert_eq!(r.control_port, 7878);
         let r = read(r#"{"integrations":{"allowAgentControl":false,"controlPort":"x"}}"#);
