@@ -91,6 +91,55 @@ fn closing_the_camera_raw_window_cancels() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
 
+/// Coming back to PhotoCraft (⌘Tab, the Dock) can put the main window over Camera Raw's, or
+/// leave Camera Raw minimized: the main window gaining focus, or a click on its dimmed surface,
+/// restores Camera Raw's window and focuses it, once per activation.
+#[test]
+fn the_main_window_gaining_focus_or_a_click_raises_the_camera_raw_window() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+    ctx.set_embed_viewports(false);
+    // A multi-window backend for this thread: Camera Raw gets a window of its own, as on a desktop,
+    // and the commands its window receives are recorded.
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = sent.clone();
+    egui::Context::set_immediate_viewport_renderer(move |ctx, immediate| {
+        let id = immediate.ids.this;
+        let mut callback = immediate.viewport_ui_cb;
+        let input = egui::RawInput { viewport_id: id, viewports: std::iter::once((id, egui::ViewportInfo::default())).collect(), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| callback(ui));
+        out.textures_delta.clear();
+        if let Some(v) = out.viewport_output.get(&id) {
+            record.lock().unwrap().extend(v.commands.iter().cloned());
+        }
+    });
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
+    let raised = [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus];
+    let frame = |app: &mut PhotocraftApp, focused: bool, events: Vec<egui::Event>| {
+        let mut input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(focused);
+        let mut out = ctx.run_ui(input, |ui| show(app, ui.ctx()));
+        out.textures_delta.clear();
+        let mut commands: Vec<_> = std::mem::take(&mut *sent.lock().unwrap());
+        commands.extend(out.viewport_output.get(&window).map(|v| v.commands.clone()).unwrap_or_default());
+        // Only the raising commands: the window also gets its own setup (title, size) from egui.
+        commands.retain(|c| matches!(c, egui::ViewportCommand::Minimized(_) | egui::ViewportCommand::Focus));
+        commands
+    };
+    assert!(frame(&mut app, false, Vec::new()).is_empty(), "Camera Raw's window is in front");
+    assert_eq!(frame(&mut app, true, Vec::new()), raised, "the main window came forward");
+    assert!(frame(&mut app, true, Vec::new()).is_empty(), "once per activation, so Camera Raw's own focus isn't fought");
+    let at = egui::pos2(400.0, 300.0);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    frame(&mut app, true, vec![egui::Event::PointerMoved(at), button(true)]);
+    let after_click = frame(&mut app, true, vec![button(false)]);
+    assert_eq!(after_click, raised, "a click on the dimmed main window");
+}
+
 /// A layer with tonal variation, a selection over part of it and the dialog open on it.
 fn worker_app() -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -111,7 +160,7 @@ fn finish_worker(d: &mut CameraRawDialog, ctx: &egui::Context) {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    panic!("the Camera Raw preview worker never finished");
+    panic!("the RAW Develop preview worker never finished");
 }
 
 /// The dialog's controls develop the proxy on a worker (#5964): the frame it shows is the one
@@ -200,7 +249,7 @@ fn a_worker_failure_is_reported_until_the_next_frame() {
     };
     let fail = |app: &mut PhotocraftApp| {
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(Err("Camera Raw preview failed".to_string())).unwrap();
+        tx.send(Err("RAW Develop preview failed".to_string())).unwrap();
         let d = app.camera_raw.as_mut().unwrap();
         d.pending = Some(rx);
         d.dirty = false;
@@ -213,7 +262,7 @@ fn a_worker_failure_is_reported_until_the_next_frame() {
     frame(&mut app);
     fail(&mut app);
     frame(&mut app);
-    assert!(app.ui.status_error && app.ui.status == "Camera Raw preview failed", "{}", app.ui.status);
+    assert!(app.ui.status_error && app.ui.status == "RAW Develop preview failed", "{}", app.ui.status);
     // No new frame yet: the error stays.
     frame(&mut app);
     assert!(app.ui.status_error);
@@ -372,7 +421,7 @@ fn raw_opens_in_camera_raw_and_open_redevelops() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
-    assert!(r.get("filter").is_some(), "contrast is applied as a Camera Raw step: {r}");
+    assert!(r.get("filter").is_some(), "contrast is applied as a RAW Develop step: {r}");
     assert!(app.camera_raw.is_none());
     assert_eq!(app.session.documents().len(), 1);
     let st = app.session.active().unwrap();
@@ -729,7 +778,7 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!((r["document"].as_u64(), r["redeveloped"].as_bool(), r.get("filter")), (Some(0), Some(false), None), "{r}");
-    assert_eq!(r.get("defaults"), None, "ProPhoto, 16-bit: no Camera Raw Default to apply: {r}");
+    assert_eq!(r.get("defaults"), None, "ProPhoto, 16-bit: no RAW Develop Default to apply: {r}");
     // Preference off: raws open straight away.
     app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
     app.open_bytes("c.dng", &dng).unwrap();
@@ -892,7 +941,7 @@ fn camera_raw_defaults_apply_when_a_raw_opens() {
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["defaults"], json!(["sharpenFor", "colorSpace"]), "{r}");
-    assert!(r.get("filter").is_some(), "Sharpen For is a Camera Raw step: {r}");
+    assert!(r.get("filter").is_some(), "Sharpen For is a RAW Develop step: {r}");
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.depth, photocraft_color::SampleType::U16);
     assert_eq!(st.saved_revision, st.revision);

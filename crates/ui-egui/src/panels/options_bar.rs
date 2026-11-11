@@ -5,6 +5,38 @@ use super::properties::{select_and_mask_button, selection_mode_buttons};
 use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Value, icons, json, starts_blend_group, vec2, widgets};
 use photocraft_paint::BrushSettings;
 
+/// The "Fill options" modal's open flag (temporary UI data, per context).
+fn fill_help_id() -> egui::Id {
+    egui::Id::NULL.with("crop-fill-help")
+}
+
+/// The Crop options bar's "Fill options" modal is open: canvas keys (Esc, Enter) belong to it.
+pub(crate) fn fill_help_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(fill_help_id())).unwrap_or(false)
+}
+
+/// Where the Fill ⓘ was last drawn, so a click on it can take Escape in the frame the help opens
+/// (the shortcut pass runs before the options bar draws, #10888).
+fn fill_help_rect_id() -> egui::Id {
+    egui::Id::NULL.with("crop-fill-help-rect")
+}
+
+/// Whether the Fill help wants this frame's Enter and Escape: it is open, or its ⓘ is clicked in
+/// the frame the help opens, where Esc must not cancel the crop underneath.
+pub(crate) fn fill_help_takes_keys(ctx: &egui::Context) -> bool {
+    if fill_help_open(ctx) {
+        return true;
+    }
+    ctx.data(|d| d.get_temp::<egui::Rect>(fill_help_rect_id()))
+        .is_some_and(|r| ctx.input(|i| i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| r.contains(p))))
+}
+
+/// Closes the Fill help when the options bar stops drawing: its flag would otherwise keep Enter and
+/// Escape away from the crop (#10888).
+pub(crate) fn close_fill_help(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(fill_help_id(), false));
+}
+
 // Custom controls also need to bring keyboard focus into a scroll viewport.
 pub(super) fn reveal_focused_control(ui: &egui::Ui) {
     // read_response reprocesses pointer events. Reading a popup's newly focused field
@@ -43,6 +75,7 @@ pub(super) fn options_bar_height(pro: bool, narrow: bool) -> f32 {
 
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::vector_ui::track_arrow_default_selection(app, ui.ctx());
+    crate::eraser_ui::alert_for_a_field_gone(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
     let narrow = app.session.prefs().workspace.narrow_options_bar();
     egui::Panel::top("options_bar")
@@ -105,7 +138,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let before = app.session.tools.brush.clone();
                             let mut brush = before.clone();
                             // Mode is the tool's own brush's, kept per tool like its size.
-                            if let Some(modes) = crate::blend_keys::tool_modes(tool) {
+                            if tool == Tool::PatternStamp {
+                                // Its list has Behind, greyed on the Background (#12879).
+                                opt_label(ui, tl!("Mode"));
+                                let behind = crate::brush_mode_menu::enabled(app, crate::brush_mode_menu::Item::Behind);
+                                super::brush_controls::pattern_stamp_mode_dropdown(ui, "retouch-mode", &mut brush, behind);
+                            } else if let Some(modes) = crate::blend_keys::tool_modes(tool) {
                                 opt_label(ui, tl!("Mode"));
                                 if let Some(Some(m)) =
                                     tool_mode_dropdown(ui, "retouch-mode", &modes, Some(crate::blend_keys::brush_tool_mode(tool, brush.mode)))
@@ -181,8 +219,13 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 }
             }
             ui.add_enabled_ui(!block, |ui| {
-                // A whole number from 1 to 100, as in Photoshop: 0 paints nothing (#11812).
-                tip(whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 62.0), tl!("Set opacity for stroke"));
+                // A whole number from 1 to 100, as in Photoshop: 0 paints nothing (#11812). The
+                // Eraser's says so when a typed value was past that (#11938).
+                if brush {
+                    tip(whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 62.0), tl!("Set opacity for stroke"));
+                } else if eraser_percent(ui, tl!("Opacity"), &mut b.opacity) {
+                    range_alert(&mut app.ui, ONE_TO_100);
+                }
                 let pressure = pressure_button(ui, b.pressure_opacity, tl!("Always use pressure for opacity"), brush);
                 if tip(pressure, tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure")).clicked() {
                     b.pressure_opacity = !b.pressure_opacity;
@@ -190,15 +233,26 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             });
             // A Pencil- or Block-mode Eraser is always full flow, without build-up (Photoshop).
             ui.add_enabled_ui(!block && !crate::eraser_ui::pencil_mode(app, app.ui.tool), |ui| {
-                tip(percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0), tl!("Set flow rate for stroke"));
+                if brush {
+                    tip(percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0), tl!("Set flow rate for stroke"));
+                } else if eraser_percent(ui, tl!("Flow"), &mut b.flow) {
+                    range_alert(&mut app.ui, ONE_TO_100);
+                }
                 let airbrush = icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
                 if crate::brush_picker::named(airbrush, "Enable airbrush-style build-up effects").clicked() {
                     b.build_up = !b.build_up;
                 }
             });
             opt_label(ui, tl!("Smoothing"));
-            tip(smoothing_field(ui, b, 58.0), tl!("Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"));
+            if brush {
+                tip(smoothing_field(ui, b, 58.0), tl!("Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"));
+            } else if super::brush_controls::smoothing_field_alerting(ui, b, 58.0).1 {
+                range_alert(&mut app.ui, ZERO_TO_100);
+            }
             smoothing_options(ui, b, brush);
+            if app.ui.tool == Tool::Eraser {
+                widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
+            }
             widgets::vline(ui, 22.0);
             let pressure = pressure_button(ui, b.pressure_size, tl!("Always use pressure for size"), brush);
             if tip(pressure, tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
@@ -219,11 +273,32 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             let held = app.held_erase;
             paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held);
             whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, if t.pro { 62.0 } else { 66.0 });
+            if t.pro {
+                // Between Opacity and Smoothing, as measured (#11962).
+                let pressure = pressure_button(ui, b.pressure_opacity, tl!("Always use pressure for opacity"), true);
+                if pressure.on_hover_text(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure")).clicked() {
+                    b.pressure_opacity = !b.pressure_opacity;
+                }
+            }
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
             widgets::vline(ui, 22.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"))
                 .on_hover_text(tl!("Draws background color over foreground colors"));
+            widgets::vline(ui, 22.0);
+            if t.pro {
+                // Between Auto Erase and the Symmetry button the bar adds after this arm (#11962).
+                let pressure = pressure_button(ui, b.pressure_size, tl!("Always use pressure for size"), true);
+                if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
+                    b.pressure_size = !b.pressure_size;
+                }
+            } else {
+                // The other themes show the Brush's labelled switches; the Pencil gets them too.
+                widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size"))
+                    .on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure"));
+                widgets::toggle(ui, &mut b.pressure_opacity, tl!("Pressure for Opacity"))
+                    .on_hover_text(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure"));
+            }
         }
         Tool::Brush | Tool::Eraser => {
             brush_preset_chip(ui, b, &mut app.ui);
@@ -235,6 +310,10 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 opt_label(ui, tl!("Size"));
                 widgets::value_field(ui, &mut b.size, 1.0..=photocraft_engine::paint::MAX_BRUSH_SIZE, "px", 76.0);
             });
+            // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
+            let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
+            // Hardness stays with Size, so Opacity follows Mode as in Photoshop and the Pro bar (#9784).
+            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
             widgets::vline(ui, 22.0);
             // The Brush's own tooltips here too (#11813); the Eraser keeps its texts.
             let brush = app.ui.tool == Tool::Brush;
@@ -249,15 +328,15 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                     tip(mode, tl!("Painting Mode"));
                 }
             }
-            // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
-            let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
-            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
             let opacity = ui.add_enabled_ui(!block, |ui| whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 66.0)).inner;
             tip(opacity, tl!("Set opacity for stroke"));
             let flow = ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0)).inner;
             tip(flow, tl!("Set flow rate for stroke"));
             opt_label(ui, tl!("Smoothing"));
             tip(smoothing_field(ui, b, 66.0), tl!("Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"));
+            if app.ui.tool == Tool::Eraser {
+                widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
+            }
             widgets::vline(ui, 22.0);
             tip(
                 widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size")),
@@ -450,8 +529,18 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
         }
         Tool::Gradient => {
             // Live "Gradient" (a Gradient Fill layer) or "Classic gradient" (pixels).
-            let mut classic = app.ui.tool_options.gradient_classic;
-            if widgets::dropdown(ui, "gradient-mode", tl!("Mode"), &mut classic, &[(false, "Gradient"), (true, "Classic gradient")], 118.0) {
+            // A gradient fill layer is always edited live: the choice reads "Gradient" and is greyed,
+            // and the stored one comes back for other layers (#12008).
+            let fill = crate::gradient_ui::fill_layer_active(app);
+            let mut classic = app.ui.tool_options.gradient_classic && !fill;
+            if ui
+                .add_enabled_ui(!fill, |ui| {
+                    widgets::dropdown(ui, "gradient-mode", tl!("Mode"), &mut classic, &[(false, "Gradient"), (true, "Classic gradient")], 118.0)
+                })
+                .inner
+                // A list opened before a fill layer became active can still be clicked.
+                && !fill
+            {
                 app.ui.tool_options.gradient_classic = classic;
             }
             // Live "Gradient" (a Gradient Fill layer) or "Classic gradient" (pixels):
@@ -475,24 +564,18 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 }
             }
             ui.spacing_mut().item_spacing.x = 8.0;
-            widgets::vline(ui, 22.0);
-            opt_label(ui, tl!("Mode"));
-            let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
-            // The wheel over it steps the mode, as over the Layers panel's (#2061).
-            widgets::dropdown_wheel_grouped(ui, "gradient-blend-mode", tl!("Blend Mode"), &mut app.ui.tool_options.gradient_blend_mode, &opts, 96.0, |m| {
-                starts_blend_group(*m)
-            });
-            opt_label(ui, tl!("Opacity"));
-            let r = widgets::value_field(ui, &mut app.ui.tool_options.fill_opacity, 1.0..=100.0, "%", 62.0);
-            // Live while scrubbed, one undo step per scrub (#5012).
-            let drag_key = r.id.with("gradient-opacity-drag");
-            if r.drag_started() {
-                let n = ui.ctx().cumulative_pass_nr();
-                ui.data_mut(|d| d.insert_temp(drag_key, n));
-            }
-            if r.changed() {
-                let drag = if r.dragged() { ui.data(|d| d.get_temp::<u64>(drag_key)) } else { None };
-                crate::gradient_ui::opacity_changed(app, drag);
+            // Only the Classic gradient paints pixels with a blend Mode and Opacity; the live
+            // Gradient makes a Normal, 100 % fill layer, changed in the Layers panel (#12007).
+            if classic {
+                widgets::vline(ui, 22.0);
+                opt_label(ui, tl!("Mode"));
+                let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
+                // The wheel over it steps the mode, as over the Layers panel's (#2061).
+                widgets::dropdown_wheel_grouped(ui, "gradient-blend-mode", tl!("Blend Mode"), &mut app.ui.tool_options.gradient_blend_mode, &opts, 96.0, |m| {
+                    starts_blend_group(*m)
+                });
+                opt_label(ui, tl!("Opacity"));
+                widgets::value_field(ui, &mut app.ui.tool_options.fill_opacity, 1.0..=100.0, "%", 62.0);
             }
             widgets::checkbox(ui, &mut app.ui.tool_options.gradient_reverse, tl!("Reverse"));
             widgets::checkbox(ui, &mut app.ui.tool_options.gradient_dither, tl!("Dither"));
@@ -504,7 +587,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             let before_ratio = crate::crop_ui::preset_ratio(app);
             let doc_size = app.session.active().map_or((0.0, 0.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
             // Ratios, sizes, saved presets, New / Delete Crop Preset… (#2443, #1919).
-            crate::crop_presets::dropdown(app, ui);
+            ui.scope(|ui| crate::crop_presets::dropdown(app, ui)).response.on_hover_text(tl!("Select a preset aspect ratio or crop size"));
             let o = &mut app.ui.tool_options;
             let mut turn = false;
             let mut ratio_base = None;
@@ -516,9 +599,11 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 // Original Ratio shows the document's numbers, as Photoshop does.
                 let (mut rw, mut rh) = crate::crop_size::custom_ratio_fields(o, doc_size);
                 let decimals = crate::crop_size::RATIO_DECIMALS;
-                let fw = widgets::value_field_prec(ui, &mut rw, 0.0..=99_999.0, "", 54.0, decimals);
+                let fw = widgets::value_field_prec_blank(ui, &mut rw, 0.0..=99_999.0, "", 54.0, decimals)
+                    .on_hover_text(tl!("Set the aspect ratio for the crop box"));
                 let swap = icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked();
-                let fh = widgets::value_field_prec(ui, &mut rh, 0.0..=99_999.0, "", 54.0, decimals);
+                let fh = widgets::value_field_prec_blank(ui, &mut rh, 0.0..=99_999.0, "", 54.0, decimals)
+                    .on_hover_text(tl!("Set the aspect ratio for the crop box"));
                 let (cw, ch) = (fw.changed(), fh.changed());
                 if swap {
                     std::mem::swap(&mut rw, &mut rh);
@@ -540,27 +625,33 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 }
             }
             widgets::vline(ui, 22.0);
-            if widgets::secondary_button(ui, tl!("Clear"), 0.0).clicked() {
+            if widgets::secondary_button(ui, tl!("Clear"), 0.0).on_hover_text(tl!("Clear aspect ratio values")).clicked() {
                 crate::crop_size::clear_ratio(o);
             }
             crate::crop_straighten::options_button(&mut app.crop.straighten, ui);
             crate::crop_overlay::options_button(o, ui);
             let pick_shield_color = crate::crop_shield::options_button(&mut o.crop_shield, ui);
-            widgets::checkbox(ui, &mut o.crop_delete, tl!("Delete Cropped Pixels"));
+            widgets::checkbox(ui, &mut o.crop_delete, tl!("Delete Cropped Pixels"))
+                .on_hover_text(tl!("Determines if pixel data outside the crop box is retained or deleted"));
             // Fill: what a turned or extending crop puts where the image doesn't reach
             // (#3823). Generative Expand is not offered. The first entry names the outcome as in
             // Photoshop: the background colour, or transparency with Delete Cropped Pixels off
             // (#10872); both store `crop_content_aware: false`.
             ui.label(tl!("Fill:"));
             let delete_cropped_pixels = o.crop_delete;
-            widgets::dropdown(
-                ui,
-                "crop-fill",
-                tl!("Fill:"),
-                &mut o.crop_content_aware,
-                &[(false, crate::crop_ui::fill_label(delete_cropped_pixels)), (true, tl!("Content-Aware Fill"))],
-                150.0,
-            );
+            ui.scope(|ui| {
+                widgets::dropdown(
+                    ui,
+                    "crop-fill",
+                    tl!("Fill:"),
+                    &mut o.crop_content_aware,
+                    &[(false, crate::crop_ui::fill_label(delete_cropped_pixels)), (true, tl!("Content-Aware Fill"))],
+                    150.0,
+                );
+            })
+            .response
+            .on_hover_text(tl!("How expanded crop area gets filled"));
+            crop_fill_help(ui);
             if turn {
                 crate::crop_ui::turn_frame(app);
             }
@@ -573,31 +664,71 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             if pick_shield_color {
                 crate::crop_shield::pick_custom_color(app);
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icons::button(
-                    ui,
-                    "check",
-                    26.0,
-                    false,
-                    &crate::i18n::fmt(tl!("Commit current crop operation  ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]),
-                )
-                .clicked()
-                {
-                    crate::canvas::commit_crop(app);
-                }
-                if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
-                    crate::crop_ui::dismiss(app);
-                }
-                // Resets the box to its first frame; nothing to reset until it is changed.
-                let changed = crate::crop_ui::modified(app);
-                if ui.add_enabled_ui(changed, |ui| icons::button(ui, "undo-2", 26.0, false, tl!("Reset"))).inner.clicked() {
-                    crate::crop_ui::reset(app);
-                }
-            });
+            crop_commit_controls(app, ui);
         }
         // Every theme gets the font, style and size controls (#1387), as with Auto-Select (#1275).
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::options_bar(app, ui),
         _ => {}
+    }
+}
+
+/// The Fill ⓘ button and the "Fill options" help modal it opens (#10888).
+fn crop_fill_help(ui: &mut egui::Ui) {
+    let help_id = fill_help_id();
+    let button = icons::button(ui, "info", 24.0, false, tl!("Displays pop-up help for the fill methods"));
+    ui.data_mut(|d| d.insert_temp(fill_help_rect_id(), button.rect));
+    if button.clicked() {
+        ui.data_mut(|d| d.insert_temp(help_id, true));
+    }
+    if !ui.data(|d| d.get_temp::<bool>(help_id)).unwrap_or(false) {
+        return;
+    }
+    let mut close = false;
+    let modal = egui::Modal::new(help_id.with("modal")).show(ui.ctx(), |ui| {
+        ui.set_max_width(380.0);
+        ui.heading(tl!("Fill options"));
+        ui.add_space(4.0);
+        ui.label(tl!("Background (default):"));
+        ui.label(tl!("Fill the expanded area with your background color or transparent pixels"));
+        ui.add_space(6.0);
+        ui.label(tl!("Content-aware fill"));
+        ui.label(tl!("Sample content from part of the image and use it to fill a small area"));
+        ui.add_space(10.0);
+        if widgets::primary_button(ui, tl!("OK"), 0.0).clicked() {
+            close = true;
+        }
+        // Esc closes the help only; `input/shortcuts.rs` leaves it to the modal (`fill_help_open`).
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            close = true;
+        }
+    });
+    close |= modal.should_close();
+    if close {
+        ui.data_mut(|d| d.insert_temp(help_id, false));
+    }
+}
+
+/// Reset (always, disabled while the frame is untouched), then Cancel and Commit only while the
+/// crop is live, beside each other rather than at the far right of the bar (#10888).
+fn crop_commit_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let changed = crate::crop_ui::modified(app);
+    if ui
+        .add_enabled_ui(changed, |ui| icons::button(ui, "undo-2", 26.0, false, tl!("Reset the crop box, image rotation, and aspect ratio settings")))
+        .inner
+        .clicked()
+    {
+        crate::crop_ui::reset(app);
+    }
+    if !crate::crop_ui::pending(app) && !changed {
+        return;
+    }
+    if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
+        crate::crop_ui::dismiss(app);
+    }
+    if icons::button(ui, "check", 26.0, false, &crate::i18n::fmt(tl!("Commit current crop operation  ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
+        .clicked()
+    {
+        crate::canvas::commit_crop(app);
     }
 }
 
@@ -705,8 +836,10 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
             }
         }
         Tool::Hand => {
-            hint(ui, tl!("Drag to pan  ·  hold Space with any tool"));
-            if widgets::secondary_button(ui, "100%", 0.0).clicked()
+            widgets::checkbox(ui, &mut app.ui.tool_options.hand_scroll_all, tl!("Scroll All Windows"))
+                .on_hover_text(tl!("Scroll all open document windows when using the hand tool"));
+            // The reference tooltips and no hint text, as on the Zoom bar (#12026).
+            if widgets::secondary_button(ui, "100%", 0.0).on_hover_text(tl!("Zoom current window to 1:1")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].zoom = 1.0;
@@ -715,7 +848,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 app.ui.views[i].fit_pending = false;
                 app.ui.views[i].fill_pending = false;
             }
-            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).clicked()
+            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).on_hover_text(tl!("Zoom current window to screen size")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].fit_pending = true;
@@ -723,7 +856,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 app.ui.views[i].zoom_anchor = None;
                 app.ui.views[i].fill_pending = false;
             }
-            if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).clicked()
+            if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).on_hover_text(tl!("Zoom current window to fill the screen")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].fill_pending = true;
@@ -739,6 +872,9 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
 
 #[cfg(test)]
 mod zoom_buttons_tests;
+
+#[cfg(test)]
+mod hand_tooltips_tests;
 
 /// Width of the Layers panel's Opacity and Fill fields, with room for their pop-up slider's ▾.
 pub(super) const LAYER_PCT_W: f32 = 66.0 + widgets::POPUP_ARROW_W;
@@ -849,6 +985,31 @@ fn pressure_button(ui: &mut egui::Ui, on: bool, name: &str, own_tip: bool) -> eg
     icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), on, name, !own_tip)
 }
 
+/// The reference's alerts for an Eraser Opacity or Flow, and Smoothing, typed out of range (#11938).
+pub const ONE_TO_100: &str = "An integer between 1% and 100% is required. Closest value inserted.";
+pub const ZERO_TO_100: &str = "An integer between 0% and 100% is required. Closest value inserted.";
+
+/// The Eraser's Opacity or Flow: whole percents 1..100 that say when a typed value was past them.
+fn eraser_percent(ui: &mut egui::Ui, label: &str, value: &mut f32) -> bool {
+    opt_label(ui, label);
+    let mut percent = *value * 100.0;
+    let (r, alert) = widgets::value_field_whole_alerting(ui, label, &mut percent, 1.0..=100.0, "%", 62.0);
+    if r.changed() {
+        *value = percent / 100.0;
+    }
+    alert
+}
+
+/// Shows one of the range alerts as a modal with OK, once even if more than one pass asks.
+fn range_alert(ui_state: &mut crate::state::UiState, text: &str) {
+    let message = tl!(text).to_owned();
+    let shown =
+        ui_state.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
+    if !shown {
+        ui_state.open_dialog(crate::state::DialogKind::Error, serde_json::json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
+}
+
 /// [`percent_field`] that keeps whole percents (`33.7` becomes 34 %). A value set elsewhere (a
 /// `tools.setBrush` fraction, an older saved 0) shows as the whole percent in range.
 fn whole_percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> egui::Response {
@@ -865,3 +1026,19 @@ fn hint(ui: &mut egui::Ui, s: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(s).color(t.text_faint));
 }
+
+#[cfg(test)]
+#[path = "../eraser_range_alert_tests.rs"]
+mod eraser_range_alert_tests;
+
+#[cfg(test)]
+#[path = "../blur_strength_alert_tests.rs"]
+mod blur_strength_alert_tests;
+
+#[cfg(test)]
+#[path = "../sharpen_strength_alert_tests.rs"]
+mod sharpen_strength_alert_tests;
+
+#[cfg(test)]
+#[path = "../smudge_strength_alert_tests.rs"]
+mod smudge_strength_alert_tests;
