@@ -114,7 +114,7 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut PaintState, _response: 
     }
     // A held pen keeps the clock running for airbrush build-up and smoothing catch-up (asked
     // after the feed, which brings in what the stroke's thread last painted).
-    if stroke_wants_time(app) {
+    if wants_time(app, stroke.tool) {
         ctx.request_repaint_after(Duration::from_millis(HOLD_REPEAT_MS as u64));
     }
 }
@@ -133,11 +133,18 @@ fn drop_stroke(app: &mut PhotocraftApp, state: &mut PaintState) {
     app.trail = None;
 }
 
-/// Is a held pen's repeat point due at `now_ms`, so the stroke's time keeps advancing? Only a
-/// stroke that changes while the pointer is still (airbrush, smoothing catching up) repeats. The
-/// last point's time is the pass's after it repeats, so a second pass of a frame repeats nothing.
-fn hold_due(app: &PhotocraftApp, now_ms: f64) -> bool {
-    app.stylus.last_point_ms().is_some_and(|t| now_ms - t >= HOLD_REPEAT_MS) && stroke_wants_time(app)
+/// Does a `tool` stroke change while the pointer is held still: a live stroke's airbrush or
+/// smoothing catching up, or an Art History Brush press, which keeps starting new strokes while
+/// held (`retouch_ui::art_history_points`, #12625)?
+fn wants_time(app: &PhotocraftApp, tool: Tool) -> bool {
+    stroke_wants_time(app) || tool == Tool::ArtHistoryBrush
+}
+
+/// Is a held pen's repeat point due at `now_ms` for a `tool` stroke, so the stroke's time keeps
+/// advancing? Only a stroke that [`wants_time`] repeats. The last point's time is the pass's after
+/// it repeats, so a second pass of a frame repeats nothing.
+fn hold_due(app: &PhotocraftApp, tool: Tool, now_ms: f64) -> bool {
+    app.stylus.last_point_ms().is_some_and(|t| now_ms - t >= HOLD_REPEAT_MS) && wants_time(app, tool)
 }
 
 /// Pushes a point of `stroke` at `at` with the stylus's pressure and records its pose.
@@ -331,7 +338,7 @@ impl CanvasTool for PaintTool<'_> {
                 drop_stroke(app, state);
                 return;
             }
-            if hold_due(app, now_ms) {
+            if hold_due(app, stroke.tool, now_ms) {
                 let Some(stroke) = state.stroke.as_mut() else { return };
                 let at = stroke.points.last().map_or(stroke.start, |p| [p[0], p[1]]);
                 app.stylus.repeat_point(now_ms);
@@ -368,7 +375,7 @@ impl CanvasTool for PaintTool<'_> {
             let zoom = app.point_zoom();
             let [x, y] = crate::stroke_constraint::constrain(stroke.tool, &mut stroke.constrain, stroke.start, last, at, pointer.mods.shift, zoom);
             let moved = stroke.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25);
-            if moved || hold_due(app, now_ms) {
+            if moved || hold_due(app, stroke.tool, now_ms) {
                 push_point(app, stroke, [x, y]);
             }
             // The canvas shows a live stroke itself; a stroke without one (a retouch tool that
