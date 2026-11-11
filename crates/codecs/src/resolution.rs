@@ -349,7 +349,13 @@ fn put_u64(order: Order, v: u64) -> [u8; 8] {
 }
 
 /// Removes the IFD0 entries at offsets `removed` (see [`exif_with_resolution`]).
-fn remove_entries(b: &mut [u8], ifd: &Ifd0, removed: &[usize]) {
+///
+/// `removed` is strictly increasing: `Ifd0::parse` visits entries in physical order and the
+/// caller records each malformed field at most once. Walk those offsets once alongside the
+/// table, keeping compaction linear even when many duplicate resolution entries are malformed.
+/// The private offset type lets tests observe real equality checks in this same loop; production
+/// instantiates it with `usize`, without a counter or a change to the exported codec API.
+fn remove_entries<Offset: Copy + PartialEq + From<usize>>(b: &mut [u8], ifd: &Ifd0, removed: &[Offset]) {
     let eb = ifd.entry_bytes;
     let next_bytes = if ifd.big { 8 } else { 4 };
     let count_bytes = if ifd.big { 8 } else { 2 };
@@ -357,8 +363,11 @@ fn remove_entries(b: &mut [u8], ifd: &Ifd0, removed: &[usize]) {
     let Some(old) = b.get(ifd.first..table_end.saturating_add(next_bytes)).map(<[u8]>::to_vec) else { return };
     let mut table = Vec::with_capacity(old.len());
     let mut kept = 0usize;
+    let mut removed = removed.iter().copied().peekable();
     for (i, entry) in old.chunks_exact(eb).take(ifd.count).enumerate() {
-        if !removed.contains(&(ifd.first + i * eb)) {
+        if removed.peek() == Some(&Offset::from(ifd.first + i * eb)) {
+            removed.next();
+        } else {
             table.extend_from_slice(entry);
             kept += 1;
         }
@@ -573,3 +582,6 @@ pub fn export_xmp(xmp: &str, ppi: Option<(f32, f32)>) -> Cow<'_, str> {
 pub(crate) fn from_metadata(exif: Option<&[u8]>, xmp: Option<&str>) -> Option<(f32, f32)> {
     xmp.and_then(xmp_resolution).or_else(|| exif.and_then(exif_resolution))
 }
+
+#[cfg(test)]
+mod complexity_tests;
