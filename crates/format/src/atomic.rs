@@ -347,7 +347,10 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, follow: bool
     // default, its extended attributes, and its ACL. Best effort, and before the swap, so the
     // file the user ends up with never passes through a more permissive state.
     let replacing = target.exists();
-    if replacing {
+    // A link that is replaced rather than followed has nothing to carry over: reading the target's
+    // attributes would open whatever it points at (a FIFO with no writer blocks there).
+    let replaced_link = !follow && std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink());
+    if replacing && !replaced_link {
         let _ = fs.copy_metadata(&target, &tmp);
     }
 
