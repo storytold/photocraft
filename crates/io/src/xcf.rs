@@ -426,25 +426,22 @@ impl<'a> Image<'a> {
         if depth > MAX_DEPTH || !state.active_masks.insert(offset) {
             return Err(invalid("cyclic or excessively nested source auxiliary coverage"));
         }
+        let mut own_pixel_charge = 0usize;
         let result = (|| -> Result<std::result::Result<LayerMask, effects::MappingFailure>> {
             let pixel_budget = self.budget;
-            let (name, properties, pixels, children) = match self.channel(offset, ctl) {
-                Ok(channel) => channel,
-                Err(IoError::Cancelled) => return Err(IoError::Cancelled),
-                Err(error) => {
-                    // A failed optional decode retains no pixels. Its speculative
-                    // sample charge must not starve later independently valid layers.
-                    self.budget = pixel_budget;
-                    return Err(error);
-                }
-            };
+            let decoded = self.channel(offset, ctl);
+            own_pixel_charge = pixel_budget.saturating_sub(self.budget);
+            let (name, properties, pixels, children) = decoded?;
             // Independently saved source effect masks use image-global pixels.
             // A nonstandard layer-style placement has no established source meaning.
             if properties.iter().any(|property| property.kind == 15 && property.data.iter().any(|byte| *byte != 0)) {
                 return Ok(Err("Source effect-mask channel has an unestablished placement property; pixels were not silently repositioned".into()));
             }
             let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, self.precision.depth(), false));
-            write_pixels(&mut surface, &pixels, 0, 0, &mut self.budget)?;
+            let pixel_budget = self.budget;
+            let written = write_pixels(&mut surface, &pixels, 0, 0, &mut self.budget);
+            own_pixel_charge = own_pixel_charge.saturating_add(pixel_budget.saturating_sub(self.budget));
+            written?;
             let bounds = Rect::new(0, 0, pixels.width as i32, pixels.height as i32);
             self.apply_coverage_stack(&children, &mut surface, bounds, depth, state, ctl)?;
             self.meta_budget = self
@@ -454,6 +451,13 @@ impl<'a> Image<'a> {
             state.masks.insert(offset, CoverageMaskRecord { name, properties, width: pixels.width, height: pixels.height, children });
             Ok(Ok(LayerMask { surface, ..LayerMask::reveal_all() }))
         })();
+        if !matches!(&result, Ok(Ok(_)) | Err(IoError::Cancelled)) {
+            // Until this mask is returned and its configuration cached, its samples
+            // and tiles are temporary. Refund only their measured, disjoint debits:
+            // children may already have retained masks whose charges must survive.
+            // The sum cannot exceed this call's incoming allowance.
+            self.budget = self.budget.saturating_add(own_pixel_charge);
+        }
         state.active_masks.remove(&offset);
         result
     }
