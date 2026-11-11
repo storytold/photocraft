@@ -738,7 +738,8 @@ mod tests {
             sm.dab(&mut empty, fp);
             assert!(empty.data.is_empty() && sm.carry.is_none(), "no carry is built for zero channels");
             calls += 1;
-        });
+        })
+        .unwrap();
         assert!(calls > 0);
     }
 

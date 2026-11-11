@@ -399,25 +399,25 @@ mod tests {
         let base = BgEraseSettings { limits: Limits::Discontiguous, tolerance: 0.01, ..Default::default() };
         let protect = BgEraseSettings { protect_foreground: true, foreground: STAND_IN, foreground_cmyk: picked, ..base.clone() };
         let mut t = s.clone();
-        apply_background_eraser(&mut t, &st, &protect, None);
+        apply_background_eraser(&mut t, &st, &protect, None).unwrap();
         assert_eq!(alpha(&t, 40, 20), 1.0, "the picked foreground inks are protected");
         assert_eq!(alpha(&t, 10, 20), 0.0, "white erased");
         let swatch = BgEraseSettings { sampling: Sampling::BackgroundSwatch, background: STAND_IN, background_cmyk: picked, ..base.clone() };
         let mut t = s.clone();
-        apply_background_eraser(&mut t, &st, &swatch, None);
+        apply_background_eraser(&mut t, &st, &swatch, None).unwrap();
         assert_eq!(alpha(&t, 40, 20), 0.0, "the picked background inks are erased fully");
         assert_eq!(alpha(&t, 10, 20), 1.0, "white kept");
         // Inks picked for another colour, and non-CMYK targets, use the stand-in as before.
         let stale = BgEraseSettings { background_cmyk: Some(([0.5; 3], [1.0, 0.0, 0.0, 0.0])), ..swatch.clone() };
         let mut t = s.clone();
-        apply_background_eraser(&mut t, &st, &stale, None);
+        apply_background_eraser(&mut t, &st, &stale, None).unwrap();
         assert_eq!(alpha(&t, 40, 20), 1.0, "stale inks are ignored");
         let rgb = PixelFormat::RGBA8;
         let mut r = Surface::new(rgb);
         r.fill_rect(Rect::new(0, 0, 80, 40), &from_rgba(&rgb, STAND_IN));
         let (mut with, mut without) = (r.clone(), r.clone());
-        apply_background_eraser(&mut with, &st, &swatch, None);
-        apply_background_eraser(&mut without, &st, &BgEraseSettings { background_cmyk: None, ..swatch }, None);
+        apply_background_eraser(&mut with, &st, &swatch, None).unwrap();
+        apply_background_eraser(&mut without, &st, &BgEraseSettings { background_cmyk: None, ..swatch }, None).unwrap();
         assert_eq!(with, without, "an RGB target ignores the inks");
     }
 
@@ -438,7 +438,7 @@ mod tests {
             background_cmyk: Some(([STAND_IN[0], STAND_IN[1], STAND_IN[2]], INKS)),
             ..Default::default()
         };
-        apply_background_eraser(&mut s, &stroke(&[(10.0, 20.0), (70.0, 20.0)]), &bs, None);
+        apply_background_eraser(&mut s, &stroke(&[(10.0, 20.0), (70.0, 20.0)]), &bs, None).unwrap();
         assert_eq!(alpha(&s, 40, 20), 0.0, "the stored inks are erased fully");
     }
 
