@@ -17,7 +17,11 @@ Validated alternating-byte rows emit their exact 128-byte literal packets direct
 the general packet scan for constant 16-bit mask samples.
 Packet boundaries, count widths and tails stay exact. Failed RLE capacity hints fall back
 to fallible row growth. Native ZIP output uses bounded blocks, then compacts once to its encoded
-size; no capacity is reserved from raw plane size. WebAssembly keeps its existing growing writer.
+size; no capacity is reserved from raw plane size. Native threads reuse one finished encoder:
+resetting its stream preserves fixed-size codec and staging allocations. All encoded output moves
+out before reuse; only fixed working buffers remain until thread exit. The slot stays empty
+during compression, and unavailable slots during thread teardown use a fresh encoder.
+WebAssembly keeps its existing fresh encoder and growing writer.
 Upstream #9745's single-pass 16/32-bit prediction and restoration stay intact. Large prediction
 inputs split on whole rows and reuse initialized float scratch. Row resets, plane-boundary
 predecessors, deflate backend, level and input bytes stay unchanged.
@@ -51,7 +55,7 @@ Non-finite evaluation, alpha, Fill, gamma and Lab behavior stay in callers.
 The table measures production source `636ef36e6c8d645ca5045b7d1ff954374e7943b9` rebased onto
 `6d99175b18e8b82dd7e7399a330236ffbafb5e73`, including upstream's [#9745](https://github.com/storytold/photocraft/pull/9745).
 Measurements were taken on November 11, 2026, after the rebase fixes. The subsequent
-constant-default gathering fast path has byte-oracle coverage but has not been timed.
+constant-default gathering and encoder-reuse follow-ups have byte-oracle coverage but have not been timed.
 Fixed main remains `292ce6ab55a3c18636fe599cfbddc20ebc32cea9`; its saved measurements were neither rerun nor changed.
 
 Both runs use the same harness, immutable fixtures, thin LTO and one codegen unit on arm64
@@ -88,17 +92,22 @@ or smart-cache paths.
 
 ## Fidelity and review
 
-Before the constant-default follow-up, untimed comparisons against the fetched main matched all 24 standard/large PSD/PSB
+Before the untimed follow-ups, untimed comparisons against the fetched main matched all 24 standard/large PSD/PSB
 files, seven fixed-input import hashes, three standalone pattern blocks and both complete
 f32 compositor hashes. They also match the preserved canonical bytes. Large fixtures cover
 masked RGB/CMYK compositions, 2048-square patterns at every depth, filtered embedded sources
 and reopened smart objects. The main reference and branch use the duplicate-TIFF-declaration
 build repair from [#13129](https://github.com/storytold/photocraft/pull/13129).
 
-The follow-up matches staged plane bytes across depths, nonzero defaults, inversion, Lab16,
+The constant-default follow-up matches staged plane bytes across depths, nonzero defaults, inversion, Lab16,
 float bits and whitening, including dirty destinations. All 704 active I/O unit tests,
 191 PSD-related integration tests and six banded-path tests pass. Strict I/O Clippy, wasm,
-layering and formatting checks pass. No further timing comparison was run.
+layering and formatting checks pass. Encoder reuse matches fresh encoders across repeated
+resets including large-to-small transitions, empty, compressible and noisy input, concurrent
+and nested calls, and thread teardown. The retention oracle checks both output-buffer capacities
+after multi-block incompressible data; the native-TLS teardown oracle verifies the slot is
+destroyed before testing fallback bytes. OS-key targets still require byte equality during teardown.
+PSD unit, integration and corpus tests also pass. No further timing comparison was run.
 
 Upstream's 16/32-bit single-pass prediction loops and its complete `unpredict` implementation
 are retained. Prediction workers reuse initialized float scratch; scalar-reference, wrapping,
@@ -125,7 +134,7 @@ for PSD, I/O, raster and compositor. Layering, formatting and all 23 wasm crate 
 Raster/compositor unit and integration checks pass after rerunning the corrected blend oracle
 and the disk-sensitive tests following cache cleanup; the free-space guard stays unchanged.
 
-The local changed-function audit documents 110/110 functions. Successful mask-error tests
+The local changed-function audit documents 114/114 functions. Successful mask-error tests
 retain original error variants across buffered and streaming writes. Banded ZIP retains
 the exact input boundaries and encoded bytes; periodic pattern and whitening oracles remain
 exact. Only the final branch received a fresh timing run; no additional performance-smoke

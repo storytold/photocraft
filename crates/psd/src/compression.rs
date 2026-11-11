@@ -506,21 +506,43 @@ fn map_chunks<T: Send, R: Send>(threads: usize, items: Vec<T>, f: impl Fn(T) -> 
 /// zlib-compresses `data` at the default level.
 pub fn zip_compress(data: &[u8]) -> Vec<u8> {
     #[cfg(not(target_arch = "wasm32"))]
-    let output = ZipOutput::default();
+    let mut e = zip_encoder();
     #[cfg(target_arch = "wasm32")]
-    let output = Vec::new();
-    let mut e = flate2::write::ZlibEncoder::new(output, flate2::Compression::default());
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     // The in-memory output always accepts the complete write.
     let _ = e.write_all(data);
-    let output = e.finish().unwrap_or_default();
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if e.try_finish().is_err() {
+            return Vec::new();
+        }
+        let output = std::mem::take(e.get_mut());
+        // Return only the finished codec; the slot stays empty during compression.
+        let _ = ZIP_ENCODER.try_with(|slot| slot.set(Some(e)));
         output.into_vec()
     }
     #[cfg(target_arch = "wasm32")]
     {
-        output
+        e.finish().unwrap_or_default()
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    /// One finished codec per thread; encoded output moves out before it is retained.
+    static ZIP_ENCODER: std::cell::Cell<Option<flate2::write::ZlibEncoder<ZipOutput>>> = const { std::cell::Cell::new(None) };
+}
+
+/// Reset a thread's finished encoder without reallocating its fixed-size working buffers.
+/// Nested calls and thread teardown can use a fresh encoder without accessing a busy slot.
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_encoder() -> flate2::write::ZlibEncoder<ZipOutput> {
+    if let Some(mut encoder) = ZIP_ENCODER.try_with(std::cell::Cell::take).ok().flatten()
+        && encoder.reset(ZipOutput::default()).is_ok()
+    {
+        return encoder;
+    }
+    flate2::write::ZlibEncoder::new(ZipOutput::default(), flate2::Compression::default())
 }
 
 /// Bounded native output blocks avoid reallocating large ZIP buffers as they grow.

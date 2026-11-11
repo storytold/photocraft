@@ -565,14 +565,91 @@ fn zip_output_matches_the_growing_writer() {
             seed as u8
         })
         .collect();
-    for bytes in [Vec::new(), vec![0; 131072], (0..131072).map(|i| (i * 31 + i / 173) as u8).collect(), noise] {
+    for bytes in [Vec::new(), vec![0; 131072], (0..131072).map(|i| (i * 31 + i / 173) as u8).collect(), noise].iter().cycle().take(12) {
         let mut old = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-        old.write_all(&bytes).unwrap();
-        let packed = zip_compress(&bytes);
+        old.write_all(bytes).unwrap();
+        let packed = zip_compress(bytes);
         assert_eq!(packed, old.finish().unwrap());
         #[cfg(not(target_arch = "wasm32"))]
         assert_eq!(packed.capacity(), packed.len());
     }
+}
+
+/// Workers retain only private codec state; a checked-out slot supports nested compression.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_encoder_reuse_is_private_and_retains_no_output() {
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..2)
+            .map(|byte| {
+                scope.spawn(move || {
+                    let mut seed = 0x12345678u32;
+                    for len in [1_048_577usize, 32769, 0, 259, 258, 257, 1, 32767, 32768, 2, 262145] {
+                        let bytes: Vec<_> = (0..len)
+                            .map(|_| {
+                                seed ^= seed << 13;
+                                seed ^= seed >> 17;
+                                seed ^= seed << 5;
+                                if byte == 0 { 0 } else { seed as u8 }
+                            })
+                            .collect();
+                        let packed = zip_compress(&bytes);
+                        if byte == 1 && len == 1_048_577 {
+                            assert!(packed.len() > 256 << 10, "the retention oracle must exercise multiple output blocks");
+                        }
+                        let encoder = ZIP_ENCODER.with(std::cell::Cell::take).unwrap();
+                        assert_eq!(encoder.total_in(), len as u64);
+                        assert_eq!(encoder.total_out(), packed.len() as u64);
+                        assert_eq!(encoder.get_ref().blocks.capacity(), 0);
+                        assert_eq!(encoder.get_ref().current.capacity(), 0);
+                        assert_eq!(zip_decompress(&zip_compress(b"nested"), 6).unwrap(), b"nested");
+                        ZIP_ENCODER.with(|slot| slot.set(Some(encoder)));
+                        let mut fresh = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                        fresh.write_all(&bytes).unwrap();
+                        assert_eq!(zip_compress(&bytes), fresh.finish().unwrap());
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    });
+}
+
+/// Compression stays byte-identical during teardown, including an unavailable native cache.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_compression_survives_thread_local_teardown() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct OnDrop(Arc<(AtomicBool, AtomicBool)>);
+    impl Drop for OnDrop {
+        /// Record whether teardown reached the destroyed cache and preserved fresh-stream bytes.
+        fn drop(&mut self) {
+            let unavailable = ZIP_ENCODER.try_with(|_| ()).is_err();
+            let mut fresh = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            fresh.write_all(b"teardown").unwrap();
+            let same = zip_compress(b"teardown") == fresh.finish().unwrap();
+            self.0.0.store(same, Ordering::SeqCst);
+            self.0.1.store(unavailable, Ordering::SeqCst);
+        }
+    }
+    thread_local! { static AFTER_CODEC: std::cell::Cell<Option<OnDrop>> = const { std::cell::Cell::new(None) }; }
+    let checked = Arc::new((AtomicBool::new(false), AtomicBool::new(false)));
+    let flag = checked.clone();
+    std::thread::spawn(move || {
+        AFTER_CODEC.with(|slot| slot.set(Some(OnDrop(flag))));
+        zip_compress(b"first");
+    })
+    .join()
+    .unwrap();
+    assert!(checked.0.load(Ordering::SeqCst), "teardown must preserve the fresh encoder's bytes");
+    // OS-key TLS may destroy keys in another order; native TLS runs these destructors in reverse.
+    #[cfg(any(target_vendor = "apple", target_os = "linux", target_env = "msvc"))]
+    assert!(checked.1.load(Ordering::SeqCst), "teardown must exercise the uncached fallback");
 }
 
 /// Verify multiple writes retain their bytes and respect ZIP output block bounds.
