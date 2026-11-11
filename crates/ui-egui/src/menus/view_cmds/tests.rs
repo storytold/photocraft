@@ -404,6 +404,20 @@ fn window_panels_select_dock_tabs() {
 }
 
 #[test]
+fn type_panel_menu_actions_update_the_custom_workspace() {
+    let (mut app, ctx) = app_with(1);
+    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
+
+    menu(&mut app, &ctx, "type.panels.character", json!({})).unwrap();
+    assert!(app.ui.docking.as_ref().unwrap().layout.contains(&"character".to_owned()));
+    assert!(app.ui.panels.character);
+
+    menu(&mut app, &ctx, "type.panels.paragraph", json!({})).unwrap();
+    assert!(app.ui.docking.as_ref().unwrap().layout.contains(&"paragraph".to_owned()));
+    assert_eq!(app.ui.dock_tabs.character, 1);
+}
+
+#[test]
 fn type_menu_checkmarks_follow_the_layer() {
     let (mut app, ctx) = app_with(1);
     assert!(!crate::menus::is_enabled(&app, "type.antiAlias.crisp"));

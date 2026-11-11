@@ -287,11 +287,22 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
     if let Some((panel, tab)) = panel_tab(app, id) {
         // A customized workspace owns the panel layout: the Window menu routes through the
         // workspace commands instead of the native dock state.
-        if app.ui.docking.is_some()
-            && !id.starts_with("type.panels.")
-            && let Some(result) = crate::panel_docking::command(app, id, p)
-        {
-            return result;
+        if app.ui.docking.is_some() {
+            let workspace_panel = match id {
+                "type.panels.character" => Some("character"),
+                "type.panels.paragraph" => Some("paragraph"),
+                _ => None,
+            };
+            if let Some(panel) = workspace_panel
+                && let Some(result) = crate::panel_docking::command(app, "window.panel.activate", &json!({"panel":panel}))
+            {
+                return result;
+            }
+            if !id.starts_with("type.panels.")
+                && let Some(result) = crate::panel_docking::command(app, id, p)
+            {
+                return result;
+            }
         }
         let group = crate::dock::Group::from_key(panel);
         let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g));

@@ -633,6 +633,54 @@ fn legacy_control_updates_authoritative_custom_visibility_and_selection_atomical
 }
 
 #[test]
+fn legacy_collapse_updates_every_split_native_group_and_clears_stale_entries() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"color","anchor":"layers","zone":"top"})).unwrap();
+    assert!(!group_members(lay(&app), "swatches").contains(&"color".to_owned()));
+    let ctx = egui::Context::default();
+    let mut dock = app.ui.dock.clone();
+    dock.set_collapsed(Group::Color, true);
+    assert_eq!(control_set(&mut app, &ctx, json!({"dock":dock}))["ok"], true);
+    assert!(group_minimized(&app, Group::Color), "every custom group containing Color panels is minimized");
+
+    let mut dock = app.ui.dock.clone();
+    dock.set_collapsed(Group::Color, false);
+    assert_eq!(control_set(&mut app, &ctx, json!({"dock":dock}))["ok"], true);
+    assert!(!group_minimized(&app, Group::Color));
+    assert!(app.ui.docking_collapsed.iter().all(|id| !["color", "swatches", "gradients", "patterns"].contains(&id.as_str())));
+
+    app.run("window.panel.group", json!({"panel":"layers","operation":"collapse"})).unwrap();
+    let layers = group_members(lay(&app), "layers");
+    assert!(layers.iter().all(|panel| app.ui.docking_collapsed.contains(panel)));
+    let mut dock = app.ui.dock.clone();
+    dock.set_collapsed(Group::Layers, false);
+    assert_eq!(control_set(&mut app, &ctx, json!({"dock":dock}))["ok"], true);
+    assert!(layers.iter().all(|panel| !collapsed_members(&app, lay(&app)).contains(panel)));
+}
+
+#[test]
+fn legacy_collapse_rejects_conflicting_native_states_in_one_custom_group_atomically() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"color","anchor":"layers"})).unwrap();
+    assert!(group_members(lay(&app), "color").contains(&"layers".to_owned()));
+    let before = serde_json::to_value(&app.ui).unwrap();
+    let ctx = egui::Context::default();
+    let mut dock = app.ui.dock.clone();
+    dock.set_collapsed(Group::Color, true);
+
+    assert_eq!(control_set(&mut app, &ctx, json!({"dock":dock}))["ok"], false);
+    assert_eq!(serde_json::to_value(&app.ui).unwrap(), before);
+
+    let mut floating = self::app();
+    floating.run("window.panel.float", json!({"panel":"swatches"})).unwrap();
+    let before = serde_json::to_value(&floating.ui).unwrap();
+    let mut dock = floating.ui.dock.clone();
+    dock.set_collapsed(Group::Color, true);
+    assert_eq!(control_set(&mut floating, &ctx, json!({"dock":dock}))["ok"], false);
+    assert_eq!(serde_json::to_value(&floating.ui).unwrap(), before);
+}
+
+#[test]
 fn legacy_dock_width_is_consumed_by_custom_renderer_and_clamped_to_existing_range() {
     let mut app = app();
     app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
@@ -665,6 +713,18 @@ fn explicit_reveal_activates_existing_tab_and_expands_custom_group() {
     let before = app.ui.docking.clone();
     assert!(app.run("window.panel.layers", json!({"show":"yes"})).is_err());
     assert_eq!(app.ui.docking, before);
+}
+
+#[test]
+fn explicit_expand_clears_a_minimized_group_imported_from_the_native_dock() {
+    let mut app = app();
+    app.ui.dock.set_collapsed(Group::Color, true);
+    app.ui.docking = Some(legacy_workspace(&app));
+    assert!(group_minimized(&app, Group::Color));
+
+    app.run("window.panel.group", json!({"panel":"swatches","operation":"expand"})).unwrap();
+
+    assert!(!group_minimized(&app, Group::Color));
 }
 
 // #2455 in a custom workspace: the pro Color field fills a tall floating group, not 120 pt.
@@ -962,6 +1022,23 @@ fn the_native_dock_width_sizes_the_default_column() {
     let total: f32 = columns.iter().map(|column| if column.iconic { column.iconic_width.unwrap_or(36.0).clamp(36.0, 240.0) } else { column.width }).sum();
     assert!((total - 380.0).abs() < 1.0, "the remembered width sizes the whole dock, got {total}");
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
+}
+
+#[test]
+fn a_custom_workspace_discards_a_pending_native_dock_width() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
+    let width_before = dock_width(&app);
+    let ctx = egui::Context::default();
+    let key = crate::panels::panel_state_id(&ctx, "dock");
+    let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(860.0, 0.0), vec2(420.0, 700.0)) };
+    ctx.data_mut(|data| data.insert_persisted(key, state));
+    app.last_canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(800.0, 600.0));
+
+    native_dock_width(&mut app, &ctx);
+
+    assert!((dock_width(&app) - width_before).abs() < 0.5, "a custom workspace keeps its saved width");
+    assert!(ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "discarded native width is consumed");
 }
 
 /// The dock-edge layout is only chosen for a horizontal root split whose canvas side is the lone

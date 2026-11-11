@@ -392,6 +392,7 @@ fn floats(layout: &Layout<String>, panel: &str) -> bool {
 /// the workspace exists the native dock's flag, after it the group's own minimized flag or the
 /// app's collapse set ([`group_command`] keeps fully minimized groups out of the workspace).
 /// [`presented`] applies the same fold to the drawn layout.
+#[cfg(test)]
 pub(crate) fn group_minimized(app: &PhotocraftApp, group: Group) -> bool {
     let Some(workspace) = app.ui.docking.as_ref() else { return app.ui.dock.is_collapsed(group) };
     let layout = &workspace.layout;
@@ -1096,6 +1097,11 @@ fn resize_end_dock(node: &mut Node<String>, total: f32, actual: &mut f32) -> boo
 fn native_dock_width(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let id = crate::panels::panel_state_id(ctx, "dock");
     let Some(state) = ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(id)) else { return };
+    let native_derived = app.ui.docking.is_none() || app.ui.docking_pristine_theme.is_some();
+    if !native_derived {
+        ctx.data_mut(|data| data.remove::<egui::PanelState>(id));
+        return;
+    }
     if !app.last_canvas_rect.is_positive() {
         return;
     }
@@ -1369,7 +1375,12 @@ fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Strin
             collapsed.retain(|id| !members.contains(id));
         }
         "collapse" => collapsed.extend(members.iter().cloned()),
-        "expand" => collapsed.retain(|id| !members.contains(id)),
+        "expand" => {
+            collapsed.retain(|id| !members.contains(id));
+            if workspace.layout.root.iter().flat_map(tree_groups).any(|group| group.minimized && group.panels.iter().any(|id| members.contains(id))) {
+                workspace.apply(Action::SetMinimized { panel: panel.to_owned(), minimized: false }, permissions).map_err(|e| e.to_string())?;
+            }
+        }
         "move" => {
             if params.get("anchor").and_then(Value::as_str).and_then(normalize).is_some_and(|anchor| members.iter().any(|id| id == anchor)) {
                 return Err("group cannot be moved into itself".into());
@@ -1419,6 +1430,7 @@ fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Strin
 
 pub(crate) struct LegacyUpdate {
     workspace: Workspace,
+    collapsed: Vec<String>,
 }
 
 /// Validate and stage the legacy controls before ui.set commits any fields.
@@ -1449,6 +1461,7 @@ pub(crate) fn prepare_legacy_update(
     }
     let mut workspace = current.clone();
     workspace.locked = false;
+    let mut collapsed = app.ui.docking_collapsed.clone();
     for group in Group::ALL {
         let visibility = request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool);
         let selected = request.get("dockTabs").and_then(|p| p.get(group.key())).is_some();
@@ -1481,20 +1494,41 @@ pub(crate) fn prepare_legacy_update(
             workspace.apply(Action::Activate { panel: id.to_owned() }, permissions).map_err(|e| e.to_string())?;
         }
     }
-    // The legacy `collapsed` list is the in-place tab-strip minimize: carry it onto the
-    // workspace's per-group minimized flags, so the request's collapse replaces the
-    // custom groups' list instead of a native-flag remap.
+    // Map each native group state onto every custom dock group containing its panels. A custom
+    // group that combines native groups with conflicting requested states cannot represent them.
     if let Some(dock) = dock {
-        for group in Group::ALL {
-            let want = dock.is_collapsed(group);
-            if group_minimized(app, group) == want {
+        let groups: Vec<TabGroup> =
+            workspace.layout.root.iter().chain(workspace.layout.floating.iter().map(|window| &window.root)).flat_map(tree_groups).collect();
+        for workspace_group in groups {
+            let mut native_groups = Vec::new();
+            for panel in &workspace_group.panels {
+                if let Some(native_group) = PANELS.iter().find(|entry| entry.0 == panel).map(|entry| entry.2)
+                    && !native_groups.contains(&native_group)
+                {
+                    native_groups.push(native_group);
+                }
+            }
+            let Some(want) = native_groups.first().map(|native_group| dock.is_collapsed(*native_group)) else { continue };
+            if native_groups.iter().any(|native_group| dock.is_collapsed(*native_group) != want) {
+                return Err("dock collapse states conflict within a custom panel group".into());
+            }
+            if !workspace_group.dock {
+                if want {
+                    return Err("dock collapse cannot be represented for this custom panel group".into());
+                }
+                collapsed.retain(|id| !workspace_group.panels.contains(id));
                 continue;
             }
-            let Some(panel) = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).find(|id| workspace.layout.contains(&id.to_string())).map(str::to_owned)
-            else {
-                continue;
-            };
-            workspace.apply(Action::SetMinimized { panel, minimized: want }, permissions).map_err(|e| e.to_string())?;
+            if workspace_group.minimized != want {
+                let panel = workspace_group
+                    .panels
+                    .iter()
+                    .find(|panel| PANELS.iter().any(|entry| entry.0 == *panel))
+                    .cloned()
+                    .ok_or("custom dock group has no registered panel")?;
+                workspace.apply(Action::SetMinimized { panel, minimized: want }, permissions).map_err(|e| e.to_string())?;
+            }
+            collapsed.retain(|id| !workspace_group.panels.contains(id));
         }
     }
     // Opening a tab or showing a panel expands its group (#129).
@@ -1505,15 +1539,18 @@ pub(crate) fn prepare_legacy_update(
             continue;
         }
         if let Some(panel) = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).find(|id| workspace.layout.contains(&id.to_string())).map(str::to_owned) {
+            let members = group_members(&workspace.layout, &panel);
             workspace.apply(Action::SetMinimized { panel, minimized: false }, permissions).map_err(|e| e.to_string())?;
+            collapsed.retain(|id| !members.contains(id));
         }
     }
-    Ok(Some(LegacyUpdate { workspace }))
+    Ok(Some(LegacyUpdate { workspace, collapsed }))
 }
 
 pub(crate) fn commit_legacy_update(app: &mut PhotocraftApp, update: LegacyUpdate) {
     let returns = app.ui.docking_returns.clone();
     commit(app, update.workspace, returns);
+    app.ui.docking_collapsed = update.collapsed;
 }
 
 struct PanelContent<'a> {
