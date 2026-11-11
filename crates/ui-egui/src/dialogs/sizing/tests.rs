@@ -488,6 +488,22 @@ fn resample_on_resolution_with_width_in_columns() {
     }
 }
 
+/// Unlinked, a Columns width past the pixel limit is bounded on its own: the untouched height
+/// keeps its pixels.
+#[test]
+fn unlinked_columns_width_past_the_limit_keeps_the_height() {
+    let (mut h, id) = resolution_dialog((1000, 1000), 72.0, "px", "bicubic");
+    let d = h.state_mut().ui.dialog_mut(id).unwrap();
+    d.fields.insert("__constrain".into(), json!(false));
+    set_unit(&mut d.fields, "width", "col");
+    h.run_steps(3);
+    type_into(&mut h, 0, "30000");
+    let f = fields(&h);
+    assert_eq!((num(&f, "width"), num(&f, "height")), (MAX_PIXEL_DIMENSION, 1000.0), "{f:?}");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_doc::Size::new(300_000, 1000));
+}
+
 /// #4162: a document wider than 30000 units in a physical unit (40000 px at 72 ppi is 40000 pt)
 /// kept its size in the fields and on OK; the fields clamped it to 30000 on open, so OK with
 /// no edit resized (Image Size) or cropped (Canvas Size) it.

@@ -405,12 +405,19 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("width".into(), json!((num(f, "height") * ow / oh.max(1.0)).round().max(1.0)));
         }
     }
-    if resampling && (w_changed || h_changed) {
+    if resampling && constrain && (w_changed || h_changed) {
         let longest = num(f, "width").max(num(f, "height"));
         if longest > MAX_PIXEL_DIMENSION && longest.is_finite() {
             let scale = MAX_PIXEL_DIMENSION / longest;
             for key in ["width", "height"] {
                 f.insert(key.into(), json!(num(f, key) * scale));
+            }
+        }
+    } else if resampling {
+        // Unlinked, only the edited side is bounded: the other one wasn't touched.
+        for (key, changed) in [("width", w_changed), ("height", h_changed)] {
+            if changed && num(f, key) > MAX_PIXEL_DIMENSION {
+                f.insert(key.into(), json!(MAX_PIXEL_DIMENSION));
             }
         }
     }
