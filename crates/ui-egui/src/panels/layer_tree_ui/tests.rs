@@ -184,6 +184,9 @@ fn off_screen_group_paints_no_row() {
     let named_in = |name: &str, row: egui::Rect| painted_texts(&h).iter().any(|(t, p)| t == name && p.y >= row.top() && p.y <= row.bottom());
     assert!(named_in("High Group", high), "the on-screen group's name is painted");
     assert!(!named_in("Low Group", low), "the off-screen group's row paints no name");
+    // Nor any other text: no text shape lands in the off-screen row at all.
+    let in_low: Vec<_> = painted_texts(&h).into_iter().filter(|(_, p)| low.contains(*p)).collect();
+    assert!(in_low.is_empty(), "the off-screen group's row adds no text shapes: {in_low:?}");
 }
 
 /// #13117: skipping the off-screen group's painting keeps its triangle a widget: it is listed for
