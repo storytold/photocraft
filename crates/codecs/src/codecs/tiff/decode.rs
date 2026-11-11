@@ -501,8 +501,6 @@ fn multiband_layout(photometric: u64, has_alpha: bool, gray_alpha: bool) -> Chan
     }
 }
 
-const TAG_PREDICTOR: u16 = 317;
-const TAG_JPEG_TABLES: u16 = 347;
 /// Marker segments looked at before a JPEG chunk's frame header. Real chunks hold a handful
 /// (SOI, DRI, SOF, DHT, DQT, SOS); the cap keeps chunks that all point at one long run of
 /// segments from costing chunks x segments.
