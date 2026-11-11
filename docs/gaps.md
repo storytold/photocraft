@@ -1,6 +1,6 @@
 # Where PhotoCraft falls short of Photoshop
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (G8: Type › OpenType › Stylistic Sets submenu, Set 1–20, #10285) · **Target:** Adobe Photoshop 2026)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-08 · **Change:** minor (G10: PDF writes spot channels as overprinting `/Separation` plates and a Multichannel document as plates alone, FILE-215-17's PDF Separation part) · **Target:** Adobe Photoshop 2026)
 
 Every known shortfall against Photoshop 2026 (27.11.0), one entry each, ranked by user impact
 on the way to beta. This is the work list agents pick from: take the highest-ranked entry that
@@ -41,6 +41,7 @@ what an agent can't finish alone.
 
 ### G1. PSD fidelity and Photoshop acceptance
 - **Done 2026-10-23 (#8940):** Filter Gallery Halftone Pattern preserves size, contrast and dot/circle/line through PSD/PSB import/export, with the reference application's descriptor keys (`HlSz`, `Cntr`, `ScrT`). Malformed descriptors stay verbatim. Other unsupported gallery effects remain opaque on import or produce an export warning.
+- **Average (2026-10-23):** the existing `Avrg` PSD mapping now has an executable smart-filter path. [Focused tests](average-filter.md#smart-filters) cover the command and re-rendering after discarding cached pixels; the local Photoshop RGB8 oracle is opt-in and does not change corpus floors. Broader filter parity remains open.
 - **Missing:** PSDs we write are not always accepted by Photoshop, and Photoshop-authored files
   don't always render as Photoshop renders them.
 - **Partial (2026-10-15, #5972 A1):** `GdFl` noise fills render when all three RGB ranges are
@@ -59,7 +60,8 @@ what an agent can't finish alone.
   decoded whole beside the layer; layered TIFFs over the limit and huge PSBs still decode whole).
   No test opens our exports in a third-party editor (FILE-216-4). Mockups whose smart object
   uses Transform Warp's Cylinder re-rendered flat after Replace Contents (#4112, fixed 2026-10-14;
-  vertical cylinders and ones with perspective are still unread).
+  vertical cylinders and ones with perspective are still unread; Warp mode edits the cylinder
+  since 2026-10-27, G5).
 - **Impact:** PSD is the format professionals exchange. Beta requires it to be reliable.
 - **Estimate:** 150–250 h. **Human:** opening exports in Photoshop on the owner's Mac (or a
   scripted check there) is the only real oracle.
@@ -269,6 +271,19 @@ what an agent can't finish alone.
   and 0/49% smoothing. Other presets, explicit spacing and remembered brushes retain their
   settings; reselect a built-in preset to take its new default. Other brush-feel and latency
   gaps remain open; percentages and estimates are unchanged.
+- **Progress (2026-10-13, #3825 partial):** Brush Tip Shape's Spacing checkbox and
+  percentage share one header, removing the duplicated label. Disabled controls retain
+  the saved spacing; toggling does not round fractional imported values. The issue's
+  remaining layout and control gaps stay open.
+
+- **Progress (2026-10-13, #3825 partial):** Scattering and Dual Brush place Both Axes
+  between the Scatter label and percentage field. The existing amount track, label
+  scrubbing, percentage limits and disabled-section value retention are preserved.
+  The assessment's remaining layout and control gaps stay open.
+- **Progress (2026-10-13, #3825 partial):** Brush Tip Shape places Angle/Roundness
+  controls in a left column with right-aligned labels and the interactive widget on
+  the right. Numeric units, limits, imported values and arrow/handle interactions
+  are retained; the assessment's other layout and control gaps remain open.
 - **Progress (2026-10-13, #3825 partial):** Transfer’s Wetness Jitter and Mix Jitter
   blocks are disabled outside the Mixer Brush, retaining their saved settings. Opacity
   and Flow keep their existing availability; other layout and brush-feel gaps remain open.
@@ -315,7 +330,13 @@ what an agent can't finish alone.
   to 100% (#2508, #2527); tool-key memory in a group (#2608, #2625); hold-a-key spring-loaded
   tools (#2672); H/V skew fields in the Free Transform options bar; Free Transform of several
   selected layers, ⌘T and the Move tool's shared frame (#6501, #3384, #6096; Warp stays one
-  layer).
+  layer); Warp mode's Cylinder
+  (#4112, 2026-10-27): listed in the Warp menu after the presets, outlined and cut into the
+  reference's 3 × 2 grid, with its five handles (two corners, the bend in the middle of the
+  upper arc, the lower edge in the middle of the lower arc, the wrap at the grid's centre), a
+  surface drag moving it, Bend, H and V greyed in the bar, and a smart object's stored cylinder
+  opening as one, previewed from its unwarped source (vertical cylinders
+  and ones in perspective stay out, as G1's PSD reader has no measurements for them).
 - **Detail:** [`ui-parity.md`](ui-parity.md).
 - **Estimate:** 60–110 h.
 
@@ -323,6 +344,8 @@ what an agent can't finish alone.
 - **Progress (2026-10-21):** adjustment clipping is reachable above the Properties editor in a compact dock (#5231), with all-theme layout coverage and 8/16/32-bit scope and undo/redo tests. The normal adjustment-layer scope and remaining estimate stay unchanged.
 - **Progress (2026-10-16, #3222):** UI scale presets are complete: 75–125% in 5% steps,
   then 150–300%, remembered through preferences (UI-217-9).
+- **Progress (2026-11-06):** Units & Rulers › Column Size (width, gutter) takes effect: Image
+  Size and Canvas Size offer a Columns width unit (#6214).
 - **Progress (2026-10-15):** Preferences › General › Animated Zoom takes effect: a held Zoom
   tool press zooms continuously about the press point, ⌥ out (#6210, `ui-egui/src/zoom_hold.rs`).
 - **Progress (2026-10-14, #5556):** Character and Paragraph controls stay available without
@@ -333,7 +356,7 @@ what an agent can't finish alone.
 - **Progress (2026-10-15):** the Color panel has Photoshop's panel-menu modes (Hue Cube, Brightness
   Cube, Color Wheel, Grayscale/RGB/HSB/CMYK/Lab/Web Color sliders), its colour ramp and copy
   commands, the same in every theme (UI-217-17, #2569, #6000; `ui-egui/src/color_panel_ui.rs`).
-- **Missing:** 11 of 183 preferences do nothing (scorecard prefs audit, 2026-11-01); panel groups can't
+- **Missing:** 8 of 199 preferences do nothing (scorecard prefs audit, 2026-11-08: Column Size takes effect, #6214); panel groups can't
   float or tear off into OS windows (UI-217-5, #1828, #1213, #2305); more themes (UI-217-11, #2661); a single pixel layer
   copies without its mask and styles (UI-217-23; fill and adjustment layers copy whole, #2344); tool-specific context menus beyond brushes, selections, Pen and
   Crop
@@ -392,13 +415,18 @@ what an agent can't finish alone.
   write (FILE-215-10, #2541; a single flattened page now saves via Save As / Save a Copy / CLI,
   2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
   DICOM, EPS/DCS, Pixar, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
-  Raw; spot plates beyond PSD and TIFF: PDF Separation (FILE-215-17); .atn,
+  Raw; spot plates beyond PSD, TIFF and PDF: the spot ink preview's ink order at overlaps and its
+  look at solidity 0.5 and 1 against reference files (FILE-215-17); .atn,
   .shc, .csh presets (.asl landed 2026-10-20) (FILE-215-15); C2PA (#1050).
 - **Detail:** [`file-format-parity.md`](file-format-parity.md).
 - **Progress (2026-10-30, #10249):** visible spot channels of RGB and CMYK documents print over
   the canvas composite as inks (the Multichannel overprint formula, in Channels panel order), open
   visible, and print in the PSD thumbnail; flatten, export and the merged image stay free of them.
   Open: ink order at overlaps and the look at solidity 0.5 and 1 against reference files.
+- **Progress (2026-10-29):** PDF writes spot channels as overprinting `/Separation` plates after
+  the flattened image, one 8-bit image per channel named after it, and a Multichannel document as
+  its plates alone, so a RIP or Ghostscript's `tiffsep` separates them as named plates (FILE-215-17's
+  PDF Separation part; `pdfSpotPlates: false` on scripted saves leaves them out).
 - **Progress (2026-10-23, #7415 split):** PSD stores and reads spot channels as Photoshop does (ink
   0 = solid) and writes their identifiers (1053); PSDs from PhotoCraft 0.1.0–0.16.0, which stored
   spot ink the other way round, keep their ink.
@@ -416,10 +444,9 @@ what an agent can't finish alone.
 
 ### G12. Pen tablets and display hardware
 - **Missing:** tilt and rotation on Windows (pressure only, via WM_POINTER; no WinTab); native
-  Wayland tablet-v2 (#79; the pen does not click on GNOME 50, #2622, KDE #2297); eraser end on
-  flipped Wacom pens (#2285); HDR/EDR output (Photoshop has "Precise Color Management for HDR
-  Display"); monitor profile detection off macOS and live profile changes; Touch Bar (macOS
-  Intel only, low value); 3D mice.
+  Wayland tablet-v2 (#79; the pen does not click on GNOME 50, #2622, KDE #2297); HDR/EDR output
+  (Photoshop has "Precise Color Management for HDR Display"); monitor profile detection off
+  macOS and live profile changes; Touch Bar (macOS Intel only, low value); 3D mice.
 - **Detail:** [`hardware-parity.md`](hardware-parity.md).
 - **Estimate:** 80–150 h. **Human:** tablets and HDR displays to test on.
 
@@ -466,6 +493,10 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | G9: Units & Rulers › Column Size takes effect as the Columns width unit of Image Size and Canvas Size (#6214); preferences that do nothing 10 → 8 of 199 |
+| 2026-10-27 | minor | G5: Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it after the presets, five handles set its silhouettes, edges, ellipse depths and wrap as in the reference (Bend, H and V stay greyed), and a smart object's stored cylinder opens in Warp mode as a cylinder and commits back as one; no estimate changed |
+| 2026-11-07 | minor | G14: Hasselblad 3FR/FFF, the X2D II 100C's uncompressed CFA, decodes; compressed 3FR still opens as the embedded preview |
+| 2026-11-06 | minor | G12: eraser end of flipped pens on Windows (Windows Ink on) selects the Eraser (#2285); no estimate changed |
 | 2026-10-29 | minor | G17: web build memory handling (#10024): up-front memory checks for Place, Image Size, smart-object re-render and Save; a low-memory warning; a stopped message when the module traps; PSD save reserves its whole output; no estimate changed |
 | 2026-11-02 | minor | G11: Batch Esc Continue/Stop, one plan and error log across interruptions, and read-only input previews without a progress bar (#4579); live tab parity remains open, AUTO-219-5 partial; readiness and estimate unchanged |
 | 2026-11-02 | minor | Action recording folds Move-tool nudge runs, records keyboard document switches by opening-order offset and places point text by canvas percentage; paragraph boxes remain absolute (AUTO-219-1, #4514); parity percentages unchanged |
@@ -499,6 +530,8 @@ what an agent can't finish alone.
 | 2026-10-23 | minor | G10: Amiga IFF write landed (24-plane ILBM, Save As `.iff`) and 24-plane ILBMs open |
 | 2026-10-23 | minor | #8940: Filter Gallery Halftone Pattern maps size, contrast and dot/circle/line both ways with the reference application's descriptor keys (`HlSz`, `Cntr`, `ScrT`); PSD/PSB round trips at 8/16/32 bits, malformed descriptors preserved verbatim. Other gallery effects remain partial; no floor or estimate changed. |
 | 2026-10-22 | minor | G11: document offsets use opening order despite tab reordering; lifecycle and `.atn` playback regressions; behavioral source evidence, no new live Photoshop reproduction |
+| 2026-10-23 | minor | Average runs on Smart Objects and imported `Avrg` records; synthetic depth tests and an opt-in cold Photoshop PSD re-render are documented in [average-filter.md](average-filter.md). Corpus floors and percentages unchanged. |
+| 2026-10-23 | minor | Average preserves transparency; synthetic Photoshop 26.6.1 RGB8 observations and 8/16/32-bit engine regressions in [average-filter.md](average-filter.md). Broader colour-model and feathering parity remains unmeasured; percentages and corpus floors unchanged. |
 | 2026-10-22 | minor | G17: Help › Check for Updates and an opt-out check once per launch (#5485), DIST-220-1 partial; estimate unchanged |
 | 2026-10-19 | minor | G5: Free Transform of several selected layers (#6501): one box moves them all; no estimate changed |
 | 2026-10-22 | minor | G1: 32-bit Hue/Saturation unclipped with Photoshop's saturation factor, bright colours keep their hue, Colorize's saturation scaled by 1 − \|Lightness\|; photoshop rgb32 hue-saturation and hue-saturation-colorize pass; Photoshop-oracle floor 188 → 190 of 258 (#5781) |
@@ -558,7 +591,10 @@ what an agent can't finish alone.
 | 2026-10-13 | minor | G8: a Type tool click on the work path or the active shape layer's path starts type on it at the point clicked (TYPE-218-1, partial); no readiness percentage or estimate changed |
 | 2026-10-13 | minor | G14: lossy DNG (#5112), `.xmp` sidecars, Camera Raw Defaults wired, Calibration panel and Auto; CR3 sensor decode ruled out under the clean-room rule |
 | 2026-10-13 | minor | G4: Hue Jitter amount-track appearance (#3825, partial); no readiness percentage or estimate changed |
+| 2026-10-13 | minor | G4: combined Spacing checkbox/percentage header (#3825, partial); disabled-value and percentage-edit behavior retained; no readiness percentage or estimate changed |
 | 2026-10-13 | minor | G2: Content-Aware Scale (P28) measured: carve 2013 → 556 ms, row 3.28 → 1.64 s on a 4-core VM, output unchanged; baseline, budgets and estimate unchanged |
+| 2026-10-13 | minor | G4: Scattering and Dual Brush Both Axes header placement (#3825, partial); label scrubbing and value retention preserved; no readiness percentage or estimate changed |
+| 2026-10-13 | minor | G4: Angle/Roundness column and label alignment (#3825, partial); existing values and interactions retained; no readiness percentage or estimate changed |
 | 2026-10-13 | minor | G4: minimum inputs in Shape Dynamics and Transfer follow their Control (#3825, partial); no readiness percentage or estimate changed |
 | 2026-10-12 | minor | G5: Free Transform options bar H/V skew fields done |
 | 2026-10-12 | minor | G11: `.atn` import maps 112 events (Select and Mask, Spatter, Ripple, Crystallize, Pattern Fill, mask targeting, Step Backward, points, Bitmap) |
