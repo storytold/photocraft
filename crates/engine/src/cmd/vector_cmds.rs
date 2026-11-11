@@ -166,7 +166,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.transform",
             "Free Transform Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (with layer target),"matrix":[a,b,c,d,e,f] | "quad":[[x,y]×4] (Distort/Perspective: where the frame's corners go, clockwise from top-left) | "style"|"mesh"|"warp":… (Warp, as edit.transform.warp) | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?,"rect":[x0,y0,x1,y1]? (the quad's or warp's frame; default = path control bounds)} (numeric transforms pivot on path bounds center)"##,
+            r##"{"name":str|"work"|"layer"="work","layer":id? (with layer target),"vectorMask":bool=false (with the layer target: its vector mask's path, not a shape layer's path),"matrix":[a,b,c,d,e,f] | "quad":[[x,y]×4] (Distort/Perspective: where the frame's corners go, clockwise from top-left) | "style"|"mesh"|"warp":… (Warp, as edit.transform.warp) | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?,"rect":[x0,y0,x1,y1]? (the quad's or warp's frame; default = path control bounds)} (numeric transforms pivot on path bounds center)"##,
             has_doc,
             path_transform
         ),
@@ -228,6 +228,17 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "subtract")"##,
             enabled: has_doc,
             run: |s, p| path_to_selection_with_mode(s, p, "subtract"),
+            journal: true,
+        },
+        // ⇧⌥⌘↩ / Ctrl+Alt+Shift+Enter intersects the path with the selection (#7726).
+        CommandSpec {
+            id: "path.intersectWithSelection",
+            label: "Intersect Path with Selection",
+            menu: &[],
+            shortcut: Some("Cmd+Alt+Shift+Enter"),
+            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "intersect")"##,
+            enabled: has_doc,
+            run: |s, p| path_to_selection_with_mode(s, p, "intersect"),
             journal: true,
         },
         spec!(

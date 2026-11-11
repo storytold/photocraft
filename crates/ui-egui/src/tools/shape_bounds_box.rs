@@ -5,8 +5,8 @@
 //! handle with one `edit.transform` (which keeps live shapes live), as one History step named
 //! "Transform Path". No Free Transform session opens, and there is no rotate zone. A corner
 //! scales both ways, the pointer projected onto the box diagonal as Free Transform's corner does
-//! (#11096); an edge middle scales one way. The corner radius widgets (`corner_radius`) keep
-//! priority on a press.
+//! (#11096); an edge scales one way, grabbed at its middle handle or anywhere along its line
+//! (#11473). The corner radius widgets (`corner_radius`) keep priority on a press.
 
 use egui::{Color32, CursorIcon, Modifiers, Pos2, Stroke, vec2};
 use photocraft_doc::LayerContent;
@@ -23,6 +23,18 @@ const MIN_SCALE: f64 = 0.01;
 const MAX_SCALE: f64 = 100.0;
 /// A handle is grabbed within this many screen points.
 const GRAB_PX: f64 = 7.0;
+/// Away from the handles, a side is grabbed anywhere along its line and up to this many screen
+/// points outside it (#11473). Inside the box only the line itself counts: a press just inside
+/// still selects or draws, as the tool does there. The band stays narrower than a handle: unlike
+/// Free Transform's box, which rotates everywhere outside, this box leaves the outside to the tool
+/// (select or move another shape, draw a new one, start a marquee).
+const EDGE_PX: f64 = 5.0;
+/// How far inside the box a point still counts as on its line, in screen points: rounding of the
+/// pointer through the view, not a grab area.
+const LINE_PX: f64 = 1e-3;
+/// Path Selection's pick tolerance on a press, in screen points (`tool_input`, `path_ops`): a
+/// shape's outline within it is that shape's, so a stroke-only neighbour keeps its press too.
+const PICK_PX: f64 = 6.0;
 
 /// A handle drag in progress.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,7 +62,7 @@ pub struct Drag {
 fn shows(app: &PhotocraftApp) -> bool {
     app.ui.transform.is_none()
         && app.ui.view.shows(app.ui.view.show.target_path)
-        && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line)
+        && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line)
 }
 
 /// The selected shape layers and the box round their paths. `None` unless at least one layer is
@@ -130,14 +142,48 @@ fn zoom(app: &PhotocraftApp) -> f64 {
     f64::from(app.point_zoom().max(0.01))
 }
 
-/// The handle within grabbing distance of document point `p`, the nearest.
+/// The handle within grabbing distance of document point `p`, the nearest; else the side whose
+/// line it is on or just outside, as that side's middle handle, unless an unselected shape is
+/// there. The handles come first, so a corner keeps its press where the sides' bands meet it.
 fn hit(app: &PhotocraftApp, p: [f64; 2]) -> Option<[i8; 2]> {
     if !shows(app) {
         return None;
     }
-    let (_, r) = selection(app)?;
-    let tol = GRAB_PX / zoom(app);
-    handles(r).into_iter().map(|(h, at)| (h, (at[0] - p[0]).hypot(at[1] - p[1]))).filter(|(_, d)| *d <= tol).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)
+    let (layers, r) = selection(app)?;
+    let zoom = zoom(app);
+    let tol = GRAB_PX / zoom;
+    handles(r)
+        .into_iter()
+        .map(|(h, at)| (h, (at[0] - p[0]).hypot(at[1] - p[1])))
+        .filter(|(_, d)| *d <= tol)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| h)
+        .or_else(|| edge_hit(r, p, EDGE_PX / zoom, LINE_PX / zoom).filter(|_| !on_other_shape(app, &layers, p, PICK_PX / zoom)))
+}
+
+/// Whether the topmost shape at document point `p` is one the box doesn't hold, picked as Path
+/// Selection picks: a press on a neighbouring shape in a side's band selects or draws there, as
+/// the tool does, instead of scaling the selection.
+fn on_other_shape(app: &PhotocraftApp, layers: &[u64], p: [f64; 2], tol: f64) -> bool {
+    app.session.active().and_then(|st| crate::vector_ui::pick_shape_at(&st.doc, p, tol)).is_some_and(|id| !layers.contains(&id.0))
+}
+
+/// The side of the box `r` nearest document point `p`, within `band` outside the box or within
+/// `line` inside it: `[-1, 0]` left, `[1, 0]` right, `[0, -1]` top, `[0, 1]` bottom.
+pub(crate) fn edge_hit(r: [f64; 4], p: [f64; 2], band: f64, line: f64) -> Option<[i8; 2]> {
+    let [x0, y0, x1, y1] = r;
+    let [x, y] = p;
+    // `f64::max` drops a NaN, so `beyond` would put a NaN point on a side's span.
+    if !(x.is_finite() && y.is_finite()) {
+        return None;
+    }
+    let inside = x > x0 && x < x1 && y > y0 && y < y1;
+    let reach = if inside { line } else { band };
+    // How far `v` lies beyond the span `lo..=hi`: a side is a segment, not a whole line.
+    let beyond = |v: f64, lo: f64, hi: f64| (lo - v).max(v - hi).max(0.0);
+    let (past_x, past_y) = (beyond(x, x0, x1), beyond(y, y0, y1));
+    let sides = [([-1, 0], (x - x0).hypot(past_y)), ([1, 0], (x - x1).hypot(past_y)), ([0, -1], (y - y0).hypot(past_x)), ([0, 1], (y - y1).hypot(past_x))];
+    sides.into_iter().filter(|(_, d)| *d <= reach).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)
 }
 
 /// The scale cursor over a handle at document point `p`, or while one is dragged, turned with the

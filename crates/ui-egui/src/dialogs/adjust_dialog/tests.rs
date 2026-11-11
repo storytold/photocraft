@@ -228,6 +228,10 @@ fn sample_params(kind: &str) -> Value {
 #[test]
 fn curves_dialog_fits_its_graph_and_controls() {
     for language in ["en", "ru"] {
+        // English runs in every build; Russian needs the craft-i18n catalogs.
+        if language != "en" && !crate::i18n::needs_catalogs() {
+            continue;
+        }
         let _language = crate::i18n::language_scope(crate::i18n::Lang::from_code(language).unwrap());
         for theme in crate::theme::ThemeKind::ALL {
             for size in [egui::vec2(1280.0, 900.0), egui::vec2(900.0, 720.0)] {
@@ -812,6 +816,9 @@ fn curves_on_a_gray_target_seeds_neutral_fields_in_a_lab_document() {
 /// stays exactly "Green".
 #[test]
 fn curves_channel_popup_keeps_custom_names_verbatim_in_italian() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let it = crate::i18n::Lang::from_code("it").expect("it registered");
     let green = crate::i18n::tr(it, "Green");
     let _lang = crate::i18n::language_scope(it);
@@ -937,6 +944,118 @@ fn curves_on_a_targeted_filter_mask_is_a_gray_plane() {
     let h = tone::compute_histograms(&st.doc, HistSource::Channel { layer: id, surface }, photocraft_doc::adjust::ToneSpace::Rgb);
     assert!(h.ch[0][0] > 0 && h.ch[0][255] > 0, "black and white levels");
     assert_eq!(curve_mode(&app, "curves"), photocraft_doc::ColorMode::Grayscale);
+}
+
+/// #9879: the reference application's Photo Filter reopens at Warming Filter (85) and 25 % after
+/// any OK, but keeps Preserve Luminosity as last confirmed (measured 2026-11-08); ⌥ reopens at all
+/// the last settings; Levels still opens at its neutral settings, and a smart filter's dialog
+/// never takes the last ones.
+#[test]
+fn photo_filter_keeps_only_preserve_luminosity_from_its_last_ok() {
+    let mut app = app_with_image();
+    let cmd = "image.adjustments.photoFilter";
+    let first = open_neutral(&mut app, cmd).unwrap();
+    let neutral = crate::filter_dialog::params_of(&app.ui.dialog_mut(first).unwrap().fields.clone());
+    app.ui.dialogs.clear();
+    let id = open(&mut app, cmd).unwrap();
+    let mut sample = photocraft_engine::adjust_params::to_params(
+        &photocraft_engine::adjust_params::from_params("photoFilter", &sample_params("photoFilter"), None, photocraft_doc::ColorMode::Rgb).unwrap(),
+    );
+    // Preserve Luminosity is on by default; the sample turns it off with the other settings.
+    assert_eq!(neutral["preserveLuminosity"], json!(true));
+    sample["preserveLuminosity"] = json!(false);
+    assert_ne!(sample["color"], neutral["color"], "the sample differs from the neutral settings");
+    assert_ne!(sample["density"], neutral["density"]);
+    if let Value::Object(p) = sample.clone() {
+        app.ui.dialog_mut(id).unwrap().fields.extend(p);
+    }
+    crate::dialogs::confirm(&mut app, id).unwrap();
+
+    let again = open(&mut app, cmd).unwrap();
+    let reopened = crate::filter_dialog::params_of(&app.ui.dialog_mut(again).unwrap().fields.clone());
+    assert_eq!(reopened["preserveLuminosity"], json!(false), "Preserve Luminosity off is kept");
+    assert_eq!(reopened["color"], neutral["color"], "the colour is the neutral one again");
+    assert_eq!(reopened["density"], neutral["density"], "and so is the density");
+    // Turned on again and confirmed, it reopens on.
+    app.ui.dialog_mut(again).unwrap().fields.insert("preserveLuminosity".into(), json!(true));
+    crate::dialogs::confirm(&mut app, again).unwrap();
+    let again = open(&mut app, cmd).unwrap();
+    assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(again).unwrap().fields.clone()), neutral, "all neutral again");
+    app.ui.dialogs.clear();
+    // ⌥ reopens at every last setting (#8900).
+    let id = open(&mut app, cmd).unwrap();
+    if let Value::Object(p) = sample.clone() {
+        app.ui.dialog_mut(id).unwrap().fields.extend(p);
+    }
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let alt = open_last(&mut app, cmd).unwrap();
+    assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(alt).unwrap().fields.clone()), sample, "⌥ reopens at the last settings");
+    app.ui.dialogs.clear();
+    let smart = open_neutral(&mut app, cmd).unwrap();
+    assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(smart).unwrap().fields.clone()), neutral, "open_neutral ignores them");
+    app.ui.dialogs.clear();
+
+    let levels = "image.adjustments.levels";
+    let id = open(&mut app, levels).unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.insert("inBlack".into(), json!(30));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let again = open(&mut app, levels).unwrap();
+    let defaults =
+        photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for("levels", photocraft_doc::ColorMode::Rgb).unwrap());
+    assert_eq!(app.ui.dialog_mut(again).unwrap().fields["inBlack"], defaults["inBlack"], "Levels opens neutral without ⌥");
+}
+
+/// #9879: Photo Filter reopens with Filter chosen for its neutral preset colour, even after an OK
+/// with Color chosen (the choice lives in the editor memory), as the reference application does;
+/// ⌥ reopens a custom colour with Color chosen, also after an opening that chose Filter and was
+/// cancelled.
+#[test]
+fn photo_filter_reopens_with_the_choice_its_colour_implies() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let cmd = "image.adjustments.photoFilter";
+    let mode = dialog_mem("photoFilter").with(crate::adjust_editors::PHOTO_FILTER_MODE);
+    let id = open(h.state_mut(), cmd).unwrap();
+    h.run_steps(2);
+    let neutral = h.state_mut().ui.dialog_mut(id).unwrap().fields["color"].clone();
+    // Color chosen (what clicking its radio stores), a custom colour, OK.
+    h.ctx.data_mut(|d| d.insert_temp(mode, true));
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#123456"));
+    h.run_steps(2);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(1);
+    let id = open(h.state_mut(), cmd).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["color"], neutral, "the neutral colour again");
+    assert_eq!(h.ctx.data(|d| d.get_temp::<bool>(mode)), Some(false), "Filter is chosen for the preset colour");
+    // That opening is cancelled with Filter chosen; ⌥ brings the custom colour back with Color.
+    h.state_mut().ui.close_dialog(id);
+    h.run_steps(1);
+    let id = open_last(h.state_mut(), cmd).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["color"], json!("#123456"));
+    assert_eq!(h.ctx.data(|d| d.get_temp::<bool>(mode)), Some(true), "Color is chosen for the custom colour");
+}
+
+/// #9879 review: a recorded Photo Filter that names only its preset completes to that preset's
+/// colour, so editing it as a smart filter doesn't swap in the dialog's neutral colour. Recorded
+/// values are kept as they were, and nothing else is rewritten.
+#[test]
+fn recorded_photo_filter_settings_complete_to_their_preset_colour() {
+    let app = app_with_image();
+    let pf = "image.adjustments.photoFilter";
+    let done = complete_params(&app, pf, &json!({"filter": "cooling80", "density": 60, "extra": [1]})).unwrap();
+    assert_eq!(done, json!({"filter": "cooling80", "density": 60, "extra": [1], "color": "#006dff"}), "only the colour is added");
+    // A recorded colour (here a float triple the engine would rewrite as hex) is left alone.
+    assert!(complete_params(&app, pf, &json!({"filter": "cooling80", "color": [0.5, 0.0, 0.0]})).is_none());
+    let null = complete_params(&app, pf, &json!({"filter": "cooling80", "color": null})).unwrap();
+    assert_eq!(null["color"], json!("#006dff"), "a null colour completes from the preset, as the engine reads it");
+    assert!(complete_params(&app, pf, &json!({"density": 60})).is_none(), "no preset to take a colour from");
+    assert!(complete_params(&app, pf, &json!({"filter": "nope"})).is_none(), "rejected params");
+    // Other adjustments keep their recorded values exactly (a pencil curve isn't smoothed again).
+    let curves = json!({"pencil": true, "smooth": 2, "rgb": [0, 255]});
+    assert!(complete_params(&app, "image.adjustments.curves", &curves).is_none());
+    assert!(complete_params(&app, "filter.blur.gaussian", &json!({"radius": 2})).is_none(), "not an adjustment");
 }
 
 #[test]
