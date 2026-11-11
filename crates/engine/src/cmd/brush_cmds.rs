@@ -249,7 +249,8 @@ fn damage_json(s: &mut Session, dmg: Rect) -> Value {
 fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option<photocraft_doc::LayerId>, BrushSettings, f32)> {
     let gray = is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some();
     let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
-    let brush = if gray && brush.erase { BrushSettings { erase: false, color: s.tools.background, ..brush } } else { brush };
+    let brush =
+        if gray && brush.erase { BrushSettings { erase: false, color: crate::color_cmds::swatch_in_doc(s, s.tools.background), ..brush } } else { brush };
     Ok((id, brush, num(p, "zoom").unwrap_or(1.0)))
 }
 
@@ -271,7 +272,8 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
-    let bg = s.tools.background;
+    let raw_bg = s.tools.background;
+    let bg = crate::color_cmds::swatch_in_doc(s, raw_bg);
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
@@ -295,7 +297,8 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             if auto_erase {
                 // A stroke in the table's colour starts on what the foreground painted as.
                 let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
-                apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
+                // Not in #11940: Pencil Auto Erase keeps the plain background colour.
+                apply_auto_erase(&mut brush, surf, pts.first(), fg, raw_bg);
             }
             let unpainted = table.as_ref().map(|_| surf.clone());
             let damage = if let Some(axis) = &symmetry {
@@ -336,11 +339,17 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
 }
 
 /// Pencil Auto Erase: a stroke that starts on a pixel of the foreground colour paints the
-/// background colour instead (Photoshop).
+/// background colour instead (Photoshop). The match is exact (#11966): the foreground as the
+/// layer would store it (its mode and depth) against the pixel, its alpha aside, so one level
+/// off paints the foreground.
 fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4]) {
     let Some(p0) = start else { return };
     let c = surf.rgba(p0.x.floor() as i32, p0.y.floor() as i32);
-    if c[3] > 0.0 && (0..3).all(|i| (c[i] - fg[i]).abs() < 1.5 / 255.0) {
+    let mut probe = Surface::new(surf.format());
+    probe.write_pixel(0, 0, &photocraft_raster::from_rgba(&surf.format(), [fg[0], fg[1], fg[2], 1.0]));
+    let stored = probe.rgba(0, 0);
+    // Far below one 8-bit level: only the float noise of the conversion.
+    if c[3] > 0.0 && (0..3).all(|i| (c[i] - stored[i]).abs() < 1e-5) {
         brush.color = bg;
     }
 }
@@ -348,7 +357,11 @@ fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&St
 /// The Pencil's brush: the session brush made aliased (every pixel fully painted or untouched,
 /// dabs on the pixel grid), hard and at full flow, with the options-bar mode.
 fn pencil_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
-    let mut brush = with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p);
+    pencil_shape(with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p), p)
+}
+
+/// `brush` with the Pencil's hard, aliased tip, or the Eraser's Block (`"block": true`).
+pub(crate) fn pencil_shape(mut brush: BrushSettings, p: &Value) -> Result<BrushSettings> {
     if flag(p, "block", false) {
         return block_brush(brush, p);
     }
@@ -614,7 +627,8 @@ impl LiveStroke {
         let sel = doc.selection.clone();
         let table = crate::mode_cmds::paint_color_table(&doc, p);
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
-        erase_locked(&mut brush, lock, s.tools.background);
+        let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
+        erase_locked(&mut brush, lock, bg);
         if pencil && flag(p, "autoErase", false) {
             let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
@@ -861,7 +875,8 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
         mode: parse(p, cmd, "mode")?.unwrap_or(ReplaceMode::Color),
         sampling: parse(p, cmd, "sampling")?.unwrap_or(Sampling::Continuous),
         limits: parse(p, cmd, "limits")?.unwrap_or(Limits::Contiguous),
-        tolerance: pct(p, "tolerance", 30.0),
+        // 1..100 %, as the reference's field takes it: 0 and below run as 1 (#11930).
+        tolerance: pct(p, "tolerance", 30.0).max(0.01),
         anti_alias: flag(p, "antiAlias", true),
         color: brush.color,
         background: s.tools.background,
@@ -1361,7 +1376,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.colorReplacement",
             "Color Replacement Tool",
-            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
+            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":1..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
             crate::commands::has_paintable,
             color_replacement,
             true
