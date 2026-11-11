@@ -583,3 +583,62 @@ fn plain_documents_lose_nothing() {
     cmyk.mode = ColorMode::Cmyk;
     assert_eq!(losses(&cmyk).len(), 1, "a document OpenRaster can't hold at all");
 }
+
+/// Matching and converted PNG layers still become independent, editable tile storage.
+#[test]
+fn imported_images_keep_their_samples_and_independent_layers() {
+    for (sample, layout, promote) in [
+        (CSample::U8, ChannelLayout::Rgba, false),
+        (CSample::U16, ChannelLayout::Rgba, false),
+        (CSample::U8, ChannelLayout::Rgb, false),
+        (CSample::U16, ChannelLayout::Gray, false),
+        (CSample::U8, ChannelLayout::Rgba, true),
+    ] {
+        let values = if sample == CSample::U8 { [40u16, 80, 120, 160] } else { [1000, 20000, 40000, 50000] };
+        let mut pixel = Vec::new();
+        for &value in values.iter().take(layout.channels()) {
+            if sample == CSample::U8 {
+                pixel.push(value as u8);
+            } else {
+                pixel.extend_from_slice(&value.to_ne_bytes());
+            }
+        }
+        let image = Image::from_raw(17, 9, layout, sample, pixel.repeat(17 * 9)).unwrap();
+        let png = codecs::encode(&image, Format::Png, &Default::default()).unwrap();
+        let extra = if promote { "<layer name='Depth' src='depth.png'/>" } else { "" };
+        let xml = format!(
+            "<image w='20' h='20'><stack><layer name='First' src='a.png' x='-3' y='2'/><layer name='Second' src='a.png' x='-3' y='2'/>{extra}</stack></image>"
+        );
+        let mut entries = vec![("a.png", png)];
+        if promote {
+            entries.push(("depth.png", gray16_png(1, 1)));
+        }
+        let mut result = crate::import("samples.ora", &archive(&xml, &entries)).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let depth = if sample == CSample::U16 || promote { SampleType::U16 } else { SampleType::U8 };
+        assert_eq!(result.document.depth, depth);
+        let scale = if sample == CSample::U8 && promote { 257u16 } else { 1 };
+        let color = if layout == ChannelLayout::Gray { [values[0]; 3] } else { [values[0], values[1], values[2]] };
+        let alpha = if layout == ChannelLayout::Rgba {
+            values[3] * scale
+        } else if depth == SampleType::U8 {
+            255
+        } else {
+            65535
+        };
+        let rgba = [color[0] * scale, color[1] * scale, color[2] * scale, alpha];
+        let expected: Vec<u8> = rgba.iter().flat_map(|v| if depth == SampleType::U8 { vec![*v as u8] } else { v.to_ne_bytes().to_vec() }).collect();
+        let rect = Rect::from_xywh(-3, 2, 17, 9);
+        let fmt = result.document.pixel_format();
+        for name in ["First", "Second"] {
+            let surface = result.document.layers.iter().find(|l| l.name == name).unwrap().surface().unwrap();
+            assert_eq!(surface.format(), fmt);
+            assert_eq!(surface.content_bounds(), rect);
+            assert_eq!(surface.to_interleaved(rect), expected.repeat(17 * 9));
+        }
+        let first = result.document.layers.iter_mut().find(|l| l.name == "First").unwrap().surface_mut().unwrap();
+        first.write_interleaved(Rect::from_xywh(-3, 2, 1, 1), &px(fmt, [1.0, 0.0, 0.0, 1.0]));
+        let second = result.document.layers.iter().find(|l| l.name == "Second").unwrap().surface().unwrap();
+        assert_eq!(second.to_interleaved(rect), expected.repeat(17 * 9), "editing one imported layer changed another");
+    }
+}
