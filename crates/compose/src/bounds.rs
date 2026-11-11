@@ -5,11 +5,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
+use photocraft_color::PixelFormat;
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, Tile};
 
 struct Entry {
     tile: Weak<Tile>,
+    /// The format the bounds were measured in. Alpha-aware bounds read the pixel at the format's
+    /// alpha offset, and `share_uniform_tiles` lets two formats share one tile whose bytes are the
+    /// same (`[255, 255, 255, 0]` is clear white in RGBA8 and solid ink in 8-bit CMYK), so the tile
+    /// pointer and the default bytes do not pin the answer on their own.
+    fmt: PixelFormat,
     /// Content bounds inside the tile (tile-local), for one default pixel.
     default: Box<[u8]>,
     bounds: Option<(u16, u16, u16, u16)>,
@@ -64,14 +70,14 @@ pub fn content_bounds(s: &Surface) -> Rect {
     let mut out = Rect::EMPTY;
     for (coord, t) in s.tiles() {
         let key = Arc::as_ptr(t) as usize;
-        let hit = c.entries.get(&key).filter(|e| e.tile.upgrade().is_some_and(|u| Arc::ptr_eq(&u, t)) && *e.default == *dp).map(|e| e.bounds);
+        let hit = c.entries.get(&key).filter(|e| e.tile.upgrade().is_some_and(|u| Arc::ptr_eq(&u, t)) && e.fmt == fmt && *e.default == *dp).map(|e| e.bounds);
         let b = match hit {
             Some(b) => b,
             None => {
                 let generation = photocraft_raster::spill::read_error_generation();
                 let b = if by_alpha { t.alpha_bounds(alpha_at, bpp, sample) } else { t.content_bounds(&dp) };
                 if photocraft_raster::spill::check_since(generation).is_ok() && t.scratch_health().is_ok() {
-                    c.entries.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
+                    c.entries.insert(key, Entry { tile: Arc::downgrade(t), fmt, default: dp.clone().into_boxed_slice(), bounds: b });
                 }
                 b
             }
@@ -115,6 +121,27 @@ mod tests {
         s.fill_rect(Rect::new(70, 41, 270, 241), &[0.0, 0.0, 0.0, 1.0]);
         assert_eq!(content_bounds(&s), Rect::new(70, 41, 270, 241));
         assert_eq!(content_bounds(&s), s.content_bounds(), "cached and surface agree");
+    }
+
+    #[test]
+    fn a_shared_tile_is_measured_in_its_own_format() {
+        use photocraft_color::{ColorMode, SampleType};
+        use photocraft_raster::TileInterner;
+
+        // `share_uniform_tiles` shares one tile between formats whose pixel bytes agree:
+        // `[255, 255, 255, 0]` is the colour under a clear pixel in RGBA8 (no content) and solid ink
+        // in 8-bit CMYK (every pixel is content). The tile pointer and the default bytes are the same
+        // for both, so the format the bounds were measured in has to be part of the cache key.
+        let full = Rect::new(0, 0, photocraft_geom::TILE_SIZE, photocraft_geom::TILE_SIZE);
+        let mut rgba = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        rgba.fill_rect(full, &[1.0, 1.0, 1.0, 0.0]);
+        let mut cmyk = Surface::new(photocraft_color::PixelFormat::new(ColorMode::Cmyk, SampleType::U8, false));
+        cmyk.fill_rect(full, &[1.0, 1.0, 1.0, 0.0]);
+        let mut interner = TileInterner::default();
+        rgba.share_uniform_tiles(&mut interner);
+        cmyk.share_uniform_tiles(&mut interner);
+        assert_eq!(content_bounds(&rgba), Rect::EMPTY, "a clear pixel's colour is not content");
+        assert_eq!(content_bounds(&cmyk), full, "solid ink is content, not the answer RGBA8 measured");
     }
 
     #[test]
