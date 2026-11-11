@@ -463,6 +463,15 @@ fn red_eye_click(app: &mut PhotocraftApp, x: f64, y: f64) {
     }
 }
 
+fn wand_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    let o = app.ui.tool_options.clone();
+    let mode = selection_mode(app, mods);
+    if wand_pasteboard_click(app, x, y, mode) {
+        return;
+    }
+    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+}
+
 /// The Brush's chosen Clear paints as Normal on the Background, and its Mode then reads Normal
 /// (#11897): at the press of a Brush stroke on the Background's own pixels, Clear (chosen in the
 /// options bar, not a held `~`) is turned off, so the stroke is sent as Normal. A Background whose
@@ -605,12 +614,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     return;
                 }
                 Tool::MagicWand => {
-                    let o = app.ui.tool_options.clone();
-                    let mode = selection_mode(app, mods);
-                    if wand_pasteboard_click(app, x, y, mode) {
-                        return;
-                    }
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+                    wand_click(app, x, y, mods);
                     return;
                 }
                 Tool::MagicEraser => {

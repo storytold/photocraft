@@ -598,7 +598,7 @@ fn rounded_outline_changes_coverage(a: [f64; 2], b: [f64; 2]) -> bool {
 /// not suffice. Such overlaps need the CPU's fold ordering and coverage compositing.
 fn unfolded_boundary(points: &[[f64; 2]], row: usize) -> Option<()> {
     let rows = points.len().checked_div(row)?;
-    if !(2..=513).contains(&row) || !(2..=513).contains(&rows) || points.len() % row != 0 {
+    if !(2..=513).contains(&row) || !(2..=513).contains(&rows) || !points.len().is_multiple_of(row) {
         return None;
     }
     let vertex = |x: usize, y: usize| points.get(y.checked_mul(row)?.checked_add(x)?).copied();
