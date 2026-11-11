@@ -646,9 +646,7 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Bitmap", |doc, active| {
         if (nw, nh) != (doc.size.width, doc.size.height) {
-        // Type, shapes and smart objects re-render from their new geometry; type in a missing
-        // font keeps its turned pixels.
-        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All)?;
+            crate::image_cmds::resample_doc(doc, CMD, nw, nh, photocraft_algo::resample::Resample::Bicubic)?;
         }
         doc.resolution_dpi = dpi;
         let w = doc.size.width as usize;
