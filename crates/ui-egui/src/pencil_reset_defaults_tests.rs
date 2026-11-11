@@ -99,6 +99,20 @@ fn pencil_starts_with_its_own_tip_whatever_the_brush_had() {
     assert!(chip_shows_one(&mut a));
 }
 
+/// Selecting the Brush again by command, before a UI pass, gives back the Brush's own tip: the
+/// Pencil's 1 px tip is not left for the next brush command, and the Brush's edit is not saved to
+/// the Pencil.
+#[test]
+fn selecting_back_to_the_brush_by_command_restores_its_tip_at_once() {
+    let mut a = app();
+    pick(&mut a, Tool::Brush);
+    a.session.tools.brush.size = 42.0;
+    control(&mut a, "ui.menu.invoke", json!({"id": "tools.select.pencil"}));
+    assert_pencil_tip(&mut a);
+    control(&mut a, "ui.menu.invoke", json!({"id": "tools.select.brush"}));
+    assert_eq!(a.session.tools.brush.size, 42.0, "the Brush's own size, before any frame");
+}
+
 /// Verifies that a default Pencil click at `(100.2, 100.2)` paints only pixel `(100, 100)`.
 #[test]
 fn a_default_click_at_100_2_paints_only_pixel_100_100() {
