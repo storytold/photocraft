@@ -2207,10 +2207,12 @@ fn big_live_dab_strokes_commit_their_pixels_and_they_are_the_commands() {
         c[3] = if (x / 23 + y / 17) % 4 == 0 { 0.0 } else { 0.35 + 0.065 * ((x * 7 + y * 3) % 11) as f32 };
         c
     });
+    let before = layer_pixels(&s);
     for (cmd, mut extra) in dab_cases() {
         extra["size"] = json!(400);
         let rendered = s.execute(cmd, dab_opts(&points, 0, &extra)).unwrap();
         let want = layer_pixels(&s);
+        assert!(want != before, "{cmd}: the stroke changes pixels");
         s.execute("edit.undo", json!({})).unwrap();
         offer_live(&mut s, cmd, &points, 0, &extra);
         let taken = s.execute(cmd, dab_opts(&points, 0, &extra)).unwrap();
