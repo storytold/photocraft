@@ -833,7 +833,13 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
 
 /// Suspend recording while a called action executes. Keep its commands in the journal
 /// for diagnostics, but record just the named call in the parent action.
-pub fn begin_playback(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
+pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
+    begin_playback_from(s, action, 0)
+}
+
+/// [`begin_playback`] for a call that starts at step `from`: the steps before it are charged to the
+/// playback budget too.
+pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
     flush_recording(s)?;
     if s.actions.playing == 0 {
         history::begin(s, &action.name);
@@ -886,7 +892,8 @@ pub fn restore_recording(s: &mut Session, idx: usize, action: &str, from: usize)
 /// failed step carries it. Such a stop fails the enclosing input rather than being swallowed.
 pub fn limit_stop(value: &Value) -> Option<String> {
     let flagged = |v: &Value| v.get("limit") == Some(&json!(true));
-    let found = value.get("errors").and_then(Value::as_array).and_then(|a| a.iter().find(|e| flagged(e))).or_else(|| value.get("failed").filter(|f| flagged(f)))?;
+    let found =
+        value.get("errors").and_then(Value::as_array).and_then(|a| a.iter().find(|e| flagged(e))).or_else(|| value.get("failed").filter(|f| flagged(f)))?;
     Some(found.get("error").and_then(Value::as_str).unwrap_or("batch limit reached").to_string())
 }
 
@@ -942,7 +949,7 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 /// recording while a gate is installed marks the recorded action ([`note_automation_step`]).
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
-    let recording = begin_playback(s, &action, from)?;
+    let recording = begin_playback_from(s, &action, from)?;
     // Nested calls and commands the steps run on their own behalf see the kept gate too.
     let kept = kept_gate(s, &action);
     if kept.is_some() {
