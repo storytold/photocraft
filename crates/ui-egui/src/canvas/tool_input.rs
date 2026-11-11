@@ -408,6 +408,19 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if handle_eyedropper_event(app, tool, ev, mods) {
         return;
     }
+    // The Revision Marker tool works on the markers, not on pixels or layers, so it takes every
+    // pointer event before the painting and locked-layer paths below can see it.
+    if tool == Tool::RevisionMarker {
+        match ev {
+            ToolEvent::Down { .. } => {
+                let [x, y] = unsnapped(raw);
+                crate::revision_tool::press(app, [x, y], mods.alt);
+            }
+            ToolEvent::Move { x, y, .. } => crate::revision_tool::move_to(app, [x, y]),
+            ToolEvent::Up { x, y } => crate::revision_tool::release(app, [x, y]),
+        }
+        return;
+    }
     // A locked layer (the Background without a selection, say): no drag, and Photoshop's message
     // once the pointer moves (a click says nothing). ⌘ with a selection tool here (#896); the Move
     // tool below, once Auto-Select has picked the layer.

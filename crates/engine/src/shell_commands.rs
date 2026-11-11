@@ -175,6 +175,7 @@ pub const TOOLS: &[(&str, &str, Option<&str>)] = &[
     ("tools.select.slice", "Slice Tool", Some("C")),
     ("tools.select.sliceSelect", "Slice Select Tool", Some("C")),
     ("tools.select.frame", "Frame Tool", Some("K")),
+    ("tools.select.revisionMarker", "Revision Marker Tool", None),
 ];
 
 /// The default key of tool shortcut `id`, if it's a tool.

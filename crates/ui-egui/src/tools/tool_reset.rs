@@ -277,7 +277,8 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         | Tool::DeleteAnchorPoint
         | Tool::ConvertPoint
         | Tool::Artboard
-        | Tool::Frame => &[],
+        | Tool::Frame
+        | Tool::RevisionMarker => &[],
     }
 }
 

@@ -250,10 +250,24 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
             _ => Some(LayerId(v.as_u64().ok_or_else(|| bad(CMD, "`layerId` must be a layer id or null"))?)),
         };
     }
+    // The panel's manual green: the author states that this marker is done without re-taking the
+    // snapshot, which is what `revision.snapshot` (the panel's Reset) does.
+    let mut marked = None;
+    if let Some(done) = p.get("done") {
+        let done = done.as_bool().ok_or_else(|| bad(CMD, "`done` must be true or false"))?;
+        marked = Some(done);
+        m.done = done;
+    }
     if m == d0.revision_markers[i] {
         return Ok(json!({"index": i, "marker": marker_json(i, &m), "changed": false}));
     }
-    let label = if reframe { "Resize Revision Marker" } else { "Edit Revision Marker" };
+    let label = if reframe {
+        "Resize Revision Marker"
+    } else if let Some(done) = marked {
+        if done { "Mark Revision Marker Done" } else { "Mark Revision Marker Open" }
+    } else {
+        "Edit Revision Marker"
+    };
     let out = marker_json(i, &m);
     s.edit(label, |d, _| {
         // A moved or resized frame must snapshot the area it now covers, or detection would
@@ -401,7 +415,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Revision Marker",
             menu: &[],
             shortcut: None,
-            params: r##"{"index":n,"name":str?,"x":px?,"y":px?,"width":px?,"height":px?,"layerId":layer|null?,"note":str?} (moving or resizing re-snapshots the frame)"##,
+            params: r##"{"index":n,"name":str?,"x":px?,"y":px?,"width":px?,"height":px?,"layerId":layer|null?,"note":str?,"done":bool?} (moving or resizing re-snapshots the frame; `done` marks the marker green or red by hand, without a new snapshot)"##,
             enabled: has_markers,
             run: set,
             journal: true,
@@ -633,6 +647,30 @@ mod tests {
         s.execute("history.undo", json!({})).unwrap();
         let v = s.execute("revision.list", json!({})).unwrap();
         assert_eq!(v["markers"][0]["done"], json!(true), "undo restores green");
+    }
+
+    /// The panel's manual green: `done` marks a marker without re-taking its snapshot, so a marker
+    /// the author has signed off stays green until it is reset, moved or checked again. One undo
+    /// step, named for the mark.
+    #[test]
+    fn a_marker_can_be_marked_green_by_hand_without_a_new_snapshot() {
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 60.0, "height": 40.0})).unwrap();
+        let snapshot = s.active().unwrap().doc.revision_markers[0].snapshot.clone();
+        s.execute("revision.set", json!({"index": 0, "done": true})).unwrap();
+        let v = s.execute("revision.list", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["done"], json!(true), "marked green by hand");
+        assert_eq!(s.active().unwrap().doc.revision_markers[0].snapshot, snapshot, "the snapshot is left alone");
+        let steps = s.active().unwrap().history.entries();
+        assert_eq!(steps.last().map(String::as_str), Some("Mark Revision Marker Done"), "one step, named for the mark");
+        // And back to red.
+        s.execute("revision.set", json!({"index": 0, "done": false})).unwrap();
+        let v = s.execute("revision.list", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["done"], json!(false));
+        let steps = s.active().unwrap().history.entries();
+        assert_eq!(steps.last().map(String::as_str), Some("Mark Revision Marker Open"));
+        // The flag is a boolean; anything else is refused rather than read as "false".
+        assert!(s.execute("revision.set", json!({"index": 0, "done": 1})).is_err(), "1 is not a boolean");
     }
 
     /// Checking records no history step, so the first undo steps back over the user's edit.

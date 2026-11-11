@@ -78,10 +78,13 @@ pub enum Tool {
     Slice,
     SliceSelect,
     Frame,
+    /// Moves, copies and resizes revision markers on the canvas (PhotoCraft's own tool: Photoshop
+    /// has no marker annotations).
+    RevisionMarker,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 69] = [
+    pub const ALL: [Tool; 70] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -151,6 +154,7 @@ impl Tool {
         Tool::Slice,
         Tool::SliceSelect,
         Tool::Frame,
+        Tool::RevisionMarker,
     ];
 
     pub fn label(self) -> &'static str {
@@ -224,6 +228,7 @@ impl Tool {
             Tool::Star => "Star Tool",
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
+            Tool::RevisionMarker => "Revision Marker Tool",
         }
     }
     pub fn is_type(self) -> bool {
@@ -293,11 +298,14 @@ impl Tool {
             Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => ' ',
             Tool::PathSelection | Tool::DirectSelection => 'A',
             Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape => 'U',
+            // No shortcut: it is PhotoCraft's own tool, outside Photoshop's keyboard map.
+            Tool::RevisionMarker => '\0',
         }
     }
     /// Glyph drawn in the toolbar (vector icons come later).
     pub fn glyph(self) -> &'static str {
         match self {
+            Tool::RevisionMarker => "▣",
             Tool::Move => "✥",
             Tool::RectMarquee => "⬚",
             Tool::EllipseMarquee => "◌",

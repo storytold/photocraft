@@ -8,6 +8,7 @@ use egui::{Color32, FontId, Rect, Stroke, pos2, vec2};
 use photocraft_doc::Document;
 
 use crate::PhotocraftApp;
+use crate::theme::Tokens;
 use crate::canvas::ViewXform;
 
 /// Red: content still to be changed (or not yet detected).
@@ -15,14 +16,18 @@ pub const TODO: Color32 = Color32::from_rgb(235, 70, 70);
 /// Green: detected changed since the snapshot.
 pub const DONE: Color32 = Color32::from_rgb(60, 200, 90);
 
-/// Draw every revision marker of the active document, clamped to the canvas.
+/// Draw every revision marker of the active document, clamped to the canvas. The marker the
+/// Revision Marker tool has picked reads heavier, and a marker being dragged shows a ghost frame at
+/// the place it would land.
 pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     if !app.ui.view.shows(app.ui.view.show.revision_markers) || doc.revision_markers.is_empty() {
         return;
     }
+    let tool_state = &app.revision_tool;
+    let accent = Tokens::get(painter.ctx()).accent;
     let canvas = doc.bounds();
     let clip = painter.clip_rect();
-    for m in &doc.revision_markers {
+    for (i, m) in doc.revision_markers.iter().enumerate() {
         // Clamp the box to the canvas in document space (a marker bound to a moved layer can
         // edge past it) and skip boxes outside the viewport.
         let x0 = m.pos[0].clamp(f64::from(canvas.x0), f64::from(canvas.x1));
@@ -39,10 +44,28 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &
             continue;
         }
         let color = if m.done { DONE } else { TODO };
+        // The picked marker is the one the options bar edits and the one a drag would move.
+        let picked = tool_state.selected == Some(i);
+        let width = if picked { 3.0 } else { 2.0 };
         // Dashed box reads as "annotation" rather than selection; solid enough to survive
         // screenshotting the manual.
-        painter.extend(egui::Shape::dashed_line(&[a, pos2(b.x, a.y), b, pos2(a.x, b.y), a], Stroke::new(2.0, color), 6.0, 3.0));
+        painter.extend(egui::Shape::dashed_line(&[a, pos2(b.x, a.y), b, pos2(a.x, b.y), a], Stroke::new(width, color), 6.0, 3.0));
+        if picked {
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Outside);
+        }
         draw_label(painter, rect, &m.name, color, m.done);
+    }
+    // The marker a drag is moving: the frame it would have where the pointer is now, drawn in the
+    // accent colour so the drop reads before the release commits it.
+    if let Some((index, pos)) = tool_state.preview
+        && let Some(m) = doc.revision_markers.get(index)
+    {
+        let a = xf.to_screen(pos[0] as f32, pos[1] as f32);
+        let b = xf.to_screen((pos[0] + m.size[0]) as f32, (pos[1] + m.size[1]) as f32);
+        let rect = Rect::from_two_pos(a, b);
+        if rect.intersects(clip) {
+            painter.extend(egui::Shape::dashed_line(&[a, pos2(b.x, a.y), b, pos2(a.x, b.y), a], Stroke::new(2.0, accent), 4.0, 3.0));
+        }
     }
 }
 

@@ -182,6 +182,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Star => "star",
         Tool::Line => "slash",
         Tool::CustomShape => "cloud",
+        Tool::RevisionMarker => "pin",
     }
 }
 

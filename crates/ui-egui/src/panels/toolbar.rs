@@ -45,6 +45,9 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::Line, Tool::CustomShape],
     ],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
+    // PhotoCraft's own slot: marker annotations have no Photoshop tool to sit beside, so the mark
+    // tool gets its own hairline-separated group at the bottom of the column.
+    &[&[Tool::RevisionMarker]],
 ];
 
 /// The tool a slot shows: the current tool if it belongs to the slot, else the last one used

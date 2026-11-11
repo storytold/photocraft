@@ -2,7 +2,7 @@
 //! had before they ran, so pressing them read past the end of the marker list and took PhotoCraft
 //! down with it.
 
-use super::revision_panel::panel;
+use super::revision_panel::{layer_under_frame, next_marker_name, panel};
 use super::*;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -70,4 +70,41 @@ fn deleting_the_last_marker_keeps_the_rows_above_it() {
     h.get_all_by_label("Delete").last().expect("one Delete per row").click();
     h.run_steps(4);
     assert_eq!(names(h.state()), ["Marker 1"]);
+}
+
+/// The row's own green button: the marker turns green by hand, and keeps the snapshot the next
+/// check compares against (Reset, not this button, re-takes it).
+#[test]
+fn the_row_green_button_marks_the_marker_without_dropping_its_snapshot() {
+    let mut h = harness(1);
+    let snapshot = h.state().session.active().unwrap().doc.revision_markers[0].snapshot.clone();
+    assert!(!snapshot.is_empty(), "the marker starts with a snapshot of its frame");
+    h.get_by_label("Mark as Green").click();
+    h.run_steps(4);
+    let m = &h.state().session.active().unwrap().doc.revision_markers[0];
+    assert!(m.done, "the marker is green");
+    assert_eq!(m.snapshot, snapshot, "and keeps the snapshot it had");
+    // Pressing it again turns the marker back to red.
+    h.get_by_label("Mark as Red").click();
+    h.run_steps(4);
+    assert!(!h.state().session.active().unwrap().doc.revision_markers[0].done, "back to red");
+}
+
+/// The next marker's number comes from the highest one already used, not the length of the list:
+/// deleting a marker in the middle used to make the next one repeat a number that is still there.
+#[test]
+fn a_new_marker_number_is_never_one_already_used() {
+    let mut h = harness(3);
+    h.get_all_by_label("Delete").nth(1).expect("one Delete per row").click();
+    h.run_steps(4);
+    assert_eq!(names(h.state()), ["Marker 1", "Marker 3"]);
+    assert_eq!(next_marker_name(h.state()), "Marker 4", "the highest number in use decides, not the row count");
+}
+
+/// The frame's centre alone does not name a layer: a marker frame only covers the background, which
+/// markers never bind, so binding reports "no layer" instead of binding the background.
+#[test]
+fn a_frame_over_the_background_binds_no_layer() {
+    let h = harness(1);
+    assert_eq!(layer_under_frame(h.state(), [0.0, 0.0], [800.0, 600.0]), None, "the background is not a layer to bind");
 }

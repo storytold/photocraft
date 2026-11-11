@@ -82,6 +82,7 @@ impl PhotocraftApp {
             menu_cache: None,
             move_preview: None,
             move_hover: None,
+            revision_tool: Default::default(),
             move_distance: None,
             object_finder: None,
             blend_preview: None,

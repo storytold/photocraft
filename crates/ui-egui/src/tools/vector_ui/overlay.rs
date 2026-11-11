@@ -170,14 +170,33 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             draw_path(moved(MovedPath::Saved).unwrap_or(p), anchors);
         }
         let st = app.session.active();
-        if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
-            && let LayerContent::Shape(sh) = &l.content
-        {
-            // Hide the stale shape path while its transform preview is active.
-            let transforming_this_shape =
-                app.ui.transform.as_ref().is_some_and(|t| t.layer == l.id.0 && !t.selection && t.target.is_none() && t.path.is_none());
-            if !transforming_this_shape {
-                draw_path(&sh.path, anchors);
+        if let Some(s) = st {
+            // The shape paths drawn as outlines: the active layer's, and every selected shape
+            // layer's. The Layers panel can select several layers without moving the active one,
+            // and a shape the user picked that way still needs its blue outline — the anchor tools
+            // only edit a path they show (a shape used to lose its outline, and with it Add/Delete
+            // Anchor Point, as soon as it was selected beside another layer).
+            let mut shapes: Vec<(u64, &Path)> = Vec::new();
+            if let Some(l) = s.active_layer.and_then(|id| s.doc.layer(id))
+                && let LayerContent::Shape(sh) = &l.content
+            {
+                shapes.push((l.id.0, &sh.path));
+            }
+            for id in s.selected_layers() {
+                if let Some(l) = s.doc.layer(id)
+                    && let LayerContent::Shape(sh) = &l.content
+                    && !shapes.iter().any(|(i, _)| *i == l.id.0)
+                {
+                    shapes.push((l.id.0, &sh.path));
+                }
+            }
+            for (id, path) in shapes {
+                // Hide the stale shape path while its transform preview is active.
+                let transforming_this_shape =
+                    app.ui.transform.as_ref().is_some_and(|t| t.layer == id && !t.selection && t.target.is_none() && t.path.is_none());
+                if !transforming_this_shape {
+                    draw_path(path, anchors);
+                }
             }
         }
         // A targeted vector mask shows its path with any tool (#196).

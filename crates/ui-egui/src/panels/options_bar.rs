@@ -131,6 +131,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             || crate::retouch_ui::options_bar(app, ui, tool)
                             || crate::vector_ui::options_bar(app, ui, tool)
                             || crate::analysis_ui::options_bar(app, ui, tool)
+                            || crate::revision_tool::options_bar(app, ui)
                             || crate::slice_ui::options_bar(app, ui, tool)
                             || crate::frame_tool::options_bar(app, ui, tool)
                             || crate::artboard_tool::options_bar(app, ui, tool)

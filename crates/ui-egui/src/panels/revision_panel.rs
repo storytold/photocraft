@@ -101,18 +101,34 @@ fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens) {
                 }
                 ui.label(RichText::new(format!("↔ {name}")).size(10.5).color(t.text_dim));
             } else if ui.add(egui::Button::new(RichText::new(tl!("Bind Layer")).size(11.5)).small()).clicked() {
-                // Bind the layer under the marker's own frame, not whatever layer happens to be
-                // selected: each marker follows the content it actually frames.
-                let id = layer_at_point(app, [pos[0] + size[0] / 2.0, pos[1] + size[1] / 2.0]);
+                // Bind what the frame actually covers. The frame's centre alone is not enough: a
+                // marker over a whole row of a manual is wide and short, so its centre often lands
+                // on the blank gutter between layers and used to report "no layer found" even
+                // though the frame was drawn around a layer (marker 52 in the report). The layer
+                // covering most of the frame wins, and a layer picked in the Layers panel binds
+                // when nothing at all lies under the frame.
+                let id = layer_under_frame(app, pos, size).or_else(|| selected_layer(app));
                 match id {
                     Some(id) => {
                         let _ = app.run("revision.set", json!({"index": i, "layerId": id}));
                     }
                     None => {
-                        app.ui.status = tl!("No layer found under this marker; select a layer and bind it manually.").into();
+                        app.ui.status =
+                            tl!("No layer under this marker. Select the layer in the Layers panel and press Bind Layer again.").into();
                         app.ui.status_error = true;
                     }
                 }
+            }
+            // The author's own verdict: green without re-taking the snapshot (Reset does that).
+            let marked = if done {
+                ui.add(egui::Button::new(RichText::new(tl!("Mark as Red")).size(11.5)).small())
+                    .on_hover_text(tl!("Set this marker back to red without re-taking its snapshot"))
+            } else {
+                ui.add(egui::Button::new(RichText::new(tl!("Mark as Green")).size(11.5)).small())
+                    .on_hover_text(tl!("Set this marker green without comparing pixels"))
+            };
+            if marked.clicked() {
+                let _ = app.run("revision.set", json!({"index": i, "done": !done}));
             }
             // Whatever is left of the row is the marker's name.
             let mut name = name.clone();
@@ -155,9 +171,9 @@ fn add_from_selection(app: &mut PhotocraftApp) {
             (cx - 100.0, cy - 30.0, 200.0, 60.0)
         }
     };
-    let name = format!("{} {}", tl!("Marker"), doc.revision_markers.len() + 1);
+    let name = next_marker_name(app);
     let mut params = json!({"x": x, "y": y, "width": w, "height": h, "name": name});
-    if let Some(id) = layer_at_point(app, [x + w / 2.0, y + h / 2.0]) {
+    if let Some(id) = layer_under_frame(app, [x, y], [w, h]) {
         params["layerId"] = json!(id);
     }
     let added = app.run("revision.add", params).is_ok();
@@ -166,21 +182,69 @@ fn add_from_selection(app: &mut PhotocraftApp) {
     }
 }
 
-/// Topmost visible, non-background pixel layer whose content bounds contain `pt`, if any. Groups
-/// (folders) are skipped so binding tracks the actual layer under the frame, not the folder.
-fn layer_at_point(app: &PhotocraftApp, pt: [f64; 2]) -> Option<u64> {
+/// The next marker name: the highest number already used, plus one. Naming by the list's length
+/// gave two markers the same number as soon as one in the middle was deleted (a 15-row list whose
+/// marker 8 was removed names the next marker "Marker 15" while "Marker 15" is still there).
+pub(crate) fn next_marker_name(app: &PhotocraftApp) -> String {
+    let prefix = tl!("Marker");
+    let used: Vec<&str> = app
+        .session
+        .active()
+        .map(|st| st.doc.revision_markers.iter().map(|m| m.name.as_str()).collect())
+        .unwrap_or_default();
+    let mut highest = 0usize;
+    for name in &used {
+        if let Some(number) = name.strip_prefix(prefix).and_then(|rest| rest.trim().parse::<usize>().ok()) {
+            highest = highest.max(number);
+        }
+    }
+    let mut n = highest + 1;
+    let mut name = format!("{prefix} {n}");
+    while used.contains(&name.as_str()) {
+        n += 1;
+        name = format!("{prefix} {n}");
+    }
+    name
+}
+
+/// The layer a marker frame should follow: the topmost visible, non-background pixel layer covering
+/// most of the frame. Groups (folders) are skipped, so binding tracks the layer under the frame and
+/// not the folder above it. Falls back to a pure containment test so a small frame behaves exactly
+/// as before.
+pub(crate) fn layer_under_frame(app: &PhotocraftApp, pos: [f64; 2], size: [f64; 2]) -> Option<u64> {
     let st = app.session.active()?;
     let doc = &st.doc;
     let canvas = doc.bounds();
-    let (x, y) = (pt[0].round() as i32, pt[1].round() as i32);
+    let (x0, y0) = (pos[0] as i32, pos[1] as i32);
+    let (x1, y1) = ((pos[0] + size[0]) as i32, (pos[1] + size[1]) as i32);
+    let mut best: Option<(i64, u64)> = None;
     for (_, _, layer) in doc.walk().into_iter().rev() {
         if doc.is_background(layer.id) || !layer.visible || layer.is_group() {
             continue;
         }
         let b = layer_bounds(layer, canvas);
-        if !b.is_empty() && b.contains(x, y) {
-            return Some(layer.id.0);
+        if b.is_empty() {
+            continue;
+        }
+        let (ox, oy) = ((b.x1.min(x1) - b.x0.max(x0)).max(0), (b.y1.min(y1) - b.y0.max(y0)).max(0));
+        let overlap = i64::from(ox) * i64::from(oy);
+        if overlap == 0 {
+            continue;
+        }
+        if best.is_none_or(|(area, _)| overlap > area) {
+            best = Some((overlap, layer.id.0));
         }
     }
-    None
+    best.map(|(_, id)| id)
+}
+
+/// The layer chosen in the Layers panel, if exactly one is picked and it is a pixel or shape layer
+/// (not the background and not a folder).
+fn selected_layer(app: &PhotocraftApp) -> Option<u64> {
+    let st = app.session.active()?;
+    let doc = &st.doc;
+    let ids = st.selected_layers();
+    let id = ids.first().copied()?;
+    let layer = doc.layer(id)?;
+    (!doc.is_background(id) && !layer.is_group()).then_some(id.0)
 }

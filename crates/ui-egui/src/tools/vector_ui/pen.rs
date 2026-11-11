@@ -408,6 +408,10 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
         return Err(e);
     }
     app.ui.pen_doc = None;
+    // The path just drawn is the one to edit now: a Work Path this app hid earlier (Load as
+    // Selection deselects it, `hidden_work_path`) must not swallow it, which made a path closed
+    // right after such a round disappear from the canvas and show only in the Paths panel.
+    app.ui.hidden_work_path = None;
     Ok(())
 }
 

@@ -315,6 +315,7 @@ pub use tools::perspective_ui;
 pub use tools::puppet_ui;
 pub use tools::qr_ui;
 pub use tools::retouch_ui;
+pub use tools::revision_tool;
 pub use tools::shape_bounds_box;
 use tools::shape_gradient_ui;
 use tools::shape_options;
@@ -406,6 +407,8 @@ pub struct PhotocraftApp {
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
     pub(crate) move_hover: Option<move_hover::Hover>,
+    /// Revision Marker tool: the marker being dragged or picked (`revision_tool`).
+    pub(crate) revision_tool: revision_tool::State,
     /// Smart Guides distances shown with ⌘ held over the canvas: the last answer (`move_distance`).
     pub(crate) move_distance: Option<move_distance::Cache>,
     /// Object Selection › Object Finder: the hover preview (`object_finder`).
