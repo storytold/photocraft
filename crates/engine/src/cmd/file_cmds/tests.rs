@@ -4481,3 +4481,58 @@ fn save_and_close_refuses_a_read_only_source() {
         assert_eq!(std::fs::read(&source).unwrap(), bytes, "overrideOpen {override_open}: the source is unchanged");
     }
 }
+
+/// The public helper must retain the registered library, not alias an embedded namespace.
+#[test]
+fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recursion() {
+    use crate::actions_cmds::{Action, begin_playback, finish_playback};
+    let dir = tmp("public-playback-namespace");
+    let input = png(&dir, "red.png", 8, 8, "#ff0000");
+    let id = "112233445566778899aabbccddeeff00";
+    for source in ["open", "folder"] {
+        for stable in [false, true] {
+            let mut s = Session::new();
+            if source == "open" {
+                s.execute("file.openAs", json!({"path":input})).unwrap();
+            }
+            let mut registered = Action::new("Shared", vec![]);
+            let mut embedded = Action::new("Shared", vec![("layer.new.layer".into(), json!({"name":"embedded helper leaf"}))]);
+            if stable {
+                registered.action_id = Some(id.into());
+                embedded.action_id = Some(id.into());
+            }
+            s.actions.list.push(registered.clone());
+            let recording = begin_playback(&mut s, &registered).unwrap();
+            let stack = s.actions.playback_stack.clone();
+            assert_eq!(stack[0].position, Some((0, 0)), "public helper captures registered origin");
+            let target = if stable { json!({"actionId":id}) } else { json!({"action":0}) };
+            let result = s
+                .execute(
+                    "file.automate.batch",
+                    json!({
+                        "source":source,"input":[input],"output":join(&dir, &format!("{source}-{stable}")),"format":"png",
+                        "steps":[["actions.play",target]],"calledActions":[embedded],
+                    }),
+                )
+                .unwrap();
+            assert_eq!(result["errors"], json!([]), "a different library may reuse this identity: {result}");
+            assert_eq!(s.actions.playback_namespace, 0);
+            assert_eq!(s.actions.playback_stack, stack, "embedded playback restores the exact caller stack");
+            assert_eq!(s.actions.list, [registered.clone()]);
+            if source == "open" {
+                assert!(doc(&s).layers.iter().any(|layer| layer.name == "embedded helper leaf"));
+            }
+            let error = s.execute("actions.play", target).unwrap_err().to_string();
+            assert!(error.contains("recursive action"), "same-library recursion must still be refused: {error}");
+            assert_eq!(s.actions.playback_stack, stack);
+            finish_playback(&mut s, recording, &registered, 0);
+            assert!(s.actions.playback_stack.is_empty());
+        }
+    }
+    // Synthetic callers not in the registered list retain the conservative legacy behavior.
+    let mut s = Session::new();
+    let driver = Action::new("Synthetic driver", vec![]);
+    let recording = begin_playback(&mut s, &driver).unwrap();
+    assert!(s.actions.playback_stack[0].position.is_none());
+    finish_playback(&mut s, recording, &driver, 0);
+}

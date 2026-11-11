@@ -924,7 +924,10 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
 /// for diagnostics, but record just the named call in the parent action.
 pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
     flush_recording(s)?;
-    Ok(push_playback(s, PlaybackTarget::from(action)))
+    // Registered identities belong to this library even when the caller uses the public
+    // unpositioned helper. Embedded Batch libraries can legitimately reuse their IDs/names.
+    let target = identity::playback_row(&s.actions.list, action).map_or_else(|| PlaybackTarget::from(action), |row| PlaybackTarget::at(s, row, action));
+    Ok(push_playback(s, target))
 }
 
 /// Begin a resolved library row. A recorded call to a later same-name row needs a durable ID.
