@@ -114,6 +114,7 @@ fn edit_section(i: usize, b: &mut BrushSettings) {
                 sample_all_layers: true,
                 load_after_stroke: false,
                 clean_after_stroke: false,
+                solid_colors_only: true,
             };
         }
         7 => {
@@ -430,6 +431,8 @@ fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftA
 #[test]
 fn clone_stamp_opacity_and_flow_are_journaled_per_gesture() {
     let mut h = options_bar_harness(crate::state::Tool::CloneStamp);
+    // The Clone Stamp's own starting brush: a tool swap is not a journaled command.
+    let start = h.state().session.tools.brush.clone();
     for (label, field) in [("Opacity", "opacity"), ("Flow", "flow")] {
         let n = h.state().session.journal.len();
         let rect = caption_rect(&h, label);
@@ -458,6 +461,7 @@ fn clone_stamp_opacity_and_flow_are_journaled_per_gesture() {
     assert_eq!(params["opacity"], json!(h.state().session.tools.brush.opacity * 100.0));
     assert_eq!(params["flow"], json!(h.state().session.tools.brush.flow * 100.0));
     let mut replay = photocraft_engine::Session::new();
+    replay.tools.brush = start;
     for (id, params) in &h.state().session.journal {
         replay.execute(id, params.clone()).unwrap();
     }
@@ -1364,6 +1368,9 @@ fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, Photoc
 
 #[test]
 fn brush_sections_paint_simplified_chinese_labels() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     fn collect_text(shape: &egui::Shape, out: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),

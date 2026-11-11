@@ -375,6 +375,42 @@ pub struct Smudge {
     alpha: Option<usize>,
     /// Carried colour (premultiplied when `alpha` is set).
     carry: Option<Vec<f32>>,
+    /// Painting Mode (#12959): how the smudged colour replaces the pixel, see [`Smudge::with_mode`].
+    mode: BlendMode,
+    /// For a Mode other than Normal: the pixels as they were before the stroke first reached
+    /// them, in cells of [`ORIGIN_CELL`]² × (R, G, B, alpha); a NaN red marks a pixel not reached yet.
+    origin: std::collections::HashMap<(i32, i32), Vec<f32>>,
+}
+
+/// Side of the cells of [`Smudge`]'s pre-stroke pixels (dense cells, as a map lookup per pixel is slow).
+const ORIGIN_CELL: i32 = 64;
+
+/// Mix the carried colour `carried` (premultiplied when `alpha` is set) into `px` at `k`.
+#[inline]
+fn lay_down(px: &mut [f32], carried: &[f32], alpha: Option<usize>, k: f32) {
+    match alpha {
+        Some(a) => {
+            // Back to straight for the mix (premultiplied lerp towards the carried colour).
+            let ca = carried[a];
+            let mut buf = [0.0f32; 16];
+            let m = carried.len().min(buf.len());
+            buf[..m].copy_from_slice(&carried[..m]);
+            let src = &mut buf[..m];
+            if ca > 1e-6 {
+                for (c, v) in src.iter_mut().enumerate() {
+                    if c != a {
+                        *v /= ca;
+                    }
+                }
+            }
+            mix_premultiplied(px, src, a, k);
+        }
+        None => {
+            for (p, c) in px.iter_mut().zip(carried) {
+                *p += (*c - *p) * k;
+            }
+        }
+    }
 }
 
 impl Smudge {
@@ -385,12 +421,31 @@ impl Smudge {
     }
 
     pub fn new(strength: f32, finger: Option<Vec<f32>>, max_brush_size: f32) -> Self {
-        Self { strength: strength.clamp(0.0, 1.0), finger, radius: Self::sampling_radius(max_brush_size), alpha: None, carry: None }
+        Self {
+            strength: strength.clamp(0.0, 1.0),
+            finger,
+            radius: Self::sampling_radius(max_brush_size),
+            alpha: None,
+            carry: None,
+            mode: BlendMode::Normal,
+            origin: Default::default(),
+        }
     }
 
     /// Mix in premultiplied space using alpha channel `a` (the format's [`alpha_index`]).
     pub fn with_alpha(mut self, a: Option<usize>) -> Self {
         self.alpha = a;
+        self
+    }
+
+    /// The options bar's Mode (#12959). The smudged colour (the pixel mixed with the carried colour
+    /// at `strength`, as Normal writes it under a full tip) is blended with the pixel as it was
+    /// before the stroke, the way a paint colour would be, and laid down through the tip's
+    /// coverage: Darken keeps the darker of the two per channel, Hue takes the smudged colour's
+    /// hue with the original saturation and luminosity. The next dab picks up what was written.
+    /// For working copies whose first three channels are R, G, B; alpha is smudged as in Normal.
+    pub fn with_mode(mut self, mode: BlendMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -404,6 +459,7 @@ impl Smudge {
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
         let wr = work.rect;
         let alpha = self.alpha.filter(|a| *a < n);
+        let blend = (self.mode != BlendMode::Normal && (3..=16).contains(&n) && alpha.is_none_or(|a| a >= 3)).then_some(self.mode);
         let carry = self.carry.get_or_insert_with(|| {
             let mut c = vec![0.0f32; side * side * n];
             match &self.finger {
@@ -437,33 +493,67 @@ impl Smudge {
         }
         let lay = fp.rect.intersect(&square);
         let (strength, keep) = (self.strength, self.strength);
+        let cell_index = |x: i32, y: i32| ((y.rem_euclid(ORIGIN_CELL) * ORIGIN_CELL + x.rem_euclid(ORIGIN_CELL)) * 4) as usize;
+        if blend.is_some() {
+            // First touch: record the pixels this dab is the first to reach, as they were before the
+            // stroke, ahead of the rows (which then only read the record, so they can run in parallel).
+            let mut cell: Option<((i32, i32), &mut Vec<f32>)> = None;
+            for y in lay.y0..lay.y1 {
+                for x in lay.x0..lay.x1 {
+                    if fp.at(x, y) * strength <= 0.0 {
+                        continue;
+                    }
+                    let key = (x.div_euclid(ORIGIN_CELL), y.div_euclid(ORIGIN_CELL));
+                    if cell.as_ref().map(|c| c.0) != Some(key) {
+                        cell = Some((key, self.origin.entry(key).or_insert_with(|| vec![f32::NAN; (ORIGIN_CELL * ORIGIN_CELL * 4) as usize])));
+                    }
+                    let i = cell_index(x, y);
+                    let Some(first) = cell.as_mut().and_then(|c| c.1.get_mut(i..i + 4)) else { continue };
+                    if first[0].is_nan() {
+                        let px = work.px(x, y);
+                        first.copy_from_slice(&[px[0], px[1], px[2], alpha.map_or(1.0, |a| px[a])]);
+                    }
+                }
+            }
+        }
+        let origin = &self.origin;
         let row = |y: i32, wrow: &mut [f32], crow: &mut [f32]| {
+            // The record's cell under the last pixel looked up, so a lookup is one per cell, not per pixel.
+            let (mut cell_key, mut cell): (Option<(i32, i32)>, Option<&Vec<f32>>) = (None, None);
             for x in square.x0..square.x1 {
                 let px = &mut wrow[(x - wr.x0) as usize * n..][..n];
                 let c = &mut crow[(x - cx + r) as usize * n..][..n];
                 // Lay down the carried colour.
-                let k = if lay.contains(x, y) { fp.at(x, y) * strength } else { 0.0 };
-                if k > 0.0 {
-                    match alpha {
-                        Some(a) => {
-                            // Back to straight for the mix (premultiplied lerp towards the carried colour).
-                            let ca = c[a];
+                let cov = if lay.contains(x, y) { fp.at(x, y) } else { 0.0 };
+                if cov * strength > 0.0 {
+                    let first = blend.and_then(|mode| {
+                        let key = (x.div_euclid(ORIGIN_CELL), y.div_euclid(ORIGIN_CELL));
+                        if cell_key != Some(key) {
+                            (cell_key, cell) = (Some(key), origin.get(&key));
+                        }
+                        let i = cell_index(x, y);
+                        cell.and_then(|v| v.get(i..i + 4)).map(|f| (mode, f))
+                    });
+                    match first {
+                        None => lay_down(px, c, alpha, cov * strength),
+                        Some((mode, first)) => {
+                            let (backdrop, backdrop_alpha) = ([first[0], first[1], first[2]], first[3]);
                             let mut buf = [0.0f32; 16];
-                            let m = n.min(buf.len());
-                            buf[..m].copy_from_slice(&c[..m]);
-                            let src = &mut buf[..m];
-                            if ca > 1e-6 {
-                                for (ch, v) in src.iter_mut().enumerate() {
-                                    if ch != a {
-                                        *v /= ca;
+                            let smudged = &mut buf[..n];
+                            smudged.copy_from_slice(px);
+                            lay_down(smudged, c, alpha, strength);
+                            // A transparent pixel has no colour to blend with: there the smudged colour stays.
+                            let out = photocraft_color::blend::blend_rgb(mode, backdrop, [smudged[0], smudged[1], smudged[2]]);
+                            for ch in 0..3 {
+                                smudged[ch] += (out[ch] - smudged[ch]) * backdrop_alpha;
+                            }
+                            match alpha {
+                                Some(a) => mix_premultiplied(px, smudged, a, cov),
+                                None => {
+                                    for ch in 0..n {
+                                        px[ch] += (smudged[ch] - px[ch]) * cov;
                                     }
                                 }
-                            }
-                            mix_premultiplied(px, src, a, k);
-                        }
-                        None => {
-                            for ch in 0..n {
-                                px[ch] += (c[ch] - px[ch]) * k;
                             }
                         }
                     }
@@ -654,7 +744,9 @@ mod tests {
     }
 
     /// The pre-optimisation `Smudge::dab` (one `Vec` per carry pixel, per-pixel pick-up), kept as an oracle.
-    fn reference_dab(sm: &mut Smudge, work: &mut Region, fp: &Footprint) {
+    /// The two-pass Smudge (lay every pixel down, then pick the square up), one pixel at a time,
+    /// with a Mode blending against each pixel as the stroke first found it (kept in `origin`).
+    fn reference_dab(sm: &mut Smudge, origin: &mut std::collections::HashMap<(i32, i32), [f32; 4]>, work: &mut Region, fp: &Footprint) {
         let (r, n) = (sm.radius, work.ch);
         let side = (2 * r + 1) as usize;
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
@@ -692,6 +784,25 @@ mod tests {
                 }
                 let q = (qy as usize * side + qx as usize) * n;
                 let px = work.px_mut(x, y);
+                if sm.mode != BlendMode::Normal && (3..=16).contains(&n) && alpha.is_none_or(|a| a >= 3) {
+                    let first = *origin.entry((x, y)).or_insert([px[0], px[1], px[2], alpha.map_or(1.0, |a| px[a])]);
+                    let mut smudged = px.to_vec();
+                    lay_down(&mut smudged, &carry[q..q + n], alpha, sm.strength);
+                    let out = photocraft_color::blend::blend_rgb(sm.mode, [first[0], first[1], first[2]], [smudged[0], smudged[1], smudged[2]]);
+                    for c in 0..3 {
+                        smudged[c] += (out[c] - smudged[c]) * first[3];
+                    }
+                    let cov = fp.at(x, y);
+                    match alpha {
+                        Some(a) => mix_premultiplied(px, &smudged, a, cov),
+                        None => {
+                            for c in 0..n {
+                                px[c] += (smudged[c] - px[c]) * cov;
+                            }
+                        }
+                    }
+                    continue;
+                }
                 match alpha {
                     Some(a) => {
                         let ca = carry[q + a];
@@ -736,12 +847,16 @@ mod tests {
 
     /// A busy test image: gradients plus a hole, so alpha and colour both vary.
     fn busy(fmt: PixelFormat) -> Surface {
+        busy_sized(fmt, 90, 60)
+    }
+
+    fn busy_sized(fmt: PixelFormat, w: i32, h: i32) -> Surface {
         let mut s = Surface::new(fmt);
         let n = fmt.channels();
-        for y in 0..60 {
-            for x in 0..90 {
-                let mut v = vec![(x as f32 / 90.0).min(1.0); n];
-                v[0] = (y as f32 / 60.0).min(1.0);
+        for y in 0..h {
+            for x in 0..w {
+                let mut v = vec![(x as f32 / w as f32).min(1.0); n];
+                v[0] = (y as f32 / h as f32).min(1.0);
                 if n > 1 {
                     v[1] = ((x * 7 + y * 3) % 17) as f32 / 17.0;
                 }
@@ -761,18 +876,23 @@ mod tests {
         for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA32F, PixelFormat::GRAYA8, PixelFormat::GRAY8, PixelFormat::CMYKA8] {
             let alpha = alpha_index(&fmt);
             let n = fmt.channels();
-            for finger in [None, Some(vec![0.3; n])] {
-                for path in paths {
-                    let st = stroke(path, 14.0, 0.6);
-                    let mut a = busy(fmt);
-                    let mut b = a.clone();
-                    let mut sm_a = Smudge::new(0.7, finger.clone(), 14.0).with_alpha(alpha);
-                    let mut sm_b = sm_a.clone();
-                    apply_dab_stroke(&mut a, &st, None, false, 0, |w, fp| sm_a.dab(w, fp));
-                    apply_dab_stroke(&mut b, &st, None, false, 0, |w, fp| reference_dab(&mut sm_b, w, fp));
-                    let rect = Rect::new(-20, -20, 120, 90);
-                    assert_eq!(a.read_region(rect), b.read_region(rect), "{fmt:?} finger {} {path:?}", finger.is_some());
-                    assert_eq!(sm_a.carry, sm_b.carry, "{fmt:?} carry");
+            // The Modes blend in RGB; on Gray and CMYK they must leave the Normal result alone.
+            for mode in [BlendMode::Normal, BlendMode::Darken, BlendMode::Hue, BlendMode::Luminosity] {
+                for finger in [None, Some(vec![0.3; n])] {
+                    for (path, size) in paths.into_iter().zip([14.0, 14.0, 14.0]).chain([(paths[0], 300.0)]) {
+                        // The 300 px tip is big enough for its rows to run in parallel.
+                        let st = stroke(path, size, 0.6);
+                        let mut a = if size > 100.0 { busy_sized(fmt, 240, 160) } else { busy(fmt) };
+                        let mut b = a.clone();
+                        let mut sm_a = Smudge::new(0.7, finger.clone(), size).with_alpha(alpha).with_mode(mode);
+                        let mut sm_b = sm_a.clone();
+                        let mut origin = Default::default();
+                        apply_dab_stroke(&mut a, &st, None, false, 0, |w, fp| sm_a.dab(w, fp));
+                        apply_dab_stroke(&mut b, &st, None, false, 0, |w, fp| reference_dab(&mut sm_b, &mut origin, w, fp));
+                        let rect = Rect::new(-20, -20, 260, 180);
+                        assert_eq!(a.read_region(rect), b.read_region(rect), "{fmt:?} {mode:?} finger {} {path:?} {size}", finger.is_some());
+                        assert_eq!(sm_a.carry, sm_b.carry, "{fmt:?} {mode:?} carry");
+                    }
                 }
             }
         }
