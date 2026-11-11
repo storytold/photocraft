@@ -197,3 +197,32 @@ fn off_screen_group_disclosure_stays_reachable() {
     click(&mut h, p, Modifiers::NONE);
     assert!(group(&h, "Low Group").1, "clicking it expands the group");
 }
+
+/// #13127 review: a group row whose eye-column colour menu is open stays whole when it scrolls
+/// out of view. The menu is the eye's own popup, which egui closes if a frame doesn't show it.
+#[test]
+fn eye_menu_survives_its_group_scrolling_off_screen() {
+    let mut h = harness_with(long_list_with_groups(), 1.0);
+    let window = h.ctx.content_rect();
+    let high = h.get_by_label("High Group").rect();
+    assert!(window.contains_rect(high), "High Group shows: {high:?}");
+    // Right-click High Group's eye column (the row's left 30 points): its colour menu opens.
+    let eye = egui::pos2(high.left() + 15.0, high.center().y);
+    h.hover_at(eye);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: eye, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: eye, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the eye column's colour menu opened");
+    // Scroll the list to its bottom group, taking High Group out of view, without a click.
+    h.query_by_label("Expand group Low Group").expect("Low Group's disclosure").scroll_to_me();
+    h.run_steps(6);
+    let high = h.get_by_label("High Group").rect();
+    let low = h.get_by_label("Low Group").rect();
+    // Low Group is in view, and High Group sits more than a window's height above it, so it is
+    // outside the panel's (shorter) list.
+    assert!(window.contains_rect(low), "scrolled to Low Group: {low:?}");
+    assert!(high.bottom() < low.top() - window.height(), "High Group is out of view: {high:?} vs {low:?}");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the colour menu stays open while its row is out of view");
+}

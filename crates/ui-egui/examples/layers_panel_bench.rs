@@ -19,12 +19,15 @@ use egui_kittest::kittest::Queryable;
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::{Value, json};
 
+/// The app in an offscreen harness.
 type H = egui_kittest::Harness<'static, PhotocraftApp>;
 
+/// The value after `name` on the command line, if any.
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
 }
 
+/// Milliseconds since `t`.
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
@@ -36,6 +39,7 @@ fn frame(h: &mut H) -> f64 {
     ms(t)
 }
 
+/// Result rows: name, then median, p90 and max frame time (ms).
 struct Rows {
     rows: Vec<(String, f64, f64, f64)>,
 }
@@ -71,6 +75,7 @@ fn build(n: usize, plain: bool, expanded: bool) -> photocraft_engine::Session {
     s
 }
 
+/// Builds the document, warms the app up, times idle frames and prints (and optionally writes) the row.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let groups: usize = arg(&args, "--groups").and_then(|v| v.parse().ok()).unwrap_or(300).max(1);

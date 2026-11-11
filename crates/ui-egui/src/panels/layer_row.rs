@@ -236,8 +236,9 @@ pub(super) fn layer_row(
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &l.name));
     // A row scrolled out of view only keeps its place (#125): a layout's hundreds of rows would
     // otherwise lay out names, icons and thumbnails every frame. An off-screen group row keeps only
-    // its disclosure widget (accessibility, scroll-to) and paints nothing (#13117).
-    if !ui.is_rect_visible(rect) && !resp.context_menu_opened() && crate::layer_row_ui::renaming(ctx) != Some(l.id.0) {
+    // its disclosure widget (accessibility, scroll-to) and paints nothing (#13117). A row whose
+    // menu (its own or the eye column's) is open, or that is being renamed, stays whole.
+    if !ui.is_rect_visible(rect) && !resp.context_menu_opened() && !eye_menu_open(ui, l) && crate::layer_row_ui::renaming(ctx) != Some(l.id.0) {
         if l.is_group() {
             let (x, _) = triangle_x_and_thumb_size(l, depth, rect, base);
             crate::layer_tree_ui::disclosure_widget(ui, rect, x, l, actions);
@@ -397,6 +398,18 @@ fn paint_row_background(painter: &egui::Painter, t: &Tokens, l: &Layer, rect: Re
     }
 }
 
+/// The eye column's widget id.
+fn eye_id(ui: &egui::Ui, l: &Layer) -> egui::Id {
+    ui.scope_id().with(("eye", l.id.0))
+}
+
+/// Whether the eye column's colour menu is open. It is the eye response's own context menu (egui
+/// keys it `Popup::default_response_id`: the widget id with "popup"), not the row's, and egui closes
+/// a popup that isn't shown in a frame, so a row with it open must not be culled.
+fn eye_menu_open(ui: &egui::Ui, l: &Layer) -> bool {
+    egui::Popup::is_id_open(ui.ctx(), eye_id(ui, l).with("popup"))
+}
+
 /// The eye column: visibility toggle (⌥ shows only this layer), sweep-drag and its colour menu.
 fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel, rect: Rect, actions: &mut Vec<(String, Value)>) -> egui::Response {
     let ctx = &ui.ctx().clone();
@@ -405,7 +418,7 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
     let eye_cell = eye_cell(rect);
     // The whole eye column takes drags too (so a drag starting on it never reorders the row): dragging down
     // the eyes gives every row swept over the visibility the first eye toggled to (#8467).
-    let eye_resp = ui.interact(eye_cell, ui.scope_id().with(("eye", l.id.0)), Sense::click_and_drag());
+    let eye_resp = ui.interact(eye_cell, eye_id(ui, l), Sense::click_and_drag());
     // A hidden layer's eye box is left empty (still clickable; the whole column takes the click, #8467).
     if l.visible {
         // Centre the drawing in the column while preserving the visibility hit area.
