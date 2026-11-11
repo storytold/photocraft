@@ -4024,7 +4024,7 @@ layerLabel	No Color	நிறம் இல்லை
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	தொடர்வதற்கு முன் இந்த உரை அடுக்கு ராஸ்டராக்கப்பட வேண்டும். அதன் உரையை இனி திருத்த முடியாது. உரையை ராஸ்டராக்கவா?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	தொடர்வதற்கு முன் இந்த வடிவ அடுக்கு ராஸ்டராக்கப்பட வேண்டும். இதை இனி வடிவமாகத் திருத்த முடியாது. வடிவத்தை ராஸ்டராக்கவா?
 	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	தொடர்வதற்கு முன் இந்த திறன்மிகு பொருள் ராஸ்டராக்கப்பட வேண்டும். அதன் உள்ளடக்கத்தை இனி திருத்த முடியாது. திறன்மிகு பொருளை ராஸ்டராக்கவா?
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	தொடர்வதற்கு முன் இந்த நிரப்பு அடுக்கு ராஸ்டராக்கப்பட வேண்டும். அதன் நிரப்பு உள்ளடக்கத்தை இனி திருத்த முடியாது. அடுக்கை ராஸ்டராக்கவா?
+	The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?	தொடர்வதற்கு முன் இந்த நிரப்பு அடுக்கு ராஸ்டராக்கப்பட வேண்டும். அதன் நிரப்பு உள்ளடக்கத்தை இனி திருத்த முடியாது. அடுக்கை ராஸ்டராக்கவா?
 	This layer must be rasterized before proceeding.	தொடர்வதற்கு முன் இந்த அடுக்கு ராஸ்டராக்கப்பட வேண்டும்.
 	Color Picker (Background Color)	நிறத் தேர்வி (பின்னணி நிறம்)
 	Color Picker (Foreground Color)	நிறத் தேர்வி (முன்புற நிறம்)
@@ -4274,3 +4274,17 @@ navigator	Zoom	பெரிதாக்கல்
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW உருவாக்க அமைப்புகள் {file} இல் சேமிக்கப்பட்டன
+# Crop options bar (#10888)
+	Select a preset aspect ratio or crop size	முன்னமைக்கப்பட்ட விகிதம் அல்லது வெட்டு அளவைத் தேர்ந்தெடுக்கவும்
+	Set the aspect ratio for the crop box	வெட்டு சட்டகத்தின் விகிதத்தை அமைக்கவும்
+	Clear aspect ratio values	விகித மதிப்புகளை அழிக்கவும்
+	Set the overlay options for the Crop Tool	வெட்டு மேலடுக்கு விருப்பங்களை அமைக்கவும்
+	Determines if pixel data outside the crop box is retained or deleted	வெட்டு சட்டகத்திற்கு வெளியே உள்ள பிக்சல்கள் வைக்கப்படுமா நீக்கப்படுமா என்பதை தீர்மானிக்கிறது
+	How expanded crop area gets filled	விரிவாக்கப்பட்ட வெட்டுப் பகுதி எவ்வாறு நிரப்பப்படுகிறது
+	Displays pop-up help for the fill methods	நிரப்பும் முறைகளுக்கான பாப்-அப் உதவியைக் காட்டுகிறது
+	Fill options	நிரப்பு விருப்பங்கள்
+	Background (default):	பின்னணி (இயல்புநிலை):
+	Fill the expanded area with your background color or transparent pixels	விரிவாக்கப்பட்ட பகுதியை பின்னணி நிறம் அல்லது ஒளிஊடுருவும் பிக்சல்களால் நிரப்பவும்
+	Content-aware fill	உள்ளடக்க அடிப்படையிலான நிரப்பு
+	Sample content from part of the image and use it to fill a small area	சிறிய பகுதியை நிரப்ப படத்தின் ஒரு பகுதியிலிருந்து உள்ளடக்கத்தை மாதிரி எடுக்கவும்
+	Reset the crop box, image rotation, and aspect ratio settings	வெட்டு சட்டகம், படச் சுழற்சி மற்றும் விகிதத்தை மீட்டமைக்கவும்

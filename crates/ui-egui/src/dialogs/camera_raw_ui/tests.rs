@@ -784,7 +784,7 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
         }
     }
     let method = photocraft_io::raw::Demosaic::Ahd;
-    let raw = RawOpen { document, held: None, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method, crop: None, active_before: None };
+    let raw = RawOpen { document, held: None, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method, crop: None, active_before: None, conversion: None };
     let (unshown, _) = filmstrip::first_settings(&app, &raw);
     open_raw(&mut app, &ctx, raw).unwrap();
     let shown = &app.camera_raw.as_ref().unwrap().params;
@@ -827,7 +827,8 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
                 developed_with: Default::default(),
                 demosaic: Default::default(),
                 crop: None,
-                active_before: None
+                active_before: None,
+                conversion: None
             }
         )
         .is_err()
@@ -1654,6 +1655,60 @@ fn a_raw_that_goes_back_to_the_filmstrip_restores_the_active_tab() {
         assert_eq!(app.session.documents().len(), 2, "the admitted document closed again");
         assert_eq!(app.session.active().map(|st| st.doc.id), Some(first), "the tab active before Open");
     }
+}
+
+/// In the desktop app (background jobs) the open dialog shows at once on the document's pixels and
+/// takes the raw's sensor data when the worker has decoded it: then the proxy, the tone curve
+/// and Auto's pixels are the ones the inline open gives.
+#[test]
+fn the_raw_source_is_built_on_a_worker_and_attached_when_ready() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("IMG_0009.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    open_raw(&mut app, &ctx, raw.clone()).unwrap();
+    let inline = app.camera_raw.take().unwrap();
+    assert!(inline.raw_proxy && !inline.raw_source_pending());
+    app.background_jobs = true;
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    for _ in 0..2000 {
+        d.poll_raw_source();
+        if !d.raw_source_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!d.raw_source_pending(), "the worker never finished");
+    assert!(d.raw_proxy && d.raw_source.is_some() && d.raw_curve.is_some(), "the sensor data is attached");
+    assert!(d.dirty, "and the preview develops again from it");
+    assert_eq!(d.proxy.len(), inline.proxy.len());
+    let (_, max) = proxy_difference(&d.proxy, &inline.proxy);
+    assert!(max < 1e-6, "the same proxy as the inline open: {max}");
+    let (_, auto) = proxy_difference(&d.auto_pixels(), &inline.auto_pixels());
+    assert!(auto < 1e-6, "and the same pixels for Auto: {auto}");
+}
+
+/// The sensor preview converts with the intent and black point compensation Color Settings had
+/// when the raw was queued, as the open policy converted the document then, not the ones set
+/// while the raw waited.
+#[test]
+fn the_sensor_preview_keeps_the_queued_raws_conversion() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("edit.colorSettings", json!({"policyRgb": "convert", "askOnMismatch": false, "intent": "perceptual", "bpc": false})).unwrap();
+    app.open_bytes("IMG_0010.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    let queued = raw.conversion.expect("the queued raw keeps its conversion");
+    assert_eq!((queued.intent, queued.bpc), (photocraft_cms::Intent::Perceptual, false));
+    // The held raw isn't in the session: its own document has the profile the policy gave it.
+    let profile = photocraft_engine::color_cmds::document_profile(raw.held.as_deref().expect("a held raw"));
+    app.run("edit.colorSettings", json!({"intent": "absolute", "bpc": true})).unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let d = app.camera_raw.as_ref().unwrap();
+    let expected = photocraft_cms::cached(photocraft_cms::Builtin::ProPhotoCompat.profile(), &profile, queued).unwrap();
+    let to_document = d.raw_source.as_ref().and_then(|r| r.to_document.clone()).expect("a converted document");
+    assert!(std::sync::Arc::ptr_eq(&to_document, &expected), "converted with the queued intent and BPC");
 }
 
 /// With Color Settings converting raws to the working space on open, the proxy developed from

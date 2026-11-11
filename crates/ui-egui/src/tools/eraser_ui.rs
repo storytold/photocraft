@@ -36,11 +36,13 @@ pub fn click(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
 }
 
 /// Finishes a Background Eraser stroke. Returns false for other tools.
-pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) -> bool {
+pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], line: bool) -> bool {
     if tool != Tool::BackgroundEraser {
         return false;
     }
-    let r = app.run("paint.backgroundEraser", background_eraser_params(app, points));
+    let mut p = background_eraser_params(app, points);
+    crate::canvas::unsmoothed_line(&mut p, line);
+    let r = app.run("paint.backgroundEraser", p);
     report(app, r);
     true
 }
@@ -57,6 +59,12 @@ pub(crate) fn background_eraser_params(app: &PhotocraftApp, points: &[[f64; 3]])
         "protectForegroundColor": o.bg_protect_fg,
         "seed": crate::retouch_ui::stroke_seed(points),
     })
+}
+
+/// The tool a drag with `tool` runs as: the History Brush for an Eraser that erases to history. ⌥
+/// at the press reverses the option for that stroke, as in Photoshop.
+pub fn drag_tool(app: &PhotocraftApp, tool: Tool, alt: bool) -> Tool {
+    if tool == Tool::Eraser && app.ui.tool_options.erase_to_history != alt { Tool::HistoryBrush } else { tool }
 }
 
 /// Whether `tool` is the Eraser in Pencil mode: it erases hard, aliased pixels through
@@ -206,22 +214,31 @@ pub const TOLERANCE_RANGE_ALERT: &str = "An integer between 1% and 100% is requi
 /// closest one. Returns true when the field is left with a value typed out of range, so the
 /// caller shows [`TOLERANCE_RANGE_ALERT`].
 fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
+    whole_tolerance_field(ui, value, "bg-eraser-tolerance-typed", tl!("Erase range of similar colors"))
+}
+
+/// [`tolerance_field`]'s field for any tool's whole-number Tolerance (the Color Replacement tool's
+/// too, #11930): `draft` keys its typed-but-not-left text, `hover` is its tooltip.
+pub(crate) fn whole_tolerance_field(ui: &mut egui::Ui, value: &mut f32, draft: &str, hover: &str) -> bool {
     // A restored setting (an older 0, a fraction) shows and erases as the field would store it.
     *value = stored_tolerance(*value);
     // While the field has the keyboard it gets back what was typed, not the stored value, so
     // its text is left alone mid-entry (`0` on the way to `05` must not turn into `1`).
-    let draft_id = ui.make_persistent_id(egui::IdSalt::new("bg-eraser-tolerance-typed"));
+    let draft_id = ui.make_persistent_id(egui::IdSalt::new(draft));
     // The field's own range is wide, so the typed value reaches here unclamped.
     // A draft only stands while the setting is still the one it stored: a value set elsewhere
     // meanwhile (a tool preset while the bar was hidden) wins.
     let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(draft_id));
     let mut typed = draft.filter(|(_, stored)| *stored == *value).map_or(*value, |(typed, _)| typed);
-    let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(tl!("Erase range of similar colors"));
+    let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(hover);
     let out_id = r.id.with("out-of-range");
     // An edit the field never got to finish (the options bar was hidden while it had the
     // keyboard) has nothing left to say once the field is entered again.
     if r.gained_focus() {
-        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+        ui.ctx().data_mut(|d| {
+            d.remove_temp::<bool>(out_id);
+            d.remove_temp::<bool>(r.id.with("parses"));
+        });
     }
     if r.changed() && typed.is_finite() {
         *value = typed.round().clamp(1.0, 100.0);
@@ -237,21 +254,73 @@ fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
             ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
         }
     }
+    // Text replaced by something that is no number (`150`, then `abc`) leaves the value alone
+    // when the field is left, with no alert (#12268). A number typed again after it (`150` once
+    // more) owes the alert again, even though the value did not change.
+    let no_number_id = r.id.with("no-number-typed");
+    if r.has_focus() {
+        match widgets::typed_text_parses(ui.ctx(), r.id) {
+            Some(false) => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(out_id);
+                d.insert_temp(no_number_id, true);
+            }),
+            Some(true) if ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number_id)).unwrap_or(false) => {
+                let out = typed.is_finite() && !(1.0..=100.0).contains(&typed);
+                ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+            }
+            _ => {}
+        }
+    } else {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number_id));
+    }
     if !r.has_focus() {
         ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
     }
-    r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false)
+    let alert = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false);
+    // While a value typed out of range waits for the field to be left, the bar notes the pass, so
+    // a field that goes away instead (a tool shortcut that passes the field by) still alerts.
+    let owed = r.has_focus() && ui.ctx().data(|d| d.get_temp::<bool>(out_id)).unwrap_or(false);
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().data_mut(|d| {
+        if owed {
+            d.insert_temp(range_alert_owed_id(), pass);
+        } else {
+            d.remove_temp::<u64>(range_alert_owed_id());
+        }
+    });
+    alert
+}
+
+/// Where a whole-number Tolerance field notes the pass in which it last owed the range alert.
+fn range_alert_owed_id() -> egui::Id {
+    egui::Id::unique("whole-tolerance-range-alert-owed")
+}
+
+/// Shows [`TOLERANCE_RANGE_ALERT`] for a whole-number Tolerance field that went away in the last
+/// pass while it held a value typed out of range (the tool changed by a shortcut, #12268). The
+/// options bar calls it before drawing a tool's options. An edit older than that (the bar was
+/// hidden meanwhile) is dropped, as the field drops it once entered again.
+pub(crate) fn alert_for_a_field_gone(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(seen) = ctx.data(|d| d.get_temp::<u64>(range_alert_owed_id())) else { return };
+    let now = ctx.cumulative_pass_nr();
+    if seen.saturating_add(1) >= now {
+        return;
+    }
+    ctx.data_mut(|d| d.remove_temp::<u64>(range_alert_owed_id()));
+    if seen.saturating_add(2) == now {
+        open_range_alert(app);
+    }
 }
 
 /// A Tolerance as the field stores it: a whole number in 1..=100, the default 50 for a value
 /// that is no number. Strokes use it too, so a restored setting erases the same before and after
 /// the options bar shows it.
-fn stored_tolerance(v: f32) -> f32 {
+pub(crate) fn stored_tolerance(v: f32) -> f32 {
     if v.is_finite() { v.round().clamp(1.0, 100.0) } else { 50.0 }
 }
 
 /// Shows [`TOLERANCE_RANGE_ALERT`]: a modal with OK, once even if more than one pass asks.
-fn open_range_alert(app: &mut PhotocraftApp) {
+pub(crate) fn open_range_alert(app: &mut PhotocraftApp) {
     let message = tl!(TOLERANCE_RANGE_ALERT).to_owned();
     let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
     if !shown {

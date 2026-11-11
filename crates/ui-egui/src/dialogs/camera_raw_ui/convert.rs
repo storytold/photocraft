@@ -132,7 +132,11 @@ pub(super) fn raw_proxy(
 /// document still has them (kept, or its profile discarded by the Color Settings open policy),
 /// else the conversion the policy made, with Color Settings' intent and black point compensation.
 /// `Err` when that conversion can't be built: the sensor pixels can't be shown as the document's.
-pub(super) fn raw_to_document(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Result<Option<std::sync::Arc<photocraft_cms::Transform>>, String> {
+pub(super) fn raw_to_document(
+    app: &PhotocraftApp,
+    doc: &photocraft_doc::Document,
+    conversion: Option<photocraft_cms::TransformOptions>,
+) -> Result<Option<std::sync::Arc<photocraft_cms::Transform>>, String> {
     if doc.icc_profile.is_none() {
         return Ok(None);
     }
@@ -141,9 +145,14 @@ pub(super) fn raw_to_document(app: &PhotocraftApp, doc: &photocraft_doc::Documen
     if profile.same_colors(prophoto) {
         return Ok(None);
     }
-    let settings = &app.session.color.settings;
-    let opts = photocraft_cms::TransformOptions { intent: settings.intent(), bpc: settings.bpc, ..Default::default() };
+    let opts = conversion.unwrap_or_else(|| conversion_options(app));
     photocraft_cms::cached(prophoto, &profile, opts).map(Some).map_err(|e| e.to_string())
+}
+
+/// Color Settings' intent and black point compensation now, as the open policy converts with.
+pub(super) fn conversion_options(app: &PhotocraftApp) -> photocraft_cms::TransformOptions {
+    let settings = &app.session.color.settings;
+    photocraft_cms::TransformOptions { intent: settings.intent(), bpc: settings.bpc, ..Default::default() }
 }
 
 pub(super) fn open_pixels(
@@ -264,6 +273,7 @@ pub(super) fn open_pixels(
         raw_source: raw,
         raw_proxy: raw_proxy_ok,
         auto_proxy: Default::default(),
+        raw_loading: None,
         pending: None,
         preview_error: None,
         render_error: None,
