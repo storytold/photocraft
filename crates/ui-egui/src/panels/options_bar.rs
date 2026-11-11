@@ -157,10 +157,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     brush.mode = m;
                                 }
                             }
-                            if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
+                            if matches!(tool, Tool::CloneStamp | Tool::PatternStamp | Tool::HistoryBrush) {
                                 let width = if t.pro { 62.0 } else { 66.0 };
-                                percent_field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, width);
-                                percent_field(ui, tl!("Flow"), &mut brush.flow, 1.0..=100.0, width);
+                                // The Pattern Stamp's are whole percents as measured; the Brush's tooltips (#12616).
+                                let pattern = tool == Tool::PatternStamp;
+                                let field = if pattern { whole_percent_field } else { percent_field };
+                                let opacity = field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, width);
+                                let flow = field(ui, tl!("Flow"), &mut brush.flow, 1.0..=100.0, width);
+                                if pattern {
+                                    opacity.on_hover_text(tl!("Set opacity for stroke"));
+                                    flow.on_hover_text(tl!("Set flow rate for stroke"));
+                                }
                             }
                             // Art History has no Mode (the engine paints Normal) and no Flow.
                             if tool == Tool::ArtHistoryBrush {

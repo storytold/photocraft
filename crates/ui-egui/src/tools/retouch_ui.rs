@@ -177,6 +177,8 @@ pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> 
         "seed": stroke_seed(points),
         // The options bar's Mode is the tool's own brush's; Behind is a mode of that list.
         "mode": if app.session.tools.brush.behind { "Behind" } else { app.session.tools.brush.mode.label() },
+        "opacity": app.session.tools.brush.opacity * 100.0,
+        "flow": app.session.tools.brush.flow * 100.0,
     });
     if o.pattern_stamp_aligned
         && let Some(ph) = app.ui.pattern_stamp_phase
