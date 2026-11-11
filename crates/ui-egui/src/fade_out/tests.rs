@@ -58,7 +58,8 @@ fn harness(animation_time: f32) -> Harness<'static, Scene> {
                 window("workspace", Pos2::ZERO, "Workspace", Some(vec2(400.0, 300.0)));
             }
             if s.gpu {
-                let texture = s.texture.get_or_insert_with(|| ctx.load_texture("ghost", egui::ColorImage::filled([2, 2], Color32::RED), Default::default())).id();
+                let texture =
+                    s.texture.get_or_insert_with(|| ctx.load_texture("ghost", egui::ColorImage::filled([2, 2], Color32::RED), Default::default())).id();
                 let resource = Arc::clone(&s.resource);
                 Area::new(Id::unique("gpu")).order(Order::Foreground).fixed_pos(pos2(40.0, 150.0)).show(&ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
