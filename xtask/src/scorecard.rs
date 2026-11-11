@@ -595,10 +595,11 @@ here supersede estimates elsewhere.\n\n## Summary\n\n| Area | Done | Partial | M
     s.push_str(&format!(
         "Budgets: `perf/budgets.toml` (targets from #209, #210, #211). Numbers: the committed baseline \
 (`perf/baseline.json`, full run), updated only by `cargo xtask perf --update-baseline`. The nightly \
-`perf-nightly` workflow runs `cargo xtask perf` on a fixed macOS runner and fails on a broken enforced \
-budget. Its p50 regression check (over {:.0} %, against the baseline's highest p50 when it was built from \
-several runs) runs only on machine class `{class}`, the baseline's. \"Over budget\" rows are targets the \
-code doesn't meet yet: they are reported, and only their regressions fail.\n\n",
+`perf-nightly` workflow runs `cargo xtask perf` on pinned macOS, Linux and Windows runners, against \
+`perf/baselines/{{class}}.json` for each machine class, and fails on a p50 regression over 25 % \
+(shared runners are noisy; {:.0} % is the local default). Multi-run baselines compare against \
+their highest p50. \"Over budget\" rows are targets the code doesn't meet yet: they are reported, \
+and only their regressions fail. The scorecard baseline is machine class `{class}`.\n\n",
         inp.budgets.settings.regression_pct
     ));
     match (&base_date, full) {
@@ -916,7 +917,8 @@ cc  c.psd
         inp.baseline = Some(base(224.9, json!({})));
         let a = render(&inp);
         assert!(a.contains("**contended baseline** (load 224.90 on 14 cores)"), "labelled from the load the baseline already has");
-        assert!(a.contains("runs only on machine class `mac-m4`"));
+        assert!(a.contains("scorecard baseline is machine class `mac-m4`"));
+        assert!(a.contains("`perf/baselines/{class}.json`"));
         assert!(a.contains("2026-10-05, 1 run,"));
         inp.baseline = Some(base(2.0, json!({"runs": 5})));
         let a = render(&inp);

@@ -10,6 +10,8 @@
 #
 # Benches run in release with `--json <file>` appended. `quick_args` = also runs in
 # `cargo xtask perf --quick` (small synthetic documents; budgets don't apply there).
+# `cpu_args` = also runs in `cargo xtask perf --cpu` (CPU canvas only, for runners without a real
+# GPU) with these added; benches without it are GPU-only and skipped there.
 
 [settings]
 # A scenario regresses when its p50 grows by more than this share of the baseline…
@@ -30,11 +32,13 @@ enforce_margin = 0.6
 [[bench]]
 name = "perf_scenarios"
 package = "photocraft-ui-egui"
+cpu_args = ["--cpu"]
 quick_args = ["--quick"]
 note = "the #209/#210/#211 rows: layered 20 MP, 150 layers, 16/32-bit, open, retouch, selection"
 
 [[bench]]
 name = "perf_scenarios_cpu"
+cpu_args = []
 package = "photocraft-ui-egui"
 example = "perf_scenarios"
 args = ["--cpu", "--group", "layered"]
@@ -43,6 +47,7 @@ note = "the layered #209 rows on the forced CPU compositor (#9330); run with per
 
 [[bench]]
 name = "flat_open_bench"
+cpu_args = ["--cpu"]
 package = "photocraft-ui-egui"
 quick_args = ["--quick"]
 note = "opening ordinary JPEG/PNG files (24 and 36 MP, 8/16-bit, alpha, EXIF orientation) phase by phase, each case in its own process for its peak memory (#10259)"
@@ -50,6 +55,7 @@ note = "opening ordinary JPEG/PNG files (24 and 36 MP, 8/16-bit, alpha, EXIF ori
 [[bench]]
 name = "interactive_bench"
 package = "photocraft-ui-egui"
+cpu_args = ["--cpu"]
 args = ["--reps", "5"]
 note = "36 MP photo: dabs, filters, adjustment previews, saves"
 
@@ -69,18 +75,21 @@ note = "chisel bevel size change (a dragged slider) on a 12 MP ellipse and a tex
 [[bench]]
 name = "camera_raw_bench"
 package = "photocraft-ui-egui"
+cpu_args = []
 quick_args = ["--quick"]
 note = "36 MP dense RGB layer: CPU develop, histogram, ICC vectorscope, clipping, nine Lab probes and egui tessellation; excludes GPU upload/presentation"
 
 [[bench]]
 name = "type_bench"
 package = "photocraft-ui-egui"
+cpu_args = []
 quick_args = ["--size", "2000x1500", "--layers", "20", "--steps", "15"]
 note = "font-size drag on 50 type layers"
 
 [[bench]]
 name = "large_image_bench"
 package = "photocraft-ui-egui"
+cpu_args = ["--cpu"]
 args = ["--size", "14000x14000", "--op", "refresh"]
 note = "196 MP: open and full refresh"
 
@@ -105,6 +114,7 @@ note = "layout PSDs with many styled layers (#125/#128)"
 # use the stand-alone example for the 4 x 24 MP stress test.
 [[bench]]
 name = "bench_multiband"
+cpu_args = []
 package = "photocraft-algo"
 args = ["4", "2", "--reps", "5"]
 quick_args = ["2", "0.25", "--reps", "3"]
@@ -621,6 +631,7 @@ row = "new 3 GP document + first reduced canvas refresh"
 
 [[bench]]
 name = "bench_filters2"
+cpu_args = []
 package = "photocraft-algo"
 args = ["--reps", "3"]
 quick_args = ["--quick", "--reps", "1"]
