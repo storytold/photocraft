@@ -78,8 +78,8 @@ fn fp(h: &Harness<'_, PhotocraftApp>) -> CursorFp {
 /// pipette, whose artwork and hotspot have separate pixel tests in `tool_cursor::tests`.
 pub(crate) fn pipette_bitmap() -> egui::CustomCursorImage {
     let ctx = egui::Context::default();
-    let mut output = ctx.run(Default::default(), |ctx| {
-        ctx.set_cursor_icon(crate::canvas::tool_cursor::pipette(ctx, egui::Pos2::ZERO));
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        ui.ctx().set_cursor_icon(crate::canvas::tool_cursor::pipette(ui.ctx(), egui::Pos2::ZERO));
     });
     output.textures_delta.clear();
     output.platform_output.cursor_image.take().expect("the native pipette has a bitmap")
