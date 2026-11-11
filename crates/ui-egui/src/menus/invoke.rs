@@ -924,6 +924,7 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     if !app.ui.timeline.open {
         app.ui.timeline.playing = false;
     }
+    app.ui.launcher_migration_failed = false;
     if app.ui.panel_presentation.migrated {
         app.ui.panel_presentation.migrated = false;
         let _ = crate::panel_docking::compat::initialize(app);

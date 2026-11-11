@@ -10,10 +10,12 @@ use super::{PhotocraftApp, Stroke, Tokens, icons, pos2};
 /// The panels and the canvas in the space left by the menus, bars and toolbar: craft-ui's
 /// docking layout, with the icon rail at the window's end edge in the Studio themes.
 pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if let Err(error) = crate::panel_docking::compat::initialize(app) {
-        app.ui.panel_presentation.migrated = true;
-        app.ui.status = error;
-        app.ui.status_error = true;
+    if !app.ui.panel_presentation.migrated && !app.ui.launcher_migration_failed {
+        if let Err(error) = crate::panel_docking::compat::initialize(app) {
+            app.ui.launcher_migration_failed = true;
+            app.ui.status = error;
+            app.ui.status_error = true;
+        }
     }
     let t = Tokens::get(ui.ctx());
     if app.ui.panels.rail && (!app.ui.panel_presentation.migrated || app.ui.docking.is_none()) && !t.pro {
@@ -28,10 +30,12 @@ pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// canvas and the dock. The canvas is drawn separately afterwards. Keeping the rail inside this
 /// panel means the toolbox cannot cover it when it is one column wide.
 pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if let Err(error) = crate::panel_docking::compat::initialize(app) {
-        app.ui.panel_presentation.migrated = true;
-        app.ui.status = error;
-        app.ui.status_error = true;
+    if !app.ui.panel_presentation.migrated && !app.ui.launcher_migration_failed {
+        if let Err(error) = crate::panel_docking::compat::initialize(app) {
+            app.ui.launcher_migration_failed = true;
+            app.ui.status = error;
+            app.ui.status_error = true;
+        }
     }
     // Lets the frame tick expire a drag start if this panel stops rendering (dock hidden).
     let frame = ui.ctx().cumulative_frame_nr();

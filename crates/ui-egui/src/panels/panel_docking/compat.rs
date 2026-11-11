@@ -50,6 +50,7 @@ pub(crate) fn initialize(app: &mut PhotocraftApp) -> Result<(), String> {
     app.ui.panels = panels;
     app.ui.panels.dock = dock_visible;
     app.ui.panel_presentation.migrated = true;
+    app.ui.launcher_migration_failed = false;
     Ok(())
 }
 

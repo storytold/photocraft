@@ -575,6 +575,9 @@ pub struct UiState {
     pub toolbar_floating: Option<[f32; 2]>,
     #[serde(default)]
     pub panel_presentation: PanelPresentation,
+    /// A failed launcher migration attempt for the current layout, so frames do not repeat the failure.
+    #[serde(skip)]
+    pub launcher_migration_failed: bool,
     #[serde(skip)]
     pub docking_flyout: Option<String>,
     /// Which chip the Color panel edits, and how it shows the colour.
@@ -755,6 +758,7 @@ impl Default for UiState {
             docking_reveal: None,
             toolbar_floating: None,
             panel_presentation: Default::default(),
+            launcher_migration_failed: false,
             docking_flyout: None,
             color_panel: Default::default(),
             color_panel_synced: None,

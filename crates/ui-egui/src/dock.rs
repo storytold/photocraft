@@ -609,6 +609,7 @@ pub fn restore(app: &mut PhotocraftApp) {
 /// is retained while the legacy layout is shown. Only an explicit layout edit replaces it.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     app.ui.panel_presentation = crate::panel_docking::migration::presentation(v);
+    app.ui.launcher_migration_failed = false;
     app.ui.docking_flyout = None;
     app.ui.toolbar_floating = v
         .get("toolbarFloating")

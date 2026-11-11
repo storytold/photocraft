@@ -560,3 +560,24 @@ fn dock_panel_initializes_launcher_on_dock_edge_route() {
     assert!(app.ui.panel_presentation.migrated);
     assert!(app.ui.docking.is_some());
 }
+
+#[test]
+fn launcher_migration_failure_is_not_recorded_as_successful_migration() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.ui.panels.rail = true;
+    assert!(!app.ui.panel_presentation.migrated);
+    assert!(!app.ui.launcher_migration_failed);
+
+    app.ui.launcher_migration_failed = true;
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ProMedium);
+    ctx.run_ui(Default::default(), |ui| {
+        crate::panels::dock_panel(&mut app, ui);
+    })
+    .textures_delta
+    .clear();
+
+    assert!(!app.ui.panel_presentation.migrated);
+    let saved = crate::dock::snapshot(&app);
+    assert_ne!(saved.get("panelPresentation").and_then(|p| p.get("migrated")), Some(&serde_json::json!(true)));
+}
