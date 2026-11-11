@@ -615,7 +615,8 @@ mod tests {
         let Some(home) = home().filter(|h| h.trim_end_matches(['/', '\\']).len() > 1) else { return };
         let profile = format!("{}/Profiles/Mine.icc", home.trim_end_matches(['/', '\\']));
         // A display read before, then a re-read that fails on a profile in the home folder.
-        let display = photocraft_engine::display_color::Display { id: 1, name: "Display".into(), frame: [0.0, 0.0, 800.0, 600.0], profile_name: None, icc: None };
+        let display =
+            photocraft_engine::display_color::Display { id: 1, name: "Display".into(), frame: [0.0, 0.0, 800.0, 600.0], profile_name: None, icc: None };
         app.session.color.set_displays(Ok(vec![display]));
         app.session.color.set_displays(Err(format!("cannot read profile `{profile}`: not found")));
         app.run("file.new", json!({"width": 8, "height": 8, "name": "Jane_Smith_wedding_proofs.psd"})).unwrap();
