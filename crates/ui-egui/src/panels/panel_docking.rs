@@ -1090,8 +1090,42 @@ fn resize_end_dock(node: &mut Node<String>, total: f32, actual: &mut f32) -> boo
     }
 }
 
+fn set_end_dock_split_width(node: &mut Node<String>, width: f32) -> bool {
+    match node {
+        Node::Dock { columns, .. } => !columns.is_empty(),
+        Node::Split { axis: SplitAxis::Horizontal, second, size, .. } => {
+            let found = set_end_dock_split_width(second, width);
+            if found && matches!(&**second, Node::Dock { .. }) {
+                *size = SplitSize::FixedSecond(width);
+            }
+            found
+        }
+        _ => false,
+    }
+}
+
+fn restore_native_dock_width(app: &mut PhotocraftApp, width: f32) {
+    if !width.is_finite() || width <= 0.0 {
+        return;
+    }
+    let Ok(mut workspace) = workspace_of(app) else { return };
+    let Some(root) = workspace.layout.root.as_mut() else { return };
+    let total = {
+        let Some(columns) = dock_columns_mut(root) else { return };
+        let Some(expanded) = columns.iter_mut().find(|column| !column.iconic) else { return };
+        expanded.width = width.clamp(column_minimum(expanded), column_maximum(expanded));
+        columns.iter().map(display_width).sum()
+    };
+    if !set_end_dock_split_width(root, total) {
+        return;
+    }
+    workspace.locked = app.session.prefs().workspace_locked;
+    let returns = app.ui.docking_returns.clone();
+    commit(app, workspace, returns);
+}
+
 /// A dock width saved by earlier versions is in egui's remembered memory under the `dock` side
-/// panel's id. The default layout's column takes it once, after the canvas has been laid out so
+/// panel's id. The default layout's expanded column takes it once, after the canvas has been laid out so
 /// the Studio Properties card keeps its place. An explicit width request ([`apply_pending_dock_width`])
 /// supersedes it, whether the workspace exists yet or not.
 fn native_dock_width(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -1110,7 +1144,7 @@ fn native_dock_width(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let range = crate::panels::dock_width_range(ctx.content_rect().width());
     let width = state.size().x;
     if width.is_finite() && (width - default_width(pro)).abs() >= 1.0 {
-        set_dock_width(app, width.clamp(*range.start(), *range.end()));
+        restore_native_dock_width(app, width.clamp(*range.start(), *range.end()));
     }
 }
 
@@ -1538,7 +1572,22 @@ pub(crate) fn prepare_legacy_update(
         if !brings_back {
             continue;
         }
-        if let Some(panel) = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).find(|id| workspace.layout.contains(&id.to_string())).map(str::to_owned) {
+        let panel = if request.get("dockTabs").and_then(|p| p.get(group.key())).is_some() {
+            let tabs = tabs.ok_or("dockTabs is missing")?;
+            let index = match group {
+                Group::Color => tabs.color,
+                Group::Properties => tabs.properties,
+                Group::Character => tabs.character,
+                Group::Navigator => tabs.navigator,
+                Group::History => tabs.history,
+                Group::Layers => tabs.layers,
+                Group::Brushes => tabs.brushes,
+            };
+            group.tabs(pro).get(index).and_then(|label| normalize(label)).map(str::to_owned)
+        } else {
+            PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).find(|id| workspace.layout.contains(&id.to_string())).map(str::to_owned)
+        };
+        if let Some(panel) = panel.filter(|panel| workspace.layout.contains(panel)) {
             let members = group_members(&workspace.layout, &panel);
             workspace.apply(Action::SetMinimized { panel, minimized: false }, permissions).map_err(|e| e.to_string())?;
             collapsed.retain(|id| !members.contains(id));

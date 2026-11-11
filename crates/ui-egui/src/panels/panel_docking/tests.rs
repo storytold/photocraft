@@ -681,6 +681,22 @@ fn legacy_collapse_rejects_conflicting_native_states_in_one_custom_group_atomica
 }
 
 #[test]
+fn legacy_tab_selection_clears_collapse_for_the_selected_custom_group() {
+    let mut app = app();
+    app.ui.theme = crate::theme::ThemeKind::ProMedium;
+    app.run("window.panel.move", json!({"panel":"color","anchor":"layers","zone":"top"})).unwrap();
+    app.run("window.panel.group", json!({"panel":"swatches","operation":"collapse"})).unwrap();
+    let swatches = group_members(lay(&app), "swatches");
+    assert!(swatches.iter().all(|panel| app.ui.docking_collapsed.contains(panel)));
+    let ctx = egui::Context::default();
+
+    assert_eq!(control_set(&mut app, &ctx, json!({"dockTabs":{"color":1}}))["ok"], true);
+
+    assert!(panel_active(lay(&app), "swatches"));
+    assert!(swatches.iter().all(|panel| !collapsed_members(&app, lay(&app)).contains(panel)));
+}
+
+#[test]
 fn legacy_dock_width_is_consumed_by_custom_renderer_and_clamped_to_existing_range() {
     let mut app = app();
     app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
@@ -1019,8 +1035,13 @@ fn the_native_dock_width_sizes_the_default_column() {
     h.run_steps(2);
     let Some(Node::Split { second, .. }) = &lay(h.state()).root else { panic!("expected the canvas split") };
     let Node::Dock { columns, .. } = second.as_ref() else { panic!("expected the dock") };
-    let total: f32 = columns.iter().map(|column| if column.iconic { column.iconic_width.unwrap_or(36.0).clamp(36.0, 240.0) } else { column.width }).sum();
-    assert!((total - 380.0).abs() < 1.0, "the remembered width sizes the whole dock, got {total}");
+    let pro = h.state().ui.theme.is_pro();
+    assert_eq!(columns.len(), 2);
+    assert!(!columns[0].iconic);
+    assert!(columns[1].iconic);
+    assert!((columns[0].width - 380.0).abs() < 1.0, "the remembered native width sizes the expanded column, got {}", columns[0].width);
+    assert!((columns[1].width - default_width(pro)).abs() < 1.0, "the icon column's expanded width is preserved, got {}", columns[1].width);
+    assert_eq!(columns[1].iconic_width, None, "the icon column's collapsed width remains the renderer default");
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
 
@@ -2489,7 +2510,12 @@ fn native_migration_still_waits_and_runs_without_an_accepted_explicit_request() 
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(), "absent/rejected requests do not discard a pending migration");
         h.state_mut().last_canvas_rect = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0));
         h.run_steps(1);
-        assert_eq!(dock_width(h.state()), 380.0);
+        let columns = dock_columns(h.state());
+        assert_eq!(columns.len(), 2);
+        assert!((columns[0].width - 380.0).abs() < 1.0, "the saved native width is restored to the expanded column");
+        assert!((columns[1].width - default_width(h.state().ui.theme.is_pro())).abs() < 1.0, "the icon column's expanded width is preserved");
+        assert_eq!(columns[1].iconic_width, None, "the icon column's collapsed width is preserved");
+        assert!((dock_width(h.state()) - 380.0 - ICONIC_WIDTH).abs() < 1.0);
         assert!(h.state().ui.docking.is_some());
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "the unchanged native migration consumes its state once");
     }

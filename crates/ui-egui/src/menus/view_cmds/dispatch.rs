@@ -293,10 +293,16 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
                 "type.panels.paragraph" => Some("paragraph"),
                 _ => None,
             };
-            if let Some(panel) = workspace_panel
-                && let Some(result) = crate::panel_docking::command(app, "window.panel.activate", &json!({"panel":panel}))
-            {
-                return result;
+            if let Some(panel) = workspace_panel {
+                let result = if p.get("show").or_else(|| p.get("on")).is_some() {
+                    let command = if panel == "character" { "window.panel.character" } else { "window.panel.paragraph" };
+                    crate::panel_docking::command(app, command, p)
+                } else {
+                    crate::panel_docking::command(app, "window.panel.activate", &json!({"panel":panel}))
+                };
+                if let Some(result) = result {
+                    return result;
+                }
             }
             if !id.starts_with("type.panels.")
                 && let Some(result) = crate::panel_docking::command(app, id, p)

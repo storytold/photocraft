@@ -415,6 +415,16 @@ fn type_panel_menu_actions_update_the_custom_workspace() {
     menu(&mut app, &ctx, "type.panels.paragraph", json!({})).unwrap();
     assert!(app.ui.docking.as_ref().unwrap().layout.contains(&"paragraph".to_owned()));
     assert_eq!(app.ui.dock_tabs.character, 1);
+
+    menu(&mut app, &ctx, "type.panels.character", json!({"show":false})).unwrap();
+    assert!(!app.ui.docking.as_ref().unwrap().layout.contains(&"character".to_owned()));
+    assert!(!app.ui.docking.as_ref().unwrap().layout.contains(&"paragraph".to_owned()));
+
+    menu(&mut app, &ctx, "type.panels.paragraph", json!({"on":true})).unwrap();
+    assert!(app.ui.docking.as_ref().unwrap().layout.contains(&"paragraph".to_owned()));
+    let before = app.ui.docking.clone();
+    assert!(menu(&mut app, &ctx, "type.panels.character", json!({"show":"false"})).is_err());
+    assert_eq!(app.ui.docking, before);
 }
 
 #[test]
