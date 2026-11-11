@@ -45,10 +45,12 @@ pub use path_ops::{
     active_path_name, make_shape, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path,
 };
 pub(crate) use path_ops::{
-    active_shape_path, active_type_path, delete_key_deletes_work_path, deselect_loaded_path, free_transform_path, targeted_vector_mask, work_path_shown,
+    active_shape_path, active_type_path, delete_key_deletes_anchor, delete_key_deletes_work_path, deselect_loaded_path, free_transform_path,
+    targeted_vector_mask, work_path_shown,
 };
 #[cfg(test)]
 use paths_panel::path_context_actions;
+pub(crate) use paths_panel::path_renaming;
 pub use paths_panel::{PathEntry, PathRow, path_rows, paths_footer, paths_panel};
 #[cfg(test)]
 pub(crate) use pen::over_first_anchor;
@@ -56,7 +58,8 @@ pub(crate) use pen::over_first_anchor;
 use pen::pen_to_json;
 pub(crate) use pen::{PATH_OPS, pen_path, pen_replace};
 pub use pen::{
-    cancel_stale, closes_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_grab_handle, pen_move, pen_undo_last_point, pen_up,
+    cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_enter, pen_grab_handle, pen_move,
+    pen_undo_last_point, pen_up,
 };
 #[cfg(test)]
 use pen::{closing, pen_path_op};
@@ -214,7 +217,19 @@ mod pen_draw_tests;
 mod pen_path_ops_tests;
 
 #[cfg(test)]
+mod pen_rubber_band_tests;
+
+#[cfg(test)]
 mod paint_tests;
+
+#[cfg(test)]
+mod add_anchor_options_bar_tests;
+
+#[cfg(test)]
+mod delete_anchor_options_bar_tests;
+
+#[cfg(test)]
+mod pen_enter_deselects_tests;
 
 pub(crate) use pen::freeform_locked_shape;
 
