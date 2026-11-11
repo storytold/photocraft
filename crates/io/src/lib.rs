@@ -50,7 +50,7 @@ pub mod export_estimate;
 mod exr_native;
 pub mod exr_parts;
 mod flat;
-mod gradient_bake;
+pub mod gradient_bake;
 pub mod guides_map;
 mod png_steps;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
@@ -65,6 +65,8 @@ pub use ora::losses as ora_losses;
 pub mod pattern_map;
 mod pcraft_cache;
 pub mod pdf;
+#[cfg(all(feature = "pdf-editable", not(target_arch = "wasm32")))]
+mod pdf_editable;
 mod pdf_import;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
@@ -97,9 +99,9 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
+    DEFAULT_LOSSY_WEBP_QUALITY, FramesImport, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
     export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page, import_tiff_page_with_options,
-    import_webp_frames, tga_alpha_channel_to_transparency, tga_default_bits,
+    import_webp_frames, opaque_surface, tga_alpha_channel_to_transparency, tga_default_bits,
 };
 pub use png_steps::PngImport;
 // Re-exported for the `flat_open_bench` example, which times the tile-building phase of a flat open.
@@ -382,7 +384,8 @@ pub enum XmpEmbed {
     /// Embed the document's whole XMP packet and free-form text.
     #[default]
     All,
-    /// Embed no XMP or free-form text.
+    /// Leave the document's own XMP packet and free-form text out. Metadata a format writes
+    /// about the file itself, such as a PDF's spot-plate description, is still written.
     None,
 }
 
@@ -430,6 +433,12 @@ pub struct ExportOptions {
     /// PSD/PSB and layered TIFF: read and embed the files linked smart objects name (see
     /// [`PsdExportOptions::read_linked_files`]). On by default; automation turns it off.
     pub read_linked_files: bool,
+    /// PDF: write the document's spot channels as overprinting `/Separation` plates after the
+    /// flattened image, and a Multichannel document as its plates alone (FILE-215-17). On by
+    /// default; `false` (`"pdfSpotPlates": false`) writes the flattened image only, so an RGB,
+    /// Grayscale or CMYK document loses its plates and a Multichannel document, which has no
+    /// image to write, is refused.
+    pub pdf_spot_plates: bool,
     /// `.pcraft`: request the flattened document at its canvas size as `composite/full.png`
     /// (Preferences › File Handling › Save Full-Size Composite in .pcraft Files). The save may
     /// omit it; check the manifest's `full_composite` member ([`photocraft_format::read_full_composite`]
@@ -452,6 +461,7 @@ impl Default for ExportOptions {
             document_path: None,
             pcraft_cache: None,
             read_linked_files: true,
+            pdf_spot_plates: true,
             pcraft_full_composite: false,
         }
     }
@@ -612,6 +622,13 @@ pub struct ImportOptions {
     pub pdf_dpi: f32,
     /// The 1-based, inclusive page range to import; `None` imports every page (up to the cap).
     pub pdf_pages: Option<(u32, u32)>,
+    /// Import PDF painted paths and embedded-font text as editable [`photocraft_doc::ShapeLayer`]s
+    /// and text layers instead of a page raster (experimental). Images, complex clips/masks,
+    /// patterns, non-normal blends and unembedded/Type 3 text make that page fall back to the
+    /// raster importer with a warning. Text that uses fonts embedded in the PDF may change font
+    /// when edited or reopened, because the document format does not carry the font bytes. Off by
+    /// default.
+    pub pdf_editable: bool,
     /// Explicit one-shot authorization for imports that exceed the soft budget but fit within the hard budget.
     pub psd_high_memory_approved: bool,
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
@@ -628,6 +645,7 @@ impl Default for ImportOptions {
             flat_max_pixel_bytes: 0,
             pdf_dpi: 300.0,
             pdf_pages: None,
+            pdf_editable: false,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
         }
@@ -1195,7 +1213,8 @@ fn export_stages_with_renderer(
         return Ok(res.into());
     }
     if ext == "pdf" {
-        let mut res = pdf::export(doc, ctl)?;
+        let xmp = if opts.xmp == XmpEmbed::All { doc.metadata.xmp.as_deref() } else { None };
+        let mut res = pdf::export_with(doc, opts.pdf_spot_plates, xmp, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
             res.warnings.extend(r.drain_diagnostics());
