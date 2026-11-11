@@ -299,12 +299,25 @@ fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
     }
 }
 
+fn opening_prompt(fields: &Fields) -> bool {
+    historical_xcf::owns(fields) || crate::open_prompt::owns_memory(fields) || crate::open_prompt::owns_damage(fields)
+}
+
+/// Called only for opening_prompt fields; keep their existing routing priority.
+fn opening_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
+    if historical_xcf::owns(fields) {
+        historical_xcf::body(ui, fields);
+    } else if crate::open_prompt::owns_memory(fields) {
+        crate::open_prompt::memory_body(ui, fields);
+    } else {
+        crate::open_prompt::damage_body(ui, fields);
+    }
+}
+
 fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
-        _ if historical_xcf::owns(fields) => historical_xcf::body(ui, fields),
-        _ if crate::open_prompt::owns_memory(fields) => crate::open_prompt::memory_body(ui, fields),
-        _ if crate::open_prompt::owns_damage(fields) => crate::open_prompt::damage_body(ui, fields),
+        _ if opening_prompt(fields) => opening_prompt_body(ui, fields),
         _ if crate::guide_layout_ui::owns(fields) => outcome = crate::guide_layout_ui::body(app, ui, fields, interactive),
         _ if crate::brush_preset_dialog::owns(fields) => outcome = crate::brush_preset_dialog::body(app, ui, fields, interactive),
         _ if crate::fill_ui::owns(fields) => crate::fill_ui::body(app, ui, fields),
@@ -1104,6 +1117,17 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     Ok(())
 }
 
+/// Called only for opening_prompt fields, after the normal dialog preflight.
+fn confirm_opening_prompt(app: &mut PhotocraftApp, fields: &Fields) -> Result<Value, String> {
+    if historical_xcf::owns(fields) {
+        historical_xcf::answer(app, fields, true)
+    } else if crate::open_prompt::owns_memory(fields) {
+        crate::open_prompt::answer_memory(app, true)
+    } else {
+        crate::open_prompt::answer_damage(app, true)
+    }
+}
+
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 /// Confirm a command dialog through the first handler whose marker its fields carry; the prompts
 /// and small editors are here, the rest in `confirm_command_more`.
@@ -1115,9 +1139,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         return crate::actions::menu_item::confirm(app, d.id, &d.fields);
     }
     match d.kind {
-        _ if historical_xcf::owns(&d.fields) => historical_xcf::answer(app, &d.fields, true),
-        _ if crate::open_prompt::owns_memory(&d.fields) => crate::open_prompt::answer_memory(app, true),
-        _ if crate::open_prompt::owns_damage(&d.fields) => crate::open_prompt::answer_damage(app, true),
+        _ if opening_prompt(&d.fields) => confirm_opening_prompt(app, &d.fields),
         _ if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
         _ if crate::brush_preset_dialog::owns(&d.fields) => crate::brush_preset_dialog::confirm(app, &d.fields),
         _ if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
