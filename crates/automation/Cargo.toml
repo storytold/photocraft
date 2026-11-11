@@ -35,8 +35,8 @@ base64 = "0.23"
 schemars = "1"
 getrandom = { workspace = true }
 # HMAC-SHA256 for the control channel's challenge authentication: the token never crosses the wire (NV-6).
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13"
+sha2 = "0.11"
 cap-std = "4"
 clap = { workspace = true }
 
