@@ -45,14 +45,8 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
                 r.warn("text beyond the document text budget (paragraph alignment left out)");
             }
         }
-        // `block_chars` scans the `Utf8` string, or walks each segment's `Glys` slots (nulls included) and `Utf8` text: charge the scan first.
-        let slots = match s.str(glyphs, b"Utf8") {
-            Some(text) => text.len(),
-            None => s
-                .objs(glyphs, b"Mixd")
-                .iter()
-                .fold(0usize, |n, seg| n.saturating_add(s.array_len(*seg, b"Glys").unwrap_or(0)).saturating_add(s.str(*seg, b"Utf8").map_or(0, str::len))),
-        };
+        // `block_chars` scans the `Utf8` string, or walks each segment's `Glys` slots (nulls included) and `Utf8` text, and stops at the character limit: charge only that scan, first.
+        let slots = scan_cost(s, glyphs, room(total));
         if !r.charge_text(slots) {
             r.warn("text beyond the document text budget (truncated)");
             break;
@@ -105,12 +99,43 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
     Some(Text { runs, align, anchor: Point { x: anchor_x, y: first_baseline }, frame: if artistic { None } else { Some(bounds) }, transform: world })
 }
 
+/// One past the allowance is enough to trip the check in `read`; `block_chars` stops there.
+fn room(total: usize) -> usize {
+    MAX_CHARS.saturating_sub(total).saturating_add(1)
+}
+
+/// The bytes of `t` that holding `want` characters of it scans, and the characters taken.
+fn prefix(t: &str, want: usize) -> (usize, usize) {
+    t.char_indices().enumerate().find(|(n, _)| *n == want).map_or((t.len(), t.chars().count()), |(n, (i, _))| (i, n))
+}
+
+/// What `block_chars` scans for a block, in the units `charge_text` takes: the `Utf8` bytes it
+/// reads, or per segment its `Glys` slots (nulls included) and the `Utf8` bytes it reads, up to the
+/// character allowance `room`; text past it is never scanned, so it is not charged.
+fn scan_cost(s: &Stream, glyphs: ObjId, room: usize) -> usize {
+    if let Some(t) = s.str(glyphs, b"Utf8") {
+        return prefix(t, room).0;
+    }
+    let (mut len, mut cost) = (0usize, 0usize);
+    for seg in s.objs(glyphs, b"Mixd") {
+        if len >= room {
+            break;
+        }
+        let inline = s.objs(seg, b"Glys").len();
+        len += inline.min(room - len);
+        cost = cost.saturating_add(s.array_len(seg, b"Glys").unwrap_or(0));
+        let (bytes, chars) = prefix(s.str(seg, b"Utf8").unwrap_or_default(), room.saturating_sub(len));
+        len += chars;
+        cost = cost.saturating_add(bytes);
+    }
+    cost
+}
+
 /// The characters of one text block. A block without a UTF-8 string is a list of segments: each
 /// inline object (page number, anchor) takes one `U+FFFC` before its segment's text. Stops once
 /// `total` plus these characters would pass the cap.
 fn block_chars(s: &Stream, glyphs: ObjId, total: usize, placeholders: &mut bool) -> Vec<char> {
-    // One past the allowance is enough to trip the check in `read`; both arms stop there.
-    let room = MAX_CHARS.saturating_sub(total).saturating_add(1);
+    let room = room(total);
     match s.str(glyphs, b"Utf8") {
         Some(t) => t.chars().take(room).collect(),
         None => {
