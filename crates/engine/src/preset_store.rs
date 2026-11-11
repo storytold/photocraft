@@ -225,7 +225,14 @@ impl PresetBackend for DirBackend {
         let path = self.path(name)?;
         let dir = path.parent().ok_or_else(|| format!("{name}: no parent directory"))?;
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        photocraft_format::atomic_write(&path, bytes).map_err(|e| format!("{name}: {e}"))
+        // The document writer follows a symlink to the file it points at on purpose; a preset
+        // entry is managed by this store, and a link someone put there would carry the write
+        // outside the directory the store confines itself to.
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("{name}: a symbolic link is not a preset file"));
+        }
+        // No-follow: a link swapped in after the check above is replaced, never written through.
+        photocraft_format::atomic_write_no_follow(&path, bytes).map_err(|e| format!("{name}: {e}"))
     }
     fn remove(&self, name: &str) -> Result<(), String> {
         match std::fs::remove_file(self.path(name)?) {
@@ -572,6 +579,9 @@ pub struct PresetStore {
     /// The pattern files and index (`patterns.json`).
     patterns: patterns::PatternFiles,
     warnings: Vec<String>,
+    /// Group-write failures already warned about since the last complete sync: every later command
+    /// retries the write, and one failure is reported once, not once per retry.
+    sync_warned: HashSet<String>,
     /// Full tips loaded for brushes in use (behind a lock so `&Session` paths can load).
     cache: Mutex<TipCache>,
     /// The stored pattern last read in full, so painting with it again doesn't re-read its file
@@ -689,6 +699,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         actions_skipped,
         patterns: pattern_files,
         warnings: Vec::new(),
+        sync_warned: HashSet::new(),
         cache: Mutex::new(TipCache { limit: TIP_CACHE_BYTES, ..Default::default() }),
         pattern_cache: Mutex::new(None),
     };
@@ -961,7 +972,10 @@ impl PresetStore {
             if let Err(e) = self.write_group(&file, group, &mut items) {
                 failed = true;
                 pending = true;
-                self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
+                let message = format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group });
+                if self.sync_warned.insert(message.clone()) {
+                    self.warnings.push(message);
+                }
             }
         }
         // Groups that are gone, unless a write failed above.
@@ -1011,6 +1025,9 @@ impl PresetStore {
                 Ok(()) => self.index = Some(want),
                 Err(e) => self.warnings.push(format!("Couldn't save the brush preset index: {e}")),
             }
+        }
+        if !pending {
+            self.sync_warned.clear();
         }
         !pending
     }

@@ -1224,3 +1224,53 @@ fn a_failed_group_write_changes_nothing_else_until_the_next_sync() {
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Stay").is_some());
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Drop").is_none(), "the deferred deletion happened");
 }
+
+/// A symlink planted among the presets must not carry a managed write to its target: the
+/// document writer follows links on purpose, the store confines itself to its directory.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_preset_entry_is_refused_not_written_through() {
+    let dir = TempDir::new("symlink");
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let outside = dir.0.join("outside.txt");
+    std::fs::write(&outside, b"victim").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.0.join("planted.json")).unwrap();
+    let be = DirBackend::new(&dir.0);
+    let e = be.write("planted.json", b"{}").unwrap_err();
+    assert!(e.contains("symbolic link"), "{e}");
+    assert_eq!(std::fs::read(&outside).unwrap(), b"victim");
+    be.write("fresh.json", b"{}").unwrap();
+    assert_eq!(be.read("fresh.json", 1024).unwrap(), b"{}");
+}
+
+#[test]
+fn a_failed_group_write_is_warned_once_not_at_every_retry() {
+    let dir = TempDir::new("warn-once");
+    let (mut s, _) = session(&dir);
+    s.tools.presets.push(sampled("Keep", "Old", tip8(8, 8, 1)));
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let _ = s.preset_store.as_mut().unwrap().take_warnings();
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    assert_eq!(s.preset_store.as_mut().unwrap().take_warnings().len(), 1);
+    // Every later command retries the pending write; the same failure is not reported again.
+    s.sync_preset_store();
+    s.sync_preset_store();
+    assert!(s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    // Once a sync completes, a new failure is reported again.
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "Old".into();
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    assert_eq!(s.preset_store.as_mut().unwrap().take_warnings().len(), 1);
+}
