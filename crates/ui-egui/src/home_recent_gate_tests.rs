@@ -23,7 +23,7 @@ fn home(path: &str) -> Harness<'static, (PhotocraftApp, bool)> {
         automation_authorize: Some(deny_file),
         automation_command: Some(Box::new(|id, p| deny_file(id, p).map_err(|e| e.to_string()))),
         import: Some(Box::new(|name, bytes, opts| {
-            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string())
         })),
         ..Default::default()
     };
