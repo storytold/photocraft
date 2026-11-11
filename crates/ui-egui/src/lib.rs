@@ -57,7 +57,7 @@ pub mod screenshot;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
-pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
+pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, MIN_WINDOW_SIZE, RenderIconFn};
 pub(crate) mod tool_memory;
 pub mod updates_ui;
 pub mod widgets;
@@ -257,6 +257,7 @@ pub use prefs::flick_pan;
 pub use prefs::kys_import;
 pub use prefs::prefs_ui;
 use prefs::pressure_curve_ui;
+pub use services::AutomationReadResult;
 pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
@@ -264,9 +265,10 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable,
-    RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn,
+    Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
+pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::bidi_text;
 pub use text::cjk_fonts;
 pub use text::direction;
@@ -327,7 +329,9 @@ use tools::tool_reset;
 pub use tools::transform_fx;
 pub use tools::transform_tex;
 pub use tools::transform_tool;
+use tools::type_box_preview;
 use tools::type_font_preview;
+use tools::type_path_placement;
 pub use tools::type_tool;
 use tools::type_transform;
 pub use tools::vector_ui;
@@ -343,8 +347,8 @@ use widgets::tab_strip;
 pub use widgets::text_field_menu;
 pub use widgets::tone;
 
-/// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
-type InfoSampleKey = (i32, i32, u64, u32);
+/// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
+type InfoSampleKey = (i32, i32, u64, u32, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -673,6 +677,9 @@ pub struct PhotocraftApp {
     /// Type tool: (layer, clicks in the current run) for word / line / paragraph / all selection.
     pub(crate) type_clicks: Option<(u64, u32)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
+    pub(crate) type_path_damage: Option<type_path_placement::Damage>,
+    /// A paragraph-box handle drag rendered in the background (`type_box_preview`).
+    pub(crate) type_box_preview: Option<type_box_preview::TypeBoxPreview>,
     /// A font hovered in the Type tool's font picker, shown live (`type_font_preview`).
     pub(crate) type_font_preview: Option<type_font_preview::TypeFontPreview>,
     /// The colour under a text or gradient stop Color Picker, shown live before OK (`color_picker_preview`).
@@ -895,6 +902,9 @@ mod star_tool_tests;
 mod transform_several_tests;
 
 #[cfg(test)]
+mod transform_corner_projection_tests;
+
+#[cfg(test)]
 mod transform_selection_rules_tests;
 
 #[cfg(test)]
@@ -904,9 +914,14 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+#[cfg(test)]
+mod move_shift_click_tests;
 
 #[cfg(test)]
 mod move_target_default_tests;
+
+#[cfg(test)]
+mod wand_press_inside_selection_tests;
 
 #[cfg(test)]
 mod move_history_names_tests;
@@ -1043,13 +1058,19 @@ mod artboard_options_bar_tests;
 #[cfg(test)]
 mod background_eraser_bar_angle_tests;
 #[cfg(test)]
+mod brush_alt_digit_smoothing_tests;
+#[cfg(test)]
 mod brush_opacity_minimum_tests;
+#[cfg(test)]
+mod burn_default_tip_tests;
 
 #[cfg(test)]
 mod pencil_shift_digit_opacity_tests;
 
 #[cfg(test)]
 mod doc_tab_menu_tests;
+#[cfg(test)]
+mod dodge_default_tip_tests;
 #[cfg(test)]
 mod layers_empty_area_menu_tests;
 #[cfg(test)]
@@ -1063,3 +1084,6 @@ mod view_guides_submenu_tests;
 
 #[cfg(test)]
 mod background_eraser_digit_keys_tests;
+
+#[cfg(test)]
+mod clone_stamp_reset_tip_tests;
