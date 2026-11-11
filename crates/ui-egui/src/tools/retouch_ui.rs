@@ -1226,3 +1226,7 @@ mod sponge_flow_field_tests;
 #[cfg(test)]
 #[path = "../healing_indexed_alert_tests.rs"]
 mod healing_indexed_alert_tests;
+
+#[cfg(test)]
+#[path = "../clone_stamp_no_source_alert_tests.rs"]
+mod clone_stamp_no_source_alert_tests;
