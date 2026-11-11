@@ -170,3 +170,20 @@ cargo +1.99.0 run --locked -j1 --release -p photocraft-engine --example multi_ch
 ```
 
 `CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`, and `RAYON_NUM_THREADS=2` were used. Harness SHA-256: `ed1d417e7c4e1199eeb808983b4a5e666b7bfd4b79028c13a1e3bf30f84a094a`. Raw samples, binary hashes and compiler-artifact provenance are retained locally for publication with this follow-up. The older archived comparisons above remain unchanged.
+
+### Additional review check — 2026-11-11
+
+The final review follow-up (`5d4933e0a74026afd7b19ed54ee1103822a28784`) was compared with `445a95d470f245e8986cf933f315403efb87ccac`, using the identical harness and environment above. Each command has a 16 × 16 selection on the 24 MP RGB16 fixture. Three interleaved processes per build supplied 216 warm CPU command samples; compilation and PhotoCraft tests were idle during measurement. The whole-layer row remains a whole-layer command control.
+
+| Operation | Target | Before p50, ms | After p50, ms | Change |
+|---|---|---:|---:|---:|
+| Move | Whole layer | 23.83 | 23.81 | -0.09% |
+| Move | Red | 111.87 | 113.49 | +1.45% |
+| Move | Red + Blue | 210.69 | 214.02 | +1.58% |
+| Wrapped Move | Whole layer | 30.72 | 30.89 | +0.57% |
+| Wrapped Move | Red | 112.48 | 113.81 | +1.18% |
+| Wrapped Move | Red + Blue | 215.58 | 216.45 | +0.40% |
+
+Native medians were 0.4–1.6% higher; controls changed by −0.1% / +0.6%. These small shared-desktop samples do not establish statistical equivalence. This is command latency, not UI-frame or physical-GPU performance. The resampling/writeback and cached GPU uniform path are unchanged. Ordinary masks are priced once before capture; implicit coverage is checked before materialization, and full-period wrapped no-ops skip both.
+
+An intermediate run (also retained) showed native medians +1.3–2.3%, prompting removal of duplicate ordinary source pricing. Raw records and provenance for both runs remain local pending publication; no historical archive or original sample was replaced.
