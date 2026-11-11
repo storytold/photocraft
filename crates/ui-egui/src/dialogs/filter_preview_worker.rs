@@ -119,15 +119,19 @@ mod tests {
         fn request(app: &crate::PhotocraftApp, id: u64) -> FilterPreviewKey {
             let st = app.session.active().unwrap();
             let f = &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
+            let command = f["__command"].as_str().unwrap().to_owned();
+            let params = crate::filter_dialog::params_of(f);
             FilterPreviewKey {
                 doc: st.doc.id,
                 revision: st.revision,
+                sources: crate::filter_dialog::preview_source_revisions(&app.session, &command, &params),
                 dialog: id,
                 active: st.active_layer,
                 target: st.channel_view.target,
-                command: f["__command"].as_str().unwrap().into(),
-                params: crate::filter_dialog::params_of(f),
+                command,
+                params,
                 k: 1,
+                tool_colors: (app.session.tools.foreground, app.session.tools.background),
             }
         }
 
@@ -220,12 +224,14 @@ mod tests {
         FilterPreviewKey {
             doc: photocraft_doc::DocId(1),
             revision,
+            sources: Vec::new(),
             dialog,
             active: None,
             target: Default::default(),
             command: "image.mode.indexedColor".into(),
             params: json!({"colors": colors}),
             k: 1,
+            tool_colors: ([0.0, 0.0, 0.0, 1.0], [1.0; 4]),
         }
     }
 

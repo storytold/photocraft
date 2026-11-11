@@ -345,6 +345,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     let dialog = |app: &mut PhotocraftApp, fields: Value, choices: Value| Some(Ok(json!({"dialog": form(app, id, label, fields, choices)})));
     match id {
         "file.openAs" => Some(app.open_dialog_file()),
+        "file.openAsSmartObject" => Some(app.open_dialog_as_smart_object()),
         "file.openExrParts" => open_exr_parts_dialog(app),
         "file.saveACopy" => Some(save_a_copy(app)),
         "file.placeEmbedded" | "file.placeLinked" => {
@@ -415,6 +416,11 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             Some(app.pick_file_bytes(move |app, path, _bytes| {
                 app.with_document(doc, |app| {
                     let r = app.run(&cmd, json!({"path": path}));
+                    if let Ok(v) = &r {
+                        // #11113: footage salvaged from a truncated GIF or WebP must say so.
+                        let what = crate::i18n::fmt(crate::i18n::t("Imported {name}"), &[("name", &crate::file_open::display_name(&path))]);
+                        crate::notices::footage_warnings(app, v, &what);
+                    }
                     if r.is_ok() && app.session.active().is_some_and(|d| d.doc.timeline.is_some()) {
                         app.ui.timeline.open = true;
                     }
@@ -690,7 +696,9 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
             return Ok(json!({"path": path, "warnings": []}));
         }
         let r = write_copy(app, &doc, &path, crate::FormatChoices::default())?;
-        app.session.journal.push(("file.saveACopy".into(), json!({"path": path})));
+        let step = json!({"path": path});
+        photocraft_engine::actions_cmds::note_automation_step(&mut app.session, "file.saveACopy", &step);
+        app.session.journal.push(("file.saveACopy".into(), step));
         Ok(r)
     })
 }
