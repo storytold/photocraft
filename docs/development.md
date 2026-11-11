@@ -36,7 +36,7 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
-On Linux, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
+On Linux and FreeBSD, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
 
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
@@ -134,6 +134,21 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japa
 - **Web:** the wasm32 build never embeds craft-fonts, even with `CRAFT_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. Instead it loads fonts served next to it, on demand: `fonts/manifest.txt` beside `index.html`, in craft-fonts' manifest format (`crates/text/src/served.rs`; hosting: `packaging/web/README.md` › Fonts). `PHOTOCRAFT_WEB_FONTS_DIR="$PWD/../craft-fonts" packaging/web/package.sh` puts craft-fonts there. Served families are in the font menus and are fetched when picked or when a document's text needs them; they aren't in the script fallback list yet, so Japanese text set in a Latin font still needs a Japanese font picked (#1615).
 - Tests that need the fonts skip with a message when `CRAFT_FONTS` is empty; CI's Linux gate and Windows test legs build with `CRAFT_FONTS_DIR` set and `CRAFT_FONTS_REQUIRED=1`, so they run there. Desktop releases check out craft-fonts at the commit pinned in `.github/workflows/release.yml` (`CRAFT_FONTS_REF`; ci.yml pins the same commit) and ship each font's `OFL.txt` as `OFL-<family>.txt`.
 
+## Translations (craft-i18n)
+
+The interface catalogs live in [storytold/craft-i18n](https://github.com/storytold/craft-i18n) (`locales/<code>/common.tsv`, shared by the Crafting Apps, and `photocraft.tsv`), never in this repo. Like craft-fonts it is an **optional build input**, never a Cargo dependency; `craft-i18n.rev` pins the commit CI, releases and the flatpak manifests use:
+
+```sh
+git clone https://github.com/storytold/craft-i18n ../craft-i18n
+git -C ../craft-i18n checkout "$(tr -d '[:space:]' < craft-i18n.rev)"
+CRAFT_I18N_DIR="$PWD/../craft-i18n" cargo run --release -p photocraft
+```
+
+- Use an absolute path: `crates/ui-egui/build.rs` embeds every locale with a `photocraft.tsv` (and its `common.tsv`) as `CRAFT_I18N`, read through the `craft-i18n` crate (`crates/ui-egui/src/i18n.rs`). Unset, `CRAFT_I18N` is empty and the interface is English only; a bad path is a build warning, or an error with `CRAFT_I18N_REQUIRED=1` (CI and release builds set both, through craft-common-actions' `checkout-craft-i18n`).
+- The web build embeds the same catalogs, raw: they ship inside the gzipped wasm parts (`packaging/web/package.sh`), so only the download grows with them.
+- Tests that need a translation skip with a note when `CRAFT_I18N` is empty; CI builds with it, so they run there.
+- A PR here adds English only; translations are added in craft-i18n and reach PhotoCraft when `craft-i18n.rev` moves (a test keeps both flatpak manifests on the same commit). `cargo xtask i18n-report` lists what each language lacks.
+
 ## One instance per user
 
 On Windows and Linux the first PhotoCraft holds an exclusive lock on `instance.lock` in the config directory and listens on a loopback port named in `instance.json` (with a fresh 256-bit token; the file is 0600 on Unix). Inside a Flatpak it listens on a Unix socket instead, `$XDG_RUNTIME_DIR/app/<app id>/instance.sock` (0600), because Flatpak isolates each sandbox's network namespace, loopback included, unless the app is granted `--share=network`, while that runtime directory is shared by all sandboxes of the app (#1540); the lock, token and protocol are the same. A later launch hands its file arguments there and exits, so files opened from Explorer or a file manager become tabs in the running window (#3708). The primary answers `ok` only once its UI has taken the files; a launch that gets anything else (the primary is starting, hung or closing) keeps retrying the lock for up to 10 s, becoming the primary itself once the old one lets go, and then starts a separate instance, so a file is never acknowledged and lost. When the event loop ends (and before the CPU-compatibility relaunch) the primary refuses new files and frees the lock. It applies only with the per-user settings folder: a portable copy (`PhotoCraftData` beside the executable) or `PHOTOCRAFT_CONFIG_DIR` may be shared between users, so those launches run separately. So do `--new-instance` (or `PHOTOCRAFT_NEW_INSTANCE=1`), every `--control` launch, and launches given a per-process option (`--safe-gpu`, `--present-mode`, `--frame-latency`, `--stroke-trace`, `--in-window-menus`, `--automation-*-root`). A `cargo run` while an installed PhotoCraft is running forwards to it: pass `--new-instance` or set `PHOTOCRAFT_CONFIG_DIR`. macOS gets the same behaviour from LaunchServices (`apple_events.rs`). On native Wayland the running window can't bring itself forward (that takes the launcher's `XDG_ACTIVATION_TOKEN`, and winit 0.30 can't activate an existing window with one), so it asks for attention instead and the taskbar highlights it; X11, XWayland and Windows bring it to the front. Code: `apps/photocraft/src/single_instance.rs`.
@@ -164,6 +179,8 @@ the `memory` sample, effective allowances and current working reservations.
 The desktop app writes its `log` records to standard error and to `logs/photocraft.log` in the settings directory (Linux `~/.config/photocraft/logs/`, macOS `~/Library/Application Support/Photocraft/logs/`, Windows `%APPDATA%\Photocraft\logs\`, or under `PHOTOCRAFT_CONFIG_DIR` / the portable data folder). A start launched from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug report: GPU startup fallbacks, a lost device and the crash guard's panic report all land there. Each launch moves the previous log to `photocraft.1.log` (and that one to `photocraft.2.log`), so the log of a run that crashed survives the next start. A launch while another PhotoCraft is still running leaves that instance's log where it is and writes its own `photocraft-<pid>.log` next to it (the newest two of those are kept once their instances have exited; the `PhotoCraft <version>, log file <path>` line at startup names the file in use). The file stops growing at 16 MiB. `--version` and command-line errors write no file. A desktop start that fails before any window exists logs the error and, when no terminal, automation client or headless session can report it, shows it in a dialog naming this file (#7643).
 
 By default PhotoCraft's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`, `RUST_LOG=warn,photocraft_gpu=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`photocraft*=debug`). The logger is `apps/photocraft/src/logging.rs`; the web build logs to the browser console instead.
+
+A file dragged in from the desktop logs two lines at `info` (`file_open.rs`; file names are left out): `N file(s) dragged over the window` when the drag reaches the window, and `N file(s) dropped on the window: <target>, pointer known|unknown` when it is released. Neither line means the operating system never offered the files to PhotoCraft: on Windows, a PhotoCraft started with Run as administrator gets nothing from a File Explorer that is not elevated, and a drag from a browser or a zip folder carries no file path. Only the first line means PhotoCraft saw the drag but not the drop. Both lines with no document opened are normal for a drop on the canvas (the file is placed as a layer) and for a preset file (it is imported into its library). A routing or open error also shows as a notice.
 
 ## Environment variables
 
@@ -305,10 +322,25 @@ At startup the desktop lists recovery metadata, then decodes one document at a t
 
 `photocraft-cli mcp` serves MCP on stdio using `crates/automation`, which is built on `rmcp`:
 
-- **Headless:** `photocraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>`. It drives an in-process engine session and has no file authority when a root is omitted.
-- **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <dir> --automation-write-root <dir>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots. See `docs/control-protocol.md#mcp-bridge`.
+- **Headless:** `photocraft-cli mcp --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`. It drives an in-process engine session with ordered read directories and one write directory.
+- **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots; root flags on the bridging CLI are a usage error. See `docs/control-protocol.md#mcp-bridge`.
 
 For headless MCP clients, pass absolute paths to deliberately chosen trusted workspace directories in the launch arguments. Desktop `PHOTOCRAFT_AUTOMATION_READ_ROOT` and `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` environment variables do **not** grant headless CLI access. Omitting a root flag deliberately denies that direction of access.
+
+Read flags accumulate in order, including mixed `--automation-read-root <dir>` and
+`--automation-read-root=<dir>` syntax; duplicate read roots are allowed. A headless relative read
+uses the first existing regular file. Only a missing file falls through to the next root;
+directory, permission, path-escape and decoding errors stop the request. Desktop `app.open`
+(and bridged `doc_open`) also accepts native directory `.pcraft` through the selected read
+capability. An earlier root's ZIP file wins over a later root's directory, and loading errors
+in a selected directory are terminal. Directory opens never establish an implicit save target;
+use explicit layered Save As beneath the write root, even when both capabilities match.
+Every root must be an existing directory, and empty or missing values fail startup. There is still only one write root;
+repeating its flag is a usage error even for identical values. Write authority does not imply
+read authority. A read-only library document needs an explicit Save As into the write root before
+it has an implicit save target; aliases and nested roots also require explicit Save As.
+These roots do not enable additional ambient asset reads or headless directory-bundle access;
+desktop directory `.pcraft` reads use only the granted read capabilities.
 
 Tools:
 
@@ -335,7 +367,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
   "mcpServers": {
     "photocraft": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
+      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
     },
     "photocraft-live": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
@@ -367,7 +399,7 @@ capability-scoped export, resize/crop, CMYK + native save) driven purely over MC
 Without MCP, `photocraft-cli serve [--port N]` keeps a headless session open and answers JSON lines
 (see `docs/control-protocol.md#headless-server`).
 
-A typical agent loop (place inputs under the configured read root and outputs under the write root):
+A typical agent loop (place inputs under a configured read root and outputs under the write root):
 
 1. `doc_open {path}`
 2. `command_list {filter:"blur"}`
@@ -394,15 +426,16 @@ intents, black point compensation). It ships CC0 built-in profiles, including a 
 the live command registry (`menus::is_live`) and rewrites [`docs/parity-checklist.md`](parity-checklist.md). The test
 `parity::tests::parity_does_not_regress` fails if the live count drops below `parity::FLOOR`.
 
-`cargo xtask i18n-coverage` prints the UI translation coverage for each language in the
-`crates/ui-egui/src/i18n.rs` registry, in stable language-code order. Its English-key set is
-derived from UI `tl!` literals, the menu catalog and UI command table, and menu command labels in
-the engine source. Catalog rows are validated for malformed and duplicate keys; unused legacy
-translations do not affect the denominator. Unregistered locale TSV files are ignored. After the
-counts it lists, per language, the source keys the catalog lacks (one line for a language with
-none). A missing translation shows in English and fails nothing: `cargo xtask ci` runs the report
-as its last step so the list appears in the log, and only prints a warning if the report itself
-can't run.
+`cargo xtask i18n-report` prints the UI translation coverage for each language in the
+`crates/ui-egui/src/i18n.rs` registry, in stable language-code order, from the craft-i18n checkout
+`CRAFT_I18N_DIR` names (the one the build embeds; without it the report says it was skipped). Its
+English-key set is derived from UI `tl!` literals and `trn` forms, the menu catalog and UI command
+table, and menu command labels in the engine source; each key is looked up as the app does (the
+`craft-i18n` crate: PhotoCraft's rows over the shared ones). After the counts and the rows kept in
+English (a translation that is the English itself) it lists, per language, the source keys it lacks
+(one line for a language with none), then any catalog rows the crate skips. A missing translation
+shows in English and fails nothing: `cargo xtask ci` runs the report as its last step so the list
+appears in the log, and only prints a warning if the report itself can't run.
 
 ## Panel command routing
 
