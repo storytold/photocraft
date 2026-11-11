@@ -52,7 +52,13 @@ fn cursor_area_visible(h: &Harness<'static, PhotocraftApp>, id: &str) -> bool {
     h.ctx.memory(|memory| memory.areas().visible_layer_ids().contains(&layer))
 }
 
+/// Shared with upstream's sampler-drag regression: recognize the native or drawn pipette.
+fn pipette_shown(h: &Harness<'static, PhotocraftApp>) -> bool {
+    crate::tool_cursor::pipette_shown(&h.ctx, &h.output().platform_output)
+}
+
 fn assert_pipette(h: &Harness<'static, PhotocraftApp>) {
+    assert!(pipette_shown(h), "the sampling pipette is shown");
     let output = &h.output().platform_output;
     assert_eq!(output.cursor_icon, egui::CursorIcon::Crosshair, "native pipette keeps a visible backend fallback");
     assert_eq!(output.cursor_image.as_ref(), Some(&crate::caps_lock_tests::pipette_bitmap()), "the native pipette bitmap is present");
