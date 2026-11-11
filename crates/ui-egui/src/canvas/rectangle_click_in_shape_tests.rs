@@ -7,12 +7,13 @@ fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.ui.tool = Tool::Rectangle;
+    app.ui.extras.snap = false;
     app.sync_views();
     app
 }
 
 fn shape(app: &mut PhotocraftApp, kind: &str, radius: f64) {
-    app.run("shape.create", json!({"kind": kind, "rect": [400, 300, 200, 100], "radii": radius, "fill": "#ff0000"})).unwrap();
+    app.run("shape.create", json!({"kind": kind, "rect": [400, 300, 200, 100], "radii": [radius; 4], "fill": "#ff0000"})).unwrap();
 }
 
 fn gesture(app: &mut PhotocraftApp, [x, y]: [f64; 2], [end_x, end_y]: [f64; 2]) {
@@ -79,7 +80,7 @@ fn a_pixel_layer_or_non_rectangle_shape_leaves_the_dialog_available() {
 }
 
 #[test]
-fn rounded_corners_use_the_outline_and_other_modes_keep_their_click_behavior() {
+fn rounded_corners_use_the_outline() {
     let mut app = app();
     shape(&mut app, "roundedRect", 30.0);
     let before = state(&app);
@@ -88,16 +89,22 @@ fn rounded_corners_use_the_outline_and_other_modes_keep_their_click_behavior() {
     assert!(app.ui.dialogs.is_empty());
     assert_eq!(state(&app), before);
     let corner = [401.0, 301.0];
-    gesture(&mut app, corner, corner);
+    super::finish_gesture(&mut app, super::Drag::new(Tool::Rectangle, corner, vec![[corner[0], corner[1], 1.0]], egui::Modifiers::NONE, false));
     assert_create_rectangle(&app);
-    app.ui.dialogs.clear();
+}
 
+#[test]
+fn other_modes_keep_their_click_behavior() {
+    let mut app = app();
+    shape(&mut app, "rect", 0.0);
+    let before = state(&app);
+    let center = [500.0, 350.0];
     app.ui.tool_options.shape_mode = "path".into();
     gesture(&mut app, center, center);
     assert!(app.ui.dialogs.is_empty());
     assert!(app.session.active().unwrap().doc.work_path.is_none());
     app.ui.tool_options.shape_mode = "pixels".into();
-    gesture(&mut app, center, center);
+    super::finish_gesture(&mut app, super::Drag::new(Tool::Rectangle, center, vec![[center[0], center[1], 1.0]], egui::Modifiers::NONE, false));
     assert_create_rectangle(&app);
     assert_eq!(state(&app), before);
 }
