@@ -200,7 +200,7 @@ fn dragging_a_sampler_past_its_tolerance_keeps_the_sampler_cursor_until_release(
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the drag keeps the arrow pointer");
     assert!(cursor_badge_visible(&h, "sampler"), "the drag keeps the sampler target badge");
-    assert!(!cursor_area_visible(&h, "pc-sampler-badge"), "no placement eyedropper mid-drag");
+    assert!(!pipette_shown(&h) && !cursor_area_visible(&h, "pc-sampler-badge"), "no placement eyedropper mid-drag");
 
     // Alt removes only on the press; the release still moves the point, so no scissors mid-drag.
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
@@ -216,6 +216,6 @@ fn dragging_a_sampler_past_its_tolerance_keeps_the_sampler_cursor_until_release(
 
     // After release, off a sampler is the placement eyedropper again.
     hover_at(&mut h, 100.0, 100.0, Modifiers::NONE);
-    assert!(cursor_area_visible(&h, "pc-sampler-badge"), "the placement eyedropper returns after release");
+    assert!(pipette_shown(&h) && cursor_area_visible(&h, "pc-sampler-badge"), "the placement eyedropper returns after release");
     assert!(!cursor_badge_visible(&h, "sampler"));
 }
