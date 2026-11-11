@@ -71,3 +71,9 @@ fn line_options_saved_before_the_new_defaults_keep_their_values() {
     assert_eq!((o.line_weight, o.arrow_end, o.arrow_width, o.arrow_length, o.arrow_concavity), (3.0, true, 52.0, 50.0, 25.0));
     assert!(!o.arrow_start, "a field the file lacks takes its default");
 }
+
+#[test]
+fn line_options_missing_from_a_saved_file_take_the_new_defaults() {
+    let o: ToolOptions = serde_json::from_value(json!({"tolerance": 10.0})).unwrap();
+    assert_line_defaults(&o);
+}
