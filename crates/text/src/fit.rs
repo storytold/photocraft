@@ -324,19 +324,27 @@ pub fn bake(engine: &mut crate::TextEngine, layer: &TextLayer, dpi: f32) -> Resu
 
     // Area text: how far (pt) a line sits below where it stacks on the line above (the solver
     // skipped rows too narrow for it). Its paragraph gets that as extra space before.
-    let para_space = |off: usize, after: bool| {
+    // One paragraph style per paragraph of the text, from its start, as layout reads it: a
+    // paragraph-run edge inside a paragraph (hand-edited or imported `paragraphs`) does not
+    // restyle its later lines, and must not once baking splits the paragraph.
+    let para_runs = layer.paragraph_runs();
+    let para_starts: BTreeSet<usize> = crate::layout::split_paragraphs(text).iter().map(|r| r.start).collect();
+    let para_style_at = |off: usize| {
+        let start = para_starts.range(..=off).next_back().copied().unwrap_or(0);
         let mut at = 0usize;
-        for p in layer.paragraph_runs() {
+        for p in &para_runs {
             let end = at.saturating_add(p.len);
-            if off < end || end >= text.len() {
-                let v = if after { p.style.space_after_pt } else { p.style.space_before_pt };
-                return if v.is_finite() { v } else { 0.0 };
+            if start < end || end >= text.len() {
+                return Some(&p.style);
             }
             at = end;
         }
-        0.0
+        None
     };
-    let para_starts: BTreeSet<usize> = crate::layout::split_paragraphs(text).iter().map(|r| r.start).collect();
+    let para_space = |off: usize, after: bool| {
+        let v = para_style_at(off).map_or(0.0, |s| if after { s.space_after_pt } else { s.space_before_pt });
+        if v.is_finite() { v } else { 0.0 }
+    };
     let skip: Vec<f32> = lines
         .iter()
         .enumerate()
@@ -417,22 +425,36 @@ pub fn bake(engine: &mut crate::TextEngine, layer: &TextLayer, dpi: f32) -> Resu
         let mut at = 0usize;
         for p in layer.paragraph_runs() {
             let end = at.saturating_add(p.len);
-            // Area text: a piece per paragraph break inserted inside this paragraph.
-            let mut starts = vec![moved(at)];
+            // Area text: a piece per paragraph break inserted inside this paragraph (original offsets).
+            let mut starts = vec![at];
             if area {
-                starts.extend(breaks.iter().filter(|&(&q, _)| q >= at && q < end).map(|(_, &p)| moved(p)));
+                starts.extend(breaks.iter().filter(|&(&q, _)| q >= at && q < end).map(|(_, &p)| p));
             }
-            let n = starts.len();
-            for (i, &a) in starts.iter().enumerate() {
-                let z = starts.get(i + 1).copied().unwrap_or_else(|| moved(end));
-                let mut style = p.style.clone();
-                if i > 0 {
-                    style.first_line_indent_pt = 0.0;
-                    style.space_before_pt = 0.0;
-                }
-                if i + 1 < n {
-                    style.space_after_pt = 0.0;
-                }
+            for (i, &a0) in starts.iter().enumerate() {
+                let (a, z) = (moved(a0), starts.get(i + 1).map_or_else(|| moved(end), |&z0| moved(z0)));
+                let mut style = if area {
+                    // Layout reads a paragraph's style at its start, for the whole paragraph: each
+                    // piece takes the style its original paragraph starts with, keeping the indent
+                    // and space before only where that paragraph starts and the space after only
+                    // on a baked paragraph that ends where the original one does.
+                    let mut style = para_style_at(a0).unwrap_or(&p.style).clone();
+                    if !para_starts.contains(&a0) {
+                        style.first_line_indent_pt = 0.0;
+                        style.space_before_pt = 0.0;
+                    }
+                    // The text's first paragraph takes no space before; below the lead-in it
+                    // would, so it doesn't get any.
+                    if a0 == 0 && lead_in.is_some() {
+                        style.space_before_pt = 0.0;
+                    }
+                    let next = para_starts.range(a0 + 1..).next().copied().unwrap_or(text.len());
+                    if breaks.values().any(|&b| b > a0 && b < next) {
+                        style.space_after_pt = 0.0;
+                    }
+                    style
+                } else {
+                    p.style.clone()
+                };
                 // The line this piece holds: the first solved line starting in it.
                 if area && let Some(li) = lines.iter().position(|l| moved(l.start as usize) >= a && moved(l.start as usize) < z.max(a + 1)) {
                     style.space_before_pt += skip.get(li).copied().unwrap_or(0.0);
@@ -2294,6 +2316,29 @@ THREE",
             let widest = widest_span(&shape, l);
             assert!((l.x1 - l.x0) <= widest + 1.0, "{l:?} vs {widest}");
         }
+    }
+
+    #[test]
+    fn area_bake_keeps_the_paragraph_style_across_an_internal_run_edge() {
+        use photocraft_doc::text::{ParagraphRun, ParagraphStyle, TextAlign};
+        let mut eng = engine();
+        let mut t = ellipse_area(CAFE, 12.0);
+        // One paragraph, its paragraph runs cut early: the later run's centring is not the
+        // paragraph's style, so no baked line may take it. Its space before (ignored on the
+        // text's first paragraph) must not move it below an inserted lead-in either.
+        let first = ParagraphStyle { align: TextAlign::Left, space_before_pt: 3.0, space_after_pt: 5.0, ..Default::default() };
+        let later = ParagraphStyle { align: TextAlign::Center, ..Default::default() };
+        t.paragraphs = vec![ParagraphRun { len: 7, style: first.clone() }, ParagraphRun { len: CAFE.len() - 7, style: later }];
+        let fitted = {
+            refit(&mut eng, &mut t, 72.0);
+            eng.layout(&t, 72.0)
+        };
+        let baked = bake(&mut eng, &t, 72.0).expect("area bake");
+        assert!(baked.paragraph_runs().len() >= 3, "baking split the paragraph");
+        assert!(baked.paragraph_runs().iter().all(|p| p.style.align == TextAlign::Left));
+        let paras = baked.paragraph_runs();
+        assert_eq!(paras.last().map(|p| p.style.space_after_pt), Some(5.0), "last piece keeps space after");
+        assert_same_look(&fitted, &eng.layout(&baked, 72.0));
     }
 
     #[test]
