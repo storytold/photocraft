@@ -120,6 +120,9 @@ struct Ex<'c> {
     /// `TextIndex`, others get the next free number; see `photocraft_text::psd::build_txt2`),
     /// written into the `TySh` data this export re-serializes.
     text_index: std::collections::HashMap<photocraft_doc::LayerId, i32>,
+    /// Dynamic Text baked for its layer's `TySh`, so the document's `Txt2` describes the same
+    /// baked text and styles rather than the fitted layer's base sizes.
+    baked_text: std::collections::HashMap<photocraft_doc::LayerId, photocraft_doc::TextLayer>,
     canvas: photocraft_geom::Rect,
     records: Vec<LayerRecord>,
     warnings: Vec<String>,
@@ -547,6 +550,9 @@ impl Ex<'_> {
                 // it bakes to (a size and a line break per line). Stored TySh data of fitted text
                 // is from before the bake, so it is regenerated.
                 let baked = self.bake_dynamic_text(l, t);
+                if let Some((b, _)) = &baked {
+                    self.baked_text.insert(l.id, b.clone());
+                }
                 let t = baked.as_ref().map_or(t, |(b, _)| b);
                 // Text layers without PSD data (created here, or baked just now) get a generated TySh.
                 let generated = (baked.is_some() || t.psd_raw.is_none())

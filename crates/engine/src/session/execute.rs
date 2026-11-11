@@ -169,6 +169,9 @@ impl Session {
             let d = self.active().ok_or_else(|| "no document open".to_string())?;
             return if d.selected_layers().is_empty() { Err("no layer selected".into()) } else { Ok(()) };
         }
+        if let Some(r) = crate::type_fit_cmds::named_layer_enabled(self, spec.id, params) {
+            return r;
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 

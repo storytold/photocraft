@@ -59,6 +59,7 @@ mod psd_flat_spot_channels;
 mod psd_font_identity;
 mod psd_frame_stroke;
 mod psd_import_file;
+mod psd_dynamic_text;
 mod psd_kerning;
 mod psd_layer_block_length;
 mod psd_maximize_compatibility;

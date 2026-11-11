@@ -74,6 +74,7 @@ fn export_supported_document(
         read_linked_files: opts.read_linked_files,
         text_styles: doc.text_styles.clone(),
         text_index: Default::default(),
+        baked_text: Default::default(),
         mask_fmt: PixelFormat::new(ColorMode::Grayscale, sample, false),
         cc,
         cmyk: fmt.mode == ColorMode::Cmyk,
@@ -163,11 +164,13 @@ fn export_supported_document(
     // `TySh` names (unused slots stay empty; see `photocraft_text::psd::build_txt2`). The block
     // it replaces is handed over so a kept object keeps everything the file held beyond its text
     // and style runs (Photoshop's `/21 /1` glyph pen positions, …).
+    // Baked Dynamic Text is written as the baked layer, in `Txt2` as in its `TySh`.
+    let baked = std::mem::take(&mut ex.baked_text);
     let text_layers: Vec<(i32, &photocraft_doc::TextLayer)> = doc
         .walk()
         .into_iter()
         .filter_map(|(_, _, l)| match &l.content {
-            LayerContent::Text(t) => Some((ex.text_index.get(&l.id).copied().unwrap_or(0), t)),
+            LayerContent::Text(t) => Some((ex.text_index.get(&l.id).copied().unwrap_or(0), baked.get(&l.id).unwrap_or(t))),
             _ => None,
         })
         .collect();

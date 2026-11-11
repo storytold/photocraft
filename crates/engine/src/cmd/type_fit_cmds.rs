@@ -68,27 +68,53 @@ pub(crate) fn guard_cmd<'a>(s: &Session, fallback: &'a str) -> &'a str {
     s.running_command.unwrap_or(fallback)
 }
 
-fn active_text(s: &Session) -> std::result::Result<&TextLayer, String> {
-    let d = s.active().ok_or("no document open")?;
-    if d.selected_layers().len() > 1 {
-        return Err("select one type layer".into());
-    }
-    match d.active_layer.and_then(|id| d.doc.layer(id)).map(|l| &l.content) {
+fn text_of(content: Option<&LayerContent>) -> std::result::Result<&TextLayer, String> {
+    match content {
         Some(LayerContent::Text(t)) => Ok(t),
         _ => Err("the active layer is not a type layer".into()),
     }
 }
 
-fn can_convert(s: &Session) -> std::result::Result<(), String> {
-    let t = active_text(s)?;
+fn active_text(s: &Session) -> std::result::Result<&TextLayer, String> {
+    let d = s.active().ok_or("no document open")?;
+    if d.selected_layers().len() > 1 {
+        return Err("select one type layer".into());
+    }
+    text_of(d.active_layer.and_then(|id| d.doc.layer(id)).map(|l| &l.content))
+}
+
+fn convertible(t: &TextLayer) -> std::result::Result<(), String> {
     if t.fit.is_some() {
         return Err("the type layer is already Dynamic Text".into());
     }
     fit_refusal(t).map_or(Ok(()), |m| Err(m.into()))
 }
 
+fn fitted(t: &TextLayer) -> std::result::Result<(), String> {
+    if t.fit.is_some() { Ok(()) } else { Err(NOT_FITTED.into()) }
+}
+
+fn can_convert(s: &Session) -> std::result::Result<(), String> {
+    convertible(active_text(s)?)
+}
+
 fn has_fit(s: &Session) -> std::result::Result<(), String> {
-    if active_text(s)?.fit.is_some() { Ok(()) } else { Err(NOT_FITTED.into()) }
+    fitted(active_text(s)?)
+}
+
+/// The precondition of a Dynamic Text command whose params name its `"layer"` (by id, as the
+/// session resolves it): that layer's own check, however many layers are selected. Only the
+/// menus, which act on the active layer, need one layer selected. `None` for other commands or
+/// calls.
+pub(crate) fn named_layer_enabled(s: &Session, id: &str, params: &Value) -> Option<std::result::Result<(), String>> {
+    let check: fn(&TextLayer) -> std::result::Result<(), String> = match id {
+        CONVERT => convertible,
+        RELEASE | SET => fitted,
+        _ => return None,
+    };
+    let layer = photocraft_doc::LayerId(params.get("layer")?.as_u64()?);
+    let d = s.active()?;
+    Some(text_of(d.doc.layer(layer).map(|l| &l.content)).and_then(check))
 }
 
 /// Dynamic Text works on one layer: an explicit `"layers"` list, or several selected layers
