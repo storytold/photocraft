@@ -1797,6 +1797,29 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     }
 }
 
+/// The Pencil's cursor (and the Eraser's in Pencil or Block mode): the outline of the whole pixels
+/// its dab fills, on the pixel grid. A round tip is a disc, a square or Block one its square. The
+/// hotspot is drawn as well when `crosshair` asks for it or the outline is too small to see.
+fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size: f32, block: bool, crosshair: bool) -> egui::CursorIcon {
+    let ppp = painter.ctx().pixels_per_point();
+    let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
+    let px = 1.0 / ppp;
+    let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
+    if !block && pencil_tip_is_round(size) {
+        let r = sq.width() / 2.0;
+        painter.circle_stroke(sq.center(), r + px / 2.0, dark);
+        painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
+    } else {
+        painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
+        painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+    }
+    // Too small to see where it is: the hotspot as well.
+    if crosshair || sq.width() < 6.0 {
+        crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+    }
+    egui::CursorIcon::None
+}
+
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
     let painter = input.painter;
     let xf = input.xf;
@@ -1861,23 +1884,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
                         let block = crate::eraser_ui::block_mode(app, tool);
                         let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                        let ppp = painter.ctx().pixels_per_point();
-                        let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
-                        let px = 1.0 / ppp;
-                        let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                        if !block && pencil_tip_is_round(size) {
-                            let r = sq.width() / 2.0;
-                            painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-                            painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
-                        } else {
-                            painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-                            painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
-                        }
-                        // Too small to see where it is: the hotspot as well.
-                        if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                            crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
-                        }
-                        egui::CursorIcon::None
+                        pencil_outline_cursor(painter, xf, p, size, block, cur.show_crosshair_in_brush_tip)
                     }
                     // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
                     // traces its outline, turned and flipped with the view; a plain round
@@ -1900,6 +1907,13 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             } else {
                 pipette_cursor(ui.ctx(), p)
             }
+        }
+        // The Count tool (#11773): an arrow with "1+", "1" over a marker (the click's own hit
+        // test) or "1−" with ⌥ there. Precise Other Cursors keeps today's crosshair.
+        Tool::Count if !precise_other_cursor(app) => {
+            let alt = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).alt;
+            let over = crate::analysis_ui::count_marker_at(app, xf.to_doc(p)).is_some();
+            crate::tool_cursor::count(ui.ctx(), p, crate::tool_cursor::CountCursor::pick(over, alt))
         }
         // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
         Tool::ColorSampler => {
