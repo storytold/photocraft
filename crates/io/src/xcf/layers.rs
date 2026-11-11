@@ -54,7 +54,7 @@ impl<'a> Image<'a> {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             let (name, cprops, px, coverage_effects) = self.channel(ptr, ctl)?;
             let mut surface = Surface::new(mask_fmt);
-            write_pixels(&mut surface, &px, 0, 0)?;
+            write_pixels(&mut surface, &px, 0, 0, &mut self.budget)?;
             let is_selection = cprops.iter().any(|p| p.kind == 4);
             let native_selection = is_selection && selection.is_none();
             let channel_outcome = self.outcomes.push(ConversionEntry {
@@ -643,7 +643,7 @@ impl<'a> Image<'a> {
                 px = resources::gray_to_rgb(px, &mut self.budget, ctl)?;
             }
             let mut surface = Surface::new(fmt);
-            write_pixels(&mut surface, &px, x, y)?;
+            write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
             self.precision_underflow(outcome, &px)?;
             layer.content = LayerContent::Raster(surface);
             if !alpha {
@@ -689,7 +689,7 @@ impl<'a> Image<'a> {
         if mptr != 0 {
             let (mname, mprops, px, coverage_effects) = self.channel(mptr, ctl)?;
             let mut surface = Surface::new(mask_fmt);
-            write_pixels(&mut surface, &px, x, y)?;
+            write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
             let mask_outcome = self.outcomes.push(ConversionEntry {
                 feature_code: "xcf.layer_mask".into(),
                 source: conversion::source("layer_mask", ordinal, mptr, &mname, &path, mprops.iter().find(|p| p.kind == 20).and_then(|p| be_u32(p.data))),

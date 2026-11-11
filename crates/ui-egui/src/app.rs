@@ -153,6 +153,7 @@ impl PhotocraftApp {
             color_picker_preview: None,
             guide_drag: None,
             layer_box: None,
+            finished_pens: Vec::new(),
             crop: Default::default(),
             pcrop: Default::default(),
             hover_doc: None,

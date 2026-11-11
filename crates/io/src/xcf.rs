@@ -43,6 +43,8 @@ mod review_tests;
 #[cfg(test)]
 mod tests;
 mod text;
+#[cfg(test)]
+mod tile_budget_tests;
 pub(crate) mod transport;
 
 use std::collections::HashMap;
@@ -430,7 +432,7 @@ impl<'a> Image<'a> {
                 return Ok(Err("Source effect-mask channel has an unestablished placement property; pixels were not silently repositioned".into()));
             }
             let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, self.precision.depth(), false));
-            write_pixels(&mut surface, &pixels, 0, 0)?;
+            write_pixels(&mut surface, &pixels, 0, 0, &mut self.budget)?;
             let bounds = Rect::new(0, 0, pixels.width as i32, pixels.height as i32);
             self.apply_coverage_stack(&children, &mut surface, bounds, depth, state, ctl)?;
             self.meta_budget = self
@@ -714,15 +716,34 @@ fn label(tag: u32) -> LabelColor {
     }
 }
 
-/// Writes `px` (its channels matching `surface`'s) at `x, y` of the document.
-fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32) -> Result<()> {
-    let (w, h) = (px.width as i32, px.height as i32);
+/// Writes `px` (its channels matching `surface`'s) at `x, y` of the document, charging the
+/// tiles that creates to `budget`: the drawable was admitted by its logical samples, and a
+/// narrow drawable (or one referenced by many layer pointers) stores far more in whole tiles.
+fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32, budget: &mut usize) -> Result<()> {
+    let w = i32::try_from(px.width).map_err(|_| invalid("drawable width overflow"))?;
+    let h = i32::try_from(px.height).map_err(|_| invalid("drawable height overflow"))?;
+    if w == 0 || h == 0 {
+        return Err(invalid("drawable dimensions must be positive"));
+    }
     let rect = Rect::new(x, y, x.checked_add(w).ok_or_else(|| invalid("offset overflow"))?, y.checked_add(h).ok_or_else(|| invalid("offset overflow"))?);
-    if surface.channels() != px.channels || px.data.len() != (px.width as usize) * (px.height as usize) * px.channels {
+    let expected = (px.width as usize)
+        .checked_mul(px.height as usize)
+        .and_then(|pixels| pixels.checked_mul(px.channels))
+        .ok_or_else(|| invalid("drawable sample count overflow"))?;
+    if surface.channels() != px.channels || px.data.len() != expected {
         return Err(invalid("pixel data does not match the drawable"));
     }
-    surface.write_region(rect, &px.data);
+    // Checked before the write (it allocates the whole rect's tiles); only the tiles kept after
+    // `prune()` are charged.
+    let tiles = usize::try_from(photocraft_raster::tile_storage_bytes(rect, &surface.format())).unwrap_or(usize::MAX);
+    if tiles > *budget {
+        return Err(invalid("the layers exceed the 1 GiB pixel limit"));
+    }
+    let before = surface.tile_count();
+    surface.try_write_region(rect, &px.data).map_err(|error| invalid(format!("drawable tile allocation failed: {error}")))?;
     surface.prune();
+    let added = surface.tile_count().saturating_sub(before) as u64;
+    *budget = budget.saturating_sub(usize::try_from(photocraft_raster::stored_tiles_bytes(added, &surface.format())).unwrap_or(usize::MAX));
     Ok(())
 }
 
