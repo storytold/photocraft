@@ -9,9 +9,9 @@ use super::{
 
 /// Where a clone stroke samples: `offset` / `source` params, else the active Clone Source slot,
 /// with the slot's (or the call's) scale, rotation and flips (see `presets::clone_source`).
-pub(super) fn clone_mapping(s: &mut Session, p: &Value, stroke: &Stroke, cmd: &str) -> Result<crate::presets::clone_source::Mapping> {
+pub(super) fn clone_mapping(s: &Session, p: &Value, stroke: &Stroke, cmd: &str) -> Result<crate::presets::clone_source::Mapping> {
     let f = stroke.points[0];
-    crate::presets::clone_source::mapping(s, p, (f.x, f.y), cmd)
+    crate::presets::clone_source::resolve(s, p, (f.x, f.y), cmd).map(|(map, _)| map)
 }
 
 /// Source pixels for destination `rect`: a translated read, or a bilinear resample when the
@@ -41,7 +41,13 @@ pub(super) fn clone_sample(
         r.rect = rect;
         return Ok(r);
     }
-    let src = read(map.source_rect(rect))?;
+    let source_rect = map.source_rect(rect);
+    // A small destination can request an enormous source when scaled down. The stroke's
+    // coverage budget alone does not bound that read; reject it before allocating native pixels.
+    if u64::from(source_rect.width()).saturating_mul(u64::from(source_rect.height())) > super::MAX_STROKE_PIXELS {
+        return Err(bad(cmd, "transformed clone source exceeds the sampling budget; increase source scale or reduce the brush"));
+    }
+    let src = read(source_rect)?;
     Ok(crate::presets::clone_source::resample(&src, rect, map, alpha_index(&surf.format())))
 }
 
@@ -163,6 +169,7 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
         let paint = clone_sample(pre, id, surf, which, &source, bounds, &map, flag(p, "wrap", false), CMD)?;
         Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
     })?;
+    crate::presets::clone_source::remember_mapping(s, p, &map);
     let mut r = clone_result(dmg, off, aligned, p, &stroke);
     if from_live {
         r["fromLive"] = json!(true);

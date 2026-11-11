@@ -26,6 +26,10 @@ pub struct CloneSource {
     pub source: Option<[f64; 2]>,
     /// Destination point paired with `source` (first aligned stroke after setting it).
     pub anchor: Option<[f64; 2]>,
+    /// Mapping origin used by the last successful stroke or an explicit offset edit.
+    /// Kept separate so reporting an unaligned stroke does not change aligned sampling.
+    #[serde(default)]
+    pub last_anchor: Option<[f64; 2]>,
     /// Layer picked with the source; Current Layer sampling reads this layer after switching targets.
     pub layer: Option<u64>,
     /// Identity of the document picked with the source; absent in older saved slots.
@@ -48,6 +52,7 @@ impl Default for CloneSource {
         CloneSource {
             source: None,
             anchor: None,
+            last_anchor: None,
             layer: None,
             document: None,
             scale: [100.0, 100.0],
@@ -67,13 +72,14 @@ impl CloneSource {
             && !self.flip_h
             && !self.flip_v
     }
-    /// The panel's Offset X/Y: source − anchor (once a stroke paired them).
+    /// Offset X/Y of the most recently used pairing, in source-minus-destination document pixels.
     pub fn offset(&self) -> Option<[f64; 2]> {
-        Some([self.source?[0] - self.anchor?[0], self.source?[1] - self.anchor?[1]])
+        let anchor = self.last_anchor.or(self.anchor)?;
+        Some([self.source?[0] - anchor[0], self.source?[1] - anchor[1]])
     }
     fn to_json(&self, i: usize) -> Value {
         json!({
-            "index": i, "source": self.source, "anchor": self.anchor, "offset": self.offset(), "layer": self.layer, "documentId": self.document,
+            "index": i, "source": self.source, "anchor": self.anchor, "lastAnchor": self.last_anchor, "offset": self.offset(), "layer": self.layer, "documentId": self.document,
             "width": self.scale[0], "height": self.scale[1], "linked": self.linked, "rotation": self.rotation, "flipH": self.flip_h, "flipV": self.flip_v,
         })
     }
@@ -165,28 +171,46 @@ pub fn transform_matrix(scale: [f64; 2], rotation_deg: f64, flip_h: bool, flip_v
     [f[3] / det, -f[1] / det, -f[2] / det, f[0] / det]
 }
 
-fn pt(p: &Value, k: &str) -> Option<(f64, f64)> {
-    let a = p.get(k)?.as_array()?;
-    Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+/// Null optional coordinates are omitted. Geometry, sampling and commit metadata must agree
+/// on this decision so an empty optional field cannot switch the source document.
+pub(crate) fn uses_slot(p: &Value) -> bool {
+    ["source", "offset"].into_iter().all(|key| p.get(key).is_none_or(Value::is_null))
 }
 
 /// Resolve a clone stroke's mapping from its params and the active slot. `first` is the
 /// stroke's first point. With `"aligned"` strokes the slot remembers the anchor so later
 /// strokes keep sampling relative to the original pairing.
 pub fn mapping(s: &mut Session, p: &Value, first: (f64, f64), cmd: &str) -> Result<Mapping> {
-    let (m, anchor) = resolve(s, p, first, cmd)?;
-    if let Some(a) = anchor {
-        s.presets.clone.active_mut().anchor = Some(a);
-    }
+    let (m, _) = resolve(s, p, first, cmd)?;
+    remember_mapping(s, p, &m);
     Ok(m)
+}
+
+/// Record a successful slot-based stroke after its pixel edit succeeds. Explicit command sources
+/// never overwrite a picked slot, and unaligned reporting never changes its aligned anchor.
+pub fn remember_mapping(s: &mut Session, p: &Value, map: &Mapping) {
+    if !uses_slot(p) {
+        return;
+    }
+    let slot = s.presets.clone.active_mut();
+    let anchor = [map.anchor.0, map.anchor.1];
+    slot.last_anchor = Some(anchor);
+    if p.get("aligned").and_then(Value::as_bool).unwrap_or(true) {
+        slot.anchor = Some(anchor);
+    }
 }
 
 /// [`mapping`] without remembering anything: the mapping, and the anchor an aligned stroke from
 /// the slot stores (a live preview resolves the same mapping the commit will).
 pub fn resolve(s: &Session, p: &Value, first: (f64, f64), cmd: &str) -> Result<(Mapping, Option<[f64; 2]>)> {
+    // Explicit paint coordinates retain their existing wide range: an in-range far source
+    // clones transparency. Interactive slot edits use the smaller preview range below.
+    let source = input_point(p, "source", cmd)?;
+    let offset = input_point(p, "offset", cmd)?;
+    let anchor_param = input_point(p, "anchor", cmd)?.map(|a| (a[0], a[1]));
     let aligned = p.get("aligned").and_then(Value::as_bool).unwrap_or(true);
     let slot = s.presets.clone.active().clone();
-    let explicit_tf = ["scale", "rotation", "flipH", "flipV"].iter().any(|k| p.get(*k).is_some());
+    let explicit_tf = ["scale", "rotation", "flipH", "flipV"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
     let m = if explicit_tf {
         let sc = p
             .get("scale")
@@ -197,13 +221,12 @@ pub fn resolve(s: &Session, p: &Value, first: (f64, f64), cmd: &str) -> Result<(
     } else {
         transform_matrix(slot.scale, slot.rotation, slot.flip_h, slot.flip_v)
     };
-    let anchor_param = pt(p, "anchor");
-    if let Some(off) = pt(p, "offset") {
+    if let Some([dx, dy]) = offset {
         let a = anchor_param.unwrap_or(first);
-        return Ok((Mapping { source: (a.0 + off.0, a.1 + off.1), anchor: a, m }, None));
+        return Ok((Mapping { source: (a.0 + dx, a.1 + dy), anchor: a, m }, None));
     }
-    if let Some(src) = pt(p, "source") {
-        return Ok((Mapping { source: src, anchor: anchor_param.unwrap_or(first), m }, None));
+    if let Some([sx, sy]) = source {
+        return Ok((Mapping { source: (sx, sy), anchor: anchor_param.unwrap_or(first), m }, None));
     }
     let Some(src) = slot.source else { return Err(bad(cmd, "missing `source` ([x,y]) or `offset` ([dx,dy]); or set one with cloneSource.set")) };
     let src = (src[0], src[1]);
@@ -285,11 +308,36 @@ pub fn resample(src: &Region, dst: Rect, map: &Mapping, alpha: Option<usize>) ->
 // ------------------------------------------------------------------ commands
 
 fn index(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
-    match p.get("index").and_then(Value::as_u64) {
-        Some(i) if (i as usize) < SLOTS => Ok(i as usize),
-        Some(i) => Err(bad(cmd, format!("index {i} out of range (0..{SLOTS})"))),
-        None => Ok(s.presets.clone.active),
+    let i = match p.get("index") {
+        Some(v) if !v.is_null() => v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad(cmd, "index must be a source-slot number"))?,
+        _ => s.presets.clone.active,
+    };
+    if i < SLOTS { Ok(i) } else { Err(bad(cmd, format!("index {i} out of range (0..{SLOTS})"))) }
+}
+
+/// Parse finite coordinate pairs without narrowing the legacy range of explicit paint commands.
+fn input_point(p: &Value, key: &str, cmd: &str) -> Result<Option<[f64; 2]>> {
+    let Some(value) = p.get(key).filter(|v| !v.is_null()) else { return Ok(None) };
+    let values = value.as_array().filter(|v| v.len() == 2).ok_or_else(|| bad(cmd, format!("{key} must be [x,y]")))?;
+    let point = values.first().and_then(Value::as_f64).zip(values.get(1).and_then(Value::as_f64));
+    match point {
+        Some((x, y)) if x.is_finite() && y.is_finite() => Ok(Some([x, y])),
+        _ => Err(bad(cmd, format!("{key} coordinates must be finite"))),
     }
+}
+
+/// Validate editable pixel coordinates before any slot is changed or an offset is added.
+fn edit_point(p: &Value, key: &str, cmd: &str) -> Result<Option<[f64; 2]>> {
+    let point = input_point(p, key, cmd)?;
+    if point.is_some_and(|p| !valid_point(p)) {
+        return Err(bad(cmd, format!("{key} coordinates exceed the clone preview range")));
+    }
+    Ok(point)
+}
+
+/// Match the preview's coordinate range and reject sums that overflow or leave that range.
+fn valid_point(point: [f64; 2]) -> bool {
+    point.into_iter().all(|v| v.is_finite() && v.abs() < 1_000_000.0)
 }
 
 /// Describe a slot with both its stable document identity and its current open-tab index.
@@ -309,10 +357,8 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
 
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "cloneSource.select";
-    let i = p.get("index").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "missing `index`"))? as usize;
-    if i >= SLOTS {
-        return Err(bad(CMD, format!("index {i} out of range (0..{SLOTS})")));
-    }
+    p.get("index").filter(|v| !v.is_null()).ok_or_else(|| bad(CMD, "missing `index`"))?;
+    let i = index(s, p, CMD)?;
     s.presets.clone.active = i;
     Ok(slot_json(s, i))
 }
@@ -320,10 +366,16 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "cloneSource.set";
     let i = index(s, p, CMD)?;
+    let source = edit_point(p, "source", CMD)?;
+    let offset = edit_point(p, "offset", CMD)?;
+    let anchor = edit_point(p, "anchor", CMD)?;
+    if anchor.is_some() && offset.is_none() {
+        return Err(bad(CMD, "anchor requires an offset edit"));
+    }
     let doc = match p.get("document") {
         None => s.active(),
         Some(value) => {
-            if pt(p, "source").is_none() {
+            if source.is_none() {
                 return Err(bad(CMD, "document requires a source point"));
             }
             let index = value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(CMD, "document must be an open document index"))?;
@@ -331,18 +383,23 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let (document, active_layer) = (doc.map(|st| st.doc.id), doc.and_then(|st| st.active_layer).map(|id| id.0));
-    let slot = &mut s.presets.clone.slots[i];
-    if let Some((x, y)) = pt(p, "source") {
+    // Build the edited slot off to the side so a rejected coordinate or sum is atomic.
+    let mut slot = s.presets.clone.slots[i].clone();
+    if let Some([x, y]) = source {
         // A new sample point re-pairs with the next stroke.
         slot.source = Some([x, y]);
         slot.anchor = None;
+        slot.last_anchor = None;
         slot.layer = p.get("layer").and_then(Value::as_u64).or(active_layer);
         slot.document = document;
     }
-    if let Some((dx, dy)) = pt(p, "offset") {
-        // Offset X/Y fields: keep the anchor (or the source as anchor) and move the source.
-        let a = slot.anchor.or(slot.source).ok_or_else(|| bad(CMD, "set a `source` before an offset"))?;
+    if let Some([dx, dy]) = offset {
+        // Edit the pairing shown in the panel, including an unaligned stroke or a live preview.
+        // Supplying its anchor does not paint; it makes the requested displacement explicit.
+        slot.source.ok_or_else(|| bad(CMD, "set a `source` before an offset"))?;
+        let a = anchor.or(slot.last_anchor).or(slot.anchor).or(slot.source).ok_or_else(|| bad(CMD, "set a `source` before an offset"))?;
         slot.anchor = Some(a);
+        slot.last_anchor = Some(a);
         slot.source = Some([a[0] + dx, a[1] + dy]);
     }
     if let Some(a) = p.get("scale").and_then(Value::as_array) {
@@ -381,8 +438,12 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         slot.flip_v = b;
     }
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
-        *slot = CloneSource::default();
+        slot = CloneSource::default();
     }
+    if [slot.source, slot.anchor, slot.last_anchor].into_iter().flatten().any(|p| !valid_point(p)) {
+        return Err(bad(CMD, "the edited clone coordinates exceed their range"));
+    }
+    s.presets.clone.slots[i] = slot;
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
         s.presets.clone.active = i;
     }
@@ -430,7 +491,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Clone Sources",
             menu: &[],
             shortcut: None,
-            params: "{} → {active,sources:[{index,source,anchor,offset,layer,document,documentId,width,height,linked,rotation,flipH,flipV}],overlay}",
+            params: "{} → {active,sources:[{index,source,anchor,lastAnchor,offset,layer,document,documentId,width,height,linked,rotation,flipH,flipV}],overlay}; offset is source minus the last used destination reference in document pixels",
             enabled: always,
             run: list,
             journal: false,
@@ -450,7 +511,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Set Clone Source",
             menu: &[],
             shortcut: None,
-            params: r##"{"index":0..4?=active,"source":[x,y]? (⌥-click; re-pairs with the next stroke),"offset":[dx,dy]?,"width":%?,"height":%?|"scale":[w%,h%]?,"linked":bool? (W/H link: a lone width or height scales the other by the same factor),"rotation":deg?,"flipH":bool?,"flipV":bool?,"layer":id?,"document":open document index?=active (with source),"clear":bool?,"select":bool=true}"##,
+            params: r##"{"index":0..4?=active,"source":[x,y]? (⌥-click; re-pairs with the next stroke),"offset":[dx,dy]? (source minus destination in document pixels),"anchor":[x,y]? (with offset: the preview/destination reference being edited; otherwise the last used reference),"width":%?,"height":%?|"scale":[w%,h%]?,"linked":bool? (W/H link: a lone width or height scales the other by the same factor),"rotation":deg?,"flipH":bool?,"flipV":bool?,"layer":id?,"document":open document index?=active (with source),"clear":bool?,"select":bool=true}"##,
             enabled: always,
             run: set,
             journal: true,

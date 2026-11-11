@@ -81,6 +81,7 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(apply_coverage(surf, g, &cov, stroke.brush.opacity, sel, lock, &healed, mode))
     })?;
+    crate::presets::clone_source::remember_mapping(s, p, &map);
     Ok(clone_result(dmg, off, aligned, p, &stroke))
 }
 

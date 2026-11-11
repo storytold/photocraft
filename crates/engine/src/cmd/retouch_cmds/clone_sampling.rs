@@ -1,6 +1,7 @@
 //! Resolve and freeze a clone source without changing the sampled document.
 use std::sync::Arc;
 
+use crate::presets::clone_source::uses_slot;
 use photocraft_cms::{Transform, TransformOptions};
 use photocraft_color::ColorMode;
 
@@ -106,7 +107,7 @@ pub(super) fn resolve(s: &Session, p: &Value, cmd: &str) -> Result<CloneFrom> {
     if !targets_pixels(p) {
         // A local mask/channel has no corresponding surface in another document. Refuse this
         // unsupported target instead of quietly cloning the destination's own mask/channel.
-        let picked = p.get("source").is_none() && p.get("offset").is_none();
+        let picked = uses_slot(p);
         if picked && s.presets.clone.active().document.is_some_and(|id| s.active().is_none_or(|st| st.doc.id != id)) {
             return Err(bad(cmd, "cross-document cloning requires a pixel-layer destination"));
         }
@@ -116,7 +117,7 @@ pub(super) fn resolve(s: &Session, p: &Value, cmd: &str) -> Result<CloneFrom> {
     let active = s.active().ok_or(EngineError::NoDocument)?;
     let slot = s.presets.clone.active();
     // Explicit coordinates are in the destination document. A picked slot carries its document.
-    let picked = p.get("source").is_none() && p.get("offset").is_none();
+    let picked = uses_slot(p);
     let doc_id = picked.then_some(slot.document).flatten().unwrap_or(active.doc.id);
     let st = s.documents().iter().find(|st| st.doc.id == doc_id).ok_or_else(|| bad(cmd, "the clone source document was closed; pick a new source"))?;
     let external = st.doc.id != active.doc.id;

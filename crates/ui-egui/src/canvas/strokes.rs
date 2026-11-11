@@ -73,14 +73,14 @@ fn clone_dab_coverage(
 /// A transient source image beneath the brush outline; never part of the document render. The
 /// Clone Source panel drives the Clone Stamp and the Healing Brush alike, so both show it.
 pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, at: [f64; 2], output: Option<u32>) {
-    use photocraft_engine::presets::clone_source::{Mapping, overlay_blend, transform_matrix};
+    use photocraft_engine::presets::clone_source::overlay_blend;
     let overlay = app.session.presets.clone.overlay.clone();
     let tool = app.ui.tool;
     if !matches!(tool, Tool::CloneStamp | Tool::Healing) || !overlay.show || (overlay.auto_hide && app.drag.is_some()) {
         return;
     }
     let slot = app.session.presets.clone.active().clone();
-    let Some(source) = slot.source else { return };
+    let Some(map) = crate::preset_panels::clone_mapping_at(app, Some(at)) else { return };
     let radius = f64::from(app.session.tools.brush.size) / 2.0;
     if !radius.is_finite() || radius <= 0.0 || radius > 500.0 || !at.iter().all(|v| v.is_finite() && v.abs() < 1_000_000.0) {
         return;
@@ -88,10 +88,6 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
     // View › Pattern Preview repeats the source for the Clone Stamp only (`paint.cloneStamp`'s
     // `wrap`); the Healing Brush samples it as it is.
     let wrap = tool == Tool::CloneStamp && app.ui.view.pattern_preview;
-    let stroke_start = app.drag.as_ref().map(|d| d.start);
-    let anchor = if app.ui.tool_options.clone_aligned { slot.anchor.or(stroke_start) } else { stroke_start }.unwrap_or(at);
-    let map =
-        Mapping { source: (source[0], source[1]), anchor: (anchor[0], anchor[1]), m: transform_matrix(slot.scale, slot.rotation, slot.flip_h, slot.flip_v) };
     let Some(st) = app.session.active() else { return };
     let source_revision =
         slot.document.and_then(|id| app.session.documents().iter().find(|st| st.doc.id == id)).map(|st| (st.doc.id, st.revision, st.active_layer));

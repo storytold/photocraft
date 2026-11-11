@@ -464,3 +464,152 @@ fn clone_maximum_size_stamp_keeps_straight_source_edges() {
         assert_eq!(pixel(&s, target, x, y)[3], 0.0, "source clips at {x},{y} within the 5,000 px tip");
     }
 }
+
+#[test]
+fn clone_offsets_report_each_unaligned_stroke_without_persisting_its_alignment() {
+    for depth in [8, 16, 32] {
+        let (mut s, source, target) = setup(depth, "rgb");
+        let want = pixel(&s, source, 16, 16);
+        for (x, y) in [(40, 30), (50, 40)] {
+            s.execute("paint.cloneStamp", json!({"points": [[x,y]], "size": 8, "hardness": 100, "aligned": false})).unwrap();
+            assert_eq!(pixel(&s, target, x, y), want, "each unaligned stroke restarts at the sample");
+            let listed = s.execute("cloneSource.list", json!({})).unwrap();
+            assert_eq!(listed["sources"][0]["offset"], json!([16.0 - x as f64, 16.0 - y as f64]));
+            assert!(s.presets.clone.active().anchor.is_none(), "reporting an offset must not establish aligned sampling");
+            assert_eq!(s.presets.clone.active().source, Some([16.0, 16.0]));
+        }
+    }
+}
+
+#[test]
+fn clone_offsets_follow_mode_toggles_and_manual_edits_use_the_reported_pairing() {
+    for depth in [8, 16, 32] {
+        let (mut s, source, target) = setup(depth, "rgb");
+        let stamp = |s: &mut Session, x, y, aligned| {
+            s.execute("paint.cloneStamp", json!({"points": [[x,y]], "size": 8, "hardness": 100, "aligned": aligned})).unwrap();
+        };
+        stamp(&mut s, 40, 30, true);
+        stamp(&mut s, 50, 40, false);
+        assert_eq!(s.presets.clone.active().anchor, Some([40.0, 30.0]));
+        assert_eq!(s.execute("cloneSource.list", json!({})).unwrap()["sources"][0]["offset"], json!([-34.0, -24.0]));
+        stamp(&mut s, 52, 42, true);
+        assert_eq!(pixel(&s, target, 52, 42), pixel(&s, source, 28, 28), "switching back retains the aligned pairing");
+        stamp(&mut s, 50, 40, false);
+        s.execute("cloneSource.set", json!({"offset": [-30,-20]})).unwrap();
+        assert_eq!(s.presets.clone.active().source, Some([20.0, 20.0]), "editing the displayed offset uses its actual destination reference");
+        assert_eq!(s.presets.clone.active().anchor, Some([50.0, 40.0]));
+        stamp(&mut s, 54, 44, false);
+        assert_eq!(pixel(&s, target, 54, 44), pixel(&s, source, 20, 20));
+        stamp(&mut s, 54, 44, true);
+        assert_eq!(pixel(&s, target, 54, 44), pixel(&s, source, 24, 24), "a manual edit establishes the newly requested pairing");
+    }
+}
+
+#[test]
+fn clone_offsets_accept_a_preview_reference_and_reject_invalid_points_atomically() {
+    let (mut s, _, _) = setup(16, "rgb");
+    let reply = s.execute("cloneSource.set", json!({"offset": [-20,-10], "anchor": [40,30]})).unwrap();
+    assert_eq!(reply["source"], json!([20.0, 20.0]));
+    assert_eq!(reply["offset"], json!([-20.0, -10.0]));
+    for p in [
+        json!({"offset": [-20,-10], "anchor": ["bad",30]}),
+        json!({"offset": [-20,-10], "anchor": [1.0e300,30]}),
+        json!({"anchor": [40,30]}),
+        json!({"source": [1.0e300,0]}),
+        json!({"source": [20,20], "offset": ["bad",0]}),
+        json!({"source": [20,20], "anchor": [999999,999999], "offset": [10,20]}),
+    ] {
+        let before = s.presets.clone.clone();
+        assert!(s.execute("cloneSource.set", p).is_err());
+        assert_eq!(s.presets.clone, before, "a rejected edit leaves all source slots unchanged");
+    }
+}
+
+#[test]
+fn clone_offsets_do_not_record_previews_failed_strokes_or_explicit_command_sources() {
+    for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
+        let (mut s, _, target) = setup(8, "rgb");
+        let p = json!({"points": [[40,30]], "size": 8, "hardness": 100});
+        let before = s.presets.clone.clone();
+        let _live = LiveRetouch::begin(&s, cmd, &p).unwrap();
+        assert_eq!(s.presets.clone, before, "a live preview is read-only");
+        s.edit("lock target", |doc, _| {
+            doc.layer_mut(target).unwrap().locks.all = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(s.execute(cmd, p.clone()).is_err());
+        assert_eq!(s.presets.clone, before, "failed painting cannot anchor or report a successful pairing");
+        s.edit("unlock target", |doc, _| {
+            doc.layer_mut(target).unwrap().locks.all = false;
+            Ok(())
+        })
+        .unwrap();
+        let mut explicit = p.clone();
+        explicit["offset"] = json!([-20, -10]);
+        s.execute(cmd, explicit).unwrap();
+        assert_eq!(s.presets.clone, before, "an explicit command source does not overwrite the picked slot");
+        let mut unaligned = p;
+        unaligned["aligned"] = json!(false);
+        s.execute(cmd, unaligned).unwrap();
+        assert_eq!(s.execute("cloneSource.list", json!({})).unwrap()["sources"][0]["offset"], json!([-24.0, -14.0]));
+        assert!(s.presets.clone.active().anchor.is_none());
+    }
+}
+
+#[test]
+fn clone_offsets_keep_legacy_pairings_and_clear_readouts_when_a_source_is_repicked() {
+    let (mut s, source, _) = setup(16, "rgb");
+    s.execute("paint.cloneStamp", json!({"points": [[40,30]], "size": 8, "hardness": 100})).unwrap();
+    let mut old = serde_json::to_value(s.presets.clone.active()).unwrap();
+    old.as_object_mut().unwrap().remove("last_anchor");
+    let restored: crate::presets::clone_source::CloneSource = serde_json::from_value(old).unwrap();
+    assert_eq!(restored.offset(), Some([-24.0, -14.0]));
+    let picked = s.execute("cloneSource.set", json!({"source": [20,20], "layer": source.0})).unwrap();
+    assert!(picked["offset"].is_null());
+    assert!(picked["anchor"].is_null());
+    assert!(picked["lastAnchor"].is_null());
+    s.execute("cloneSource.set", json!({"source": null, "offset": null, "anchor": null, "index": null, "width": 150})).unwrap();
+    assert_eq!(s.presets.clone.active().source, Some([20.0, 20.0]), "null optional coordinates remain omitted for compatibility");
+    for value in [json!(u64::MAX), json!(-1), json!("bad")] {
+        assert!(s.execute("cloneSource.set", json!({"index": value})).is_err());
+        assert!(s.execute("cloneSource.select", json!({"index": value})).is_err());
+    }
+    s.presets.clone.active = usize::MAX;
+    assert!(
+        matches!(s.execute("cloneSource.set", json!({})), Err(EngineError::BadParams { .. })),
+        "corrupt saved selection must be a parameter error, not an internal panic"
+    );
+    assert!(matches!(s.execute("cloneSource.resetTransform", json!({})), Err(EngineError::BadParams { .. })));
+}
+
+#[test]
+fn clone_offsets_scaled_source_reads_are_bounded_before_allocation() {
+    for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
+        let (mut s, _, _) = setup(8, "rgb");
+        let before = s.presets.clone.clone();
+        let document = s.active().unwrap().doc.clone();
+        let result = s.execute(cmd, json!({"points": [[32,32]], "scale": [0.00001,0.00001], "size": 8, "hardness": 100}));
+        assert!(result.is_err(), "a small dab cannot allocate an unbounded transformed source");
+        assert_eq!(s.active().unwrap().doc, document);
+        assert_eq!(s.presets.clone, before);
+    }
+}
+
+#[test]
+fn clone_offsets_null_optional_coordinates_keep_the_picked_source_document() {
+    for depth in [8, 16, 32] {
+        let (mut s, source, _) = setup(depth, "rgb");
+        let want = pixel(&s, source, 16, 16);
+        s.execute("file.new", json!({"width": 64, "height": 64, "depth": depth})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let target = s.active().unwrap().active_layer.unwrap();
+        s.execute("paint.cloneStamp", json!({"points": [[40,30]], "size": 8, "hardness": 100, "source": null, "offset": null, "anchor": null})).unwrap();
+        assert_eq!(pixel(&s, target, 40, 30), want, "null optional coordinates must not silently switch sampling to the destination document");
+        assert_eq!(s.execute("cloneSource.list", json!({})).unwrap()["sources"][0]["offset"], json!([-24.0, -14.0]));
+        s.execute("cloneSource.set", json!({"width": 200, "rotation": 90})).unwrap();
+        let (map, _) =
+            crate::presets::clone_source::resolve(&s, &json!({"scale": null, "rotation": null, "flipH": null}), (40.0, 30.0), "paint.cloneStamp").unwrap();
+        assert_eq!(map.m, crate::presets::clone_source::transform_matrix([200.0, 100.0], 90.0, false, false));
+    }
+}
