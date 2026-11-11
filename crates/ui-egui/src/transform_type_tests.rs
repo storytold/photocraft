@@ -54,6 +54,7 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
         under: None,
         text: false,
         type_layer: false,
+        type_shape: None,
         guide: false,
         spelling: None,
         crop: None,

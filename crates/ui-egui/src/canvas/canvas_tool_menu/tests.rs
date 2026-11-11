@@ -213,7 +213,9 @@ fn type_layer_menu_targets_the_type_under_the_pointer() {
     assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([16.0, 16.0])));
     assert_eq!(active(&app), Some(id));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all", FAUX_BOLD, FAUX_ITALIC] {
+    // The text-edit rows belong to the edit menu only; the faux rows act on the whole layer
+    // here since #12043 (the new tests cover them).
+    for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all"] {
         assert!(!available(&app, &menu, edit_row), "{edit_row} belongs to the edit menu only");
     }
     assert!(entry_enabled(&app, &menu, "type.convertToParagraphText") && !entry_enabled(&app, &menu, "type.convertToPointText"));
