@@ -27,6 +27,10 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 /// `points` and `target`): shared by the live preview and the commit. `None` when no source
 /// point is set yet.
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
+    // Refused there (`healing_refused`): no live preview either.
+    if healing_in_indexed(app, app.ui.tool) {
+        return None;
+    }
     let o = &app.ui.tool_options;
     // The options bar's Mode is the tool's own brush's.
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
@@ -216,6 +220,9 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
         Tool::PatternStamp => ("paint.patternStamp", pattern_stamp_params(app, points)),
         Tool::Healing | Tool::CloneStamp => {
+            if healing_refused(app, tool) {
+                return true;
+            }
             let Some(p) = clone_params(app) else {
                 // Option-click on the Mac, Alt-click on Windows.
                 app.ui.status = if cfg!(target_os = "macos") {
@@ -650,8 +657,28 @@ pub fn report_smart_result(app: &mut PhotocraftApp, res: Result<Value, String>, 
     }
 }
 
+/// The Healing Brush in an Indexed Color document: the reference's alert with OK at the ⌥-click
+/// and at a stroke, and nothing changes (#12112). The engine refuses the stroke with the same words.
+fn healing_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    if !healing_in_indexed(app, tool) {
+        return false;
+    }
+    crate::brush_refusal::prompt(
+        app,
+        tl!("Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit)."),
+    );
+    true
+}
+
+fn healing_in_indexed(app: &PhotocraftApp, tool: Tool) -> bool {
+    tool == Tool::Healing && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
+}
+
 /// ⌥-click with Clone Stamp / Healing Brush sets the source.
 pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
+    if healing_refused(app, app.active_tool()) {
+        return;
+    }
     app.ui.clone_source = Some([x.round(), y.round()]);
     app.ui.clone_offset = None;
     let _ = app.run("cloneSource.set", json!({"source": [x.round(), y.round()]}));
@@ -1176,3 +1203,7 @@ mod smudge_mode_bar_tests;
 #[cfg(test)]
 #[path = "../sponge_flow_field_tests.rs"]
 mod sponge_flow_field_tests;
+
+#[cfg(test)]
+#[path = "../healing_indexed_alert_tests.rs"]
+mod healing_indexed_alert_tests;
