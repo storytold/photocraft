@@ -189,8 +189,12 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
     } else if photocraft_io::vectorcraft::is_vectorcraft(bytes) {
         let limit = photocraft_io::vectorcraft::scale_limit(bytes).map_err(|e| other(format!("can't draw the VectorCraft smart object: {e}")))?;
         let k = vector_scale(sm).min(f64::from(limit));
-        // The drawn artboard is as large as the placed result, so the budget is checked first.
-        let check = |bounds: Rect| crate::transform_cmds::check_budget(bounds, &scaled_placement(sm, k), "smart object", fmt);
+        // The drawn artboard and the placed result are both checked against the budget before
+        // drawing: a placement stretched along one axis draws more than it places.
+        let check = |bounds: Rect| {
+            crate::transform_cmds::check_budget(bounds, &Homography::IDENTITY, "smart object", fmt)?;
+            crate::transform_cmds::check_budget(bounds, &scaled_placement(sm, k), "smart object", fmt)
+        };
         Some((vectorcraft_source_image_in(name, bytes, doc, k, check)?, k))
     } else {
         None
