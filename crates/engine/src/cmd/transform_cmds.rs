@@ -173,10 +173,13 @@ pub(crate) fn move_gray_selected(
 
 /// A lone mask or channel as Free Transform leaves it, for the live preview of the box: `rest`
 /// with `lifted` moved through `h` laid over it (both from [`split_gray_selected`]). Refused
-/// past the transform budget, as the commit is.
-pub fn moved_gray(rest: &Surface, lifted: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
+/// past the transform budget, as the commit is, and stopped with [`EngineError::Cancelled`] once
+/// `cancel` says so (the box closed while a worker built its frame).
+pub fn moved_gray(rest: &Surface, lifted: &Surface, h: &Homography, interp: Interp, cancel: &(dyn Fn() -> bool + Sync)) -> Result<Surface> {
     check_budget(lifted.content_bounds(), h, "mask or channel", rest.format())?;
-    lay_moved(rest.clone(), lifted, &|l, src| Ok(warp_surface(l, src, h, interp)?))
+    let ignore = |_: f32| {};
+    let ctl = Interrupt::new(cancel, &ignore);
+    lay_moved(rest.clone(), lifted, &|l, src| warp_surface_with(l, src, h, interp, &ctl)?.ok_or(EngineError::Cancelled))
 }
 
 /// `out` with the grey + alpha values of `lifted`, moved by `warp`, laid over it.

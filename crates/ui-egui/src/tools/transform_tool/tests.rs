@@ -3571,10 +3571,14 @@ fn a_large_lone_mask_builds_its_frames_off_the_ui_thread() {
     t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
     let (stale, k1) = crate::canvas::display_doc(&mut app, 0);
     assert!(k1 == k0 && Arc::ptr_eq(&stale, &first) && running(&app));
+    // Whether the first move's frame has landed by now is the worker's race: either way the
+    // latest box isn't shown yet, and a worker builds it (#9691 review).
     let t = app.ui.transform.as_mut().unwrap();
     t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
     let (_, k2) = crate::canvas::display_doc(&mut app, 0);
-    assert_eq!(k2, k0);
+    let live = app.transform_preview.as_ref().unwrap().live_mask.as_ref().unwrap();
+    let latest = (app.ui.transform.as_ref().unwrap().quad, false);
+    assert!(live.quad != Some(latest) && live.running.as_ref().is_some_and(|(q, _)| k2 == k0 || *q == latest));
     // Then the latest box shows.
     let (moved, k3) = settled_live_mask(&mut app);
     assert_ne!(k3, k0);
@@ -3589,6 +3593,48 @@ fn a_large_lone_mask_builds_its_frames_off_the_ui_thread() {
         aspect: 1.0,
     };
     assert!(preview_meshes(&app, &xf).is_empty(), "no grey mesh over the layer");
+}
+
+/// #9691 review: closing the box stops a worker still building one of its frames, so closing
+/// and reopening it on a large mask doesn't pile up builds.
+#[test]
+fn closing_the_box_stops_its_mask_worker() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let live = app.transform_preview.as_mut().unwrap().live_mask.as_mut().unwrap();
+    live.sync_limit = 0;
+    let stop = live.stop.clone();
+    crate::canvas::display_doc(&mut app, 0);
+    assert!(!stop.load(std::sync::atomic::Ordering::Relaxed));
+    cancel(&mut app);
+    assert!(app.transform_preview.is_none());
+    assert!(stop.load(std::sync::atomic::Ordering::Relaxed), "the worker is told to stop");
+}
+
+/// #9691 review: a feathered mask blurs its moved values past the box, so the canvas redraws
+/// as far as the feather reaches (3 sigmas and 2 px), not just the box.
+#[test]
+fn a_feathered_lone_mask_damages_its_feather_reach() {
+    let mut app = masked_app(false);
+    app.session
+        .edit("feather", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().mask.as_mut().unwrap().feather = 3.0;
+            Ok(())
+        })
+        .unwrap();
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let (id, revision) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.revision)
+    };
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+    let (_, k1) = crate::canvas::display_doc(&mut app, 0);
+    let vacated = PREVIEW_BASE + app.transform_preview.as_ref().unwrap().session;
+    // Unfeathered this is 4..24 (`a_lone_mask_previews_live_through_its_layer`); 11 px more each side.
+    assert_eq!(live_mask_damage(&app, id, revision, vacated, k1), Some(photocraft_geom::Rect::new(0, 0, 35, 64)));
 }
 
 /// An alpha channel keeps the grey preview: it masks no layer.

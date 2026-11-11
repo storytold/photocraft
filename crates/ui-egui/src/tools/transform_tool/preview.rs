@@ -353,7 +353,9 @@ pub(crate) fn live_mask_doc(app: &mut PhotocraftApp) -> Option<(Arc<Document>, u
     // Bilinear keeps a frame cheap while the box moves; the commit uses the chosen interpolation.
     let interp = if want.1 { photocraft_algo::transform::Interp::Nearest } else { photocraft_algo::transform::Interp::Bilinear };
     let h = Homography::rect_to_quad(t.rect, t.quad);
-    let build = move || h.and_then(|h| photocraft_engine::transform_cmds::moved_gray(&rest, &lifted, &h, interp).ok());
+    let stop = live.stop.clone();
+    let canceled = move || stop.load(std::sync::atomic::Ordering::Relaxed);
+    let build = move || h.and_then(|h| photocraft_engine::transform_cmds::moved_gray(&rest, &lifted, &h, interp, &canceled).ok());
     let (lo, hi) = quad_bounds(&t.quad);
     let pixels = |w: f64, h: f64| if (w * h).is_finite() { (w * h).max(0.0) as u64 } else { u64::MAX };
     let src = live.lifted.content_bounds();
@@ -406,6 +408,8 @@ fn show_live_mask(app: &mut PhotocraftApp, quad: super::LiveBox, moved: Option<p
     let layer = LayerId(t.layer);
     let Some(pv) = app.transform_preview.as_mut() else { return };
     let mut doc = (*pv.doc).clone();
+    // A feathered mask blurs the moved values past the box: the canvas redraws that far too.
+    let feather = doc.layer(layer).and_then(|l| l.mask.as_ref()).map_or(0.0, |m| photocraft_compose::masks::feather_sigma(m.feather));
     let Some(live) = pv.live_mask.as_mut() else { return };
     live.quad = Some(quad);
     live.shown = None;
@@ -414,8 +418,8 @@ fn show_live_mask(app: &mut PhotocraftApp, quad: super::LiveBox, moved: Option<p
     *surf = moved;
     let (min, max) = quad_bounds(&quad.0);
     let edge = |v: f64| v.clamp(-1e9, 1e9) as i32;
-    let area =
-        photocraft_geom::Rect::new(edge(min[0].floor()), edge(min[1].floor()), edge(max[0].ceil()), edge(max[1].ceil())).inflate(2).intersect(&doc.bounds());
+    let area = photocraft_geom::Rect::new(edge(min[0].floor()), edge(min[1].floor()), edge(max[0].ceil()), edge(max[1].ceil())).inflate(2);
+    let area = if feather > 0.0 { photocraft_vector::feather::grow(area, feather) } else { area }.intersect(&doc.bounds());
     if live.areas.len() >= 128 {
         live.areas.pop_front();
     }

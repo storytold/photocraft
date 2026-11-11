@@ -624,6 +624,7 @@ fn begin_lone(
         running: None,
         sync_limit: super::LIVE_MASK_SYNC_PIXELS,
         ctx: ctx.clone(),
+        stop: Arc::default(),
     });
     let layer = app.session.active().and_then(|st| st.active_layer).map_or(0, |l| l.0);
     let mut pd = (*doc).clone();

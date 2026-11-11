@@ -515,7 +515,7 @@ fn moved_gray_matches_the_committed_mask() {
         });
         let (lifted, rest) = split_gray_selected(&surf, &sel).unwrap().unwrap();
         let h = Homography([1.0, 0.0, 7.0, 0.0, 1.0, 30.0, 0.0, 0.0, 1.0]);
-        let live = moved_gray(&rest, &lifted, &h, Interp::Bicubic).unwrap();
+        let live = moved_gray(&rest, &lifted, &h, Interp::Bicubic, &|| false).unwrap();
         s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 7, 30], "target": "mask"})).unwrap();
         let st = s.active().unwrap();
         let committed = &st.doc.layer(id.unwrap()).unwrap().mask.as_ref().unwrap().surface;
@@ -529,7 +529,10 @@ fn moved_gray_matches_the_committed_mask() {
     sel.fill_rect(Rect::new(0, 0, 64, 64), &[1.0]);
     let (lifted, rest) = split_gray_selected(&surf, &sel).unwrap().unwrap();
     let huge = Homography([1e6, 0.0, 0.0, 0.0, 1e6, 0.0, 0.0, 0.0, 1.0]);
-    assert!(moved_gray(&rest, &lifted, &huge, Interp::Bilinear).is_err());
+    assert!(moved_gray(&rest, &lifted, &huge, Interp::Bilinear, &|| false).is_err());
+    // A canceled build stops instead of finishing a frame nobody shows.
+    let h = Homography([1.0, 0.0, 7.0, 0.0, 1.0, 30.0, 0.0, 0.0, 1.0]);
+    assert!(matches!(moved_gray(&rest, &lifted, &h, Interp::Bilinear, &|| true), Err(EngineError::Cancelled)));
 }
 
 #[test]

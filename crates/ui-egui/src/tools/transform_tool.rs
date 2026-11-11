@@ -249,6 +249,15 @@ struct LiveMask {
     sync_limit: u64,
     /// Wakes the canvas when a worker's frame lands.
     ctx: egui::Context,
+    /// Set when the box closes: a worker still building a frame for it stops (#9691 review), so
+    /// closing and reopening the box doesn't pile up builds of large masks.
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for LiveMask {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// A live mask frame's box and Nearest Neighbor choice.
