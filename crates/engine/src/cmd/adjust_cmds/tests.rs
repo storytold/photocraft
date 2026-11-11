@@ -598,6 +598,24 @@ fn smart_filter_replace_refuses_out_of_range_filter_params() {
     assert_eq!(smart_filters_of(&s)[0].params["radius"], json!(9));
 }
 
+/// The review on #6187: the Color Lookup editor replaces its settings with a named `lut` and an
+/// emptied (or removed) `data` and `fileName`; those read as not given, so the replacement is
+/// valid. A `fileName` that isn't text (the old generated dialog sent `0`) is still refused.
+#[test]
+fn smart_filter_replace_takes_a_color_lookup_without_data() {
+    let mut s = smart_session();
+    s.execute("image.adjustments.colorLookup", json!({"lut": "cool"})).unwrap();
+    let dialog = json!({"lut": "warm", "data": "", "fileName": "", "file": "", "lutFormat": "auto", "dataEncoding": "text", "interpolation": "trilinear", "dither": false});
+    for params in [dialog, json!({"lut": "warm"})] {
+        s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": params.clone(), "replace": true})).unwrap();
+        assert_eq!(smart_filters_of(&s)[0].params["lut"], json!("warm"), "{params}");
+    }
+    for bad in [json!({"lut": "warm", "fileName": 0}), json!({"lut": "nope"})] {
+        let r = s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": bad.clone(), "replace": true}));
+        assert!(r.is_err(), "{bad} is refused");
+    }
+}
+
 /// A selection becomes the smart filter's mask, and the adjustment with its own command
 /// (Shadows/Highlights) records a filter too.
 #[test]
