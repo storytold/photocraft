@@ -53,16 +53,13 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
         let Some(d) = app.drag.take() else { return };
         let live = app.live_stroke.take();
         if let Some(l) = live {
-            let (doc, key, steps) = (l.doc, l.key, l.damage.len() as u64);
-            if let EngineStroke::Mixer(mixer) = l.stroke {
-                if l.preview_failed {
-                    let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&d.points));
-                    p["seed"] = json!(mixer.seed);
-                    drop(mixer);
-                    let _ = app.run("paint.mixerBrush", p);
-                    return;
-                }
-                match mixer.prepare_commit(&mut app.session) {
+            // What the stroke's thread was still painting.
+            let (painted, stroke) = l.paint.finish();
+            let failed = l.preview_failed || painted.iter().any(Result::is_err);
+            let steps = (l.damage.len() + painted.len()) as u64;
+            let (doc, key, seed) = (l.doc, l.key, l.seed);
+            match stroke {
+                Some(EngineStroke::Mixer(mixer)) if !failed => match mixer.prepare_commit(&mut app.session) {
                     Ok(p) => {
                         if app.run("paint.mixerBrush", p).is_ok() {
                             shown_as_document(app, doc, |k| k == 0 || (key..=key + steps).contains(&k));
@@ -72,6 +69,15 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                         app.ui.status = e.to_string();
                         app.ui.status_error = true;
                     }
+                },
+                // A step failed, or the thread stopped mid-step: render the whole stroke.
+                stroke => {
+                    drop(stroke);
+                    let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&d.points));
+                    if let Some(seed) = seed {
+                        p["seed"] = json!(seed);
+                    }
+                    let _ = app.run("paint.mixerBrush", p);
                 }
             }
         } else {
@@ -87,7 +93,8 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
     if live_retouch_command(d.tool).is_some() || crate::retouch_ui::dab_params(app, d.tool).is_some() || d.tool == Tool::ColorReplacement {
         app.live_stroke = None;
     }
-    let finished = crate::eraser_ui::finish_stroke(app, d.tool, &d.points) || crate::retouch_ui::finish_stroke(app, d.tool, &d.points, d.modifiers);
+    let finished = crate::eraser_ui::finish_stroke(app, d.tool, &d.points, d.line)
+        || crate::retouch_ui::finish_stroke_with(app, d.tool, &d.points, d.modifiers, d.line, d.history_params.clone());
     app.session.clear_live_stroke();
     if finished {
         return;
@@ -133,18 +140,29 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                 json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "line": line, "antiAlias": false, "feather": feather}),
             );
         }
-        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
+        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+            crate::retouch_ui::finish_patch(app, d.start, crate::retouch_ui::patch_end(&d, [end[0], end[1]]))
+        }
         Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
             crate::retouch_ui::finish_content_aware_move(app, d.start, [end[0], end[1]])
         }
         Tool::Lasso | Tool::Patch | Tool::ContentAwareMove => {
             let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();
+            // A Content-Aware Move drag with nothing to select only says so (#12192).
+            if d.tool == Tool::ContentAwareMove && crate::retouch_ui::content_aware_move_no_pixels(app, &pts) {
+                return;
+            }
             if pts.len() >= 3 {
                 let mode = selection_mode(app, d.modifiers);
                 let o = &app.ui.tool_options;
                 // The Patch and Content-Aware Move tools have no Feather in their options bar.
                 let feather = if d.tool == Tool::Lasso { o.feather } else { 0.0 };
-                let made = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": feather}));
+                let mut params = json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": feather});
+                // The Patch tool's lasso is a step of that tool in History; the Lasso tool keeps "Lasso".
+                if d.tool == Tool::Patch {
+                    params["historyName"] = json!("Patch Tool");
+                }
+                let made = app.run("select.lasso", params);
                 // The lasso only outlines the patch; say that it is dragged next (#1715).
                 if made.is_ok() && d.tool != Tool::Lasso {
                     crate::retouch_ui::patch_hint(app);
