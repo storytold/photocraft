@@ -180,3 +180,24 @@ fn a_click_within_one_frame_counts() {
     let button = |pressed| egui::Event::PointerButton { pos: a.center(), button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     assert_eq!(frame(vec![button(true), button(false)]), (true, false, true), "the click was on a");
 }
+
+/// A slow frame can hold a click on one rectangle and then a press on another: the second press
+/// counts for its own rectangle.
+#[test]
+fn every_press_of_a_frame_counts() {
+    let ctx = egui::Context::default();
+    let (a, b) = (egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(100.0, 100.0)), egui::Rect::from_min_size(egui::pos2(100.0, 0.0), vec2(100.0, 100.0)));
+    let frame = |events: Vec<egui::Event>| {
+        let input = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(200.0, 100.0))), ..Default::default() };
+        let mut seen = (false, false);
+        let mut out = ctx.run_ui(input, |ui| {
+            seen = (crate::canvas::pressed_on(ui, a, true), crate::canvas::pressed_on(ui, b, true));
+        });
+        out.textures_delta.clear();
+        seen
+    };
+    frame(vec![egui::Event::PointerMoved(a.center())]);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let seen = frame(vec![button(a.center(), true), button(a.center(), false), egui::Event::PointerMoved(b.center()), button(b.center(), true)]);
+    assert_eq!(seen, (true, true), "a click on a, then a press on b");
+}

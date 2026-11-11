@@ -2210,22 +2210,23 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
 
 /// A press this frame (the primary button, or `any` button) that began on `rect` with `ui`'s own
 /// layer on top there: not on a menu, popup or panel drawn over it (#11010). Where the press began,
-/// not where the pointer is by the time the frame runs, so a quick move can't carry it elsewhere.
-/// The press event's own position counts first: when the release comes in the same frame (a quick
-/// click or tap), egui has already dropped the press origin.
+/// not where the pointer is by the time the frame runs, so a quick move can't carry it elsewhere,
+/// and a release in the same frame (a quick click or tap) still counts. Every press of the frame
+/// counts: a slow frame can hold a click elsewhere and then a press here.
 pub(crate) fn pressed_on(ui: &egui::Ui, rect: Rect, primary: bool) -> bool {
-    let (pressed, origin) = ui.input(|i| {
-        let pressed = if primary { i.pointer.primary_pressed() } else { i.pointer.any_pressed() };
-        let at_press = i.events.iter().find_map(|e| match e {
-            egui::Event::PointerButton { pos, button, pressed: true, .. } if !primary || *button == egui::PointerButton::Primary => Some(*pos),
-            _ => None,
-        });
-        (pressed, at_press.or(i.pointer.press_origin()))
+    let presses: Vec<egui::Pos2> = ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::PointerButton { pos, button, pressed: true, .. } if !primary || *button == egui::PointerButton::Primary => Some(*pos),
+                _ => None,
+            })
+            .collect()
     });
     let ctx = ui.ctx();
     let rect = ui.clip_rect().intersect(rect);
     let rect = ctx.layer_transform_to_global(ui.layer_id()).map_or(rect, |t| t * rect);
-    pressed && origin.is_some_and(|p| rect.contains(p) && ctx.layer_id_at(p) == Some(ui.layer_id()))
+    presses.into_iter().any(|p| rect.contains(p) && ctx.layer_id_at(p) == Some(ui.layer_id()))
 }
 
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
