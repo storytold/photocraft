@@ -136,4 +136,5 @@ impl Session {
 }
 
 #[cfg(test)]
+#[path = "historical_xcf_open/tests.rs"]
 mod tests;
