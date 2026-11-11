@@ -111,7 +111,8 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
             if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
             json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
         ),
-        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "vibrance": o.vibrance})),
+        // Flow as the bar's field stores it (#12976), so a restored fraction paints what the bar shows.
+        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "flow": crate::eraser_ui::stored_tolerance(o.sponge_flow), "vibrance": o.vibrance})),
         _ => return None,
     })
 }
@@ -574,6 +575,12 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 /// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
 /// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
+    if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
+        crate::object_finder::clear(app);
+        crate::brush_refusal::prompt(app, tl!(why));
+        return;
+    }
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let sample_all = app.ui.tool_options.sample_all.object_selection;
@@ -938,23 +945,25 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Mode:"));
             let opts = [("desaturate".to_string(), tl!("Desaturate")), ("saturate".to_string(), tl!("Saturate"))];
             crate::widgets::dropdown(ui, "sponge-mode", tl!("Mode"), &mut o.sponge_mode, &opts, 110.0);
+            // Flow (#12976): whole numbers 1..100 with the "Closest value inserted" alert, and a slider arrow.
+            let label = tl!("Flow:");
+            opt(ui, label);
+            let (_, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut o.sponge_flow, 1.0..=100.0, "%", 58.0);
+            cam_amount_slider(ui, tl!("Flow"), &mut o.sponge_flow, 1.0, 100.0, "Flow");
             crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
+            }
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
             let label = tl!("Strength:");
             opt(ui, label);
-            // Blur's (#12650) and Sharpen's (#12949) Strength are measured; a copy, so a shared fraction is not rounded.
-            let out_of_range = if matches!(tool, Tool::Blur | Tool::Sharpen) {
-                let mut s = o.strength;
-                let (r, alert) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
-                if r.changed() {
-                    o.strength = s;
-                }
-                alert
-            } else {
-                crate::widgets::value_field(ui, &mut o.strength, 1.0..=100.0, "%", 58.0);
-                false
-            };
+            // Measured for Blur (#12650), Sharpen (#12949) and Smudge (#12962); a copy, so a shared fraction is not rounded.
+            let mut s = o.strength;
+            let (r, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
+            if r.changed() {
+                o.strength = s;
+            }
             if let Some(all) = o.sample_all.slot(tool) {
                 crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
             }
@@ -1132,3 +1141,7 @@ mod cam_options_bar_tests;
 #[cfg(test)]
 #[path = "../burn_bar_tooltips_tests.rs"]
 mod burn_bar_tooltips_tests;
+
+#[cfg(test)]
+#[path = "../sponge_flow_field_tests.rs"]
+mod sponge_flow_field_tests;

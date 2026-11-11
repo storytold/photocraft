@@ -506,6 +506,25 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
 
+/// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
+/// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
+/// path at all. A path that exists but isn't active, and the Path Selection and Direct Selection
+/// menus, keep the table's label.
+pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
+    if command != "path.transform" || menu.tool != Tool::Pen {
+        return label;
+    }
+    if app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2) {
+        return "Free Transform Points";
+    }
+    let any_path = app.session.active().is_some_and(|st| {
+        st.doc.work_path.is_some()
+            || !st.doc.paths.is_empty()
+            || st.doc.walk().iter().any(|(_, _, l)| l.vector_mask.is_some() || matches!(l.content, LayerContent::Shape(_)))
+    });
+    if any_path { label } else { "Free Transform" }
+}
+
 /// The Color Sampler menu's Delete row: removes the sampler the menu opened on.
 pub const SAMPLER_DELETE: &str = "view.colorSamplers.delete";
 
@@ -1242,6 +1261,7 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
     if command == "path.toSelection" {
         // OK deselects and hides the path, as ⌘↩ does (#6079).
         fields.insert("__deselectPath".into(), json!(true));
+        fields.insert(MAKE_SELECTION.into(), json!(true));
     }
     if command == "path.fill" {
         let fg = app.session.tools.foreground;
@@ -1260,6 +1280,63 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
         fields.insert("simulatePressure".into(), json!(remembered_simulate_pressure(app)));
     }
     spec_dialog(app, command, label, spec, fields);
+}
+
+/// Marks the Make Selection dialog [`pen_dialog`] opens. It keeps the schema dialog's fields, so OK
+/// and Alt+Reset work as before; only the body is Photoshop's layout (#12917).
+const MAKE_SELECTION: &str = "__makeSelection";
+
+/// The Make Selection operations, in Photoshop's order: (`path.toSelection` mode, label).
+const MAKE_SELECTION_OPERATIONS: [(&str, &str); 4] =
+    [("replace", "New Selection"), ("add", "Add to Selection"), ("subtract", "Subtract from Selection"), ("intersect", "Intersect with Selection")];
+
+/// Is this dialog the Make Selection dialog?
+pub(crate) fn owns_make_selection(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(MAKE_SELECTION)
+}
+
+/// Photoshop's Make Selection dialog: Rendering (Feather Radius, Anti-aliased) and Operation.
+/// Without a selection there is nothing to combine with, so only New Selection is available.
+pub(crate) fn make_selection_body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut serde_json::Map<String, Value>) {
+    let has_selection = app.session.active().is_some_and(|st| st.doc.selection.is_some());
+    ui.spacing_mut().item_spacing.y = 6.0;
+    crate::widgets::section_label(ui, tl!("Rendering"));
+    crate::widgets::hairline(ui);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Feather Radius:"));
+        let mut feather = f.get("feather").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        crate::widgets::value_field(ui, &mut feather, 0.0..=250.0, "", 64.0).accessible_name(tl!("Feather Radius:"));
+        ui.label(tl!("pixels"));
+        // The schema dialog's rounding, so OK sends what it sent.
+        f.insert("feather".into(), json!((feather * 10.0).round() / 10.0));
+    });
+    let mut anti_alias = f.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
+    crate::widgets::checkbox(ui, &mut anti_alias, tl!("Anti-aliased"));
+    f.insert("antiAlias".into(), json!(anti_alias));
+    ui.add_space(4.0);
+    crate::widgets::section_label(ui, tl!("Operation"));
+    crate::widgets::hairline(ui);
+    let mut mode = f.get("mode").and_then(Value::as_str).unwrap_or("replace").to_string();
+    // A combining mode set from outside, or a selection gone while the dialog was open.
+    if !has_selection {
+        mode = "replace".into();
+    }
+    for (key, label) in MAKE_SELECTION_OPERATIONS {
+        ui.add_enabled_ui(key == "replace" || has_selection, |ui| ui.radio_value(&mut mode, key.to_string(), tl!(label)));
+    }
+    f.insert("mode".into(), json!(mode));
+}
+
+/// OK in the Make Selection dialog: a new selection is the History step Selection Change, as in
+/// Photoshop (#12917). ⌘↩, the Paths panel and the combining operations keep the engine's Make
+/// Selection (not measured). Only a step this run added is renamed: `revision` is from before it.
+pub(crate) fn name_make_selection_step(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>, params: &Value, revision: Option<u64>) {
+    if !owns_make_selection(fields) || params.get("mode").and_then(Value::as_str).is_some_and(|m| m != "replace") {
+        return;
+    }
+    if let Some(st) = app.session.active_mut().filter(|st| Some(st.revision) != revision) {
+        st.history.set_current_label("Selection Change");
+    }
 }
 
 /// The Pen options bar's Make Selection (Path mode, #5703): the canvas menu's Make Selection…
@@ -1376,7 +1453,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         ui.separator();
                         continue;
                     };
-                    let item = egui::Button::selectable(mode_checked(app, &menu, command), tl!(label)).min_size(egui::vec2(200.0, 20.0));
+                    let text = match row_label(app, &menu, label, command) {
+                        // Spelled out so `cargo xtask i18n-coverage` lists the new label.
+                        "Free Transform Points" => tl!("Free Transform Points"),
+                        key => tl!(key),
+                    };
+                    let item = egui::Button::selectable(mode_checked(app, &menu, command), text).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
                         selected = Some((*command).to_string());
                     }
@@ -1412,3 +1494,9 @@ mod tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;
+
+#[cfg(test)]
+mod pen_free_transform_label_tests;
+
+#[cfg(test)]
+mod make_selection_dialog_tests;

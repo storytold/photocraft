@@ -365,3 +365,5 @@ mod fx_mode_tests;
 #[cfg(test)]
 mod brush_clear_background_tests;
 pub mod command_hints;
+#[cfg(test)]
+mod pencil_auto_erase_exact_tests;

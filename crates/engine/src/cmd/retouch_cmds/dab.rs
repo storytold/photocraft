@@ -265,12 +265,13 @@ impl DabTool {
     }
 }
 
-/// The reference application refuses a Dodge stroke in Indexed Color and Bitmap documents, with
-/// its alert's words (#12686); other modes (Multichannel and Duotone were not measured) tone as
-/// before. The live stroke checks this too, so it previews nothing there.
+/// The reference application refuses a Dodge or Sharpen stroke in Indexed Color and Bitmap
+/// documents, with its alert's words (#12686, #12953); other modes (Multichannel and Duotone were
+/// not measured) paint as before. The live stroke checks this too, so it previews nothing there.
 fn mode_refusal(s: &Session, cmd: &str) -> Result<()> {
     let tool = match cmd {
         "paint.dodge" => "dodge tool",
+        "paint.sharpen" => "sharpen tool",
         _ => return Ok(()),
     };
     let why = match s.active().map(|st| st.doc.mode) {
@@ -695,3 +696,7 @@ impl LiveDab {
 #[cfg(test)]
 #[path = "dodge_refuses_indexed_tests.rs"]
 mod dodge_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "sharpen_refuses_indexed_tests.rs"]
+mod sharpen_refuses_indexed_tests;
