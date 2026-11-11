@@ -44,13 +44,16 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     let layout = if info.has_alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
     let sample = if info.bit_depth > 8 { SampleType::U16 } else { SampleType::U8 };
     let (w, h) = if keep_orientation { (info.coded_width, info.coded_height) } else { (info.width, info.height) };
-    limits.check(w, h, layout, sample)?;
+    // craft-heif hands back 16-bit samples at any depth, and that buffer is still live while the
+    // output copy below is built, so the peak is both of them, not the output alone.
+    let peak = (layout.channels() * (2 + sample.bytes())) as u64;
+    limits.check_bytes(w, h, peak)?;
     // The delegated decoder allocates the full coded image before applying any clean-aperture
     // crop or orientation transform, so the coded dimensions must pass the limit policy even
     // when the displayed (transformed) size is small. Checking only the transformed size let a
     // tiny visible image hide a large coded allocation.
     if !keep_orientation && (info.coded_width, info.coded_height) != (w, h) {
-        limits.check(info.coded_width, info.coded_height, layout, sample)?;
+        limits.check_bytes(info.coded_width, info.coded_height, peak)?;
     }
     let options = craft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation };
     let decoded = craft_heif::decode(bytes, &options).map_err(err)?;
