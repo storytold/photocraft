@@ -91,6 +91,10 @@ pub struct DirectSelection {
     /// until the path's structure changes (#10854).
     #[serde(skip)]
     pub(crate) signature: Option<crate::path_components::SelectionSignature>,
+    /// Where a ⌥-press with Delete Anchor Point hit an anchor: its release without a drag selects
+    /// the anchor's subpath (`anchor_tools`).
+    #[serde(skip)]
+    pub(crate) subpath_press: Option<[f64; 2]>,
 }
 
 /// The cached structural check for one document revision. Type Paths are generated only when
@@ -768,10 +772,15 @@ pub(crate) fn grab_added(app: &mut PhotocraftApp, target: PathRef, base: Path, k
     app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Anchors(vec![k]), start: p, end: p, preview: None });
 }
 
+/// Did the pointer move between `start` and `end` (document points): a screen pixel or more?
+pub(crate) fn moved(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
+    (end[0] - start[0]).hypot(end[1] - start[1]) * f64::from(app.point_zoom()) >= 1.0
+}
+
 /// End of an edit drag: commit it as one command. A click (no movement) commits nothing, except
 /// Pen + ⌥ on an anchor, which makes it a corner. The Pen path being drawn takes the edit directly.
 fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, start: [f64; 2], end: [f64; 2], mods: Modifiers) {
-    let moved = (end[0] - start[0]).hypot(end[1] - start[1]) * f64::from(app.point_zoom()) >= 1.0;
+    let moved = moved(app, start, end);
     if target == PathRef::Pen {
         let edited = match edit {
             Edit::Convert(k) if !moved => {
