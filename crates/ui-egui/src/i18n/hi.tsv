@@ -716,3 +716,8 @@ cameraRaw	Yellow	पीला
 	Content-aware fill	सामग्री-आधारित भरण
 	Sample content from part of the image and use it to fill a small area	छोटा क्षेत्र भरने के लिए छवि के हिस्से से सामग्री लें
 	Reset the crop box, image rotation, and aspect ratio settings	क्रॉप फ़्रेम, छवि घुमाव और पक्षानुपात रीसेट करें
+	General Blending	सामान्य ब्लेंडिंग
+	Blend Mode	ब्लेंड मोड
+	Opacity	ओपेसिटी
+	Advanced Blending	उन्नत ब्लेंडिंग
+	Fill Opacity	फ़िल ओपेसिटी
