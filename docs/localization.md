@@ -36,6 +36,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Suomi | `fi` | one / other (partitive after every count but 1) |
 | Dansk | `da` | one / other |
 | Norsk bokmål | `nb` | one / other |
+| ქართული | `ka` | one form (count-neutral: `შრე: {n}`) |
 | עברית | `he` | one / other |
 | اردو | `ur` | one / other |
 | Română | `ro` | one / few (0, 2–19, 101–119 …) / other (20–100, 120 …) |

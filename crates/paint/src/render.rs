@@ -263,9 +263,7 @@ impl BrushContext {
         let (fx, fy) = ((x as f32 + 0.5) / s - 0.5, (y as f32 + 0.5) / s - 0.5);
         let (x0, y0) = (fx.floor(), fy.floor());
         let (tx, ty) = (fx - x0, fy - y0);
-        let a = p.sample_wrap(x0, y0) + (p.sample_wrap(x0 + 1.0, y0) - p.sample_wrap(x0, y0)) * tx;
-        let b = p.sample_wrap(x0, y0 + 1.0) + (p.sample_wrap(x0 + 1.0, y0 + 1.0) - p.sample_wrap(x0, y0 + 1.0)) * tx;
-        a + (b - a) * ty
+        p.sample_bilinear_wrap(x0, y0, tx, ty)
     }
 
     /// Bounding rectangle of a dab (rotated sampled tips need the corner reach).

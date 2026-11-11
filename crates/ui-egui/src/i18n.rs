@@ -216,7 +216,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 34] = [
+pub static LANGUAGES: [LangInfo; 35] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -284,6 +284,8 @@ pub static LANGUAGES: [LangInfo; 34] = [
     LangInfo { code: "ro", name: "Română", source: catalog!("ro"), plural: plural_romanian, complete_menus: true, catalog: OnceLock::new() },
     // Tamil; `ta-IN`, `ta-LK` and `ta_IN.UTF-8` resolve here. CLDR plural: one|other.
     LangInfo { code: "ta", name: "தமிழ்", source: catalog!("ta"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Georgian: nouns stay singular after a numeral (`შრე: 5`, `5 შრე`), so one form serves every count.
+    LangInfo { code: "ka", name: "ქართული", source: catalog!("ka"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
