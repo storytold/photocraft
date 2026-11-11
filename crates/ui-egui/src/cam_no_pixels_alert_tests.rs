@@ -22,7 +22,7 @@ fn app() -> PhotocraftApp {
 }
 
 /// A drag through `points` (the first is the press), released at the last.
-fn drag(app: &mut PhotocraftApp, points: &[[f64; 2]]) {
+pub(crate) fn drag(app: &mut PhotocraftApp, points: &[[f64; 2]]) {
     let m = Modifiers::NONE;
     let [x, y] = points[0];
     tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, m);
@@ -48,12 +48,12 @@ fn alerts(app: &PhotocraftApp) -> Vec<u64> {
 }
 
 /// Whether the document has a selection.
-fn selected(app: &PhotocraftApp) -> bool {
+pub(crate) fn selected(app: &PhotocraftApp) -> bool {
     app.session.active().unwrap().doc.selection.is_some()
 }
 
 /// The number of History states.
-fn steps(app: &PhotocraftApp) -> usize {
+pub(crate) fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.past_len()
 }
 
