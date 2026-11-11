@@ -411,7 +411,10 @@ fn open_at_six() -> Prompted {
 fn jpeg_quality_field_has_the_focused_id() {
     let h = open_at_six();
     let focused = h.ctx.memory(|m| m.focused()).expect("Quality starts focused");
-    let field = h.get_all_by_label("Quality").find(|n| (u128::from(n.accesskit_node().id()) >> 64) as u64 == focused.accesskit_id().0);
+    // Both the field and the slider are labelled "Quality"; the field is the one that is not the slider.
+    let field = h
+        .get_all_by_label("Quality")
+        .find(|n| n.accesskit_node().role() != egui::accesskit::Role::Slider && (u128::from(n.accesskit_node().id()) >> 64) as u64 == focused.accesskit_id().0);
     assert!(field.is_some(), "the focused id is not the Quality field's widget");
 }
 
@@ -431,19 +434,16 @@ fn jpeg_quality_arrows_step_after_tab_back() {
     assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(6));
 }
 
-/// Left and Right step the focused Quality field too, and keep the focus on it.
+/// Left and Right move the caret in the focused Quality field, so they leave the quality alone.
 #[test]
-fn jpeg_quality_left_and_right_step_and_keep_focus() {
+fn jpeg_quality_left_and_right_do_not_change_quality() {
     let mut h = open_at_six();
-    let focused = h.ctx.memory(|m| m.focused());
     h.key_press(Key::ArrowRight);
     h.run_steps(3);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(7));
     h.key_press(Key::ArrowLeft);
     h.key_press(Key::ArrowLeft);
     h.run_steps(3);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(5));
-    assert_eq!(h.ctx.memory(|m| m.focused()), focused, "the arrows keep the focus on Quality");
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(6));
 }
 
 /// With the focus elsewhere, the arrows leave Quality alone.

@@ -254,22 +254,19 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         crate::widgets::section_label(ui, tl!("Image Options"));
         ui.horizontal(|ui| {
             let quality_caption = ui.label(tl!("Quality"));
-            // The field sits in its own scope, so the id it takes for itself is stable and is the one
-            // focus is requested for and read from (a DragValue has no `.id()` of its own).
+            // The field sits in its own scope so the focus request names the field's own id (a DragValue
+            // has no `.id()` of its own); it does not make that id independent of the widgets before it.
             ui.push_id("jpeg-quality", |ui| {
                 let quality_id = ui.next_auto_id();
                 if !ui.is_sizing_pass() && std::mem::take(&mut p.focus_quality_on_open) {
                     ui.memory_mut(|m| m.request_focus(quality_id));
                 }
-                // The arrows step by one quality level while pointer scrubbing stays fine: Up and Right
-                // raise it, Down and Left lower it.
+                // Up and Down step by one quality level while pointer scrubbing stays fine. Left and Right
+                // are left alone: a focused DragValue is a text field and they move its caret.
                 if ui.is_enabled() && ui.memory(|m| m.has_focus(quality_id)) {
                     let (up, down) = ui.input_mut(|input| {
                         let n = |input: &mut egui::InputState, key| input.count_and_consume_key(egui::Modifiers::NONE, key);
-                        (
-                            n(input, egui::Key::ArrowUp).saturating_add(n(input, egui::Key::ArrowRight)),
-                            n(input, egui::Key::ArrowDown).saturating_add(n(input, egui::Key::ArrowLeft)),
-                        )
+                        (n(input, egui::Key::ArrowUp), n(input, egui::Key::ArrowDown))
                     });
                     if up != 0 || down != 0 {
                         // egui may already have queued a focus move for the consumed arrow.
