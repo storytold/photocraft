@@ -16,6 +16,7 @@
 //! helper thread, and the closest finer level already uploaded is shown until it is ready
 //! (#11103): halving a 24 MP layer took a whole frame or more on the UI thread.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use egui::{Color32, ColorImage, TextureHandle, TextureId, TextureOptions};
@@ -41,6 +42,19 @@ pub struct PreviewTextures {
     building: Arc<Mutex<Vec<(u32, u64)>>>,
     /// Whether a mip level that has a finer level to stand in for it is built off the UI thread.
     background: bool,
+    /// Cleared when the preview closes (under the `uploaded` lock): a level finishing after that is
+    /// neither converted nor uploaded. Workers only read it, so they never keep the preview alive.
+    alive: Arc<AtomicBool>,
+    /// Held by a test to pause the workers just before they check `alive`.
+    #[cfg(test)]
+    gate: Arc<Mutex<()>>,
+}
+
+impl Drop for PreviewTextures {
+    fn drop(&mut self) {
+        let _uploads = self.uploaded.lock().unwrap_or_else(PoisonError::into_inner);
+        self.alive.store(false, Ordering::Release);
+    }
 }
 
 /// Off the UI thread on native builds; the web build has no threads to spare. Unit tests build
@@ -63,6 +77,9 @@ impl PreviewTextures {
             uploaded: Arc::new(Mutex::new(vec![Level { level: 0, display_key: 0, nearest: false, tex, uv: base_uv }])),
             building: Arc::new(Mutex::new(Vec::new())),
             background: BUILD_IN_BACKGROUND,
+            alive: Arc::new(AtomicBool::new(true)),
+            #[cfg(test)]
+            gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -76,6 +93,14 @@ impl PreviewTextures {
     #[cfg(test)]
     pub(crate) fn is_building(&self) -> bool {
         !self.building.lock().unwrap_or_else(PoisonError::into_inner).is_empty()
+    }
+
+    /// What a test locks to pause the workers just before they check that the preview is open,
+    /// and what tells it they are all done, which still works once the preview is gone.
+    #[cfg(test)]
+    pub(crate) fn worker_hooks(&self) -> (Arc<Mutex<()>>, impl Fn() -> bool + use<>) {
+        let building = Arc::clone(&self.building);
+        (Arc::clone(&self.gate), move || building.lock().unwrap_or_else(PoisonError::into_inner).is_empty())
     }
 
     /// Size of the full-resolution level in texels.
@@ -162,23 +187,24 @@ impl PreviewTextures {
             }
             building.push((level, display_key));
         }
-        // Only the preview owns `uploaded`: workers hold it weakly, so another level still building
-        // doesn't count as a preview to upload for.
-        let (images, uploaded, building) = (Arc::clone(&self.images), Arc::downgrade(&self.uploaded), Arc::clone(&self.building));
+        let (images, uploaded, building, alive) = (Arc::clone(&self.images), Arc::clone(&self.uploaded), Arc::clone(&self.building), Arc::clone(&self.alive));
         let (ctx, base_uv, name) = (ctx.clone(), self.base_uv, format!("{}-{level}-linear", self.name));
         let display = display.map(share_display);
+        #[cfg(test)]
+        let gate = Arc::clone(&self.gate);
         let job = move || {
             let built = level_of(&images, base_uv, level);
-            // Nobody left to show it (the box closed meanwhile): neither convert nor upload.
-            if let Some((img, uv)) = built.filter(|_| uploaded.strong_count() > 0) {
+            #[cfg(test)]
+            drop(gate.lock().unwrap_or_else(PoisonError::into_inner));
+            // The box closed meanwhile: neither convert nor upload.
+            if let Some((img, uv)) = built.filter(|_| alive.load(Ordering::Acquire)) {
                 let img = display.as_ref().map_or_else(|| Arc::clone(&img), |d| Arc::new(display_image(&img, d)));
-                if let Some(uploaded) = uploaded.upgrade() {
+                let mut up = uploaded.lock().unwrap_or_else(PoisonError::into_inner);
+                // Checked again under the lock the preview takes as it closes. A monitor profile
+                // change meanwhile released this display's uploads: drop it then too.
+                if alive.load(Ordering::Acquire) && up.iter().all(|l| l.display_key == display_key) && !up.iter().any(|l| l.level == level && !l.nearest) {
                     let tex = ctx.load_texture(name, img, TextureOptions::LINEAR);
-                    let mut up = uploaded.lock().unwrap_or_else(PoisonError::into_inner);
-                    // A monitor profile change meanwhile released this display's uploads: drop it.
-                    if up.iter().all(|l| l.display_key == display_key) && !up.iter().any(|l| l.level == level && !l.nearest) {
-                        up.push(Level { level, display_key, nearest: false, tex, uv });
-                    }
+                    up.push(Level { level, display_key, nearest: false, tex, uv });
                 }
             }
             building.lock().unwrap_or_else(PoisonError::into_inner).retain(|b| *b != (level, display_key));

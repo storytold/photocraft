@@ -260,3 +260,27 @@ fn a_level_with_nothing_finer_uploaded_for_the_display_is_built_at_once() {
     assert!((uv[0] - 5.0 / 6.0).abs() < 1e-6 && (uv[1] - 3.0 / 4.0).abs() < 1e-6, "{uv:?}");
     ctx.tex_manager().write().take_delta().clear();
 }
+
+/// A box closed while two levels were still building: neither worker converts or uploads its
+/// level, though each still holds the preview's shared state (#13382 review).
+#[test]
+fn levels_finishing_after_the_box_closed_are_not_uploaded() {
+    let ctx = egui::Context::default();
+    let before = ctx.tex_manager().read().num_allocated();
+    let t = textures(&ctx);
+    let _ = t.pick(&ctx, 1.0, 1.0, false);
+    let (gate, done) = t.worker_hooks();
+    let held = gate.lock().unwrap();
+    // Levels 1 and 3, each on its own worker, both paused before they check the box is open.
+    let _ = t.pick(&ctx, 0.3, 1.0, false);
+    let _ = t.pick(&ctx, 0.1, 1.0, false);
+    drop(t);
+    drop(held);
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(10), "the workers finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ctx.tex_manager().read().num_allocated(), before, "nothing uploaded for the closed box");
+    ctx.tex_manager().write().take_delta().clear();
+}
