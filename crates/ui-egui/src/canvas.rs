@@ -1492,7 +1492,9 @@ fn transform_press_release(
         }
     }
     if app.ui.transform.is_none() || !ui.input(|i| i.pointer.primary_down()) {
-        ctx.data_mut(|m| m.remove::<bool>(transform_press_id(ctx)));
+        // The id first: reading the viewport inside `data_mut` would wait on its own lock.
+        let id = transform_press_id(ctx);
+        ctx.data_mut(|m| m.remove::<bool>(id));
     }
 }
 
