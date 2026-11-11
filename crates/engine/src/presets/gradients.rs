@@ -64,7 +64,8 @@ fn sample<V: Copy>(stops: &[(f32, V)], t: f32, mix: impl Fn(V, V, f32) -> V) -> 
     }
     // Sorted stops: bisect rather than rescan them for every generated position.
     let j = stops.partition_point(|s| s.0 < t);
-    if j >= stops.len() {
+    // j == 0 for a NaN position (no stop compares below it): the last stop, as a scan gave.
+    if j >= stops.len() || j == 0 {
         return stops.last().map(|s| s.1);
     }
     let ((t0, a), (t1, b)) = (stops[j - 1], stops[j]);
@@ -766,4 +767,17 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
         },
     ]
+}
+
+#[cfg(test)]
+mod sample_tests {
+    use super::sample;
+
+    #[test]
+    fn a_nan_position_takes_the_last_stop_instead_of_panicking() {
+        let stops = [(0.0f32, 1.0f32), (0.5, 2.0), (1.0, 3.0)];
+        let lerp = |a: f32, b: f32, u: f32| a + (b - a) * u;
+        assert_eq!(sample(&stops, f32::NAN, lerp), Some(3.0));
+        assert_eq!(sample(&stops, 0.25, lerp), Some(1.5));
+    }
 }
