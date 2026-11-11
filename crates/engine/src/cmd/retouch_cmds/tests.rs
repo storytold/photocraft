@@ -1605,9 +1605,10 @@ fn content_aware_move_structure_and_color_shape_the_result() {
     };
     let (kept, some, fitted) = (mean(0), mean(3), mean(10));
     assert!((kept - 0.8).abs() < 1e-3, "color 0 keeps the colour: {kept}");
-    // Photoshop shifts by up to about 0.04 per step of Color.
-    assert!((some - 0.68).abs() < 0.03, "color 3 adapts part of the way: {some}");
-    assert!((fitted - 0.4).abs() < 0.03, "color 10 adapts most of the way: {fitted}");
+    // A brightness-only patch stays through Color 5 and matches the new surroundings at Color 10
+    // (0.8 onto 0.2). https://github.com/storytold/photocraft/issues/12197#issuecomment-6716231485
+    assert!((some - 0.8).abs() < 0.03, "color 3 leaves the middle: {some}");
+    assert!((fitted - 0.2).abs() < 0.03, "color 10 matches the new surroundings: {fitted}");
 }
 
 #[test]
@@ -1813,12 +1814,13 @@ fn pattern_stamp_aligned_keeps_document_phase_across_strokes() {
 fn pattern_stamp_unaligned_restarts_at_each_stroke() {
     let mut s = session(80, 40, 8, "rgb");
     let r1 = stamp(&mut s, json!({"points": [[10, 16]], "size": 8, "hardness": 100, "aligned": false})).unwrap();
-    assert_eq!(r1["phase"], json!([10.0, 16.0]));
+    assert_eq!(r1["phase"], json!([15.0, 9.0]));
     let a = rgba(&s, 10, 16);
     let r2 = stamp(&mut s, json!({"points": [[40, 16]], "size": 8, "hardness": 100, "aligned": false})).unwrap();
-    assert_eq!(r2["phase"], json!([40.0, 16.0]));
+    assert_eq!(r2["phase"], json!([1.0, 9.0]));
     let b = rgba(&s, 40, 16);
-    assert!((a[0] - b[0]).abs() <= tol(8), "each stroke's first point is the tile origin: {a:?} vs {b:?}");
+    assert!((a[0] - checker_at(10 - 15, 16 - 9)).abs() <= tol(8), "first stroke: {a:?}");
+    assert!((b[0] - checker_at(40 - 1, 16 - 9)).abs() <= tol(8), "new stroke: {b:?}");
 }
 
 #[test]
