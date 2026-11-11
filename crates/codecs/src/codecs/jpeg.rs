@@ -40,6 +40,47 @@ pub(crate) struct JpegMeta {
     pub adobe_transform: Option<u8>,
     /// (width, height, components) from the first SOFn.
     pub frame: Option<(u32, u32, u8)>,
+    /// [`crate::JpegInfo::held_coefficients`] of the first SOFn and the first scan.
+    pub held_coefficients: u64,
+}
+
+/// The first frame of `b` as [`crate::JpegInfo`], from its markers alone (see [`crate::jpeg_info`]).
+pub(crate) fn info(b: &[u8]) -> Option<crate::JpegInfo> {
+    let m = scan_metadata(b);
+    let (width, height, components) = m.frame?;
+    let layout = match components {
+        1 => ChannelLayout::Gray,
+        3 => ChannelLayout::Rgb,
+        4 => ChannelLayout::Cmyk,
+        _ => return None,
+    };
+    let held_coefficients = m.held_coefficients;
+    Some(crate::JpegInfo { width, height, layout, whole_coefficients: uses_craft_jpeg(b), held_coefficients })
+}
+
+/// Bytes of the coefficients `zune-jpeg` holds beside its output for a frame it can't turn into
+/// rows as it reads (see [`crate::JpegInfo::held_coefficients`]), from the frame's header
+/// segment `seg` and the number of components in its first scan: per component, a 64-value
+/// block of `i16`s for each of its H × V blocks in every MCU (A.2), the MCUs covering the frame
+/// at the largest sampling factors. 0 for any other frame.
+fn held_coefficients(marker: u8, seg: &[u8], scan_components: Option<u8>) -> u64 {
+    let &[8, h0, h1, w0, w1, n, ref comps @ ..] = seg else { return 0 };
+    // Progressive scans refine every block in turn; a sequential first scan without every
+    // component leaves its rows unfinished until the scans that bring the others.
+    let held = match marker {
+        0xC2 => true,
+        0xC0 | 0xC1 => scan_components.is_some_and(|s| s < n),
+        _ => false,
+    };
+    if !held {
+        return 0;
+    }
+    let (h, w) = (u64::from(u16::from_be_bytes([h0, h1])), u64::from(u16::from_be_bytes([w0, w1])));
+    let factors: Vec<(u64, u64)> = comps.as_chunks::<3>().0.iter().take(usize::from(n)).map(|&[_, f, _]| (u64::from(f >> 4), u64::from(f & 15))).collect();
+    let hmax = factors.iter().map(|f| f.0).max().unwrap_or(1).max(1);
+    let vmax = factors.iter().map(|f| f.1).max().unwrap_or(1).max(1);
+    let mcus = w.div_ceil(8 * hmax) * h.div_ceil(8 * vmax);
+    factors.iter().map(|&(fh, fv)| mcus * fh * fv * 64 * 2).sum()
 }
 
 /// Walk the marker segments up to SOS and collect metadata.
@@ -49,6 +90,9 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
     // Photoshop splits a large resource block over consecutive APP13 segments.
     let mut photoshop: Vec<u8> = Vec::new();
     let mut jfif_dpi = None;
+    // The first frame header and the number of components in the first scan.
+    let mut sof: Option<(u8, &[u8])> = None;
+    let mut scan_components = None;
     let mut i = 2;
     while i + 4 <= b.len() {
         if b[i] != 0xFF {
@@ -64,6 +108,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
             continue;
         }
         if marker == 0xDA || marker == 0xD9 {
+            scan_components = (marker == 0xDA).then(|| b.get(i + 4).copied()).flatten();
             break;
         }
         let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
@@ -100,6 +145,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 let h = u16::from_be_bytes([seg[1], seg[2]]) as u32;
                 let w = u16::from_be_bytes([seg[3], seg[4]]) as u32;
                 m.frame = Some((w, h, seg[5]));
+                sof = Some((marker, seg));
             }
             0xEE if seg.len() >= 12 && seg.starts_with(b"Adobe") => {
                 m.adobe_transform = Some(seg[11]);
@@ -108,6 +154,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
         }
         i += 2 + len;
     }
+    m.held_coefficients = sof.map_or(0, |(marker, seg)| held_coefficients(marker, seg, scan_components));
     m.dpi = photoshop_resolution(&photoshop)
         .or_else(|| m.xmp.as_deref().and_then(xmp_resolution))
         .or_else(|| m.exif.as_deref().and_then(exif_resolution))
@@ -376,6 +423,315 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     Ok(img)
 }
 
+/// Decoded rows a [`JpegBands`] group holds, about: a few lines of MCUs per worker at a time.
+const GROUP_BYTES: usize = 64 << 20;
+
+/// Bands each worker reads in a row, at least, when reading from a seek point also decodes the
+/// MCU lines either side ([`craft_jpeg::Bands::halo`], chroma subsampled down): one band at a
+/// time would decode three lines for each. Groups then hold a run for every worker. Without a
+/// halo stretches stay a band each, which balances the workers best.
+const RUN: usize = 4;
+
+/// A baseline JPEG decoded a group of rows at a time, for a caller that writes them into its own
+/// storage and never needs the whole decoded image (see [`craft_jpeg::Bands`]). The samples,
+/// metadata and warnings are what [`decode`] gives for the file, except that the samples come
+/// from `craft-jpeg`'s decoder, not `zune-jpeg`'s: equal within the difference between the two
+/// inverse transforms and chroma upsamplings.
+pub struct JpegBands<'a> {
+    bands: craft_jpeg::Bands<'a>,
+    layout: ChannelLayout,
+    /// The structure says the file ends inside the image data.
+    truncated: bool,
+    /// About how many bytes of rows a group holds, and the bands a worker reads in a row (0:
+    /// every stretch on its own): [`GROUP_BYTES`] and [`RUN`] or 0 (tests set them).
+    group_bytes: usize,
+    run: usize,
+    pub icc: Option<Vec<u8>>,
+    pub meta: Metadata,
+    /// After [`JpegBands::decode`]: [`DecodeWarning::Truncated`] when data was cut short or damaged.
+    pub warnings: Vec<DecodeWarning>,
+}
+
+impl<'a> JpegBands<'a> {
+    /// Opens `bytes` for decoding in bands, checked against `limits` as [`decode`] checks the
+    /// whole image (sizes and decoded bytes; nothing that size is allocated). `Ok(None)`: decode
+    /// the file whole instead. That is any file but a sequential Huffman-coded 8-bit one with
+    /// all its components in one scan, and one whose EXIF orientation turns it. Errors are the
+    /// ones [`decode`] reports for the file before it decodes.
+    pub fn open(bytes: &'a [u8], limits: &Limits) -> Result<Option<Self>, CodecError> {
+        let meta = scan_metadata(bytes);
+        let Some((w, h, nc)) = meta.frame else { return Ok(None) };
+        let layout = match nc {
+            1 => ChannelLayout::Gray,
+            3 => ChannelLayout::Rgb,
+            4 => ChannelLayout::Cmyk,
+            _ => return Ok(None),
+        };
+        if uses_craft_jpeg(bytes) || meta.exif.as_deref().is_some_and(|e| (2..=8).contains(&crate::exif_orientation(e))) {
+            return Ok(None);
+        }
+        // Two passes over the scan data, side by side: where the data ends, and where its restart
+        // intervals start (the seek points). The second only reads.
+        let mut lim = craft_jpeg::Limits::default();
+        lim.max_pixels = limits.max_pixels;
+        lim.max_alloc = limits.max_alloc;
+        let seek = || {
+            craft_jpeg::Bands::new(bytes, &lim, meta.adobe_transform).ok().map(|mut b| {
+                b.find_seek_points();
+                b
+            })
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let ((end, scan_bytes), bands) = rayon::join(|| data_end(bytes), seek);
+        #[cfg(target_arch = "wasm32")]
+        let ((end, scan_bytes), bands) = (data_end(bytes), seek());
+        if end == DataEnd::Empty {
+            return Err(err("the file ends before any image data"));
+        }
+        limits.check(w, h, layout, SampleType::U8)?;
+        // As for the whole decode (#8597): damaged data decodes to grey, so a short scan under a
+        // large frame would make a document of that size from a few kilobytes of file.
+        if u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes {
+            let what = if end == DataEnd::Truncated { "the truncated scan" } else { "the scan data" };
+            return Err(err(format!("{what} is too short for the frame it declares")));
+        }
+        let Some(bands) = bands else { return Ok(None) };
+        if (bands.width(), bands.height(), usize::from(bands.components())) != (w, h, layout.channels()) {
+            return Ok(None);
+        }
+        let dpi = meta.dpi.or_else(|| crate::resolution::from_metadata(meta.exif.as_deref(), meta.xmp.as_deref()));
+        let JpegMeta { icc, exif, xmp, photoshop, .. } = meta;
+        let run = if bands.halo() > 0 { RUN } else { 0 };
+        Ok(Some(JpegBands {
+            bands,
+            layout,
+            truncated: end == DataEnd::Truncated,
+            group_bytes: GROUP_BYTES,
+            run,
+            icc,
+            meta: Metadata { exif, xmp, dpi, photoshop_resources: photoshop, ..Default::default() },
+            warnings: Vec::new(),
+        }))
+    }
+
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.bands.width(), self.bands.height())
+    }
+
+    pub fn layout(&self) -> ChannelLayout {
+        self.layout
+    }
+
+    /// Lines of MCUs (bands) decoded at once: about [`GROUP_BYTES`], and at least a run for
+    /// every worker (see [`RUN`]).
+    fn bands_per_group(&self) -> usize {
+        #[cfg(not(target_arch = "wasm32"))]
+        let workers = rayon::current_num_threads();
+        #[cfg(target_arch = "wasm32")]
+        let workers: usize = 1;
+        (self.group_bytes / self.bands.band_bytes().max(1)).max(workers.saturating_mul(self.run)).max(1)
+    }
+
+    /// What decoding holds beside the caller's storage: two of the largest groups (one being
+    /// decoded while the caller takes the other) and a reader's buffers per worker, plus one.
+    pub fn working_bytes(&self) -> u64 {
+        let group = (self.bands_per_group() * self.bands.band_bytes()) as u64;
+        #[cfg(not(target_arch = "wasm32"))]
+        let workers = rayon::current_num_threads() as u64;
+        #[cfg(target_arch = "wasm32")]
+        let workers = 1;
+        group.saturating_mul(2).saturating_add(self.bands.reader_bytes().saturating_mul(workers + 1))
+    }
+
+    /// The groups [`JpegBands::decode`] hands over, in order: whole stretches between seek points
+    /// (as many as fit in a group, each read by its own reader), or a group's worth of a longer
+    /// stretch read in order (seeking at the stretch's start).
+    fn plan(&self) -> Vec<Group> {
+        let n = self.bands.bands();
+        let per_group = self.bands_per_group();
+        let mut points: Vec<usize> = self.bands.seek_points().collect();
+        points.push(n);
+        let mut plan = Vec::new();
+        let mut i = 0;
+        while let (Some(&first), Some(&next)) = (points.get(i), points.get(i + 1)) {
+            if next - first > per_group {
+                let mut at = first;
+                while at < next {
+                    let end = (at + per_group).min(next);
+                    plan.push(Group::InOrder { bands: at..end, seek: at == first });
+                    at = end;
+                }
+                i += 1;
+            } else {
+                let mut j = i + 1;
+                while points.get(j + 1).is_some_and(|&p| p - first <= per_group) {
+                    j += 1;
+                }
+                // Consecutive stretches merge into runs of at least `run` bands, each read in order.
+                let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+                for w in points.get(i..=j).unwrap_or_default().windows(2) {
+                    match runs.last_mut() {
+                        Some(r) if r.len() < self.run => r.end = w[1],
+                        _ => runs.push(w[0]..w[1]),
+                    }
+                }
+                plan.push(Group::Stretches(runs));
+                i = j;
+            }
+        }
+        plan
+    }
+
+    /// Decodes the image in groups of rows, in order, handing each to `sink` with the row of its
+    /// first. A group is about [`GROUP_BYTES`]. Where restart intervals start lines of MCUs
+    /// ([`craft_jpeg::Bands::find_seek_points`]) the stretches between them decode on all
+    /// cores; elsewhere the rows decode in order. The next group decodes while `sink` takes the
+    /// last, so two groups exist at a time.
+    pub fn decode<E: From<CodecError> + Send>(&mut self, mut sink: impl FnMut(u32, &Image) -> Result<(), E> + Send) -> Result<(), E> {
+        let plan = self.plan();
+        let this = &*self;
+        let pool = std::sync::Mutex::new(Vec::new());
+        let mut in_order = this.bands.reader();
+        let mut damaged = false;
+        let (mut spare, mut ready): (Vec<u8>, Option<Rows>) = (Vec::new(), None);
+        for group in plan.iter().map(Some).chain([None]) {
+            let decode = || -> Result<Option<(Rows, bool)>, CodecError> {
+                let Some(group) = group else { return Ok(None) };
+                let mut buf = std::mem::take(&mut spare);
+                let (first, end) = group.span();
+                let mut hurt = false;
+                let image = this.group(&mut buf, first, end, |out| {
+                    hurt = match group {
+                        Group::Stretches(stretches) => read_stretches(&this.bands, stretches, out, &pool)?,
+                        Group::InOrder { bands, seek } => {
+                            if *seek {
+                                in_order.seek(bands.start).map_err(craft_jpeg_error)?;
+                            }
+                            read_bands(&mut in_order, bands.clone(), out)?;
+                            in_order.damaged()
+                        }
+                    };
+                    Ok(())
+                })?;
+                Ok(Some((image, hurt)))
+            };
+            let mut take = |ready: Option<Rows>| -> Result<Option<Vec<u8>>, E> {
+                match ready {
+                    Some((y, image)) => {
+                        sink(y, &image)?;
+                        Ok(Some(image.into_data()))
+                    }
+                    None => Ok(None),
+                }
+            };
+            let last = ready.take();
+            #[cfg(not(target_arch = "wasm32"))]
+            let (decoded, taken) = rayon::join(decode, || take(last));
+            #[cfg(target_arch = "wasm32")]
+            let (taken, decoded) = (take(last), { decode }());
+            if let Some(buf) = taken? {
+                spare = buf;
+            }
+            if let Some((image, hurt)) = decoded? {
+                damaged |= hurt;
+                ready = Some(image);
+            }
+        }
+        if self.truncated || damaged {
+            self.warnings.push(DecodeWarning::Truncated { format: F });
+        }
+        Ok(())
+    }
+
+    /// Bands `first..end` as an image, filled by `fill` from `buf`'s allocation: the row of its
+    /// first and the image.
+    fn group(&self, buf: &mut Vec<u8>, first: usize, end: usize, fill: impl FnOnce(&mut [u8]) -> Result<(), CodecError>) -> Result<(u32, Image), CodecError> {
+        let b = &self.bands;
+        let (w, h) = (b.width(), b.height());
+        let y0 = (first as u64 * u64::from(b.band_rows())).min(u64::from(h)) as u32;
+        let y1 = (end as u64 * u64::from(b.band_rows())).min(u64::from(h)) as u32;
+        let len = (w as usize)
+            .checked_mul((y1 - y0) as usize)
+            .and_then(|v| v.checked_mul(self.layout.channels()))
+            .ok_or_else(|| CodecError::LimitExceeded("band size".into()))?;
+        // Every byte is written by the bands: the allocation is reused, not cleared.
+        let mut data = std::mem::take(buf);
+        data.truncate(len);
+        data.try_reserve_exact(len - data.len()).map_err(|_| CodecError::LimitExceeded(format!("{len} bytes for a group of rows")))?;
+        data.resize(len, 0);
+        fill(&mut data)?;
+        Ok((y0, Image::from_raw(w, y1 - y0, self.layout, SampleType::U8, data)?))
+    }
+}
+
+/// A decoded group: the row of its first row, and its rows.
+type Rows = (u32, Image);
+
+/// A group of [`JpegBands::plan`].
+enum Group {
+    Stretches(Vec<std::ops::Range<usize>>),
+    InOrder { bands: std::ops::Range<usize>, seek: bool },
+}
+
+impl Group {
+    /// Its first band and the band after its last.
+    fn span(&self) -> (usize, usize) {
+        match self {
+            Group::Stretches(s) => (s.first().map_or(0, |r| r.start), s.last().map_or(0, |r| r.end)),
+            Group::InOrder { bands, .. } => (bands.start, bands.end),
+        }
+    }
+}
+
+/// Bands `range` from `reader` (at `range.start`) into `out`, one after another.
+fn read_bands(reader: &mut craft_jpeg::Reader<'_>, range: std::ops::Range<usize>, out: &mut [u8]) -> Result<(), CodecError> {
+    let mut at = 0;
+    for _ in range {
+        let band = reader.next_band().map_err(craft_jpeg_error)?.ok_or_else(|| err("the image has fewer bands than its frame declares"))?;
+        let dst = out.get_mut(at..at + band.samples.len()).ok_or_else(|| err("band past the group"))?;
+        dst.copy_from_slice(band.samples);
+        at += band.samples.len();
+    }
+    Ok(())
+}
+
+/// The stretches between seek points (bands `a..b` each) that make up a group, each read on its
+/// own core into its part of `out` by a reader from `pool` (made when the pool is empty, and put
+/// back after); whether any was damaged.
+fn read_stretches<'b>(
+    bands: &'b craft_jpeg::Bands<'_>,
+    stretches: &[std::ops::Range<usize>],
+    out: &mut [u8],
+    pool: &std::sync::Mutex<Vec<craft_jpeg::Reader<'b>>>,
+) -> Result<bool, CodecError> {
+    let band_bytes = bands.band_bytes();
+    let mut parts = Vec::with_capacity(stretches.len());
+    let mut rest = out;
+    for range in stretches {
+        let len = (range.len() * band_bytes).min(rest.len());
+        let (part, tail) = rest.split_at_mut(len);
+        parts.push((range.clone(), part));
+        rest = tail;
+    }
+    let read = |(range, part): (std::ops::Range<usize>, &mut [u8])| -> Result<bool, CodecError> {
+        let pooled = pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop();
+        let mut reader = pooled.unwrap_or_else(|| bands.reader());
+        let was = reader.damaged();
+        let r = reader.seek(range.start).map_err(craft_jpeg_error).and_then(|()| read_bands(&mut reader, range, part));
+        let hurt = reader.damaged() && !was;
+        pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(reader);
+        r.map(|()| hurt)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let results: Vec<Result<bool, CodecError>> = {
+        use rayon::prelude::*;
+        parts.into_par_iter().map(read).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let results: Vec<Result<bool, CodecError>> = parts.into_iter().map(read).collect();
+    results.into_iter().try_fold(false, |any, r| Ok(any | r?))
+}
+
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = img.dimensions();
@@ -572,6 +928,156 @@ mod tests {
     /// Return whether the JPEG begins with a JFIF APP0 segment.
     fn has_jfif_app0(bytes: &[u8]) -> bool {
         bytes.get(2..11) == Some(b"\xff\xe0\0\x10JFIF\0")
+    }
+
+    /// `info` reads the frame from the markers, and which decoder the file goes to.
+    #[test]
+    fn info_reads_the_frame_and_the_decoder() {
+        let img = Image::from_raw(37, 21, ChannelLayout::Rgb, SampleType::U8, vec![128; 37 * 21 * 3]).unwrap();
+        let rgb = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+        let rgb_info = crate::JpegInfo { width: 37, height: 21, layout: ChannelLayout::Rgb, whole_coefficients: false, held_coefficients: 0 };
+        assert_eq!(info(&rgb), Some(rgb_info));
+        // A 12-bit extended frame (SOF1) declaring 40,000 × 30,000 gray, markers only.
+        let mut twelve = vec![0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12];
+        twelve.extend_from_slice(&30_000u16.to_be_bytes());
+        twelve.extend_from_slice(&40_000u16.to_be_bytes());
+        twelve.extend_from_slice(&[1, 1, 0x11, 0, 0xFF, 0xD9]);
+        let twelve_info = crate::JpegInfo { width: 40_000, height: 30_000, layout: ChannelLayout::Gray, whole_coefficients: true, held_coefficients: 0 };
+        assert_eq!(info(&twelve), Some(twelve_info));
+        assert_eq!(info(b"not a jpeg"), None);
+        // Markers only, 200 × 100 with `n` components: four are CMYK, two no layout `decode` returns.
+        let sof0 = |n: u8| {
+            let mut b = vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 8 + 3 * n, 8, 0, 100, 0, 200, n];
+            for i in 1..=n {
+                b.extend_from_slice(&[i, 0x11, 0]);
+            }
+            b.extend_from_slice(&[0xFF, 0xD9]);
+            b
+        };
+        assert_eq!(info(&sof0(4)).map(|i| (i.width, i.height, i.layout)), Some((200, 100, ChannelLayout::Cmyk)));
+        assert_eq!(info(&sof0(2)), None);
+    }
+
+    /// A frame the decoder can't turn into rows as it reads reports every coefficient it holds:
+    /// a block of 64 `i16`s per component block of every MCU. That is an 8-bit progressive frame
+    /// (SOF2), or an 8-bit sequential one whose first scan lacks some of its components.
+    #[test]
+    fn info_counts_the_coefficients_a_decode_holds() {
+        // Markers only: SOI, a frame of `marker` declaring 48,000 × 34,200 with `factors`, a first
+        // scan of the first `scan` components when given, EOI.
+        let frame = |marker: u8, precision: u8, factors: &[u8], scan: Option<u8>| {
+            let mut b = vec![0xFF, 0xD8, 0xFF, marker, 0, 8 + 3 * factors.len() as u8, precision];
+            b.extend_from_slice(&34_200u16.to_be_bytes());
+            b.extend_from_slice(&48_000u16.to_be_bytes());
+            b.push(factors.len() as u8);
+            for (i, &f) in factors.iter().enumerate() {
+                b.extend_from_slice(&[i as u8 + 1, f, 0]);
+            }
+            if let Some(n) = scan {
+                b.extend_from_slice(&[0xFF, 0xDA, 0, 6 + 2 * n, n]);
+                for c in 1..=n {
+                    b.extend_from_slice(&[c, 0]);
+                }
+                b.extend_from_slice(&[0, 63, 0]);
+            }
+            b.extend_from_slice(&[0xFF, 0xD9]);
+            b
+        };
+        let held = |b: &[u8]| info(b).map(|i| i.held_coefficients);
+        let all_444 = 6_000 * 4_275 * 3 * 128;
+        // 4:4:4: 6,000 × 4,275 MCUs of one block per component.
+        assert_eq!(held(&frame(0xC2, 8, &[0x11, 0x11, 0x11], Some(1))), Some(all_444));
+        // 4:2:0: 3,000 × 2,138 MCUs of 4 + 1 + 1 blocks.
+        assert_eq!(held(&frame(0xC2, 8, &[0x22, 0x11, 0x11], None)), Some(3_000 * 2_138 * 6 * 128));
+        // Sequential frames whose first scan lacks components hold them all too.
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], Some(1))), Some(all_444));
+        assert_eq!(held(&frame(0xC1, 8, &[0x11, 0x11, 0x11], Some(2))), Some(all_444));
+        // A sequential first scan with every component is read a line of MCUs at a time, and a
+        // 12-bit progressive frame goes to craft-jpeg: they hold none.
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], Some(3))), Some(0));
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], None)), Some(0));
+        assert_eq!(held(&frame(0xC2, 12, &[0x11, 0x11, 0x11], None)), Some(0));
+    }
+
+    /// Bands decoded in groups of a few lines of MCUs give `craft-jpeg`'s whole-file samples:
+    /// without restart intervals (one stretch read in order across groups), with one at every
+    /// line (stretches on all cores) and with one every five lines (stretches longer than a
+    /// group, read in order from their seek point).
+    #[test]
+    fn bands_in_groups_are_the_whole_file() {
+        let (w, h) = (97u16, 203u16);
+        let px: Vec<u8> = (0..usize::from(w) * usize::from(h) * 3).map(|i| ((i * 37) % 251) as u8 ^ (i / 291) as u8).collect();
+        for restart in [0u16, 7, 35] {
+            let mut bytes = Vec::new();
+            let mut enc = jpeg_encoder::Encoder::new(&mut bytes, 90);
+            enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
+            if restart > 0 {
+                enc.set_restart_interval(restart);
+            }
+            enc.encode(&px, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
+            let whole = craft_jpeg::decode(&bytes, &craft_jpeg::Limits::default(), None).unwrap();
+            let craft_jpeg::Samples::U8(want) = whole.samples else { panic!("16-bit") };
+            for group in [1, 3 * usize::from(w) * 16 * 3, 1 << 30] {
+                let mut bands = JpegBands::open(&bytes, &Limits::default()).unwrap().expect("bands");
+                // No run: groups of exactly `group` bytes, and every stretch on its own.
+                (bands.group_bytes, bands.run) = (group, 0);
+                let mut got = Vec::new();
+                let mut groups = 0;
+                bands
+                    .decode(|y, img: &Image| -> Result<(), CodecError> {
+                        assert_eq!(y as usize, got.len() / (usize::from(w) * 3), "restart {restart} group {group}");
+                        got.extend_from_slice(img.data());
+                        groups += 1;
+                        Ok(())
+                    })
+                    .unwrap();
+                assert!(got == want, "restart {restart} group {group}: {groups} groups");
+                assert!(bands.warnings.is_empty());
+                let bands_count = usize::from(h).div_ceil(16);
+                assert_eq!(
+                    groups,
+                    if group == 1 {
+                        bands_count
+                    } else if group == 1 << 30 {
+                        1
+                    } else {
+                        groups
+                    },
+                    "restart {restart} group {group}"
+                );
+            }
+        }
+    }
+
+    /// Stretches between seek points merge into runs read in order, across groups of any size,
+    /// and the result is still the whole file's samples.
+    #[test]
+    fn stretches_read_in_runs_are_the_whole_file() {
+        let (w, h) = (97u16, 203u16);
+        let px: Vec<u8> = (0..usize::from(w) * usize::from(h) * 3).map(|i| ((i * 31) % 253) as u8 ^ (i / 97) as u8).collect();
+        let mut bytes = Vec::new();
+        let mut enc = jpeg_encoder::Encoder::new(&mut bytes, 90);
+        enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
+        enc.set_restart_interval(7);
+        enc.encode(&px, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
+        let whole = craft_jpeg::decode(&bytes, &craft_jpeg::Limits::default(), None).unwrap();
+        let craft_jpeg::Samples::U8(want) = whole.samples else { panic!("16-bit") };
+        for (run, group) in [(3, 1), (3, 5 * usize::from(w) * 16 * 3), (2, 1 << 30), (100, 1)] {
+            let mut bands = JpegBands::open(&bytes, &Limits::default()).unwrap().expect("bands");
+            (bands.run, bands.group_bytes) = (run, group);
+            assert!(bands.plan().iter().all(|g| match g {
+                Group::Stretches(runs) => runs.iter().rev().skip(1).all(|r| r.len() >= run),
+                Group::InOrder { .. } => false,
+            }));
+            let mut got = Vec::new();
+            bands
+                .decode(|_, img: &Image| -> Result<(), CodecError> {
+                    got.extend_from_slice(img.data());
+                    Ok(())
+                })
+                .unwrap();
+            assert!(got == want, "run {run} group {group}");
+        }
     }
 
     /// An APP1 Extended XMP fragment (GUID, total size, offset, data).

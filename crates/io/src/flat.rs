@@ -61,6 +61,37 @@ fn decode_limits(opts: &crate::ImportOptions) -> codecs::Limits {
     limits
 }
 
+/// Largest side a JPEG frame can declare: it is stored in 16 bits.
+const JPEG_MAX_SIDE: u32 = 65_535;
+
+/// [`decode_limits`] for a JPEG: past their pixel count, up to the format's own sides, when the
+/// whole-image decode (to which `zune-jpeg` allocates one buffer) is admitted against `available`
+/// bytes first (see [`crate::memory::available`]). The byte budget is unchanged, and the decoder's
+/// scan-size guard still needs a byte of scan data per 2,048 pixels before it allocates.
+///
+/// Sizes the default limits open, the files the whole-coefficient decoder takes (whose working
+/// set is several times the image: [`codecs::JpegInfo::whole_coefficients`]) and 32-bit targets
+/// keep the default limits, and so does every file where free memory isn't known: the decoder
+/// allocates its output infallibly, so a decode the machine can't hold would end the process.
+fn jpeg_limits(bytes: &[u8], opts: &crate::ImportOptions, available: Option<u64>) -> Result<codecs::Limits, IoError> {
+    let limits = decode_limits(opts);
+    let Some(info) = codecs::jpeg_info(bytes) else { return Ok(limits) };
+    let (w, h) = (info.width, info.height);
+    if info.whole_coefficients || !cfg!(target_pointer_width = "64") || !needs_memory_check(w, h, info.layout, CSample::U8) {
+        return Ok(limits);
+    }
+    let Some(available) = available else { return Ok(limits) };
+    // Linux overcommits: a decode the machine can't hold is allocated, and writing it has the
+    // process killed. Checked first: the decoded image and the document built from it, or the
+    // decoded image and the coefficients the decode holds beside it (a progressive frame, or a
+    // sequential one whose components come in separate scans), whichever is more.
+    let decoded = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.layout.channels() as u64);
+    let decoding = decoded.saturating_add(info.held_coefficients);
+    let needed = flattened_import_bytes(w, h, info.layout, CSample::U8, 0, 0).max(decoding);
+    crate::memory::check_fits(w, h, needed, Some(available))?;
+    Ok(codecs::Limits { max_width: JPEG_MAX_SIDE, max_height: JPEG_MAX_SIDE, max_pixels: u64::from(JPEG_MAX_SIDE).pow(2), ..limits })
+}
+
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_flat_with_options(name, bytes, &crate::ImportOptions::default(), &photocraft_raster::Interrupt::NONE)
 }
@@ -114,12 +145,14 @@ fn import_flat_impl_with_options(
     // A PNG whose rows come in final order is decoded straight into the tiles.
     let streamed = match stream_min {
         Some(min) if format == Some(Format::Png) => import_png_streamed(name, bytes, opts, ctl, min)?,
+        // A baseline JPEG is decoded straight into the tiles too, a few lines of MCUs at a time.
+        Some(min) if format == Some(Format::Jpeg) => import_jpeg_streamed(name, bytes, opts, ctl, min)?,
         _ => None,
     };
     let (mut r, img) = match streamed {
         Some(r) => (r, None),
         None => {
-            let limits = decode_limits(opts);
+            let limits = if format == Some(Format::Jpeg) { jpeg_limits(bytes, opts, crate::memory::available())? } else { decode_limits(opts) };
             let img = codecs::decode_as_with(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes, &codecs::DecodeOptions { limits, ..Default::default() })?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
             ctl.progress(0.6);
@@ -944,36 +977,59 @@ fn import_png_streamed(name: &str, bytes: &[u8], opts: &crate::ImportOptions, ct
     import_png_streamed_with(name, bytes, opts, ctl, min_bytes, crate::memory::available)
 }
 
-/// A PNG's rows becoming the tiles of its layer as they are decoded: the surface, and what turns a
-/// decoded row into its pixels. Shared by [`import_png_streamed`] (all at once) and the stepped
-/// import ([`crate::PngImport`], a bounded piece at a time), which give the same document.
-pub(crate) struct PngStream {
+/// Decoded rows becoming the tiles of their layer as they are decoded: the surface, and what turns
+/// a decoded row into its pixels. A PNG's (in [`import_png_streamed`], all at once, and in the
+/// stepped import, [`crate::PngImport`], a bounded piece at a time, which give the same document)
+/// and a baseline JPEG's ([`import_jpeg_streamed`]).
+pub(crate) struct RowStream {
     surface: Surface,
-    header: codecs::PngHeader,
+    header: Shape,
     convert: RowConverter,
 }
 
-impl PngStream {
+/// A decoded image's size, layout and sample type, as [`RowStream`] receives its rows.
+#[derive(Clone, Copy)]
+struct Shape {
+    width: u32,
+    height: u32,
+    layout: ChannelLayout,
+    sample: CSample,
+}
+
+impl From<&codecs::PngHeader> for Shape {
+    fn from(h: &codecs::PngHeader) -> Self {
+        Shape { width: h.width, height: h.height, layout: h.layout, sample: h.sample }
+    }
+}
+
+impl RowStream {
     /// Sets up the surface for rows of `header`, after checking the layer's tiles and a group of
     /// rows as decoded and as converted against `available` (the memory the machine can still use,
     /// when known): Linux overcommits, so the tiles would be allocated even when they can't be
     /// backed, and writing them would have the process killed.
     pub(crate) fn new(header: &codecs::PngHeader, available: Option<u64>) -> Result<Self, IoError> {
+        // One group of rows as decoded and as converted into the tiles.
         let (_, target_layout, _, csample) = flat_target(header.layout, header.sample);
-        // The layer's tiles, plus one group of rows as decoded and as converted into them.
         let bpp = surface_format(target_layout, csample).bytes_per_pixel() as u64;
         let src_px = (header.layout.channels() * header.sample.bytes()) as u64;
         let group = u64::from(header.width).saturating_mul(u64::from(header.height.min(TILE_SIZE as u32)));
-        let needed = tile_bytes(header.width, header.height, bpp).saturating_add(group.saturating_mul(src_px)).saturating_add(group.saturating_mul(bpp));
+        Self::with_working(header.into(), group.saturating_mul(src_px).saturating_add(group.saturating_mul(bpp)), available)
+    }
+
+    /// [`RowStream::new`] for a decoder that holds `working` bytes beside the tiles while it decodes.
+    fn with_working(header: Shape, working: u64, available: Option<u64>) -> Result<Self, IoError> {
+        let (_, target_layout, _, csample) = flat_target(header.layout, header.sample);
+        let bpp = surface_format(target_layout, csample).bytes_per_pixel() as u64;
+        let needed = tile_bytes(header.width, header.height, bpp).saturating_add(working);
         crate::memory::check_fits(header.width, header.height, needed, available)?;
         Ok(Self {
             surface: Surface::new(surface_format(target_layout, csample)),
-            header: *header,
+            header,
             convert: RowConverter::new((header.layout, header.sample), (target_layout, csample)),
         })
     }
 
-    /// [`PngStream::new`] for a stepped import, which streams every PNG whose rows come in order
+    /// [`RowStream::new`] for a stepped import, which streams every PNG whose rows come in order
     /// and not only the big ones: a layer under [`STREAM_MIN_BYTES`] of tiles is not checked
     /// against free memory, as the whole-image path leaves it unchecked ([`check_layer_fits`]).
     pub(crate) fn for_steps(header: &codecs::PngHeader) -> Result<Self, IoError> {
@@ -1028,7 +1084,7 @@ impl PngStream {
         !self.scans() || self.surface.prune_batch(cursor, PRUNE_BATCH)
     }
 
-    /// A cursor for [`PngStream::prune_step`].
+    /// A cursor for [`RowStream::prune_step`].
     pub(crate) fn prune_cursor(&self) -> photocraft_raster::PruneCursor {
         self.surface.prune_cursor()
     }
@@ -1037,11 +1093,23 @@ impl PngStream {
     /// count of images the file holds when the decoder read only the first (an animated PNG's
     /// frames), so Save doesn't write one image over all of them (#5733).
     pub(crate) fn into_document(self, name: &str, extras: codecs::PngExtras) -> Result<ImportResult, IoError> {
+        self.into_document_with(name, extras.icc, &extras.meta, &extras.warnings)
+    }
+
+    /// [`RowStream::into_document`] with the profile, metadata and warnings given apart.
+    fn into_document_with(
+        self,
+        name: &str,
+        icc: Option<Vec<u8>>,
+        meta: &codecs::Metadata,
+        warnings: &[codecs::DecodeWarning],
+    ) -> Result<ImportResult, IoError> {
         let Self { surface, header, .. } = self;
         let (mode, _, depth, _) = flat_target(header.layout, header.sample);
-        let warnings = extras.warnings.iter().map(ToString::to_string).collect();
-        let mut r = flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)?;
-        r.document.file_encoding.source_images = source_images(&extras.warnings);
+        let images = source_images(warnings);
+        let warnings = warnings.iter().map(ToString::to_string).collect();
+        let mut r = flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, icc, meta, warnings, None)?;
+        r.document.file_encoding.source_images = images;
         Ok(r)
     }
 }
@@ -1058,7 +1126,7 @@ fn import_png_streamed_with(
 ) -> Result<Option<ImportResult>, IoError> {
     // Rows are worked off 0.02..0.55 so a fallback to the whole-image path, which reports 0.6
     // after its decode, never takes progress backwards.
-    let state = std::cell::RefCell::new(None::<PngStream>);
+    let state = std::cell::RefCell::new(None::<RowStream>);
     let mut available = Some(available);
     let busy = || IoError::Unsupported("the PNG reader re-entered itself".into());
     let mut begin = |header: &codecs::PngHeader| -> Result<bool, IoError> {
@@ -1071,7 +1139,7 @@ fn import_png_streamed_with(
         }
         // A cancelled import is reported as such, not as the memory it would have needed.
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        *state.try_borrow_mut().map_err(|_| busy())? = Some(PngStream::new(header, available.take().and_then(|f| f()))?);
+        *state.try_borrow_mut().map_err(|_| busy())? = Some(RowStream::new(header, available.take().and_then(|f| f()))?);
         ctl.progress(0.02);
         Ok(true)
     };
@@ -1102,6 +1170,54 @@ fn import_png_streamed_with(
     ctl.progress(0.95);
     stream.prune();
     stream.into_document(name, extras).map(Some)
+}
+
+/// A baseline JPEG opened straight into the tiles of its layer, a group of rows at a time (see
+/// [`codecs::JpegBands`]), so the whole decoded image never exists next to them. `None` when the
+/// whole-image path is for it: under `min_bytes` decoded, a file `JpegBands` doesn't take
+/// (progressive, arithmetic-coded or 12-bit, components in several scans, an EXIF orientation that
+/// turns it), or the web build. The byte budget is [`decode_limits`]', applied to the image as the
+/// whole-image decode applies it, and the sides are the format's own (65,535 px) on 64-bit
+/// targets; the tiles and the decoder's buffers are checked against free memory first.
+fn import_jpeg_streamed(name: &str, bytes: &[u8], opts: &crate::ImportOptions, ctl: &Interrupt, min_bytes: u64) -> Result<Option<ImportResult>, IoError> {
+    import_jpeg_streamed_with(name, bytes, opts, ctl, min_bytes, crate::memory::available)
+}
+
+/// [`import_jpeg_streamed`], with the memory the machine can still use given.
+fn import_jpeg_streamed_with(
+    name: &str,
+    bytes: &[u8],
+    opts: &crate::ImportOptions,
+    ctl: &Interrupt,
+    min_bytes: u64,
+    available: impl FnOnce() -> Option<u64>,
+) -> Result<Option<ImportResult>, IoError> {
+    if cfg!(target_arch = "wasm32") {
+        return Ok(None);
+    }
+    let Some(info) = codecs::jpeg_info(bytes) else { return Ok(None) };
+    let decoded = u64::from(info.width).saturating_mul(u64::from(info.height)).saturating_mul(info.layout.channels() as u64);
+    if decoded < min_bytes {
+        return Ok(None);
+    }
+    let mut limits = decode_limits(opts);
+    if cfg!(target_pointer_width = "64") {
+        limits = codecs::Limits { max_width: JPEG_MAX_SIDE, max_height: JPEG_MAX_SIDE, max_pixels: u64::from(JPEG_MAX_SIDE).pow(2), ..limits };
+    }
+    let Some(mut bands) = codecs::JpegBands::open(bytes, &limits)? else { return Ok(None) };
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let (w, h) = bands.dimensions();
+    let shape = Shape { width: w, height: h, layout: bands.layout(), sample: CSample::U8 };
+    let mut stream = RowStream::with_working(shape, bands.working_bytes(), available())?;
+    ctl.progress(0.02);
+    bands.decode(|y0, group: &Image| -> Result<(), IoError> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        stream.write_rows(y0, group.data(), ctl)?;
+        ctl.progress(0.02 + 0.93 * (y0 + group.height()) as f32 / h.max(1) as f32);
+        Ok(())
+    })?;
+    let codecs::JpegBands { icc, meta, warnings, .. } = bands;
+    stream.into_document_with(name, icc, &meta, &warnings).map(Some)
 }
 
 /// The pixels of a decoded image as a surface of the target layout and sample type, converted
@@ -2733,11 +2849,11 @@ mod streamed_png_tests {
     #[test]
     fn a_stream_for_steps_keeps_the_memory_errors() {
         let big = codecs::PngHeader { width: 20_000, height: 20_000, layout: ChannelLayout::Rgba, sample: CSample::U8 };
-        let e = PngStream::new(&big, Some(1 << 20)).err().expect("refused");
+        let e = RowStream::new(&big, Some(1 << 20)).err().expect("refused");
         assert!(matches!(&e, IoError::Unsupported(m) if m.contains("not enough memory to open this 20000 × 20000 px image")), "{e}");
         let small = codecs::PngHeader { width: 64, height: 64, layout: ChannelLayout::Rgba, sample: CSample::U8 };
-        assert!(PngStream::for_steps(&small).is_ok(), "a small layer is not checked");
-        assert!(PngStream::new(&small, Some(1 << 20)).is_err(), "though the check itself would refuse it");
+        assert!(RowStream::for_steps(&small).is_ok(), "a small layer is not checked");
+        assert!(RowStream::new(&small, Some(1 << 20)).is_err(), "though the check itself would refuse it");
     }
 
     #[test]
@@ -3100,6 +3216,9 @@ mod fused_tile_tests {
 mod png_stream_tests;
 
 #[cfg(test)]
+mod jpeg_stream_tests;
+
+#[cfg(test)]
 mod bilevel_tiff_tests {
     use super::*;
 
@@ -3192,5 +3311,112 @@ mod bilevel_tiff_tests {
         assert_eq!(second.document.mode, ColorMode::Bitmap);
         let first = import_tiff_page("pages.tif", &bytes, Some(0)).unwrap();
         assert_eq!(first.document.mode, ColorMode::Grayscale);
+    }
+}
+
+#[cfg(test)]
+mod jpeg_limits_tests {
+    use super::*;
+
+    /// A JPEG of markers only: SOI, one frame (`marker`, `precision` bits, `w` × `h`, `n`
+    /// components), EOI. Its header is all [`jpeg_limits`] reads.
+    fn jpeg_header(marker: u8, precision: u8, w: u16, h: u16, n: u8) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8, 0xFF, marker];
+        b.extend_from_slice(&(8 + 3 * u16::from(n)).to_be_bytes());
+        b.push(precision);
+        b.extend_from_slice(&h.to_be_bytes());
+        b.extend_from_slice(&w.to_be_bytes());
+        b.push(n);
+        for c in 1..=n {
+            b.extend_from_slice(&[c, 0x11, 0]);
+        }
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        b
+    }
+
+    /// A JPEG past the default pixel count opens up to the format's own sides, once its decode is
+    /// admitted against free memory; the byte budget is unchanged.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_jpeg_past_the_pixel_cap_is_admitted_against_free_memory_first() {
+        let opts = crate::ImportOptions::default();
+        // A 48,000 × 34,200 RGB frame: 1.64 GP, past the default 2^30.
+        let big = jpeg_header(0xC0, 8, 48_000, 34_200, 3);
+        let e = jpeg_limits(&big, &opts, Some(0)).unwrap_err().to_string();
+        assert!(e.contains("not enough memory to open this 48000 × 34200 px image"), "{e}");
+        let limits = jpeg_limits(&big, &opts, Some(u64::MAX)).unwrap();
+        assert!(limits.check(48_000, 34_200, ChannelLayout::Rgb, CSample::U8).is_ok());
+        assert!(decode_limits(&opts).check(48_000, 34_200, ChannelLayout::Rgb, CSample::U8).is_err(), "the default cap");
+        assert_eq!(limits.max_alloc, decode_limits(&opts).max_alloc, "the byte budget");
+        assert!(limits.check(65_535, 1, ChannelLayout::Gray, CSample::U8).is_ok(), "a JPEG's own side");
+        assert!(limits.check(65_536, 1, ChannelLayout::Gray, CSample::U8).is_err(), "past a JPEG's own side");
+        assert_eq!(jpeg_limits(&big, &opts, None).unwrap(), decode_limits(&opts), "unknown free memory keeps the default cap");
+        // Admitted with exactly what it needs free, refused a byte short: the RGBA layer's 256 px
+        // tiles, the decoded RGB image, the 16 bands of 32 MiB it converts through, and the
+        // 512 MiB reserve.
+        let need = 48_128 * 34_304 * 4 + 48_000 * 34_200 * 3 + 16 * (32 << 20) + (512 << 20);
+        assert!(jpeg_limits(&big, &opts, Some(need)).is_ok());
+        assert!(jpeg_limits(&big, &opts, Some(need - 1)).is_err());
+        // One row past 2^30 px is checked.
+        assert!(jpeg_limits(&jpeg_header(0xC0, 8, 32_768, 32_769, 1), &opts, Some(0)).is_err());
+        // The largest frame: 65,535² gray fits the byte budget; RGB doesn't, and stays refused.
+        let max = jpeg_limits(&jpeg_header(0xC0, 8, 65_535, 65_535, 1), &opts, Some(u64::MAX)).unwrap();
+        assert!(max.check(65_535, 65_535, ChannelLayout::Gray, CSample::U8).is_ok());
+        assert!(max.check(65_535, 65_535, ChannelLayout::Rgb, CSample::U8).is_err(), "the byte budget");
+    }
+
+    /// A frame whose decode holds every coefficient (progressive, or sequential with its
+    /// components in separate scans) is admitted against that peak: the decoded image and the
+    /// coefficients, which for a 4:4:4 frame is more than the image and its document.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_jpeg_whose_decode_holds_its_coefficients_is_admitted_against_them() {
+        let opts = crate::ImportOptions::default();
+        let (w, h) = (48_000u32, 34_200u32);
+        let document = flattened_import_bytes(w, h, ChannelLayout::Rgb, CSample::U8, 0, 0);
+        // 3 bytes of image and 3 × 2 bytes of coefficients per pixel, the MCUs filling 48,000 × 34,200.
+        let decoding = u64::from(w * h) * 3 + 6_000 * 4_275 * 3 * 128;
+        assert!(decoding > document);
+        // `header` with a first scan (before EOI) of its first `n` components.
+        let with_scan = |mut header: Vec<u8>, n: u8| {
+            let mut sos = vec![0xFF, 0xDA, 0, 6 + 2 * n, n];
+            for c in 1..=n {
+                sos.extend_from_slice(&[c, 0]);
+            }
+            sos.extend_from_slice(&[0, 63, 0]);
+            let eoi = header.len() - 2;
+            header.splice(eoi..eoi, sos);
+            header
+        };
+        let baseline = with_scan(jpeg_header(0xC0, 8, 48_000, 34_200, 3), 3);
+        let progressive = with_scan(jpeg_header(0xC2, 8, 48_000, 34_200, 3), 1);
+        let split = with_scan(jpeg_header(0xC0, 8, 48_000, 34_200, 3), 1);
+        // Room for the document but not for the coefficients: the baseline frame with every
+        // component in its first scan opens, the other two are refused.
+        let room = document + crate::memory::RESERVE;
+        assert!(jpeg_limits(&baseline, &opts, Some(room)).is_ok());
+        assert!(jpeg_limits(&baseline, &opts, Some(room - 1)).is_err());
+        for (what, b) in [("progressive", &progressive), ("split scans", &split)] {
+            let e = jpeg_limits(b, &opts, Some(room)).unwrap_err().to_string();
+            assert!(e.contains("not enough memory"), "{what}: {e}");
+            assert!(jpeg_limits(b, &opts, Some(decoding + crate::memory::RESERVE)).is_ok(), "{what}");
+            assert!(jpeg_limits(b, &opts, Some(decoding + crate::memory::RESERVE - 1)).is_err(), "{what}");
+        }
+    }
+
+    /// Sizes the default limits open (up to exactly 2^30 px) are not checked, and a file for the
+    /// whole-coefficient decoder (12-bit, arithmetic-coded or lossless) keeps the default cap
+    /// however large it is, as does a frame whose components aren't a layout `decode` returns.
+    #[test]
+    fn other_jpegs_keep_the_default_limits_unchecked() {
+        let opts = crate::ImportOptions::default();
+        let default = |b: &[u8]| jpeg_limits(b, &opts, Some(0)).unwrap() == decode_limits(&opts);
+        assert!(default(&jpeg_header(0xC0, 8, 4000, 3000, 3)));
+        assert!(default(&jpeg_header(0xC0, 8, 32_768, 32_768, 3)), "exactly 2^30 px");
+        for (marker, precision) in [(0xC1, 12), (0xC9, 8), (0xC3, 8)] {
+            assert!(default(&jpeg_header(marker, precision, 48_000, 34_200, 3)), "{marker:#x}");
+        }
+        assert!(default(&jpeg_header(0xC0, 8, 48_000, 34_200, 2)), "two components");
+        assert!(default(b"not a jpeg"));
     }
 }

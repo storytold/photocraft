@@ -1448,7 +1448,7 @@ dependencies = [
 [[package]]
 name = "craft-jpeg"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
+source = "git+https://github.com/storytold/craft-libs?rev=97c83dc9e891d6a2b719b0288095be7e56a8cb17#97c83dc9e891d6a2b719b0288095be7e56a8cb17"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -5628,10 +5628,12 @@ version = "0.20.1"
 dependencies = [
  "blake3",
  "craft-docpath",
+ "craft-jpeg",
  "craft-pdf",
  "crc32fast",
  "flate2",
  "imagesize",
+ "jpeg-encoder",
  "kurbo 0.13.1",
  "lopdf",
  "miniz_oxide 0.9.1",
