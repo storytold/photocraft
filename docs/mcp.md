@@ -50,12 +50,48 @@ not put the CLI on `PATH`.
 PhotoCraft follows the same conventions as FilmCraft #28. Start a headless session:
 
 ```sh
-photocraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project
+photocraft-cli mcp \
+  --automation-read-root /work/project \
+  --automation-read-root /library/reference \
+  --automation-write-root /work/project
 ```
 
-Paths are relative to the corresponding root, or absolute paths beneath it; without a root that
-filesystem authority is absent. Bridge mode uses `--bridge` and `--control-token-file` as
-described in [development.md](development.md). UI tools require a running desktop app.
+Repeat `--automation-read-root` to grant ordered read directories in headless `mcp`, `serve`,
+or desktop `photocraft --control`. Both `--flag <dir>` and `--flag=<dir>` work and can be mixed;
+duplicate read roots are allowed. Relative file requests search the roots in launch order.
+Headless reads select the first existing regular file; only a missing file tries the next root.
+Directory, permission, path-escape and decoding errors stop headless requests instead of falling back.
+Desktop `app.open`, including bridged `doc_open`, also supports native directory `.pcraft`
+documents through the selected read capability. An earlier root's ZIP file wins over a later
+root's directory; loading errors in a selected directory are terminal. Directory opens have
+no implicit save target, even through the write root's capability, and need explicit layered
+Save As beneath the write root.
+All configured roots must be valid existing directories; an empty, missing or invalid root
+fails startup rather than being dropped.
+
+There is still only one `--automation-write-root`. Repeating it is a usage error (exit 2),
+even with an identical value or mixed flag syntax. Writes are relative to that root, with no
+fallback to any read root. Read and write authority are independent; a write root does not grant
+reads, and omitting either kind of root denies that direction of filesystem access.
+Absolute request paths must be beneath a corresponding granted root and are opened through
+its directory capability, without ambient filesystem resolution of the requested path.
+
+A document opened through a read root that does not share the write root's held directory
+capability has no implicit save target. The same configured root shares that capability;
+canonical filesystem identity is not inferred. Use an explicit `doc_save {path:"copy.pcraft"}`
+(or another supported layered format) beneath the write root to establish one. Aliases and nested roots conservatively also
+require explicit Save As; a flat export does not establish a save target. Existing restrictions
+on pathless saves still apply. These grants do not enable ambient asset reads or headless
+directory-bundle access; desktop directory `.pcraft` reads remain scoped to the granted capabilities.
+
+Bridge mode uses `--bridge` and `--control-token-file` as described in
+[development.md](development.md). Configure all roots on the desktop process; passing root flags
+to `photocraft-cli mcp --bridge` is a usage error because the bridge cannot grant them.
+UI tools require a running desktop app. The desktop environment variable
+`PHOTOCRAFT_AUTOMATION_READ_ROOT` supplies one fallback directory only when no explicit read-root
+flags are present; explicit flags replace it, preserving CLI order. Similarly, one explicit
+write-root flag overrides `PHOTOCRAFT_AUTOMATION_WRITE_ROOT`. These variables do not grant
+headless CLI file access.
 
 A client has the full rights of the roots it is given: it can read any file below the read
 root, and `doc_save`, `doc_export` and the export tools can create files anywhere below the
@@ -97,8 +133,12 @@ protocol messages. For `serve`, explicit credential flags require `--port` (or
 
 Existing document/session/job/UI tools remain listed, including the documented
 `doc_render_preview` spelling. There are no hidden legacy aliases. Every tool has a title
-and all four annotation hints. Generic command/control tools conservatively advertise writes;
-file saves may replace existing image and document files. Hints do not grant permission.
+and all four annotation hints. Reads (`command_list`, `doc_inspect`, `session_list`, the
+previews, `ui_inspect`, `ui_screenshot`, `jobs_list`) are read-only and idempotent. `doc_new`,
+`doc_open`, `doc_place`, `doc_select` and the scoped exports (`doc_export_layers`,
+`doc_export_data_sets`, which refuse to overwrite) are not destructive; `doc_select` is also
+idempotent. Generic command/control tools conservatively advertise writes; file saves may
+replace existing image and document files. Hints do not grant permission.
 
 After a failed batch, `completed` and per-step `results` report successful steps, not a
 rolled-back transaction. Inspect the document and its history with `doc_inspect`; commands
@@ -133,6 +173,23 @@ for ten minutes. List/read responses include the MCP 2026-07-28 result/cache fie
 
 ## Progress and cancellation
 
+`command_run` (and each `command_batch` step) that waits, the default, runs a job-capable
+command (filters, Content-Aware Fill/Scale, Photomerge, …) as a background job and returns its
+result when the job ends. Meanwhile the server serves other calls (`doc_inspect`, `jobs_list`,
+…), and the running job shows in `jobs_list`. With `_meta.progressToken`, the call sends
+`notifications/progress` with the job's progress (0–1, `total` 1; for a batch, finished steps
+plus the current step's fraction, `total` the step count) and the job's `message`, increasing
+strictly and at most ten per second. `notifications/cancelled`, or the client dropping the
+request, cancels the job: the document stays unchanged and a cancelled batch runs no further
+step. A job that already finished before the cancellation arrived stays applied. Commands that
+are not jobs still run to the end.
+
+Headless, the session runs the job itself (#8129). In bridge mode (#8130) the app runs it: the
+server starts it with `engine.execute {wait: false}` (sent once, never resent) and polls
+`jobs.list`, so a job may run past the bridge's 55s reply timeout. A command that is not a job,
+a UI command id and a lost reply to the start still fail at that timeout; see
+[MCP bridge](control-protocol.md#mcp-bridge) for the limits.
+
 A direct headless `command_run` of `file.export.renderVideo` reports frame counts when
 `_meta.progressToken` is present (a string or number). Notifications increase strictly,
 are throttled to at most ten per second except completion, and include `total`. No token
@@ -154,6 +211,6 @@ the engine renderer. The document and playhead are unchanged.
 Cancellation suppresses the request response and stops at a frame boundary (the current
 frame/encoding may finish first). Unknown request ids are ignored. Render Video stays a
 synchronous command even with `wait:false`; other job-capable commands keep their existing
-`jobs_list`/`jobs_cancel` behavior. Batch exports do not emit MCP progress or support per-step
-MCP cancellation. Nested engine actions and bridge Render Video remain denied by the existing
+`jobs_list`/`jobs_cancel` behavior. Render Video as a `command_batch` step reports no
+progress and cannot be cancelled. Nested engine actions and bridge Render Video remain denied by the existing
 ambient-filesystem policy; the new scoped writer is available for direct headless commands.
