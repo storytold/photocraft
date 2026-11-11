@@ -145,6 +145,9 @@ fn preferences_search_matches_editable_fields_across_sections() {
 /// The preview language controls translated search; English schema paths keep their aliases.
 #[test]
 fn azerbaijani_preferences_search_keeps_dotted_i_and_schema_aliases() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let az = crate::i18n::Lang::from_code("az").unwrap();
     crate::i18n::with_language(az, || {
         let values = prefs::Preferences::default().to_json();

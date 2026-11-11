@@ -739,6 +739,35 @@ fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &
 /// actions a resumed playback replays first, outermost first, each `(action, from)`: the first is
 /// the one this action's step before `from` called ([`resume`]).
 fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<SuspendedRecording>, inner: &[(usize, usize)]) -> Result<Value, String> {
+    // An action automation wrote plays under automation's gate even when the user starts it (its
+    // key, the panel, Button Mode); nested calls, a paused step's dialog and the steps' own
+    // commands see that gate too.
+    let kept = actions_cmds::playback_plan_at(&app.session, params).ok().and_then(|(_, action, _)| actions_cmds::kept_gate(&app.session, &action));
+    if kept.is_some() {
+        app.session.authorize = kept;
+    }
+    let played = play_steps(app, params, suspended, inner);
+    if kept.is_some() {
+        app.session.authorize = None;
+        // A pause under the kept gate records it as this action's own, not the set's.
+        if let Ok(v) = &played
+            && let Some(dialog) = v.get("paused").and_then(waiting_dialog)
+            && let Some(token) = paused_token(app, dialog)
+            && let Some(entry) = app.paused_playbacks.paused.get_mut(&token)
+        {
+            entry.kept = true;
+        }
+    }
+    // The call journaled into a recording while automation's gate is installed marks the recorded
+    // action, as the engine's `actions.play` does (the kept gate is already removed).
+    actions_cmds::note_automation_step(&mut app.session, "actions.play", params);
+    played
+}
+
+/// Play an action's steps in the shell (dialogs, shell saves and views), under whatever gate
+/// [`play_owned`] installed; pauses at a step whose dialog is toggled on. `inner` is as in
+/// [`play_owned`].
+fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<SuspendedRecording>, inner: &[(usize, usize)]) -> Result<Value, String> {
     let (row, mut action, from) = match actions_cmds::playback_plan_at(&app.session, params) {
         Ok(plan) => plan,
         Err(e) => {
@@ -953,6 +982,7 @@ pub(crate) fn run_view(app: &mut PhotocraftApp, id: &str, params: Value) -> Resu
         _ => return Err(format!("unsupported view command: {id}")),
     }
     v.zoom_anchor = None;
+    actions_cmds::note_automation_step(&mut app.session, id, &params);
     app.session.journal.push((id.into(), params));
     Ok(Value::Null)
 }
@@ -1535,6 +1565,11 @@ pub(crate) struct PausedPlayback {
     /// The paused action and each of its callers as they were when it paused, innermost first.
     /// The continuation checks these snapshots before resuming any remaining steps.
     played: Vec<ActionOccurrence>,
+    /// `gate` is the kept gate of an action automation wrote that the user played
+    /// ([`actions_cmds::kept_gate`]), not the gate of the whole call: it still judges the dialog's
+    /// own command ([`run_step_dialog`]), but [`resume`] lets each such action take it again as it
+    /// plays, so its callers and the rest of the set keep the gate they had.
+    kept: bool,
 }
 
 /// The longest caller chain a paused playback keeps; [`actions_cmds::playback_plan`] refuses deeper
@@ -1579,6 +1614,7 @@ impl PausedPlaybacks {
                 allow_continue: false,
                 timed: false,
                 played: Vec::new(),
+                kept: false,
             },
         );
         self.last
@@ -1777,6 +1813,9 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
             return Err(error);
         }
     };
+    // A kept gate belongs to the action automation wrote: it takes the gate again as it plays
+    // ([`play_owned`]), while its callers and the rest of the set keep the gate they had.
+    let gate = if paused.kept { service.or(saved) } else { gate };
     // Every caller needs a captured occurrence before the two lists can be paired.
     let rows: Option<Vec<usize>> = paused.played.iter().rev().map(|occurrence| occurrence.resolve(&app.session)).collect();
     if paused.played.len() != paused.callers.len() + 1 || (remaining && rows.is_none()) {

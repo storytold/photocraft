@@ -121,7 +121,11 @@ pub(in super::super) fn replace(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(COMMAND, "encoding must be auto or a non-empty label")),
     };
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, COMMAND, ".atn file")?;
-    let Replacement { list, rows, keys, warnings, unsupported } = Replacement::parse(&bytes, encoding)?;
+    let Replacement { mut list, rows, keys, warnings, unsupported } = Replacement::parse(&bytes, encoding)?;
+    // Whole-library imports keep their automation origin just as actions.load imports do.
+    for action in &mut list {
+        action.automation = s.authorize.is_some();
+    }
     let result = json!({"sets":rows,"actions":list.iter().map(|a| &a.name).collect::<Vec<_>>(),"warnings":warnings,"unsupported":unsupported});
     publish_library(s, list, Vec::new(), rows, Some(keys), "Undo Replace Actions", COMMAND)?;
     Ok(result)

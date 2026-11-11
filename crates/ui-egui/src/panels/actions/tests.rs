@@ -527,6 +527,9 @@ fn bulk_load_summary_counts_distinct_sets_and_pluralises_files() {
 #[test]
 /// The multi-file summary is translated like the rest of the Actions panel.
 fn bulk_load_summary_is_translated() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let files = vec![("a.atn".into(), action_set_bytes("Set 1", "A")), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
     let status = crate::i18n::with_language(crate::i18n::Lang::from_code("de").unwrap(), || bulk_load_status(&mut app, files));
@@ -3157,6 +3160,164 @@ fn a_paused_playback_keeps_its_automation_gate_when_the_dialog_is_confirmed() {
     app.automation_input = false;
     assert!(app.session.active().unwrap().doc.selection.is_none(), "the denied step did not run");
     assert!(app.ui.status.contains("select.all denied"), "{}", app.ui.status);
+}
+
+/// An action automation wrote, bound to a key, plays under the desktop's automation policy
+/// when the user presses the key: its file step is refused, not run with the user's access.
+#[test]
+fn a_users_key_plays_an_action_automation_wrote_under_its_gate() {
+    /// The automation policy this test stands in for: every `file.` command is refused.
+    fn deny_file(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id.starts_with("file.") { Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let services = crate::Services { automation_authorize: Some(deny_file), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let mut planted = Action::new("Backup", vec![("file.openAs".into(), json!({"path": "/outside/secret.png"}))]);
+    planted.automation = true;
+    app.session.actions.list.push(planted);
+    assign_shortcut(&mut app, 0, "F9").unwrap();
+    let shortcut = actions_cmds::occurrence_key(app.session.actions.list[0].action_id.as_deref().unwrap());
+    crate::shortcut_dispatch::dispatch(&mut app, &egui::Context::default(), &shortcut);
+    assert!(app.session.documents().is_empty());
+    assert!(app.ui.status.contains("disabled"), "the refusal is reported: {}", app.ui.status);
+    assert!(app.session.authorize.is_none(), "the kept gate is removed after playback");
+}
+
+/// Whole-library replacement retains origin through Classic IDs in both playback routes.
+#[test]
+fn replacement_origin_keeps_its_gate_for_same_name_occurrence_playback() {
+    fn deny_invert(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "image.adjustments.invert" { Err(photocraft_engine::EngineError::Other("automation invert denied".into())) } else { Ok(()) }
+    }
+    for automation in [false, true] {
+        let services = crate::Services { automation_authorize: Some(deny_invert), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.session.authorize = if automation { Some(deny_invert) } else { None };
+        let bytes = action_set_bytes("Replacement", "Same");
+        app.session.execute("actions.replace", json!({"confirm": true, "data": photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap();
+        app.session.authorize = None;
+        assert_eq!(app.session.actions.list[0].automation, automation);
+        app.session.actions.list.insert(0, Action::new("Same", Vec::new()));
+        let id = actions_cmds::prepare_action_id(&app.session.actions.list, 1).unwrap();
+        actions_cmds::commit_action_id(&mut app.session, 1, id.clone()).unwrap();
+        let target = json!({"action": "Same", "actionId": id});
+        let engine = app.session.execute("actions.play", target.clone()).unwrap();
+        let shell = play(&mut app, &target).unwrap();
+        for result in [engine, shell] {
+            if automation {
+                assert_eq!(result["ran"], 0);
+                assert!(result["failed"]["error"].as_str().unwrap().contains("automation invert denied"), "{result}");
+            } else {
+                assert_eq!(result["ran"], 1, "the user's selected occurrence plays, not its empty namesake");
+                assert!(result.get("failed").is_none(), "{result}");
+            }
+        }
+        assert!(app.session.authorize.is_none(), "neither route leaks the kept gate");
+    }
+}
+
+/// A paused bound namesake retakes its own gate without applying it to its caller.
+#[test]
+fn a_bound_same_name_pause_keeps_only_the_selected_occurrences_gate() {
+    fn deny_tails(id: &str, p: &Value) -> photocraft_engine::Result<()> {
+        if id == "layer.new.layer" && matches!(p.get("name").and_then(Value::as_str), Some("Suffix" | "caller tail")) {
+            Err(photocraft_engine::EngineError::Other("automation tail denied".into()))
+        } else {
+            Ok(())
+        }
+    }
+    for disabled in [false, true] {
+        let services = crate::Services { automation_authorize: Some(deny_tails), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 8, "height": 6, "background": "#203040"})).unwrap();
+        let id = "a".repeat(32);
+        let mut second =
+            Action::new("Same", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1.5})), ("layer.new.layer".into(), json!({"name": "Suffix"}))]);
+        second.action_id = Some(id.clone());
+        second.automation = true;
+        second.dialogs.insert(0);
+        if disabled {
+            second.disabled.insert(1);
+        }
+        let first = Action::new(
+            "Same",
+            vec![("actions.play".into(), json!({"action": "Same", "actionId": id})), ("layer.new.layer".into(), json!({"name": "caller tail"}))],
+        );
+        app.session.actions.list.extend([first, second]);
+        let playback = play(&mut app, &json!({"action": "Same"})).unwrap();
+        let dialog = playback["paused"]["dialog"].as_u64().expect("the selected occurrence's blur dialog");
+        let confirmed = crate::dialogs::confirm(&mut app, dialog);
+        if disabled {
+            confirmed.unwrap();
+            assert_eq!(layer_names(&app), ["caller tail"], "the user's caller retains its access");
+        } else {
+            assert!(layer_names(&app).is_empty(), "the marked tail is refused and stops its caller");
+            assert!(app.ui.status.contains("automation tail denied"), "{}", app.ui.status);
+        }
+        assert!(app.session.authorize.is_none(), "the selected occurrence's gate is removed");
+    }
+}
+
+/// CodeRabbit on #9783: the kept gate of an action automation wrote stays with that action. A set
+/// the user plays pauses at the marked action's step dialog; after OK the marked action's tail
+/// still plays under the gate (its refused step is refused), and once that tail passes, the
+/// user's own action after it in the set keeps the user's access.
+#[test]
+fn a_kept_gate_does_not_carry_into_the_rest_of_a_set_after_a_pause() {
+    use egui_kittest::kittest::Queryable;
+    /// The automation policy this test stands in for: it refuses only layers named `a2` and `b`.
+    fn deny_a2_and_b(id: &str, p: &Value) -> photocraft_engine::Result<()> {
+        match p.get("name").and_then(Value::as_str) {
+            Some(name @ ("a2" | "b")) if id == "layer.new.layer" => Err(photocraft_engine::EngineError::Other(format!("layer {name} denied"))),
+            _ => Ok(()),
+        }
+    }
+    let services = crate::Services { automation_authorize: Some(deny_a2_and_b), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut a = Action::new(
+        "A",
+        vec![
+            ("layer.new.layer".into(), json!({"name": "a"})),
+            ("filter.blur.gaussianBlur".into(), json!({"radius": 1})),
+            ("layer.new.layer".into(), json!({"name": "a2"})),
+        ],
+    );
+    a.set = Some("S".into());
+    a.dialogs.insert(1);
+    a.automation = true;
+    let mut b = Action::new("B", vec![("layer.new.layer".into(), json!({"name": "b"}))]);
+    b.set = Some("S".into());
+    app.session.actions.list.extend([a, b]);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("S").click();
+    h.run_steps(2);
+
+    // The marked action's tail after OK: its `a2` step meets the kept gate, and the set stops.
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"]);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
+    let _confirmed = crate::dialogs::confirm(h.state_mut(), dialog);
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"], "a2 was refused after OK: {}", h.state().ui.status);
+    assert!(h.state().ui.status.contains("a2 denied"), "the refusal is reported: {}", h.state().ui.status);
+    assert!(h.state().session.authorize.is_none(), "no gate is left installed");
+
+    // With that step off, the tail passes, and the user's own action after it plays with the
+    // user's access.
+    h.state_mut().session.actions.list[0].disabled.insert(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    h.run_steps(2);
+    let names = layer_names(h.state());
+    assert!(names.iter().any(|n| n == "b"), "B played with the user's access: {names:?} {}", h.state().ui.status);
+    assert!(!names.iter().any(|n| n == "a2"), "{names:?}");
+    assert!(h.state().session.authorize.is_none(), "no gate is left installed");
 }
 
 /// The dialog names only its pause: changing its fields can't resume another action.

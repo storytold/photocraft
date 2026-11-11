@@ -11,40 +11,88 @@ struct Key {
 #[derive(Debug)]
 struct Language {
     code: String,
-    catalog: Option<PathBuf>,
 }
 
+/// `cargo xtask i18n-report` (the last `cargo xtask ci` step): per registered language, how many
+/// of PhotoCraft's English UI strings have a translation in the craft-i18n checkout
+/// `CRAFT_I18N_DIR` names, looked up as the app does (the `craft-i18n` crate: PhotoCraft's rows
+/// over the shared ones, a region falling back to its language), the strings it lacks, and how
+/// many rows are kept in English (a translation that is the English text itself). It never fails
+/// on a missing translation: that string shows in English, and translators fill it in craft-i18n.
+/// Without `CRAFT_I18N_DIR` it says so and passes.
 pub fn run(root: &Path) -> Result<(), String> {
-    let i18n_dir = root.join("crates/ui-egui/src/i18n");
     let registry_path = root.join("crates/ui-egui/src/i18n.rs");
     let registry = fs::read_to_string(&registry_path).map_err(|e| format!("{}: {e}", registry_path.display()))?;
     let languages = registered_languages(&registry)?;
-
+    let Some(dir) = std::env::var_os("CRAFT_I18N_DIR").filter(|d| !d.is_empty()) else {
+        println!("UI translation report: skipped, built without craft-i18n (set CRAFT_I18N_DIR to a craft-i18n checkout)");
+        return Ok(());
+    };
     let english_keys = source_keys(root)?;
-    let mut catalog_texts = BTreeMap::new();
-    for language in &languages {
-        if let Some(path) = &language.catalog {
-            let full_path = i18n_dir.join(path);
-            let text = fs::read_to_string(&full_path).map_err(|e| format!("{}: {e}", full_path.display()))?;
-            catalog_texts.insert(language.code.clone(), (full_path, text));
-        }
-    }
-    let mut translations = BTreeMap::new();
-    for language in &languages {
-        let entries = if language.catalog.is_some() {
-            let (full_path, text) = catalog_texts.get(&language.code).ok_or_else(|| format!("missing source for registered language `{}`", language.code))?;
-            parse_catalog(full_path, text)?
-        } else {
-            BTreeSet::new()
-        };
-        translations.insert(language.code.clone(), entries);
-    }
-
     if english_keys.is_empty() {
         return Err("no source-derived English UI translation keys were found".into());
     }
-    print!("{}", format_report(&languages, &english_keys, &translations));
+    let embedded = embedded(&PathBuf::from(dir).join("locales"))?;
+    let codes: Vec<&str> = languages.iter().map(|l| l.code.as_str()).collect();
+    let (i18n, mut problems) = craft_i18n::I18n::new(embedded, &codes);
+    problems.extend(i18n.check_all());
+    let mut translations = BTreeMap::new();
+    let mut kept = BTreeMap::new();
+    for language in &languages {
+        let Some(lang) = i18n.from_code(&language.code).filter(|_| language.code != "en") else { continue };
+        let found: BTreeSet<Key> = english_keys.iter().filter(|key| translation(&i18n, lang, key).is_some()).cloned().collect();
+        let same = english_keys.iter().filter(|key| key.context.is_empty() && translation(&i18n, lang, key) == Some(key.source.as_str())).count();
+        translations.insert(language.code.clone(), found);
+        kept.insert(language.code.clone(), same);
+    }
+    print!("{}", format_report(&languages, &english_keys, &translations, &kept));
+    if !problems.is_empty() {
+        println!("\n{} catalog rows are skipped (they show in English):", problems.len());
+        for problem in &problems {
+            println!("    {problem}");
+        }
+    }
     Ok(())
+}
+
+/// The translation of `key` in `lang`, as the app looks it up: a contextual string falls back to
+/// the plain one, a plural to nothing (its English forms show).
+fn translation<'a>(i18n: &'a craft_i18n::I18n, lang: craft_i18n::Lang, key: &'a Key) -> Option<&'a str> {
+    match key.context.as_str() {
+        "" | "@plural" => i18n.get(lang, &key.context, &key.source),
+        context => i18n.get(lang, context, &key.source).or_else(|| i18n.get(lang, "", &key.source)),
+    }
+}
+
+/// The catalogs of every locale under `dir` with a `photocraft.tsv`, as the app's build.rs embeds
+/// them: (locale, shared `common.tsv` or "", `photocraft.tsv`). Read once per run, so leaked.
+fn embedded(dir: &Path) -> Result<&'static craft_i18n::Embedded, String> {
+    let list = fs::read_dir(dir).map_err(|e| format!("{} is not a craft-i18n checkout ({e})", dir.display()))?;
+    let mut out: Vec<(&'static str, &'static str, &'static str)> = Vec::new();
+    for entry in list {
+        // A listing that fails part way would pass off the rest of the locales as missing.
+        let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+        let Some(code) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
+        // A locale without the file is skipped (or reads without a shared catalog); a file that is
+        // there but can't be read is an error, not a gap in the coverage.
+        let Some(app) = read_optional(&path.join("photocraft.tsv"))? else { continue };
+        let shared = read_optional(&path.join("common.tsv"))?.unwrap_or_default();
+        out.push((Box::leak(code.into_boxed_str()), Box::leak(shared.into_boxed_str()), Box::leak(app.into_boxed_str())));
+    }
+    if out.is_empty() {
+        return Err(format!("{} has no locale with a photocraft.tsv", dir.display()));
+    }
+    out.sort();
+    Ok(Box::leak(out.into_boxed_slice()))
+}
+
+/// The file's text; `None` when there is no such file, an error naming it when it can't be read.
+fn read_optional(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
 }
 
 fn source_keys(root: &Path) -> Result<BTreeSet<Key>, String> {
@@ -63,17 +111,30 @@ fn source_keys(root: &Path) -> Result<BTreeSet<Key>, String> {
     Ok(keys)
 }
 
-fn format_report(languages: &[Language], english_keys: &BTreeSet<Key>, translations: &BTreeMap<String, BTreeSet<Key>>) -> String {
-    let mut report = String::from("UI translation coverage (translated source keys / source keys)\n");
-    report.push_str(&format!("{:<12} {:>12} {:>9}\n", "language", "translated", "coverage"));
-    for language in languages {
+fn format_report(
+    languages: &[Language],
+    english_keys: &BTreeSet<Key>,
+    translations: &BTreeMap<String, BTreeSet<Key>>,
+    kept: &BTreeMap<String, usize>,
+) -> String {
+    let mut report = String::from("UI translation coverage (translated source keys / source keys; kept: translated as the English itself)\n");
+    report.push_str(&format!("{:<12} {:>12} {:>9} {:>6}\n", "language", "translated", "coverage", "kept"));
+    // A registered language without a catalog in the checkout isn't a catalog with nothing in it:
+    // it is listed apart and left out of the coverage.
+    let resolved = |language: &&Language| language.code == "en" || translations.contains_key(&language.code);
+    for language in languages.iter().filter(resolved) {
         let translated =
             if language.code == "en" { english_keys.len() } else { translations.get(&language.code).map_or(0, |keys| keys.intersection(english_keys).count()) };
         let coverage = 100.0 * translated as f64 / english_keys.len() as f64;
-        report.push_str(&format!("{:<12} {:>5}/{:<6} {:>8.2}%\n", language.code, translated, english_keys.len(), coverage));
+        let kept = kept.get(&language.code).copied().unwrap_or(0);
+        report.push_str(&format!("{:<12} {:>5}/{:<6} {:>8.2}% {:>6}\n", language.code, translated, english_keys.len(), coverage, kept));
+    }
+    let unresolved: Vec<&str> = languages.iter().filter(|language| !resolved(language)).map(|language| language.code.as_str()).collect();
+    if !unresolved.is_empty() {
+        report.push_str(&format!("\nRegistered without a photocraft.tsv in the checkout (shown in English, not counted): {}\n", unresolved.join(", ")));
     }
     report.push_str("\nMissing translations (shown in English until translated)\n");
-    for language in languages.iter().filter(|language| language.code != "en") {
+    for language in languages.iter().filter(resolved).filter(|language| language.code != "en") {
         let empty = BTreeSet::new();
         let translated = translations.get(&language.code).unwrap_or(&empty);
         let missing: Vec<&Key> = english_keys.difference(translated).collect();
@@ -104,33 +165,18 @@ fn registered_languages(source: &str) -> Result<Vec<Language>, String> {
         .split("pub static LANGUAGES")
         .nth(1)
         .ok_or_else(|| "could not find the LANGUAGES registry".to_string())?
-        .split("impl LangInfo")
+        .split("];")
         .next()
         .ok_or_else(|| "could not find the end of the LANGUAGES registry".to_string())?;
     let mut languages = Vec::new();
     let mut codes = HashSet::new();
     for (index, section) in registry.split("LangInfo {").skip(1).enumerate() {
-        let block = section.split("},").next().unwrap_or(section);
+        let block = section.split('}').next().unwrap_or(section);
         let code = quoted_field(block, "code:").ok_or_else(|| format!("LANGUAGES entry {} has no code", index + 1))?;
         if !codes.insert(code.clone()) {
             return Err(format!("duplicate registered language code `{code}`"));
         }
-        let catalog = if code == "en" {
-            None
-        } else {
-            // `catalog!("xx")` embeds `xx.tsv` (packed by ui-egui's build.rs).
-            let marker = "catalog!(\"";
-            let start = block.find(marker).ok_or_else(|| format!("language `{code}` has no catalog! entry"))? + marker.len();
-            let rest = block.get(start..).ok_or_else(|| format!("language `{code}` has a malformed catalog path"))?;
-            let end = rest.find("\")").ok_or_else(|| format!("language `{code}` has a malformed catalog path"))?;
-            let file = format!("{}.tsv", rest.get(..end).ok_or_else(|| format!("language `{code}` has an invalid catalog path"))?);
-            let path = Path::new(&file);
-            if path.components().count() != 1 || path.extension().and_then(|ext| ext.to_str()) != Some("tsv") {
-                return Err(format!("language `{code}` has unsafe catalog path `{file}`"));
-            }
-            Some(path.to_path_buf())
-        };
-        languages.push(Language { code, catalog });
+        languages.push(Language { code });
     }
     if !languages.iter().any(|language| language.code == "en") {
         return Err("LANGUAGES registry does not contain English (`en`)".into());
@@ -477,77 +523,21 @@ fn unescape_rust_string(raw: &str) -> String {
     out
 }
 
-fn parse_catalog(path: &Path, text: &str) -> Result<BTreeSet<Key>, String> {
-    let mut keys = BTreeSet::new();
-    for (index, line) in text.lines().enumerate() {
-        if line.trim().is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut columns = line.split('\t');
-        let parsed = match (columns.next(), columns.next(), columns.next(), columns.next()) {
-            (Some(context), Some(source), Some(translation), None) if !source.is_empty() && !translation.is_empty() => {
-                Key { context: unescape_tsv(context), source: unescape_tsv(source) }
-            }
-            _ => return Err(format!("{}:{line_no}: expected `context<TAB>source<TAB>translation`", path.display(), line_no = index + 1)),
-        };
-        if !keys.insert(Key { context: parsed.context.clone(), source: parsed.source.clone() }) {
-            return Err(format!("{}:{line_no}: duplicate key {:?} {:?}", path.display(), parsed.context, parsed.source, line_no = index + 1));
-        }
-    }
-    Ok(keys)
-}
-
-fn unescape_tsv(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    let mut chars = source.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            out.push(ch);
-            continue;
-        }
-        match chars.next() {
-            Some('n') => out.push('\n'),
-            Some('t') => out.push('\t'),
-            Some('\\') => out.push('\\'),
-            Some(other) => {
-                out.push('\\');
-                out.push(other);
-            }
-            None => out.push('\\'),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn known_keys(values: &[&str]) -> BTreeSet<Key> {
-        values.iter().map(|value| Key { context: String::new(), source: (*value).to_string() }).collect()
-    }
-
-    #[test]
-    fn unused_legacy_catalog_keys_do_not_affect_coverage() {
-        let catalog = parse_catalog(Path::new("xx.tsv"), "\tOld key\tÜbersetzung\n");
-        assert_eq!(catalog, Ok(known_keys(&["Old key"])));
-    }
-
-    #[test]
-    fn rejects_duplicate_keys() {
-        let error = parse_catalog(Path::new("xx.tsv"), "\tOpen\tOuvrir\n\tOpen\tOuvert\n").err();
-        assert!(error.is_some_and(|message| message.contains("duplicate key")));
-    }
-
     #[test]
     fn registered_languages_and_report_are_stable() {
         let registry = r#"
-            pub static LANGUAGES: [LangInfo; 3] = [
-                LangInfo { code: "zh", source: catalog!("zh") },
-                LangInfo { code: "en", source: b"" },
-                LangInfo { code: "fr", source: catalog!("fr") },
+            pub static LANGUAGES: [LangInfo; 4] = [
+                LangInfo { code: "zh", complete_menus: true },
+                LangInfo { code: "de", complete_menus: true },
+                LangInfo { code: "en", complete_menus: false },
+                // A comment with a } brace.
+                LangInfo { code: "fr", complete_menus: true },
             ];
-            impl LangInfo {}
+            impl Lang {}
         "#;
         let languages = registered_languages(registry);
         assert!(languages.is_ok());
@@ -561,13 +551,16 @@ mod tests {
             ("fr".to_string(), BTreeSet::from([Key { context: String::new(), source: "Open".into() }])),
             ("zh".to_string(), english_keys.clone()),
         ]);
+        let kept = BTreeMap::from([("fr".to_string(), 0), ("zh".to_string(), 1)]);
         assert_eq!(
-            format_report(&languages, &english_keys, &translations),
-            "UI translation coverage (translated source keys / source keys)\n\
-             language       translated  coverage\n\
-             en               3/3        100.00%\n\
-             fr               1/3         33.33%\n\
-             zh               3/3        100.00%\n\
+            format_report(&languages, &english_keys, &translations, &kept),
+            "UI translation coverage (translated source keys / source keys; kept: translated as the English itself)\n\
+             language       translated  coverage   kept\n\
+             en               3/3        100.00%      0\n\
+             fr               1/3         33.33%      0\n\
+             zh               3/3        100.00%      1\n\
+             \n\
+             Registered without a photocraft.tsv in the checkout (shown in English, not counted): de\n\
              \n\
              Missing translations (shown in English until translated)\n\
              fr: 2 missing\n\
