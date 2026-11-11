@@ -480,17 +480,31 @@ fn targeted(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
 /// shape layer inside a group, a hidden active layer, the active layer's path behind a path
 /// selected in the Paths panel, and a Work Path hidden after ⌘↩ or Load as Selection (#8459).
 fn hit_converting(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
-    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+    let zoom = f64::from(app.point_zoom().max(0.01));
+    let tol = 6.0 / zoom;
+    // An anchor is in reach within 5 points (5 screen px at display scale 1, as measured, #12748);
+    // other display scales weren't measured and keep the points unit, like every canvas tolerance.
+    // The 0.01 point covers the f32 screen-to-document mapping, so a press 5 px away always hits.
+    // Shown handles and segments weren't measured and keep `tol`.
+    let reach = 5.01 / zoom;
+    let beyond = |path: &Path, k: [usize; 2]| {
+        path.subpaths.get(k[0]).and_then(|s| s.knots.get(k[1])).is_some_and(|kn| (kn.anchor.x - p[0]).hypot(kn.anchor.y - p[1]) > reach)
+    };
     let ds = &app.ui.direct_selection;
     let valid = still_valid(app, ds);
     let mut paths = targeted(app);
     if !paths.iter().any(|(r, _)| *r == PathRef::Work) {
         paths.extend(app.session.active().and_then(|st| st.doc.work_path.clone()).map(|p| (PathRef::Work, p)));
     }
-    paths.into_iter().find_map(|(r, path)| {
-        let shown = if valid && ds.target.as_ref() == Some(&r) { shown_handles(ds, &path) } else { Vec::new() };
-        edit::hit(&path, Point::new(p[0], p[1]), tol, &shown).map(|h| (r, path, h))
-    })
+    paths
+        .into_iter()
+        .find_map(|(r, path)| {
+            let shown = if valid && ds.target.as_ref() == Some(&r) { shown_handles(ds, &path) } else { Vec::new() };
+            edit::hit(&path, Point::new(p[0], p[1]), tol.max(reach), &shown).map(|h| (r, path, h))
+        })
+        // The front path's anchor out of reach swallows the press, as today, rather than handing it
+        // to a path behind.
+        .filter(|(_, path, h)| !matches!(h, Hit::Anchor(k) if beyond(path, *k)))
 }
 
 fn retracted(k: &photocraft_doc::Knot, h: Handle) -> bool {
@@ -926,6 +940,9 @@ mod convert_point_history_tests;
 
 #[cfg(test)]
 mod convert_point_targeted_path_tests;
+
+#[cfg(test)]
+mod convert_point_tolerance_tests;
 
 #[cfg(test)]
 mod freeform_command_tests {
