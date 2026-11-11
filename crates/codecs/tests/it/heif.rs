@@ -151,6 +151,12 @@ fn limits_are_checked_before_decoding() {
     assert!(matches!(decode_with(checker_64(), &tight(few)), Err(CodecError::LimitExceeded(_))));
     let bytes = Limits { max_alloc: 64 * 64 * 3 - 1, ..Default::default() };
     assert!(matches!(decode_with(checker_64(), &tight(bytes)), Err(CodecError::LimitExceeded(_))));
+    // An 8-bit file peaks at the decoder's 16-bit buffer plus the 8-bit output: 3 bytes a sample.
+    // The budget is held against the picture as coded, which this file pads to 10240 pixels.
+    let peak = 10240 * 3 * 3;
+    let short = Limits { max_alloc: peak - 1, ..Default::default() };
+    assert!(matches!(decode_with(checker_64(), &tight(short)), Err(CodecError::LimitExceeded(_))));
+    decode_with(checker_64(), &tight(Limits { max_alloc: peak, ..Default::default() })).unwrap();
 }
 
 #[test]

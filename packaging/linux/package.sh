@@ -78,6 +78,8 @@ mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
 mkdir -p "$STAGE/usr/share/doc/photocraft"
 copy_docs "$STAGE/usr/share/doc/photocraft"
+install -Dm644 "$ROOT/docs/mcp.md" "$STAGE/usr/share/doc/photocraft/mcp.md"
+install -Dm644 "$ROOT/docs/control-protocol.md" "$STAGE/usr/share/doc/photocraft/control-protocol.md"
 # photocraft-cli's man pages and shell completions, from its clap definition, written by the
 # example built above. A cross build runs it through $EMULATOR, like the --version check at the
 # end, and leaves them out without one, as a --skip-build run whose prebuilt binaries came without
@@ -208,7 +210,9 @@ fi
 if [[ -z "${CROSS_TARGET:-}" ]]; then
   "$STAGE/usr/bin/photocraft-cli" --version
 elif [[ -n "${EMULATOR:-}" ]]; then
-  "$EMULATOR" "$STAGE/usr/bin/photocraft-cli" --version
+  # Set, so malloc_tuning::apply doesn't re-execute the CLI (#8743): under qemu-user that exec goes
+  # to the host kernel, which can't run a $CROSS_ARCH binary, and glibc then hands it to /bin/sh.
+  MALLOC_TRIM_THRESHOLD_=131072 "$EMULATOR" "$STAGE/usr/bin/photocraft-cli" --version
 fi
 echo "==> done"
 ls -lh "$DIST"

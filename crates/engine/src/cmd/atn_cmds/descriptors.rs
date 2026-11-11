@@ -20,11 +20,15 @@ pub(super) fn get_num(d: &Descriptor, k: &str) -> Option<f64> {
     d.get(k).and_then(num)
 }
 
-pub(super) fn get_bool(d: &Descriptor, k: &str) -> Option<bool> {
-    match d.get(k) {
-        Some(D::Boolean(b)) => Some(*b),
+pub(super) fn boolean(v: &D) -> Option<bool> {
+    match v {
+        D::Boolean(b) => Some(*b),
         _ => None,
     }
+}
+
+pub(super) fn get_bool(d: &Descriptor, k: &str) -> Option<bool> {
+    d.get(k).and_then(boolean)
 }
 
 pub(super) fn get_text(d: &Descriptor, k: &str) -> Option<String> {
@@ -35,11 +39,15 @@ pub(super) fn get_text(d: &Descriptor, k: &str) -> Option<String> {
 }
 
 /// An enumerated value's id, trailing spaces removed (`Ordn.Trgt` → `"Trgt"`).
-pub(super) fn get_enum(d: &Descriptor, k: &str) -> Option<String> {
-    match d.get(k) {
-        Some(D::Enumerated { value, .. }) => Some(trimmed(value)),
+pub(super) fn enumerated(v: &D) -> Option<String> {
+    match v {
+        D::Enumerated { value, .. } => Some(trimmed(value)),
         _ => None,
     }
+}
+
+pub(super) fn get_enum(d: &Descriptor, k: &str) -> Option<String> {
+    d.get(k).and_then(enumerated)
 }
 
 pub(super) fn get_obj<'a>(d: &'a Descriptor, k: &str) -> Option<&'a Descriptor> {
@@ -84,6 +92,7 @@ pub(super) enum Target {
     Class,
     Offset(i32),
     Index(u32),
+    Id(u32),
     Other,
 }
 
@@ -93,6 +102,7 @@ pub(super) fn target(r: &[ReferenceItem]) -> Target {
         Some(ReferenceItem::Name { name, .. }) => Target::Name(name.to_string_lossy()),
         Some(ReferenceItem::Property { key, .. }) => Target::Property(trimmed(key)),
         Some(ReferenceItem::Class(_)) => Target::Class,
+        Some(ReferenceItem::Identifier { id, .. }) => Target::Id(*id),
         Some(ReferenceItem::Offset { offset, .. }) => Target::Offset(*offset),
         Some(ReferenceItem::Index { index, .. }) => Target::Index(*index),
         _ => Target::Other,
@@ -100,7 +110,8 @@ pub(super) fn target(r: &[ReferenceItem]) -> Target {
 }
 
 /// `{"layer": name}` for a reference that names a layer, `{}` for the target layer, `None`
-/// for anything else (an index or id: meaningless in another document).
+/// for anything else (an index: meaningless in another document). A layer id reference
+/// (`Idnt`) comes back as the id the engine's `layer` param takes.
 pub(super) fn layer_target(r: &[ReferenceItem]) -> Option<Map<String, Value>> {
     let mut m = Map::new();
     match target(r) {
@@ -109,11 +120,31 @@ pub(super) fn layer_target(r: &[ReferenceItem]) -> Option<Map<String, Value>> {
             m.insert("layer".into(), json!(n));
         }
         Target::Property(p) if p == "Bckg" => {
-            m.insert("layer".into(), json!("Background"));
+            m.insert("layer".into(), json!({"background": true}));
+        }
+        // Photoshop's layer id: exact in the document whose ids the file refers to.
+        Target::Id(id) if ref_class(r).as_deref() == Some("Lyr") => {
+            m.insert("layer".into(), json!(id));
         }
         _ => return None,
     }
     Some(m)
+}
+
+/// Select and Move retain stack references until playback rather than capturing local ids.
+pub(super) fn recorded_layer_target(r: &[ReferenceItem]) -> Option<Map<String, Value>> {
+    let selector = match r {
+        [ReferenceItem::Index { class, index }] if trimmed(&class.class_id) == "Lyr" => json!({"index": index}),
+        [ReferenceItem::Enumerated { class, type_id, value }]
+            if trimmed(&class.class_id) == "Lyr" && type_id.is("Ordn") && matches!(trimmed(value).as_str(), "Trgt" | "Frwr" | "Bckw" | "Frnt" | "Back") =>
+        {
+            json!({"ordinal": trimmed(value)})
+        }
+        [ReferenceItem::Index { .. } | ReferenceItem::Enumerated { .. }] => return None,
+        _ if matches!(target(r), Target::Index(_) | Target::Ordinal(_)) => return None,
+        _ => return layer_target(r),
+    };
+    Some(Map::from_iter([("layer".into(), selector)]))
 }
 
 // ------------------------------------------------------------------ descriptor building
@@ -172,13 +203,40 @@ pub(super) fn class_ref(cls: &str) -> D {
     D::Reference(vec![ReferenceItem::Class(class(cls))])
 }
 
-/// The `null` reference for a command's `layer` param: by name, else the target layer.
+/// The `null` reference for a command's `layer` param: by name, by id (a numeric `layer`
+/// is an imported `Idnt`: Photoshop's own layer-id reference), else the target layer.
 pub(super) fn layer_ref(p: &Value) -> Option<D> {
     match p.get("layer") {
         None | Some(Value::Null) => Some(target_ref("Lyr ")),
         Some(Value::String(n)) => Some(name_ref("Lyr ", n)),
+        Some(Value::Number(n)) => match n.as_u64() {
+            Some(i) if i <= u32::MAX as u64 => Some(D::Reference(vec![ReferenceItem::Identifier { class: class("Lyr "), id: i as u32 }])),
+            _ => None,
+        },
+        Some(v) if *v == json!({"background": true}) => Some(D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: code("Bckg") }])),
         _ => None,
     }
+}
+
+/// Write the recorded form, including the padded four-byte ordinal codes.
+pub(super) fn recorded_layer_ref(p: &Value) -> Option<D> {
+    let Some(Value::Object(selector)) = p.get("layer") else { return layer_ref(p) };
+    if !selector.contains_key("index") && !selector.contains_key("ordinal") {
+        return layer_ref(p);
+    }
+    if selector.len() != 1 {
+        return None;
+    }
+    let item = if let Some(index) = selector.get("index") {
+        ReferenceItem::Index { class: class("Lyr "), index: u32::try_from(index.as_u64()?).ok()? }
+    } else {
+        let ordinal = selector.get("ordinal")?.as_str()?;
+        if !matches!(ordinal, "Trgt" | "Frwr" | "Bckw" | "Frnt" | "Back") {
+            return None;
+        }
+        ReferenceItem::Enumerated { class: class("Lyr "), type_id: code("Ordn"), value: code(ordinal) }
+    };
+    Some(D::Reference(vec![item]))
 }
 
 pub(super) fn desc(cls: &str) -> Descriptor {
@@ -200,6 +258,22 @@ pub(super) fn jstr<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 }
 
 // ------------------------------------------------------------------ colours and enums
+
+/// A recorded D50 Lab colour converted through the CMS to sRGB `#rrggbb`.
+pub(super) fn lab_color_hex(c: &Descriptor) -> Option<String> {
+    use photocraft_cms::{Builtin, TransformOptions};
+    if !c.class_id.is("LbCl") {
+        return None;
+    }
+    let (l, a, b) = (get_num(c, "Lmnc")?, get_num(c, "A   ")?, get_num(c, "B   ")?);
+    let transform = photocraft_cms::cached(Builtin::LabD50.profile(), Builtin::Srgb.profile(), TransformOptions { bpc: false, ..Default::default() }).ok()?;
+    // ICC v4 Lab device values are normalized, unlike the recorded L*, a*, b*.
+    let input = [(l / 100.0) as f32, ((a + 128.0) / 255.0) as f32, ((b + 128.0) / 255.0) as f32];
+    let mut rgb = [0.0; 3];
+    transform.convert_f32(&input, 3, &mut rgb, 3, false);
+    let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    Some(format!("#{r:02x}{g:02x}{b:02x}"))
+}
 
 /// A Photoshop colour object as `#rrggbb`: `RGBC` (0..255), `HSBC`, `Grsc`.
 pub(super) fn color_hex(c: &Descriptor) -> Option<String> {
