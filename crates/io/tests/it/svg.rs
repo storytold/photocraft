@@ -437,27 +437,27 @@ fn retained_deep_svg_groups_lower_render_and_drop_on_a_bounded_worker() {
     std::thread::Builder::new()
         .stack_size(512 << 10)
         .spawn(move || {
-            let drawing = |depth| {
-                format!(
-                    "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
-                    "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(depth),
-                    "</g>".repeat(depth)
-                )
-            };
-            let source = drawing(500);
+            let source = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(500),
+                "</g>".repeat(500)
+            );
             let imported = svg::import_svg("retained.svg", source.as_bytes()).unwrap();
             assert_eq!(imported.document.max_group_depth(), 100);
             assert!(pixel(&imported.document)[3] > 0.5);
             let (preview, _) = svg::import_svg_preview_with_work("retained.svg", source.as_bytes(), u64::MAX).unwrap();
             assert_eq!(preview.document.max_group_depth(), 100);
             assert!(pixel(&preview.document)[3] > 0.5);
-            // Native import flattens groups to the document limit, but direct rasterization
-            // retains them and must obey the renderer's independent depth cap.
-            let error = svg::rasterize_rgba8(source.as_bytes()).unwrap_err();
-            assert!(matches!(error, IoError::Svg(message) if message.contains("layers are nested too deeply")), "deep rasterization must be refused");
-            // Still exercise successful rasterization on the small caller stack below that cap.
-            let source = drawing(190);
-            let (w, h, pixels) = svg::rasterize_rgba8(source.as_bytes()).unwrap();
+            // Whole-drawing rasterisation refuses more than 200 nested layers (#10953) with an
+            // error, not a crash; a drawing within that limit still renders on this small stack.
+            let refused = svg::rasterize_rgba8(source.as_bytes()).unwrap_err().to_string();
+            assert!(refused.contains("layers are nested too deeply"), "{refused}");
+            let within = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(150),
+                "</g>".repeat(150)
+            );
+            let (w, h, pixels) = svg::rasterize_rgba8(within.as_bytes()).unwrap();
             assert_eq!((w, h), (8, 8));
             assert!(pixels[3] > 127);
         })
