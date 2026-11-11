@@ -72,7 +72,7 @@ pub fn enable_explorer_thumbnails(enable: bool, show_logo: bool) -> Result<(), S
         } else {
             unregister()
         }
-    })?
+    })
 }
 
 /// Runs `f` under a per-user, cross-process lock for registry changes.
@@ -134,7 +134,7 @@ pub fn ensure_explorer_thumbnails(show_logo: bool) -> Result<(), String> {
             }
         }
         Ok(())
-    })?
+    })
 }
 
 /// A handler may be registered on the extension or on its associated ProgID. Automatic
@@ -403,4 +403,71 @@ fn read_string(root: HKEY, path: &str, name: Option<&str>) -> Option<String> {
     }
     let text = buf.get(..(size as usize / 2).min(buf.len()))?;
     let end = text.iter().position(|&c| c == 0).unwrap_or(text.len());
-    String::from_utf1
+    String::from_utf16(text.get(..end)?).ok()
+}
+
+/// Deletes one value of an HKCU key; a value that is already gone is fine.
+fn delete_value(path: &str, name: &str) -> Result<(), String> {
+    let (path_w, name_w) = (wide(path), wide(name));
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    let rc = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, path_w.as_ptr(), name_w.as_ptr()) };
+    if matches!(rc, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) { Ok(()) } else { check(rc, "RegDeleteKeyValueW") }
+}
+
+/// Deletes an HKCU key and everything under it; a key that is already gone is fine.
+fn delete_tree(path: &str) -> Result<(), String> {
+    let path_w = wide(path);
+    // SAFETY: `path_w` is NUL-terminated and outlive the call.
+    let rc = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, path_w.as_ptr()) };
+    if matches!(rc, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) { Ok(()) } else { check(rc, "RegDeleteTreeW") }
+}
+
+/// Tells Explorer that file associations changed, so it refreshes its thumbnails and icons.
+fn notify_shell() {
+    // SAFETY: null item pointers are valid for `SHCNE_ASSOCCHANGED`.
+    unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED as i32, SHCNF_IDLIST, null(), null()) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CLSID_STR, for_each_keep_going, is_our_clsid};
+
+    #[test]
+    fn a_failing_step_does_not_skip_the_rest_and_the_first_error_wins() {
+        let mut seen = Vec::new();
+        let result = for_each_keep_going([".psd", ".psb", ".pcraft"], |ext| {
+            seen.push(ext);
+            if ext == ".pcraft" {
+                Err("last".into())
+            } else if ext == ".psd" {
+                Err("first".into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(seen, [".psd", ".psb", ".pcraft"]);
+        assert_eq!(result, Err("first".to_string()));
+        assert_eq!(for_each_keep_going([1, 2], |_| Ok(())), Ok(()));
+    }
+
+    #[test]
+    fn every_extension_has_its_own_handler_and_backup() {
+        use super::{EXTENSIONS, handler_key, state_key, user_handler_key};
+        let mut handlers = std::collections::HashSet::new();
+        let mut backups = std::collections::HashSet::new();
+        for ext in EXTENSIONS {
+            assert!(handlers.insert(handler_key(ext)));
+            assert!(backups.insert(state_key(ext)));
+            assert!(user_handler_key(ext).starts_with(r"Software\Classes\"));
+        }
+        assert_eq!(handlers.len(), 3);
+        assert_eq!(state_key(".psd"), super::class_key(), "retain PSD-only version's backup");
+    }
+
+    #[test]
+    fn recognizes_case_variants_of_our_clsid() {
+        assert!(is_our_clsid(CLSID_STR));
+        assert!(is_our_clsid(&CLSID_STR.to_ascii_lowercase()));
+        assert!(!is_our_clsid("{11111111-2222-3333-4444-555555555555}"));
+    }
+}

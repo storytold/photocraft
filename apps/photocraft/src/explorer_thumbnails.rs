@@ -34,8 +34,11 @@ fn code(mode: ExplorerThumbnails) -> u8 {
 }
 
 /// The mode a [`code`] stands for; `None` for 0 (not seen yet) or an unknown number.
+#[cfg(test)]
 fn mode_from(code: u8) -> Option<ExplorerThumbnails> {
-    [ExplorerThumbnails::Off, ExplorerThumbnails::WithLogo, ExplorerThumbnails::NoLogo].into_iter().find(|&mode| self::code(mode) == code)
+    [ExplorerThumbnails::Off, ExplorerThumbnails::WithLogo, ExplorerThumbnails::NoLogo]
+        .into_iter()
+        .find(|&mode| self::code(mode) == code)
 }
 
 /// Records `mode` as the preference now in force; true when it differs from the one seen before.
@@ -56,10 +59,10 @@ fn read_mode(path: &Path) -> Option<ExplorerThumbnails> {
 
 /// The value a worker should apply. Called while holding the cross-process registration lock: another
 /// instance may have saved a different setting since this process last saw one, and a stale
-/// process-local value must not restore an outdated registration. Falls back to the last value this
-/// process saw when the file cannot be read.
+/// process-local value must not restore an outdated registration. Returns `None` if the preferences file
+/// cannot be read to prevent applying a stale local fallback.
 fn current_mode() -> Option<ExplorerThumbnails> {
-    PREFS_FILE.get().and_then(|path| read_mode(path)).or_else(|| mode_from(SEEN.load(Ordering::SeqCst)))
+    PREFS_FILE.get().and_then(|path| read_mode(path))
 }
 
 /// Only the normal per-user install writes the registry: a portable copy leaves nothing behind, a
@@ -93,22 +96,30 @@ pub fn startup(prefs_file: Option<&Path>) {
     SEEN.store(code(wanted(&text)), Ordering::SeqCst);
     in_background(|| {
         let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-        photocraft_shell::with_registration_lock(|| {
+        let lock_result = photocraft_shell::with_registration_lock(|| {
             // The persisted value, read under the lock: another instance may have changed the
             // setting since this process read it at launch.
             let Some(mode) = current_mode() else {
-                return;
+                return Ok(());
             };
-            let result = if mode == ExplorerThumbnails::Off {
+            if mode == ExplorerThumbnails::Off {
                 photocraft_shell::enable_explorer_thumbnails(false, true)
             } else {
                 // Typically fails because the DLL is not beside the executable (a development build).
                 photocraft_shell::ensure_explorer_thumbnails(mode == ExplorerThumbnails::WithLogo)
-            };
-            if let Err(e) = result {
-                log::debug!("Explorer thumbnails: {e}");
             }
         });
+
+        match lock_result {
+            Ok(()) => {}
+            Err(e) => {
+                log::debug!("Explorer thumbnails: {e}");
+                // Forget that this value was seen, allowing retries if a transient lock error occurred.
+                if let Some(mode) = current_mode() {
+                    let _ = SEEN.compare_exchange(code(mode), 0, Ordering::SeqCst, Ordering::SeqCst);
+                }
+            }
+        }
     });
 }
 
@@ -125,19 +136,25 @@ pub fn after_save(text: &str) {
     }
     in_background(|| {
         let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-        photocraft_shell::with_registration_lock(|| {
+        let lock_result = photocraft_shell::with_registration_lock(|| {
             // The persisted value, read under the lock: it is this save's value unless another
             // instance has saved a different one since, which is then the one in force.
             let Some(mode) = current_mode() else {
-                return;
+                return Ok(());
             };
-            if let Err(e) = photocraft_shell::enable_explorer_thumbnails(mode != ExplorerThumbnails::Off, mode == ExplorerThumbnails::WithLogo) {
-                log::debug!("Explorer thumbnails: {e}");
-                // Forget that this value was seen, so the next save tries again (unless the
-                // setting has moved on, which that save handles).
-                let _ = SEEN.compare_exchange(code(mode), 0, Ordering::SeqCst, Ordering::SeqCst);
-            }
+            photocraft_shell::enable_explorer_thumbnails(mode != ExplorerThumbnails::Off, mode == ExplorerThumbnails::WithLogo)
         });
+
+        match lock_result {
+            Ok(()) => {}
+            Err(e) => {
+                log::debug!("Explorer thumbnails: {e}");
+                // Forget that this value was seen, so the next save tries again.
+                if let Some(mode) = current_mode() {
+                    let _ = SEEN.compare_exchange(code(mode), 0, Ordering::SeqCst, Ordering::SeqCst);
+                }
+            }
+        }
     });
 }
 
@@ -173,9 +190,52 @@ mod tests {
         assert_eq!(read_mode(&path), None, "a missing file is not a preference");
         std::fs::write(&path, r#"{"fileHandling": {"explorerThumbnails": "off"}}"#).unwrap();
         assert_eq!(read_mode(&path), Some(ExplorerThumbnails::Off));
-        std::fs::write(&path, r#"{"fileHandling": {"autosave": false}}"#).unwrap();
+        std::fs::write(&path, r#"{"fileHandling": {"explorerThumbnails": "withLogo"}}"#).unwrap();
         assert_eq!(read_mode(&path), Some(ExplorerThumbnails::WithLogo));
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn unreadable_file_prevents_stale_mode_fallback() {
+        let path = std::env::temp_dir().join(format!("photocraft-explorer-thumbnails-missing-{}.json", std::process::id()));
+        let _ = PREFS_FILE.set(path.clone());
+        SEEN.store(code(ExplorerThumbnails::Off), Ordering::SeqCst);
+
+        // When PREFS_FILE exists in OnceLock but points to an unreadable file, current_mode must return None
+        // to avoid applying process-local SEEN value.
+        assert_eq!(current_mode(), None);
+    }
+
+    #[test]
+    fn concurrent_workers_re_read_persisted_file_order() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        let path = std::env::temp_dir().join(format!("photocraft-explorer-thumbnails-race-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"fileHandling": {"explorerThumbnails": "withLogo"}}"#).unwrap();
+
+        let applied_mode = Arc::new(Mutex::new(None));
+        let worker_finished = Arc::new(AtomicBool::new(false));
+
+        let path_clone = path.clone();
+        let applied_mode_clone = Arc::clone(&applied_mode);
+        let worker_finished_clone = Arc::clone(&worker_finished);
+
+        // Simulate Worker 1 holding the lock and re-reading the latest file state
+        let handle = std::thread::spawn(move || {
+            // Process 2 updates the file mid-flight before Worker 1 evaluates `current_mode()`
+            std::fs::write(&path_clone, r#"{"fileHandling": {"explorerThumbnails": "off"}}"#).unwrap();
+            let mode = read_mode(&path_clone);
+            *applied_mode_clone.lock().unwrap() = mode;
+            worker_finished_clone.store(true, Ordering::SeqCst);
+        });
+
+        handle.join().unwrap();
+
+        assert!(worker_finished.load(Ordering::SeqCst));
+        assert_eq!(*applied_mode.lock().unwrap(), Some(ExplorerThumbnails::Off));
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
