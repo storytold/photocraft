@@ -655,6 +655,19 @@ impl Jobs {
     fn threaded(&self) -> bool {
         self.spawn && !self.cooperative && !cfg!(target_arch = "wasm32")
     }
+
+    /// A client's pixel-selection slot was swapped into or out of the document and the swap had
+    /// to copy it (a job still holds the old allocation): running jobs that started on `old`
+    /// follow it to `new`. The swap changes whose selection sits in the document, not the
+    /// document a job computed on, so it must not discard that job's result; a real edit never
+    /// comes through here and is still caught when the job lands.
+    pub(crate) fn follow_selection_swap(&mut self, old: &Weak<Document>, new: &Weak<Document>) {
+        for job in &mut self.running {
+            if job.snapshot.as_ref().is_some_and(|w| Weak::ptr_eq(w, old)) {
+                job.snapshot = Some(new.clone());
+            }
+        }
+    }
 }
 
 const RECENT: usize = 16;
@@ -1059,9 +1072,36 @@ impl Session {
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
     /// like [`Session::execute`] for unknown, disabled or failing commands.
     pub fn start(&mut self, id: &str, params: Value) -> Result<Started> {
+        // `execute` does not wrap `start`, so the client is taken and the selection slot entered
+        // here, exactly as `execute` does (current_client saved and restored for nesting).
+        let mut params = params;
+        let client = crate::multisession_adapter::take_client(&mut params)?;
+        let known = crate::commands::find(id).is_some();
+        let prev = self.current_client.clone();
+        // Only the outermost call takes the pixel-selection slot (nested calls share it).
+        let outer = prev.is_none();
+        self.current_client = client.clone();
+        if known {
+            self.enter_selection_slot(client.as_deref().unwrap_or(""));
+            if let (true, Some(name)) = (outer, client.as_deref()) {
+                self.enter_pixel_slot(name);
+            }
+            if let Some(name) = client.as_deref() {
+                self.note_peer(name);
+            }
+        }
         let before = self.active_layer_stamp();
         let started = self.dispatch(id, params, true);
         self.note_layer_change(before);
+        // Unconditional (Ok or Err): a job that starts returns at once, so the UI's pixel
+        // selection goes back into the document now.
+        if let (true, true, Some(name)) = (known, outer, client.as_deref()) {
+            self.exit_pixel_slot(name);
+        }
+        if let (true, Some(name), Ok(_)) = (known, client.as_deref(), &started) {
+            self.store_selection_slot(name);
+        }
+        self.current_client = prev;
         started
     }
 
@@ -1796,6 +1836,7 @@ impl Session {
         let nested_from = self.journal.len();
         let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers()) } else { None };
         let mut event_snapshot = crate::events::Snapshot::of(self.active());
+        event_snapshot.client = self.current_client.clone();
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
@@ -1808,6 +1849,9 @@ impl Session {
         // returns, so the documents are unchanged.
         self.live_commit = live_commit.filter(|live| live.cmd == id);
         let was_running = std::mem::replace(&mut self.event_command_running, true);
+        // A named client may only change the layers it created: this state goes back otherwise.
+        let layer_client = self.current_client.clone();
+        let layer_guard = self.layer_guard(layer_client.as_deref());
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
         self.event_command_running = was_running;
@@ -1824,6 +1868,8 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
+        // A job changes nothing yet: it is checked when it lands (`apply_job`).
+        let r = if pending.is_none() { r.and_then(|v| self.keep_to_own_layers(id, layer_client.as_deref(), layer_guard).map(|()| v)) } else { r };
         if pending.is_none()
             && let Some((doc, revision)) = &before
         {
@@ -2082,12 +2128,28 @@ impl Session {
         let nested_from = self.journal.len();
         let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
         let was_running = std::mem::replace(&mut self.event_command_running, true);
+        // Landing outside any client call: the job's client owns the pixel selection while its
+        // result is applied (nested inside a client call, the slot is already taken).
+        let landing_client = if self.current_client.is_none() { snapshot_events.client.as_deref().filter(|c| !c.is_empty()) } else { None };
+        if let Some(name) = landing_client {
+            self.enter_pixel_slot(name);
+        }
+        // The job of a named client lands on that client's own layers only (as in dispatch).
+        let layer_client = snapshot_events.client.clone();
+        let layer_guard = match (layer_client.as_deref().filter(|c| !c.is_empty()), target) {
+            (Some(_), Some(i)) => self.docs.get(i).cloned(),
+            _ => None,
+        };
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
+        let r = r.and_then(|v| self.keep_to_own_layers(command, layer_client.as_deref(), layer_guard).map(|()| v));
         self.event_command_running = was_running;
+        if let Some(name) = landing_client {
+            self.exit_pixel_slot(name);
+        }
         if self.actions.recording.is_none() {
             self.actions.recording = recording;
         }
@@ -2125,7 +2187,8 @@ impl Session {
     /// Run a capability-scoped edit whose bytes were already read by the caller, and emit the
     /// same document events as command dispatch. Failed edits leave the event cursor unchanged.
     pub fn run_edit_with_events<T>(&mut self, command: &str, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        let before = crate::events::Snapshot::of(self.active());
+        let mut before = crate::events::Snapshot::of(self.active());
+        before.client = self.current_client.clone();
         let value = edit(self)?;
         self.emit_events(command, &before);
         Ok(value)

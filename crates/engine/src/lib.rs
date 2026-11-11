@@ -34,6 +34,8 @@ pub mod link_watch;
 pub mod malloc_tuning;
 pub mod memory;
 pub mod memory_gate;
+pub mod multisession;
+mod multisession_adapter;
 pub mod new_layer;
 mod param_check;
 mod pixels;
@@ -230,6 +232,10 @@ pub struct Session {
     pub journal: Vec<(String, Value)>,
     /// Bounded committed-change log for control clients (#4939).
     pub events: events::EventLog,
+    /// Named clients seen on the documents and the selection of each (multi-agent).
+    pub peers: multisession::Peers,
+    /// Client name of the command being executed; set on entry, restored on exit (session/execute.rs).
+    pub current_client: Option<String>,
     /// Direct layer-selection helpers publish their own events only outside command dispatch;
     /// a command's before/after snapshot publishes its selection change once.
     event_command_running: bool,

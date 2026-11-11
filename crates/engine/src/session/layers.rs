@@ -26,7 +26,8 @@ impl Session {
         if publish && previous != (st.active_layer, st.selected_layers.clone()) {
             let doc = st.doc.id.0;
             let selected: Vec<u64> = st.selected_layers.iter().map(|id| id.0).collect();
-            self.events.push("layers.selected", Some(doc), Some("ui"), serde_json::json!({"active": id.0, "selected": selected}));
+            let source = self.current_client.as_deref().unwrap_or("ui");
+            self.events.push("layers.selected", Some(doc), Some(source), serde_json::json!({"active": id.0, "selected": selected}));
         }
         self.note_layer_change(before);
         Ok(())
@@ -60,7 +61,8 @@ impl Session {
         if publish && previous != (st.active_layer, st.selected_layers.clone()) {
             let doc = st.doc.id.0;
             let selected: Vec<u64> = st.selected_layers.iter().map(|id| id.0).collect();
-            self.events.push("layers.selected", Some(doc), Some("ui"), serde_json::json!({"active": active.map(|id| id.0), "selected": selected}));
+            let source = self.current_client.as_deref().unwrap_or("ui");
+            self.events.push("layers.selected", Some(doc), Some(source), serde_json::json!({"active": active.map(|id| id.0), "selected": selected}));
         }
         self.note_layer_change(before);
         Ok(())

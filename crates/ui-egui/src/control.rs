@@ -191,11 +191,13 @@ pub(super) const METHODS: &[&str] = &[
     "app.open",
     "app.quit",
     "app.save",
+    "client.leave",
     "engine.commands",
     "engine.execute",
     "events.poll",
     "events.subscribe",
     "events.unsubscribe",
+    "hub.probe",
     "jobs.cancel",
     "jobs.list",
     "ui.click",
@@ -220,3 +222,8 @@ pub(super) const METHODS: &[&str] = &[
     "ui.window.close",
     "ui.window.open",
 ];
+
+/// Names of every control method this server dispatches, sorted alphabetically.
+pub fn methods() -> &'static [&'static str] {
+    METHODS
+}

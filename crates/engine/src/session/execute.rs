@@ -14,7 +14,42 @@ impl Session {
     ///
     /// Runs synchronously, including job-capable commands (see [`jobs`]; [`Session::start`] runs
     /// those in the background).
-    pub fn execute(&mut self, id: &str, params: Value) -> Result<Value> {
+    pub fn execute(&mut self, id: &str, mut params: Value) -> Result<Value> {
+        // The client is taken and checked before anything else, the command lookup included.
+        let client = crate::multisession_adapter::take_client(&mut params)?;
+        if id == "client.leave" {
+            return self.leave_client(client.as_deref());
+        }
+        if id == "hub.probe" {
+            return Ok(self.probe_client(client.as_deref()));
+        }
+        if crate::commands::find(id).is_none() {
+            return self.execute_body(id, params);
+        }
+        let prev = self.current_client.clone();
+        // Only the outermost call takes the pixel-selection slot (nested calls share it).
+        let outer = prev.is_none();
+        self.current_client = client.clone();
+        self.enter_selection_slot(client.as_deref().unwrap_or(""));
+        if let (true, Some(name)) = (outer, client.as_deref()) {
+            self.enter_pixel_slot(name);
+        }
+        if let Some(name) = client.as_deref() {
+            self.note_peer(name);
+        }
+        let result = self.execute_body(id, params);
+        // Unconditional (Ok or Err): the UI's pixel selection must be put back even on failure.
+        if let (true, Some(name)) = (outer, client.as_deref()) {
+            self.exit_pixel_slot(name);
+        }
+        if let (Some(name), Ok(_)) = (client.as_deref(), &result) {
+            self.store_selection_slot(name);
+        }
+        self.current_client = prev;
+        result
+    }
+
+    fn execute_body(&mut self, id: &str, params: Value) -> Result<Value> {
         let before = self.active_layer_stamp();
         let result = self.dispatch(id, params, false);
         self.note_layer_change(before);
@@ -67,6 +102,10 @@ impl Session {
     /// Complete for the commands in [`PRECHECKED`]: there it accepts what `execute` accepts, but
     /// for the group nesting limit (a test holds the two together). For others it checks only what they share.
     pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
+        // The client is checked, not consumed by the caller: the checks below see params without it.
+        let mut stripped = params.clone();
+        crate::multisession_adapter::take_client(&mut stripped)?;
+        let params = &stripped;
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });

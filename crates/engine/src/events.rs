@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 pub const CAPACITY: usize = 4096;
 
 /// Every event kind, in the order a reader is likely to want them explained.
-pub const KINDS: [&str; 9] = [
+pub const KINDS: [&str; 12] = [
     "document.opened",
     "document.closed",
     "document.activated",
@@ -31,6 +31,9 @@ pub const KINDS: [&str; 9] = [
     "layers.selected",
     "history.changed",
     "tool.changed",
+    "peer.joined",
+    "peer.left",
+    "peer.selection",
 ];
 
 /// One committed change.
@@ -200,6 +203,8 @@ pub fn poll(log: &EventLog, p: &Value) -> Result<Batch, String> {
 /// command changed.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    /// The agent that ran the command, set by the caller (`None` for the UI).
+    pub client: Option<String>,
     pub document: Option<u64>,
     /// Holding the pre-command document makes a revision-only view change distinguishable from
     /// a content edit. Edits use copy-on-write and get a different Arc while this is held.
@@ -228,6 +233,7 @@ impl Snapshot {
     pub fn of(st: Option<&crate::DocState>) -> Snapshot {
         let Some(st) = st else { return Snapshot::default() };
         Snapshot {
+            client: None,
             document: Some(st.doc.id.0),
             content: Some(Arc::clone(&st.doc)),
             revision: st.revision,
@@ -242,6 +248,16 @@ impl Snapshot {
     }
 }
 
+/// `{id, name}` of the layers created or modified (in `after`) and deleted (from `before`),
+/// names cut by `truncate`, at most `MAX_ELEMENTS` entries.
+fn touched_layers(before: Option<&Arc<photocraft_doc::Document>>, after: &photocraft_doc::Document) -> Vec<Value> {
+    let Some(a) = before else { return Vec::new() };
+    let element = |l: &photocraft_doc::Layer| json!({"id": l.id.0, "name": crate::multisession::truncate(&l.name)});
+    let changed = after.walk().into_iter().filter(|(_, _, l)| a.layer(l.id) != Some(*l)).map(|(_, _, l)| element(l));
+    let deleted = a.walk().into_iter().filter(|(_, _, l)| after.layer(l.id).is_none()).map(|(_, _, l)| element(l));
+    changed.chain(deleted).take(crate::multisession::MAX_ELEMENTS).collect()
+}
+
 /// The events a successful command `id` produced, from the document before it ([`Snapshot`])
 /// and after (`st`, the document the command ran on, when still open).
 pub fn after_command(log: &mut EventLog, id: &str, before: &Snapshot, st: Option<&crate::DocState>) {
@@ -253,7 +269,13 @@ pub fn after_command(log: &mut EventLog, id: &str, before: &Snapshot, st: Option
         let now: Vec<u64> = st.doc.walk().iter().map(|(_, _, l)| l.id.0).collect();
         let added: Vec<u64> = now.iter().copied().filter(|l| !before.layers.contains(l)).collect();
         let removed: Vec<u64> = before.layers.iter().copied().filter(|l| !now.contains(l)).collect();
-        let mut data = json!({"command": id, "revision": st.revision});
+        let mut data = json!({
+            "command": id,
+            "revision": st.revision,
+            "agent": before.client,
+            "elements": touched_layers(before.content.as_ref(), &st.doc),
+            "page": Value::Null,
+        });
         if let Some(r) = st.last_damage {
             data["damage"] = json!([r.x0, r.y0, r.x1, r.y1]);
         }
@@ -276,7 +298,9 @@ pub fn after_command(log: &mut EventLog, id: &str, before: &Snapshot, st: Option
     let active = st.active_layer.map(|l| l.0);
     let selected: Vec<u64> = st.selected_layers().iter().map(|l| l.0).collect();
     if active != before.active_layer || selected != before.selected {
-        log.push("layers.selected", Some(doc), src, json!({"active": active, "selected": selected}));
+        // A named client's layer selection is reported as that client's, not as the command's.
+        let who = before.client.as_deref().filter(|c| !c.is_empty()).or(src);
+        log.push("layers.selected", Some(doc), who, json!({"active": active, "selected": selected}));
     }
     let history = st.history.past_len();
     let history_id = st.history.row_id(history);
