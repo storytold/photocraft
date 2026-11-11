@@ -556,11 +556,27 @@ fn overlaps_ifd0(order: Order, body: &[u8], ifd0: usize, count: usize, off: usiz
             let e = ifd0 + 2 + i * 12;
             // A LONG pointer (tag 0x8769 ExifIFD, 0x8825 GPSIFD) to a sub-IFD, whose own count says its size.
             matches!(order.u16(body, e), Some(0x8769 | 0x8825))
-                && order
-                    .u32(body, e + 8)
-                    .and_then(|v| usize::try_from(v).ok())
-                    .is_some_and(|sub| order.u16(body, sub).is_some_and(|n| overlaps_ifd(order, body, sub, usize::from(n), off, len, &mut budget)))
+                && order.u32(body, e + 8).and_then(|v| usize::try_from(v).ok()).is_some_and(|sub| overlaps_sub_ifd(order, body, sub, off, len, &mut budget))
         })
+}
+
+/// [`overlaps_ifd`] for the Exif / GPS sub-IFD at `sub`, and for the Interoperability IFD (tag
+/// 0xA005) it points to, which `jpeg.fill(0)` would otherwise erase from under its pointer.
+fn overlaps_sub_ifd(order: Order, body: &[u8], sub: usize, off: usize, len: usize, budget: &mut usize) -> bool {
+    let Some(n) = order.u16(body, sub).map(usize::from) else { return false };
+    if overlaps_ifd(order, body, sub, n, off, len, budget) {
+        return true;
+    }
+    (0..n).any(|i| {
+        let Some(left) = budget.checked_sub(1) else { return true };
+        *budget = left;
+        let e = sub + 2 + i * 12;
+        matches!(order.u16(body, e), Some(0xA005))
+            && order
+                .u32(body, e + 8)
+                .and_then(|v| usize::try_from(v).ok())
+                .is_some_and(|interop| order.u16(body, interop).is_some_and(|m| overlaps_ifd(order, body, interop, usize::from(m), off, len, budget)))
+    })
 }
 
 /// Whether `off..off + len` of `body` covers the table of the classic IFD at `ifd` (its entry

@@ -620,3 +620,39 @@ fn next_ifd_at(e: &Exif, exif: &[u8], at: usize) -> u32 {
     let b: [u8; 4] = exif[at..at + 4].try_into().unwrap();
     if e.big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }
 }
+
+/// A thumbnail range that covers the Interoperability IFD (an Exif sub-IFD's 0xA005 target) is not
+/// blanked: its pointer would stay behind, aimed at zeroes.
+#[test]
+fn thumbnail_blanking_keeps_the_interoperability_ifd() {
+    for e in [&LE, &BE] {
+        let (ifd0, sub, interop, ifd1) = (8usize, 8 + 2 + 12 + 4, 8 + 2 + 12 + 4 + 2 + 12 + 4, 8 + 2 + 12 + 4 + 2 + 12 + 4 + 2 + 12 + 4);
+        let mut v = if e.big { b"MM\0*".to_vec() } else { b"II*\0".to_vec() };
+        v.extend_from_slice(&e.u32(ifd0 as u32));
+        // IFD0: one ExifIFD pointer, then IFD1.
+        v.extend_from_slice(&e.u16(1));
+        v.extend_from_slice(&[e.u16(0x8769), e.u16(LONG)].concat());
+        v.extend_from_slice(&[e.u32(1), e.u32(sub as u32)].concat());
+        v.extend_from_slice(&e.u32(ifd1 as u32));
+        // The Exif IFD: one Interoperability pointer.
+        v.extend_from_slice(&e.u16(1));
+        v.extend_from_slice(&[e.u16(0xA005), e.u16(LONG)].concat());
+        v.extend_from_slice(&[e.u32(1), e.u32(interop as u32)].concat());
+        v.extend_from_slice(&e.u32(0));
+        // The Interoperability IFD: one inline ASCII entry (InteroperabilityIndex).
+        v.extend_from_slice(&e.u16(1));
+        v.extend_from_slice(&[e.u16(1), e.u16(ASCII)].concat());
+        v.extend_from_slice(&[e.u32(4), b"R98\0".to_vec().try_into().unwrap_or([0; 4])].concat());
+        v.extend_from_slice(&e.u32(0));
+        assert_eq!(v.len(), ifd1);
+        // IFD1: a thumbnail whose range is the Interoperability IFD.
+        v.extend_from_slice(&e.u16(2));
+        for (tag, value) in [(0x0201u16, interop as u32), (0x0202, 18)] {
+            v.extend_from_slice(&[e.u16(tag), e.u16(LONG)].concat());
+            v.extend_from_slice(&[e.u32(1), e.u32(value)].concat());
+        }
+        v.extend_from_slice(&e.u32(0));
+        let out = export_exif(&v, None);
+        assert_eq!(out[interop..interop + 18], v[interop..interop + 18], "the Interoperability IFD is untouched");
+    }
+}
