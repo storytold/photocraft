@@ -359,6 +359,10 @@ fn hard_round_presets_have_continuous_pressure_opacity_tapers() {
                 b.size = 150.0;
                 b.pressure_opacity = true;
                 b.smoothing.amount = smoothing;
+                // The measured lag (#11888) leaves a 49 % stroke ~150 px short of the pointer, so
+                // its end cap would fall inside the span checked below; catch-up on end paints it
+                // through to the last point.
+                b.smoothing.catch_up_on_end = true;
                 let mut s = Surface::new(fmt);
                 render_stroke(&mut s, &b, &points, None, false, 1.0);
                 assert!(s.rgba(200, 120)[3] > 0.7 && s.rgba(699, 120)[3] < 0.3, "{}: the stroke must still taper", preset.name);
