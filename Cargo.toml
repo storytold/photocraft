@@ -41,7 +41,7 @@ photocraft-ipp = { path = "crates/ipp" }
 # external
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
 # HEIC/HEIF: the shared decoder (replaces crates/heif; craft-libs#784).
-craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "7e66c62b7a87db26993795a9da7ab35d098805b2" }
+craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "6e21c5b0b1358f7d5505e7ea395948fe21f4d872" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d", features = ["raster"] }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
