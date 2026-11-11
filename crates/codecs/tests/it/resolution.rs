@@ -584,3 +584,39 @@ fn thumbnail_removal_never_panics_on_truncated_exif() {
         }
     }
 }
+
+/// Many Exif pointers to one huge sub-IFD must not cost a full scan each: past the scan budget the
+/// thumbnail bytes are left alone (the IFD1 pointer is still cleared).
+#[test]
+fn thumbnail_overlap_scan_is_bounded_by_a_budget() {
+    let e = &LE;
+    let (pointers, sub_entries) = (100usize, 65_535usize);
+    let sub = 8 + 2 + pointers * 12 + 4;
+    let ifd1 = sub + 2 + sub_entries * 12 + 4;
+    let thumb = b"\xFF\xD8stale thumbnail\xFF\xD9";
+    let mut v = b"II*\0".to_vec();
+    v.extend_from_slice(&e.u32(8));
+    v.extend_from_slice(&e.u16(pointers as u16));
+    for _ in 0..pointers {
+        v.extend_from_slice(&[e.u16(0x8769), e.u16(LONG)].concat());
+        v.extend_from_slice(&[e.u32(1), e.u32(sub as u32)].concat());
+    }
+    v.extend_from_slice(&e.u32(ifd1 as u32));
+    v.extend_from_slice(&e.u16(sub_entries as u16));
+    v.resize(ifd1, 0); // the sub-IFD's entries are type 0: nothing to hit
+    v.extend_from_slice(&e.u16(2));
+    for (tag, value) in [(0x0201u16, (ifd1 + 2 + 2 * 12 + 4) as u32), (0x0202, thumb.len() as u32)] {
+        v.extend_from_slice(&[e.u16(tag), e.u16(LONG)].concat());
+        v.extend_from_slice(&[e.u32(1), e.u32(value)].concat());
+    }
+    v.extend_from_slice(&e.u32(0));
+    v.extend_from_slice(thumb);
+    let out = export_exif(&v, None);
+    assert_eq!(next_ifd_at(e, &out, 8 + 2 + pointers * 12), 0, "IFD1 is unlinked");
+    assert!(out.windows(5).any(|w| w == b"stale"), "over the scan budget the thumbnail bytes stay");
+}
+
+fn next_ifd_at(e: &Exif, exif: &[u8], at: usize) -> u32 {
+    let b: [u8; 4] = exif[at..at + 4].try_into().unwrap();
+    if e.big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }
+}

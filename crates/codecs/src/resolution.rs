@@ -542,10 +542,16 @@ fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Most IFD entries `overlaps_ifd0` examines in total: a hostile block with thousands of Exif/GPS
+/// pointers to large sub-IFDs would otherwise cost billions of checks.
+const MAX_OVERLAP_ENTRIES: usize = 1 << 20;
+
 /// Whether `off..off + len` of `body` covers part of classic IFD0 (`ifd0` is its entry count's
-/// offset) or of its Exif / GPS sub-IFDs.
+/// offset) or of its Exif / GPS sub-IFDs. Past [`MAX_OVERLAP_ENTRIES`] checks it answers `true`
+/// (the range is not trusted as a thumbnail, so its bytes stay).
 fn overlaps_ifd0(order: Order, body: &[u8], ifd0: usize, count: usize, off: usize, len: usize) -> bool {
-    overlaps_ifd(order, body, ifd0, count, off, len)
+    let mut budget = MAX_OVERLAP_ENTRIES;
+    overlaps_ifd(order, body, ifd0, count, off, len, &mut budget)
         || (0..count).any(|i| {
             let e = ifd0 + 2 + i * 12;
             // A LONG pointer (tag 0x8769 ExifIFD, 0x8825 GPSIFD) to a sub-IFD, whose own count says its size.
@@ -553,19 +559,22 @@ fn overlaps_ifd0(order: Order, body: &[u8], ifd0: usize, count: usize, off: usiz
                 && order
                     .u32(body, e + 8)
                     .and_then(|v| usize::try_from(v).ok())
-                    .is_some_and(|sub| order.u16(body, sub).is_some_and(|n| overlaps_ifd(order, body, sub, usize::from(n), off, len)))
+                    .is_some_and(|sub| order.u16(body, sub).is_some_and(|n| overlaps_ifd(order, body, sub, usize::from(n), off, len, &mut budget)))
         })
 }
 
 /// Whether `off..off + len` of `body` covers the table of the classic IFD at `ifd` (its entry
-/// count's offset) with the next-IFD pointer, or an out-of-line value of one of its entries.
-fn overlaps_ifd(order: Order, body: &[u8], ifd: usize, count: usize, off: usize, len: usize) -> bool {
+/// count's offset) with the next-IFD pointer, or an out-of-line value of one of its entries. Each
+/// entry examined is charged to `budget`; when it runs out the answer is `true`.
+fn overlaps_ifd(order: Order, body: &[u8], ifd: usize, count: usize, off: usize, len: usize, budget: &mut usize) -> bool {
     let end = off.saturating_add(len);
     let hits = |a: usize, size: usize| a < end && off < a.saturating_add(size);
     if hits(ifd, 2 + count * 12 + 4) {
         return true;
     }
     (0..count).any(|i| {
+        let Some(left) = budget.checked_sub(1) else { return true };
+        *budget = left;
         let e = ifd + 2 + i * 12;
         let unit = match order.u16(body, e + 2) {
             Some(1 | 2 | 6 | 7) => 1,
