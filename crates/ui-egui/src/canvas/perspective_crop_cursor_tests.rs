@@ -83,12 +83,12 @@ fn a_held_drag_keeps_its_cursor() {
     // Not measured: as the Crop tool, the cursor stays the drag's while the button is held.
     let mut app = app();
     app.ui.perspective_crop = Some(QUAD);
-    assert!(pointer(&mut app, ToolEvent::Down { x: 100.0, y: 75.0, pressure: 1.0 }));
-    assert!(pointer(&mut app, ToolEvent::Move { x: 190.0, y: 140.0, pressure: 1.0 }));
+    assert!(pointer(&mut app, ToolEvent::Down { x: 100.0, y: 75.0, pressure: 1.0 }, egui::Modifiers::NONE));
+    assert!(pointer(&mut app, ToolEvent::Move { x: 190.0, y: 140.0, pressure: 1.0 }, egui::Modifiers::NONE));
     assert_eq!(cursor(&app, [5.0, 5.0]), Some(Zone::Inside), "moving the quad");
-    assert!(pointer(&mut app, ToolEvent::Up { x: 190.0, y: 140.0 }));
+    assert!(pointer(&mut app, ToolEvent::Up { x: 190.0, y: 140.0 }, egui::Modifiers::NONE));
     let corner = app.ui.perspective_crop.unwrap()[0];
-    assert!(pointer(&mut app, ToolEvent::Down { x: corner[0], y: corner[1], pressure: 1.0 }));
+    assert!(pointer(&mut app, ToolEvent::Down { x: corner[0], y: corner[1], pressure: 1.0 }, egui::Modifiers::NONE));
     assert_eq!(cursor(&app, [100.0, 75.0]), Some(Zone::Corner(0)), "dragging a corner");
 }
 

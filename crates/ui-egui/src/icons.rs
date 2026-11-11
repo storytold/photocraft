@@ -203,6 +203,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::EllipseShape => "circle",
         Tool::Triangle => "triangle",
         Tool::Polygon => "pentagon",
+        Tool::Star => "star",
         Tool::Line => "slash",
         Tool::CustomShape => "cloud",
     }
