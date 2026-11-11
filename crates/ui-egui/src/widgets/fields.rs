@@ -117,6 +117,9 @@ pub(super) struct FieldOpts {
     /// keystroke (the zoom fields: typing `150` over `50` must not zoom to 1 % on the way). Esc,
     /// Tab and Alt do not apply it (`zoom_field`).
     pub(super) hold_typed: bool,
+    /// Show an unset value as an empty field rather than `0` (the Crop tool's free ratio sides,
+    /// #10888). Editing, scrubbing and parsing are unchanged.
+    pub(super) blank_when_zero: bool,
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -322,6 +325,19 @@ pub const POPUP_ARROW_W: f32 = 14.0;
 /// Width of a [`popup_value_field`]'s pop-up slider.
 const POPUP_SLIDER_W: f32 = 160.0;
 
+/// A [`value_field`] reserving `trailing` points at its right for an embedded arrow. Returns the
+/// field and its full rectangle; the arrow gets its own interaction id.
+pub fn value_field_with_trailing(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    trailing: f32,
+) -> (Response, Rect) {
+    value_field_in(ui, value, range, suffix, width, trailing, FieldOpts::default(), None)
+}
+
 /// What a [`popup_value_field`] did this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PopupFieldResponse {
@@ -446,7 +462,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, .. } = opts;
+    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -462,6 +478,9 @@ fn number_edit(
     // A zoom field shows its number with the system's decimal separator (`12,5` on a German
     // Windows), as Photoshop does, so the text it shows is one that can be typed.
     let format = move |v: f64| {
+        if blank_when_zero && v == 0.0 {
+            return String::new();
+        }
         let text = match decimals {
             Some(d) => fmt_num_prec(v, d),
             None if fine => fmt_num2(v),
@@ -537,10 +556,18 @@ fn number_edit(
                     s.to_owned()
                 };
                 let s = ready.as_str();
-                let v = if hold_typed { zoom_number(s, units) } else { parse_num_in(s, units) };
+                // A cleared field that draws its zero blank means zero, not "keep what was there" (#10888).
+                let blank = blank_when_zero && s.trim().is_empty();
+                let v = if hold_typed {
+                    zoom_number(s, units)
+                } else if blank {
+                    Some(0.0)
+                } else {
+                    parse_num_in(s, units)
+                };
                 // Whether the text being typed is a number at all, for [`typed_text_parses`].
                 ctx.data_mut(|d| d.insert_temp(id.with("parses"), v.is_some()));
-                if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
+                if ctx.memory(|m| m.has_focus(id)) && !blank && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
                     return None;
