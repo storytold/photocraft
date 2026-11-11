@@ -66,6 +66,17 @@ fn typed_decimals_round_to_the_nearest_whole_number() {
     }
 }
 
+/// Each operand of a typed expression is its own number: `1.5+2.5` adds up to 4, while a number
+/// with two separators (`1,5,2`) is not one and leaves the option as it was.
+#[test]
+fn typed_expressions_take_decimal_operands() {
+    let mut h = wand_bar();
+    assert_eq!(type_tolerance(&mut h, "1.5+2.5"), 4.0, "typing 1.5+2.5");
+    let mut h = wand_bar();
+    let before = h.state().ui.tool_options.tolerance;
+    assert_eq!(type_tolerance(&mut h, "1,5,2"), before, "typing 1,5,2");
+}
+
 /// A typed number outside the range clamps, as in any value field.
 #[test]
 fn typed_values_outside_the_range_clamp() {

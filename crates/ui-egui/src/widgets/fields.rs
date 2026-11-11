@@ -558,12 +558,14 @@ fn number_edit(
                         }
                     }
                 } else if integer {
-                    // A whole-number field takes the decimal comma too (`12,5` is `12.5`); two
-                    // separators (`1,5,2`) are not a number, as in any other field.
-                    match crate::zoom_field::read(s) {
-                        crate::zoom_field::Entry::Number(ready) => ready,
-                        crate::zoom_field::Entry::Invalid(_) => return None,
+                    // A whole-number field takes the decimal comma too (`12,5` is `12.5`); a number
+                    // with two separators (`1,5,2`) is not one, as in any other field. Each operand
+                    // of an expression is its own number, so `1.5+2.5` still adds up.
+                    let is_sep = |c: char| matches!(c, '.' | ',');
+                    if s.split(|c: char| !(c.is_ascii_digit() || is_sep(c))).any(|n| n.chars().filter(|&c| is_sep(c)).count() > 1) {
+                        return None;
                     }
+                    s.replace(',', ".")
                 } else {
                     s.to_owned()
                 };
