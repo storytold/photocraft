@@ -34,6 +34,45 @@ fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
     h.state().current_zoom()
 }
 
+/// Check the bitmap contract, not merely that some custom cursor reached the backend.
+fn assert_pipette(h: &Harness<'static, PhotocraftApp>) {
+    let output = &h.output().platform_output;
+    if cfg!(target_arch = "wasm32") || h.input().viewport_id != egui::ViewportId::ROOT {
+        assert_eq!(output.cursor_icon, egui::CursorIcon::None, "painted-only viewports hide the system cursor");
+        assert!(output.cursor_image.is_none());
+        let textures = h.ctx.tex_manager();
+        let textures = textures.read();
+        let pipettes: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) => textures.meta(mesh.texture_id).filter(|meta| meta.name == "pc-pipette-icon").map(|meta| (mesh, meta)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pipettes.len(), 1, "the canvas sampling caller paints one pipette, not just a hidden OS cursor");
+        let (mesh, meta) = pipettes[0];
+        let scale = h.output().pixels_per_point.clamp(0.5, 8.0);
+        let hot = (24.5 * scale + 1.0).ceil();
+        assert_eq!(meta.size, [(2.0 * hot + 1.0) as usize; 2]);
+        let at = h.ctx.input_for(h.input().viewport_id, |i| i.pointer.hover_pos()).unwrap();
+        let expected = egui::Rect::from_min_size(at - egui::Vec2::splat((hot + 0.5) / scale), egui::Vec2::splat(meta.size[0] as f32 / scale));
+        assert!(mesh.calc_bounds().min.distance(expected.min) < 0.001, "the sampling tip follows the pointer");
+        assert!(mesh.calc_bounds().max.distance(expected.max) < 0.001, "the artwork keeps its logical size");
+    } else {
+        assert_eq!(output.cursor_icon, egui::CursorIcon::Crosshair, "visible fallback underneath the native pipette");
+        let image = output.cursor_image.as_ref().expect("the pipette must reach the OS");
+        let scale = if cfg!(target_os = "macos") { h.ctx.zoom_factor() } else { h.ctx.pixels_per_point() };
+        // 23 logical points of reach, 1.5 of stroke padding, then one bitmap pixel for AA.
+        let hot = (24.5 * scale + 1.0).ceil() as u16;
+        assert_eq!(image.size, [2 * hot + 1; 2]);
+        assert_eq!(image.hotspot, [hot; 2]);
+        let i = (usize::from(hot) * usize::from(image.size[0]) + usize::from(hot)) * 4;
+        assert!(image.rgba[i + 3] > 230, "the SVG sampling tip occupies the hotspot");
+    }
+}
+
 fn open_dialog(h: &mut Harness<'static, PhotocraftApp>) {
     crate::dialogs::open_command_dialog(h.state_mut(), "image.adjustments.brightnessContrast", "Brightness/Contrast…");
     h.run_steps(3);
@@ -260,6 +299,25 @@ fn picker_color(h: &Harness<'static, PhotocraftApp>) -> String {
     d.fields.get("color").and_then(serde_json::Value::as_str).unwrap().to_string()
 }
 
+/// Check artwork and hotspot through the real canvas picker, not just the cursor renderer.
+#[test]
+fn color_picker_paints_a_pipette_on_a_high_dpi_child_canvas() {
+    let mut h = harness();
+    let child = egui::ViewportId::from_hash_of("sampling-painted-pipette");
+    h.input_mut().viewport_id = child;
+    h.input_mut().viewports.entry(child).or_default().native_pixels_per_point = Some(6.0);
+    h.run_steps(4);
+    crate::color_picker_ui::open(h.state_mut(), "foreground");
+    h.run_steps(3);
+    h.hover_at(free_canvas(&h));
+    h.run_steps(1);
+    assert_pipette(&h);
+    h.hover_at(h.state().last_canvas_rect.center());
+    h.run_steps(1);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "dialog controls release the painted pipette");
+    assert!(h.output().platform_output.cursor_image.is_none());
+}
+
 /// The Color Picker's eyedropper, as in Photoshop: over the image the pointer is a pipette, and a
 /// click or drag there samples into the picker's new colour, whatever the tool. OK applies it.
 #[test]
@@ -279,10 +337,11 @@ fn color_picker_samples_the_image_under_its_pipette() {
 
     h.hover_at(red);
     h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the pipette replaces the pointer");
+    assert_pipette(&h);
     h.hover_at(r.center());
     h.run_steps(1);
     assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "over the dialog it is the normal pointer");
+    assert!(h.output().platform_output.cursor_image.is_none(), "dialog widgets must release the pipette");
 
     // A click samples; the press and release may land in one frame (`ui.click`).
     h.hover_at(red);
@@ -350,7 +409,7 @@ fn curves_picker_samples_document_coordinates_through_the_view_transform() {
     let left = pos2(canvas.left() + 60.0, canvas.center().y);
     h.hover_at(left);
     h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+    assert_pipette(&h);
     press(&mut h, left, true);
     press(&mut h, left, false);
     h.run_steps(3);
@@ -663,7 +722,8 @@ fn a_notch_pans_the_canvas_at_once_without_a_glide() {
         let p = h.state().last_canvas_rect.center();
         h.hover_at(p);
         h.run_steps(2);
-        let notch = h.ctx.options(|o| o.input_options.line_scroll_speed);
+        // The canvas' own notch (#12028), not egui's.
+        let notch = crate::wheel_nav::CANVAS_PAN_PER_LINE;
         let (z, c0) = (zoom(&h), h.state().ui.views[0].center);
         wheel(&h, -1.0, m);
         h.run_steps(1);
@@ -1013,10 +1073,12 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
         h.output().platform_output.cursor_icon
     };
     h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
-    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "the pipette replaces the pointer");
+    cursor(&mut h);
+    assert_pipette(&h);
     h.state_mut().ui.tool = crate::state::Tool::Brush;
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
-    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "⌥ samples with a pipette");
+    cursor(&mut h);
+    assert_pipette(&h);
     h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
     // Every platform reports the crosshair. The desktop builds also hand the OS a black-and-white
     // bitmap for it (`tool_cursor`, #1160, #1343), with `Crosshair` underneath as the fallback.
@@ -1504,4 +1566,48 @@ fn marquee_drag_after_hiding_extras_restores_selection_visibility() {
     assert!(!h.state().ui.view.extras, "the user can hide the existing selection again");
     h.state_mut().run("edit.fill", json!({"color": "#22cc44"})).unwrap();
     assert!(!h.state().ui.view.extras, "painting an existing selection must preserve the user's hide choice");
+}
+
+/// Text Color Picker hover must use a cached OS bitmap instead of an app-painted cursor.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn text_color_picker_pipette_is_native_cached_and_released_over_dialog() {
+    let mut h = harness();
+    h.state_mut().run("type.create", json!({"text":"Cursor test","color":"#000000","size":24,"x":10,"y":60})).unwrap();
+    h.state_mut().ui.tool = crate::state::Tool::Type;
+    let v = &mut h.state_mut().ui.views[0];
+    (v.zoom, v.center, v.fit_pending) = (4.0, [200.0, 150.0], false);
+    crate::type_tool::open_color_picker(h.state_mut(), [0.0; 3]);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["__label"], "Color Picker (Text Color)");
+    let r = h.state().last_canvas_rect;
+    let p = pos2(r.left() + 60.0, r.center().y);
+    h.hover_at(p);
+    h.run_steps(1);
+    assert_pipette(&h);
+    let image = h.output().platform_output.cursor_image.clone().unwrap();
+    h.hover_at(p + vec2(20.0, 0.0));
+    h.run_steps(1);
+    let moved = h.output().platform_output.cursor_image.as_ref().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&image.rgba, &moved.rgba), "pointer motion must reuse the OS cursor bitmap");
+
+    h.ctx.set_zoom_factor(1.5);
+    h.run_steps(3);
+    let r = h.state().last_canvas_rect;
+    h.hover_at(pos2(r.left() + 30.0, r.center().y));
+    h.run_steps(1);
+    assert_pipette(&h);
+    let scaled = h.output().platform_output.cursor_image.as_ref().unwrap();
+    assert_ne!(scaled.size, image.size, "UI scale change replaces the displayed bitmap");
+    assert!(!std::sync::Arc::ptr_eq(&image.rgba, &scaled.rgba));
+
+    h.hover_at(r.center());
+    h.run_steps(1);
+    assert!(h.output().platform_output.cursor_image.is_none(), "dialog widgets release the pipette");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "dialog keeps its arrow");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.dialogs.is_empty());
+    assert!(h.output().platform_output.cursor_image.is_none(), "Escape releases the pipette");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "the Type tool regains its I-beam");
 }

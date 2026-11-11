@@ -65,6 +65,8 @@ fn label(c: DdsCompression) -> &'static str {
     }
 }
 
+/// Show the DDS Options modal for a parked save, and on OK write it and journal its step (marking
+/// a recording automation's when an automation gate is installed); Cancel drops the save.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &mut app.dds_options else { return };
     let (mut ok, mut cancel) = (false, false);

@@ -5,7 +5,7 @@
 
 mod corpus;
 mod corpus_pins;
-mod i18n_coverage;
+mod i18n_report;
 mod ico;
 mod layers;
 mod panel_commands;
@@ -35,7 +35,7 @@ commands:
                   one explicit real-browser provider-boundary test with a bounded opaque-origin artifact relay
   ci              the CI gate: fmt --check, clippy -D warnings, layers, panel-commands, scorecard --check, tests
                   (nextest --profile ci), panic_hunt, doctests and wasm, with --locked --features heif
-                  (stops at first failure), then the i18n-coverage report
+                  (stops at first failure), then the i18n-report
   corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --atn | --photoshop | --gimp] [--local] [--update-manifest]
                   show where test corpora live and their pins (xtask/src/corpus_pins.rs), or fetch
                   them into corpus/ (pinned commits, sha256-verified; --all = every corpus but pixls,
@@ -47,8 +47,9 @@ commands:
                   --local takes corpus/photoshop and corpus/gimp from the photocraft-corpus authoring clone
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          Photoshop menu parity; rewrites docs/parity-checklist.md
-  i18n-coverage   report UI translation coverage and the missing strings per registered language
-                  (the last `ci` step; it never fails)
+  i18n-report     report UI translation coverage, the missing strings and the rows kept in English per
+                  registered language, from the craft-i18n checkout in CRAFT_I18N_DIR (the last `ci`
+                  step; it never fails, and says so when CRAFT_I18N_DIR is unset)
   perf [--quick] [--update-baseline] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
                   run the release benches, merge them by scenario id into target/perf/results.json,
                   check perf/budgets.toml and perf/baseline.json (non-zero on a broken budget or regression)
@@ -76,7 +77,7 @@ fn main() -> ExitCode {
         Some("test-corpus") => corpus::test_cmd(&rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => cmd_parity(),
-        Some("i18n-coverage") => i18n_coverage::run(&root()),
+        Some("i18n-report") => i18n_report::run(&root()),
         Some("perf") => perf::run(&root(), &rest),
         Some("scorecard") => scorecard::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
@@ -228,7 +229,7 @@ fn cmd_test() -> Result<(), String> {
     run(c, &format!("cargo {tool} {}", TEST_TARGETS.join(" ")))
 }
 
-/// What the CI gate adds to every build: `--locked`, and the optional photocraft-heif crate that
+/// What the CI gate adds to every build: `--locked`, and the optional craft-heif decoder that
 /// official builds open HEIC photos with.
 const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif"];
 
@@ -304,8 +305,8 @@ fn cmd_ci() -> Result<(), String> {
             "i18n",
             Box::new(|| {
                 // Lists missing translations for the log; a missing string shows in English, so it never fails CI.
-                if let Err(e) = i18n_coverage::run(&root()) {
-                    eprintln!("warning: i18n coverage report failed: {e}");
+                if let Err(e) = i18n_report::run(&root()) {
+                    eprintln!("warning: i18n report failed: {e}");
                 }
                 Ok(())
             }),

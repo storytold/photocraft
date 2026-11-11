@@ -24,6 +24,7 @@ fn app(connected: bool) -> (PhotocraftApp, Host, Written) {
     let dialog_provider = provider.clone();
     let services = Services {
         file_provider: Some(provider.clone()),
+        automation_command: Some(Box::new(|id, _| if id == "file.save" { Ok(()) } else { Err(format!("unexpected automation command: {id}")) })),
         export: Some(Box::new(|_, _, _| Ok((vec![10, 20, 30], Vec::new())))),
         write: Some(Box::new(move |name, bytes| {
             writes.borrow_mut().push((name.into(), bytes.to_vec()));
@@ -85,6 +86,22 @@ fn disabled_provider_keeps_new_saves_local() {
     assert_eq!(written.borrow().len(), 1);
     assert!(provider.take_events().is_empty());
     assert_eq!(app.session.active().unwrap().saved_revision, 2);
+}
+
+#[test]
+fn denied_control_save_keeps_the_close_prompt_without_a_provider_request() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    app.services.automation_command = Some(Box::new(|_, _| Err("automation Save denied".into())));
+
+    menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    assert_eq!(crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap_err(), "automation Save denied");
+    app.poll_file_dialog(&ctx, None);
+    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(app.session.active().unwrap().is_dirty());
+    assert!(!provider.wants_dialog());
+    assert!(provider.take_events().is_empty());
+    assert!(written.borrow().is_empty());
 }
 
 /// The admitted capture must still belong to the first chooser before any durable ACK.
