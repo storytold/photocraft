@@ -3,7 +3,7 @@ use super::cursors::{alt_eyedropper, sample_eyedropper};
 use super::drag::Drag;
 use super::gesture::{finish_release, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
-use super::strokes::{HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
+use super::strokes::{HOLD_REPEAT_MS, LiveStroke, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
 use super::{PhotocraftApp, Tool, json, multiple_color_target};
 
 /// Abstract tool event, produced by the mouse or by automation (`ui.pointer`).
@@ -45,7 +45,7 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         let moved = d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25);
         // A held pen repeats its point now and then, so the stroke's time keeps advancing.
         let held = app.stylus.last_point_ms().is_some_and(|t| app.stylus.clock_ms - t >= HOLD_REPEAT_MS)
-            && app.live_stroke.as_ref().is_some_and(|l| l.stroke.wants_time());
+            && app.live_stroke.as_ref().is_some_and(LiveStroke::wants_time);
         if moved || held {
             d.points.push([x, y, pressure as f64]);
             app.stylus.record_point();
@@ -278,7 +278,7 @@ fn note_move_pick(app: &mut PhotocraftApp, active_before: Option<photocraft_doc:
 /// Handle Move-specific pointer events and report whether the event was consumed. Auto-Select
 /// picks on press so snapping and dragging use the resulting layer selection. When a locked-only
 /// hit starts a marquee, Shift preserves the selection that the marquee adds to.
-fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
+fn handle_move_pointer(app: &mut PhotocraftApp, raw: ToolEvent, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
             if let Some((vertical, i)) = crate::rulers::guide_at(app, x, y) {
@@ -370,15 +370,16 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
             }
         }
         ToolEvent::Move { x, y, .. } => {
-            if let Some(d) = app.guide_drag.as_mut().filter(|d| d.index.is_some()) {
-                d.track([x, y], mods.alt);
+            if let Some(mut d) = app.guide_drag.filter(|d| d.index.is_some()) {
+                d.follow_pointer(app, unsnapped(raw), [x, y], mods);
+                app.guide_drag = Some(d);
                 return true;
             }
         }
         ToolEvent::Up { x, y } => {
             if let Some(mut d) = app.guide_drag.filter(|d| d.index.is_some()) {
                 app.guide_drag = None;
-                d.track([x, y], mods.alt);
+                d.follow_pointer(app, unsnapped(raw), [x, y], mods);
                 crate::rulers::finish_drag(app, d);
                 return true;
             }
@@ -511,7 +512,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
         }
         _ => {}
     }
-    if handle_move_pointer(app, ev, tool, mods) {
+    if handle_move_pointer(app, raw, ev, tool, mods) {
         return;
     }
 
