@@ -90,7 +90,7 @@ pub fn prompt(app: &mut PhotocraftApp, message: &str) {
 
 #[cfg(test)]
 #[path = "../brush_refusal_alert_tests.rs"]
-mod brush_refusal_alert_tests;
+pub(super) mod brush_refusal_alert_tests;
 
 #[cfg(test)]
 #[path = "../sharpen_refusal_alert_tests.rs"]
@@ -99,3 +99,7 @@ mod sharpen_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../sponge_refusal_alert_tests.rs"]
 mod sponge_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../bucket_bitmap_alert_tests.rs"]
+mod bucket_bitmap_alert_tests;

@@ -693,7 +693,10 @@ fn straighten_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     if !rot.is_finite() {
         return;
     }
-    fields.insert("angle".into(), json!(rot.abs()));
+    // Rounded here, in f64, to the field's two decimals: `ui.dialog.open` then `ui.dialog.confirm`
+    // can run with no frame drawn between them, and only a drawn frame rounds (#13067).
+    let scale = 10f64.powi(wide_field_decimals("image.rotation.arbitrary", "angle").unwrap_or(2).min(6) as i32);
+    fields.insert("angle".into(), json!((rot.abs() * scale).round() / scale));
     fields.insert("direction".into(), json!(if rot < 0.0 { "ccw" } else { "cw" }));
 }
 
@@ -1158,7 +1161,16 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         match p.kind {
             Kind::Range { min, max, default } => {
-                let src = f.get(&p.key).and_then(Value::as_f64);
+                // The field's shown precision: small ranges keep their two decimals, and so
+                // does the Arbitrary angle; the other wide fields round to one (#12035).
+                let scale = field_scale(&cmd, &p.key, min, max);
+                let wide_decimals = wide_field_decimals(&cmd, &p.key).is_some();
+                let round64 = |x: f64| (x * f64::from(scale)).round() / f64::from(scale);
+                // A wide field showing two decimals rounds while the value is still f64, before
+                // the widget narrows it: a 43x27 ruler is 32.1249984°, whose f32 cast lands
+                // exactly on 32.125, and the field drew that half-away as 32.13 on the first
+                // frame after opening or Alt+Reset, over the 32.12 it stored (#13067).
+                let src = f.get(&p.key).and_then(Value::as_f64).map(|x| if wide_decimals { round64(x) } else { x });
                 let mut v = src.unwrap_or(default as f64) as f32;
                 // A widget edit this frame makes the field's f32 value authoritative (#12035).
                 let mut edited = false;
@@ -1209,18 +1221,15 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                 .changed();
                     }
                 });
-                // The field's shown precision: small ranges keep their two decimals, and so
-                // does the Arbitrary angle; the other wide fields round to one (#12035).
-                let scale = field_scale(&cmd, &p.key, min, max);
-                // A field showing two decimals rounds while the value is still f64: a 43x27
-                // ruler is 32.1249984°, whose f32 cast lands exactly on 32.125, and rounding
-                // that widened value half-away shows 32.13 where the pre-fill says 32.12.
-                // Values the user typed or dragged are f32 already, so they round as before.
-                let w = match (wide_field_decimals(&cmd, &p.key), src) {
-                    (Some(_), Some(raw)) if !edited => ((raw * f64::from(scale)).round() / f64::from(scale)) as f32,
-                    _ => (v * scale).round() / scale,
+                // Such a field also keeps its rounded value as f64: stored as f32, 32.12 widens to
+                // 32.1199989 and OK sends that to the command (#13067). A value the user typed or
+                // dragged this frame is the widget's f32, so it rounds from that.
+                let w = match (wide_decimals, src) {
+                    (true, Some(rounded)) if !edited => json!(rounded),
+                    (true, _) => json!(round64(f64::from(v))),
+                    (false, _) => json!((v * scale).round() / scale),
                 };
-                f.insert(p.key, json!(w));
+                f.insert(p.key, w);
             }
             Kind::Choice { options, default } => {
                 ui.horizontal(|ui| {
