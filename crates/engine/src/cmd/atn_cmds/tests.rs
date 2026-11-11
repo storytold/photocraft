@@ -7023,11 +7023,13 @@ fn adjustment_layer_name_must_round_trip() {
 fn whole_library_conditional_scopes_roundtrip_without_borrowing_external_targets() {
     let mut caller = Action::new(
         "Caller",
-        vec![("actions.conditional".into(), json!({"if":"always", "then":"Target", "thenSet":"Original", "else":"Target", "elseSet":"Outside"}))],
+        vec![("actions.conditional".into(), json!({"if":"always", "then":"Target", "thenSet":"Original", "else":"Target", "elseSet":"Original"}))],
     );
     caller.set = Some("Original".into());
     let mut target = Action::new("Target", vec![]);
     target.set = Some("Original".into());
+
+    // Internal name-only branches remain resolvable through whole-library save and replacement.
     let (original, _) = export("Original", &[&caller, &target], &[], false).unwrap();
     let mut s = Session::new();
     s.execute("actions.replace", json!({"data":b64(&original),"confirm":true})).unwrap();
@@ -7035,11 +7037,27 @@ fn whole_library_conditional_scopes_roundtrip_without_borrowing_external_targets
     let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
     let imported = super::convert::import_sets(&bytes, None).unwrap().remove(0).0.imported;
     assert_eq!(imported.actions[0].steps[0].1["thenSet"], DEFAULT_SET);
-    assert_eq!(imported.actions[0].steps[0].1["elseSet"], "Outside");
+    assert_eq!(imported.actions[0].steps[0].1["elseSet"], DEFAULT_SET);
     s.execute("actions.replace", json!({"data":b64(&bytes),"confirm":true})).unwrap();
     let params = &s.actions.list[0].steps[0].1;
     assert!(params.get("thenActionId").is_none(), "included target must remain resolvable: {params}");
-    assert_eq!(params["elseActionId"], Value::Null, "external unresolved scope cannot borrow an included target");
+    assert!(params.get("elseActionId").is_none(), "included target must remain resolvable: {params}");
+
+    // An external name-only ATN reference imports with an explicit unresolved guard. Strict save
+    // must reject that guard rather than borrow the included Target or omit the conditional.
+    caller.steps[0].1["elseSet"] = json!("Outside");
+    let (external, _) = export(DEFAULT_SET, &[&caller, &target], &[], false).unwrap();
+    let imported = super::convert::import_sets(&external, None).unwrap().remove(0).0.imported;
+    assert_eq!(imported.actions[0].steps[0].1["thenSet"], DEFAULT_SET);
+    assert_eq!(imported.actions[0].steps[0].1["elseSet"], "Outside");
+    s.execute("actions.replace", json!({"data":b64(&external),"confirm":true})).unwrap();
+    let params = &s.actions.list[0].steps[0].1;
+    assert_eq!(params["thenSet"], DEFAULT_SET);
+    assert_eq!(params["elseSet"], "Outside");
+    assert!(params.get("thenActionId").is_none(), "included target must remain resolvable: {params}");
+    assert_eq!(params.get("elseActionId"), Some(&Value::Null), "external unresolved scope cannot borrow an included target");
+    let error = s.execute("actions.save", json!({})).unwrap_err().to_string();
+    assert!(error.contains("`actions.conditional`"), "strict save must reject the unresolved conditional: {error}");
 }
 
 #[test]
