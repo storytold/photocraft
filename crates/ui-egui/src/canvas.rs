@@ -703,6 +703,96 @@ struct DialogCanvasInput<'a> {
     aspect: f32,
 }
 
+/// Identifies one canvas for a Pattern Fill drag: its OS window (viewport), the document it shows
+/// and the document window it belongs to. The main canvas and a Window › New Window view of the
+/// same document differ, as do Window › Arrange cells.
+pub(crate) fn pattern_drag_owner(viewport: egui::ViewportId, idx: usize, window: Option<u64>) -> u64 {
+    egui::Id::unique(("pattern-fill-drag", viewport, idx, window)).value()
+}
+
+/// Routes this frame's pointer events to a linked Pattern Fill's canvas drag while one owns the
+/// pointer, and ends any stored gesture that no longer does. Returns true when the pattern drag
+/// owns the pointer and cursor this frame.
+fn pattern_fill_canvas_drag(app: &mut PhotocraftApp, input: &DialogCanvasInput<'_>, picking: bool) -> bool {
+    // The gesture belongs to the canvas its press landed on. Each OS window has its own pointer,
+    // so another canvas (the main one while a New Window view of the same document is dragged)
+    // must neither move it nor end it because its own button is up.
+    let owner = pattern_drag_owner(input.ctx.viewport_id(), input.idx, app.drawing_window);
+    // A linked Pattern Fill: a drag on the free canvas moves the pattern. Only the view that owns
+    // input (the active document's canvas, or the focused document window) may route or end it;
+    // an inactive arranged cell or floating view must neither move the active fill nor cancel a
+    // drag it is still using. Space, the middle button, temporary zoom, a popup or another dialog
+    // above take the pointer instead.
+    let pattern_target = (input.primary
+        && !picking
+        && !input.middle
+        && !input.space_pan
+        && !matches!(input.temporary, Some(crate::hold_keys::Temporary::ZoomIn | crate::hold_keys::Temporary::ZoomOut))
+        && !egui::Popup::is_any_open(input.ctx))
+    .then(|| {
+        app.ui
+            .dialogs
+            .last()
+            .filter(|d| crate::pattern_fill_ui::owns(&d.fields))
+            .and_then(|d| crate::pattern_fill_ui::drag_target(app, &d.fields))
+            .map(|t| t.owned_by(owner))
+    })
+    .flatten();
+    let owns = pattern_target.is_some();
+    // Apply this frame's primary pointer events to the gesture in order, not just the pointer's
+    // final hover: a press and release in one frame are one click, a release that leaves the
+    // window still carries its own position, and a release under a dialog never moves the fill.
+    // Event order also keeps a release followed by a new press from joining the two gestures.
+    // Only the view that owns input routes them.
+    if let Some(target) = &pattern_target {
+        let events = input.ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, .. } => {
+                        Some(if *pressed { crate::pattern_fill_ui::CanvasEvent::Press(*pos) } else { crate::pattern_fill_ui::CanvasEvent::Release(*pos) })
+                    }
+                    egui::Event::PointerMoved(pos) => Some(crate::pattern_fill_ui::CanvasEvent::Move(*pos)),
+                    egui::Event::PointerGone => Some(crate::pattern_fill_ui::CanvasEvent::Gone),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Some(d) = app.ui.dialogs.last_mut().filter(|d| crate::pattern_fill_ui::owns(&d.fields)) {
+            crate::pattern_fill_ui::canvas_events(
+                &mut d.fields,
+                target,
+                events,
+                |p| crate::dialogs::free_pointer_at(input.ctx, input.rect, p).is_some(),
+                |a, b| {
+                    let delta = input.xf.unmap_vec(b - a) / (input.view.zoom / input.ppp);
+                    [f64::from(delta.x), f64::from(delta.y)]
+                },
+            );
+        }
+    }
+    // With its press released, off that dialog or target, or below another Pattern Fill dialog,
+    // the stored gesture is over: the next eligible press starts from the phase shown, not from
+    // one captured before the interruption. This runs after the events so a release and a new
+    // press in one frame keep only the new gesture. Only the canvas holding the gesture clears it,
+    // reading its own window's button; it does so even after it stops owning input (its window
+    // lost focus), so the gesture cannot resume later from a stale position. A gesture stored
+    // without a canvas is cleared by the view that owns input.
+    let pressed = input.ctx.input(|i| i.pointer.primary_down());
+    let top_pattern = app.ui.dialogs.last().filter(|d| crate::pattern_fill_ui::owns(&d.fields)).map(|d| d.id);
+    for d in app.ui.dialogs.iter_mut().filter(|d| crate::pattern_fill_ui::owns(&d.fields)) {
+        let holds = match crate::pattern_fill_ui::drag_owner(&d.fields) {
+            None => false,
+            Some(Some(o)) => o == owner,
+            Some(None) => input.primary,
+        };
+        if holds && (!owns || Some(d.id) != top_pattern || !pressed) {
+            crate::pattern_fill_ui::end_phase_drag(&mut d.fields);
+        }
+    }
+    owns
+}
+
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
     let sticky_alt = app.ui.shell.sticky_alt;
     let zoom_out = |alt: bool| match input.temporary {
@@ -744,6 +834,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     if !gradient_drag && let Some(d) = app.ui.dialogs.last_mut().filter(|d| d.kind == crate::state::DialogKind::LayerStyle) {
         crate::layer_style::end_gradient_drag(&mut d.fields);
     }
+    let pattern_drag_owns = pattern_fill_canvas_drag(app, &input, picking);
     // ⌘/Ctrl-click with Curves open: a point at the pixel's tone (#7325), whatever the tool. The
     // press's own modifiers decide, and only the press adds: a drag would add one per frame.
     let curve_point_press = (input.primary && !input.middle && crate::adjust_dialog::curves_on_top(app))
@@ -766,6 +857,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         && !locating
         && !shadow_drag
         && !gradient_drag
+        && !pattern_drag_owns
         && curve_point_press.is_none();
     // ⌘Space / ⌥Space zoom under the dialog as they do without one, before Space pans (#6460).
     // With the Hand tool, ⌘ alone is Zoom In (#6434); under Curves that press is the dialog's
@@ -819,6 +911,12 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             if let (Some(bounds), Some(d)) = (bounds, app.ui.dialogs.last_mut()) {
                 crate::layer_style::drag_gradient(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)], bounds);
             }
+        }
+    } else if pattern_drag_owns {
+        // The pattern drag's events were applied above; this branch keeps the pointer from reaching
+        // the eyedropper and other dialog canvas gestures, and shows the move cursor.
+        if crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {
+            input.ctx.set_cursor_icon(egui::CursorIcon::Move);
         }
     } else if picking && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect) {
         if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
@@ -892,6 +990,7 @@ struct CanvasToolInput<'a> {
     display_zoom: f32,
 }
 
+/// Processes primary canvas pointer gestures, view transitions, and tool cancellations on focus loss.
 fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasToolInput<'_>) {
     let ctx = input.ctx;
     let response = input.response;
@@ -943,7 +1042,12 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
         ctx.data_mut(|d| d.insert_temp(tool_press, press_mods));
         if tool.is_type() && press_mods.command && app.ui.text_edit.is_some() {
             let d = xf.to_doc(p);
-            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                press_mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
 
@@ -951,6 +1055,7 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     handle_canvas_tool_navigation(app, ui, view, input, &mut buttons);
     handle_canvas_tool_stroke(app, ui, input, mods, capture_press, tool_press, &mut buttons);
     handle_canvas_tool_clicks(app, ui, view, input, mods, tool_press, &buttons);
+    crate::tools::type_path_placement::cancel_missing_release(app, ctx);
     // Clear the menu-dismissal flag on the gesture's pointer release, even when the release
     // occurs outside the canvas and produces no `buttons.clicked` event. It sits below (not
     // above) the click handling, so a release over the canvas in a later frame is first
@@ -1097,6 +1202,7 @@ fn handle_canvas_tool_navigation(
     }
 }
 
+/// Routes continuous stroke dragging events for active painting and vector tools to tool handlers with view context.
 fn handle_canvas_tool_stroke(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1136,7 +1242,12 @@ fn handle_canvas_tool_stroke(
         let d = xf.to_doc(p);
         // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
         let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
-        tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+        tool_input::tool_event_with_view(
+            app,
+            ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+            press_mods,
+            Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+        );
         app.press_stroke = app.drag.is_some();
     }
     let press_stroke = app.press_stroke;
@@ -1154,7 +1265,12 @@ fn handle_canvas_tool_stroke(
         if !refused {
             let d = xf.to_doc(p);
             let press_mods = if capture_press { ctx.data(|d| d.get_temp(tool_press)).unwrap_or(mods) } else { mods };
-            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                press_mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
     // A stroke started on the press takes its moves from the press on, not only once egui
@@ -1206,7 +1322,12 @@ fn handle_canvas_tool_stroke(
             // This move's share of the pen samples the frame brought (pressure, tilt, rotation).
             app.stylus.select(k, n);
             let d = xf.to_doc(p);
-            tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
         app.stylus.clear_selection();
         app.stylus.clock_ms = now_ms;
@@ -1239,7 +1360,12 @@ fn handle_canvas_tool_stroke(
         let p = at.map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
         if let Some(d) = p {
             tap_at_peak_pressure(app);
-            tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Up { x: d[0], y: d[1] },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
     // A stroke started on the press ends with the release, whether egui saw a drag, a click,
@@ -1251,7 +1377,12 @@ fn handle_canvas_tool_stroke(
             && app.drag.is_some()
         {
             tap_at_peak_pressure(app);
-            tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Up { x: d[0], y: d[1] },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
     if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
@@ -1259,6 +1390,7 @@ fn handle_canvas_tool_stroke(
     }
 }
 
+/// Dispatches discrete pointer click and release events to active tools with view transform context.
 fn handle_canvas_tool_clicks(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1292,10 +1424,25 @@ fn handle_canvas_tool_clicks(
         app.defer_live_stroke = true;
         for p in moves.into_iter().filter(|p| rect.contains(*p)) {
             let d = xf.to_doc(p);
-            tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
         app.defer_live_stroke = false;
         crate::magnetic_lasso_ui::flush(app);
+    }
+    // Perspective Crop: between corner clicks the preview quad follows the pointer (#11804).
+    if tool == Tool::PerspectiveCrop
+        && !app.pcrop.clicks.is_empty()
+        && !(buttons.started || buttons.dragged || buttons.stopped)
+        && response.hovered()
+        && let Some(p) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p))
+    {
+        let d = xf.to_doc(p);
+        tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: 1.0 }, mods);
     }
     if buttons.clicked
         && let Some(p) = response.interact_pointer_pos()
@@ -1350,9 +1497,19 @@ fn handle_canvas_tool_clicks(
                 _ => {
                     // If this tool was not handled on pointer-down, fall back to a
                     // click-sized gesture while preserving pen pressure (mouse stays at 1).
-                    tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
+                    tool_input::tool_event_with_view(
+                        app,
+                        ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                        click_mods,
+                        Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+                    );
                     tap_at_peak_pressure(app);
-                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
+                    tool_input::tool_event_with_view(
+                        app,
+                        ToolEvent::Up { x: d[0], y: d[1] },
+                        click_mods,
+                        Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+                    );
                 }
             }
         }
@@ -1432,6 +1589,7 @@ struct CanvasOverlayInput<'a> {
     zoom_out: &'a dyn Fn(bool) -> bool,
 }
 
+/// Paints what sits over the canvas image: the grid, guides, selection ants, and the active tool's previews and handles.
 fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>, ants: Vec<egui::Shape>) {
     let ctx = input.ctx;
     let painter = input.painter;
@@ -1493,6 +1651,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::transform_tool::draw_overlay(app, painter, xf);
     crate::cam_transform::draw(app, painter, xf);
     crate::cam_preview::wake(app, painter.ctx());
+    crate::type_box_preview::wake(app, painter.ctx());
     crate::distort_ui::draw_overlay(app, painter, xf);
     crate::perspective_crop_ui::draw_overlay(app, painter, xf);
     crate::retouch_ui::draw_source_marker(app, painter, xf);
@@ -1525,6 +1684,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     draw_canvas_tool_cursor(app, ui, input, resizing);
 }
 
+/// Renders custom canvas cursor overlays, including brush silhouettes and type path placement directional arrows.
 fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool) {
     let ctx = input.ctx;
     let xf = input.xf;
@@ -1567,6 +1727,13 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         ui.ctx().set_cursor_icon(c);
     } else if let Some(c) = response.hover_pos().and_then(|p| crate::cam_transform::cursor(app, ctx, xf, p)) {
         ui.ctx().set_cursor_icon(c);
+    } else if let Some((p, grab)) = response
+        .hover_pos()
+        .filter(|_| matches!(tool, Tool::PathSelection | Tool::DirectSelection))
+        .and_then(|p| crate::type_path_placement::cursor(app, xf, p).map(|grab| (p, grab)))
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        crate::type_path_placement::draw_cursor(ctx, p, grab);
     } else if let Some(p) = response.hover_pos().filter(|p| crate::corner_radius::hovers(app, xf.to_doc(*p))) {
         // Over a live rectangle's corner widget (or dragging one): the arrow with a rounded
         // corner badge, as Photoshop's corner radius cursor.
@@ -1628,6 +1795,29 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     } else if let Some(p) = response.hover_pos() {
         draw_default_tool_cursor(app, ui, input, resizing, p);
     }
+}
+
+/// The Pencil's cursor (and the Eraser's in Pencil or Block mode): the outline of the whole pixels
+/// its dab fills, on the pixel grid. A round tip is a disc, a square or Block one its square. The
+/// hotspot is drawn as well when `crosshair` asks for it or the outline is too small to see.
+fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size: f32, block: bool, crosshair: bool) -> egui::CursorIcon {
+    let ppp = painter.ctx().pixels_per_point();
+    let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
+    let px = 1.0 / ppp;
+    let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
+    if !block && pencil_tip_is_round(size) {
+        let r = sq.width() / 2.0;
+        painter.circle_stroke(sq.center(), r + px / 2.0, dark);
+        painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
+    } else {
+        painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
+        painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+    }
+    // Too small to see where it is: the hotspot as well.
+    if crosshair || sq.width() < 6.0 {
+        crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+    }
+    egui::CursorIcon::None
 }
 
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
@@ -1694,23 +1884,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
                         let block = crate::eraser_ui::block_mode(app, tool);
                         let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                        let ppp = painter.ctx().pixels_per_point();
-                        let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
-                        let px = 1.0 / ppp;
-                        let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                        if !block && pencil_tip_is_round(size) {
-                            let r = sq.width() / 2.0;
-                            painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-                            painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
-                        } else {
-                            painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-                            painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
-                        }
-                        // Too small to see where it is: the hotspot as well.
-                        if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                            crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
-                        }
-                        egui::CursorIcon::None
+                        pencil_outline_cursor(painter, xf, p, size, block, cur.show_crosshair_in_brush_tip)
                     }
                     // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
                     // traces its outline, turned and flipped with the view; a plain round
@@ -1733,6 +1907,13 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             } else {
                 pipette_cursor(ui.ctx(), p)
             }
+        }
+        // The Count tool (#11773): an arrow with "1+", "1" over a marker (the click's own hit
+        // test) or "1−" with ⌥ there. Precise Other Cursors keeps today's crosshair.
+        Tool::Count if !precise_other_cursor(app) => {
+            let alt = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).alt;
+            let over = crate::analysis_ui::count_marker_at(app, xf.to_doc(p)).is_some();
+            crate::tool_cursor::count(ui.ctx(), p, crate::tool_cursor::CountCursor::pick(over, alt))
         }
         // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
         Tool::ColorSampler => {
@@ -2384,6 +2565,9 @@ mod tap_pressure_tests {
         assert_eq!(s.pressure(), 1.0, "Use Tablet Pressure off stays full pressure");
     }
 }
+
+#[cfg(test)]
+mod pattern_drag_tests;
 
 #[cfg(test)]
 mod tabs_tests;

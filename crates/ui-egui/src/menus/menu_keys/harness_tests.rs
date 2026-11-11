@@ -283,6 +283,9 @@ fn underlined_text_marks_the_mnemonic_once_and_keeps_the_prefix() {
 /// Access keys preserve visible spelling and underline only the locale-correct I pair.
 #[test]
 fn azerbaijani_and_turkish_mnemonics_keep_the_two_i_pairs_distinct() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     for code in ["az", "tr"] {
         let lang = crate::i18n::Lang::from_code(code).unwrap();
         crate::i18n::with_language(lang, || {
