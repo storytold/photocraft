@@ -121,7 +121,12 @@ pub fn geometry(f: &Map<String, Value>) -> Result<Value, String> {
                     *r = v.as_f64().filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, w.min(h) / 2.0);
                 }
             }
-            if radii.iter().any(|r| *r > 0.0) { json!({"kind": "roundedRect", "rect": rect, "radii": radii}) } else { json!({"kind": "rect", "rect": rect}) }
+            let name = crate::vector_ui::RECTANGLE_HISTORY_NAME;
+            if radii.iter().any(|r| *r > 0.0) {
+                json!({"kind": "roundedRect", "rect": rect, "radii": radii, "historyName": name})
+            } else {
+                json!({"kind": "rect", "rect": rect, "historyName": name})
+            }
         }
         "ellipse" => json!({"kind": "ellipse", "rect": rect}),
         "triangle" => json!({"kind": "polygon", "rect": rect, "sides": 3}),
