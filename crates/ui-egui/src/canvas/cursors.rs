@@ -244,6 +244,10 @@ pub(crate) fn mixer_target_locked(app: &PhotocraftApp) -> bool {
 #[path = "../mixer_cursor_tests.rs"]
 mod mixer_cursor_tests;
 
+#[cfg(test)]
+#[path = "../healing_alt_cursor_tests.rs"]
+mod healing_alt_cursor_tests;
+
 /// The Paint Bucket artwork and target share one cached cursor image. Report rasterization
 /// failures once per distinct message, with the same concise error in the dialog and status bar.
 pub(crate) fn paint_bucket_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
