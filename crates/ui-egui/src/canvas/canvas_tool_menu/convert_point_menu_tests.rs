@@ -44,10 +44,9 @@ fn opening_the_menu_adds_no_history_step_and_converts_no_point() {
 
 /// Every anchor selected (a Direct Selection marquee), then Delete Anchor Point from the menu on
 /// (300,300): the anchors shift, so no old anchor index stays selected, as after a Delete Anchor
-/// Point click. (`app.run` already drops a selection whose revision moved on; the menu then resets
-/// one that survives, with the same helper the click uses.)
+/// Point click: `app.run` drops a Direct Selection whose revision moved on (`cancel_stale`).
 #[test]
-fn deleting_from_the_menu_resets_the_shifted_anchor_selection() {
+fn deleting_from_the_menu_leaves_no_shifted_anchor_selected() {
     let mut app = setup(Tool::DirectSelection);
     tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 250.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Move { x: 750.0, y: 550.0, pressure: 1.0 }, Modifiers::NONE);

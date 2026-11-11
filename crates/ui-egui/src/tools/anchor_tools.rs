@@ -229,18 +229,13 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) {
                 _ => app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() },
             }
         }
-        Ok(_) => reset_shifted_selection(app, r),
+        // The anchors shift: a Direct Selection on this path would point at the wrong ones.
+        Ok(_) if app.ui.direct_selection.target.as_ref() == Some(&r) => app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() },
+        Ok(_) => {}
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
         }
-    }
-}
-
-/// The anchors of `r` shifted: a Direct Selection on this path would point at the wrong ones.
-pub(crate) fn reset_shifted_selection(app: &mut PhotocraftApp, r: PathRef) {
-    if app.ui.direct_selection.target.as_ref() == Some(&r) {
-        app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() };
     }
 }
 
