@@ -134,8 +134,7 @@ use spot::{is_flat, merge, merge_spot, mergeable, split};
 use targeting::{SLOT_KEY, target_cmd, target_slot};
 pub(crate) use targeting::{
     Target, as_tone, channel_surface_for_filter, clear_channel, clear_color_channel, color_restriction, edits_channel, filter_mask_layer, inject_target,
-    invert_blocks, invert_region, is_channel_target, is_spot_target, mask_target_enabled, restrict_to_color, routed, target_of, target_surface,
-    targeted_channel,
+    invert_region, is_channel_target, is_spot_target, mask_target_enabled, restrict_to_color, routed, target_of, target_surface, targeted_channel,
 };
 pub use targeting::{follows_filter_mask, follows_target, follows_vector_mask_target, gray_target, read_target_surface};
 pub use tone_target::{ToneTarget, resolve_tone_target};

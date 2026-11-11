@@ -82,7 +82,7 @@ pub(crate) fn as_tone<T>(surf: &mut Surface, spot: bool, area: Rect, f: impl FnO
 }
 
 /// [`invert_region`] over `area`, one block of the tile grid at a time.
-pub(crate) fn invert_blocks(surf: &mut Surface, area: Rect) -> Result<()> {
+fn invert_blocks(surf: &mut Surface, area: Rect) -> Result<()> {
     let t = photocraft_geom::TILE_SIZE;
     let mut y = area.y0.div_euclid(t).saturating_mul(t);
     while y < area.y1 {

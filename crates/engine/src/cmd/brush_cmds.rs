@@ -258,10 +258,18 @@ fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option
     Ok((id, brush, num(p, "zoom").unwrap_or(1.0), spot))
 }
 
-/// A spot channel's `ink` as the tone it shows over `canvas`, for a stroke to be drawn on.
-fn tone_of(ink: &Surface, canvas: Rect) -> Result<Surface> {
-    let mut tone = ink.clone();
-    crate::channel_cmds::invert_blocks(&mut tone, canvas)?;
+/// A spot channel's `ink` as the tone it shows, for a stroke to be drawn on. Only the tiles the
+/// channel holds are turned; everywhere else the tone reads its default, the bare paper's tone,
+/// so a stroke on a large and mostly bare channel costs what the channel holds, not the canvas
+/// (CodeRabbit on #10217).
+fn tone_of(ink: &Surface) -> Result<Surface> {
+    let paper: Vec<f32> = ink.default_pixel().iter().map(|v| 1.0 - v).collect();
+    let mut tone = Surface::with_default(ink.format(), &paper);
+    tone.put_tiles(ink.tiles().map(|(c, t)| (*c, std::sync::Arc::clone(t))));
+    let coords: Vec<photocraft_geom::TileCoord> = ink.tiles().map(|(c, _)| *c).collect();
+    for c in coords {
+        crate::channel_cmds::invert_region(&mut tone, c.rect())?;
+    }
     Ok(tone)
 }
 
@@ -311,12 +319,11 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 *surf = l.surface;
                 return Ok(l.bounds);
             }
-            let canvas = doc.bounds();
             let sel = doc.selection.clone();
             let table = crate::mode_cmds::paint_color_table(doc, p);
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
             // A spot channel is stroked on the tone it shows (see `stroke_target`).
-            let mut tone = if spot { Some(tone_of(surf, canvas)?) } else { None };
+            let mut tone = if spot { Some(tone_of(surf)?) } else { None };
             let ink = &mut *surf;
             let surf: &mut Surface = match tone.as_mut() {
                 Some(tone) => tone,
@@ -666,9 +673,8 @@ impl LiveStroke {
         let mut doc = (*st.doc).clone();
         let sel = doc.selection.clone();
         let table = crate::mode_cmds::paint_color_table(&doc, p);
-        let canvas = doc.bounds();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
-        let tone = if spot { Some(tone_of(surf, canvas)?) } else { None };
+        let tone = if spot { Some(tone_of(surf)?) } else { None };
         let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
         erase_locked(&mut brush, lock, bg);
         if pencil && flag(p, "autoErase", false) {
