@@ -73,12 +73,25 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
     }))
 }
 
+/// Only Freeform Pen overrides these shared commands' normal History labels (#12829).
+/// Validate before editing so malformed automation input cannot change the document.
+pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Result<&'a str> {
+    match p.get("historyName") {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::String(n)) if n == "Freeform Pen" => Ok("Freeform Pen"),
+        Some(_) => Err(bad(cmd, "`historyName` must be \"Freeform Pen\"")),
+    }
+}
+
+/// Replaces the Work Path or a saved path, or appends subpaths with the requested operation.
+/// The optional Freeform Pen history label overrides the normal Work Path or Save Path label.
 pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
-    s.edit(if is_work(name.as_deref()) { "Work Path" } else { "Save Path" }, |doc, _| {
+    let label = pen_history_name(p, CMD, if is_work(name.as_deref()) { "Work Path" } else { "Save Path" })?;
+    s.edit(label, |doc, _| {
         let merge = |old: Option<&Path>, new: Path| -> Result<Path> {
             let merged = match (old, append) {
                 (Some(o), Some(op)) => {
@@ -161,12 +174,15 @@ pub(super) fn clipping_path_clear(s: &mut Session, _p: &Value) -> Result<Value> 
     Ok(Value::Null)
 }
 
-/// The path `path.transform` edits: `layer`'s shape path or vector mask, else the work path or a
-/// saved path.
-fn transform_target(s: &Session, name: &str, layer: Option<LayerId>) -> Result<Path> {
+/// The path `path.transform` edits: `layer`'s shape path or vector mask (its vector mask alone when
+/// `vector_mask` is set), else the work path or a saved path.
+fn transform_target(s: &Session, name: &str, layer: Option<LayerId>, vector_mask: bool) -> Result<Path> {
     let Some(id) = layer else { return resolve_path(s, Some(name)) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if vector_mask {
+        return l.vector_mask.as_ref().map(|v| v.path.clone()).ok_or_else(|| EngineError::Other("target layer has no vector mask".into()));
+    }
     match &l.content {
         LayerContent::Shape(sh) => Ok(sh.path.clone()),
         _ => l.vector_mask.as_ref().map(|v| v.path.clone()).ok_or_else(|| EngineError::Other("target layer has no shape path or vector mask".into())),
@@ -202,12 +218,27 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.transform";
     let name = p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned();
     let layer_id = if name == "layer" { Some(layer_id(s, p)?) } else { None };
+    let vector_mask = match p.get("vectorMask") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad(CMD, "`vectorMask` must be true or false")),
+    };
+    // A shape layer's path is its content; only an explicit vector-mask target edits the mask.
+    if vector_mask && layer_id.is_none() {
+        return Err(bad(CMD, "`vectorMask` needs `\"name\":\"layer\"`"));
+    }
+    if let Some(id) = layer_id {
+        // Both explicit and implicit layer-mask paths must respect Lock All on the layer or
+        // its groups. Pixel-only locks still allow mask edits; shape content checks them below.
+        crate::commands::check_all_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    }
     // The box Distort, Perspective and Warp frame: `rect`, else the path's control bounds.
     let frame = |s: &Session| -> Result<[f64; 4]> {
         let r = match coords(p, "rect", 4)? {
             Some(r) => [r[0], r[1], r[2], r[3]],
             None => {
-                let (x0, y0, x1, y1) = transform_target(s, &name, layer_id)?.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
+                let (x0, y0, x1, y1) =
+                    transform_target(s, &name, layer_id, vector_mask)?.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
                 [x0, y0, x1, y1]
             }
         };
@@ -262,7 +293,7 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
         let (sx, sy) = (number("scaleX", 1.0)?, number("scaleY", 1.0)?);
         let angle = number("angle", 0.0)?;
         // An explicit `layer` parameter determines both the transformed path and its pivot (#3062).
-        let path = transform_target(s, &name, layer_id)?;
+        let path = transform_target(s, &name, layer_id, vector_mask)?;
         let (x0, y0, x1, y1) = path.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
         let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
         PathMap::Affine(
@@ -277,7 +308,8 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
         PathMap::Projective(h) => json!({ "name": name, "homography": h.0 }),
         PathMap::Warp(_) => json!({ "name": name, "warp": true }),
     };
-    if let Some(id) = layer_id
+    if !vector_mask
+        && let Some(id) = layer_id
         && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|layer| matches!(layer.content, LayerContent::Shape(_)))
     {
         with_shape(s, id, "Transform Path", |shape, _| {
@@ -533,9 +565,8 @@ fn stroke_with_command(s: &mut Session, p: &Value, cmd: &str, lines: &[vector::P
         params.remove(k);
     }
     let journal = s.journal.len();
+    let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let r = crate::analysis_cmds::compound(s, "Stroke Path", |s| {
-        // The union of what each subpath's command changed; None when one of them didn't say.
-        let mut dmg = Some(Rect::EMPTY);
         for pl in lines {
             let pts = stroke_points(&pl.pts, pl.closed, simulate);
             if pts.is_empty() {
@@ -544,25 +575,14 @@ fn stroke_with_command(s: &mut Session, p: &Value, cmd: &str, lines: &[vector::P
             let mut call = params.clone();
             call.insert("points".into(), Value::Array(pts.iter().map(|q| json!([q.x, q.y, q.pressure])).collect()));
             s.execute(cmd, Value::Object(call))?;
-            let r = s.active().and_then(|d| d.last_damage);
-            dmg = dmg.zip(r).map(|(a, b)| {
-                if a.is_empty() {
-                    b
-                } else if b.is_empty() {
-                    a
-                } else {
-                    a.union(&b)
-                }
-            });
         }
-        Ok(dmg)
+        Ok(())
     });
     s.journal.truncate(journal);
-    let dmg = r?;
-    if let Some(st) = s.active_mut() {
-        st.last_damage = dmg;
-    }
-    let dmg = dmg.unwrap_or_else(|| s.active().map_or(Rect::EMPTY, |d| d.doc.bounds()));
+    r?;
+    // One subpath keeps its command's damage; several are one span, which `Session::dispatch`
+    // reports. The result says what changed either way.
+    let dmg = s.active().and_then(|st| crate::layer_multi_cmds::step_damage(&before, &st.doc).or(Some(st.doc.bounds()))).unwrap_or(Rect::EMPTY);
     Ok(json!({ "damage": [dmg.x0, dmg.y0, dmg.width(), dmg.height()] }))
 }
 

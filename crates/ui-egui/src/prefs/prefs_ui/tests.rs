@@ -145,6 +145,9 @@ fn preferences_search_matches_editable_fields_across_sections() {
 /// The preview language controls translated search; English schema paths keep their aliases.
 #[test]
 fn azerbaijani_preferences_search_keeps_dotted_i_and_schema_aliases() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let az = crate::i18n::Lang::from_code("az").unwrap();
     crate::i18n::with_language(az, || {
         let values = prefs::Preferences::default().to_json();
@@ -1019,15 +1022,15 @@ fn brush_picker_view_survives_a_restart() {
     let (mut app2, _) = app_with_saved(Some(saved));
     tick(&mut app2, &ctx);
     assert!(!app2.ui.brush_picker_list.show_stroke);
-    assert!(app2.ui.brush_picker_list.show_name && app2.ui.brush_picker_list.show_tip);
+    assert!(app2.ui.brush_picker_list.show_name && !app2.ui.brush_picker_list.show_tip);
     assert!((app2.ui.brush_picker_list.scale - 0.4).abs() < 1e-6);
-    // A hand-edited file: the scale is clamped to the slider's range and the last part comes
-    // back on — an empty card would show no brush at all.
+    // A hand-edited file: the scale is clamped to the slider's range and the
+    // parts come back as they start — an empty card would show no brush at all.
     let bad = json!({"brushPicker": {"showName": false, "showStroke": false, "showTip": false, "scale": 9.0}}).to_string();
     let (mut app3, _) = app_with_saved(Some(bad));
     tick(&mut app3, &ctx);
     assert_eq!(app3.ui.brush_picker_list.scale, *crate::brush_picker::SCALE_RANGE.end());
-    assert!(app3.ui.brush_picker_list.show_name && app3.ui.brush_picker_list.show_stroke && app3.ui.brush_picker_list.show_tip);
+    assert!(app3.ui.brush_picker_list.show_name && app3.ui.brush_picker_list.show_stroke && !app3.ui.brush_picker_list.show_tip);
 }
 
 #[test]
@@ -1868,6 +1871,112 @@ fn preferences_confirm_after_apply_commits_later_edits() {
     assert_eq!(app.session.prefs().units_and_rulers.rulers, prefs::Unit::Inches);
 }
 
+/// #11120: a live theme change made while Preferences is open survives Apply (and OK) of an
+/// unrelated setting, and the next draft shows it.
+#[test]
+fn preferences_apply_keeps_a_live_theme_change_made_while_open() {
+    let ctx = egui::Context::default();
+    for ok in [false, true] {
+        let (mut app, store) = app_with_store();
+        app.set_theme(&ctx, ThemeKind::Studio);
+        let id = open_preferences(&mut app, "interface");
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["values"]["interface"]["theme"], "studio");
+        app.set_theme(&ctx, ThemeKind::Classic);
+        assert!(!preferences_changed(&app, &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields), "a change made elsewhere is not a dialog edit");
+        app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiScale"] = json!("200");
+        assert!(preferences_changed(&app, &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields));
+        if ok {
+            crate::dialogs::confirm(&mut app, id).unwrap();
+            assert!(app.ui.dialogs.iter().all(|d| d.id != id));
+        } else {
+            apply(&mut app, id).unwrap();
+            let d = app.ui.dialogs.iter().find(|d| d.id == id).unwrap();
+            assert_eq!(d.fields["values"]["interface"]["theme"], "classic", "the next draft follows the live theme");
+            assert!(!preferences_changed(&app, &d.fields));
+        }
+        let p = app.session.prefs();
+        assert_eq!((p.interface.theme, p.interface.ui_scale), (Theme::Classic, prefs::UiScale::P200), "ok: {ok}");
+        assert_eq!(app.ui.theme, ThemeKind::Classic);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert_eq!((saved["interface"]["theme"].as_str(), saved["interface"]["uiScale"].as_str()), (Some("classic"), Some("200")));
+    }
+}
+
+/// A setting edited both in the dialog and elsewhere while it is open takes the dialog's value.
+#[test]
+fn preferences_apply_prefers_the_dialog_edit_of_a_setting_changed_elsewhere() {
+    let ctx = egui::Context::default();
+    let (mut app, store) = app_with_store();
+    app.set_theme(&ctx, ThemeKind::Studio);
+    let id = open_preferences(&mut app, "interface");
+    app.set_theme(&ctx, ThemeKind::Classic);
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["theme"] = json!("studioLight");
+    apply(&mut app, id).unwrap();
+    assert_eq!(app.session.prefs().interface.theme, Theme::StudioLight);
+    // The dialog's value is the one shown (from the next frame) and saved, not only the one held.
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.theme, ThemeKind::StudioLight);
+    assert_eq!(stored(&store)["interface"]["theme"].as_str(), Some("studioLight"));
+}
+
+/// Apply makes the committed values the next base: a live change made after one Apply survives
+/// the next one too.
+#[test]
+fn preferences_apply_twice_keeps_each_live_change() {
+    let ctx = egui::Context::default();
+    let (mut app, store) = app_with_store();
+    app.set_theme(&ctx, ThemeKind::Studio);
+    let id = open_preferences(&mut app, "interface");
+    app.set_theme(&ctx, ThemeKind::Classic);
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiScale"] = json!("200");
+    apply(&mut app, id).unwrap();
+    app.set_theme(&ctx, ThemeKind::StudioLight);
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiScale"] = json!("150");
+    apply(&mut app, id).unwrap();
+    let p = app.session.prefs();
+    assert_eq!((p.interface.theme, p.interface.ui_scale), (Theme::StudioLight, prefs::UiScale::P150));
+    assert_eq!(app.ui.theme, ThemeKind::StudioLight);
+    tick(&mut app, &ctx);
+    let saved = stored(&store);
+    assert_eq!((saved["interface"]["theme"].as_str(), saved["interface"]["uiScale"].as_str()), (Some("studioLight"), Some("150")));
+}
+
+/// The merge is not about the theme: a setting changed elsewhere (History States, by command)
+/// survives Apply of a theme edited in the dialog.
+#[test]
+fn preferences_apply_keeps_a_setting_changed_elsewhere_beside_a_dialog_theme_edit() {
+    let ctx = egui::Context::default();
+    let (mut app, store) = app_with_store();
+    app.set_theme(&ctx, ThemeKind::Studio);
+    let id = open_preferences(&mut app, "interface");
+    app.run("prefs.set", json!({"path": "performance.historyStates", "value": 30})).unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["theme"] = json!("classic");
+    apply(&mut app, id).unwrap();
+    let p = app.session.prefs();
+    assert_eq!((p.interface.theme, p.performance.history_states), (Theme::Classic, 30));
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.theme, ThemeKind::Classic);
+    let saved = stored(&store);
+    assert_eq!((saved["interface"]["theme"].as_str(), saved["performance"]["historyStates"].as_u64()), (Some("classic"), Some(30)));
+}
+
+/// A Preferences dialog without `__base` (opened before it was kept) commits its draft as it is:
+/// a change made elsewhere meanwhile is not kept.
+#[test]
+fn preferences_without_a_base_commit_the_draft_as_it_is() {
+    let ctx = egui::Context::default();
+    let (mut app, _store) = app_with_store();
+    app.set_theme(&ctx, ThemeKind::Studio);
+    let id = open_preferences(&mut app, "interface");
+    app.ui.dialog_mut(id).unwrap().fields.remove("__base");
+    app.set_theme(&ctx, ThemeKind::Classic);
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiScale"] = json!("200");
+    apply(&mut app, id).unwrap();
+    let p = app.session.prefs();
+    assert_eq!((p.interface.theme, p.interface.ui_scale), (Theme::Studio, prefs::UiScale::P200), "the draft's theme");
+}
+
 #[test]
 fn preferences_apply_rejects_invalid_drafts_and_keeps_them_open() {
     let (mut app, _) = app_with_store();
@@ -2140,6 +2249,8 @@ fn edit_dialogs_open() {
     app.sync_views();
     let d = crate::menus::invoke(&mut app, &ctx, "edit.colorSettings", json!({})).unwrap()["dialog"].as_u64().unwrap();
     assert_eq!(app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["workingRgb"], "srgb");
+    // Working Spaces › Spot, filled from the current setting like the others.
+    assert_eq!(app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["spotDotGain"], json!(app.session.color.settings.spot_dot_gain));
     let note = app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["__note"].as_str().unwrap().to_string();
     assert!(note.starts_with("Monitor profile in use: sRGB") && note.contains("fallback"), "{note}");
     assert!(crate::menus::invoke(&mut app, &ctx, "edit.fade", json!({})).is_err());
