@@ -207,6 +207,13 @@ fn filter_event_before_tool(
     if crate::type_path_placement::pointer_with_context(app, raw, xf, viewport) {
         return None;
     }
+    // Pen + ⌥ on a straight segment of the active path adds an anchor and drags out its handles
+    // (#12899); anywhere else ⌥ stays Convert Point, below.
+    if let ToolEvent::Down { x, y, .. } = ev
+        && crate::anchor_tools::pen_alt_segment_press(app, mods, [x, y])
+    {
+        return None;
+    }
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
     }
