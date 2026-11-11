@@ -42,8 +42,12 @@ fn main() -> std::io::Result<()> {
     for case in PSB_CASES.iter().chain([&PSD_2GB]).filter(|c| wanted.is_empty() || wanted.iter().any(|w| w == c.name)) {
         let path = out.join(case.file_name());
         let t = std::time::Instant::now();
+        // In the fresh default folder only: a half-written fixture is removed, but never a file an
+        // operator-chosen folder already held.
         let len = case.write_file(&path).inspect_err(|_| {
-            let _ = std::fs::remove_file(&path); // no half-written fixture left behind
+            if args.is_empty() {
+                let _ = std::fs::remove_file(&path);
+            }
         })?;
         println!("{}: {:.2} GB in {:.1} s", path.display(), len as f64 / 1e9, t.elapsed().as_secs_f64());
     }
