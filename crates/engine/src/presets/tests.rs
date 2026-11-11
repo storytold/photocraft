@@ -246,7 +246,8 @@ fn paint_gradient_honours_explicit_transparency_stops() {
         ] {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 16, "height": 16, "depth": depth, "background": "transparent"})).unwrap();
-            let mut p = json!({"from": [0, 0], "to": [0, 15], "transparency": transparency});
+            // Pixel 15 is sampled at 14.5 (#12018), so a drag to 14 ends on it.
+            let mut p = json!({"from": [0, 0], "to": [0, 14], "transparency": transparency});
             for (k, v) in extra.as_object().unwrap() {
                 p[k] = v.clone();
             }
