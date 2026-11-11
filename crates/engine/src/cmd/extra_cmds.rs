@@ -139,7 +139,7 @@ pub(crate) fn stroke_width(p: &Value) -> usize {
     p.get("width").and_then(Value::as_f64).filter(|w| w.is_finite()).unwrap_or(1.0).clamp(1.0, 250.0).ceil() as usize
 }
 
-/// Edit › Stroke: a band along the selection edge (or the layer's opaque edge without a selection).
+/// Edit › Stroke: a band along the selection edge (or the targeted surface's opaque edge without a selection).
 fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let width = stroke_width(p);
     let color = color_param("edit.stroke", p, "color", s.tools.foreground)?;
@@ -169,14 +169,16 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let location = p.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
     let id = layer_param(s, p)?;
+    // Stroke keeps its layer behavior for channel views; an explicit mask edits that mask.
+    let pixels = Value::Null;
+    let target = if crate::commands::is_mask_target(p) { p } else { &pixels };
     s.edit("Stroke", |doc, _| {
         let canvas = doc.bounds();
         let (w, h) = (canvas.width() as usize, canvas.height() as usize);
         let edge = match &doc.selection {
             Some(m) => sel::mask_from_surface(Some(m), canvas),
             None => {
-                let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-                let surf = l.surface().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?;
+                let (surf, _) = crate::channel_cmds::target_surface(doc, Some(id), target)?;
                 let mut px = vec![[0.0f32; 4]; w * h];
                 surf.read_rgba_into(canvas, &mut px);
                 px.iter().map(|p| p[3]).collect()
@@ -219,8 +221,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
             .flat_map(|(o, i)| o.iter().zip(i).skip(pad).take(w).map(|(o, i)| (o - i).clamp(0.0, 1.0)))
             .collect();
         let band = sel::mask_to_surface(&band, canvas);
-        let lock = doc.effective_locks(id).transparency;
-        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+        let (surf, lock) = crate::channel_cmds::target_surface(doc, Some(id), target)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
             crate::fill_cmds::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;
@@ -274,13 +275,43 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------- transform presets ----------
 
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
-const TRANSFORM_TARGET: &str =
-    r#"{"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask turns alone)}"#;
+const TRANSFORM_TARGET: &str = r#"{"target":"pixels"|"mask"|"vectorMask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, a vector mask, an alpha channel or the Quick Mask turns alone)}"#;
+
+/// The active layer's vector mask when the target names it, with its path's control bounds.
+/// The path tools' Free Transform and `path.transform` reuse those bounds, so a flip mirrors
+/// anchors and Bézier handles about the same box (#12283).
+fn targeted_vector_mask(s: &Session, p: &Value) -> Result<Option<(LayerId, [f64; 4])>> {
+    let explicit = p.get("target").and_then(Value::as_str) == Some("vectorMask");
+    let panel = p.get("target").is_none() && s.active().is_some_and(|d| d.channel_view.target == crate::channel_cmds::ChannelTarget::VectorMask);
+    if !explicit && !panel {
+        return Ok(None);
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
+    let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let vm = l.vector_mask.as_ref().ok_or_else(|| EngineError::Other("the active layer has no vector mask".into()))?;
+    let (x0, y0, x1, y1) = vm.path.control_bounds().ok_or_else(|| EngineError::Other("nothing to transform".into()))?;
+    Ok(Some((id, [x0, y0, x1, y1])))
+}
 
 /// Flips and turns about the centre of the box Free Transform would open: with a selection
 /// limiting the transform it is the selection's own bounds, as in Photoshop, so Select All
 /// mirrors across the canvas (#6928); otherwise the content's bounds.
 fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
+    // A targeted vector mask turns its own path, not the layer's pixels (and whether or not the
+    // mask is linked): reuse `path.transform` for its geometry and History step.
+    if let Some((id, [x0, y0, x1, y1])) = targeted_vector_mask(s, p)? {
+        let (sx, sy) = (x0 + x1, y0 + y1);
+        let (cx, cy) = (sx / 2.0, sy / 2.0);
+        let m: [f64; 6] = match kind {
+            "rotate180" => [-1.0, 0.0, 0.0, -1.0, sx, sy],
+            "rotate90Cw" => [0.0, 1.0, -1.0, 0.0, cx + cy, cy - cx],
+            "rotate90Ccw" => [0.0, -1.0, 1.0, 0.0, cx - cy, cx + cy],
+            "flipHorizontal" => [-1.0, 0.0, 0.0, 1.0, sx, 0.0],
+            _ => [1.0, 0.0, 0.0, -1.0, 0.0, sy],
+        };
+        return s.execute("path.transform", json!({"name": "layer", "layer": id.0, "vectorMask": true, "matrix": m}));
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // A targeted alpha channel, the Quick Mask or an unlinked layer mask turns by itself (#2835).
     let (b, mut params) = match crate::transform_cmds::lone_target(&d.doc, d.active_layer, p)? {
