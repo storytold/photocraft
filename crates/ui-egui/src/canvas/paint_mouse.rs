@@ -41,8 +41,16 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
+        // History Brush gets its own tip on first use, while pressure and airbrush keep their
+        // previous first-use behavior (#12847).
+        None if tool == Tool::HistoryBrush => BrushSettings {
+            pressure_size: current.pressure_size,
+            pressure_opacity: current.pressure_opacity,
+            build_up: current.build_up,
+            ..fresh_brush(tool, &current)
+        },
         // These tools start with their measured Reset Tool tips.
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::HistoryBrush) => {
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp) => {
             fresh_brush(tool, &current)
         }
         None => {

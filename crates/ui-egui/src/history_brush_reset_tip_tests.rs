@@ -44,7 +44,7 @@ fn scramble(app: &mut PhotocraftApp) {
     b.build_up = true;
 }
 
-/// Check #12847's reset defaults through both the command response and live brush state.
+/// Check #12847's tip and options through both the command response and live brush state.
 fn assert_history_tip(app: &mut PhotocraftApp) {
     let b = app.run("brush.get", json!({})).unwrap();
     for (key, expected) in [("size", 21.0), ("hardness", 0.0), ("spacing", 0.25), ("angle", 0.0), ("roundness", 1.0), ("opacity", 1.0), ("flow", 1.0)] {
@@ -54,8 +54,13 @@ fn assert_history_tip(app: &mut PhotocraftApp) {
     assert_eq!(brush.smoothing.amount, 0.0);
     assert_eq!(brush.mode, photocraft_color::BlendMode::Normal);
     assert!(!brush.flip_x && !brush.flip_y);
-    assert!(!brush.pressure_size && !brush.pressure_opacity && !brush.build_up);
     assert_eq!(brush.tip, photocraft_engine::paint::brush::TipShape::Round);
+}
+
+fn assert_history_reset(app: &mut PhotocraftApp) {
+    assert_history_tip(app);
+    let brush = &app.session.tools.brush;
+    assert!(!brush.pressure_size && !brush.pressure_opacity && !brush.build_up);
 }
 
 /// Reset Tool restores the History Brush defaults while preserving session colors and seed.
@@ -69,7 +74,7 @@ fn reset_tool_restores_the_history_brush_tip_and_options() {
     app.session.tools.brush.background = colors.1;
     app.session.tools.brush.seed = 42;
     invoke(&mut app, "tool.reset", json!({}));
-    assert_history_tip(&mut app);
+    assert_history_reset(&mut app);
     let b = &app.session.tools.brush;
     assert_eq!((b.color, b.background, b.seed), (colors.0, colors.1, 42));
 }
@@ -102,7 +107,7 @@ fn the_options_bar_draws_21_on_the_brush_chip_without_a_smoothing_field() {
     assert!(!text.iter().any(|t| t.contains("Smoothing")), "{text:?}");
 }
 
-/// First use gets the History Brush defaults while the outgoing tool retains its edited brush.
+/// First use gets its own tip and retains pressure and airbrush settings from the outgoing brush.
 #[test]
 fn first_pick_uses_its_own_tip_instead_of_the_outgoing_brush() {
     let mut app = app();
@@ -110,6 +115,8 @@ fn first_pick_uses_its_own_tip_instead_of_the_outgoing_brush() {
     scramble(&mut app);
     pick(&mut app, Tool::HistoryBrush);
     assert_history_tip(&mut app);
+    let brush = &app.session.tools.brush;
+    assert!(brush.pressure_size && brush.pressure_opacity && brush.build_up);
     pick(&mut app, Tool::Pencil);
     assert_eq!(app.session.tools.brush.size, 57.0);
     assert_eq!(app.session.tools.brush.smoothing.amount, 0.7);
@@ -141,7 +148,7 @@ fn saved_history_brush_is_preserved_until_explicitly_reset() {
     pick(&mut restored, Tool::HistoryBrush);
     assert_eq!(restored.session.tools.brush, custom);
     invoke(&mut restored, "tool.reset", json!({}));
-    assert_history_tip(&mut restored);
+    assert_history_reset(&mut restored);
 }
 
 /// Reset All Tools restores the History Brush whether it is active or selected after the reset.
@@ -156,7 +163,7 @@ fn reset_all_restores_the_history_brush_active_or_picked_later() {
         }
         invoke(&mut app, "tool.resetAll", json!({"confirmed": true}));
         pick(&mut app, Tool::HistoryBrush);
-        assert_history_tip(&mut app);
+        assert_history_reset(&mut app);
     }
 }
 
