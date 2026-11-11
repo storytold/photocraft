@@ -4891,3 +4891,5 @@ fn softer_outer_glow_fades_out_before_its_size() {
         }
     }
 }
+
+mod fx_move;
