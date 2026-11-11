@@ -23,7 +23,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
             // Held to the importer's name limit: the set name is copied into every action.
-            imp.set = clip_name(n.trim());
+            imp.set = clip_name(n.trim()).trim_end().to_string();
             for a in &mut imp.actions {
                 a.set = Some(imp.set.clone());
             }

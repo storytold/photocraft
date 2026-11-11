@@ -817,6 +817,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
         let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
         let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
+        // The nesting depth and shared budget of the levels above travel with the run too.
+        let previous_shared = std::mem::replace(&mut s.actions.budget_shared, actions.budget_shared);
+        let previous_depth = std::mem::replace(&mut s.actions.batch_depth, actions.batch_depth);
         let previous_list = p.get("calledActions").is_some_and(|value| !value.is_null()).then(|| std::mem::replace(&mut s.actions.list, actions.list));
         let owns_history = s.action_history.is_none() && s.prefs().actions.create_single_history_state;
         if owns_history {
@@ -828,10 +831,12 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
         s.actions.playing = previous_playing;
         s.actions.playback_stack = previous_stack;
+        s.actions.budget_shared = previous_shared;
+        s.actions.batch_depth = previous_depth;
         if let Some(previous) = previous_list {
             s.actions.list = previous;
         }
-        if previous_playing == 0 {
+        if previous_playing == 0 && !previous_shared {
             s.actions.playback_steps = previous_steps;
         }
         if named {
@@ -1011,7 +1016,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         // A nested batch, droplet or played action that hit the nesting or shared playback
                         // limit fails this input too, instead of saving it unprocessed.
                         if let Some(limit) = crate::actions_cmds::limit_stop(&r) {
-                            return Err(EngineError::BatchLimit(limit).into());
+                            // The child result stays, so the files it wrote before the stop are reported.
+                            return Err(FileFailure { error: EngineError::BatchLimit(limit), result: Some(r) });
                         }
                         ctx.publish_batch_preview(&source_path, scratch.active().map(|state| state.doc.clone()));
                         // A failed step inside a called action makes this file an error, not a saved result.

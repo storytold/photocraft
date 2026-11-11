@@ -1610,6 +1610,7 @@ fn skipped_steps_count_against_the_script_limit() {
     let e = s.execute("actions.play", json!({"action": "A", "from": 3})).err().map(|e| e.to_string());
     assert!(e.is_some_and(|e| e.contains("the script ran more than")));
     assert_eq!(s.actions.playing, 0);
+    assert!(s.action_history.is_none(), "a rejected call leaves no history scope open");
 }
 
 /// A droplet capturing two actions of one name (sets A and B) keeps each call on the action it

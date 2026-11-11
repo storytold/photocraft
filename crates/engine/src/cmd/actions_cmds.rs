@@ -805,7 +805,10 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
             Ok(value) => {
                 // A nested batch or action that stopped at a limit stops this action too.
                 if let Some(error) = limit_stop(&value) {
-                    failed = Some(json!({"step": i, "id": id, "error": error, "limit": true}));
+                    // The child result stays, so the files a nested batch wrote before the stop are visible.
+                    let mut failure = json!({"step": i, "id": id, "error": error, "limit": true});
+                    failure["result"] = value;
+                    failed = Some(failure);
                     break;
                 }
                 if let Some(error) = nested_failure(id, &value) {
@@ -841,19 +844,20 @@ pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize,
 /// playback budget too.
 pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
     flush_recording(s)?;
+    // The steps that run are charged one by one as they run; the ones walked past are charged
+    // here ([`playback_plan`] checked that the whole action fits). Refused before the history
+    // scope opens, so a rejected call leaves none behind.
+    let skipped = skipped_steps(action, from);
+    let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
+    if s.actions.script_depth > 0 && s.actions.script_steps.saturating_add(skipped) > max {
+        return Err(bad("actions.play", format!("the script ran more than {max} steps in all")));
+    }
     if s.actions.playing == 0 {
         history::begin(s, &action.name);
         // A batch nested in a played action or another batch carries the shared count on.
         if !s.actions.budget_shared {
             s.actions.playback_steps = 0;
         }
-    }
-    // The steps that run are charged one by one as they run; the ones walked past are charged
-    // here ([`playback_plan`] checked that the whole action fits).
-    let skipped = skipped_steps(action, from);
-    let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
-    if s.actions.script_depth > 0 && s.actions.script_steps.saturating_add(skipped) > max {
-        return Err(bad("actions.play", format!("the script ran more than {max} steps in all")));
     }
     s.actions.playback_steps = s.actions.playback_steps.saturating_add(skipped);
     if s.actions.script_depth > 0 {
