@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn source_top_left_becomes_the_native_point_text_baseline_anchor() {
+    fn check(layer: &TextLayer, x: f64, y: f64) {
+        let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let layout = engine.layout(layer, 72.);
+        let [left, top, _, _] = layout.bounds().expect("real font metrics");
+        let origin = layer.transform.apply(photocraft_geom::Point::new(f64::from(left), f64::from(top)));
+        assert!((origin.x - x).abs() < 0.0001 && (origin.y - y).abs() < 0.0001, "source origin ({x}, {y}) became {origin:?}");
+    }
+    for matrix in ["", " (transformation (matrix 1.2 0.3 -0.2 0.9))"] {
+        let config = format!("(text \"Ag\") (font \"Inter\") (font-size 24){matrix}");
+        check(&decode(config.as_bytes(), 72., (3, 4)).unwrap().layer, 3., 4.);
+    }
+    let legacy = br"GDT10{Ag}{1}{0}{0}{0}{ff2200}{0}{-*-sans-medium-r-normal-*-20-*-*-*-*-*-iso8859-1}";
+    check(&decode_gdyntext(legacy, 72., (3, 4)).unwrap().layer, 3., 4.);
+}
+
+#[test]
 fn explicit_alpha_wins_over_rgba_foreground_in_either_attribute_order() {
     for attrs in [
         "alpha='25%' foreground='#ff000080'",
@@ -57,7 +74,9 @@ fn markup_face_overrides_clear_inherited_postscript_identity_and_resolve_native_
 
 #[test]
 fn fontconfig_weight_values_have_native_opentype_meaning() {
-    for (source, expected) in [(0, 100), (40, 200), (50, 300), (55, 350), (75, 380), (80, 400), (100, 500), (180, 600), (200, 700), (205, 800), (210, 900), (215, 900)] {
+    for (source, expected) in
+        [(0, 100), (40, 200), (50, 300), (55, 350), (75, 380), (80, 400), (100, 500), (180, 600), (200, 700), (205, 800), (210, 900), (215, 900)]
+    {
         let fields = vec![Value::List(vec![Value::Atom(b"weight".to_vec()), Value::Atom(source.to_string().into_bytes())])];
         let mut style = CharStyle::default();
         requested_font(&fields, &mut style).unwrap();

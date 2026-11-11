@@ -21,3 +21,11 @@ path = "fuzz_targets/xcf_import.rs"
 test = false
 doc = false
 bench = false
+
+# A separate fuzz workspace does not inherit the host workspace patches.
+# craft-pdf requires the same reviewed Hayro API as the application.
+[patch.crates-io]
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }

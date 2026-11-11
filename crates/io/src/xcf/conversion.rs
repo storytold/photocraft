@@ -65,7 +65,8 @@ impl<'a> Outcomes<'a> {
         // Includes conservative native struct overhead as well as owned strings/paths.
         // Schema-v1 validation uses fixed 256/128-byte entry/target costs.
         // Admission must cover those portable costs as well as actual Rust storage.
-        let bytes = std::mem::size_of::<ConversionEntry>().max(256)
+        let bytes = std::mem::size_of::<ConversionEntry>()
+            .max(256)
             .saturating_add(entry.feature_code.len())
             .saturating_add(entry.source.kind.len())
             .saturating_add(entry.source.name.len())
@@ -202,7 +203,8 @@ impl<'a> Outcomes<'a> {
             };
             // Cover the validator's fixed attachment cost and its u32 owner reference
             // before optional bytes can change a successful import into a failure.
-            let memory = std::mem::size_of::<RetainedImportData>().max(160)
+            let memory = std::mem::size_of::<RetainedImportData>()
+                .max(160)
                 .saturating_add(attachment.owner.kind.len())
                 .saturating_add(attachment.owner.name.len())
                 .saturating_add(std::mem::size_of_val(attachment.owner.item_path.as_slice()))

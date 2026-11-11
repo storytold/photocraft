@@ -18,6 +18,9 @@
 
 mod color;
 mod conversion;
+mod layers;
+mod samples;
+mod wire;
 // Parsed fields stay inert until native mapping slices land.
 #[allow(dead_code)]
 mod effects;
@@ -29,6 +32,8 @@ mod metadata_packets;
 mod metadata_tests;
 mod paths;
 mod resources;
+#[cfg(test)]
+mod review_tests;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -47,6 +52,11 @@ use photocraft_raster::{Interrupt, Surface};
 
 use crate::ora::Warnings;
 use crate::{ImportResult, IoError};
+
+use samples::{Precision, integer_samples};
+#[cfg(test)]
+use wire::rle_decode;
+use wire::{Compression, Cursor, Prop, be_f32, be_i32, be_u32, decode_tile, parasites, props, props_version};
 
 type Result<T> = std::result::Result<T, IoError>;
 
@@ -85,378 +95,6 @@ pub(crate) fn is_xcf(bytes: &[u8]) -> bool {
     bytes.starts_with(MAGIC)
 }
 
-/// How samples are stored: bytes per sample, whether they are floats, and whether the values are
-/// linear light, the assigned profile's own curve, or the perceptual sRGB transfer curve.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Precision {
-    bytes: usize,
-    float: bool,
-    linear: bool,
-    perceptual: bool,
-}
-
-impl Precision {
-    const GAMMA8: Precision = Precision { bytes: 1, float: false, linear: false, perceptual: false };
-
-    /// Interprets versioned precision codes into sample width, transfer encoding and native depth, rejecting
-    /// unknown combinations.
-    fn from_header(version: u32, code: u32) -> Result<Precision> {
-        let p = |bytes, float, linear| Ok(Precision { bytes, float, linear, perceptual: false });
-        match version {
-            0..=3 => Ok(Self::GAMMA8),
-            4 => match code {
-                0 => p(1, false, false),
-                1 => p(2, false, false),
-                2 => p(4, false, true),
-                3 => p(2, true, true),
-                4 => p(4, true, true),
-                c => Err(invalid(format!("unknown precision {c} in an XCF version 4 file"))),
-            },
-            5 | 6 => match code {
-                100 => p(1, false, true),
-                150 => p(1, false, false),
-                200 => p(2, false, true),
-                250 => p(2, false, false),
-                300 => p(4, false, true),
-                350 => p(4, false, false),
-                400 => p(2, true, true),
-                450 => p(2, true, false),
-                500 => p(4, true, true),
-                550 => p(4, true, false),
-                c => Err(invalid(format!("unknown precision {c} in an XCF version {version} file"))),
-            },
-            _ if code % 100 == 75 => {
-                let mut precision = Self::from_header(version, code - 25)?;
-                precision.perceptual = true;
-                Ok(precision)
-            }
-            _ => match code {
-                100 => p(1, false, true),
-                150 => p(1, false, false),
-                200 => p(2, false, true),
-                250 => p(2, false, false),
-                300 => p(4, false, true),
-                350 => p(4, false, false),
-                500 => p(2, true, true),
-                550 => p(2, true, false),
-                600 => p(4, true, true),
-                650 => p(4, true, false),
-                700 => p(8, true, true),
-                750 => p(8, true, false),
-                c => Err(invalid(format!("unknown precision {c}"))),
-            },
-        }
-    }
-
-    /// The document depth the samples open at.
-    fn depth(self) -> SampleType {
-        match (self.float, self.bytes) {
-            (false, 1) => SampleType::U8,
-            (false, 2) => SampleType::U16,
-            _ => SampleType::F32,
-        }
-    }
-
-    /// Reports source storage wider than the chosen native representation so numerical-loss notices stay
-    /// scoped correctly.
-    fn reduces_precision(self) -> bool {
-        matches!((self.float, self.bytes), (false, 4) | (true, 8))
-    }
-
-    /// Decode before narrowing, so invalid coverage cannot round into range. The second
-    /// result records a nonzero source value rounded to native signed zero.
-    fn sample(self, b: &[u8], coverage: bool) -> Result<(f32, bool)> {
-        let source = match (self.float, self.bytes, b) {
-            (false, 1, [v]) => f64::from(*v) / 255.0,
-            (false, 2, [a, b]) => f64::from(u16::from_be_bytes([*a, *b])) / 65535.0,
-            (false, 4, [a, b, c, d]) => f64::from(u32::from_be_bytes([*a, *b, *c, *d])) / f64::from(u32::MAX),
-            (true, 2, [a, b]) => f64::from(f16::from_bits(u16::from_be_bytes([*a, *b])).to_f32()),
-            (true, 4, [a, b, c, d]) => f64::from(f32::from_be_bytes([*a, *b, *c, *d])),
-            (true, 8, [a, b, c, d, e, f, g, h]) => f64::from_be_bytes([*a, *b, *c, *d, *e, *f, *g, *h]),
-            _ => return Err(invalid("sample size does not match the image precision")),
-        };
-        if !source.is_finite() {
-            return Err(invalid("a floating-point sample is not finite"));
-        }
-        if coverage && !(0.0..=1.0).contains(&source) {
-            return Err(invalid("a coverage sample is outside the range 0 to 1"));
-        }
-        if source.abs() > f64::from(f32::MAX) {
-            return Err(invalid("a floating-point sample exceeds native F32 range"));
-        }
-        let native = source as f32;
-        if !native.is_finite() {
-            return Err(invalid("a floating-point sample exceeds native F32 range"));
-        }
-        Ok((native, source != 0.0 && native == 0.0))
-    }
-}
-
-/// U8/U16 samples already have finite normalized color and coverage domains.
-/// Keep their row conversion separate from validation/narrowing of floats and U32.
-#[inline]
-fn integer_samples(raw: &[u8], output: &mut [f32], sample_bytes: usize) -> Result<()> {
-    match sample_bytes {
-        1 if raw.len() == output.len() => {
-            for (out, value) in output.iter_mut().zip(raw) {
-                *out = f32::from(*value) / 255.0;
-            }
-        }
-        2 if output.len().checked_mul(2) == Some(raw.len()) => {
-            for (out, value) in output.iter_mut().zip(raw.as_chunks::<2>().0) {
-                *out = f32::from(u16::from_be_bytes(*value)) / 65535.0;
-            }
-        }
-        _ => return Err(invalid("integer row size does not match the image precision")),
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Compression {
-    None,
-    Rle,
-    Zlib,
-}
-
-/// Big-endian reads with bounds checks; every failure is an error, never a panic.
-struct Cursor<'a> {
-    b: &'a [u8],
-    pos: usize,
-    /// XCF 11 and later store pointers as 64-bit.
-    wide: bool,
-}
-
-impl<'a> Cursor<'a> {
-    fn at(&self, pos: usize) -> Cursor<'a> {
-        Cursor { b: self.b, pos, wide: self.wide }
-    }
-
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self.pos.checked_add(n).ok_or_else(|| invalid("offset overflow"))?;
-        let s = self.b.get(self.pos..end).ok_or_else(|| invalid(format!("the file ends early (wanted {n} bytes at {})", self.pos)))?;
-        self.pos = end;
-        Ok(s)
-    }
-
-    fn u32(&mut self) -> Result<u32> {
-        let s = self.take(4)?;
-        Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
-    }
-
-    fn ptr(&mut self) -> Result<usize> {
-        if self.wide {
-            let s = self.take(8)?;
-            usize::try_from(u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]])).map_err(|_| invalid("pointer does not fit in memory"))
-        } else {
-            self.u32().map(|v| v as usize)
-        }
-    }
-
-    /// A STRING: `n+1` then `n` bytes and a NUL (0 for the empty string).
-    fn string(&mut self) -> Result<String> {
-        Ok(String::from_utf8_lossy(self.string_bytes()?).into_owned())
-    }
-
-    /// The same bounded STRING read without allocating or decoding an unused field.
-    fn string_bytes(&mut self) -> Result<&'a [u8]> {
-        let n = self.u32()? as usize;
-        if n > MAX_STRING {
-            return Err(invalid(format!("a string of {n} bytes exceeds the limit")));
-        }
-        let s = self.take(n)?;
-        Ok(s.strip_suffix(&[0]).unwrap_or(s))
-    }
-
-    fn skip(&mut self, n: usize) -> Result<()> {
-        self.take(n).map(|_| ())
-    }
-}
-
-/// One property record: its type and payload.
-struct Prop<'a> {
-    offset: usize,
-    kind: u32,
-    data: &'a [u8],
-}
-
-/// Read a drawable/path property list, using the declared framing for image-only properties.
-fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
-    props_version(c, None)
-}
-
-/// Image properties can carry historical lengths that GIMP itself ignores. Resolve their
-/// documented framing using the actual file epoch rather than probing payload bytes as headers.
-fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>) -> Result<Vec<Prop<'a>>> {
-    let mut out = Vec::new();
-    loop {
-        let offset = c.pos;
-        let kind = c.u32()?;
-        let len = c.u32()? as usize;
-        if kind == 0 {
-            return Ok(out);
-        }
-        // PROP_COLORMAP's length word was wrong in some releases (n+4 for 3n+4 bytes); its real
-        // size follows from the count. Unit strings changed at XCF21.
-        // PROP_LINK_LAYER's length can be four bytes short (#8857); read all its fields.
-        let len = match kind {
-            1 => {
-                let n = c.at(c.pos).u32()? as usize;
-                4usize.checked_add(n.checked_mul(3).ok_or_else(|| invalid("colormap overflow"))?).ok_or_else(|| invalid("colormap overflow"))?
-            }
-            24 => {
-                if let Some(version) = version {
-                    user_unit_len(c, version)?
-                } else {
-                    len
-                }
-            }
-            48 => link_layer_len(c)?,
-            _ => len,
-        };
-        if len > MAX_PAYLOAD {
-            return Err(invalid(format!("property {kind} declares {len} bytes")));
-        }
-        let data = c.take(len)?;
-        out.push(Prop { offset, kind, data });
-        if out.len() > 4096 {
-            return Err(invalid("too many properties"));
-        }
-    }
-}
-
-/// A PROP_LINK_LAYER payload: flags, a path STRING, then the source width and height.
-/// The dimensions are present for raster links too, where their values are unused.
-fn link_layer_len(c: &Cursor<'_>) -> Result<usize> {
-    let mut p = c.at(c.pos);
-    p.skip(4)?;
-    p.string_bytes()?;
-    p.skip(8)?;
-    Ok(p.pos - c.pos)
-}
-
-/// The real size of a PROP_USER_UNIT payload: a float, a count and three (XCF 21+) or five
-/// strings. Measured without consuming.
-fn user_unit_len(c: &Cursor<'_>, version: u32) -> Result<usize> {
-    let mut p = c.at(c.pos);
-    p.skip(8)?;
-    for _ in 0..if version < 21 { 5 } else { 3 } {
-        p.string()?;
-    }
-    Ok(p.pos - c.pos)
-}
-
-fn be_u32(b: &[u8]) -> Option<u32> {
-    b.get(..4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
-}
-
-fn be_i32(b: &[u8]) -> Option<i32> {
-    be_u32(b).map(|v| v as i32)
-}
-
-fn be_f32(b: &[u8]) -> Option<f32> {
-    be_u32(b).map(f32::from_bits)
-}
-
-/// The parasites of a PROP_PARASITES payload as (name, data); a later duplicate wins.
-fn parasites(data: &[u8]) -> Vec<(String, Vec<u8>)> {
-    let mut c = Cursor { b: data, pos: 0, wide: false };
-    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
-    // Map each name to its output slot so duplicate replacement is O(1). The parasite
-    // records are file-controlled, so scanning `out` with iter_mut().find() per record is
-    // O(n^2) and lets a crafted payload with many distinct names stall import. The map
-    // preserves insertion order and last-value-wins behavior.
-    let mut index: HashMap<String, usize> = HashMap::new();
-    while c.pos < data.len() {
-        let Ok(name) = c.string() else { break };
-        let (Ok(_flags), Ok(len)) = (c.u32(), c.u32()) else { break };
-        let Ok(payload) = c.take(len as usize) else { break };
-        match index.get(&name) {
-            Some(&i) => out[i].1 = payload.to_vec(),
-            None => {
-                index.insert(name.clone(), out.len());
-                out.push((name, payload.to_vec()));
-            }
-        }
-    }
-    out
-}
-
-/// What one tile's bytes decode to, for a drawable of `bpp` bytes per pixel.
-fn decode_tile(c: &Cursor<'_>, at: usize, end: usize, compression: Compression, bpp: usize, pixels: usize) -> Result<Vec<u8>> {
-    let expected = pixels.checked_mul(bpp).ok_or_else(|| invalid("tile size overflow"))?;
-    let input = c.b.get(at..end.min(c.b.len())).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
-    match compression {
-        Compression::None => input.get(..expected).map(<[u8]>::to_vec).ok_or_else(|| invalid("an uncompressed tile is cut short")),
-        Compression::Zlib => {
-            let mut out = Vec::with_capacity(expected);
-            // Read one byte beyond the expected tile: stopping exactly at its pixels would
-            // skip the decoder's trailer/checksum check and accept truncation or excess data.
-            flate2::read::ZlibDecoder::new(input).take(expected as u64 + 1).read_to_end(&mut out).map_err(|e| invalid(format!("zlib tile: {e}")))?;
-            if out.len() != expected {
-                return Err(invalid("a zlib tile has an invalid decoded size"));
-            }
-            Ok(out)
-        }
-        Compression::Rle => rle_decode(input, bpp, pixels),
-    }
-}
-
-/// RLE tile data: one run-length stream per byte position of the pixel, each of `pixels` bytes.
-fn rle_decode(input: &[u8], bpp: usize, pixels: usize) -> Result<Vec<u8>> {
-    let mut out = vec![0u8; pixels * bpp];
-    let mut pos = 0usize;
-    let mut plane = Vec::with_capacity(pixels);
-    for b in 0..bpp {
-        plane.clear();
-        while plane.len() < pixels {
-            let op = *input.get(pos).ok_or_else(|| invalid("an RLE tile is cut short"))?;
-            pos += 1;
-            let (run, verbatim) = match op {
-                0..=126 => (usize::from(op) + 1, false),
-                127 => {
-                    let (p, q) = (input.get(pos).copied(), input.get(pos + 1).copied());
-                    pos += 2;
-                    (
-                        usize::from(p.ok_or_else(|| invalid("an RLE tile is cut short"))?) * 256
-                            + usize::from(q.ok_or_else(|| invalid("an RLE tile is cut short"))?),
-                        false,
-                    )
-                }
-                128 => {
-                    let (p, q) = (input.get(pos).copied(), input.get(pos + 1).copied());
-                    pos += 2;
-                    (
-                        usize::from(p.ok_or_else(|| invalid("an RLE tile is cut short"))?) * 256
-                            + usize::from(q.ok_or_else(|| invalid("an RLE tile is cut short"))?),
-                        true,
-                    )
-                }
-                _ => (256 - usize::from(op), true),
-            };
-            if run == 0 {
-                return Err(invalid("an RLE run has zero length"));
-            }
-            if plane.len() + run > pixels {
-                return Err(invalid("an RLE run crosses the end of its tile"));
-            }
-            if verbatim {
-                let data = input.get(pos..pos + run).ok_or_else(|| invalid("an RLE tile is cut short"))?;
-                pos += run;
-                plane.extend_from_slice(data);
-            } else {
-                let v = *input.get(pos).ok_or_else(|| invalid("an RLE tile is cut short"))?;
-                pos += 1;
-                plane.resize(plane.len() + run, v);
-            }
-        }
-        for (i, v) in plane.iter().enumerate() {
-            out[i * bpp + b] = *v;
-        }
-    }
-    Ok(out)
-}
-
 /// Image-wide facts the drawables need.
 struct Image<'a> {
     c: Cursor<'a>,
@@ -481,6 +119,8 @@ struct Image<'a> {
     pending_effects: Vec<PendingLayerEffects>,
     path_tattoos: HashMap<u32, Option<usize>>,
     pending_vectors: Vec<(photocraft_doc::LayerId, usize, paths::VectorStyle)>,
+    /// Unavailable literal-color conversion keeps source text/vector rasters intact.
+    native_color_error: Option<String>,
 }
 
 /// Bounded source mask facts retained for reporting after native coverage conversion.
@@ -1244,6 +884,9 @@ pub(crate) fn import_with_sample_order(
     }
 
     let ImageMetadata { properties: image_props, compression, colormap, icc } = read_image_metadata(&mut c, version)?;
+    let assigned_profile = icc.is_some();
+    let native_profile = color::profile(mode, precision, icc)?;
+    let native_color_error = text::color_transform(&native_profile).err().map(|error| error.to_string());
 
     let mut layer_ptrs = Vec::new();
     loop {
@@ -1299,6 +942,7 @@ pub(crate) fn import_with_sample_order(
         pending_effects: Vec::new(),
         path_tattoos: HashMap::new(),
         pending_vectors: Vec::new(),
+        native_color_error,
     };
     let fmt = PixelFormat::new(mode, depth, true);
     let mask_fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
@@ -1359,8 +1003,7 @@ pub(crate) fn import_with_sample_order(
     document.channels = channels;
     document.selection = selection;
     metadata::image(&mut document, &image_props, version, &mut image.initial_view, &mut image.outcomes, image_outcome, &mut image.meta_budget)?;
-    let assigned_profile = icc.is_some();
-    document.icc_profile = Some(color::profile(mode, precision, icc)?);
+    document.icc_profile = Some(native_profile);
     image.outcomes.push(ConversionEntry {
         feature_code: "xcf.color_encoding".into(),
         source: conversion::source("image", 0, 0, "", &[], None),
@@ -1522,6 +1165,27 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 attachments: Vec::new(),
             })?;
             image.outcomes.property_with_reason(outcome, 45, effect.record_offset, effect.raw, reason)?;
+            if effect.mask_offset != 0 {
+                // This slice retains the envelope, not the referenced mask channel/tiles.
+                // A later mask adapter must replace this loss disclosure when it retains
+                // or installs that data; the envelope pointer alone is not preservation.
+                let mut mask_source = image.outcomes.entry(outcome)?.source.clone();
+                mask_source.kind = "effect-mask".into();
+                mask_source.record_offset = Some(effect.mask_offset as u64);
+                image.outcomes.push(ConversionEntry {
+                    feature_code: "xcf.layer_effect.mask".into(),
+                    source: mask_source,
+                    targets: vec![NativeTargetRef { layer_id: Some(pending.layer), label: "Native raster owner".into(), ..Default::default() }],
+                    disposition: ConversionDisposition::SkippedNonessential,
+                    reason: ConversionReason::NativeLimitation,
+                    source_description: "Stored effect references a separate mask channel and tile data".into(),
+                    native_description:
+                        "Referenced effect mask data is not retained in this decoder slice; stored effect configuration remains inert and is not executed"
+                            .into(),
+                    attachments: Vec::new(),
+                })?;
+                image.warnings.layer(&original.name, "has a deferred effect mask whose referenced data is not retained; see the conversion report");
+            }
             for property in effect.unknown_properties {
                 image.outcomes.property(outcome, property.kind, property.offset, property.bytes)?;
             }
@@ -1662,6 +1326,20 @@ fn import_vectors(document: &mut Document, image: &mut Image<'_>, ctl: &Interrup
             )?;
             continue;
         }
+        if let Some(error) = &image.native_color_error {
+            image.outcomes.notice(
+                outcome,
+                "xcf.vector_layer",
+                ConversionReason::NativeLimitation,
+                (
+                    format!("Native vector colors cannot be converted: {error}"),
+                    "Stored pixels preserved as a native raster; source path and paint configuration remain inert".into(),
+                ),
+                Some("has unavailable native color conversion and opens as pixels"),
+                &mut image.warnings,
+            )?;
+            continue;
+        }
         let index = image.path_tattoos.get(&vector.path_tattoo).copied().flatten();
         let Some(path) = index.and_then(|index| document.paths.get(index)) else {
             image.outcomes.notice(
@@ -1754,681 +1432,4 @@ fn finish(nodes: Vec<Node>) -> Vec<Layer> {
         out.push(node.layer);
     }
     out
-}
-
-impl<'a> Image<'a> {
-    /// Decode layers in source order, then build the native hierarchy with the existing bounded-path policy.
-    fn import_layers(&mut self, pointers: &[usize], fmt: PixelFormat, mask_fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<(Vec<Layer>, bool)> {
-        let total = pointers.len().max(1) as f32;
-
-        // Layers, topmost first in the file.
-        let mut nodes: Vec<Node> = Vec::new();
-        let mut linear_compositing = false;
-        for (i, &ptr) in pointers.iter().enumerate() {
-            ctl.check().map_err(|_| IoError::Cancelled)?;
-            ctl.progress(0.05 + 0.85 * i as f32 / total);
-            if let Some((node, linear)) = self.layer(i, ptr, fmt, mask_fmt, ctl)? {
-                linear_compositing |= linear;
-                nodes.push(node);
-            }
-        }
-        let mut roots: Vec<Node> = Vec::new();
-        for (i, mut node) in nodes.into_iter().enumerate() {
-            // Default path: the item's position at the top level, as a file without groups has it.
-            if node.path.is_empty() {
-                node.path = vec![i as u32];
-            }
-            if node.path.len() > MAX_DEPTH {
-                self.warnings.layer(&node.layer.name, "is nested deeper than the reader allows and was moved to the top level");
-                self.outcomes.detail(
-                    node.outcome,
-                    "xcf.item_path",
-                    ConversionReason::NativeLimitation,
-                    "Source hierarchy exceeds 64 components".into(),
-                    "Layer moved to the native top level; source identity retains the ordinal and bounded path prefix".into(),
-                )?;
-                node.path.truncate(1);
-            }
-            place(&mut roots, node, &mut self.warnings, &mut self.outcomes)?;
-        }
-        Ok((finish(roots), linear_compositing))
-    }
-
-    /// Decode saved selection and alpha coverage, retaining duplicate markers and applying native view hints once.
-    fn import_channels(&mut self, pointers: &[usize], mask_fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<(Vec<AlphaChannel>, Option<Surface>)> {
-        let precision = self.precision;
-        // Channels: the selection and the extras.
-        let mut channels = Vec::new();
-        let mut selection = None;
-        for (ordinal, &ptr) in pointers.iter().enumerate() {
-            ctl.check().map_err(|_| IoError::Cancelled)?;
-            let (name, cprops, px, coverage_effects) = self.channel(ptr, ctl)?;
-            let mut surface = Surface::new(mask_fmt);
-            write_pixels(&mut surface, &px, 0, 0)?;
-            let is_selection = cprops.iter().any(|p| p.kind == 4);
-            let native_selection = is_selection && selection.is_none();
-            let channel_outcome = self.outcomes.push(ConversionEntry {
-                feature_code: if is_selection { "xcf.selection" } else { "xcf.channel" }.into(),
-                source: conversion::source(
-                    if is_selection { "selection" } else { "channel" },
-                    ordinal,
-                    ptr,
-                    &name,
-                    &[],
-                    cprops.iter().find(|p| p.kind == 20).and_then(|p| be_u32(p.data)),
-                ),
-                targets: vec![NativeTargetRef {
-                    channel_index: if native_selection { None } else { Some(channels.len() as u32) },
-                    label: if native_selection { "Document selection" } else { "Alpha channel" }.into(),
-                    ..Default::default()
-                }],
-                disposition: if precision.reduces_precision() { ConversionDisposition::NativeApproximation } else { ConversionDisposition::NativeEquivalent },
-                reason: ConversionReason::NativePolicy,
-                source_description: "Stored channel coverage samples".into(),
-                native_description: "Native coverage surface".into(),
-                attachments: Vec::new(),
-            })?;
-            self.precision_underflow(channel_outcome, &px)?;
-            self.translate_coverage_effects(channel_outcome, &coverage_effects, &mut surface, Rect::new(0, 0, px.width as i32, px.height as i32), ctl)?;
-            let mut channel = AlphaChannel::new(name, surface);
-            let handled = metadata::channel_overlay(&mut channel, &cprops);
-            for property in &cprops {
-                if !matches!(property.kind, 4 | 20) && !handled.contains(&property.kind) {
-                    let reason = match property.kind {
-                        3 | 8 => ConversionReason::NativePolicy,
-                        6 | 14 | 16 | 33 | 38 => ConversionReason::InvalidOptionalData,
-                        9 | 28 | 32 | 34 | 42 => ConversionReason::NativeLimitation,
-                        _ => ConversionReason::MissingMapping,
-                    };
-                    self.outcomes.property_with_reason(channel_outcome, property.kind, property.offset, property.data, reason)?;
-                }
-            }
-            if native_selection {
-                selection = Some(channel.surface);
-            } else {
-                // Preserve ambiguous additional selection records as ordinary saved alpha channels.
-                if is_selection {
-                    self.outcomes.detail(
-                        channel_outcome,
-                        "xcf.duplicate_selection",
-                        ConversionReason::InvalidOptionalData,
-                        "More than one source channel is marked as the active selection".into(),
-                        "First selection kept; additional coverage retained as an ordinary alpha channel".into(),
-                    )?;
-                }
-                if metadata::flag(&cprops, 8) {
-                    self.initial_view.visible_alpha_channels.push(channels.len());
-                }
-                if metadata::active(&cprops, 3) {
-                    if matches!(self.initial_view.target, crate::initial_view::NativeImportTarget::AlphaChannel(_)) {
-                        self.outcomes.detail(
-                            channel_outcome,
-                            "xcf.active_channels",
-                            ConversionReason::NativeLimitation,
-                            "Multiple source channels selected".into(),
-                            "Native initial view targets one alpha channel; original markers remain inert".into(),
-                        )?;
-                    } else {
-                        self.initial_view.target = crate::initial_view::NativeImportTarget::AlphaChannel(channels.len());
-                    }
-                }
-                channels.push(channel);
-            }
-        }
-        Ok((channels, selection))
-    }
-
-    /// Describe floating attachments and the single historical movement set without changing their native layer semantics.
-    fn layer_identity_notices(&mut self, outcome: usize, properties: &[Prop<'a>], floating: bool, gray_floating: bool, legacy_linked: bool) -> Result<()> {
-        if floating {
-            let attachment = properties.iter().rev().find(|p| p.kind == 5).map(|p| resources::attachment(p.data, self.c.wide));
-            let (reason, source) = match attachment {
-                Some(Ok(pointer)) => (ConversionReason::NativePolicy, format!("Floating pixels; source attachment record {pointer}")),
-                _ => (ConversionReason::InvalidOptionalData, "Floating pixels with an invalid optional attachment record".into()),
-            };
-            self.outcomes.notice(
-                outcome,
-                "xcf.floating_selection",
-                reason,
-                (
-                    source,
-                    if gray_floating {
-                        "Separate positioned native raster layer; gray coverage repeated into RGB, attachment retained inert; original channel/mask unchanged"
-                    } else {
-                        "Separate positioned native raster layer; attachment retained inert, without merging or anchoring"
-                    }
-                    .into(),
-                ),
-                Some("is a floating selection and opens as a separate editable layer"),
-                &mut self.warnings,
-            )?;
-        }
-        if legacy_linked {
-            self.outcomes.detail(
-                outcome,
-                "xcf.legacy_linked_movement",
-                ConversionReason::NativePolicy,
-                "Member of the source's single legacy linked movement set".into(),
-                "Native link_group 1; ordinary PhotoCraft movement, linking and unlinking apply".into(),
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Report inert linked-resource and placement records without resolving a locator or applying placement twice.
-    fn layer_link(&mut self, outcome: usize, properties: &[Prop<'a>], hptr: usize) -> Result<()> {
-        let metadata = properties.iter().rev().find(|p| p.kind == 48).map(|p| resources::link(p.data));
-        let (reason, source) = match metadata {
-            Some(Ok(metadata)) => (
-                if hptr == 0 { ConversionReason::ResourceUnavailable } else { ConversionReason::NativePolicy },
-                format!(
-                    "Link resource {}x{}, flags {}, nonempty locator {} bytes retained inert; {}",
-                    metadata.width,
-                    metadata.height,
-                    metadata.flags,
-                    metadata.locator.len(),
-                    if hptr == 0 { "no stored pixel hierarchy" } else { "stored pixel hierarchy available" },
-                ),
-            ),
-            _ => (ConversionReason::InvalidOptionalData, "Invalid optional link-resource configuration retained inert".into()),
-        };
-        self.outcomes.notice(
-            outcome,
-            "xcf.link_layer",
-            reason,
-            (
-                source,
-                if hptr == 0 {
-                    "Native raster layer has no stored pixels; source resource is unavailable until explicitly supplied by the user"
-                } else {
-                    "Stored pixels preserved as an editable native raster; no locator resolution, automatic refresh or filesystem watch"
-                }
-                .into(),
-            ),
-            Some(if hptr == 0 {
-                "is a link layer without stored pixels; its source must be supplied explicitly"
-            } else {
-                "is a link layer and opens as stored editable pixels"
-            }),
-            &mut self.warnings,
-        )?;
-        if let Some(property) = properties.iter().rev().find(|p| p.kind == 49) {
-            let (reason, source) = match resources::transform(property.data) {
-                Ok(transform) => (
-                    ConversionReason::NativePolicy,
-                    format!(
-                        "Source placement offset {:?}, interpolation {}, projective matrix {:?}",
-                        transform.offset, transform.interpolation, transform.matrix
-                    ),
-                ),
-                Err(_) => (ConversionReason::InvalidOptionalData, "Invalid optional link placement retained inert".into()),
-            };
-            self.outcomes.detail(outcome, "xcf.link_transform", reason, source,
-                "Stored drawable pixels already contain the source placement; native layer offsets are preserved and the source transform is not applied a second time".into())?;
-        }
-        Ok(())
-    }
-
-    /// Record source blend and coverage policies while leaving the already constructed native layer unchanged.
-    fn layer_compositing(&mut self, layer: &Layer, outcome: usize, layer_mode: u32, group: bool, composite_mode: i32) -> Result<()> {
-        let (blend, note) = blend_mode(layer_mode);
-        // These describe the native translation, not a promise of GIMP formula equivalence.
-        if layer_mode != 0 && layer_mode != 28 && !(group && layer_mode == 61) {
-            let human = note.map(|note| {
-                format!(
-                    "uses GIMP's {note} mode, which opens as {}",
-                    if blend == BlendMode::Normal { "Normal".into() } else { format!("Photoshop's {blend:?}") }
-                )
-            });
-            self.outcomes.notice(
-                outcome,
-                "xcf.blend_mode",
-                if blend == BlendMode::Normal { ConversionReason::MissingMapping } else { ConversionReason::NativePolicy },
-                (
-                    format!("GIMP mode {layer_mode}{}", note.map(|s| format!(" ({s})")).unwrap_or_default()),
-                    format!("Native {:?}; PhotoCraft blend formulas and clamping apply", layer.blend),
-                ),
-                human.as_deref(),
-                &mut self.warnings,
-            )?;
-        }
-        if composite_mode.unsigned_abs() > 1 {
-            let human = match composite_mode.unsigned_abs() {
-                3 => Some("composites with Clip to layer, which is not reproduced"),
-                4 => Some("composites with Intersection, which is not reproduced"),
-                _ => None,
-            };
-            self.outcomes.notice(
-                outcome,
-                "xcf.composite_mode",
-                ConversionReason::NativePolicy,
-                (
-                    format!(
-                        "GIMP coverage mode {composite_mode} ({})",
-                        match composite_mode.unsigned_abs() {
-                            2 => "Clip to backdrop",
-                            3 => "Clip to layer",
-                            4 => "Intersection",
-                            _ => "unknown",
-                        }
-                    ),
-                    "Native source-over coverage; source coverage does not enable a native clipping mask".into(),
-                ),
-                human,
-                &mut self.warnings,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Translate unmodified stored text into editable native text, retaining saved pixels on optional-data failures.
-    fn layer_text(&mut self, layer: &mut Layer, properties: &[Prop<'a>], position: (i32, i32), outcome: usize) -> Result<()> {
-        let (x, y) = position;
-        let modified = properties.iter().find(|p| p.kind == 26).and_then(|p| be_u32(p.data)).is_some_and(|flags| flags & 2 != 0);
-        let config = properties
-            .iter()
-            .filter(|p| p.kind == 21)
-            .flat_map(|p| parasites(p.data))
-            .filter(|(name, _)| matches!(name.as_str(), "gimp-text-layer" | "plug_in_gdyntext/data"))
-            .min_by_key(|(name, _)| name != "gimp-text-layer");
-        if modified {
-            self.outcomes.notice(
-                outcome,
-                "xcf.text",
-                ConversionReason::NativePolicy,
-                (
-                    "Source text pixels were modified independently of the saved text configuration".into(),
-                    "Native raster preserves modified pixels; original text configuration remains inert".into(),
-                ),
-                Some("has modified text pixels and opens as a native raster layer"),
-                &mut self.warnings,
-            )?;
-        } else if let Some((config_name, config)) = config {
-            let decoded = if config_name == "plug_in_gdyntext/data" {
-                text::decode_gdyntext(&config, self.resolution_dpi, (x, y))
-            } else {
-                text::decode(&config, self.resolution_dpi, (x, y))
-            };
-            match decoded {
-                Ok(decoded) => {
-                    layer.content = LayerContent::Text(decoded.layer);
-                    self.outcomes.notice(
-                        outcome,
-                        "xcf.text",
-                        ConversionReason::NativePolicy,
-                        (
-                            "Editable source text, typography and placement".into(),
-                            "Native editable text; PhotoCraft font matching, shaping and rasterization apply".into(),
-                        ),
-                        Some("opens as editable native text with PhotoCraft typography"),
-                        &mut self.warnings,
-                    )?;
-                    for note in decoded.native_policy {
-                        self.outcomes.detail(
-                            outcome,
-                            "xcf.text.formatting",
-                            ConversionReason::NativePolicy,
-                            note,
-                            "Native text placement and editable affine data apply".into(),
-                        )?;
-                    }
-                    for note in decoded.source_only {
-                        self.outcomes.detail(
-                            outcome,
-                            "xcf.text.formatting",
-                            ConversionReason::MissingMapping,
-                            note,
-                            "Supported native typography is editable; additional source formatting remains inert".into(),
-                        )?;
-                    }
-                }
-                Err(error) => self.outcomes.notice(
-                    outcome,
-                    "xcf.text",
-                    if matches!(error, IoError::Unsupported(_)) { ConversionReason::MissingMapping } else { ConversionReason::InvalidOptionalData },
-                    (
-                        format!("Source text configuration could not be translated: {error}"),
-                        "Stored pixels preserved as a native raster; source configuration remains inert".into(),
-                    ),
-                    Some("has unsupported or invalid text configuration and opens as pixels"),
-                    &mut self.warnings,
-                )?,
-            }
-        } else {
-            self.outcomes.notice(
-                outcome,
-                "xcf.text",
-                ConversionReason::InvalidOptionalData,
-                ("Source text marker has no saved text configuration".into(), "Stored pixels preserved as a native raster".into()),
-                Some("has no saved text configuration and opens as pixels"),
-                &mut self.warnings,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Retain only unmapped layer records with their original policy/error classifications and shared retention budget.
-    fn retain_layer_properties(&mut self, outcome: usize, properties: &[Prop<'a>]) -> Result<()> {
-        for property in properties {
-            if property.kind == 21 {
-                self.outcomes.parasites(outcome, property.offset, property.data, &["gimphoto-clipped"])?;
-            } else if !matches!(property.kind, 6 | 7 | 8 | 9 | 10 | 11 | 15 | 20 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37) {
-                let reason = match property.kind {
-                    5 => {
-                        if resources::attachment(property.data, self.c.wide).is_ok() {
-                            ConversionReason::NativePolicy
-                        } else {
-                            ConversionReason::InvalidOptionalData
-                        }
-                    }
-                    48 => {
-                        if resources::link(property.data).is_ok() {
-                            ConversionReason::NativePolicy
-                        } else {
-                            ConversionReason::InvalidOptionalData
-                        }
-                    }
-                    49 => {
-                        if resources::transform(property.data).is_ok() {
-                            ConversionReason::NativePolicy
-                        } else {
-                            ConversionReason::InvalidOptionalData
-                        }
-                    }
-                    2 | 12 | 13 => ConversionReason::NativePolicy,
-                    42 => ConversionReason::NativeLimitation,
-                    _ => ConversionReason::MissingMapping,
-                };
-                self.outcomes.property_with_reason(outcome, property.kind, property.offset, property.data, reason)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Capture one native layer/mask editing target after its content is available, without persisting view rules.
-    fn layer_initial_view(&mut self, layer: &Layer, properties: &[Prop<'a>]) {
-        if metadata::active(properties, 2) {
-            self.initial_view.selected_layers.push(layer.id);
-            if self.initial_view.active_layer.is_none() {
-                self.initial_view.active_layer = Some(layer.id);
-                self.initial_view.show_layer_mask = layer.mask.is_some() && metadata::flag(properties, 13);
-                if layer.mask.is_some() && metadata::flag(properties, 12) {
-                    self.initial_view.target = crate::initial_view::NativeImportTarget::LayerMask;
-                }
-            }
-        }
-    }
-
-    /// Decode a layer's declared sample layout and restore the image model even when decoding fails or is cancelled.
-    fn layer_hierarchy(&mut self, hptr: usize, kind: u32, alpha: bool, floating: bool, name: &str, ctl: &Interrupt<'_>) -> Result<Pixels> {
-        let gray_floating = floating && matches!(kind, 2 | 3) && self.base_type != 1;
-        let source_base_type = if floating {
-            match kind {
-                0 | 1 => 0,
-                2 | 3 => 1,
-                _ => 2,
-            }
-        } else {
-            self.base_type
-        };
-        let source_channels = match (source_base_type, alpha) {
-            (2, false) => 1,
-            (2, true) => 2,
-            (1, false) => 1,
-            (1, true) => 2,
-            (_, false) => 3,
-            (_, true) => 4,
-        };
-        let saved_base_type = self.base_type;
-        self.base_type = source_base_type;
-        let decoded = self.hierarchy(hptr, source_channels, gray_floating, ctl);
-        self.base_type = saved_base_type;
-        decoded.map_err(|error| match error {
-            IoError::Cancelled => IoError::Cancelled,
-            error => invalid(format!("layer '{name}': {error}")),
-        })
-    }
-
-    /// Construct a native group or raster with source expansion state and the existing non-group pass-through fallback.
-    fn native_layer(name: String, fmt: PixelFormat, group: bool, expanded: bool, blend: BlendMode) -> Layer {
-        if group {
-            let mut g = Layer::group(name, Vec::new());
-            if let LayerContent::Group(gr) = &mut g.content {
-                gr.expanded = expanded;
-            }
-            g.blend = if blend == BlendMode::PassThrough { BlendMode::PassThrough } else { blend };
-            g
-        } else {
-            let mut l = Layer::raster(name, fmt);
-            l.blend = if blend == BlendMode::PassThrough { BlendMode::Normal } else { blend };
-            l
-        }
-    }
-
-    /// Reads a layer structure, and whether GIMP composites it in linear light.
-    fn layer(&mut self, ordinal: usize, ptr: usize, fmt: PixelFormat, mask_fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<Option<(Node, bool)>> {
-        let mut c = self.c.at(ptr);
-        let (lw, lh, kind) = (c.u32()?, c.u32()?, c.u32()?);
-        let name = c.string()?;
-        // Charge the owned name against the document-wide metadata budget: repeated layer
-        // offsets referencing one large name must not retain unbounded copies.
-        self.meta_budget = self.meta_budget.checked_sub(name.len()).ok_or_else(|| invalid("layer metadata exceeds the budget"))?;
-        let lprops = props(&mut c)?;
-        let hptr = c.ptr()?;
-        let mptr = c.ptr()?;
-        let effect_pointers = if self.version >= 20 { effects::read_pointers(&mut c, &mut self.meta_budget, ctl)? } else { Vec::new() };
-        let (type_rgb, alpha) = match kind {
-            0 => (true, false),
-            1 => (true, true),
-            2 | 4 => (false, false),
-            3 | 5 => (false, true),
-            k => return Err(invalid(format!("unknown layer type {k} on '{name}'"))),
-        };
-
-        let mut layer_mode = 0u32;
-        let mut opacity = 1.0f32;
-        // PROP_FLOAT_OPACITY wins over PROP_OPACITY whatever their order in the file.
-        let mut float_opacity = None;
-        let mut visible = true;
-        let (mut x, mut y) = (0i32, 0i32);
-        let mut apply_mask = true;
-        let mut group = false;
-        let mut expanded = true;
-        let mut path = Vec::new();
-        let mut text = false;
-        let mut vector = false;
-        let mut link = false;
-        let mut floating = false;
-        let mut legacy_linked = false;
-        let mut clipped = false;
-        let mut composite_mode = 0i32;
-        let mut composite_space = 0i32;
-        let mut blend_space = 0i32;
-        let mut locks = photocraft_doc::Locks::default();
-        let mut tag = LabelColor::None;
-        let mut tattoo = None;
-        for p in &lprops {
-            let v = be_u32(p.data).unwrap_or(0);
-            match p.kind {
-                5 => floating = true,
-                6 => opacity = (v.min(255) as f32) / 255.0,
-                33 => float_opacity = be_f32(p.data).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0)).or(float_opacity),
-                7 => layer_mode = v,
-                8 => visible = v != 0,
-                9 => legacy_linked = v != 0,
-                10 => locks.transparency = v != 0,
-                11 => apply_mask = v != 0,
-                15 => {
-                    x = be_i32(p.data).unwrap_or(0);
-                    y = p.data.get(4..).and_then(be_i32).unwrap_or(0);
-                }
-                26 => text = true,
-                20 => tattoo = (v != 0).then_some(v),
-                28 => locks.pixels = v != 0,
-                29 => group = true,
-                30 => {
-                    path = p.data.as_chunks::<4>().0.iter().map(|s| u32::from_be_bytes(*s)).collect();
-                    self.meta_budget =
-                        self.meta_budget.checked_sub(path.len().saturating_mul(4)).ok_or_else(|| invalid("layer metadata exceeds the budget"))?;
-                }
-                31 => expanded = v & 1 != 0,
-                32 => locks.position = v != 0,
-                34 => tag = label(v),
-                35 => composite_mode = be_i32(p.data).unwrap_or(0),
-                36 => composite_space = be_i32(p.data).unwrap_or(0),
-                37 => blend_space = be_i32(p.data).unwrap_or(0),
-                47 => vector = true,
-                48 => link = true,
-                21 => {
-                    for (pname, _) in parasites(p.data) {
-                        match pname.as_str() {
-                            "gimphoto-clipped" => clipped = true,
-                            "gimp-text-layer" | "plug_in_gdyntext/data" => text = true,
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        let gray_floating = floating && matches!(kind, 2 | 3) && self.base_type != 1;
-        if !gray_floating && type_rgb != (self.base_type != 1) && self.base_type != 2 {
-            return Err(invalid(format!("layer '{name}' does not match the image's colour model")));
-        }
-
-        let (blend, _) = blend_mode(layer_mode);
-        if composite_mode.unsigned_abs() == 2 {
-            self.clipped_to_backdrop += 1;
-        }
-
-        let mut layer = Self::native_layer(name.clone(), fmt, group, expanded, blend);
-        layer.opacity = float_opacity.unwrap_or(opacity);
-        layer.visible = visible;
-        layer.locks = locks;
-        layer.label = tag;
-        layer.clipped = clipped;
-        // Historical XCF stores one boolean movement set, not arbitrary independent groups.
-        layer.link_group = legacy_linked.then_some(1);
-
-        let outcome = self.outcomes.push(ConversionEntry {
-            feature_code: "xcf.layer".into(),
-            source: conversion::source("layer", ordinal, ptr, &name, &path, tattoo),
-            targets: vec![NativeTargetRef { layer_id: Some(layer.id), ..Default::default() }],
-            disposition: if text || vector || link || self.precision.reduces_precision() {
-                ConversionDisposition::NativeApproximation
-            } else {
-                ConversionDisposition::NativeEquivalent
-            },
-            reason: ConversionReason::NativePolicy,
-            source_description: "Layer structure, offsets, opacity, visibility, locks and stored pixel samples".into(),
-            native_description: if group { "Native group and its properties" } else { "Native raster layer and its properties" }.into(),
-            attachments: Vec::new(),
-        })?;
-        self.layer_identity_notices(outcome, &lprops, floating, gray_floating, legacy_linked)?;
-        if link {
-            self.layer_link(outcome, &lprops, hptr)?;
-        }
-        self.layer_compositing(&layer, outcome, layer_mode, group, composite_mode)?;
-        let linear = composite_space.unsigned_abs() == 1 || blend_space.unsigned_abs() == 1;
-        if linear || composite_space.unsigned_abs() > 2 || blend_space.unsigned_abs() > 2 {
-            self.outcomes.detail(
-                outcome,
-                "xcf.compositing_space",
-                ConversionReason::NativePolicy,
-                format!("GIMP blend space {blend_space}, composite space {composite_space}"),
-                "Native document encoding and PhotoCraft compositing rules".into(),
-            )?;
-        }
-
-        if !group && hptr != 0 {
-            let mut px = self.layer_hierarchy(hptr, kind, alpha, floating, &name, ctl)?;
-            if (px.width, px.height) != (lw, lh) {
-                return Err(invalid(format!("layer '{name}' pixels are {}x{} where {lw}x{lh} were declared", px.width, px.height)));
-            }
-            if !alpha {
-                // An opaque layer: add the alpha channel the document's pixel format carries.
-                let n = px.channels;
-                let mut data = Vec::with_capacity(px.data.len() / n * (n + 1));
-                for p in px.data.chunks_exact(n) {
-                    data.extend_from_slice(p);
-                    data.push(1.0);
-                }
-                px = Pixels { width: px.width, height: px.height, channels: n + 1, data, underflow: px.underflow };
-            }
-            if gray_floating {
-                px = resources::gray_to_rgb(px, &mut self.budget, ctl)?;
-            }
-            let mut surface = Surface::new(fmt);
-            write_pixels(&mut surface, &px, x, y)?;
-            self.precision_underflow(outcome, &px)?;
-            layer.content = LayerContent::Raster(surface);
-            if !alpha {
-                layer.locks.transparency = true;
-            }
-        }
-        if vector
-            && !group
-            && let Some(property) = lprops.iter().rev().find(|p| p.kind == 47)
-        {
-            match paths::vector_style(property.data) {
-                Ok(style) => self.pending_vectors.push((layer.id, outcome, style)),
-                Err(error) => self.outcomes.notice(
-                    outcome,
-                    "xcf.vector_layer",
-                    if matches!(error, IoError::Unsupported(_)) { ConversionReason::MissingMapping } else { ConversionReason::InvalidOptionalData },
-                    (
-                        format!("Source vector style could not be translated: {error}"),
-                        "Stored pixels preserved as a native raster; source style remains inert".into(),
-                    ),
-                    Some("has unsupported or invalid vector paint and opens as pixels"),
-                    &mut self.warnings,
-                )?,
-            }
-        }
-        if text && !group {
-            self.layer_text(&mut layer, &lprops, (x, y), outcome)?;
-        }
-        self.retain_layer_properties(outcome, &lprops)?;
-        if mptr != 0 {
-            let (mname, mprops, px, coverage_effects) = self.channel(mptr, ctl)?;
-            let mut surface = Surface::new(mask_fmt);
-            write_pixels(&mut surface, &px, x, y)?;
-            let mask_outcome = self.outcomes.push(ConversionEntry {
-                feature_code: "xcf.layer_mask".into(),
-                source: conversion::source("layer_mask", ordinal, mptr, &mname, &path, mprops.iter().find(|p| p.kind == 20).and_then(|p| be_u32(p.data))),
-                targets: vec![NativeTargetRef { layer_id: Some(layer.id), label: "Layer mask".into(), ..Default::default() }],
-                disposition: if self.precision.reduces_precision() {
-                    ConversionDisposition::NativeApproximation
-                } else {
-                    ConversionDisposition::NativeEquivalent
-                },
-                reason: ConversionReason::NativePolicy,
-                source_description: "Stored mask coverage and enabled state".into(),
-                native_description: "Native linked layer mask".into(),
-                attachments: Vec::new(),
-            })?;
-            self.precision_underflow(mask_outcome, &px)?;
-            self.translate_coverage_effects(
-                mask_outcome,
-                &coverage_effects,
-                &mut surface,
-                Rect::new(x, y, x.saturating_add(px.width as i32), y.saturating_add(px.height as i32)),
-                ctl,
-            )?;
-            layer.mask = Some(LayerMask { surface, enabled: apply_mask, linked: true, density: 1.0, feather: 0.0 });
-            for property in &mprops {
-                let reason = match property.kind {
-                    6 | 8 | 9 | 14 | 16 | 20 | 28 | 32 | 33 | 34 | 38 | 42 => ConversionReason::NativeLimitation,
-                    _ => ConversionReason::MissingMapping,
-                };
-                self.outcomes.property_with_reason(mask_outcome, property.kind, property.offset, property.data, reason)?;
-            }
-        }
-        self.layer_initial_view(&layer, &lprops);
-        if !effect_pointers.is_empty() {
-            let bounds = x.checked_add(lw as i32).zip(y.checked_add(lh as i32)).map_or(Rect::EMPTY, |(right, bottom)| Rect::new(x, y, right, bottom));
-            self.pending_effects.push(PendingLayerEffects { layer: layer.id, owner: outcome, bounds, pointers: effect_pointers });
-        }
-        Ok(Some((Node { layer, path, group, children: Vec::new(), outcome }, linear)))
-    }
 }

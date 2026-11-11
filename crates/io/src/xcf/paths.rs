@@ -15,6 +15,9 @@ const MAX_PATHS: usize = 1024;
 const MAX_POINTS: usize = 262_144;
 const MAX_COORD: f64 = 10_000_000.0;
 
+#[cfg(test)]
+mod review_tests;
+
 pub(super) struct DecodedPath {
     pub named: NamedPath,
     pub tattoo: Option<u32>,
@@ -66,8 +69,11 @@ fn paint(c: &mut Cursor<'_>, notes: &mut Vec<String>) -> Result<Fill> {
         } else {
             match super::effects::literal_rgb(&super::effects::ColorLiteral { encoding: &encoding, pixels: raw, profile }) {
                 Ok([r, g, b, a]) => Color::rgba(r, g, b, a),
-                Err(message) => {
-                    notes.push(format!("Source color {encoding} retained; native black approximation used: {message}"));
+                Err(_) => {
+                    // Encoding names may approach 1 MiB and one layer record can be
+                    // referenced repeatedly. Keep diagnostics independent of their size;
+                    // the complete original configuration is retained separately.
+                    notes.push("Unsupported source vector color encoding/profile retained; native black approximation used".into());
                     Color::BLACK
                 }
             }
