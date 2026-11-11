@@ -159,7 +159,13 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
     // Clear pixels carry no colour once premultiplied, so they are not content whatever colour they are stored in
     // (white and black copies of one shape must warp alike, #10639): with a clear default only the covered
     // part of the rect is warped. An opaque default keeps the whole rect (see `warp_source_rect`).
-    let src_rect = crate::transform::warp_source_rect(src, src_rect);
+    // Only a stacked fold narrows: its clear parts composite to nothing, so leaving them out never
+    // changes what is drawn. In row order the last cell drawn replaces what is under it, so a clear
+    // cell still counts there (lens corrections and distortions warp as before).
+    let src_rect = match fold {
+        Fold::Stack(_) => crate::transform::warp_source_rect(src, src_rect),
+        Fold::Rows => src_rect,
+    };
     if src_rect.is_empty() {
         let fmt = src.format();
         return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
@@ -1116,6 +1122,8 @@ mod tests {
     }
 
     #[test]
+    // A warp in place (stacked folds) leaves clear pixels out of the source rect; row order keeps
+    // them, as a clear cell drawn last still covers what is under it.
     fn white_and_black_clear_pixels_warp_alike() {
         let mut white = Surface::new(PixelFormat::RGBA8);
         white.fill_rect(Rect::new(0, 0, 96, 96), &[1.0, 1.0, 1.0, 0.0]);
@@ -1129,8 +1137,8 @@ mod tests {
         let (sin, cos) = 15.0_f64.to_radians().sin_cos();
         let rotate = |x: f64, y: f64| (48.0 + 0.6 * ((x - 48.0) * cos - (y - 48.0) * sin), 48.0 + 0.6 * ((x - 48.0) * sin + (y - 48.0) * cos));
         for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
-            let a = warp_mesh_surface(&white, white.content_bounds(), &rotate, interp);
-            let b = warp_mesh_surface(&black, black.content_bounds(), &rotate, interp);
+            let a = warp_mesh_surface_with(&white, white.content_bounds(), &rotate, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
+            let b = warp_mesh_surface_with(&black, black.content_bounds(), &rotate, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
             let bounds = a.tile_bounds().union(&b.tile_bounds()).inflate(8);
             for y in bounds.y0..bounds.y1 {
                 for x in bounds.x0..bounds.x1 {
@@ -1184,8 +1192,8 @@ mod tests {
         let (sin, cos) = 15.0_f64.to_radians().sin_cos();
         let rotate = |x: f64, y: f64| (48.0 + 0.6 * ((x - 48.0) * cos - (y - 48.0) * sin), 48.0 + 0.6 * ((x - 48.0) * sin + (y - 48.0) * cos));
         for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
-            let tight = warp_mesh_surface(&black, black.content_bounds(), &rotate, interp);
-            let padded = warp_mesh_surface(&black, black.content_bounds().inflate(8), &rotate, interp);
+            let tight = warp_mesh_surface_with(&black, black.content_bounds(), &rotate, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
+            let padded = warp_mesh_surface_with(&black, black.content_bounds().inflate(8), &rotate, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
             assert_alpha_alike(&tight, &padded, &format!("{interp:?}"));
         }
     }
