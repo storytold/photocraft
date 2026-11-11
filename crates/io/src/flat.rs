@@ -237,7 +237,8 @@ impl FlatBuilder {
     }
 
     /// The document, after copying and pruning whatever is left: the one-shot result and the last
-    /// step of a stepped one.
+    /// step of a stepped one. Like the one-shot import, it records how many images the file holds
+    /// when the decoder read only the first, so Save doesn't write over the rest (#5733).
     pub(crate) fn finish(mut self, bytes: &[u8], format: Option<Format>) -> Result<ImportResult, IoError> {
         let copied = self.copy_done();
         while !self.copy_done() {
@@ -251,6 +252,7 @@ impl FlatBuilder {
         let Self { name, img, mode, depth, surface, warnings, .. } = self;
         let (w, h) = img.dimensions();
         let mut r = flat_document(&name, (w, h, img.layout(), mode, depth), surface, img.icc.clone(), &img.meta, warnings, Some(&img))?;
+        r.document.file_encoding.source_images = source_images(&img.warnings);
         apply_flat_format(&mut r, bytes, format, Some(&img))?;
         Ok(r)
     }
@@ -274,7 +276,9 @@ pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Opti
         r.document.mode = ColorMode::Indexed;
         r.document.color_table = Some(photocraft_doc::ColorTable { colors, transparent });
     }
-    r.document.file_encoding = file_encoding_as(format, bytes);
+    // The decoder's count of frames or pages left out (set above) stays alongside the encoding.
+    let encoding = file_encoding_as(format, bytes);
+    r.document.file_encoding = photocraft_doc::FileEncoding { source_images: r.document.file_encoding.source_images.or(encoding.source_images), ..encoding };
     if format == Some(Format::Tga) && img.is_some_and(|i| i.layout() == ChannelLayout::Rgba) {
         tga_alpha_to_channel(&mut r.document)?;
     }
@@ -326,26 +330,44 @@ fn cicp_profile(img: &Image) -> Option<Arc<Vec<u8>>> {
     photocraft_cms::builtin::cicp_rgb(primaries, c.transfer, linear).map(|p| p.to_bytes())
 }
 
+/// A frame import: the frames handed to the caller's callback and the decoder's warnings that
+/// survived salvaging (#11113). A GIF or WebP truncated after some frames decodes those frames
+/// with [`codecs::DecodeWarning::Truncated`] on the first; the caller must disclose that the
+/// animation is incomplete rather than report a plain success.
+#[derive(Debug, Default)]
+pub struct FramesImport {
+    pub frames: usize,
+    pub warnings: Vec<String>,
+}
+
 /// Every frame of a GIF as a single-layer document, handed to `each` in order with its delay in
 /// milliseconds (a still GIF has one). One frame at a time becomes a document, so the caller
-/// can flatten and drop it. Returns the number of frames; stops at the first error `each` gives.
-pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+/// can flatten and drop it. Returns the frame count and any decoder warnings; stops at the
+/// first error `each` gives.
+pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
     import_frames(name, codecs::decode_gif_frames(bytes, &codecs::DecodeOptions::default())?, each)
 }
 
 /// Every frame of a WebP as a single-layer document, as [`import_gif_frames`] does for a GIF: an
 /// animation's frames composited onto its canvas, with their durations in milliseconds; a still
 /// WebP is one frame.
-pub fn import_webp_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+pub fn import_webp_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
     import_frames(name, codecs::decode_webp_frames(bytes, &codecs::DecodeOptions::default())?, each)
 }
 
-fn import_frames(name: &str, frames: Vec<codecs::AnimationFrame>, each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+fn import_frames(name: &str, frames: Vec<codecs::AnimationFrame>, each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
     let n = frames.len();
+    let mut warnings = Vec::new();
     for f in frames {
-        each(image_to_document(name, &f.image)?.document, f.delay_ms)?;
+        let r = image_to_document(name, &f.image)?;
+        for w in r.warnings {
+            if !warnings.contains(&w) {
+                warnings.push(w);
+            }
+        }
+        each(r.document, f.delay_ms)?;
     }
-    Ok(n)
+    Ok(FramesImport { frames: n, warnings })
 }
 
 /// The lossy settings `bytes` were encoded with, for File › Save to keep: a JPEG's quality
@@ -370,6 +392,11 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
             }
             None => {}
         },
+        // An icon file's directory count (ICONDIR: reserved, type, count, little-endian); the
+        // decoder opens one of its sizes.
+        Some(Format::Ico) => {
+            e.source_images = bytes.get(4..6).and_then(|c| <[u8; 2]>::try_from(c).ok()).map(|c| u32::from(u16::from_le_bytes(c))).filter(|&n| n > 1);
+        }
         _ => {}
     }
     e
@@ -501,7 +528,14 @@ pub fn import_tiff_page_with_options(
         drop(bands);
         return import_tiff_with_extras(name, bytes, page, opts, ctl);
     }
-    tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES, ctl)
+    let mut r = tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES, ctl)?;
+    // A 1-bit black-and-white TIFF opens in Bitmap mode, as in Photoshop (#10480); like a
+    // Bitmap PSD, its pixels are kept as gray. Its one sample has no extra samples beside it,
+    // so it always opens here.
+    if r.document.mode == ColorMode::Grayscale && tiff_is_bilevel(bytes, page) {
+        r.document.mode = ColorMode::Bitmap;
+    }
+    Ok(r)
 }
 
 /// A layered TIFF page: its layer tag and resources are read into a plan, the plan's estimate is
@@ -539,6 +573,7 @@ fn import_tiff_layered(
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut r = crate::tiff_layers::import_layered(name, &img, plan, ctl)?;
+    r.document.file_encoding.source_images = r.document.file_encoding.source_images.or(source_images(&img.warnings));
     if orientation != 1 {
         r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
     }
@@ -599,6 +634,15 @@ fn import_tiff_with_extras(
     };
     ctl.check().map_err(|_| IoError::Cancelled)?;
     image_to_document(name, &img.oriented(orientation)?)
+}
+
+/// Whether the TIFF page that opens (`page`, else the default one) is bilevel: one 1-bit sample
+/// per pixel, black-and-white (PhotometricInterpretation 0 or 1).
+fn tiff_is_bilevel(bytes: &[u8], page: Option<usize>) -> bool {
+    let Ok(info) = codecs::tiff_info(bytes) else { return false };
+    page.or_else(|| info.default_page())
+        .and_then(|i| info.pages.get(i))
+        .is_some_and(|p| p.bits_per_sample == 1 && p.samples_per_pixel == 1 && matches!(p.photometric, Some(0 | 1)))
 }
 
 /// A flat TIFF page as a single-layer document, decoded a group of rows at a time into the
@@ -663,7 +707,9 @@ fn tiff_to_document(
     let mut warnings: Vec<String> = bands.warnings.iter().map(ToString::to_string).collect();
     warnings.extend(f.warning.clone());
     let meta = std::mem::take(&mut bands.meta);
-    Ok(single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings))
+    let mut r = single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings);
+    r.document.file_encoding.source_images = source_images(&bands.warnings);
+    Ok(r)
 }
 
 /// The bytes of a layer's tiles holding a `w` × `h` image of `bpp` bytes a pixel: tiles are whole
@@ -798,7 +844,22 @@ fn image_to_document_with_memory(name: &str, img: &Image, ctl: &Interrupt, avail
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.95);
-    flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))
+    let mut r = flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))?;
+    r.document.file_encoding.source_images = source_images(&img.warnings);
+    Ok(r)
+}
+
+/// How many frames, pages, parts or entries the file holds when the decoder read only one of
+/// them (`u32::MAX` when it couldn't count them), so Save doesn't write the document back over
+/// all of them (#5733).
+fn source_images(warnings: &[codecs::DecodeWarning]) -> Option<u32> {
+    warnings.iter().find_map(|w| match *w {
+        codecs::DecodeWarning::MoreFrames { total } | codecs::DecodeWarning::MorePages { total } | codecs::DecodeWarning::MoreParts { total } => {
+            Some(total.unwrap_or(u32::MAX))
+        }
+        codecs::DecodeWarning::MoreElements { total } => Some(total),
+        _ => None,
+    })
 }
 
 /// What the decoder noticed (frames or pages left out, data ending early) and the conversion
@@ -972,12 +1033,16 @@ impl PngStream {
         self.surface.prune_cursor()
     }
 
-    /// The document of the layer, with the profile and metadata the file ended with.
+    /// The document of the layer, with the profile and metadata the file ended with, and the
+    /// count of images the file holds when the decoder read only the first (an animated PNG's
+    /// frames), so Save doesn't write one image over all of them (#5733).
     pub(crate) fn into_document(self, name: &str, extras: codecs::PngExtras) -> Result<ImportResult, IoError> {
         let Self { surface, header, .. } = self;
         let (mode, _, depth, _) = flat_target(header.layout, header.sample);
         let warnings = extras.warnings.iter().map(ToString::to_string).collect();
-        flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)
+        let mut r = flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)?;
+        r.document.file_encoding.source_images = source_images(&extras.warnings);
+        Ok(r)
     }
 }
 
@@ -1622,8 +1687,9 @@ fn compact_alpha(data: &mut Vec<u8>, color: usize, alpha: usize) {
     data.truncate(n * color);
 }
 
-/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy).
-pub(crate) fn opaque_surface(s: &Surface, r: Rect) -> bool {
+/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy). `s` must
+/// have an alpha channel.
+pub fn opaque_surface(s: &Surface, r: Rect) -> bool {
     let fmt = s.format();
     let (ch, bps) = (fmt.channels(), fmt.sample.bytes());
     let a = ch - 1;
@@ -3032,3 +3098,99 @@ mod fused_tile_tests {
 
 #[cfg(test)]
 mod png_stream_tests;
+
+#[cfg(test)]
+mod bilevel_tiff_tests {
+    use super::*;
+
+    /// A 16×8 uncompressed TIFF with one `bits`-bit sample per pixel, PhotometricInterpretation
+    /// `photometric` (0 WhiteIsZero, 1 BlackIsZero), rows of alternating stripes.
+    fn tiff(bits: u16, photometric: u16) -> Vec<u8> {
+        tiff_pages(&[(bits, photometric)])
+    }
+
+    /// A TIFF with one 16×8 page per `(bits, photometric)`, chained through the IFDs' next
+    /// offsets: each page's IFD is followed by its strip.
+    fn tiff_pages(pages: &[(u16, u16)]) -> Vec<u8> {
+        let (w, h) = (16u32, 8u32);
+        let mut out = b"II*\0".to_vec();
+        out.extend(8u32.to_le_bytes());
+        for (i, &(bits, photometric)) in pages.iter().enumerate() {
+            let row: Vec<u8> = if bits == 1 { vec![0b1010_1010, 0b1111_0000] } else { (0..w).map(|x| if x % 2 == 0 { 255 } else { 0 }).collect() };
+            let data: Vec<u8> = (0..h).flat_map(|_| row.clone()).collect();
+            let entries: [(u16, u16, u32); 9] = [
+                (256, 3, w),
+                (257, 3, h),
+                (258, 3, u32::from(bits)),
+                (259, 3, 1),
+                (262, 3, u32::from(photometric)),
+                (273, 4, 0),
+                (277, 3, 1),
+                (278, 3, h),
+                (279, 4, data.len() as u32),
+            ];
+            let ifd_at = out.len() as u32;
+            let data_at = ifd_at + 2 + entries.len() as u32 * 12 + 4;
+            let next_ifd = if i + 1 < pages.len() { data_at + data.len() as u32 } else { 0 };
+            out.extend((entries.len() as u16).to_le_bytes());
+            for (tag, ty, value) in entries {
+                let value = if tag == 273 { data_at } else { value };
+                out.extend(tag.to_le_bytes());
+                out.extend(ty.to_le_bytes());
+                out.extend(1u32.to_le_bytes());
+                if ty == 3 {
+                    out.extend((value as u16).to_le_bytes());
+                    out.extend([0, 0]);
+                } else {
+                    out.extend(value.to_le_bytes());
+                }
+            }
+            out.extend(next_ifd.to_le_bytes());
+            out.extend(data);
+        }
+        out
+    }
+
+    /// #10480: Photoshop 2025 opens a 1-bit TIFF in Bitmap mode (`DocumentMode.BITMAP`, 1 bit);
+    /// it opened as Grayscale. An 8-bit gray TIFF stays Grayscale.
+    #[test]
+    fn a_one_bit_tiff_opens_in_bitmap_mode() {
+        let r = import_flat("bilevel.tif", &tiff(1, 1)).unwrap();
+        assert_eq!(r.document.mode, ColorMode::Bitmap);
+        let gray = import_flat("gray.tif", &tiff(8, 1)).unwrap();
+        assert_eq!(gray.document.mode, ColorMode::Grayscale);
+        // The same black and white pixels either way.
+        let px = |r: &ImportResult, x: i32| r.document.layers[0].surface().unwrap().pixel(x, 3)[0];
+        for x in 0..8 {
+            assert_eq!(px(&r, x), px(&gray, x), "x={x}");
+        }
+    }
+
+    /// A WhiteIsZero (min-is-white) 1-bit TIFF also opens in Bitmap mode, with a 0 bit white and
+    /// a 1 bit black: the same bits as the BlackIsZero file, inverted.
+    #[test]
+    fn a_min_is_white_one_bit_tiff_opens_in_bitmap_mode_inverted() {
+        let miw = import_flat("min-is-white.tif", &tiff(1, 0)).unwrap();
+        assert_eq!(miw.document.mode, ColorMode::Bitmap);
+        let mib = import_flat("min-is-black.tif", &tiff(1, 1)).unwrap();
+        let px = |r: &ImportResult, x: i32| r.document.layers[0].surface().unwrap().pixel(x, 3)[0];
+        // Row bits 1010_1010 1111_0000: a 1 bit at even x in the first byte, then four 1s, four 0s.
+        for x in 0..16 {
+            let bit = if x < 8 { x % 2 == 0 } else { x < 12 };
+            let white = if bit { 0.0 } else { 1.0 };
+            assert_eq!(px(&miw, x), white, "x={x}: bit {}", u8::from(bit));
+            assert_eq!(px(&miw, x), 1.0 - px(&mib, x), "x={x}");
+        }
+    }
+
+    /// The Bitmap check reads the page that opens: a second page that is bilevel opens in Bitmap
+    /// mode, while the 8-bit gray first page stays Grayscale.
+    #[test]
+    fn a_bilevel_second_page_opens_in_bitmap_mode() {
+        let bytes = tiff_pages(&[(8, 1), (1, 1)]);
+        let second = import_tiff_page("pages.tif", &bytes, Some(1)).unwrap();
+        assert_eq!(second.document.mode, ColorMode::Bitmap);
+        let first = import_tiff_page("pages.tif", &bytes, Some(0)).unwrap();
+        assert_eq!(first.document.mode, ColorMode::Grayscale);
+    }
+}
