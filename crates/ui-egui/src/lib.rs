@@ -1097,3 +1097,6 @@ mod background_eraser_digit_keys_tests;
 mod clone_stamp_reset_tip_tests;
 #[cfg(test)]
 mod sponge_default_tip_tests;
+
+#[cfg(test)]
+mod red_eye_context_menu_tests;

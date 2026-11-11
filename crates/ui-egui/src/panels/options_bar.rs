@@ -92,7 +92,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::chrome_ui::home_button(app, ui);
                             widgets::vline(ui, 22.0);
                         }
-                        let tool_icon = icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()));
+                        // The tool preset picker is greyed while warping, as in the reference (#12503).
+                        let warping = app.ui.transform.as_ref().is_some_and(|s| s.warp.is_some());
+                        let tool_icon = ui
+                            .add_enabled_ui(!warping, |ui| {
+                                icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()))
+                            })
+                            .inner;
                         // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools (#2825).
                         let mut reset = None;
                         tool_icon.context_menu(|ui| {
