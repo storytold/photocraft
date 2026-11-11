@@ -495,15 +495,20 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
     }
     let p = content_aware_move_params(app, [i64::from(off[0]), i64::from(off[1])]);
     if let Err(e) = app.run("paint.contentAwareMove", p) {
-        if content_aware_move_alert(&e) {
-            // One OK button. Other engine errors (empty selection, too large, a zero offset that
-            // reached the command) stay on the status bar.
-            let params = json!({ "message": e }).as_object().cloned().unwrap_or_default();
-            app.ui.open_dialog(crate::state::DialogKind::Error, params);
-        } else {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
+        content_aware_move_failed(app, e);
+    }
+}
+
+/// A `paint.contentAwareMove` error from a drag or a Transform On Drop commit: the four measured
+/// refusals are an alert with one OK button. Other engine errors (too large, a zero offset that
+/// reached the command) stay on the status bar.
+pub(crate) fn content_aware_move_failed(app: &mut PhotocraftApp, e: String) {
+    if content_aware_move_alert(&e) {
+        let params = json!({ "message": e }).as_object().cloned().unwrap_or_default();
+        app.ui.open_dialog(crate::state::DialogKind::Error, params);
+    } else {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 

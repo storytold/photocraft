@@ -274,16 +274,28 @@ fn refuse_unusable(doc: &Document, p: &Value, id: Option<LayerId>, sel: &Surface
     Ok(())
 }
 
-/// Whether any selected pixel of `layer` has opacity. A format with no alpha is opaque.
+/// Whether any selected pixel of `layer` has opacity. A format with no alpha is opaque. Read a
+/// strip of rows at a time and stop at the first one, so a large selection over opaque pixels
+/// (the usual case, also for every settled preview) reads only its first rows.
 fn selection_holds_pixels(layer: &photocraft_doc::Layer, sel: &Surface, area: Rect) -> bool {
+    const STRIP_ROWS: i32 = 64;
     let Some(surf) = layer.surface() else { return true };
     let Some(ai) = alpha_index(&surf.format()) else { return true };
     let n = surf.channels().max(1);
-    let data = surf.read_region(area);
-    coverage(sel, area)
-        .iter()
-        .enumerate()
-        .any(|(i, c)| *c > 0.0 && i.checked_mul(n).and_then(|b| b.checked_add(ai)).and_then(|idx| data.get(idx)).is_some_and(|a| *a > 0.0))
+    let mut y = area.y0;
+    while y < area.y1 {
+        let strip = Rect::new(area.x0, y, area.x1, y.saturating_add(STRIP_ROWS).min(area.y1));
+        let data = surf.read_region(strip);
+        let found = coverage(sel, strip)
+            .iter()
+            .enumerate()
+            .any(|(i, c)| *c > 0.0 && i.checked_mul(n).and_then(|b| b.checked_add(ai)).and_then(|idx| data.get(idx)).is_some_and(|a| *a > 0.0));
+        if found {
+            return true;
+        }
+        y = strip.y1;
+    }
+    false
 }
 
 /// Where the content of `area` lands on `canvas`: moved by `offset`, or (Transform On Drop) the

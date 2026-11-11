@@ -110,3 +110,17 @@ fn other_errors_keep_their_own_text() {
         assert_ne!(err, REFUSAL_INDEXED);
     }
 }
+
+#[test]
+fn pixels_below_the_first_rows_of_a_tall_selection_are_found() {
+    // The check reads the selection a strip of rows at a time; a dab far below the first strip
+    // still makes the layer usable.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 48, "height": 240, "background": "white"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.pencil", json!({"points": [[10, 220]], "size": 6, "color": "#202020"})).unwrap();
+    s.execute("select.rect", json!({"x": 4, "y": 2, "width": 14, "height": 230})).unwrap();
+    let n = steps(&s);
+    s.execute("paint.contentAwareMove", json!({"offset": [24, 0]})).unwrap();
+    assert_eq!(steps(&s), n + 1, "not refused as empty");
+}

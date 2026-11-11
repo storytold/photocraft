@@ -137,8 +137,7 @@ pub(crate) fn commit(app: &mut PhotocraftApp) {
     }
     let p = params(app, &place);
     if let Err(e) = app.run("paint.contentAwareMove", p) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+        crate::retouch_ui::content_aware_move_failed(app, e);
     }
 }
 
