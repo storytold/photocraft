@@ -977,6 +977,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         // A recorded Save is a step too: Batch writes the output for it.
                         charge_script_step(scratch)?;
                         if batch_save_point(id) {
+                            // The scratch session never executes a save point, so the gate would not see it.
+                            if let Some(gate) = scratch.authorize {
+                                gate(id, params)?;
+                            }
                             let st = scratch.active_mut().ok_or(EngineError::NoDocument)?;
                             saved = Some(st.doc.clone());
                             // Batch performs the action's Save / Save As (to its destination), so the
