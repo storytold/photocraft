@@ -7018,3 +7018,71 @@ fn adjustment_layer_name_must_round_trip() {
         }
     }
 }
+
+#[test]
+fn whole_library_conditional_scopes_roundtrip_without_borrowing_external_targets() {
+    let mut caller = Action::new(
+        "Caller",
+        vec![("actions.conditional".into(), json!({"if":"always", "then":"Target", "thenSet":"Original", "else":"Target", "elseSet":"Outside"}))],
+    );
+    caller.set = Some("Original".into());
+    let mut target = Action::new("Target", vec![]);
+    target.set = Some("Original".into());
+    let (original, _) = export("Original", &[&caller, &target], &[], false).unwrap();
+    let mut s = Session::new();
+    s.execute("actions.replace", json!({"data":b64(&original),"confirm":true})).unwrap();
+    let saved = s.execute("actions.save", json!({})).unwrap();
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    let imported = super::convert::import_sets(&bytes, None).unwrap().remove(0).0.imported;
+    assert_eq!(imported.actions[0].steps[0].1["thenSet"], DEFAULT_SET);
+    assert_eq!(imported.actions[0].steps[0].1["elseSet"], "Outside");
+    s.execute("actions.replace", json!({"data":b64(&bytes),"confirm":true})).unwrap();
+    let params = &s.actions.list[0].steps[0].1;
+    assert!(params.get("thenActionId").is_none(), "included target must remain resolvable: {params}");
+    assert_eq!(params["elseActionId"], Value::Null, "external unresolved scope cannot borrow an included target");
+}
+
+#[test]
+fn repeated_id_export_reuses_unique_targets_and_rejects_duplicate_ids() {
+    let id = "112233445566778899aabbccddeeff00";
+    let mut target = Action::new("Target", vec![]);
+    target.action_id = Some(id.into());
+    let caller = Action::new("Caller", (0..64).map(|_| ("actions.conditional".into(), json!({"if":"always","thenActionId":id,"thenSet":"Old"}))).collect());
+    let (bytes, skipped) = export("New", &[&caller, &target], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let imported = super::convert::import_sets(&bytes, None).unwrap().remove(0).0.imported;
+    assert_eq!(imported.actions[0].steps.len(), 64);
+    for (_, params) in &imported.actions[0].steps {
+        assert_eq!(params["then"], "Target");
+        assert_eq!(params["thenSet"], "New");
+    }
+    let mut duplicate = Action::new("Different", vec![]);
+    duplicate.action_id = Some(id.into());
+    assert!(export("New", &[&caller, &target, &duplicate], &[], false).is_err());
+    let (_, omitted) = export("New", &[&caller, &target, &duplicate], &[], true).unwrap();
+    assert_eq!(omitted.len(), 64);
+}
+
+#[test]
+fn loading_a_function_key_disables_displaced_occurrence_without_reviving_legacy() {
+    let mut s = Session::new();
+    let id = "112233445566778899aabbccddeeff00";
+    let mut original = Action::new("Existing", vec![]);
+    original.action_id = Some(id.into());
+    original.legacy_shortcut_owner = true;
+    s.actions.list.push(original);
+    let occurrence = crate::actions_cmds::occurrence_key(id);
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts.insert("actions.play:Existing".into(), "F5".into());
+        prefs.shortcuts.insert(occurrence.clone(), "F6".into());
+        prefs.shortcuts.insert("edit.fill".into(), "F5".into());
+    });
+    let action = Action::new("Imported", vec![]);
+    let (bytes, _) = export("Imported Set", &[&action], &[("Imported".into(), "F6".into())], false).unwrap();
+    s.execute("actions.load", json!({"data":b64(&bytes)})).unwrap();
+    assert_eq!(s.prefs().shortcuts.get(&occurrence).map(String::as_str), Some(""));
+    assert_eq!(crate::actions_cmds::action_shortcut(&s, 0), Some(""));
+    assert_eq!(s.prefs().shortcuts.get("actions.play:Existing").map(String::as_str), Some("F5"));
+    assert_eq!(s.prefs().shortcuts.get("edit.fill").map(String::as_str), Some("F5"));
+    assert_eq!(s.prefs().shortcuts.get("actions.play:Imported").map(String::as_str), Some("F6"));
+}

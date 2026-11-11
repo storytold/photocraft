@@ -113,7 +113,11 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         s.edit_prefs(|prefs| {
             for (name, key) in &keys {
                 // A function key belongs to one action.
-                prefs.shortcuts.retain(|k, v| !(crate::actions_cmds::is_action_key(k) && v == key));
+                for (assigned, value) in &mut prefs.shortcuts {
+                    if crate::actions_cmds::is_action_key(assigned) && value == key {
+                        value.clear();
+                    }
+                }
                 prefs.shortcuts.insert(format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX), key.clone());
             }
         });

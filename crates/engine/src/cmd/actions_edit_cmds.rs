@@ -93,8 +93,7 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if id == "actions.play" {
         // Refuse the one cycle visible here; deeper ones are caught at playback.
-        let target = params.get("action");
-        let is_self = target.and_then(Value::as_str) == Some(s.actions.list[idx].name.as_str()) || target.and_then(Value::as_u64) == Some(idx as u64);
+        let is_self = crate::actions_cmds::resolve_play_target(&s.actions.list, &params, cmd).ok() == Some(idx);
         if is_self {
             return Err(bad(cmd, "an action cannot play itself"));
         }
@@ -611,6 +610,26 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use crate::actions_cmds::Action;
+
+    #[test]
+    fn inserted_play_calls_use_resolved_occurrences_for_self_call_guard() {
+        let mut s = Session::new();
+        let first = "112233445566778899aabbccddeeff00";
+        let second = "112233445566778899aabbccddeeff11";
+        for id in [first, second] {
+            let mut action = Action::new("Same", vec![]);
+            action.action_id = Some(id.into());
+            s.actions.list.push(action);
+        }
+        // An ID-bound self call cannot hide behind another displayed name.
+        assert!(s.execute("actions.insert", json!({"action":1,"id":"actions.play","params":{"action":"Other","actionId":second}})).is_err());
+        assert!(s.actions.list[1].steps.is_empty());
+        // The first same-caption row and an explicit other ID are legitimate children.
+        s.execute("actions.insert", json!({"action":1,"id":"actions.play","params":{"action":"Same"}})).unwrap();
+        s.execute("actions.insert", json!({"action":1,"id":"actions.play","params":{"action":"Same","actionId":first}})).unwrap();
+        assert_eq!(s.actions.list[1].steps.len(), 2);
+        assert!(s.execute("actions.insert", json!({"action":0,"id":"actions.play","params":{"action":"Same"}})).is_err());
+    }
 
     fn session_with(steps: &[&str]) -> Session {
         let mut s = Session::new();

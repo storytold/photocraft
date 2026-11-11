@@ -330,33 +330,63 @@ pub fn parse_function_key(key: &str) -> Option<(u16, bool, bool)> {
     Some((n, shift, command))
 }
 
+/// Resolve export targets once; repeated calls never scan the selected library again.
+struct ExportTargets<'a> {
+    actions: &'a [&'a Action],
+    ids: std::collections::HashMap<&'a str, Option<usize>>,
+    clipped: std::collections::HashMap<String, usize>,
+    names: std::collections::HashSet<&'a str>,
+    scopes: std::collections::HashSet<(&'a str, &'a str)>,
+}
+
+impl<'a> ExportTargets<'a> {
+    fn new(actions: &'a [&'a Action]) -> Self {
+        let mut out = Self { actions, ids: Default::default(), clipped: Default::default(), names: Default::default(), scopes: Default::default() };
+        for (index, action) in actions.iter().enumerate() {
+            if let Some(id) = action.action_id.as_deref() {
+                out.ids.entry(id).and_modify(|row| *row = None).or_insert(Some(index));
+            }
+            *out.clipped.entry(clip_name(action.name.trim_end_matches('\0'))).or_default() += 1;
+            out.names.insert(&action.name);
+            if let Some(set) = action.set.as_deref() {
+                out.scopes.insert((set, &action.name));
+            }
+        }
+        out
+    }
+
+    fn by_id(&self, id: &Value) -> Option<&Action> {
+        let id = id.as_str().filter(|id| crate::actions_cmds::valid_action_id(id))?;
+        let action = self.actions[(*self.ids.get(id)?)?];
+        (self.clipped.get(&clip_name(action.name.trim_end_matches('\0'))) == Some(&1)).then_some(action)
+    }
+
+    fn internal(&self, name: &str, scope: Option<&str>) -> bool {
+        scope.map_or_else(|| self.names.contains(name), |scope| self.scopes.contains(&(scope, name)))
+    }
+}
+
 /// ATN uses names for these calls. Only translate an ID when that name identifies
 /// the same exported row; an absent or ambiguous target is an unsupported step.
-fn export_targeted_items(id: &str, params: &Value, set: &str, actions: &[&Action]) -> Option<Vec<AtnItem>> {
-    let targets: &[(&str, &str)] = match id {
-        "actions.play" => &[("actionId", "action")],
-        "actions.conditional" => &[("thenActionId", "then"), ("elseActionId", "else")],
-        _ => &[],
+fn export_targeted_items(id: &str, params: &Value, set: &str, targets: &ExportTargets<'_>) -> Option<Vec<AtnItem>> {
+    let fields: &[(&str, &str, &str)] = match id {
+        "actions.play" => &[("actionId", "action", "set")],
+        "actions.conditional" => &[("thenActionId", "then", "thenSet"), ("elseActionId", "else", "elseSet")],
+        _ => return export_items(id, params, set),
     };
-    if !targets.iter().any(|(key, _)| params.get(*key).is_some()) {
-        return export_items(id, params, set);
-    }
     let mut params = params.clone();
-    for (key, name) in targets {
-        if let Some(id) = params.get(*key) {
-            let id = id.as_str().filter(|id| crate::actions_cmds::valid_action_id(id))?;
-            let mut matches = actions.iter().filter(|action| action.action_id.as_deref() == Some(id));
-            let action = matches.next()?;
-            let imported = clip_name(action.name.trim_end_matches('\0'));
-            if matches.next().is_some()
-                || actions.iter().filter(|other| other.name.trim_end_matches('\0').chars().take(MAX_NAME_CHARS).eq(imported.chars())).take(2).count() != 1
-            {
-                return None;
-            }
+    for (key, name, scope) in fields {
+        if let Some(value) = params.get(*key) {
+            let action = targets.by_id(value)?;
             params[*name] = json!(action.name);
+            params[*scope] = json!(set);
+        } else if let Some(target) = params.get(*name).and_then(Value::as_str) {
+            let original_scope = params.get(*scope).filter(|value| !value.is_null()).or_else(|| params.get("set")).and_then(Value::as_str);
+            if targets.internal(target, original_scope) {
+                params[*scope] = json!(set);
+            }
         }
     }
-    params["set"] = json!(set);
     export_items(id, &params, set)
 }
 
@@ -377,6 +407,7 @@ pub(super) fn export_with_keys<'a>(
     key: impl Fn(usize, &Action) -> Option<&'a str>,
     skip_unsupported: bool,
 ) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
+    let targets = ExportTargets::new(actions);
     let mut skipped = Vec::new();
     let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
     for (index, a) in actions.iter().enumerate() {
@@ -385,7 +416,7 @@ pub(super) fn export_with_keys<'a>(
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
         for (i, (id, params)) in a.steps.iter().enumerate() {
-            let Some(items) = export_targeted_items(id, params, set, actions) else {
+            let Some(items) = export_targeted_items(id, params, set, &targets) else {
                 if skip_unsupported {
                     skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
                     continue;
