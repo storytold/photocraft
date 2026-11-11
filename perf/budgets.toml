@@ -882,3 +882,36 @@ issue = 9329
 bench = "perf_scenarios"
 row = "app frame after Paste Into on 24 MP (CPU canvas)"
 enforce = false  # new; no baseline yet
+
+# ---- #9332: moving and pasting a photo layer (track only) -------------------------------------
+#
+# A layer copied from a 36 MP photo, so every tile is its own: P14 and the full-canvas drag rows
+# move solid fills, which `Surface::translated` shares as one tile. Each row checks its path: the
+# layer's tiles are at least 90 % distinct, the document has two layers, the drag stays under the
+# live-copy limit, and the paste lands in the layer mask.
+
+[[scenario]]
+id = "P113"
+title = "Move a 36 MP photo layer + refresh"
+issue = 9332
+bench = "perf_scenarios"
+row = "move photo layer 36 MP + refresh"
+budget_ms = 80
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P114"
+title = "Move tool drag frame of a 36 MP photo layer"
+issue = 9332
+bench = "perf_scenarios"
+row = "move tool drag frame, 36 MP photo layer"
+budget_ms = 16
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P115"
+title = "Paste a 36 MP photo into a layer mask + refresh"
+issue = 9332
+bench = "perf_scenarios"
+row = "paste 36 MP into a layer mask + refresh"
+enforce = false  # new; no baseline yet
