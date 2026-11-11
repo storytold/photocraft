@@ -211,9 +211,8 @@ impl GradientShape {
                 }
             }
         }
-        let blocks = hashes.iter().enumerate().filter(|(i, _)| occupied[*i]).map(|(i, h)| {
-            (((by + i as i32 / width), (bx + i as i32 % width)), h.finish())
-        }).collect();
+        let blocks =
+            hashes.iter().enumerate().filter(|(i, _)| occupied[*i]).map(|(i, h)| (((by + i as i32 / width), (bx + i as i32 % width)), h.finish())).collect();
         Self { bounds, blocks }
     }
 

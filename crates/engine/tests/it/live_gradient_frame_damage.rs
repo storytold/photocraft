@@ -416,8 +416,11 @@ fn an_interior_mask_hole_keeps_gradient_stroke_damage_local() {
         let layer = doc.layer_mut(id).unwrap();
         let photocraft_doc::Effect::GradientOverlay { common, gradient, .. } = layer.effects.items.remove(0) else { panic!("fixture overlay") };
         layer.effects.items.push(photocraft_doc::Effect::Stroke(photocraft_doc::StrokeFx {
-            common, size: 4.0, position: photocraft_doc::StrokePosition::Inside,
-            paint: photocraft_doc::FxPaint::Gradient(gradient), overprint: false,
+            common,
+            size: 4.0,
+            position: photocraft_doc::StrokePosition::Inside,
+            paint: photocraft_doc::FxPaint::Gradient(gradient),
+            overprint: false,
         }));
         Ok(())
     })
@@ -464,11 +467,15 @@ fn mask_build_fallback_change_is_visible_in_cached_stroke_coverage() {
         let layer = doc.layer_mut(id).unwrap();
         let photocraft_doc::Effect::GradientOverlay { common, gradient, .. } = layer.effects.items.remove(0) else { panic!("fixture overlay") };
         layer.effects.items.push(photocraft_doc::Effect::Stroke(photocraft_doc::StrokeFx {
-            common, size: 4.0, position: photocraft_doc::StrokePosition::Inside,
-            paint: photocraft_doc::FxPaint::Gradient(gradient), overprint: false,
+            common,
+            size: 4.0,
+            position: photocraft_doc::StrokePosition::Inside,
+            paint: photocraft_doc::FxPaint::Gradient(gradient),
+            overprint: false,
         }));
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let doc = &s.active().unwrap().doc;
     let layer = doc.layer(id).unwrap();
     let photocraft_doc::Effect::Stroke(stroke) = &layer.effects.items[0] else { panic!("fixture Stroke") };
@@ -476,7 +483,9 @@ fn mask_build_fallback_change_is_visible_in_cached_stroke_coverage() {
     let tex = photocraft_compose::effects::TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
     let mut old = vec![1.0; 64 * 64];
     for y in 8..16 {
-        for x in 8..16 { old[y * 64 + x] = 0.0; }
+        for x in 8..16 {
+            old[y * 64 + x] = 0.0;
+        }
     }
     let before = photocraft_compose::effects::build_maps(layer, old, rect, &doc.global_light, &tex);
     // When the larger mask build is refused, the returned default1 mask removes the old hole.
@@ -509,23 +518,33 @@ fn feather_rounding_stroke_frame_changes_use_the_actual_renderer_maps() {
         mask.surface.fill_rect(Rect::new(511, 63, 512, 64), &[1.0]);
         layer.mask = Some(mask);
         Ok(())
-    }).unwrap();
-    s.execute("layer.layerStyle.gradientOverlay", json!({"from":"#000000","to":"#ffffff","angle":0,"scale":100,"opacity":100,"blend":"Normal","style":"linear"})).unwrap();
+    })
+    .unwrap();
+    s.execute(
+        "layer.layerStyle.gradientOverlay",
+        json!({"from":"#000000","to":"#ffffff","angle":0,"scale":100,"opacity":100,"blend":"Normal","style":"linear"}),
+    )
+    .unwrap();
     s.edit("inside gradient Stroke", |doc, _| {
         let layer = doc.layer_mut(id).unwrap();
         let photocraft_doc::Effect::GradientOverlay { common, gradient, .. } = layer.effects.items.remove(0) else { panic!("fixture overlay") };
         layer.effects.items.push(photocraft_doc::Effect::Stroke(photocraft_doc::StrokeFx {
-            common, size: 4.0, position: photocraft_doc::StrokePosition::Inside,
-            paint: photocraft_doc::FxPaint::Gradient(gradient), overprint: false,
+            common,
+            size: 4.0,
+            position: photocraft_doc::StrokePosition::Inside,
+            paint: photocraft_doc::FxPaint::Gradient(gradient),
+            overprint: false,
         }));
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let original = &s.active().unwrap().doc;
     let mut shown = render(original, original.bounds());
     let before = photocraft_compose::gradient_stroke_layout(original, original.layer(id).unwrap()).unwrap();
     let mask = photocraft_compose::masks::combined_mask(original.layer(id).unwrap(), original.bounds()).unwrap();
     assert_eq!(mask.sample_channel(350, 32, 0), 129.0 / 65535.0);
-    let params = json!({"points":[[136.0,32.0,1.0]],"target":"mask","block":true,"zoom":1.0,"color":"#ffffff","seed":42,"brush":{"smoothing":{"enabled":false}}});
+    let params =
+        json!({"points":[[136.0,32.0,1.0]],"target":"mask","block":true,"zoom":1.0,"color":"#ffffff","seed":42,"brush":{"smoothing":{"enabled":false}}});
     let live = LiveStroke::begin_with(&s, "paint.pencil", &params).unwrap();
     let layer = live.doc.layer(id).unwrap();
     let current = photocraft_compose::gradient_stroke_layout(&live.doc, layer).unwrap();

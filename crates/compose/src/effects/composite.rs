@@ -125,8 +125,8 @@ pub(crate) fn build_maps_prepared(
     } else {
         (None, None)
     };
-    let gradient_shape = items.iter().any(|e| matches!(e, Effect::Stroke(st) if matches!(st.paint, FxPaint::Gradient(_))))
-        .then(|| super::GradientShape::new(&shape, rect));
+    let gradient_shape =
+        items.iter().any(|e| matches!(e, Effect::Stroke(st) if matches!(st.paint, FxPaint::Gradient(_)))).then(|| super::GradientShape::new(&shape, rect));
     let mut frames: Vec<(u32, Rect)> = Vec::new();
     for e in &items {
         if let Effect::Stroke(st) = e

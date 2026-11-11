@@ -17,10 +17,12 @@ fn gradients(layer: &Layer) -> impl Iterator<Item = (&Gradient, bool)> {
 
 fn mappings(layer: &Layer, frame: Rect, layout: Option<&GradientStrokeLayout>) -> Vec<GradientMapping> {
     let mut frames = layout.map(|layout| layout.frames.iter());
-    gradients(layer).map(|(gradient, stroke)| {
-        let frame = if stroke { frames.as_mut().and_then(|frames| frames.next()).copied().unwrap_or(frame) } else { frame };
-        GradientMapping::for_effect(gradient, frame)
-    }).collect()
+    gradients(layer)
+        .map(|(gradient, stroke)| {
+            let frame = if stroke { frames.as_mut().and_then(|frames| frames.next()).copied().unwrap_or(frame) } else { frame };
+            GradientMapping::for_effect(gradient, frame)
+        })
+        .collect()
 }
 
 struct Watched {
@@ -55,7 +57,11 @@ impl Tracker {
             let layout = photocraft_compose::gradient_stroke_layout(doc, layer);
             let mappings = mappings(layer, frame, layout.as_ref());
             layers.push(Watched {
-                path: path.to_vec(), id: layer.id, frame, mappings, layout,
+                path: path.to_vec(),
+                id: layer.id,
+                frame,
+                mappings,
+                layout,
                 bounds: photocraft_compose::change_bounds(layer, doc.bounds()).unwrap_or_else(|| doc.bounds()),
             });
         }
