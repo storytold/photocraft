@@ -14,6 +14,49 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     menu_items(app).into_iter().find(|i| i.id == id).and_then(|i| i.checked)
 }
 
+/// The form must list every source first and default to Current only when a document exists.
+#[test]
+fn image_processor_source_choices_include_current_and_all_open_documents() {
+    for n in [0, 2] {
+        let (mut app, ctx) = app_with(n);
+        menu(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+        let fields = &app.ui.dialogs.last().unwrap().fields;
+        assert_eq!(fields["source"], json!(if n == 0 { "folder" } else { "current" }));
+        assert_eq!(fields["__choices"]["source"], json!(["current", "open", "folder"]));
+        assert_eq!(fields["__labels"]["current"], json!("Current document"));
+        assert_eq!(fields["__labels"]["open"], json!("All open documents"));
+        assert_eq!(form_keys(fields).first().map(String::as_str), Some("source"));
+    }
+}
+
+/// Confirming either document source must ignore a stale input-folder field, export the
+/// expected number of copies and retain the open documents' original snapshots.
+#[test]
+fn image_processor_dialog_confirms_open_document_sources_without_reading_the_input_folder() {
+    for source in ["current", "open"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, ctx) = app_with(0);
+        for name in ["First", "Second"] {
+            app.run("file.new", json!({"name": name, "width": 100, "height": 80})).unwrap();
+        }
+        let before: Vec<_> = app.session.documents().iter().map(|st| st.doc.clone()).collect();
+        let id = menu(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+        fields.insert("source".into(), json!(source));
+        fields.insert("input".into(), json!(dir.path().join("missing-input")));
+        fields.insert("output".into(), json!(dir.path()));
+        fields.insert("format".into(), json!("png"));
+        fields.insert("width".into(), json!(50));
+        fields.insert("height".into(), json!(50));
+        let result = crate::dialogs::confirm(&mut app, id).unwrap();
+        assert_eq!(result["files"].as_array().unwrap().len(), if source == "current" { 1 } else { 2 }, "{result}");
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+        for (st, original) in app.session.documents().iter().zip(&before) {
+            assert!(std::sync::Arc::ptr_eq(&st.doc, original));
+        }
+    }
+}
+
 /// #1209: the browser picker supplies bytes even when the engine cannot read native paths.
 #[test]
 fn place_embedded_enablement_does_not_require_native_doc() {
@@ -183,14 +226,14 @@ fn print_size_uses_the_screen_resolution_preference() {
 #[test]
 fn arrange_layouts_floating_windows_and_matching() {
     let (mut app, ctx) = app_with(3);
-    assert!(cells("tabs", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3).is_none());
+    assert!(cells("tabs", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).is_none());
     menu(&mut app, &ctx, "window.arrange.threeUpStacked", json!({})).unwrap();
     assert_eq!(checked(&app, "window.arrange.threeUpStacked"), Some(true));
-    let c = cells(&app.ui.view.arrange, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3).unwrap();
+    let c = cells(&app.ui.view.arrange, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).unwrap();
     assert_eq!(c.len(), 3);
     assert_eq!(c[0].height(), 600.0);
     assert_eq!(c[1].height(), 300.0);
-    let six = cells("sixUp", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3).unwrap();
+    let six = cells("sixUp", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).unwrap();
     assert_eq!((six.len(), six[1].min.x), (6, 300.0));
     menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
     assert_eq!(app.ui.windows.len(), 3);
@@ -232,13 +275,109 @@ fn match_zoom_clamps_to_each_documents_zoom_range() {
 fn two_up_and_stacked_cells_keep_their_existing_boundaries() {
     let rect = egui::Rect::from_min_max(egui::pos2(40.0, 75.0), egui::pos2(940.0, 675.0));
     let region = |left, top, right, bottom| egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
-    assert_eq!(cells("twoUpVertical", rect, 2).unwrap(), vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 675.0)]);
-    assert_eq!(cells("twoUpHorizontal", rect, 2).unwrap(), vec![region(40.0, 75.0, 940.0, 375.0), region(40.0, 375.0, 940.0, 675.0)]);
+    assert_eq!(cells("twoUpVertical", rect, 2, &[]).unwrap(), vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 675.0)]);
+    assert_eq!(cells("twoUpHorizontal", rect, 2, &[]).unwrap(), vec![region(40.0, 75.0, 940.0, 375.0), region(40.0, 375.0, 940.0, 675.0)]);
     assert_eq!(
-        cells("threeUpStacked", rect, 3).unwrap(),
+        cells("threeUpStacked", rect, 3, &[]).unwrap(),
         vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 375.0), region(490.0, 375.0, 940.0, 675.0)]
     );
-    assert!(cells("twoUpVertical", rect, 1).is_none());
+    assert!(cells("twoUpVertical", rect, 1, &[]).is_none());
+}
+
+#[test]
+fn dragged_arrange_borders_resize_the_cells_beside_them() {
+    // #10101: in 2-up and the other arrangements the border between documents drags, as in
+    // Photoshop, and the documents on either side take the new sizes.
+    use super::arrange::{Border, MIN_CELL};
+    let near = |a: &[egui::Rect], b: &[egui::Rect]| {
+        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| (a.min - b.min).length() < 0.01 && (a.max - b.max).length() < 0.01)
+    };
+    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 600.0));
+    let region = |left, top, right, bottom| egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
+    let mut splits = Vec::new();
+    let b = borders("twoUpVertical", rect, 2, &splits);
+    assert_eq!(b, vec![Border { split: 0, vertical: true, line: region(450.0, 0.0, 450.0, 600.0) }]);
+    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(300.0, 250.0));
+    assert!(near(&cells("twoUpVertical", rect, 2, &splits).unwrap(), &[region(0.0, 0.0, 300.0, 600.0), region(300.0, 0.0, 900.0, 600.0)]));
+    assert!((borders("twoUpVertical", rect, 2, &splits)[0].line.min.x - 300.0).abs() < 0.01);
+    // No cell is dragged narrower than MIN_CELL, nor past the area.
+    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(-500.0, 0.0));
+    assert!((cells("twoUpVertical", rect, 2, &splits).unwrap()[0].width() - MIN_CELL).abs() < 0.01);
+    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(899.0, 0.0));
+    assert!((cells("twoUpVertical", rect, 2, &splits).unwrap()[1].width() - MIN_CELL).abs() < 0.01);
+
+    // 4-up: a column border and a row border, each across the whole area.
+    let mut splits = Vec::new();
+    let b = borders("fourUp", rect, 4, &splits);
+    assert_eq!(b.iter().map(|b| (b.split, b.vertical)).collect::<Vec<_>>(), vec![(0, true), (1, false)]);
+    drag_border("fourUp", rect, 4, &mut splits, 1, egui::pos2(10.0, 450.0));
+    let c = cells("fourUp", rect, 4, &splits).unwrap();
+    assert!(near(&[c[0], c[3]], &[region(0.0, 0.0, 450.0, 450.0), region(450.0, 450.0, 900.0, 600.0)]));
+
+    // 3-up Stacked: the row border is only across the right column, and follows the column.
+    let mut splits = Vec::new();
+    drag_border("threeUpStacked", rect, 3, &mut splits, 0, egui::pos2(600.0, 0.0));
+    drag_border("threeUpStacked", rect, 3, &mut splits, 1, egui::pos2(700.0, 200.0));
+    assert!(near(
+        &cells("threeUpStacked", rect, 3, &splits).unwrap(),
+        &[region(0.0, 0.0, 600.0, 600.0), region(600.0, 0.0, 900.0, 200.0), region(600.0, 200.0, 900.0, 600.0)]
+    ));
+    assert!(near(&[borders("threeUpStacked", rect, 3, &splits)[1].line], &[region(600.0, 200.0, 900.0, 200.0)]));
+
+    // Tiled: a border stops short of its neighbours, so the cells keep their order.
+    let mut splits = Vec::new();
+    drag_border("threeUpVertical", rect, 3, &mut splits, 0, egui::pos2(800.0, 0.0));
+    let c = cells("threeUpVertical", rect, 3, &splits).unwrap();
+    assert!((c[0].max.x - (600.0 - MIN_CELL)).abs() < 0.01 && (c[1].width() - MIN_CELL).abs() < 0.01);
+
+    // #10101 review: the limit is MIN_CELL itself, not the even spacing. On a 300 pt axis a
+    // 2-up cell may still be dragged down to 80 pt, where capping the gap at 0.5/(n+1) would
+    // have stopped it at 75.
+    let narrow = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(300.0, 200.0));
+    let mut splits = Vec::new();
+    drag_border("twoUpVertical", narrow, 2, &mut splits, 0, egui::pos2(-100.0, 0.0));
+    assert!((cells("twoUpVertical", narrow, 2, &splits).unwrap()[0].width() - MIN_CELL).abs() < 0.01);
+
+    // And when the neighbours leave no room for a cell of that width, the border stays put and
+    // the list keeps its order rather than taking a value from the wrong side of them.
+    let tight = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(200.0, 200.0));
+    let mut splits = vec![0.45, 0.55];
+    drag_border("threeUpVertical", tight, 3, &mut splits, 1, egui::pos2(10.0, 0.0));
+    assert_eq!(splits, vec![0.45, 0.55], "no room: unchanged");
+    let mut splits = vec![0.45, 0.55];
+    drag_border("threeUpVertical", tight, 3, &mut splits, 0, egui::pos2(190.0, 0.0));
+    assert_eq!(splits, vec![0.45, 0.55], "and from the other side too");
+}
+
+#[test]
+fn damaged_or_stale_arrange_splits_lay_out_even_cells() {
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0));
+    let even = cells("threeUpVertical", rect, 3, &[]).unwrap();
+    // From a settings file or another layout: wrong count, out of order, outside 0–1, NaN.
+    for bad in [vec![0.5], vec![0.6, 0.3], vec![0.0, 0.5], vec![0.3, 1.5], vec![f32::NAN, 0.7], vec![0.2, 0.4, 0.6]] {
+        assert_eq!(cells("threeUpVertical", rect, 3, &bad).unwrap(), even, "{bad:?}");
+        assert_eq!(borders("threeUpVertical", rect, 3, &bad).len(), 2);
+        // A drag starts again from even cells.
+        let mut splits = bad.clone();
+        drag_border("threeUpVertical", rect, 3, &mut splits, 1, egui::pos2(700.0, 0.0));
+        assert_eq!(cells("threeUpVertical", rect, 3, &splits).unwrap()[0], even[0], "{bad:?}");
+    }
+    // A split that isn't the layout's, or a pointer off the numbers, changes nothing.
+    let mut splits = vec![0.25, 0.5];
+    drag_border("threeUpVertical", rect, 3, &mut splits, 2, egui::pos2(700.0, 0.0));
+    drag_border("threeUpVertical", rect, 3, &mut splits, 0, egui::pos2(f32::NAN, 0.0));
+    drag_border("threeUpVertical", egui::Rect::NOTHING, 3, &mut splits, 0, egui::pos2(10.0, 0.0));
+    assert_eq!(splits, vec![0.25, 0.5]);
+    assert!(borders("tabs", rect, 3, &[]).is_empty());
+}
+
+#[test]
+fn choosing_an_arrangement_starts_from_even_cells() {
+    let (mut app, ctx) = app_with(2);
+    menu(&mut app, &ctx, "window.arrange.twoUpVertical", json!({})).unwrap();
+    app.ui.view.arrange_splits = vec![0.3];
+    menu(&mut app, &ctx, "window.arrange.twoUpHorizontal", json!({})).unwrap();
+    assert!(app.ui.view.arrange_splits.is_empty());
 }
 
 #[test]
@@ -511,8 +650,8 @@ fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
     let (mut app, ctx) = app_with(1);
     let first = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
     assert_eq!(app.ui.dialog_mut(first).unwrap().fields["columns"], 8);
-    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["gutter"], 20);
-    for (key, value) in [("columns", json!(2)), ("gutter", json!(0)), ("rows", json!(2)), ("rowGutter", json!(0))] {
+    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["gutter"], "20 px");
+    for (key, value) in [("columns", json!(2)), ("gutter", json!("0 px")), ("rows", json!(2)), ("rowGutter", json!("0 px"))] {
         app.ui.dialog_mut(first).unwrap().fields.insert(key.into(), value);
     }
     crate::dialogs::confirm(&mut app, first).unwrap();
@@ -520,9 +659,9 @@ fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
     let second = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &app.ui.dialog_mut(second).unwrap().fields;
     assert_eq!(fields["columns"], 2);
-    assert_eq!(fields["gutter"], 0);
+    assert_eq!(fields["gutter"], "0 px");
     assert_eq!(fields["rows"], 2);
-    assert_eq!(fields["rowGutter"], 0);
+    assert_eq!(fields["rowGutter"], "0 px");
     assert_eq!(fields["clearExisting"], false);
     // A cancelled edit must not replace the last successfully used values.
     app.ui.dialog_mut(second).unwrap().fields.insert("columns".into(), json!(9));
@@ -592,6 +731,7 @@ fn batch_dialogs_include_all_subfolders() {
             assert_eq!(fields["stopOnError"], json!(false));
             assert_eq!(fields["errorLog"], json!(""));
         }
+        fields.insert("source".into(), json!("folder"));
         fields.insert("input".into(), json!(input));
         fields.insert("output".into(), json!(dir.join(out).to_string_lossy()));
         fields.insert("includeSubfolders".into(), json!(true));
@@ -1014,6 +1154,50 @@ fn arranged_documents_keep_their_tiles() {
     assert_eq!(docs(&mut app, 1), vec![0, 1]);
 }
 
+/// #10101: dragging the border between two arranged documents moves it. Grabbed inside the
+/// other document's edge, it doesn't make that document the active one.
+#[test]
+fn dragging_the_border_between_arranged_documents_resizes_them() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with(2);
+    app.ui.view.arrange = "twoUpVertical".into();
+    app.ui.tool = crate::state::Tool::Brush;
+    // The right-hand document is active; the grab below is inside the left one's edge.
+    app.session.set_active(1);
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let area = h.state().last_canvas_rect;
+    let n = h.state().session.documents().len();
+    let border = borders("twoUpVertical", area, n, &[])[0].line;
+    // On the grip, 2 pt inside the left document (its cell ends 1 pt short of the border).
+    let from = border.center() - egui::vec2(2.0, 0.0);
+    let to = from - egui::vec2(200.0, 0.0);
+    let ev = |h: &mut Harness<'_, PhotocraftApp>, e: egui::Event| h.input_mut().events.push(e);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    ev(&mut h, egui::Event::PointerMoved(from));
+    h.run();
+    ev(&mut h, button(from, true));
+    h.run();
+    for step in 1..=10 {
+        ev(&mut h, egui::Event::PointerMoved(from + (to - from) * (step as f32 / 10.0)));
+        h.run();
+    }
+    ev(&mut h, button(to, false));
+    h.run_steps(2);
+    let cells = cells("twoUpVertical", area, n, &h.state().ui.view.arrange_splits).unwrap();
+    assert!((cells[0].max.x - to.x).abs() < 1.0, "the border follows the pointer: {cells:?}, pointer at {}", to.x);
+    assert_eq!(h.state().session.active_index(), Some(1), "grabbing the border activates no document");
+}
+
 /// #6017: rulers showed in the active tile only; the other tile had none and no room for them.
 #[test]
 fn every_arranged_tile_has_rulers() {
@@ -1044,6 +1228,87 @@ fn every_arranged_tile_has_rulers() {
         }
     }
     assert!(labels[0] > 0 && labels[1] > 0, "ruler labels per tile: {labels:?}");
+}
+
+/// #10069: with documents side by side, a press on a dialog over another document's tile made
+/// that document active under the dialog. Only a press that reaches the tile switches documents.
+#[test]
+fn a_press_on_a_dialog_over_an_arranged_tile_keeps_the_active_document() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with(2);
+    app.ui.view.arrange = "tileAllVertically".into();
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            // A dialog (Levels, say) over the left half of the document area.
+            egui::Window::new("Levels")
+                .id(egui::Id::unique("arrange-test-dialog"))
+                .fixed_pos(egui::pos2(60.0, 120.0))
+                .fixed_size(egui::vec2(260.0, 200.0))
+                .show(ui.ctx(), |ui| ui.label("Levels"));
+            // An open menu (View › Pixel Aspect Ratio, say): a foreground popup below the dialog.
+            egui::Area::new(egui::Id::unique("arrange-test-menu")).order(egui::Order::Foreground).fixed_pos(egui::pos2(60.0, 360.0)).show(ui.ctx(), |ui| {
+                ui.set_min_size(egui::vec2(200.0, 80.0));
+                ui.label("Anamorphic 2:1 (2)")
+            });
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let active = h.state().session.active_index().unwrap();
+    let rect = h.state().last_canvas_rect;
+    let other = crate::canvas::arranged_cells(h.state(), rect).unwrap().into_iter().find(|(d, _)| *d != active).unwrap();
+    let dialog = h.ctx.memory(|m| m.area_rect(egui::Id::unique("arrange-test-dialog"))).unwrap();
+    assert!(other.1.intersects(dialog), "the dialog covers part of the other tile: {:?} and {dialog:?}", other.1);
+    let press = |h: &mut Harness<'_, PhotocraftApp>, p: egui::Pos2| {
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+    };
+    let on_dialog = other.1.intersect(dialog).center();
+    press(&mut h, on_dialog);
+    assert_eq!(h.state().session.active_index(), Some(active), "a press on the dialog leaves the active document alone");
+    // Nor does choosing a menu item over the tile: the item's command must reach the active
+    // document, not the one under the menu.
+    let menu = h.ctx.memory(|m| m.area_rect(egui::Id::unique("arrange-test-menu"))).unwrap();
+    assert!(other.1.intersects(menu), "the menu covers part of the other tile: {:?} and {menu:?}", other.1);
+    press(&mut h, other.1.intersect(menu).center());
+    assert_eq!(h.state().session.active_index(), Some(active), "a press on a menu leaves the active document alone");
+    // A press on the dialog and a move off it that arrive in one frame: the press decides.
+    let clear = [other.1.center_bottom() - egui::vec2(0.0, 20.0), other.1.right_center() - egui::vec2(20.0, 0.0)]
+        .into_iter()
+        .find(|p| !dialog.contains(*p) && !menu.contains(*p))
+        .unwrap();
+    h.event(egui::Event::PointerMoved(on_dialog));
+    h.run_steps(1);
+    // `Harness::event` runs a frame per event, so both go into one frame's input.
+    h.input_mut().events.extend([
+        egui::Event::PointerButton { pos: on_dialog, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerMoved(clear),
+    ]);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: clear, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().session.active_index(), Some(active), "a press on the dialog, then a move in the same frame, leaves it alone");
+    // The tile itself, clear of the dialog, still switches documents.
+    press(&mut h, clear);
+    assert_eq!(h.state().session.active_index(), Some(other.0), "a press on the tile activates its document");
+    // Two presses in one frame, the dialog's and then the tile's: the last one decides.
+    h.state_mut().session.set_active(active);
+    h.run_steps(2);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.input_mut().events.extend([button(on_dialog, true), button(on_dialog, false), egui::Event::PointerMoved(clear), button(clear, true)]);
+    h.run_steps(1);
+    h.event(button(clear, false));
+    h.run_steps(2);
+    assert_eq!(h.state().session.active_index(), Some(other.0), "the frame's last press, on the tile, activates its document");
 }
 
 #[test]
@@ -1107,4 +1372,53 @@ fn full_screen_modes_need_a_document() {
     app.ui.view.screen_mode = "fullScreenWithMenuBar".into();
     leave_full_screen_without_document(&mut app, &ctx);
     assert_eq!(app.ui.view.screen_mode, "standard");
+}
+
+/// #10101 review: the grip overlaps the *active* document's edge too, and a press there must
+/// drag the border without painting. The cells the canvases are actually drawn in follow.
+#[test]
+fn grabbing_the_border_inside_the_active_document_drags_it_without_painting() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with(2);
+    app.ui.view.arrange = "twoUpVertical".into();
+    app.ui.tool = crate::state::Tool::Brush;
+    // The right-hand document is active, and the grab below is inside *its* edge.
+    app.session.set_active(1);
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let area = h.state().last_canvas_rect;
+    let n = h.state().session.documents().len();
+    let border = borders("twoUpVertical", area, n, &[])[0].line;
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().map_or(0, |d| d.history.entries().len());
+    let before = steps(&h);
+    // 2 pt into the right-hand (active) document, where its canvas would otherwise take the press.
+    let from = border.center() + egui::vec2(2.0, 0.0);
+    let to = from + egui::vec2(150.0, 0.0);
+    let ev = |h: &mut Harness<'_, PhotocraftApp>, e: egui::Event| h.input_mut().events.push(e);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    ev(&mut h, egui::Event::PointerMoved(from));
+    h.run();
+    ev(&mut h, button(from, true));
+    h.run();
+    for step in 1..=10 {
+        ev(&mut h, egui::Event::PointerMoved(from + (to - from) * (step as f32 / 10.0)));
+        h.run();
+    }
+    ev(&mut h, button(to, false));
+    h.run_steps(2);
+    assert_eq!(steps(&h), before, "the press dragged the border and painted nothing");
+    assert_eq!(h.state().session.active_index(), Some(1), "the active document stays active");
+    // And the cells the documents are drawn in follow the border, not just the stored fractions.
+    let shown = crate::canvas::arranged_cells(h.state(), area).expect("two documents are arranged");
+    assert!((shown[0].1.max.x - to.x).abs() < 2.0, "the left cell ends at the border: {:?}, pointer at {}", shown[0].1, to.x);
+    assert!((shown[1].1.min.x - to.x).abs() < 2.0, "and the right one starts there: {:?}", shown[1].1);
 }

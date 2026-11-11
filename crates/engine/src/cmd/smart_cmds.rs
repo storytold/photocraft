@@ -193,7 +193,7 @@ pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_pain
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
 pub(crate) use placing::detach_psd;
 pub(crate) use placing::{affine_homography, set_placement, shift_smart, transform_placement};
-use placing::{convert, shift_layer, via_copy};
+use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
 #[cfg(test)]
 pub(crate) use rendering::DISPLAY_NATIVE_HASH_BYTES;
@@ -238,6 +238,14 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"layer":id?} → opens the contents as a new document; saving (layer.smartObjects.saveContents) or closing it updates the smart object"##,
             has_smart,
             edit_contents
+        ),
+        spec!(
+            "layer.smartObjects.resetTransform",
+            "Reset Transform",
+            SO,
+            r##"{"layer":id?} (the placement returns to 100 % of the current contents' own size with rotation, skew, Distort, Perspective and the Warp cleared, centred on the average of the placement's four corners; the smart filters stay; refused with nothing changed when the object can't be re-rendered (a visible filter PhotoCraft doesn't have, or contents that can't be read); one undo step)"##,
+            has_smart,
+            reset_transform
         ),
         spec!("layer.smartObjects.saveContents", "Save Contents", &[], "{} (in an Edit Contents document)", is_smart_child, |s, _| {
             let i = s.active_index().ok_or(EngineError::NoDocument)?;

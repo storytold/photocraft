@@ -1,4 +1,4 @@
-//! Issue #11753: only the Eyedropper Sample labels change, not their ids or translations.
+//! Issue #11753: English Sample labels and stable ids; catalog changes live in craft-i18n.
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -133,75 +133,21 @@ fn sample_dropdown_selects_current_and_below_no_adjustments_by_unchanged_id() {
 }
 
 #[test]
-fn translated_sample_labels_preserve_the_five_ids_and_existing_values() {
+fn sample_layer_ids_keep_the_five_entry_order_in_every_language() {
     for lang in Lang::all() {
         i18n::with_language(lang, || {
             let options = super::layer_options();
-            assert_eq!(options.clone().map(|(id, _)| id), IDS.map(str::to_owned), "{}", lang.code());
-            assert_eq!(options.map(|(_, label)| label), LABELS.map(|label| i18n::tr(lang, label)), "{}", lang.code());
+            assert_eq!(options.map(|(id, _)| id), IDS.map(str::to_owned), "{}", lang.code());
         });
     }
 }
 
 #[test]
-fn translated_sample_dropdown_keeps_selection_ids_and_sibling_options() {
-    let lang = Lang::from_code("fr").unwrap();
+fn sample_dropdown_keeps_selection_ids_and_sibling_options_in_other_language() {
+    // Keep the real locale when embedded; an English-only build needs no external catalog.
+    let lang = Lang::from_code("fr").unwrap_or_else(|| i18n::fixture_lang("fr", ""));
     let mut h = options_bar(lang, ThemeKind::Studio);
     // Missing translations remain a supported English fallback, never a test failure.
     choose_sample(&mut h, lang, "allNoAdjustments", i18n::tr(lang, "All Layers no Adjustments"));
     choose_sample(&mut h, lang, "currentAndBelowNoAdjustments", i18n::tr(lang, "Current & Below no Adjustments"));
-}
-
-// Frozen pre-change values: rekey existing entries without editing their translated bytes.
-// Do not require a row to exist: catalogs may legitimately fall back to English.
-const TRANSLATIONS: [(&str, [&str; 2]); 32] = [
-    ("ar", ["كل الطبقات بدون تعديلات", "الحالية وما تحتها دون تعديلات"]),
-    ("az", ["Bütün qatlardə düzəliş yoxdur", "Cari və Aşağıda Düzəlişlər Yoxdur"]),
-    ("bs", ["Svi slojevi bez podešavanja", "Trenutni i ispod bez podešavanja"]),
-    ("cs", ["Všechny vrstvy bez korekcí", "Aktuální a pod ní bez korekcí"]),
-    ("da", ["Alle lag uden justeringer", "Aktuelt og nedenunder uden justeringer"]),
-    ("de", ["Alle Ebenen ohne Einstellungen", "Aktuelle und darunter ohne Einstellungen"]),
-    ("el", ["Όλα τα επίπεδα χωρίς προσαρμογές", "Τρέχον και υποκείμενα χωρίς προσαρμογές"]),
-    ("es", ["Todas las capas sin ajustes", "Actual e inferiores sin ajustes"]),
-    ("fi", ["Kaikki tasot ilman säätöjä", "Nykyinen ja alemmat ilman säätöjä"]),
-    ("fr", ["Tous les calques sans ajustements", "Actif et inférieurs sans ajustements"]),
-    ("he", ["כל השכבות ללא התאמות", "נוכחי ומתחת ללא התאמות"]),
-    ("hu", ["Minden réteg, korrekciók nélkül", "Jelenlegi és alatta lévők, korrekciók nélkül"]),
-    ("id", ["Semua Layer Tanpa Penyesuaian", "Saat Ini & Di Bawahnya Tanpa Penyesuaian"]),
-    ("it", ["Tutti i livelli senza regolazioni", "Corrente e inferiori senza regolazioni"]),
-    ("ja", ["すべてのレイヤー (色調補正なし)", "現在のレイヤーとその下 (色調補正なし)"]),
-    ("ko", ["모든 레이어(조정 제외)", "현재 및 이하(조정 제외)"]),
-    ("nb", ["Alle lag uten justeringer", "Gjeldende og under uten justeringer"]),
-    ("nl", ["Alle lagen zonder aanpassingen", "Huidige en onderliggende zonder aanpassingen"]),
-    ("pl", ["Wszystkie warstwy bez korekt", "Bieżąca i poniżej bez korekt"]),
-    ("pt-br", ["Todas as camadas sem ajustes", "Atual e abaixo sem ajustes"]),
-    ("ro", ["Toate straturile fără ajustări", "Curent și inferioare fără ajustări"]),
-    ("ru", ["Все слои без коррекции", "Текущий и ниже без коррекции"]),
-    ("sr", ["Svi slojevi bez korekcija", "Tekući i ispod bez korekcija"]),
-    ("sv", ["Alla lager utan justeringar", "Aktuellt och under utan justeringar"]),
-    ("ta", ["அனைத்து அடுக்குகள், சரிசெய்தல்கள் இல்லாமல்", "தற்போதையது & கீழுள்ளவை, சரிசெய்தல்கள் இல்லாமல்"]),
-    ("th", ["ทุกเลเยอร์ไม่มีการปรับเปลี่ยน", "ปัจจุบันและต่ำกว่าไม่มีการปรับเปลี่ยน"]),
-    ("tr", ["Tüm Katmanlar Ayarlama Yok", "Mevcut ve Altında Ayarlama Yok"]),
-    ("uk", ["Усі шари без коригувань", "Поточний і нижчі без коригувань"]),
-    ("ur", ["تمام تہیں بغیر ایڈجسٹمنٹ", "موجودہ اور نیچے بغیر ایڈجسٹمنٹ"]),
-    ("vi", ["Mọi lớp không điều chỉnh", "Hiện tại & dưới không điều chỉnh"]),
-    ("zh-hans", ["所有图层（不含调整）", "当前及下方图层（不含调整）"]),
-    ("zh-hant", ["所有圖層（不含調整）", "目前及以下（不含調整）"]),
-];
-
-#[test]
-fn existing_catalog_keys_are_rekeyed_without_changing_translation_bytes() {
-    for info in &i18n::LANGUAGES {
-        let lang = Lang::from_code(info.code).unwrap();
-        for old in OLD_LABELS {
-            assert!(!i18n::has(lang, old), "{} still carries the superseded English key {old:?}", info.code);
-        }
-        if let Some((_, expected)) = TRANSLATIONS.iter().find(|(code, _)| *code == info.code) {
-            for (key, value) in LABELS.iter().skip(3).zip(expected) {
-                if i18n::has(lang, key) {
-                    assert_eq!(i18n::tr(lang, key).as_bytes(), value.as_bytes(), "{}: {key}", info.code);
-                }
-            }
-        }
-    }
 }
