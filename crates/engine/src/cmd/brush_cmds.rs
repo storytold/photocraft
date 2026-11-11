@@ -336,11 +336,17 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
 }
 
 /// Pencil Auto Erase: a stroke that starts on a pixel of the foreground colour paints the
-/// background colour instead (Photoshop).
+/// background colour instead (Photoshop). The match is exact (#11966): the foreground as the
+/// layer would store it (its mode and depth) against the pixel, its alpha aside, so one level
+/// off paints the foreground.
 fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4]) {
     let Some(p0) = start else { return };
     let c = surf.rgba(p0.x.floor() as i32, p0.y.floor() as i32);
-    if c[3] > 0.0 && (0..3).all(|i| (c[i] - fg[i]).abs() < 1.5 / 255.0) {
+    let mut probe = Surface::new(surf.format());
+    probe.write_pixel(0, 0, &photocraft_raster::from_rgba(&surf.format(), [fg[0], fg[1], fg[2], 1.0]));
+    let stored = probe.rgba(0, 0);
+    // Far below one 8-bit level: only the float noise of the conversion.
+    if c[3] > 0.0 && (0..3).all(|i| (c[i] - stored[i]).abs() < 1e-5) {
         brush.color = bg;
     }
 }

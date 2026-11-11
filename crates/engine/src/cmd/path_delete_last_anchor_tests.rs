@@ -50,6 +50,21 @@ fn deleting_a_saved_paths_last_anchor_leaves_it_empty_in_one_undoable_step() {
     assert_eq!(s.execute("path.list", json!({})).unwrap()["paths"], json!([{"name": "Path 1", "knots": 0, "subpaths": 0}]));
 }
 
+/// ⌫ / Delete on the Add Anchor Point tool's selected anchor (`segments`, #12703) follows the same
+/// rule for the path's only anchor, which has no segments.
+#[test]
+fn deleting_the_only_anchor_with_its_segments_empties_a_saved_path_and_refuses_the_work_path() {
+    let s = &mut session();
+    s.execute("path.set", json!({"name": "Path 1", "path": lone()})).unwrap();
+    let r = s.execute("path.deleteAnchor", json!({"name": "Path 1", "subpath": 0, "knot": 0, "segments": true})).unwrap();
+    assert_eq!(r["subpathRemoved"], json!(true));
+    assert!(doc(s).paths[0].path.subpaths.is_empty());
+    s.execute("path.set", json!({"path": lone()})).unwrap();
+    let e = s.execute("path.deleteAnchor", json!({"subpath": 0, "knot": 0, "segments": true})).unwrap_err();
+    assert!(e.to_string().contains("only anchor"), "{e}");
+    assert_eq!(doc(s).work_path.as_ref().map(|p| p.subpaths.len()), Some(1));
+}
+
 #[test]
 fn the_work_paths_and_a_vector_masks_last_anchor_are_still_refused() {
     let mut s = session();
