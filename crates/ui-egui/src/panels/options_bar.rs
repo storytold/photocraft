@@ -523,8 +523,18 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
         }
         Tool::Gradient => {
             // Live "Gradient" (a Gradient Fill layer) or "Classic gradient" (pixels).
-            let mut classic = app.ui.tool_options.gradient_classic;
-            if widgets::dropdown(ui, "gradient-mode", tl!("Mode"), &mut classic, &[(false, "Gradient"), (true, "Classic gradient")], 118.0) {
+            // A gradient fill layer is always edited live: the choice reads "Gradient" and is greyed,
+            // and the stored one comes back for other layers (#12008).
+            let fill = crate::gradient_ui::fill_layer_active(app);
+            let mut classic = app.ui.tool_options.gradient_classic && !fill;
+            if ui
+                .add_enabled_ui(!fill, |ui| {
+                    widgets::dropdown(ui, "gradient-mode", tl!("Mode"), &mut classic, &[(false, "Gradient"), (true, "Classic gradient")], 118.0)
+                })
+                .inner
+                // A list opened before a fill layer became active can still be clicked.
+                && !fill
+            {
                 app.ui.tool_options.gradient_classic = classic;
             }
             // Live "Gradient" (a Gradient Fill layer) or "Classic gradient" (pixels):

@@ -357,6 +357,9 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::smart_filter_dialog::owns(fields) => crate::smart_filter_dialog::body(app, ui, fields),
         _ if crate::adjust_dialog::owns(fields) => crate::adjust_dialog::body(app, ui, fields),
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
+        _ if crate::canvas_tool_menu::owns_make_selection(fields) => {
+            first_field_focused(ui, id, |ui| crate::canvas_tool_menu::make_selection_body(app, ui, fields))
+        }
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
         _ if crate::equalize_ui::owns(fields) => crate::equalize_ui::body(ui, fields),
@@ -1008,6 +1011,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
             return Err(e);
         }
     };
+    let revision = app.session.active().map(|st| st.revision);
     let result = crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone());
     if let Ok(r) = &result {
         report_file_errors(app, &d, r);
@@ -1019,6 +1023,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
     match app.filter_preview.as_mut() {
         Some(p) if result.is_ok() && running => p.committing = true,
         _ => app.filter_preview = None,
+    }
+    if result.is_ok() && cmd == "path.toSelection" {
+        crate::canvas_tool_menu::name_make_selection_step(app, &d.fields, &params, revision);
     }
     if result.is_ok()
         && cmd == "path.toSelection"
@@ -1259,6 +1266,8 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
+#[cfg(test)]
+mod arbitrary_ruler_prefill_tests;
 pub(crate) mod bitmap_dialog;
 pub mod blur_pins;
 pub mod brush_preset_dialog;
