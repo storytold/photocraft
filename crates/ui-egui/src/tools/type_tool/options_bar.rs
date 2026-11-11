@@ -26,37 +26,41 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
     // Font family and style menus (one placeholder in their place while the fonts load).
-    if fonts_ready(ui, 170.0 + ui.spacing().item_spacing.x + 110.0) {
-        if let Some(picked) = font_picker(app, ui, &mut fam, 170.0) {
-            app.ui.tool_options.type_font = fam.clone();
-            let st = styles(&fam);
-            let picked = picked.filter(|s| st.contains(s));
-            style = match &picked {
-                Some(s) => s.clone(),
-                None if st.contains(&style) => style,
-                None => st.first().cloned().unwrap_or_else(|| "Regular".into()),
-            };
-            app.ui.tool_options.type_style = style.clone();
-            // Only a style picked under the family's ">" is set: otherwise each selected layer
-            // keeps its own face in the new family (#3556).
-            match picked {
-                Some(s) => apply(app, ui.ctx(), json!({"font": fam, "fontStyle": s})),
-                None => apply(app, ui.ctx(), json!({"font": fam})),
+    // Keep the following controls' positional IDs stable when the font menus replace the
+    // loading placeholder: both states occupy one slot in the parent UI.
+    ui.scope(|ui| {
+        if fonts_ready(ui, 170.0 + ui.spacing().item_spacing.x + 110.0) {
+            if let Some(picked) = font_picker(app, ui, &mut fam, 170.0) {
+                app.ui.tool_options.type_font = fam.clone();
+                let st = styles(&fam);
+                let picked = picked.filter(|s| st.contains(s));
+                style = match &picked {
+                    Some(s) => s.clone(),
+                    None if st.contains(&style) => style,
+                    None => st.first().cloned().unwrap_or_else(|| "Regular".into()),
+                };
+                app.ui.tool_options.type_style = style.clone();
+                // Only a style picked under the family's ">" is set: otherwise each selected layer
+                // keeps its own face in the new family (#3556).
+                match picked {
+                    Some(s) => apply(app, ui.ctx(), json!({"font": fam, "fontStyle": s})),
+                    None => apply(app, ui.ctx(), json!({"font": fam})),
+                }
+            }
+            font_picker_tip(ui, tl!("Search and select fonts"));
+            let style_family = if fam.is_empty() { styles_at(app).map(|(c, _)| c.font_family).unwrap_or_default() } else { fam.clone() };
+            let opts: Vec<(String, String)> = styles(&style_family).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
+            let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
+            if crate::widgets::dropdown(ui, "type-style", tl!("Style"), &mut style, &opts_ref, 110.0) {
+                app.ui.tool_options.type_style = style.clone();
+                apply(app, ui.ctx(), json!({"fontStyle": style}));
+            }
+            // The menu's button, by the id its combo box takes from "type-style"; "Style" stays its name.
+            if let Some(menu) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("type-style"))) {
+                menu.on_hover_text(tl!("Set font style"));
             }
         }
-        font_picker_tip(ui, tl!("Search and select fonts"));
-        let style_family = if fam.is_empty() { styles_at(app).map(|(c, _)| c.font_family).unwrap_or_default() } else { fam.clone() };
-        let opts: Vec<(String, String)> = styles(&style_family).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
-        let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-        if crate::widgets::dropdown(ui, "type-style", tl!("Style"), &mut style, &opts_ref, 110.0) {
-            app.ui.tool_options.type_style = style.clone();
-            apply(app, ui.ctx(), json!({"fontStyle": style}));
-        }
-        // The menu's button, by the id its combo box takes from "type-style"; "Style" stays its name.
-        if let Some(menu) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("type-style"))) {
-            menu.on_hover_text(tl!("Set font style"));
-        }
-    }
+    });
     let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "type", 13.0, t.icon);
     icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Font size")));
