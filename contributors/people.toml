@@ -32,6 +32,9 @@ sync_github_name = false
 display_name = "Skyfuller"
 sync_github_name = true
 
+[people.JohnXu28]
+display_name = "JohnXu"
+
 [people.AlanRockefeller]
 sync_github_name = true
 
