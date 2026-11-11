@@ -240,18 +240,79 @@ fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
 /// Whether any selected pixel of the moved (or transformed) selection falls inside `dest`, the
 /// part of its bounds that is on the canvas. A round selection dragged towards a corner can keep
 /// only a corner of its bounding box there; moving that would erase the old place and paste nothing.
+/// Cheap when it can be: a move whose whole bounds land answers at once (`area` of a normal
+/// selection is the bounds of its set pixels, so it holds one; an inverted selection's `area` is
+/// the canvas, which may hold none, so it is always checked), and the rest reads only the part of
+/// the selection that lands, in bands, and stops at the first selected pixel.
 fn selected_pixel_lands(sel: &Surface, area: Rect, map: Option<&Homography>, (dx, dy): (i32, i32), dest: Rect) -> bool {
+    let inverted = sel.default_pixel().first().copied().unwrap_or(0.0) > 0.0;
     match map {
         None => {
-            let src = dest.translate(-dx, -dy).intersect(&area);
-            !src.is_empty() && coverage(sel, src).iter().any(|c| *c > 0.0)
+            if !inverted && area.translate(dx, dy) == dest {
+                return true;
+            }
+            any_selected(sel, dest.translate(-dx, -dy))
         }
-        Some(h) => match h.inverse() {
-            Some(inv) => landed_mask(&coverage(sel, area), area, &inv, dest).iter().any(|b| *b),
+        Some(h) => {
+            if !inverted && mapped_bounds(h, area) == dest {
+                return true;
+            }
             // `run_move` reports the collapsed transform.
-            None => true,
-        },
+            let Some(inv) = h.inverse() else { return true };
+            let corners = [(dest.x0, dest.y0), (dest.x1, dest.y0), (dest.x0, dest.y1), (dest.x1, dest.y1)].map(|(x, y)| inv.apply(f64::from(x), f64::from(y)));
+            if corners.iter().any(|(x, y)| !(x.is_finite() && y.is_finite())) {
+                return true;
+            }
+            let lo = |f: fn(f64, f64) -> f64, pick: fn(&(f64, f64)) -> f64| corners.iter().map(pick).fold(pick(&corners[0]), f);
+            let clamp = |v: f64| v.clamp(-1e8, 1e8) as i32;
+            let sub = Rect::new(
+                clamp(lo(f64::min, |c| c.0).floor() - 1.0),
+                clamp(lo(f64::min, |c| c.1).floor() - 1.0),
+                clamp(lo(f64::max, |c| c.0).ceil() + 1.0),
+                clamp(lo(f64::max, |c| c.1).ceil() + 1.0),
+            )
+            .intersect(&area);
+            if sub.is_empty() {
+                return false;
+            }
+            let cov = coverage(sel, sub);
+            let w = sub.width() as usize;
+            (dest.y0..dest.y1).any(|qy| {
+                (dest.x0..dest.x1).any(|qx| {
+                    let (sx, sy) = inv.apply(f64::from(qx) + 0.5, f64::from(qy) + 0.5);
+                    let (x, y) = (sx.floor(), sy.floor());
+                    if !(f64::from(sub.x0)..f64::from(sub.x1)).contains(&x) || !(f64::from(sub.y0)..f64::from(sub.y1)).contains(&y) {
+                        return false;
+                    }
+                    let j = (y as i32 - sub.y0) as usize * w + (x as i32 - sub.x0) as usize;
+                    cov.get(j).is_some_and(|c| *c > 0.0)
+                })
+            })
+        }
     }
+}
+
+/// Whether any pixel of `sel` over `rect` is above zero: read in bands of 64 rows (one buffer),
+/// stopping at the first hit.
+fn any_selected(sel: &Surface, rect: Rect) -> bool {
+    let n = sel.channels().max(1);
+    let mut buf = Vec::new();
+    let mut y = rect.y0;
+    while y < rect.y1 {
+        let band = Rect::new(rect.x0, y, rect.x1, y.saturating_add(64).min(rect.y1));
+        sel.read_region_into(band, &mut buf);
+        if buf.chunks_exact(n).any(|px| px.first().is_some_and(|c| *c > 0.0)) {
+            return true;
+        }
+        y = band.y1;
+    }
+    false
+}
+
+/// Whether `s` selects anything: its default pixel (outside every tile) is set, as for an
+/// inverted selection, or some pixel differs from it.
+fn selects_something(s: &Surface) -> bool {
+    s.default_pixel().first().copied().unwrap_or(0.0) > 0.0 || !s.content_bounds().is_empty()
 }
 
 /// Where the content of `area` lands on `canvas`: moved by `offset`, or (Transform On Drop) the
@@ -545,7 +606,7 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
                 *crate::channel_cmds::target_surface(doc, plan.target.id, &p)?.0 = surf;
                 // The selection follows the content, ready for another drag.
                 let followed = if let Some(moved) = moved_sel {
-                    Some(moved).filter(|s| !s.content_bounds().is_empty())
+                    Some(moved).filter(selects_something)
                 } else {
                     doc.selection.as_ref().map(|sel| crate::layer_multi_cmds::shift_surface(sel, dx, dy))
                 };
@@ -555,7 +616,7 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
                     if plan.canvas.contains_rect(&f.content_bounds()) {
                         Some(f)
                     } else {
-                        Some(photocraft_algo::resample::crop_surface(&f, plan.canvas)).filter(|s| !s.content_bounds().is_empty())
+                        Some(photocraft_algo::resample::crop_surface(&f, plan.canvas)).filter(selects_something)
                     }
                 });
                 Ok(())

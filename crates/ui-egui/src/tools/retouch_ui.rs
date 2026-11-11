@@ -350,7 +350,8 @@ pub fn patch_end(d: &crate::canvas::Drag, end: [f64; 2]) -> [f64; 2] {
 
 /// Whole-pixel offset for a drag from `start` to `end`. The Patch Tool keeps the whole dragged
 /// outline on the canvas (the engine rejects a patch that leaves it); the Content-Aware Move Tool
-/// only needs one pixel of it there, and what goes past the edge is dropped.
+/// only needs one pixel of the selection's bounding box there (what goes past the edge is dropped); the
+/// engine also refuses a drop where no selected pixel lands, so the user gets an error and nothing changes.
 pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
     // The drag in progress names its own tool; the toolbar may have changed since it started.
     let tool = app.drag.as_ref().map_or(app.ui.tool, |d| d.tool);
@@ -369,7 +370,8 @@ fn patch_offset_for(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     }
     let clamp = |d: i32, lo: i32, hi: i32| if lo > hi { 0 } else { d.clamp(lo, hi) };
     if tool == Tool::ContentAwareMove {
-        // At least one pixel of the outline stays on the canvas; the rest may go past the edge.
+        // The clamp keeps one pixel of the selection's bounding box on the canvas; the rest may go past the
+        // edge. The engine also refuses a drop where no selected pixel lands (an error, nothing changes).
         let span = |lo: i32, hi: i32, c0: i32, c1: i32| (c0.saturating_sub(hi).saturating_add(1), c1.saturating_sub(lo).saturating_sub(1));
         let (xl, xh) = span(b.x0, b.x1, canvas.x0, canvas.x1);
         let (yl, yh) = span(b.y0, b.y1, canvas.y0, canvas.y1);
