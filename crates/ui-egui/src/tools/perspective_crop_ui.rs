@@ -191,6 +191,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     cancel_stale(app);
     match ev {
         ToolEvent::Down { .. } => {
+            // A new quad's first press drops an active selection as its own "Deselect" step, as in
+            // Photoshop (#11975): it is gone after the commit and after Esc too. Refused (a job
+            // locks the document, its reason in the status bar), the press starts no quad.
+            if app.ui.perspective_crop.is_none()
+                && app.pcrop.clicks.is_empty()
+                && app.session.active().is_some_and(|d| d.doc.selection.is_some())
+                && app.run("select.deselect", json!({})).is_err()
+            {
+                return true;
+            }
             app.pcrop.drag = match (zone(app, p), app.ui.perspective_crop) {
                 (Zone::Corner(index), Some(q)) => Some(Drag::Corner { index, offset: [p[0] - q[index][0], p[1] - q[index][1]], press: p, quad: q }),
                 (Zone::Inside, Some(q)) => Some(Drag::Move { start: p, quad: q }),
@@ -524,6 +534,10 @@ mod perspective_crop_modifiers_tests;
 #[cfg(test)]
 #[path = "perspective_crop_shield_tests.rs"]
 mod perspective_crop_shield_tests;
+
+#[cfg(test)]
+#[path = "perspective_crop_deselect_tests.rs"]
+mod perspective_crop_deselect_tests;
 
 #[cfg(test)]
 mod tests {
