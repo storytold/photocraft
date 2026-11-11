@@ -106,7 +106,8 @@ fn spot_overlay_previews_with_the_spot_dot_gain() {
     let st = s.active().unwrap();
     let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
     let gain = photocraft_compose::multichannel::spot_dot_gain();
-    let paper = 1.0 - photocraft_compose::multichannel::dot_gain(0.5, gain);
+    // The ink takes its share of the light away (mixed in linear light, the document's sRGB).
+    let paper = photocraft_color::convert::linear_to_srgb(1.0 - photocraft_compose::multichannel::dot_gain(0.5, gain));
     assert!(px[0].a() == 255 && (f32::from(px[0].r()) / 255.0 - paper).abs() <= 1.5 / 255.0, "{:?} vs {paper} at {gain} %", px[0]);
 }
 
@@ -574,7 +575,8 @@ fn sparse_inks_composite_only_their_bounding_box() {
         let got = render_with_source(&doc, &v, b, factor, Look::default(), None, source).unwrap();
         assert!(fresh.is_none(), "/{factor}: two inked pixels render no whole composite");
         let whole = composite_sampled(&doc, b, factor);
-        let ink = photocraft_compose::multichannel::Ink::of(&doc, &doc.channels[0]);
+        let space = photocraft_compose::multichannel::InkSpace::of(&doc);
+        let ink = space.ink(&doc.channels[0]);
         let w = 60usize.div_ceil(factor as usize);
         let f = factor as usize;
         let inked = [(12 / f, 0), (18 / f, 6 / f)];
@@ -585,7 +587,7 @@ fn sparse_inks_composite_only_their_bounding_box() {
             };
             let mut want = [whole[k]];
             let gain = photocraft_compose::multichannel::spot_dot_gain();
-            ink.apply_with_gain(&mut want, [doc.channels[0].surface.pixel((x * f) as i32, (y * f) as i32)[0]], gain);
+            space.press(&mut want, gain).print(&ink, [doc.channels[0].surface.pixel((x * f) as i32, (y * f) as i32)[0]]);
             let want = Color32::from_rgb(q(want[0][0]), q(want[0][1]), q(want[0][2]));
             assert_eq!(*px, want, "/{factor} ({x}, {y})");
         }

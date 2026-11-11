@@ -15,6 +15,7 @@
 //! above; otherwise the printed look is converted.
 
 use photocraft_color::{Color, ColorMode, PixelFormat};
+use photocraft_compose::multichannel::{InkLight, InkSpace};
 use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -186,11 +187,21 @@ fn remap_view(s: &mut Session, (target, eyes): (ChannelTarget, Vec<bool>), map: 
 }
 
 /// Image › Mode › RGB / CMYK / Lab / Grayscale from a Multichannel document (called by
-/// `color_cmds::convert_mode`). Profiles are not involved: Multichannel has none.
-pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Result<Value> {
+/// `color_cmds::convert_mode`). Multichannel has no profile; when the inks are printed (the
+/// appearance branch) they mix in the light of the RGB space the image goes to: `profile` when it
+/// is an RGB one, else the working RGB.
+pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value> {
     if !matches!(mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Grayscale) {
         return Err(EngineError::Other(format!("a Multichannel document can't be converted to {mode:?}")));
     }
+    let rgb = p
+        .get("profile")
+        .and_then(Value::as_str)
+        .filter(|_| mode == ColorMode::Rgb)
+        .and_then(|spec| s.color.resolve(spec, s.active().map(|st| &*st.doc), Some(mode)).ok())
+        .filter(|pr| pr.color_space == photocraft_cms::ColorSpace::Rgb)
+        .unwrap_or_else(|| s.color.working(ColorMode::Rgb));
+    let light = InkLight::of_profile(&rgb).unwrap_or_else(InkLight::srgb);
     // The inks leave; the other channels close up.
     let Some((spots, view)) = s
         .active()
@@ -216,7 +227,7 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
         let shown = (!reinterpret).then(|| {
             let mut d = doc.clone();
             d.channels = inks.clone();
-            photocraft_compose::flatten(&d)
+            photocraft_compose::multichannel::inks_in(&d, canvas, &InkSpace::of(&d).in_light(light.clone()))
         });
         doc.mode = mode;
         let fmt = doc.pixel_format();
