@@ -629,7 +629,7 @@ fn number_edit(
             let delta = resp.drag_delta();
             let slow = ui.input(|input| input.modifiers.shift);
             let precise = ui.data(|data| data.get_temp::<f64>(precise_id)).unwrap_or(f64::from(before));
-            let precise = precise + f64::from(delta.x - delta.y) * f64::from(speed) / if slow { 10.0 } else { 1.0 };
+            let precise = precise + f64::from(delta.x - delta.y) * speed / if slow { 10.0 } else { 1.0 };
             ui.data_mut(|data| data.insert_temp(precise_id, precise));
             *value = precise.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
         }
