@@ -498,9 +498,10 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
     open_pixels(app, ctx, layer, surf, params, coverage, Target::SmartFilter(index))
 }
 
-/// Largest RAW file re-read for a tuned develop (the importer's own file ceiling is far lower).
+/// Largest RAW file re-read for a tuned develop: the RAW decoder's default allocation ceiling
+/// (`photocraft_raw::Limits::default().max_alloc`, 2 GiB), which the decode's buffers exceed for any file this large.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_RAW_REREAD_BYTES: u64 = 4 << 30;
+const MAX_RAW_REREAD_BYTES: u64 = 2 << 30;
 
 /// The bytes of the regular file at `path`, at most [`MAX_RAW_REREAD_BYTES`]: the opened handle
 /// must be a regular file, so a pathname swapped for a never-ending device is refused, and reading
