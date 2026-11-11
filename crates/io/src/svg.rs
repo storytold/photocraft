@@ -1775,9 +1775,11 @@ impl Conv {
         // Whole tiles, as the cache stores them: a narrow shape keeps far more than its area.
         let pixels = area.tile_count() * (photocraft_geom::TILE_SIZE as u64).pow(2);
         if self.can_retain_pixels(pixels, pixels) {
-            sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, self.canvas));
-            let bytes = pixels * self.fmt.bytes_per_pixel() as u64;
-            self.pixel_budget -= bytes;
+            let cache = photocraft_vector::render_shape(&sh, self.fmt, self.canvas);
+            // The preflight above assumed every tile of the box; the cache keeps the ones it drew.
+            let bytes = photocraft_raster::stored_tiles_bytes(cache.tile_count() as u64, &self.fmt);
+            sh.cache = Some(cache);
+            self.pixel_budget = self.pixel_budget.saturating_sub(bytes);
             self.retained_pixel_bytes += bytes;
         }
         Some(Layer::new(self.name(p.id(), 0), LayerContent::Shape(sh)))
