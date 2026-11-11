@@ -388,6 +388,84 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
         .unwrap();
 }
 
+/// Accepted maximum-depth markup and deep embedded drawings must render correctly on the caller's unchanged small stack.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn accepted_deep_svg_and_embedded_children_do_not_exhaust_a_small_caller_stack() {
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let top = nested(svg::MAX_XML_DEPTH - 1);
+            let imported = open(&top);
+            assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "near-limit top-level shape must remain visible");
+            let (_, _, pixels) = svg::rasterize_rgba8(top.as_bytes()).unwrap();
+            assert_eq!(&pixels[(4 * 8 + 4) * 4..(4 * 8 + 4) * 4 + 4], &[0, 0, 0, 255]);
+            let (preview, _) = svg::import_svg_preview_with_work("drawing.svg", top.as_bytes(), u64::MAX).unwrap();
+            assert!(close(px(&preview.document, 4, 4), [0., 0., 0., 1.]), "near-limit preview shape must remain visible");
+            // The outer drawing alone is shallow. Its decoded child must receive the same
+            // isolation as a deep top-level drawing, without increasing the shared depth cap.
+            for inner in [126, 500] {
+                let url = base64_data_url("image/svg+xml", nested(inner).as_bytes());
+                let embedded = format!("<svg {NS} width=\"8\" height=\"8\"><g><image width=\"8\" height=\"8\" href=\"{url}\"/></g></svg>");
+                let imported = open(&embedded);
+                assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "shallow outer/deep child {inner} must remain visible");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Multiple children and opacity retain the groups: parsing alone on a worker is insufficient.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn retained_deep_svg_groups_lower_render_and_drop_on_a_bounded_worker() {
+    // Native document compositing has its own recursive stack requirements. Keep only this
+    // independent pixel oracle off the small caller; SVG APIs and native document destruction
+    // below must still complete there, with all retained groups intact.
+    let pixel = |doc: &photocraft_doc::Document| {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("svg-native-pixel-oracle".into())
+                .stack_size(8 << 20)
+                .spawn_scoped(scope, || px(doc, 0, 0))
+                .unwrap()
+                .join()
+                .unwrap()
+        })
+    };
+    std::thread::Builder::new()
+        .stack_size(512 << 10)
+        .spawn(move || {
+            let source = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(500),
+                "</g>".repeat(500)
+            );
+            let imported = svg::import_svg("retained.svg", source.as_bytes()).unwrap();
+            assert_eq!(imported.document.max_group_depth(), 100);
+            assert!(pixel(&imported.document)[3] > 0.5);
+            let (preview, _) = svg::import_svg_preview_with_work("retained.svg", source.as_bytes(), u64::MAX).unwrap();
+            assert_eq!(preview.document.max_group_depth(), 100);
+            assert!(pixel(&preview.document)[3] > 0.5);
+            // Whole-drawing rasterisation refuses more than 200 nested layers (#10953) with an
+            // error, not a crash; a drawing within that limit still renders on this small stack.
+            let refused = svg::rasterize_rgba8(source.as_bytes()).unwrap_err().to_string();
+            assert!(refused.contains("layers are nested too deeply"), "{refused}");
+            let within = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(150),
+                "</g>".repeat(150)
+            );
+            let (w, h, pixels) = svg::rasterize_rgba8(within.as_bytes()).unwrap();
+            assert_eq!((w, h), (8, 8));
+            assert!(pixels[3] > 127);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// 8 000 nested groups (70 KB) overflowed the XML parser's recursion on a 2 MB thread stack, an
 /// abort nothing can catch. It is an error now, found before the parser runs; the thread here
 /// has a small stack so a regression aborts the test instead of passing by luck.
@@ -409,6 +487,53 @@ fn deeply_nested_markup_is_an_error_not_a_stack_overflow() {
     // Just inside the limit still opens, the empty groups folded away.
     let r = open(&nested(svg::MAX_XML_DEPTH - 1));
     assert_eq!(r.document.layers.len(), 1);
+}
+
+/// The parser expands a DTD's internal entities after the depth check: an entity holding
+/// markup, or a quote in a DTD comment or declaration that made the check skip ahead, hid 20 000 nested groups
+/// from it and overflowed the stack again. Both are errors now; same small stack as above.
+#[test]
+fn a_dtd_cannot_hide_nesting_from_the_depth_check() {
+    let deep = |open: &str, close: &str| format!("{}{}", open.repeat(20_000), close.repeat(20_000));
+    let with_dtd = |subset: &str, body: &str| format!("<!DOCTYPE svg [{subset}]><svg {NS} width=\"8\" height=\"8\">{body}</svg>");
+    let cases = [
+        ("entity", with_dtd(&format!("<!ENTITY a \"{}\">", deep("<g>", "</g>")), "&a;")),
+        ("single-quoted entity", with_dtd(&format!("<!ENTITY a '{}'>", deep("<g>", "</g>")), "&a;")),
+        ("quote in a comment", with_dtd("<!-- ' -->", &format!("{}<desc>'</desc>", deep("<g>", "</g>")))),
+        ("quote in an element declaration", with_dtd("<!ELEMENT x '>", &format!("{}<desc>'</desc>", deep("<g>", "</g>")))),
+        (
+            "entity between quoted attribute lists",
+            with_dtd(&format!("<!ATTLIST svg x CDATA '><!ENTITY a \"{}\"><!ATTLIST svg y CDATA '>", deep("<g>", "</g>")), "&a;"),
+        ),
+        ("entity between quoted notations", with_dtd(&format!("<!NOTATION n SYSTEM '><!ENTITY a \"{}\"><!NOTATION m SYSTEM '>", deep("<g>", "</g>")), "&a;")),
+    ];
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            for (name, svg) in &cases {
+                let gz = gzip(svg.as_bytes());
+                for bytes in [svg.as_bytes(), gz.as_slice()] {
+                    let e = import("deep.svg", bytes).err().unwrap_or_else(|| panic!("{name} opened"));
+                    assert!(matches!(&e, IoError::Svg(_)), "{name}: {e}");
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Text-only entities, as Illustrator declares its namespaces, still open, `&#60;` included:
+/// the parser keeps a character reference in an entity as text.
+#[test]
+fn text_entities_in_a_dtd_still_open() {
+    let r = open(
+        "<?xml version=\"1.0\"?><!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\" [\
+           <!ENTITY ns_svg \"http://www.w3.org/2000/svg\"> <!-- a ' and a <g> --> <?pi > ?> <!ATTLIST svg data-x CDATA '<'> <!ENTITY red '#ff0000'> <!ENTITY c \"&#169; &#60;g&#62;\"> ]>\
+         <svg xmlns=\"&ns_svg;\" width=\"8\" height=\"8\"><title>&c;</title><rect width=\"8\" height=\"8\" fill=\"&red;\"/></svg>",
+    );
+    assert_eq!(r.document.layers.len(), 1);
+    assert!(close(px(&r.document, 4, 4), [1.0, 0.0, 0.0, 1.0]));
 }
 
 /// The depth check reads the markup, not the parser's tree: it must not count `<` in comments,
