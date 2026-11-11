@@ -266,7 +266,7 @@ fn filter_event_before_tool(
 }
 
 fn refuse_colour_set_copy_drag(app: &mut PhotocraftApp, mods: egui::Modifiers) -> bool {
-    if !mods.alt || crate::move_ui::color_target(app).is_none_or(|colors| colors.len() <= 1) {
+    if !mods.alt || !crate::move_ui::native_copy_unsupported(app) {
         return false;
     }
     app.ui.status = crate::move_ui::COPY_SET_DRAG_UNSUPPORTED.into();
@@ -945,7 +945,7 @@ fn is_selection_move_tool(tool: Tool) -> bool {
 /// A native colour set cannot float, so selection-tool shortcuts use the same native Move
 /// gesture from inside or outside the selection, before snapping or modifiers classify it.
 fn native_set_move_shortcut(app: &PhotocraftApp, tool: Tool, mods: egui::Modifiers) -> bool {
-    is_selection_move_tool(tool) && !mods.shift && app.ui.polygon.is_empty() && crate::move_ui::color_target(app).is_some_and(|colors| colors.len() > 1)
+    is_selection_move_tool(tool) && !mods.shift && app.ui.polygon.is_empty() && crate::move_ui::color_target(app).is_some()
 }
 
 /// Does a ⌘ (⌘⌥) press with selection tool `tool` at `p` move the whole layer (a duplicate with

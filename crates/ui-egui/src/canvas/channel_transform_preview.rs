@@ -330,7 +330,11 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
                 || (!crate::channel_transform_gpu::validation_pending(gpu)
                     && photocraft_engine::channel_transform::check_capture(&preview.base, generation).is_ok());
         }
-        if let Some(tex) = preview.gpu.as_mut().and_then(|g| g.texture(t, &view, in_color, display.as_ref().is_some_and(|d| d.encode_srgb), preview.factor)) {
+        let texture = preview.gpu.as_mut().and_then(|g| g.texture(t, &view, in_color, display.as_ref().is_some_and(|d| d.encode_srgb), preview.factor));
+        if preview.gpu.as_ref().is_some_and(crate::channel_transform_gpu::Preview::allocation_failed) {
+            preview.gpu = None;
+        }
+        if let Some(tex) = texture {
             // Ordinary GPU dragging avoids CPU resampling. After a refusal, the geometry
             // must pass the oracle before showing the GPU result or clearing its error.
             if preview.reported_error.is_some() {

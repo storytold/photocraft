@@ -176,7 +176,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         None
     };
     if let Some(colors) = color {
-        return translate_color_channel(s, p, colors, dx, dy, carry);
+        return translate_color_channel(s, p, colors, dx, dy, wrap);
     }
     let roots = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
@@ -341,15 +341,19 @@ fn auto_nest(doc: &mut Document, ids: &[LayerId]) -> Vec<LayerId> {
 
 /// Move the captured native components on the named or active layer in one history step.
 /// Linked layers stay put; selected pixels and their outline move together.
-fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_channels::ColorChannels, dx: i32, dy: i32, carry: bool) -> Result<Value> {
+fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_channels::ColorChannels, dx: i32, dy: i32, wrap: bool) -> Result<Value> {
     let id = match crate::commands::explicit_layer(s, p)? {
         Some(id) => id,
         None => s.active().and_then(|d| d.active_layer).ok_or_else(|| EngineError::Other("no active layer".into()))?,
     };
+    let tile = s.active().filter(|_| wrap).map(|st| st.doc.bounds());
+    if tile.is_some_and(|tile| wrapped_delta(dx, dy, tile) == (0, 0)) {
+        return Ok(Value::Null);
+    }
     let background = s.tools.background;
     s.edit("Move", |doc, _| {
         let locks = doc.effective_locks(id);
-        let selected_background = colors.len() > 1 && doc.selection.is_some() && doc.is_background(id);
+        let selected_background = doc.selection.is_some() && doc.is_background(id);
         if (locks.position && !selected_background) || locks.all {
             let name = doc.layer(id).map_or_else(String::new, |l| l.name.clone());
             return Err(EngineError::Other(format!("layer \"{name}\" is position-locked")));
@@ -357,11 +361,7 @@ fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_chan
         if locks.pixels {
             return Err(EngineError::Other("the target layer is pixel-locked".into()));
         }
-        let selected_pixels = colors.len() > 1 && doc.selection.is_some();
-        crate::channel_cmds::move_color_channels(doc, id, colors, dx, dy, background)?;
-        if carry && !selected_pixels {
-            doc.selection = doc.selection.as_ref().map(|sel| shift_surface(sel, dx, dy));
-        }
+        crate::channel_cmds::move_color_channels_wrapping(doc, id, colors, dx, dy, background, tile)?;
         Ok(())
     })?;
     Ok(Value::Null)
@@ -511,6 +511,22 @@ fn tile_period(tile: photocraft_geom::Rect) -> Option<(i32, i32)> {
 
 fn wrap_axis(delta: i32, period: i32) -> i32 {
     i64::from(delta).rem_euclid(i64::from(period)) as i32
+}
+
+/// Pattern Preview's selected coverage, shared by commit and the live marching ants.
+/// Validate the work before copying tiles, and never publish a failed scratch read.
+pub fn wrapped_selection(selection: &photocraft_raster::Surface, dx: i32, dy: i32, tile: photocraft_geom::Rect) -> Result<photocraft_raster::Surface> {
+    if tile.is_empty() {
+        return Err(bad("layer.translate", "a wrapping selection requires a nonempty canvas"));
+    }
+    crate::channel_cmds::color_move_destination(tile, 0, 0)?;
+    let generation = photocraft_raster::spill::read_error_generation();
+    crate::channel_transform::validate_area(selection.content_bounds())?;
+    let moved = wrap_surface(selection, dx, dy, tile);
+    photocraft_raster::spill::check_since(generation).map_err(EngineError::Other)?;
+    selection.scratch_health().map_err(EngineError::Other)?;
+    moved.scratch_health().map_err(EngineError::Other)?;
+    Ok(moved)
 }
 
 /// Move `s` by whole pixels, folding samples that start inside `tile` back into it. Samples

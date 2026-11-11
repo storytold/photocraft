@@ -62,7 +62,7 @@ fn shifted_components_survive_beyond_sparse_source_edges_at_native_depth() {
 }
 
 #[test]
-fn explicit_outline_carry_works_for_single_components_and_sets_move_it_once() {
+fn selected_component_and_set_moves_carry_the_outline_once_regardless_of_carry_flag() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         for colors in [vec![0], vec![0, 2]] {
             for carry in [None, Some(false), Some(true)] {
@@ -71,7 +71,7 @@ fn explicit_outline_carry_works_for_single_components_and_sets_move_it_once() {
                 selection(&mut s, 3);
                 let before = s.active().unwrap().doc.clone();
                 let old = before.selection.as_ref().unwrap();
-                let expected = if colors.len() > 1 || carry == Some(true) { old.translated(2, -1, old.content_bounds()) } else { old.clone() };
+                let expected = old.translated(2, -1, old.content_bounds());
                 let mut params = json!({"target":{"colors":colors},"dx":2,"dy":-1});
                 if let Some(carry) = carry {
                     params["selection"] = json!(carry);
@@ -163,4 +163,185 @@ fn native_writeback_union_is_priced_before_affine_and_warp_previews_or_commits()
     assert!(crate::warp_cmds::check_channel_warp_geometry(&before, layer, &params, rect, &warp).is_err());
     assert!(s.execute("edit.transform.warp", json!({"target":{"colors":[0,2]},"warp":warp})).is_err());
     assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+}
+
+#[test]
+fn pattern_channel_moves_wrap_native_samples_and_preserve_other_encoded_components() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for colors in [vec![0], vec![0, 2]] {
+                for (dx, dy) in [(2_i32, 1_i32), (-14, -9), (12, 8)] {
+                    let mut s = session(mode, depth);
+                    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+                    s.edit("native wrap sentinels", |doc, active| {
+                        let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                        surface.write_pixel(-1, 3, &vec![0.7; surface.channels()]);
+                        if depth == SampleType::F32 {
+                            let mut pixel = surface.pixel(5, 3);
+                            pixel[0] = -0.0;
+                            pixel[1] = f32::from_bits(0x7fc0_1234);
+                            pixel[2] = 1.75;
+                            surface.write_pixel(5, 3, &pixel);
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                    let before = surface(&s).clone();
+                    let fmt = before.format();
+                    let bounds = s.active().unwrap().doc.bounds();
+                    let original = before.try_to_interleaved(bounds).unwrap();
+                    let history = s.active().unwrap().history.past_len();
+                    s.execute("layer.translate", json!({"target":{"colors":colors},"dx":dx,"dy":dy,"wrap":true})).unwrap();
+                    let actual = surface(&s).try_to_interleaved(bounds).unwrap();
+                    let outside = Rect::new(-2, 0, 0, 8);
+                    assert_eq!(surface(&s).try_to_interleaved(outside).unwrap(), before.try_to_interleaved(outside).unwrap());
+                    let bytes = depth.bytes();
+                    let bpp = fmt.bytes_per_pixel();
+                    for y in 0..8 {
+                        for x in 0..12 {
+                            let dest = (y * 12 + x) as usize * bpp;
+                            let source = (((y - dy).rem_euclid(8) * 12) + (x - dx).rem_euclid(12)) as usize * bpp;
+                            for c in 0..fmt.channels() {
+                                let from = if colors.contains(&c) { source } else { dest };
+                                assert_eq!(
+                                    &actual[dest + c * bytes..dest + (c + 1) * bytes],
+                                    &original[from + c * bytes..from + (c + 1) * bytes],
+                                    "{mode:?}/{depth:?}/{colors:?}/{dx}/{dy}/{x}/{y}/{c}"
+                                );
+                            }
+                        }
+                    }
+                    assert_eq!(s.active().unwrap().history.past_len(), history + usize::from((dx.rem_euclid(12), dy.rem_euclid(8)) != (0, 0)));
+                    if surface(&s) != &before {
+                        let moved = surface(&s).clone();
+                        assert!(s.undo());
+                        assert_eq!(surface(&s), &before);
+                        assert!(s.redo());
+                        assert_eq!(surface(&s), &moved);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn single_selected_move_changes_only_selected_channel_samples_and_moves_outline_once() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for kind in [1, 2, 3] {
+                let mut s = session(mode, depth);
+                selection(&mut s, kind);
+                s.execute("channel.target", json!({"channel":{"color":0}})).unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let original = surface(&s).clone();
+                let mut oracle = Session::new();
+                oracle.tools.background = s.tools.background;
+                oracle.add_document((*before).clone(), None);
+                oracle.execute("edit.transform", json!({"target":{"color":0},"dx":3,"dy":1,"interpolation":"nearest"})).unwrap();
+                s.execute("layer.translate", json!({"dx":3,"dy":1,"selection":true})).unwrap();
+                let bounds = before.bounds().union(&surface(&s).content_bounds());
+                assert_eq!(surface(&s).try_to_interleaved(bounds).unwrap(), surface(&oracle).try_to_interleaved(bounds).unwrap(), "{mode:?}/{depth:?}/{kind}");
+                assert_eq!(s.active().unwrap().doc.selection, oracle.active().unwrap().doc.selection);
+                assert!(s.active().unwrap().doc.is_background(s.active().unwrap().active_layer.unwrap()));
+                assert!(s.undo());
+                assert_eq!(surface(&s), &original);
+                assert_eq!(s.active().unwrap().doc.selection, before.selection);
+            }
+        }
+    }
+}
+
+#[test]
+fn selected_wrapped_components_match_coverage_math_and_leave_off_canvas_samples_untouched() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for colors in [vec![0], vec![0, 2]] {
+                for coverage in [1.0, 0.5] {
+                    let mut s = session(mode, depth);
+                    s.tools.background = [0.2, 0.4, 0.6, 1.0];
+                    s.edit("wrap selection", |doc, active| {
+                        let source = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                        source.write_pixel(-1, 3, &vec![0.7; source.channels()]);
+                        let mut sel = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
+                        sel.fill_rect(Rect::new(10, 2, 12, 5), &[coverage]);
+                        sel.write_pixel(-1, 3, &[coverage]);
+                        doc.selection = Some(sel);
+                        Ok(())
+                    })
+                    .unwrap();
+                    let before = s.active().unwrap().doc.clone();
+                    let original = surface(&s).clone();
+                    let sel = before.selection.as_ref().unwrap();
+                    let space = photocraft_compose::cmyk_space(&before);
+                    let fill = photocraft_color::convert::with_cmyk_space(space.as_ref(), || from_rgba(&original.format(), s.tools.background));
+                    let fill = Surface::with_default(original.format(), &fill).pixel(0, 0);
+                    // Quantize the cleared samples at native depth before blending the lifted
+                    // coverage, independently of the transform/Move implementations.
+                    let mut rest = original.clone();
+                    for y in 0..8 {
+                        for x in 0..12 {
+                            let a = sel.sample_channel(x, y, 0);
+                            let mut pixel = original.pixel(x, y);
+                            for &c in &colors {
+                                pixel[c] = pixel[c] * (1.0 - a) + fill[c] * a;
+                            }
+                            rest.write_pixel(x, y, &pixel);
+                        }
+                    }
+                    let mut expected = original.clone();
+                    for y in 0..8 {
+                        for x in 0..12 {
+                            let (sx, sy) = ((x - 3_i32).rem_euclid(12), (y - 1_i32).rem_euclid(8));
+                            let a = sel.sample_channel(sx, sy, 0);
+                            let mut pixel = original.pixel(x, y);
+                            for &c in &colors {
+                                pixel[c] = original.sample_channel(sx, sy, c) * a + rest.sample_channel(x, y, c) * (1.0 - a);
+                            }
+                            expected.write_pixel(x, y, &pixel);
+                        }
+                    }
+                    let history = s.active().unwrap().history.past_len();
+                    s.execute("layer.translate", json!({"target":{"colors":colors},"dx":-9,"dy":-7,"selection":true,"wrap":true})).unwrap();
+                    let area = Rect::new(-2, -1, 15, 10);
+                    assert_eq!(
+                        surface(&s).try_to_interleaved(area).unwrap(),
+                        expected.try_to_interleaved(area).unwrap(),
+                        "{mode:?}/{depth:?}/{colors:?}/{coverage}"
+                    );
+                    let moved_selection = s.active().unwrap().doc.selection.as_ref().unwrap();
+                    for y in 0..8 {
+                        for x in 0..12 {
+                            assert_eq!(moved_selection.sample_channel(x, y, 0), sel.sample_channel((x - 3_i32).rem_euclid(12), (y - 1_i32).rem_euclid(8), 0));
+                        }
+                    }
+                    assert_eq!(moved_selection.sample_channel(-1, 3, 0), sel.sample_channel(-1, 3, 0));
+                    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+                    assert!(s.undo());
+                    assert_eq!(surface(&s), &original);
+                    assert_eq!(s.active().unwrap().doc.selection, before.selection);
+                    assert!(s.redo());
+                    assert_eq!(surface(&s).try_to_interleaved(area).unwrap(), expected.try_to_interleaved(area).unwrap());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn floating_a_single_colour_is_refused_for_automation_before_it_can_move_rgba() {
+    let mut s = session(ColorMode::Rgb, SampleType::U16);
+    selection(&mut s, 2);
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    assert!(!s.is_enabled("select.float"));
+    assert!(s.execute("select.float", json!({"dx":2})).is_err());
+    assert!(s.execute("select.float", json!({"target":{"color":0},"dx":2})).is_err());
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_none());
+    assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    // An explicit pixel target deliberately keeps the existing full-pixel operation.
+    s.execute("select.float", json!({"target":"pixels","dx":2})).unwrap();
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
 }

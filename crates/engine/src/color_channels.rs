@@ -112,6 +112,9 @@ pub(crate) fn refusal(s: &Session, id: &str, p: &Value) -> Option<String> {
     if crate::channel_cmds::routed(id) && p.get("newLayer").and_then(Value::as_bool) == Some(true) {
         return Some("Creating a new layer requires the composite channel".into());
     }
+    if id == "select.float" && colors.len() == 1 && (p.get("target").is_some() || s.active().is_none_or(|st| crate::mask_view_cmds::current(st).is_none())) {
+        return Some("Use layer.translate to move selected colour samples; floating pixels requires the composite channel".into());
+    }
     if colors.len() < 2 {
         return None;
     }

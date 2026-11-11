@@ -1,4 +1,4 @@
-//! Keep new GPU objects private until both error scopes have completed. WebGPU resolves scopes
+//! Keep new GPU objects private until every error scope has completed. WebGPU resolves scopes
 //! asynchronously, so an initially pending scope is neither success nor a permanent CPU fallback.
 use std::future::Future;
 use std::pin::Pin;
@@ -43,24 +43,44 @@ impl<T> Validated<T> {
     }
 }
 
-pub(super) fn validated<T>(device: &wgpu::Device, build: impl FnOnce() -> T) -> Validated<T> {
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let result = build();
-    // Pop immediately: the guards are thread-bound, while their futures may be polled later.
-    let scopes = [internal.pop(), validation.pop()];
-    Validated::new(result, async move {
-        let mut valid = true;
-        for scope in scopes {
-            if let Some(e) = scope.await {
-                log::warn!("channel preview uses CPU: {e}");
-                #[cfg(test)]
-                eprintln!("channel preview uses CPU: {e}");
-                valid = false;
+/// Match the canvas's local allocation handling: an unsupported preview must not fault the
+/// shared device or spend its global OOM recovery retries. Guards also pop on early returns.
+pub(super) struct ErrorScopes {
+    // Rust drops fields in declaration order. Early returns must pop the top scope first.
+    internal: wgpu::ErrorScopeGuard,
+    memory: wgpu::ErrorScopeGuard,
+    validation: wgpu::ErrorScopeGuard,
+}
+
+impl ErrorScopes {
+    pub(super) fn new(device: &wgpu::Device) -> Self {
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        Self { internal, memory, validation }
+    }
+
+    pub(super) fn finish<T>(self, value: T) -> Validated<T> {
+        // Pop immediately: the guards are thread-bound, while their futures may be polled later.
+        let scopes = [self.internal.pop(), self.memory.pop(), self.validation.pop()];
+        Validated::new(value, async move {
+            let mut valid = true;
+            for scope in scopes {
+                if let Some(e) = scope.await {
+                    log::warn!("channel preview uses CPU: {e}");
+                    #[cfg(test)]
+                    eprintln!("channel preview uses CPU: {e}");
+                    valid = false;
+                }
             }
-        }
-        valid
-    })
+            valid
+        })
+    }
+}
+
+pub(super) fn validated<T>(device: &wgpu::Device, build: impl FnOnce() -> T) -> Validated<T> {
+    let scopes = ErrorScopes::new(device);
+    scopes.finish(build())
 }
 
 #[cfg(test)]
@@ -68,6 +88,32 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn an_early_return_pops_nested_scopes_in_reverse_order_without_faulting_the_device() {
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            eprintln!("no software GPU adapter for scope cleanup regression");
+            return;
+        };
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        let abandon = || {
+            let _scopes = ErrorScopes::new(&rs.device);
+            let _ = rs.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("abandoned preview scope regression"),
+                size: 16,
+                usage: wgpu::BufferUsages::empty(),
+                mapped_at_creation: false,
+            });
+            None::<()>
+        };
+        assert!(abandon().is_none());
+        let next = super::super::track_resources(&rs, ErrorScopes::new(&rs.device));
+        assert_eq!(super::super::test_wait(&rs, || next.get()), Some(&()));
+        assert!(gpu.health().is_ok());
+    }
 
     #[test]
     fn pending_validation_is_retried_and_late_failure_never_exposes_the_object() {

@@ -3800,3 +3800,52 @@ fn an_armed_eyedropper_hides_no_cursor_on_a_secondary_canvas() {
     assert_eq!(cursor(&mut app, true), egui::CursorIcon::None, "the primary canvas hides the icon under the pipette it draws");
     assert_ne!(cursor(&mut app, false), egui::CursorIcon::None, "a secondary canvas keeps a cursor");
 }
+
+#[test]
+fn wrapped_channel_selection_ants_match_commit_with_pixel_preview_on_or_off() {
+    fn paint(app: &mut PhotocraftApp, ctx: &egui::Context) -> Rect {
+        let doc = app.session.active().unwrap().doc.clone();
+        let view = app.ui.views[0].clone();
+        let mut bounds = Rect::NOTHING;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let rect = Rect::from_min_size(Pos2::ZERO, vec2(128.0, 128.0));
+            let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(rect);
+            let xf = ViewXform { rect, zoom: 1.0, center: [16.0, 8.0], flip: false, rotation: 0.0, aspect: 1.0 };
+            let input = SelectionPaintInput { ctx, painter: &painter, ui, view: &view, xf, rect, doc: &doc, idx: 0 };
+            for shape in paint_selection_outline(app, input) {
+                bounds = bounds.union(shape.visual_bounding_rect());
+            }
+        });
+        out.textures_delta.clear();
+        bounds
+    }
+    for bounding_box in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":32,"height":16})).unwrap();
+        app.run("select.rect", json!({"x":28,"y":4,"width":4,"height":8})).unwrap();
+        app.run("channel.target", json!({"channel":"red"})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.view.pattern_preview = true;
+        app.ui.tool_options.move_auto_select = false;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        app.session.edit_prefs(|p| p.interface.show_bounding_box_when_dragging_layer = bounding_box);
+        app.sync_views();
+        tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 36.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        let preview = paint(&mut app, &ctx);
+        assert!(preview.is_positive());
+        let cached = app.outline_cache.as_ref().unwrap().2.clone();
+        assert!(!cached.is_empty());
+        assert!(cached.iter().flat_map(|(a, b)| [a, b]).all(|p| (2..=6).contains(&p[0])), "ants wrap to the opposite edge");
+        assert_eq!(paint(&mut app, &ctx), preview);
+        assert!(std::sync::Arc::ptr_eq(&cached, &app.outline_cache.as_ref().unwrap().2), "idle frames reuse the projected outline");
+        app.ui.view.pattern_preview = false;
+        assert_ne!(paint(&mut app, &ctx), preview);
+        app.ui.view.pattern_preview = true;
+        assert_eq!(paint(&mut app, &ctx), preview);
+        tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 8.0 }, egui::Modifiers::NONE);
+        assert_eq!(paint(&mut app, &ctx), preview, "preview and commit apply the offset once");
+    }
+}

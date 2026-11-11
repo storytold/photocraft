@@ -151,7 +151,7 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
 
 fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2] {
     let Some(start) = app.move_mods.start.filter(|_| moving(app)) else { return p };
-    if app.move_mods.alt && crate::move_ui::color_target(app).is_some_and(|colors| colors.len() > 1) {
+    if app.move_mods.alt && crate::move_ui::native_copy_unsupported(app) {
         // Check pending copy intent before selected-pixel classification can skip duplication.
         // No copy has been made while `alt` is still armed, so cancellation needs no history edit.
         app.move_mods = MoveDrag::default();
@@ -306,8 +306,8 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
         crate::move_ui::float_selected(app, duplicate_first, dx, dy);
         return;
     }
-    if duplicate_first && crate::move_ui::color_target(app).is_some_and(|c| c.len() > 1) {
-        app.ui.status = "Copy-nudging a colour set is not supported; use Copy and Paste into the selected channels".into();
+    if duplicate_first && crate::move_ui::native_copy_unsupported(app) {
+        app.ui.status = "Copy-nudging selected colour channels is not supported; use Copy and Paste into the selected channels".into();
         app.ui.status_error = true;
         return;
     }

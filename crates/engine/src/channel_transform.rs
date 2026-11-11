@@ -262,24 +262,60 @@ pub(crate) fn move_selected_colors(
     dx: i32,
     dy: i32,
     background: [f32; 4],
+    wrap: Option<Rect>,
 ) -> Result<()> {
     let params = json!({"target": colors.params()});
     check_locks(doc, Some(layer), &params)?;
     let selection = doc.selection.clone().ok_or_else(|| bad("no selected pixels"))?;
     let bounds = selection.content_bounds();
     validate_area(bounds)?;
-    if [f64::from(bounds.x0) + f64::from(dx), f64::from(bounds.x1) + f64::from(dx), f64::from(bounds.y0) + f64::from(dy), f64::from(bounds.y1) + f64::from(dy)]
+    let (dx, dy) = wrap.map_or((dx, dy), |tile| crate::layer_multi_cmds::wrapped_delta(dx, dy, tile));
+    if dx == 0 && dy == 0 {
+        return Ok(());
+    }
+    if wrap.is_none()
+        && [
+            f64::from(bounds.x0) + f64::from(dx),
+            f64::from(bounds.x1) + f64::from(dx),
+            f64::from(bounds.y0) + f64::from(dy),
+            f64::from(bounds.y1) + f64::from(dy),
+        ]
         .iter()
         .any(|v| v.abs() > f64::from(1 << 28))
     {
         return Err(bad("selected channel move coordinates are out of range"));
     }
+    // Wrapping leaves samples already outside the canvas untouched. Limit the lifted
+    // coverage too, otherwise stationary feathered samples there would be blended twice.
+    let inside = if let Some(tile) = wrap {
+        validate_area(tile)?;
+        let mut inside = Surface::new(selection.format());
+        for coord in bounds.intersect(&tile).tiles() {
+            let r = coord.rect().intersect(&bounds).intersect(&tile);
+            let bytes = selection.try_to_interleaved(r)?;
+            inside.try_tile_mut(coord)?;
+            inside.write_interleaved(r, &bytes);
+        }
+        Some(inside)
+    } else {
+        None
+    };
+    let coverage = inside.as_ref().unwrap_or(&selection);
     let h = photocraft_algo::transform::Homography([1.0, 0.0, f64::from(dx), 0.0, 1.0, f64::from(dy), 0.0, 0.0, 1.0]);
     for plane in planes(doc, Some(layer), &params, background)?.ok_or_else(|| bad("no selected colour channels"))? {
-        let moved = crate::transform_cmds::warp_gray_selected(&plane.surface, &selection, &h, photocraft_algo::transform::Interp::Nearest)?;
+        let moved = if let Some(tile) = wrap {
+            let shift = |s: &Surface, _| Ok(crate::layer_multi_cmds::wrap_surface(s, dx, dy, tile));
+            let whole = |s: &Surface| Ok(crate::layer_multi_cmds::wrap_surface(s, dx, dy, tile));
+            crate::transform_cmds::move_gray_selected(&plane.surface, coverage, &shift, &whole)?
+        } else {
+            crate::transform_cmds::warp_gray_selected(&plane.surface, &selection, &h, photocraft_algo::transform::Interp::Nearest)?
+        };
         plane.write(doc, Some(layer), moved, &photocraft_raster::Interrupt::NONE)?;
     }
-    doc.selection = Some(selection.translated(dx, dy, bounds));
+    doc.selection = Some(match wrap {
+        Some(tile) => crate::layer_multi_cmds::wrapped_selection(&selection, dx, dy, tile)?,
+        None => selection.translated(dx, dy, bounds),
+    });
     Ok(())
 }
 

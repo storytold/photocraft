@@ -138,7 +138,7 @@ pub(crate) use targeting::{
 };
 pub use targeting::{
     color_move_destination, follows_filter_mask, follows_target, follows_vector_mask_target, gray_target, move_color_channel, move_color_channels,
-    read_target_surface,
+    move_color_channels_wrapping, read_target_surface,
 };
 pub use tone_target::{ToneTarget, resolve_tone_target};
 pub(crate) use view::fix_view;

@@ -275,6 +275,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
     let patch_replaces =
         || refined.is_none() && floated.is_none() && app.session.active_index() == Some(input.idx) && crate::retouch_ui::patch_replaces_selection(app);
     if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app) && !patch_replaces()) {
+        let wrapped_move = (refined.is_none() && floated.is_none()).then(|| crate::move_ui::wrapped_selection_offset(app, input.idx)).flatten();
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
@@ -320,15 +321,30 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             ^ (vis.y0 as u64) << 24
             ^ (vis.x1 as u64) << 36
             ^ (vis.y1 as u64) << 48
-            ^ u64::from(k).rotate_left(5);
+            ^ u64::from(k).rotate_left(5)
+            ^ wrapped_move.map_or(0, |(dx, dy)| {
+                (1 << 63)
+                    ^ (dx as u64).rotate_left(7)
+                    ^ (dy as u64).rotate_left(39)
+                    ^ u64::from(input.doc.size.width).rotate_left(19)
+                    ^ u64::from(input.doc.size.height).rotate_left(51)
+            });
         let fresh = matches!(&app.outline_cache, Some((d, k, _)) if *d == input.doc.id && *k == key);
         if !fresh {
             let t0 = crate::gpu_canvas::now_ms();
-            let b = carried_bounds.unwrap_or_else(|| app.cached_bounds(bounds_key, sel).intersect(&vis));
+            let wrapped = match wrapped_move {
+                Some((dx, dy)) => match photocraft_engine::layer_multi_cmds::wrapped_selection(sel, dx, dy, input.doc.bounds()) {
+                    Ok(selection) => Some(selection),
+                    Err(_) => return ants, // A recovered scratch read must retry this projection.
+                },
+                None => None,
+            };
+            let traced = wrapped.as_ref().unwrap_or(sel);
+            let b = carried_bounds.unwrap_or_else(|| app.cached_bounds(bounds_key ^ if wrapped.is_some() { 1 << 62 } else { 0 }, traced).intersect(&vis));
             // Filters can occupy every worker in Rayon's global pool. A parallel scan here would
             // block the UI thread waiting for those workers, preventing job cancellation (#1554).
             let mut segs =
-                if app.session.has_jobs() { crate::outline::outline_scaled_serial(sel, b, step) } else { crate::outline::outline_scaled(sel, b, step) };
+                if app.session.has_jobs() { crate::outline::outline_scaled_serial(traced, b, step) } else { crate::outline::outline_scaled(traced, b, step) };
             if k > 1 {
                 let s = i32::try_from(k).unwrap_or(1);
                 let up = |p: [i32; 2]| [p[0].saturating_mul(s), p[1].saturating_mul(s)];
@@ -342,7 +358,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             let time = input.ui.input(|i| i.time);
             // A floating piece (and a selection being dragged) draws its ants where it is shown.
             let mut shown = input.xf;
-            if let Some((dx, dy)) = selection_shown_offset(app) {
+            if let Some((dx, dy)) = selection_shown_offset(app).filter(|_| wrapped_move.is_none()) {
                 shown.center = [input.xf.center[0] - dx as f32, input.xf.center[1] - dy as f32];
             }
             // Under a Free Transform box they are where the box puts them (#5297).

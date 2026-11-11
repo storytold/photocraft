@@ -3,7 +3,7 @@
 
 use super::{
     Arc, ChannelView, Document, FLOAT, LayerId, OUTPUT, Pipelines, Preview, RenderState, SampleType, TransformSession, UNIFORM_BYTES, Validated, bytes,
-    render_pass, shader_source as transform_shader_source, source, supports_channels, validated, wgpu,
+    render_pass, resource_scope, shader_source as transform_shader_source, source, supports_channels, track_resources, validated, wgpu,
 };
 
 fn write_bytes(rs: &RenderState, texture: &wgpu::Texture, width: u32, y: u32, rows: u32, plane: u32, data: &[u8]) -> Option<()> {
@@ -133,6 +133,7 @@ impl Preview {
             }
         };
         let layouts = pipes.get()?;
+        let scopes = resource_scope(&rs.device);
         let texture = |label, size: [u32; 3], format, usage| {
             rs.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -255,9 +256,13 @@ impl Preview {
             SampleType::F32 => 0.0,
         };
         let fill = fill.map(|v| if steps > 0.0 { (v.clamp(0.0, 1.0) * steps + 0.5).floor() / steps } else { v });
+        let vertices = buffer(wgpu::BufferUsages::VERTEX);
+        let indices = buffer(wgpu::BufferUsages::INDEX);
+        let allocation = track_resources(rs, scopes);
         Some(Self {
             rs: rs.clone(),
             pipes,
+            allocation,
             uniform,
             inputs,
             moved,
@@ -274,10 +279,11 @@ impl Preview {
             selection: None,
             selected: false,
             last: None,
-            vertices: buffer(wgpu::BufferUsages::VERTEX),
-            indices: buffer(wgpu::BufferUsages::INDEX),
+            vertices,
+            indices,
             native: Some([native_size[0], native_size[1], factor]),
         })
+        .filter(|p| p.allocation.get().is_some() || p.allocation.is_pending())
     }
 
     pub(super) fn texture_native_move(
@@ -289,6 +295,7 @@ impl Preview {
         factor: u32,
         bounds: photocraft_geom::Rect,
     ) -> Option<egui::TextureId> {
+        self.allocation.get()?;
         let [width, height, k] = self.native?;
         if k != factor
             || t.warp.is_some()

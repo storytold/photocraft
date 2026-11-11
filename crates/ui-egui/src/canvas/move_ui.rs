@@ -18,7 +18,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::{Tool, TransformSession};
 
-pub(crate) const COPY_SET_DRAG_UNSUPPORTED: &str = "Copy-dragging a colour set is not supported; use Copy and Paste into the selected channels";
+pub(crate) const COPY_SET_DRAG_UNSUPPORTED: &str = "Copy-dragging selected colour channels is not supported; use Copy and Paste into the selected channels";
 
 /// Thumbnail targeting supplements the engine's viewed-mask decision, shared with commit.
 fn mask_target(app: &PhotocraftApp) -> bool {
@@ -37,10 +37,15 @@ pub(crate) fn color_target(app: &PhotocraftApp) -> Option<photocraft_engine::col
     photocraft_engine::color_channels::selected(&app.session)
 }
 
+/// A native selected region cannot use the RGBA floating-copy route, even for one component.
+pub(crate) fn native_copy_unsupported(app: &PhotocraftApp) -> bool {
+    color_target(app).is_some_and(|colors| colors.len() > 1 || app.session.active().is_some_and(|st| st.doc.selection.is_some()))
+}
+
 /// Copying for a geometric edit keeps a shown mask on the copy. Otherwise changing the active layer
 /// ends the mask view and can expose retained colour rows as a different movement target.
 pub(crate) fn duplicate_for_geometry(app: &mut PhotocraftApp) -> Result<serde_json::Value, String> {
-    if color_target(app).is_some_and(|colors| colors.len() > 1) {
+    if native_copy_unsupported(app) {
         return Err(COPY_SET_DRAG_UNSUPPORTED.into());
     }
     let viewed = app.session.active().and_then(photocraft_engine::mask_view_cmds::current);
@@ -61,7 +66,7 @@ pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> boo
     floats_selected_pixels_with(app, tool)
         || (tool == Tool::Move
             && app.ui.transform.is_none()
-            && color_target(app).is_some_and(|colors| colors.len() > 1)
+            && color_target(app).is_some()
             && app.session.active().is_some_and(|st| st.doc.selection.is_some()))
 }
 
@@ -75,6 +80,7 @@ pub(crate) fn floats_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> bo
     let Some(st) = app.session.active() else { return false };
     tool == Tool::Move
         && app.ui.transform.is_none()
+        && color_target(app).is_none()
         && st.doc.selection.is_some()
         && st.selected_layers().len() <= 1
         && st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.visible)
@@ -254,7 +260,12 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
     if let Some(p) = app.move_gpu_preview.as_mut() {
         p.shown = false;
     }
-    if offset == (0, 0) || app.ui.transform.is_some() || app.session.prefs().interface.show_bounding_box_when_dragging_layer || mask_target(app) {
+    if offset == (0, 0)
+        || app.ui.transform.is_some()
+        || app.ui.view.pattern_preview
+        || app.session.prefs().interface.show_bounding_box_when_dragging_layer
+        || mask_target(app)
+    {
         return None;
     }
     let st = app.session.documents().get(idx)?;
@@ -338,6 +349,9 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
     let texture = p.gpu.as_mut().and_then(|g| {
         g.texture_move(&t, &view, app.session.prefs().interface.show_channels_in_color, display.as_ref().is_some_and(|d| d.encode_srgb), factor, p.bounds)
     });
+    if p.gpu.as_ref().is_some_and(crate::channel_transform_gpu::Preview::allocation_failed) {
+        p.gpu = None;
+    }
     p.shown = texture.is_some();
     // Other displays and the Navigator share the CPU document cache. The main canvas
     // paints this texture directly, so retaining that cache cannot apply the move twice.
@@ -401,6 +415,14 @@ fn drag_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     Some((dx, dy))
 }
 
+/// Native wrapped samples carry a wrapped outline, rather than a translated copy of its
+/// old segments. The canvas caches that projection per source/offset, even with pixel preview off.
+pub(crate) fn wrapped_selection_offset(app: &PhotocraftApp, idx: usize) -> Option<(i32, i32)> {
+    (app.ui.view.pattern_preview && app.session.active_index() == Some(idx) && color_target(app).is_some() && carries_selection(app))
+        .then(|| drag_offset(app))
+        .flatten()
+}
+
 /// The ΔX/ΔY values shown beside the pointer while the Move tool drags layers or selected pixels,
 /// as in Photoshop (#5727): the whole pixels the release will move them. Free Transform shows its
 /// own (`transform_tool::live_readout`). `None` until the pointer moves.
@@ -438,7 +460,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if channel.is_some() {
         photocraft_engine::channel_transform::retry_capture(&doc).ok()?;
     }
-    let pattern = app.ui.view.pattern_preview && channel.is_none();
+    let pattern = app.ui.view.pattern_preview;
     // A toggle of Pattern Preview mid-drag drops the old keys; `damage` is then `None` and the
     // canvas recomposites, so preview pixels and the release share the live mode.
     if app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision && p.pattern != pattern) {
@@ -494,7 +516,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let moved = match channel {
             Some((id, colors)) => {
                 let mut d = (*doc).clone();
-                photocraft_engine::channel_cmds::move_color_channels(&mut d, id, colors, offset.0, offset.1, background).map(|()| d)
+                photocraft_engine::channel_cmds::move_color_channels_wrapping(&mut d, id, colors, offset.0, offset.1, background, wrap).map(|()| d)
             }
             None => photocraft_engine::layer_multi_cmds::moved_wrapping(&doc, &p.ids, offset.0, offset.1, mask_target, wrap),
         };
@@ -646,7 +668,7 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     app.move_gpu_preview = None;
     // Only when the canvas shows this very offset (else it recomposites everything once).
     let at = (dx as i32, dy as i32);
-    let pattern = app.ui.view.pattern_preview && color_target(app).is_none();
+    let pattern = app.ui.view.pattern_preview;
     let shown = app.move_preview.take().filter(|p| {
         p.shown.is_some() && p.offsets.last() == Some(&at) && p.pattern == pattern && (!p.stationary || p.background == app.session.tools.background)
     });

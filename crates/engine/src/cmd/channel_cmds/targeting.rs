@@ -356,9 +356,23 @@ pub fn move_color_channels(
     dy: i32,
     background: [f32; 4],
 ) -> Result<()> {
+    move_color_channels_wrapping(doc, id, colors, dx, dy, background, None)
+}
+
+/// The same native Move with Pattern Preview's canvas wrapping. Samples already outside
+/// the canvas stay put, matching whole-layer wrapping; transparency never moves with them.
+pub fn move_color_channels_wrapping(
+    doc: &mut Document,
+    id: LayerId,
+    colors: crate::color_channels::ColorChannels,
+    dx: i32,
+    dy: i32,
+    background: [f32; 4],
+    wrap: Option<Rect>,
+) -> Result<()> {
     let generation = photocraft_raster::spill::read_error_generation();
     crate::channel_transform::retry_capture(doc)?;
-    let result = move_color_channels_inner(doc, id, colors, dx, dy, background);
+    let result = move_color_channels_inner(doc, id, colors, dx, dy, background, wrap);
     crate::channel_transform::check_capture(doc, generation)?;
     result
 }
@@ -370,15 +384,30 @@ fn move_color_channels_inner(
     dx: i32,
     dy: i32,
     background: [f32; 4],
+    wrap: Option<Rect>,
 ) -> Result<()> {
-    if (dx != 0 || dy != 0) && colors.len() > 1 && doc.selection.is_some() {
-        return crate::channel_transform::move_selected_colors(doc, id, colors, dx, dy, background);
+    if let Some(tile) = wrap {
+        if tile.is_empty() {
+            return Err(bad("layer.translate", "a wrapping channel move requires a nonempty canvas"));
+        }
+        color_move_destination(tile, 0, 0)?;
+    }
+    if (dx != 0 || dy != 0) && doc.selection.is_some() {
+        return crate::channel_transform::move_selected_colors(doc, id, colors, dx, dy, background, wrap);
     }
     let space = photocraft_compose::cmyk_space(doc);
     let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
     let fmt = surf.format();
     if colors.indices().any(|k| k >= fmt.mode.color_channels()) {
         return Err(EngineError::Other("colour channel index is out of range".into()));
+    }
+    if let Some(tile) = wrap {
+        crate::channel_transform::validate_area(tile.union(&photocraft_compose::bounds::content_bounds(surf)))?;
+        let source = surf.clone();
+        let mut moved = crate::layer_multi_cmds::wrap_surface(&source, dx, dy, tile);
+        crate::color_channels::restrict_surface(&source, &mut moved, colors)?;
+        *surf = moved;
+        return Ok(());
     }
     let area = surf.content_bounds();
     if area.is_empty() || (dx == 0 && dy == 0) {

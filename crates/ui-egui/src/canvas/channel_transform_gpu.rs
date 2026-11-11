@@ -12,7 +12,7 @@ use crate::state::TransformSession;
 
 #[path = "channel_transform_gpu_validation.rs"]
 mod validation;
-use validation::{Validated, validated};
+use validation::{ErrorScopes, Validated, validated};
 #[path = "channel_move_native.rs"]
 mod native_move;
 
@@ -31,6 +31,7 @@ fn supports_channels(rs: &RenderState) -> bool {
 #[cfg(test)]
 thread_local! {
     static FORCE_UNSUPPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FORCE_RESOURCE_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -71,6 +72,7 @@ struct Passes {
 pub(crate) struct Preview {
     rs: RenderState,
     pipes: Arc<Validated<Pipelines>>,
+    allocation: Arc<Validated<()>>,
     uniform: wgpu::Buffer,
     inputs: wgpu::BindGroup,
     moved: wgpu::BindGroup,
@@ -90,6 +92,77 @@ pub(crate) struct Preview {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     native: Option<[u32; 3]>,
+}
+
+#[derive(Default)]
+struct ResourceValidations(Vec<std::sync::Weak<Validated<()>>>);
+
+fn resource_scope(device: &wgpu::Device) -> ErrorScopes {
+    let scopes = ErrorScopes::new(device);
+    #[cfg(test)]
+    if FORCE_RESOURCE_ERROR.with(std::cell::Cell::get) {
+        // Fail validation without allocating memory or putting a real device under pressure.
+        let _ = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("channel preview allocation regression"),
+            size: 16,
+            usage: wgpu::BufferUsages::empty(),
+            mapped_at_creation: false,
+        });
+    }
+    scopes
+}
+
+/// Resource creation has the same deferred scopes as pipeline compilation. Keep
+/// repainting while a retained capture settles, without retaining an abandoned capture's VRAM.
+fn track_resources(rs: &RenderState, scopes: ErrorScopes) -> Arc<Validated<()>> {
+    let validation = Arc::new(scopes.finish(()));
+    let _ = validation.get();
+    if validation.is_pending() {
+        let mut renderer = rs.renderer.write();
+        if renderer.callback_resources.get::<ResourceValidations>().is_none() {
+            renderer.callback_resources.insert(ResourceValidations::default());
+        }
+        if let Some(checks) = renderer.callback_resources.get_mut::<ResourceValidations>() {
+            checks.0.retain(|weak| weak.upgrade().is_some_and(|v| v.is_pending()));
+            checks.0.push(Arc::downgrade(&validation));
+        }
+    }
+    validation
+}
+
+fn upload_mesh(
+    rs: &RenderState,
+    vertices: &mut wgpu::Buffer,
+    indices: &mut wgpu::Buffer,
+    allocation: &mut Arc<Validated<()>>,
+    mesh: (Vec<f32>, Vec<u32>),
+) -> Option<u32> {
+    let (points, triangles) = mesh;
+    let vb = bytes(&points);
+    let ib: Vec<u8> = triangles.iter().flat_map(|v| v.to_le_bytes()).collect();
+    if vb.len() > 8 * 1024 * 1024 || ib.len() > 8 * 1024 * 1024 {
+        return None;
+    }
+    if vb.len() as u64 > vertices.size() || ib.len() as u64 > indices.size() {
+        let scopes = resource_scope(&rs.device);
+        let grow = |buffer: &mut wgpu::Buffer, size: usize, usage| {
+            if size as u64 > buffer.size() {
+                *buffer = rs.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("channel warp geometry"),
+                    size: (size as u64).next_power_of_two(),
+                    usage: usage | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+        };
+        grow(vertices, vb.len(), wgpu::BufferUsages::VERTEX);
+        grow(indices, ib.len(), wgpu::BufferUsages::INDEX);
+        *allocation = track_resources(rs, scopes);
+        allocation.get()?;
+    }
+    rs.queue.write_buffer(vertices, 0, &vb);
+    rs.queue.write_buffer(indices, 0, &ib);
+    u32::try_from(triangles.len()).ok()
 }
 
 /// Deliberately narrow: no flattened RGB shortcut may change a mask, blending or ICC result.
@@ -122,6 +195,11 @@ fn source(doc: &Document, layer: Option<LayerId>) -> Option<(&Layer, bool)> {
 }
 
 impl Preview {
+    /// A settled local failure releases this capture's VRAM; pending scopes keep it private.
+    pub(crate) fn allocation_failed(&self) -> bool {
+        self.allocation.get().is_none() && !self.allocation.is_pending()
+    }
+
     pub(crate) fn new(gpu: &crate::gpu_canvas::GpuCanvas, doc: &Document, layer: Option<LayerId>, fill: [f32; 4]) -> Option<Self> {
         let generation = photocraft_raster::spill::read_error_generation();
         let captured = Self::capture(gpu, doc, layer, fill);
@@ -169,6 +247,7 @@ impl Preview {
             }
         };
         let layouts = pipes.get()?;
+        let scopes = resource_scope(&rs.device);
         let texture = |label, format, usage| {
             rs.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -275,9 +354,13 @@ impl Preview {
                 mapped_at_creation: false,
             })
         };
+        let vertices = buffer("channel warp vertices", wgpu::BufferUsages::VERTEX);
+        let indices = buffer("channel warp triangles", wgpu::BufferUsages::INDEX);
+        let allocation = track_resources(rs, scopes);
         Some(Self {
             rs: rs.clone(),
             pipes,
+            allocation,
             uniform,
             inputs,
             moved,
@@ -294,10 +377,11 @@ impl Preview {
             selection: selection_bounds,
             selected: doc.selection.is_some(),
             last: None,
-            vertices: buffer("channel warp vertices", wgpu::BufferUsages::VERTEX),
-            indices: buffer("channel warp triangles", wgpu::BufferUsages::INDEX),
+            vertices,
+            indices,
             native: None,
         })
+        .filter(|p| p.allocation.get().is_some() || p.allocation.is_pending())
     }
 
     pub(crate) fn new_move(gpu: &crate::gpu_canvas::GpuCanvas, doc: &Document, layer: Option<LayerId>, fill: [f32; 4], factor: u32) -> Option<Self> {
@@ -343,6 +427,7 @@ impl Preview {
         factor: u32,
         move_bounds: Option<photocraft_geom::Rect>,
     ) -> Option<egui::TextureId> {
+        self.allocation.get()?;
         let colors = photocraft_engine::color_channels::explicit(&serde_json::json!({"target":t.target}), 3).ok()??;
         let component = colors.indices().next()?;
         let mask = colors.indices().fold(0u32, |bits, k| bits | (1 << k));
@@ -448,34 +533,20 @@ impl Preview {
             None => None,
         };
         let passes = self.pipes.get()?.passes(&self.rs.device, colors.len() > 1)?;
+        // Uniform-only drags retain the fast path. Waiting for a fresh asynchronous scope
+        // on every frame would keep continuous WebGPU drags on the CPU indefinitely.
+        let mesh_indices =
+            if let Some(mesh) = geometry { Some(upload_mesh(&self.rs, &mut self.vertices, &mut self.indices, &mut self.allocation, mesh)?) } else { None };
         self.rs.queue.write_buffer(&self.uniform, 0, &bytes(&data));
         let mut encoder = self.rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("channel preview") });
-        if let Some((vertices, indices)) = geometry {
-            let vb = bytes(&vertices);
-            let ib: Vec<u8> = indices.iter().flat_map(|v| v.to_le_bytes()).collect();
-            if vb.len() > 8 * 1024 * 1024 || ib.len() > 8 * 1024 * 1024 {
-                return None;
-            }
-            for (buffer, size, usage) in [(&mut self.vertices, vb.len(), wgpu::BufferUsages::VERTEX), (&mut self.indices, ib.len(), wgpu::BufferUsages::INDEX)]
-            {
-                if size as u64 > buffer.size() {
-                    *buffer = self.rs.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("channel warp geometry"),
-                        size: (size as u64).next_power_of_two(),
-                        usage: usage | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                }
-            }
-            self.rs.queue.write_buffer(&self.vertices, 0, &vb);
-            self.rs.queue.write_buffer(&self.indices, 0, &ib);
+        if let Some(count) = mesh_indices {
             {
                 let mut pass = render_pass(&mut encoder, &self.moved_view);
                 pass.set_pipeline(&passes.warp);
                 pass.set_bind_group(0, &self.inputs, &[]);
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..u32::try_from(indices.len()).ok()?, 0, 0..1);
+                pass.draw_indexed(0..count, 0, 0..1);
             }
             let mut pass = render_pass(&mut encoder, &self.output_view);
             pass.set_pipeline(&passes.finish);
@@ -889,14 +960,19 @@ pub(crate) fn validation_pending(gpu: &crate::gpu_canvas::GpuCanvas) -> bool {
 
 fn validation_pending_for(rs: &RenderState) -> bool {
     let renderer = rs.renderer.read();
-    let Some(cache) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() else { return false };
+    let resources = renderer
+        .callback_resources
+        .get::<ResourceValidations>()
+        .is_some_and(|checks| checks.0.iter().filter_map(std::sync::Weak::upgrade).any(|v| v.is_pending()));
+    let Some(cache) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() else { return resources };
     if cache.is_pending() {
         return true;
     }
-    cache.get().is_some_and(|pipes| {
-        [&pipes.scalar, &pipes.multiple].into_iter().any(|slot| slot.get().is_some_and(Validated::is_pending))
-            || [&pipes.native_scalar, &pipes.native_multiple].into_iter().any(|slot| slot.get().is_some_and(Validated::is_pending))
-    })
+    resources
+        || cache.get().is_some_and(|pipes| {
+            [&pipes.scalar, &pipes.multiple].into_iter().any(|slot| slot.get().is_some_and(Validated::is_pending))
+                || [&pipes.native_scalar, &pipes.native_multiple].into_iter().any(|slot| slot.get().is_some_and(Validated::is_pending))
+        })
 }
 
 /// Advance even abandoned captures, and request one final frame when a scope settles so a
@@ -906,9 +982,18 @@ pub(crate) fn poll_validation(gpu: &crate::gpu_canvas::GpuCanvas) -> bool {
 }
 
 fn poll_validation_for(rs: &RenderState) -> bool {
-    let renderer = rs.renderer.read();
-    let Some(cache) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() else { return false };
-    let mut pending = cache.is_pending();
+    let mut renderer = rs.renderer.write();
+    let mut pending = false;
+    if let Some(checks) = renderer.callback_resources.get_mut::<ResourceValidations>() {
+        checks.0.retain(|weak| {
+            let Some(v) = weak.upgrade() else { return false };
+            pending |= v.is_pending();
+            let _ = v.get();
+            v.is_pending()
+        });
+    }
+    let Some(cache) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() else { return pending };
+    pending |= cache.is_pending();
     if let Some(pipes) = cache.get() {
         for slot in [&pipes.scalar, &pipes.multiple] {
             if let Some(validation) = slot.get() {
@@ -940,8 +1025,8 @@ pub(crate) fn test_supported(rs: &RenderState) -> bool {
 #[cfg(test)]
 pub(crate) fn test_wait<T>(rs: &RenderState, mut operation: impl FnMut() -> Option<T>) -> Option<T> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut value = operation();
     loop {
-        let value = operation();
         if !validation_pending_for(rs) {
             return value;
         }
@@ -949,6 +1034,9 @@ pub(crate) fn test_wait<T>(rs: &RenderState, mut operation: impl FnMut() -> Opti
         let _ = rs.device.poll(wgpu::PollType::Poll);
         poll_validation_for(rs);
         std::thread::sleep(std::time::Duration::from_millis(1));
+        if value.is_none() {
+            value = operation();
+        }
     }
 }
 
@@ -1072,6 +1160,110 @@ mod tests {
             assert_eq!(cache.get().is_some(), valid);
             assert_eq!(count.load(Ordering::SeqCst), 3);
         }
+    }
+
+    #[test]
+    fn resource_failures_stay_local_for_transform_and_native_move_captures() {
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            eprintln!("no software GPU adapter for local preview error handling");
+            return;
+        };
+        if !test_supported(&rs) {
+            return;
+        }
+        let doc = Document::with_background("local preview errors", Size::new(16, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut session = photocraft_engine::Session::new();
+        session.add_document(doc.clone(), None);
+        session.execute("channel.target", serde_json::json!({"channel":"red"})).unwrap();
+        let mut app = crate::PhotocraftApp::new(session, crate::Services::default());
+        app.sync_views();
+        crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
+        let mut t = app.ui.transform.clone().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 1.0, y]);
+        let view = app.session.active().unwrap().channel_view.clone();
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        struct Reset(bool);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                FORCE_RESOURCE_ERROR.with(|flag| flag.set(self.0));
+            }
+        }
+        for factor in [1, 2] {
+            let id = Some(doc.layers[0].id);
+            let mut preview = test_wait(&rs, || Preview::new_move(&gpu, &doc, id, [0.0; 4], factor)).unwrap();
+            test_wait(&rs, || preview.texture_move(&t, &view, true, false, factor, doc.bounds())).unwrap();
+            {
+                let _reset = Reset(FORCE_RESOURCE_ERROR.with(|flag| flag.replace(true)));
+                let mut failed = Preview::new_move(&gpu, &doc, id, [0.0; 4], factor);
+                assert!(test_wait(&rs, || failed.as_mut()?.texture_move(&t, &view, true, false, factor, doc.bounds())).is_none());
+                if factor == 1 {
+                    let mut changed = t.clone();
+                    changed.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 2, 2).map_points(|[x, y]| [x + 1.0, y]), t.rect));
+                    assert!(test_wait(&rs, || preview.texture(&changed, &view, true, false, factor)).is_none());
+                    assert!(preview.allocation_failed(), "a failed mesh allocation is remembered until the capture is released");
+                } else {
+                    let mut changed = t.clone();
+                    changed.quad = changed.quad.map(|[x, y]| [x + 1.0, y]);
+                    test_wait(&rs, || preview.texture_move(&changed, &view, true, false, factor, doc.bounds())).unwrap();
+                    assert!(!preview.allocation_failed(), "a uniform-only drag does not allocate or wait for resource scopes");
+                }
+                assert!(gpu.health().is_ok(), "a preview resource failure must not fault the shared GPU");
+            }
+            let mut recovered = test_wait(&rs, || Preview::new_move(&gpu, &doc, id, [0.0; 4], factor)).unwrap();
+            test_wait(&rs, || recovered.texture_move(&t, &view, true, false, factor, doc.bounds())).unwrap();
+            assert!(gpu.health().is_ok());
+            assert_eq!(doc.layers, app.session.active().unwrap().doc.layers, "captures and failed draws do not edit the document");
+        }
+    }
+
+    #[test]
+    fn deferred_resource_checks_settle_and_abandoned_captures_do_not_keep_repainting() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            return;
+        };
+        for valid in [false, true] {
+            let polls = Arc::new(AtomicUsize::new(0));
+            let count = polls.clone();
+            let validation = Arc::new(Validated::new(
+                (),
+                std::future::poll_fn(move |_| if count.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(valid) }),
+            ));
+            rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&validation)]));
+            for _ in 0..3 {
+                assert!(poll_validation_for(&rs));
+            }
+            assert!(!validation_pending_for(&rs));
+            assert!(!poll_validation_for(&rs));
+            assert_eq!(validation.get().is_some(), valid);
+            assert_eq!(polls.load(Ordering::SeqCst), 3);
+        }
+        let captures = std::cell::Cell::new(0);
+        let retained = test_wait(&rs, || {
+            captures.set(captures.get() + 1);
+            let count = Arc::new(AtomicUsize::new(0));
+            let check = Arc::new(Validated::new(
+                (),
+                std::future::poll_fn(move |_| if count.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(true) }),
+            ));
+            rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&check)]));
+            Some(check)
+        })
+        .unwrap();
+        assert!(retained.get().is_some());
+        assert_eq!(captures.get(), 1, "a returned capture stays alive while its resource scopes settle");
+        let pending = Arc::new(Validated::new((), std::future::pending()));
+        rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&pending)]));
+        assert!(validation_pending_for(&rs));
+        drop(pending);
+        assert!(!poll_validation_for(&rs));
+        assert!(!validation_pending_for(&rs));
     }
 
     #[test]
