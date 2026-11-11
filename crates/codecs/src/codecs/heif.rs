@@ -57,15 +57,18 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     }
     // Photoshop on macOS opens HEIC through Apple's decoder, so match its chroma upsampling.
     let options = craft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation, chroma: craft_heif::Chroma::Apple };
-    let decoded = craft_heif::decode(bytes, &options).map_err(err)?;
+    let mut decoded = craft_heif::decode(bytes, &options).map_err(err)?;
     // The decoder re-reads the container; trust its output's shape, not the probe's.
     let layout = if decoded.has_alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
     // The decoder returns full-scale 16-bit samples at any coded depth; an 8-bit file stays 8-bit.
+    // Taken, so the decoder's buffer is freed here and not held through the HDR conversion below.
+    let raw = std::mem::take(&mut decoded.data);
     let (sample, data) = if decoded.bit_depth > 8 {
-        (SampleType::U16, decoded.data.iter().flat_map(|v| v.to_ne_bytes()).collect())
+        (SampleType::U16, raw.iter().flat_map(|v| v.to_ne_bytes()).collect())
     } else {
-        (SampleType::U8, decoded.data.iter().map(|&v| ((u32::from(v) * 255 + 32767) / 65535) as u8).collect())
+        (SampleType::U8, raw.iter().map(|&v| ((u32::from(v) * 255 + 32767) / 65535) as u8).collect())
     };
+    drop(raw);
     let mut img = Image::from_raw(decoded.width, decoded.height, layout, sample, data)?;
     img.icc = decoded.icc;
     // `colour` is always filled in (nclx, else the HEVC VUI, else H.273's "unspecified" 2s); only a
@@ -82,7 +85,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     // ICC curve can describe those transfers, and an 8/16-bit document would clip the highlights.
     match img.cicp.filter(|c| c.is_hdr()) {
         Some(c) => {
-            limits.check(decoded.width, decoded.height, layout, SampleType::F32)?;
+            // `linearize` holds the 16-bit image, its float copy and the float output at once.
+            let hdr_peak = (layout.channels() * (SampleType::U16.bytes() + 2 * SampleType::F32.bytes())) as u64;
+            limits.check_bytes(decoded.width, decoded.height, hdr_peak)?;
             crate::cicp::linearize(img, c)
         }
         None => Ok(img),
@@ -120,6 +125,23 @@ mod tests {
         0x69, 0x61, 0x66, 0x4d, 0x69, 0x48, 0x42, 0x72, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6d, 0x65, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x10, 0x75, 0x75, 0x69, 0x64, 0x00, 0x00, 0x00, 0x00, 0x03, 0x08, 0x08, 0x08, 0x00, 0x03, 0x01, 0x03, 0x70, 0x00, 0xa8, 0x00,
     ];
+
+    /// A 10-bit HLG file opens as float: the conversion holds the 16-bit image, its float copy and
+    /// the float output at once, ten bytes a sample.
+    #[cfg(feature = "heif")]
+    #[test]
+    fn an_hdr_heic_is_checked_against_its_conversion_peak() {
+        use craft_heif::testdata::{Prop, Spec, build};
+        let grey = |_, _| [512u16, 512, 512];
+        let mut spec = Spec::new(32, 32, &grey);
+        spec.bit_depth = 10;
+        spec.props = vec![Prop::Nclx(9, 18, 9, false)];
+        let bytes = build(&spec);
+        let peak = 32 * 32 * 3 * 10;
+        let with = |max_alloc| crate::decode_with(&bytes, &crate::DecodeOptions { limits: Limits { max_alloc, ..Default::default() }, ..Default::default() });
+        assert!(matches!(with(peak - 1), Err(CodecError::LimitExceeded(_))));
+        assert_eq!(with(peak).unwrap().sample_type(), crate::image::SampleType::F32);
+    }
 
     #[cfg(feature = "heif")]
     #[test]

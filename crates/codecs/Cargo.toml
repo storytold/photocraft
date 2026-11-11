@@ -47,6 +47,8 @@ exr = { version = "1.73", default-features = false, features = ["rayon"] }
 proptest.workspace = true
 # Oracle decoders for cross-checking in tests only.
 image = { workspace = true, features = ["png", "jpeg", "tiff"] }
+# Lossless synthetic HEIC files for the `heif` feature's tests.
+craft-heif = { workspace = true, features = ["testdata"] }
 
 # Independent JPEG XL decoder oracle; not linked into the application.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
