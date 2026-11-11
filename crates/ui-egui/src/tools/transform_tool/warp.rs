@@ -131,6 +131,13 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
     if warps_type(app) {
         return;
     }
+    // A press first records what it finds: a Warp entered this frame hasn't settled yet, and once
+    // a drag starts the box settles only on release, so Undo would skip from the drag to the box.
+    if matches!(ev, ToolEvent::Down { .. })
+        && let (Some(t), Some(pv)) = (app.ui.transform.as_ref(), app.transform_preview.as_mut())
+    {
+        pv.steps.settle(super::Step::of(t));
+    }
     // A smart object's warp may be in its contents' space (#8927): the pointer is taken there.
     let (ev, tol, unit) = match app.ui.transform.as_ref().filter(|t| t.warp_place.is_some()) {
         Some(t) => {

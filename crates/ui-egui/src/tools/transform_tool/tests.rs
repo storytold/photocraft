@@ -3004,6 +3004,26 @@ fn undo_after_leaving_warp_mid_drag_keeps_the_drag() {
 }
 
 #[test]
+fn a_drag_right_after_entering_warp_undoes_to_the_warp_before_the_box() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    begin(&mut app, &ctx).unwrap();
+    super::commit::track_steps(&mut app, &ctx);
+    // Warp and the press in one go, before a frame settles Warp.
+    enter_warp(&mut app, &ctx);
+    let entered = warp_mesh(&app);
+    warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+    warp_pointer(&mut app, ToolEvent::Move { x: 30.0, y: 14.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+    warp_pointer(&mut app, ToolEvent::Up { x: 30.0, y: 14.0 }, 2.0, egui::Modifiers::NONE);
+    super::commit::track_steps(&mut app, &ctx);
+    assert_ne!(warp_mesh(&app).points, entered.points, "the drag moved the mesh");
+    crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(warp_mesh(&app).points, entered.points, "the first Undo takes back the drag alone");
+    crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_none(), "the second goes back to the box");
+}
+
+#[test]
 fn warp_drag_from_inside_the_grid_pulls_the_surface_under_the_pointer() {
     let mut app = warping_square();
     let before = warp_mesh(&app);
