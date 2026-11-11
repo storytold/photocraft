@@ -47,7 +47,7 @@ fn frame_record(f: &mut PsdFile) -> &mut photocraft_psd::LayerRecord {
 fn a_photoshop_frames_vstk_draws_its_stroke_along_the_outline() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         // A file shaped like Photoshop's: the group record carries `vsms` and a `vstk`.
-        let mut f = document_to_psd(&frame_doc(depth, None));
+        let mut f = document_to_psd(&frame_doc(depth, None)).unwrap();
         frame_record(&mut f).blocks.push(TaggedBlock::new(*b"vstk", vstk_bytes(Some(&red_inside(4.0)), true, 72.0)));
         let (d, _) = psd_to_document(&f);
         assert_eq!(frame_stroke(&d), Some(red_inside(4.0)), "{depth:?}");

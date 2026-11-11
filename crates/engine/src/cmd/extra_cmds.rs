@@ -139,7 +139,7 @@ pub(crate) fn stroke_width(p: &Value) -> usize {
     p.get("width").and_then(Value::as_f64).filter(|w| w.is_finite()).unwrap_or(1.0).clamp(1.0, 250.0).ceil() as usize
 }
 
-/// Edit › Stroke: a band along the selection edge (or the layer's opaque edge without a selection).
+/// Edit › Stroke: a band along the selection edge (or the targeted surface's opaque edge without a selection).
 fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let width = stroke_width(p);
     let color = color_param("edit.stroke", p, "color", s.tools.foreground)?;
@@ -169,14 +169,16 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let location = p.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
     let id = layer_param(s, p)?;
+    // Stroke keeps its layer behavior for channel views; an explicit mask edits that mask.
+    let pixels = Value::Null;
+    let target = if crate::commands::is_mask_target(p) { p } else { &pixels };
     s.edit("Stroke", |doc, _| {
         let canvas = doc.bounds();
         let (w, h) = (canvas.width() as usize, canvas.height() as usize);
         let edge = match &doc.selection {
             Some(m) => sel::mask_from_surface(Some(m), canvas),
             None => {
-                let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-                let surf = l.surface().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?;
+                let (surf, _) = crate::channel_cmds::target_surface(doc, Some(id), target)?;
                 let mut px = vec![[0.0f32; 4]; w * h];
                 surf.read_rgba_into(canvas, &mut px);
                 px.iter().map(|p| p[3]).collect()
@@ -219,8 +221,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
             .flat_map(|(o, i)| o.iter().zip(i).skip(pad).take(w).map(|(o, i)| (o - i).clamp(0.0, 1.0)))
             .collect();
         let band = sel::mask_to_surface(&band, canvas);
-        let lock = doc.effective_locks(id).transparency;
-        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+        let (surf, lock) = crate::channel_cmds::target_surface(doc, Some(id), target)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
             crate::fill_cmds::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;

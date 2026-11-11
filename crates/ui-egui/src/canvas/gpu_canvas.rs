@@ -814,7 +814,7 @@ impl GpuCanvas {
                         multiview_mask: None,
                     });
                     pass.set_pipeline(pipe);
-                    pass.set_bind_group(0, &bg, &[]);
+                    pass.set_bind_group(0, &bg, &[0]);
                     pass.set_scissor_rect((r.x0 - tx) as u32, (r.y0 - ty) as u32, r.width(), r.height());
                     pass.draw(0..3, 0..1);
                 }
@@ -1130,6 +1130,9 @@ impl GpuCanvas {
 
 #[cfg(test)]
 mod mip_tests;
+
+#[cfg(test)]
+mod sharp_tests;
 
 #[cfg(test)]
 mod tests;

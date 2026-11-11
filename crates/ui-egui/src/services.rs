@@ -477,6 +477,9 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Where the pen in range is on the screen, in physical pixels ([`Services::pen_screen_px`]).
+pub type PenScreenFn = Box<dyn Fn() -> Option<[i32; 2]> + Send + Sync>;
+
 /// Which end of the pen is in use, `Some(true)` = eraser, `None` = no pen ([`Services::pen_end`]).
 pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
 
@@ -616,6 +619,9 @@ pub struct Services {
     /// Which end of the pen is in use, where the platform reports it outside the stylus feed
     /// (Windows: the feed carries no pen samples there). Read for the eraser-end tool switch.
     pub pen_end: Option<PenEndFn>,
+    /// Where the pen is on the screen, independent of where the window is (Windows: the pen's
+    /// pointer messages). A pen moving the window by its title bar follows it (`titlebar`).
+    pub pen_screen_px: Option<PenScreenFn>,
     /// WinTab packet poll (Windows with Windows Ink disabled; see `photocraft_tablet::wintab`).
     pub tablet_poll: Option<TabletPollFn>,
     /// The persistent brush preset store, loading in the background (desktop; see

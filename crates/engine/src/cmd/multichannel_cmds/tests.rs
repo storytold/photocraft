@@ -182,7 +182,7 @@ fn psd_round_trip_keeps_names_inks_and_values() {
         s.execute("image.mode.multichannel", json!({})).unwrap();
         let d = doc(&s).clone();
         let out = photocraft_io::export(&d, "x.psd", &photocraft_io::ExportOptions::default()).unwrap();
-        let file = photocraft_io::document_to_psd(&d);
+        let file = photocraft_io::document_to_psd(&d).unwrap();
         assert_eq!(file.header.color_mode.as_u16(), 7);
         assert_eq!(file.header.channels, 4);
         // Photoshop stores ink as dark: a solid-ink sample is 0.
@@ -206,7 +206,7 @@ fn psd_stores_ink_as_dark() {
     let mut s = session("grayscale", 8);
     s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
     s.execute("image.mode.multichannel", json!({})).unwrap();
-    let file = photocraft_io::document_to_psd(doc(&s));
+    let file = photocraft_io::document_to_psd(doc(&s)).unwrap();
     let merged = file.decode_merged().unwrap();
     assert!(merged.iter().all(|&b| b == 0), "solid black ink is stored as 0");
 }

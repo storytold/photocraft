@@ -325,6 +325,19 @@ pub const POPUP_ARROW_W: f32 = 14.0;
 /// Width of a [`popup_value_field`]'s pop-up slider.
 const POPUP_SLIDER_W: f32 = 160.0;
 
+/// A [`value_field`] reserving `trailing` points at its right for an embedded arrow. Returns the
+/// field and its full rectangle; the arrow gets its own interaction id.
+pub fn value_field_with_trailing(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    trailing: f32,
+) -> (Response, Rect) {
+    value_field_in(ui, value, range, suffix, width, trailing, FieldOpts::default(), None)
+}
+
 /// What a [`popup_value_field`] did this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PopupFieldResponse {

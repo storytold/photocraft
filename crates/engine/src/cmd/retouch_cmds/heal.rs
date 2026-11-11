@@ -44,8 +44,15 @@ pub(super) fn heal_region(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &
     out
 }
 
+/// The reference's alert for the Healing Brush in an Indexed Color document (#12112). Bitmap,
+/// Duotone and Multichannel weren't measured and heal as before.
+const INDEXED_REFUSAL: &str = "Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+
 pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.healingBrush";
+    if s.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Indexed) {
+        return Err(EngineError::Other(INDEXED_REFUSAL.into()));
+    }
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
     let which = sample_layers(p, CMD)?;
@@ -95,6 +102,11 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
+    // Here, so the live preview refuses too. Only the History Brush: the Art History Brush and
+    // Erase to History were not measured and keep converting.
+    if cmd == "paint.historyBrush" && !flag(p, "eraseToHistory", false) {
+        crate::history_source_cmds::refuse_other_format(st, &source_doc)?;
+    }
     let missing = || EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into());
     match crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p) {
         Ok(surf) => Ok(surf.clone()),
@@ -136,8 +148,9 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
     reject_huge_stroke(CMD, &stroke)?;
     let live = s.live_commit.take().filter(|l| l.matches(s, CMD, p, &stroke.points));
     let from_live = live.is_some();
+    let erase = flag(p, "eraseToHistory", false);
     let src_surface = history_source(s, id, p, CMD)?;
-    let label = if flag(p, "eraseToHistory", false) { "History Eraser" } else { "History Brush" };
+    let label = if erase { "History Eraser" } else { "History Brush" };
     let dmg = run_stroke(s, label, id, p, |_, surf, sel, lock| {
         if let Some(l) = live {
             *surf = l.surface;
@@ -285,3 +298,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
     let dmg = run_stroke(s, "Spot Healing Brush", id, p, |pre, surf, sel, lock| spot_heal_surface(surf, pre, &stroke, kind, all, sel, lock))?;
     Ok(json!({ "damage": damage_json(dmg) }))
 }
+
+#[cfg(test)]
+#[path = "heal_indexed_tests.rs"]
+mod heal_indexed_tests;

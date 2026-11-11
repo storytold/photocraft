@@ -11,13 +11,13 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current
 /// [`dropdown`] whose option labels are shown exactly as given: names the user typed (a channel
 /// or layer name) must not be translated, unlike the built-in labels [`dropdown`] translates (#5335).
 pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false, &|_| false);
+    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false, &|_| false, &|_| true);
     !chosen.is_empty()
 }
 
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
-    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false);
+    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false, &|_| true);
     (!chosen.is_empty(), hovered)
 }
 
@@ -35,7 +35,7 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
     options: &[(T, &str)],
     width: f32,
 ) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, name, current, options, width, true, true, &|_| false)
+    dropdown_with(ui, id, name, current, options, width, true, true, &|_| false, &|_| true)
 }
 
 /// [`dropdown_wheel_hovered`] whose open list draws a line above each option (but the first) that
@@ -50,7 +50,25 @@ pub fn dropdown_wheel_grouped<T: PartialEq + Clone>(
     width: f32,
     starts_group: impl Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group)
+    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group, &|_| true)
+}
+
+/// [`dropdown_wheel_grouped`] whose open list greys the options `enabled` refuses: drawn disabled,
+/// not picked by the pointer and not previewed, and passed over by every wheel notch. The keys
+/// still land on them; the caller steps past (#12879, the Pattern Stamp's Behind on the
+/// Background).
+#[allow(clippy::too_many_arguments)]
+pub fn dropdown_wheel_grouped_enabled<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    starts_group: impl Fn(&T) -> bool,
+    enabled: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group, &enabled)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -64,6 +82,7 @@ fn dropdown_with<T: PartialEq + Clone>(
     wheel: bool,
     translate: bool,
     starts_group: &dyn Fn(&T) -> bool,
+    enabled: &dyn Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
     let shown = |l: &str| if translate { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
@@ -93,7 +112,7 @@ fn dropdown_with<T: PartialEq + Clone>(
         // Over the open list the wheel steps the value too, instead of scrolling the list.
         over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
         if over_list {
-            let stepped = wheel_steps(ui, wheel_id, true, current, options);
+            let stepped = wheel_steps(ui, wheel_id, true, current, options, enabled);
             wheeled = !stepped.is_empty();
             reveal |= wheeled;
             chosen.extend(stepped);
@@ -105,9 +124,18 @@ fn dropdown_with<T: PartialEq + Clone>(
             if i > 0 && starts_group(v) {
                 list_separator(ui);
             }
-            let item = ui.selectable_label(v == current, text.as_str());
+            let on = enabled(v);
+            let item = if on {
+                ui.selectable_label(v == current, text.as_str())
+            } else {
+                ui.add_enabled(false, egui::Button::selectable(v == current, text.as_str()))
+            };
             if reveal && v == current {
                 item.scroll_to_me(None);
+            }
+            // A greyed option is neither previewed nor picked.
+            if !on {
+                continue;
             }
             if item.hovered() {
                 hovered = Some(v.clone());
@@ -139,7 +167,7 @@ fn dropdown_with<T: PartialEq + Clone>(
         chosen.push(current.clone());
     }
     if wheel && !over_list {
-        let stepped = wheel_steps(ui, wheel_id, response.hovered(), current, options);
+        let stepped = wheel_steps(ui, wheel_id, response.hovered(), current, options, enabled);
         wheeled = !stepped.is_empty();
         if wheeled && craft_ui::ComboBox::is_open(ui.ctx(), response.id) {
             ui.data_mut(|d| d.insert_temp(reveal_id, true));
@@ -188,9 +216,10 @@ fn wheel_rests(ui: &Ui, id: egui::Id, wheeled: bool) -> bool {
 }
 
 /// The options the wheel over dropdown `id` (while `hovered`) steps `current` through this frame,
-/// one per notch, in order; the last is the new `current`. While the pointer is over it the wheel
+/// one per notch, in order; the last is the new `current`. A notch goes to the next option
+/// `enabled` accepts, so a greyed one costs no notch. While the pointer is over it the wheel
 /// scrolls nothing else.
-fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, current: &mut T, options: &[(T, &str)]) -> Vec<T> {
+fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, current: &mut T, options: &[(T, &str)], enabled: &dyn Fn(&T) -> bool) -> Vec<T> {
     if hovered {
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
     }
@@ -199,8 +228,10 @@ fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, c
     let mut chosen = Vec::new();
     // Down (negative) is the next option. No more steps than there are options.
     for _ in 0..(notches.abs().min(options.len() as f32) as usize) {
-        let next = if notches < 0.0 { index.checked_add(1) } else { index.checked_sub(1) };
-        let Some((next, (v, _))) = next.and_then(|i| options.get(i).map(|o| (i, o))) else { break };
+        let mut ahead = options.iter().enumerate().skip(index.saturating_add(1));
+        let mut behind = options.iter().enumerate().take(index).rev();
+        let next = if notches < 0.0 { ahead.find(|(_, (v, _))| enabled(v)) } else { behind.find(|(_, (v, _))| enabled(v)) };
+        let Some((next, (v, _))) = next else { break };
         index = next;
         chosen.push(v.clone());
     }

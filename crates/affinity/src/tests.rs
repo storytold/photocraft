@@ -497,6 +497,61 @@ mod shapes {
     }
 
     #[test]
+    fn a_shared_story_placed_many_times_is_charged_against_the_text_budget() {
+        // One ~1 MiB story referenced 100 times would retain ~100 MiB of text without a budget.
+        let glyphs = F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("a".repeat((1 << 20) - 1)))]);
+        let run = F::Obj(tag(b"Item"), vec![]);
+        let attributes = F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), vec![vec![(tag(b"Indx"), F::I32(1 << 20)), (tag(b"Item"), run)]]))]);
+        let block = vec![(tag(b"Glyp"), glyphs), (tag(b"GAtt"), attributes)];
+        let text = F::Def(
+            100,
+            vec![tag(b"TxtA")],
+            vec![
+                (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))])),
+                (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![block]))])),
+            ],
+        );
+        let group = F::Def(101, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared((0..100).map(|_| F::Ref(100)).collect()))]);
+        let d = read(vec![text, group], 101);
+        assert!(d.warnings.iter().any(|w| w.contains("document text budget")), "{:?}", d.warnings);
+    }
+
+    #[test]
+    fn text_past_the_character_limit_is_not_charged_so_a_later_text_node_survives() {
+        // 64 references to one segment of 1 MiB + 1 characters: only the first is scanned (the
+        // block is cut at the character limit), so only that scan is charged to the text budget.
+        let frame = || (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))]));
+        let segment = F::Def(200, vec![tag(b"Segm")], vec![(tag(b"Utf8"), F::Str("a".repeat((1 << 20) + 1)))]);
+        let mut refs = vec![segment];
+        refs.extend((0..63).map(|_| F::Ref(200)));
+        let big_block = vec![(tag(b"Glyp"), F::Obj(tag(b"Glyp"), vec![(tag(b"Mixd"), F::Shared(refs))]))];
+        let big =
+            F::Def(100, vec![tag(b"TxtA")], vec![frame(), (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![big_block]))]))]);
+        let run = F::Obj(tag(b"Item"), vec![]);
+        let attributes = F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), vec![vec![(tag(b"Indx"), F::I32(2)), (tag(b"Item"), run)]]))]);
+        let small_block = vec![(tag(b"Glyp"), F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("ok".into()))])), (tag(b"GAtt"), attributes)];
+        let small = F::Def(
+            101,
+            vec![tag(b"TxtA")],
+            vec![frame(), (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![small_block]))]))],
+        );
+        let group = F::Def(102, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared(vec![F::Ref(100), F::Ref(101)]))]);
+        let d = read(vec![big, small, group], 102);
+        assert!(!d.warnings.iter().any(|w| w.contains("document text budget")), "{:?}", d.warnings);
+        fn collect(nodes: &[crate::model::Node], out: &mut Vec<String>) {
+            for n in nodes {
+                if let Kind::Text(t) = &n.kind {
+                    out.push(t.runs.iter().map(|r| r.text.as_str()).collect());
+                }
+                collect(&n.children, out);
+            }
+        }
+        let mut texts = Vec::new();
+        collect(&d.spreads[0].nodes, &mut texts);
+        assert!(texts.iter().any(|t| t == "ok"), "{texts:?}");
+    }
+
+    #[test]
     fn pie_angles_with_huge_finite_values_do_not_loop_or_emit_nonfinite_points() {
         let document = read(vec![shape(100, b"ShPi", vec![(tag(b"AngS"), F::F64(1.0e308)), (tag(b"AngE"), F::F64(-1.0e308))])], 100);
         for subpath in &path(&document).subpaths {

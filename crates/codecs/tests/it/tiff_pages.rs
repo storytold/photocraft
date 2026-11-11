@@ -839,3 +839,109 @@ fn zoo_long_random_mutations() {
         poke(&g);
     }
 }
+
+/// A 64-bit gray page whose strips decode through a scratch buffer four times the size of their
+/// output rows: every sample of row `y` is `y << 48` (it reads back as the 16-bit value `y`).
+fn wide_gray(w: u32, h: u32, rows: u32) -> Vec<u8> {
+    let px: Vec<u8> = (0..h).flat_map(|y| (0..w).flat_map(move |_| (u64::from(y) << 48).to_le_bytes())).collect();
+    build(true, false, &[strips(w, h, 64, 1, 1, rows, &px)], &[0]).bytes
+}
+
+/// Decode options whose only change from the defaults is `max_alloc`.
+fn with_max_alloc(max_alloc: u64) -> DecodeOptions {
+    DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..Default::default() }
+}
+
+/// A strip's scratch buffer is charged against `max_alloc` next to the output it decodes into.
+#[test]
+fn strip_scratch_counts_against_max_alloc() {
+    // 64×64: an 8 KiB 16-bit output, but its one strip is 32 KiB of 64-bit samples, decoded
+    // into a scratch buffer held next to the output. The two together are over 36 KiB.
+    let file = wide_gray(64, 64, 64);
+    let r = decode_with(&file, &with_max_alloc(36 << 10));
+    assert!(matches!(r, Err(CodecError::LimitExceeded(_))), "output plus strip scratch over max_alloc: {:?}", r.map(|i| i.data().len()));
+    // With room for both it decodes.
+    let img = decode_with(&file, &with_max_alloc(48 << 10)).unwrap();
+    assert_eq!(img.to_u16_samples().unwrap()[64 * 63], 63);
+}
+
+/// A page's strip tables are charged against `max_alloc` before the `tiff` crate reads them:
+/// it reads both tables in full while it opens the directory, under its own default limits.
+/// A 1x65536 gray page in one-row strips holds a 64 KiB image but 65536 strips, 1 MiB of
+/// tables as the decoder keeps them. Under a 512 KiB budget it used to open the decoder (and
+/// allocate those tables) before the band worker's budget refused it; it is now refused first.
+#[test]
+fn strip_tables_are_refused_before_the_decoder_opens() {
+    let h = 65_536u32;
+    let file = build(true, false, &[strips(1, h, 8, 1, 1, 1, &vec![7u8; h as usize])], &[0]).bytes;
+    match decode_with(&file, &with_max_alloc(512 << 10)) {
+        Err(CodecError::LimitExceeded(m)) => assert!(m.contains("tables") && m.contains("65536 chunks"), "{m}"),
+        other => panic!("tables over max_alloc must be refused: {:?}", other.map(|i| i.data().len())),
+    }
+    // With room for the image and one worker's tables it decodes.
+    let img = decode_with(&file, &with_max_alloc(4 << 20)).unwrap();
+    assert_eq!(img.dimensions(), (1, h));
+    assert!(img.data().iter().all(|&v| v == 7));
+}
+
+/// Room for one worker's scratch decodes every strip with that one worker, each in its place.
+#[test]
+fn a_tight_budget_decodes_its_strips_one_after_another() {
+    // 64×512 in eight 32 KiB strips: a 64 KiB output with room for only one strip's scratch
+    // beside it, so the bands are decoded by one worker, in order, and still land in place.
+    let file = wide_gray(64, 512, 64);
+    let img = decode_with(&file, &with_max_alloc((64 + 40) << 10)).unwrap();
+    let v = img.to_u16_samples().unwrap();
+    for y in 0..512 {
+        assert_eq!(v[y * 64], y as u16, "row {y}");
+        assert_eq!(v[y * 64 + 63], y as u16, "row {y}");
+    }
+    // Unlimited, the same file decodes the same in parallel.
+    assert_eq!(decode(&file).unwrap().to_u16_samples().unwrap(), v);
+}
+
+/// The `tiff` crate decodes each row of a floating-point-predicted tile into a buffer of the
+/// declared tile width. A 64x64 page declaring TileWidth 0xFFFFFFFF asked for about 103 GB
+/// there, unbudgeted (an allocation failure aborts); it is now refused with a limit error.
+#[test]
+fn a_float_predictor_row_of_a_hostile_tile_width_is_refused() {
+    let (w, h) = (64u32, 64u32);
+    let tile = vec![0u8; (w * h * 3 * 8) as usize];
+    let d = Dir { entries: base(w, h, 64, 3, 2), chunks: vec![tile], tiled: true }
+        .tag(322, LONG, &[0xFFFF_FFFF])
+        .tag(323, LONG, &[u64::from(h)])
+        .tag(317, SHORT, &[3])
+        .tag(339, SHORT, &[3]);
+    let file = build(true, false, &[d], &[0]).bytes;
+    let r = decode_with(&file, &with_max_alloc(1 << 30));
+    assert!(matches!(r, Err(CodecError::LimitExceeded(_))), "{:?}", r.map(|i| i.data().len()));
+}
+
+/// The JPEG headers of every tile are read before the decode. 65536 JPEG tiles that all span
+/// the same 512 KiB without a 0xFF (the file's own offset and byte-count tables) made that read
+/// step through about 34 billion bytes; it is now bounded by the file's length (plus a few steps
+/// per tile), and the page is refused at once.
+#[test]
+fn overlapping_jpeg_tiles_without_markers_are_refused_quickly() {
+    let (w, h, tile) = (4096u32, 4096u32, 16u32);
+    let n = ((w / tile) * (h / tile)) as usize;
+    let mut entries = base(w, h, 8, 1, 1);
+    entries.retain(|e| e.0 != 259);
+    // The tables are the first thing after the header, at 8: every tile spans both of them
+    // (LONG offsets of 8 and counts of 8n, neither holding a 0xFF byte).
+    let offsets = vec![8u64; n];
+    let counts = vec![8 * n as u64; n];
+    let d = Dir { entries, chunks: Vec::new(), tiled: true }
+        .tag(259, SHORT, &[7])
+        .tag(322, LONG, &[u64::from(tile)])
+        .tag(323, LONG, &[u64::from(tile)])
+        .tag(324, LONG, &offsets)
+        .tag(325, LONG, &counts);
+    let file = build(true, false, &[d], &[0]).bytes;
+    assert!(file.len() > 8 + 8 * n, "the tables are in the file");
+    assert!(!file[8..8 + 8 * n].contains(&0xFF), "no marker in the tiles");
+    let started = std::time::Instant::now();
+    let r = decode(&file);
+    assert!(matches!(r, Err(CodecError::InvalidImage(_))), "{:?}", r.map(|i| i.data().len()));
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "took {:?}", started.elapsed());
+}

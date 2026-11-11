@@ -174,3 +174,39 @@ fn default_tiff_is_baseline() {
         assert_eq!(decode(&bytes).expect("decode").data(), img.data(), "{layout:?}: round trip");
     }
 }
+
+fn refusal(bytes: &[u8]) -> String {
+    match decode(bytes) {
+        Err(e) => e.to_string(),
+        Ok(i) => panic!("decoded a {}x{} image", i.width(), i.height()),
+    }
+}
+
+#[test]
+fn a_repeated_structural_tag_is_refused() {
+    // SamplesPerPixel 1 first (what the directory checks read), 64 last (what the backend reads).
+    let dir = strips(4, 1, 8, 1, 1, 1, &[1, 2, 3, 4]).tag(277, SHORT, &[64]);
+    let bytes = build(true, false, &[dir], &[0]).bytes;
+    let e = refusal(&bytes);
+    assert!(e.contains("277 appears more than once"), "{e}");
+}
+
+#[test]
+fn a_jpeg_strip_larger_than_its_strip_is_refused() {
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, 95).encode(&[100u8; 64 * 64], 64, 64, jpeg_encoder::ColorType::Luma).expect("encode the JPEG strip");
+    let mut dir = with_compression(strips(16, 16, 8, 1, 1, 16, &[0; 256]), 7);
+    dir.chunks = vec![jpeg];
+    let e = refusal(&build(true, false, &[dir], &[0]).bytes);
+    assert!(e.contains("64x64 JPEG frame in a 16x16 strip"), "{e}");
+}
+
+#[test]
+fn a_float_predicted_tile_row_wider_than_the_scratch_cap_is_refused() {
+    // A 16x16 32-bit float image in one tile 2^25 samples wide: the floating-point predictor
+    // would make the backend allocate a 128 MiB row for it.
+    let mut dir = Dir { entries: base(16, 16, 32, 1, 1), chunks: vec![vec![0; 64]], tiled: true };
+    dir = with_compression(dir, 8).tag(317, SHORT, &[3]).tag(322, LONG, &[1 << 25]).tag(323, LONG, &[16]).tag(339, SHORT, &[3]);
+    let e = refusal(&build(true, false, &[dir], &[0]).bytes);
+    assert!(e.contains("predicted tile row"), "{e}");
+}

@@ -73,12 +73,25 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
     }))
 }
 
+/// Only Freeform Pen overrides these shared commands' normal History labels (#12829).
+/// Validate before editing so malformed automation input cannot change the document.
+pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Result<&'a str> {
+    match p.get("historyName") {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::String(n)) if n == "Freeform Pen" => Ok("Freeform Pen"),
+        Some(_) => Err(bad(cmd, "`historyName` must be \"Freeform Pen\"")),
+    }
+}
+
+/// Replaces the Work Path or a saved path, or appends subpaths with the requested operation.
+/// The optional Freeform Pen history label overrides the normal Work Path or Save Path label.
 pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
-    s.edit(if is_work(name.as_deref()) { "Work Path" } else { "Save Path" }, |doc, _| {
+    let label = pen_history_name(p, CMD, if is_work(name.as_deref()) { "Work Path" } else { "Save Path" })?;
+    s.edit(label, |doc, _| {
         let merge = |old: Option<&Path>, new: Path| -> Result<Path> {
             let merged = match (old, append) {
                 (Some(o), Some(op)) => {

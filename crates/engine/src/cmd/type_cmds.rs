@@ -953,7 +953,8 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
     Ok(t)
 }
 
-/// The name of the history state a new type layer makes: what `type.create` records, and what the
+/// The name of the history state a new horizontal type layer makes: what `type.create` records
+/// (vertical text is "New Vertical Type Layer", #12058), and what the
 /// Type tool's commit keeps in the modes [`commits_as_selection`] names (#12041).
 pub const NEW_TYPE_LAYER_LABEL: &str = "New Type Layer";
 
@@ -1020,7 +1021,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut t = new_text_layer(s, p, "type.create")?;
                 let given = p.get("name").and_then(Value::as_str).map(str::to_string);
                 let name = given.clone().unwrap_or_else(|| layer_name(&t.text));
-                let id = s.edit(NEW_TYPE_LAYER_LABEL, |doc, active| {
+                // The reference application names new vertical text after its tool (#12058).
+                let label = if t.orientation == Orientation::Vertical { "New Vertical Type Layer" } else { NEW_TYPE_LAYER_LABEL };
+                let id = s.edit(label, |doc, active| {
                     refresh(doc, &mut t);
                     let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Text(t)), crate::layer_place::Place::AutoEditable);
                     *active = Some(id);
@@ -1306,3 +1309,6 @@ fn step_size(s: &mut Session, p: &Value, up: bool, default_by: f32) -> Result<Va
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "type_vertical_history_name_tests.rs"]
+mod vertical_history_name_tests;

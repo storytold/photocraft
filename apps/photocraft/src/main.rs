@@ -153,7 +153,7 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
             .with_app_id(APP_ID)
             .with_title("PhotoCraft")
             .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([760.0, 480.0])
+            .with_min_inner_size(photocraft_ui_egui::MIN_WINDOW_SIZE)
             .with_drag_and_drop(true)
             .with_decorations(!custom_titlebar)
             .with_fullsize_content_view(true)
@@ -682,6 +682,7 @@ fn main() -> eframe::Result {
             tablet::spawn_x11(&app.stylus.feed, display);
             app.services.right_button_down = tablet::right_button_service();
             app.services.pen_end = tablet::pen_end_service();
+            app.services.pen_screen_px = tablet::pen_screen_service();
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if !unreadable_paths.is_empty() {
@@ -1065,5 +1066,25 @@ mod tests {
         let entry = include_str!("../../../packaging/linux/ai.storyteller.photocraft.desktop");
         let class = entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
         assert_eq!(class, Some(super::APP_ID));
+    }
+
+    /// Both flatpak manifests build with the craft-i18n commit `craft-i18n.rev` pins: CI and
+    /// releases read the file, and the manifests have to name the commit themselves. The pin may
+    /// have a trailing newline or CRLF (a Windows checkout), so it is trimmed, as every reader does.
+    #[test]
+    fn the_flatpak_manifests_pin_the_craft_i18n_rev() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let rev = std::fs::read_to_string(root.join("craft-i18n.rev")).unwrap();
+        let rev = rev.trim();
+        assert!(rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()), "craft-i18n.rev holds one full SHA: {rev:?}");
+        for manifest in ["ai.storyteller.photocraft.yml", "ai.storyteller.photocraft.bundle.yml"] {
+            let text = std::fs::read_to_string(root.join("packaging/linux/flatpak").join(manifest)).unwrap();
+            let source = text.split("url: https://github.com/storytold/craft-i18n").nth(1).unwrap_or_else(|| panic!("{manifest}: a craft-i18n git source"));
+            let source = source.split("- type:").next().unwrap_or(source);
+            let commit =
+                source.lines().find_map(|l| l.trim().strip_prefix("commit:")).unwrap_or_else(|| panic!("{manifest}: the craft-i18n source pins a commit"));
+            assert_eq!(commit.trim().trim_matches(['\'', '"']), rev, "{manifest}");
+            assert!(text.contains("CRAFT_I18N_DIR: /run/build/photocraft/craft-i18n"), "{manifest}: the build names the catalogs");
+        }
     }
 }

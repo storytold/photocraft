@@ -11,6 +11,8 @@ workspace = true
 chrono = { workspace = true }
 craft-print = { workspace = true }
 craft-ui = { workspace = true }
+# Interface translations over the embedded craft-i18n catalogs (`build.rs`, `src/i18n.rs`).
+craft-i18n = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-cms = { workspace = true }
@@ -44,7 +46,7 @@ unicode-bidi = "0.3"
 icu_casemap = "2.3"
 icu_locale_core = "2.3"
 base64 = "0.23"
-# Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.
+# Inflating egui's default fonts, stored deflated (build.rs, `text/egui_fonts.rs`); already linked through photocraft-io.
 flate2 = { workspace = true }
 web-time = { workspace = true }
 
@@ -79,7 +81,7 @@ photocraft-psd = { workspace = true, features = ["testgen"] }
 tempfile = "3"
 
 [build-dependencies]
-# Deflates the translation catalogs and egui's default fonts (build.rs); already linked at run time to inflate them.
+# Deflates egui's default fonts (build.rs); already linked at run time to inflate them.
 flate2 = { workspace = true }
 # egui's default fonts, deflated by build.rs for egui_fonts.rs (the same version egui uses).
 epaint_default_fonts = { version = "0.37", features = ["monochrome_emoji_fonts"] }

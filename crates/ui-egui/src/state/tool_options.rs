@@ -84,11 +84,16 @@ pub struct ToolOptions {
     pub protect_tones: bool,
     /// Sponge: desaturate | saturate, vibrance.
     pub sponge_mode: String,
+    /// Sponge: Flow %, whole numbers 1..100 (#12976). Settings saved before it load as 50.
+    #[serde(default = "fifty")]
+    pub sponge_flow: f32,
     pub vibrance: bool,
     /// Blur/Sharpen/Smudge strength %, Sharpen protect detail, Smudge finger painting.
     pub strength: f32,
     pub protect_detail: bool,
     pub finger_painting: bool,
+    /// Smudge › Mode (#12959): Normal, Darken, Lighten, Hue, Saturation, Color or Luminosity.
+    pub smudge_mode: photocraft_color::BlendMode,
     /// Quick Selection enhance edge.
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
@@ -127,6 +132,10 @@ pub struct ToolOptions {
     /// on one of its anchors deletes it (#4144).
     #[serde(default = "yes")]
     pub pen_auto_add_delete: bool,
+    /// Pen › gear › Rubber Band: while drawing, preview the next segment from the last anchor to
+    /// the pointer. Off by default, as in Photoshop (#12900).
+    #[serde(default)]
+    pub pen_rubber_band: bool,
     /// Marquee options bar: "normal" | "fixedRatio" | "fixedSize", with the ratio or size.
     #[serde(default = "default_marquee_style")]
     pub marquee_style: String,
@@ -480,10 +489,12 @@ impl Default for ToolOptions {
             exposure: 50.0,
             protect_tones: true,
             sponge_mode: "desaturate".into(),
+            sponge_flow: 50.0,
             vibrance: true,
             strength: 50.0,
             protect_detail: true,
             finger_painting: false,
+            smudge_mode: photocraft_color::BlendMode::Normal,
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
@@ -503,6 +514,7 @@ impl Default for ToolOptions {
             arrow_concavity: 0.0,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
+            pen_rubber_band: false,
             marquee_style: default_marquee_style(),
             marquee_width: 1.0,
             marquee_height: 1.0,

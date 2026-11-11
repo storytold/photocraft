@@ -125,6 +125,10 @@ pub struct ColorSettings {
     /// Advanced › "Blend Text Colors Using Gamma" (1 = off; Photoshop's default 1.45): type
     /// layers mix anti-aliased edges in this gamma (`photocraft_compose::psblend::set_text_gamma`).
     pub blend_text_gamma: f32,
+    /// Working Spaces › Spot: the dot gain, in percent at a 50 % dot, that previews of spot
+    /// channels add (Photoshop's default Dot Gain 20 %; its menu offers 10–30 % and custom
+    /// values). Lives in the compositor too (`photocraft_compose::multichannel::set_spot_dot_gain`).
+    pub spot_dot_gain: f32,
     /// Monitor profile the canvas is displayed in: `auto` (the main display's profile when the
     /// platform supplies it, else sRGB), a built-in RGB profile id or an `.icc` path.
     pub monitor_profile: String,
@@ -147,6 +151,7 @@ impl Default for ColorSettings {
             bpc: true,
             dither: true,
             blend_text_gamma: photocraft_compose::psblend::TEXT_GAMMA,
+            spot_dot_gain: photocraft_compose::multichannel::SPOT_DOT_GAIN,
             monitor_profile: "auto".into(),
         }
     }
@@ -197,6 +202,9 @@ pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
     }
     if Intent::parse(&c.intent).is_none() {
         return Err(format!("unknown intent `{}` (perceptual|relative|saturation|absolute)", c.intent));
+    }
+    if !(c.spot_dot_gain.is_finite() && (0.0..=photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN).contains(&c.spot_dot_gain)) {
+        return Err(format!("spot dot gain must be 0..{} %", photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN));
     }
     Ok(())
 }
@@ -558,6 +566,36 @@ pub fn document_profile(doc: &Document) -> Arc<Profile> {
         .and_then(|b| profile_from_bytes(b).ok())
         .filter(|p| p.color_space == mode_space(doc.mode))
         .unwrap_or_else(|| working_profile(doc.mode))
+}
+
+/// A swatch colour (straight RGB in the RGB working space, as the foreground and background hold
+/// it) as the active document takes it. In a Grayscale document that is the colour's gray with the
+/// sRGB tone curve (sGray), through `photocraft-cms` (relative colorimetric with black point
+/// compensation), returned as equal R, G and B so the pixel conversion keeps it: RGB 0,200,0
+/// becomes gray 172, as the reference paints it (173, measured), not its Rec.601 luma 117 (#11940).
+/// The reference's swatch conversion doesn't follow the document's Dot Gain curve (that gives 153),
+/// so pixel conversions such as Image › Mode › Grayscale keep using the document's profile. Other
+/// modes, and a failed conversion, keep the colour. So do Grayscale documents outside the default
+/// gray working space, which #11940 did not measure: a Working Gray other than Dot Gain 20 %, or a
+/// document tagged with a gray profile other than that one.
+pub fn swatch_in_doc(s: &Session, c: [f32; 4]) -> [f32; 4] {
+    let Some(st) = s.active().filter(|st| st.doc.mode == ColorMode::Grayscale) else { return c };
+    let default_gray = Builtin::DotGain20Compat;
+    if s.color.settings.working_gray != default_gray.id() || document_profile(&st.doc).content_hash() != default_gray.profile().content_hash() {
+        return c;
+    }
+    let opts = photocraft_cms::TransformOptions { intent: Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let sgray = Arc::new(Builtin::SGray.profile().clone());
+    let Ok(t) = photocraft_cms::cached(&working_profile(ColorMode::Rgb), &sgray, opts) else { return c };
+    let mut out = [0.0f32; 16];
+    t.eval(&[c[0], c[1], c[2]], &mut out);
+    let g = out[0];
+    if g.is_finite() {
+        let g = g.clamp(0.0, 1.0);
+        [g, g, g, c[3]]
+    } else {
+        c
+    }
 }
 
 /// Profile describing the compositor's RGB output for this document (see the module docs).
@@ -1212,9 +1250,18 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => {}
     }
+    if let Some(v) = p.get("spotDotGain") {
+        let max = f64::from(photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN);
+        let g = v
+            .as_f64()
+            .filter(|g| (0.0..=max).contains(g))
+            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`spotDotGain` must be a dot gain of 0..{max} %") })?;
+        next.spot_dot_gain = g as f32;
+    }
     validate_settings(&next).map_err(|msg| EngineError::BadParams { cmd: cmd.into(), msg })?;
     if next != s.color.settings {
         photocraft_compose::psblend::set_text_gamma(next.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(next.spot_dot_gain);
         s.color.settings = next;
         // Persisted with the preferences.
         s.prefs.edit(|_| ());
@@ -1310,7 +1357,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.colorSettings",
             "Color Settings…",
             ["Edit"],
-            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
+            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"spotDotGain":0..49=20,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (spotDotGain = the Spot working space: the dot gain, in % at a 50 % dot, that spot channel previews add, as Photoshop's Spot menu (Dot Gain 10–30 %, or a custom value); working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
             always,
             color_settings,
             true,

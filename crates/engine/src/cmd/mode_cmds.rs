@@ -105,6 +105,8 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
         let fmt = doc.pixel_format();
         let dpi = doc.resolution_dpi;
         let background_id = doc.background().map(|l| l.id);
+        // Type in a font that isn't installed turns its own pixels, as it can't re-render (#8860).
+        crate::canvas_geom::map_missing_font_type(&mut doc.layers, &mut |c| photocraft_algo::transform::warp_surface(c, c.content_bounds(), &h, interp))?;
         for l in doc.layers.iter_mut() {
             let background = Some(l.id) == background_id;
             if background && let Some(surf) = l.surface_mut() {
@@ -137,7 +139,8 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(sel) = &doc.selection {
             doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
         }
-        // Type, shapes and smart objects re-render from their new geometry.
+        // Type, shapes and smart objects re-render from their new geometry; type in a missing
+        // font keeps its turned pixels.
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
         doc.guides = Default::default();
         Ok(new)
@@ -563,12 +566,23 @@ fn custom_pattern_map(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<f32>, us
     let pat = crate::pattern_cmds::resolve_param(s, cmd, p)?;
     // A pattern keeps its own colours: its lightness is what it paints in a Grayscale document,
     // over white where it is transparent.
-    let px = photocraft_compose::pattern::pattern_rgba(&pat, ColorMode::Grayscale);
-    if px.is_empty() {
+    if !pat.is_paintable() {
         return Err(bad(cmd, format!("the pattern \"{}\" is empty or too large", pat.display_name())));
     }
-    let lightness: Vec<f32> = px.iter().map(|q| photocraft_color::convert::rgb_to_gray([q[0], q[1], q[2]]) * q[3] + (1.0 - q[3])).collect();
-    Ok((quantize::custom_pattern_thresholds(&lightness), pat.width as usize, pat.height as usize))
+    let count = usize::try_from(pat.pixel_count()).map_err(|_| bad(cmd, "the pattern is too large"))?;
+    quantize::custom_pattern_working_bytes(count).map_err(|_| bad(cmd, "the pattern's threshold ranking exceeds the 256 MiB workspace limit"))?;
+    let mut lightness = Vec::new();
+    lightness.try_reserve_exact(count).map_err(|_| bad(cmd, "not enough memory for the pattern's lightness map"))?;
+    let mut band = Vec::new();
+    for top in (0..pat.height).step_by(photocraft_doc::pattern::BAND_ROWS as usize) {
+        photocraft_compose::pattern::pattern_rgba_rows(&pat, ColorMode::Grayscale, top, top + photocraft_doc::pattern::BAND_ROWS, &mut band)
+            .ok_or_else(|| bad(cmd, "not enough memory for the pattern's pixel rows"))?;
+        lightness.extend(band.iter().map(|q| photocraft_color::convert::rgb_to_gray([q[0], q[1], q[2]]) * q[3] + (1.0 - q[3])));
+    }
+    // Rank the complete pattern once: band-local ranks would change its thresholds.
+    drop(band);
+    let map = quantize::custom_pattern_thresholds(&lightness).map_err(|error| bad(cmd, format!("could not rank the pattern: {error}")))?;
+    Ok((map, pat.width as usize, pat.height as usize))
 }
 
 fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {

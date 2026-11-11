@@ -860,6 +860,8 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.layerStyle.createLayer",
             "layer.new.group",
             "layer.groupLayers",
+            super::steps_artboard_section::NEW,
+            super::steps_artboard_section::FROM_LAYERS,
             "layer.duplicate",
             "layer.new.layerViaCopy",
             "layer.new.layerViaCut",

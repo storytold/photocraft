@@ -152,12 +152,15 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
         return true; // Photoshop: a click outside commits without starting new text
     }
     app.ui.type_insertion_style = None;
-    // The Type Mask tools always start new text: existing type layers are just pixels to them;
-    // so does a ⇧-click with the Type tool, as in Photoshop, to start new text over old.
-    if app.ui.tool.is_type_mask() || mods.shift {
+    // A ⇧-click starts new text over old, as in Photoshop. A Type Mask click on a text layer's
+    // glyphs edits it as the Type tool does (#12075), unless ⇧ is held or the layer is only partly
+    // locked: neither is measured, so those keep starting a new mask.
+    let hit = hit_layer(app, x, y);
+    let partly_locked = |id| app.session.active().map(|st| st.doc.effective_locks(id)).is_some_and(|l| l.any() && !l.all);
+    if mods.shift || (app.ui.tool.is_type_mask() && hit.is_some_and(partly_locked)) {
         return false;
     }
-    if let Some(id) = hit_layer(app, x, y) {
+    if let Some(id) = hit {
         let _ = app.session.select_layer(id);
         // Lock All (the layer's own or a group's) refuses the edit before it starts, as the engine
         // would refuse the first keystroke; the reference application says so in an alert (#12040).
@@ -183,7 +186,14 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
             resize: None,
             preedit: None,
         });
-        app.ui.text_edit_return_tool = None;
+        // The frame commits an edit that is no mask while a Type Mask tool is in hand: edit with
+        // the Type tool, as Move's double-click does, and give the mask tool back at the end.
+        app.ui.text_edit_return_tool = app.ui.tool.is_type_mask().then_some(app.ui.tool);
+        if app.ui.text_edit_return_tool.is_some() {
+            let vertical =
+                app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
+            app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
+        }
         return true;
     }
     false
@@ -481,3 +491,7 @@ pub fn multi_click(app: &mut PhotocraftApp, egui_count: u32, x: f64, y: f64) {
 #[cfg(test)]
 #[path = "mask_placeholder_tests.rs"]
 mod mask_placeholder_tests;
+
+#[cfg(test)]
+#[path = "mask_click_text_layer_tests.rs"]
+mod mask_click_text_layer_tests;

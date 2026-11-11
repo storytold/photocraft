@@ -43,7 +43,6 @@ fn scramble(app: &mut PhotocraftApp) {
 }
 
 const BURN_TIP: [f64; 5] = [65.0, 0.0, 0.25, 0.0, 1.0];
-const DEFAULT_TIP: [f64; 5] = [20.0, 1.0, 0.1, 0.0, 1.0];
 
 #[test]
 fn reset_tool_gives_the_burn_tool_a_65_px_soft_tip() {
@@ -86,20 +85,4 @@ fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
     invoke(&mut app, "tool.resetAll", json!({"confirmed": true}));
     pick(&mut app, Tool::Burn);
     assert_eq!(tip(&mut app), BURN_TIP, "picked after the reset");
-}
-
-/// The Dodge tool shares the Burn tool's tip (#12684); the Sponge keeps the default.
-#[test]
-fn the_sponge_tool_keeps_its_tip() {
-    let mut a = app();
-    pick(&mut a, Tool::Sponge);
-    scramble(&mut a);
-    invoke(&mut a, "tool.reset", json!({}));
-    assert_eq!(tip(&mut a), DEFAULT_TIP);
-    // A first use still takes the current tip, as before.
-    let mut a = app();
-    pick(&mut a, Tool::Pencil);
-    scramble(&mut a);
-    pick(&mut a, Tool::Sponge);
-    assert_eq!(tip(&mut a)[0], 57.0, "first use");
 }

@@ -318,6 +318,7 @@ impl PhotocraftApp {
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
         FormatChoices { jpeg: None, ..choices }.record(&mut step);
+        photocraft_engine::actions_cmds::note_automation_step(&mut self.session, "file.save", &step);
         self.session.journal.push(("file.save".into(), step));
         Ok(r)
     }
@@ -363,6 +364,7 @@ impl PhotocraftApp {
             step["tiffLayers"] = layers.into();
         }
         choices.record(&mut step);
+        photocraft_engine::actions_cmds::note_automation_step(&mut self.session, "file.saveAs", &step);
         self.session.journal.push(("file.saveAs".into(), step));
         Ok(r)
     }
@@ -768,6 +770,7 @@ impl PhotocraftApp {
             app.write_document(path, settings, copy)
         });
         if written.is_ok() {
+            photocraft_engine::actions_cmds::note_automation_step(&mut self.session, record, &step);
             self.session.journal.push((record.into(), step));
         }
         match written {

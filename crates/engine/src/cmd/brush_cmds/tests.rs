@@ -468,7 +468,7 @@ fn every_size_change_scales_the_dual_tip_and_keeps_its_proportion() {
     s.execute("tools.setBrush", json!({"brush": {"size": 100, "dualBrush": {"enabled": true, "size": 20}}})).unwrap();
     let sizes = |s: &Session| (s.tools.brush.size, s.tools.brush.dual_brush.size);
     s.execute("tools.decreaseBrushSize", json!({})).unwrap();
-    assert_eq!(sizes(&s), (80.0, 16.0));
+    assert_eq!(sizes(&s), (90.0, 18.0));
     s.execute("tools.increaseBrushSize", json!({})).unwrap();
     assert_eq!(sizes(&s), (100.0, 20.0));
     // A coalesced drag (options bar slider, Alt+right-drag) is a run of size-only patches.

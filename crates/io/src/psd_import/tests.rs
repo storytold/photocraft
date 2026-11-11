@@ -151,7 +151,7 @@ fn spots(doc: &Document) -> Vec<bool> {
 /// straight (the maximum = solid ink), no 1053, and `version_info` as resource 1057. `padded`
 /// lays DisplayInfo out in the 14-byte records of 0.1.0 to 0.7.0.
 fn as_earlier_photocraft_saved(doc: &Document, version_info: Vec<u8>, padded: bool) -> Vec<u8> {
-    let mut file = crate::psd_export::document_to_psd(doc);
+    let mut file = crate::psd_export::document_to_psd(doc).unwrap();
     assert!(!file.merged_has_alpha());
     file.resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS);
     for r in &mut file.resources {
@@ -259,7 +259,7 @@ fn other_files_without_alpha_identifiers_use_photoshop_polarity() {
     ];
     for (what, info) in cases {
         // Photoshop's polarity, as this version writes it, without 1053.
-        let mut file = crate::psd_export::document_to_psd(&doc);
+        let mut file = crate::psd_export::document_to_psd(&doc).unwrap();
         file.resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS && r.id != ids::VERSION_INFO);
         file.resources.extend(info.map(|d| ImageResource::new(ids::VERSION_INFO, d)));
         let bytes = file.to_bytes().unwrap();
@@ -292,7 +292,7 @@ fn the_earlier_photocraft_rule_needs_a_spot_and_no_alpha_identifiers() {
 /// those channels' planes as Photoshop stored them (it had read and written them straight),
 /// and stored the channels added after them straight.
 fn as_earlier_photocraft_resaved(doc: &Document, stale_ids: &[u32], kept: usize) -> Vec<u8> {
-    let mut file = crate::psd_export::document_to_psd(doc);
+    let mut file = crate::psd_export::document_to_psd(doc).unwrap();
     file.resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS && r.id != ids::VERSION_INFO);
     file.resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, stale_ids.iter().flat_map(|id| id.to_be_bytes()).collect()));
     file.resources.push(ImageResource::new(ids::VERSION_INFO, version_info_2026(true)));
@@ -542,7 +542,7 @@ fn a_fatal_layer_error_skips_the_extra_channel_conversion() {
             self.bytes.as_slice().read_at(offset, buf)
         }
     }
-    let bytes = crate::psd_export::document_to_psd(&channels_document(SampleType::U8)).to_bytes().unwrap();
+    let bytes = crate::psd_export::document_to_psd(&channels_document(SampleType::U8)).unwrap().to_bytes().unwrap();
     let whole = PsdFile::from_bytes(&bytes).unwrap();
     assert!(merged_needed(&whole), "the extra channels come from the merged image");
     let converted = psd_to_document_global(&whole, &photocraft_raster::Interrupt::NONE, None, Vec::new(), false).unwrap();

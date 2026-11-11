@@ -622,6 +622,41 @@ fn a_directory_flush_the_file_system_cannot_do_still_saves() {
     assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
 }
 
+/// #9440: network shares (SMB) refuse a directory flush with `ERROR_INVALID_FUNCTION` (1) or
+/// `ERROR_NOT_SUPPORTED` (50) on Windows; those count as flushed. Real failures still don't.
+#[test]
+fn windows_unsupported_directory_flush_codes_are_classified() {
+    let code = |c| dir_synced(Err(io::Error::from_raw_os_error(c)));
+    assert!(dir_synced(Err(io::Error::from(io::ErrorKind::Unsupported))).is_ok());
+    // Off Windows these are errno values (1 is EPERM): a real failure, never swallowed.
+    assert_eq!(code(1).is_ok(), cfg!(windows), "code 1 counts as flushed only on Windows");
+    assert_eq!(code(50).is_ok(), cfg!(windows), "code 50 counts as flushed only on Windows");
+    if cfg!(windows) {
+        assert!(code(5).is_err(), "ERROR_ACCESS_DENIED stays a failure");
+        assert!(code(1117).is_err(), "ERROR_IO_DEVICE stays a failure");
+    }
+    assert!(dir_synced(Err(io::Error::from(io::ErrorKind::Other))).is_err());
+}
+
+/// #9440: the Windows mirror of `a_directory_flush_the_file_system_cannot_do_still_saves`. A share
+/// refusing the directory flush with `ERROR_INVALID_FUNCTION` (1) or `ERROR_NOT_SUPPORTED` (50)
+/// still saves through `atomic_write_with`; `ERROR_ACCESS_DENIED` (5) still fails the save.
+#[cfg(windows)]
+#[test]
+fn a_share_that_cannot_flush_a_directory_still_saves() {
+    let d = TempDir::new("syncdir-smb");
+    let p = d.0.join("doc.pcraft");
+    for code in [1, 50] {
+        let fs = Faulty { fail_sync_dir: Some(Ok(code)), ..Default::default() };
+        atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap();
+        assert_eq!(fs.synced.get(), 1, "code {code}: the flush was attempted");
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+    }
+    let fs = Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() };
+    assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
+    assert_no_temp(&d.0);
+}
+
 /// #9388: on macOS a save keeps the replaced file's creation time ("Created" in Finder), as
 /// Photoshop's does; the rename would otherwise leave a file born at the time of the save.
 #[cfg(target_os = "macos")]
