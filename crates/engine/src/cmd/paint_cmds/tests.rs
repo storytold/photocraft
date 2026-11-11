@@ -372,8 +372,8 @@ fn assert_all_white(s: &Session, what: &str) {
 /// #11311 / #11354 review: after clearing an anti-aliased selection and bucket-filling the hole
 /// white at 100 %, the hole and the hole's edge are opaque white and the opaque art is untouched.
 /// The soft rim the Clear left (straight white at partial alpha) rises only partly, as in the
-/// reference application: a pixel the fill reaches at alpha `α` ends at `α + (1 − α)²`, so a faint
-/// rim stays. Before the first round the hole's own edge stayed semi-transparent (a grey ring);
+/// reference application: a pixel of the one-pixel ring 8-adjacent to the flood, at alpha `α`,
+/// ends at `α + (1 − α)²`, and pixels further out keep their alpha, so a faint rim stays. Before the first round the hole's own edge stayed semi-transparent (a grey ring);
 /// the first round filled the rim to 255 too, which the reference does not do.
 #[test]
 fn bucket_after_clearing_an_antialiased_selection_fills_the_hole_and_raises_the_rim_partly() {
@@ -389,17 +389,21 @@ fn bucket_after_clearing_an_antialiased_selection_fills_the_hole_and_raises_the_
         assert!(rim.iter().all(|p| p[..3].iter().all(|c| (c - 1.0).abs() < 1e-3)), "depth {depth}: the rim keeps its white");
 
         let after = layer_rgba(&s);
+        // The flood is every pixel the 8-bit wand sees as empty; the ring is the pixels 8-adjacent to it.
+        let empty = |x: i64, y: i64| (0..120).contains(&x) && (0..100).contains(&y) && level(cleared[(y * 120 + x) as usize][3]) == 0;
         let mut raised = 0;
         for (i, (was, now)) in cleared.iter().zip(&after).enumerate() {
             let at = (i % 120, i / 120);
-            if was[3] <= 0.0 || was[3] >= 1.0 {
+            let (x, y) = (at.0 as i64, at.1 as i64);
+            let next_to_flood = (-1..=1).any(|dy| (-1..=1).any(|dx| (dx, dy) != (0, 0) && empty(x + dx, y + dy)));
+            if level(was[3]) == 0 || was[3] >= 1.0 {
                 assert_eq!(level(now[3]), 255, "depth {depth} at {at:?}: hole, hole edge and opaque art end opaque: {now:?}");
-            } else if now[3] > was[3] {
+            } else if next_to_flood {
                 raised += 1;
                 let want = was[3] + (1.0 - was[3]).powi(2);
                 assert!((now[3] - want).abs() < 1.5 / 255.0, "depth {depth} at {at:?}: rim {was:?} -> {now:?}, want alpha {want}");
             } else {
-                assert_eq!(now, was, "depth {depth} at {at:?}: a rim pixel the fill does not reach stays");
+                assert_eq!(now, was, "depth {depth} at {at:?}: a rim pixel beyond the ring next to the flood stays");
             }
             assert!(now[..3].iter().all(|c| (c - 1.0).abs() < 1e-3), "depth {depth} at {at:?}: white: {now:?}");
         }
