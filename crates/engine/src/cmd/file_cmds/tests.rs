@@ -2014,6 +2014,9 @@ fn placing_refuses_a_scale_that_would_exceed_the_pixel_limit() {
         assert!(matches!(s.execute("file.placeEmbedded", json!({"path": small, "scale": scale})), Err(EngineError::BadParams { .. })), "{scale}");
     }
     assert!(s.execute("file.placeEmbedded", json!({"path": small, "scale": 50})).is_ok());
+    // The error names the command that asked.
+    let linked = s.execute("file.placeLinked", json!({"path": small, "scale": 1e9}));
+    assert!(matches!(linked, Err(EngineError::BadParams { ref cmd, .. }) if cmd == "file.placeLinked"), "{linked:?}");
 }
 
 /// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
