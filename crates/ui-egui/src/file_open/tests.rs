@@ -1462,6 +1462,35 @@ fn notices_render_without_panicking() {
     assert_eq!(app.ui.notices.len(), 2);
 }
 
+/// CodeRabbit on #10390: with Open Documents as Tabs off, a document is shown only in its floating
+/// window, so closing that window closes the document through File › Close: a clean one closes,
+/// one with changes asks first and, cancelled, keeps its window. It never turns back into a tab.
+#[test]
+fn closing_a_documents_only_floating_window_closes_the_document() {
+    let (mut app, _) = app_with(Vec::new());
+    let ctx = egui::Context::default();
+    app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = false);
+    app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
+    app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
+    assert_eq!((app.session.documents().len(), app.ui.windows.len()), (2, 2));
+    // A clean document: closing its window closes it.
+    let clean = app.ui.windows.iter().find(|w| w.document == 0).unwrap().id;
+    crate::canvas::tabs::close_window(&mut app, &ctx, clean);
+    assert_eq!(app.session.documents().len(), 1, "the document closed with its window");
+    assert_eq!(app.ui.windows.len(), 1);
+    assert_eq!(crate::canvas::docked_document_indices(&app), Vec::<usize>::new(), "nothing became a tab");
+    // One with changes: asked about, and cancelling keeps the window.
+    app.session.set_active(0);
+    app.run("edit.fillForeground", json!({})).unwrap();
+    assert!(app.session.documents()[0].is_dirty());
+    let edited = app.ui.windows[0].id;
+    crate::canvas::tabs::close_window(&mut app, &ctx, edited);
+    assert!(app.discard.is_some(), "asked whether to save");
+    crate::dialogs::discard_ui::answer_control(&mut app, &ctx, "cancel").unwrap();
+    assert_eq!(app.session.documents().len(), 1, "cancelled: the document stays open");
+    assert!(app.ui.windows.iter().any(|w| w.id == edited && w.open), "and so does its window");
+}
+
 #[test]
 fn open_documents_as_tabs_preference_controls_floating_windows() {
     let (mut app, _) = app_with(Vec::new());
