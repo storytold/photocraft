@@ -55,7 +55,8 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     if !keep_orientation && (info.coded_width, info.coded_height) != (w, h) {
         limits.check_bytes(info.coded_width, info.coded_height, peak)?;
     }
-    let options = craft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation };
+    // Photoshop on macOS opens HEIC through Apple's decoder, so match its chroma upsampling.
+    let options = craft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation, chroma: craft_heif::Chroma::Apple };
     let decoded = craft_heif::decode(bytes, &options).map_err(err)?;
     // The decoder re-reads the container; trust its output's shape, not the probe's.
     let layout = if decoded.has_alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
