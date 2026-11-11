@@ -697,6 +697,24 @@ fn legacy_tab_selection_clears_collapse_for_the_selected_custom_group() {
 }
 
 #[test]
+fn legacy_visibility_expands_every_split_custom_group_for_native_group() {
+    let mut app = app();
+    app.ui.theme = crate::theme::ThemeKind::ProMedium;
+    app.run("window.panel.move", json!({"panel":"color","anchor":"layers","zone":"top"})).unwrap();
+    let color = group_members(lay(&app), "color");
+    let swatches = group_members(lay(&app), "swatches");
+    app.run("window.panel.group", json!({"panel":"swatches","operation":"collapse"})).unwrap();
+    assert!(swatches.iter().all(|panel| collapsed_members(&app, lay(&app)).contains(panel)));
+    let ctx = egui::Context::default();
+
+    assert_eq!(control_set(&mut app, &ctx, json!({"panels":{"color":true}}))["ok"], true);
+
+    let collapsed = collapsed_members(&app, lay(&app));
+    assert!(color.iter().all(|panel| !collapsed.contains(panel)));
+    assert!(swatches.iter().all(|panel| !collapsed.contains(panel)));
+}
+
+#[test]
 fn legacy_dock_width_is_consumed_by_custom_renderer_and_clamped_to_existing_range() {
     let mut app = app();
     app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
@@ -1060,6 +1078,32 @@ fn a_custom_workspace_discards_a_pending_native_dock_width() {
 
     assert!((dock_width(&app) - width_before).abs() < 0.5, "a custom workspace keeps its saved width");
     assert!(ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "discarded native width is consumed");
+}
+
+#[test]
+fn studio_native_width_waits_until_the_canvas_is_ready() {
+    let mut app = app();
+    app.ui.theme = crate::theme::ThemeKind::Studio;
+    app.last_canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(800.0, 600.0));
+    assert!(app.drop_canvas_rect.is_none());
+    let ctx = egui::Context::default();
+    let key = crate::panels::panel_state_id(&ctx, "dock");
+    let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(420.0, 0.0), vec2(380.0, 700.0)) };
+    ctx.data_mut(|data| data.insert_persisted(key, state));
+
+    native_dock_width(&mut app, &ctx);
+
+    assert!(app.ui.docking.is_none(), "migration must not commit before the Studio canvas is ready");
+    assert!(ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(), "the native width remains pending");
+
+    app.drop_canvas_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(800.0, 600.0)));
+    native_dock_width(&mut app, &ctx);
+
+    let columns = end_columns_of(&app.ui.docking.as_ref().unwrap().layout);
+    assert!((columns[0].width - 380.0).abs() < 1.0);
+    assert!((columns[1].width - default_width(false)).abs() < 1.0);
+    assert_eq!(columns[1].iconic_width, None);
+    assert!(ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
 }
 
 /// The dock-edge layout is only chosen for a horizontal root split whose canvas side is the lone

@@ -1136,7 +1136,7 @@ fn native_dock_width(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ctx.data_mut(|data| data.remove::<egui::PanelState>(id));
         return;
     }
-    if !app.last_canvas_rect.is_positive() {
+    if !app.last_canvas_rect.is_positive() || !migrate::ready(app) {
         return;
     }
     ctx.data_mut(|data| data.remove::<egui::PanelState>(id));
@@ -1567,9 +1567,24 @@ pub(crate) fn prepare_legacy_update(
     }
     // Opening a tab or showing a panel expands its group (#129).
     for group in Group::ALL {
-        let brings_back = request.get("dockTabs").and_then(|p| p.get(group.key())).is_some()
-            || request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool) == Some(true);
-        if !brings_back {
+        let show_group = request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool) == Some(true);
+        let select_tab = request.get("dockTabs").and_then(|p| p.get(group.key())).is_some();
+        if show_group {
+            let groups: Vec<TabGroup> =
+                workspace.layout.root.iter().chain(workspace.layout.floating.iter().map(|window| &window.root)).flat_map(tree_groups).collect();
+            for workspace_group in groups {
+                if !workspace_group.dock {
+                    continue;
+                }
+                let Some(panel) = workspace_group.panels.iter().find(|panel| PANELS.iter().any(|entry| entry.0 == *panel && entry.2 == group)).cloned() else {
+                    continue;
+                };
+                workspace.apply(Action::SetMinimized { panel, minimized: false }, permissions).map_err(|e| e.to_string())?;
+                collapsed.retain(|id| !workspace_group.panels.contains(id));
+            }
+            continue;
+        }
+        if !select_tab {
             continue;
         }
         let panel = if request.get("dockTabs").and_then(|p| p.get(group.key())).is_some() {
