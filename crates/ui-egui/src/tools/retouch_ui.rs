@@ -38,13 +38,7 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     }
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
     // the aligned pairing and applies the slot's scale/rotation/flip.
-    let slot = app.session.presets.clone.active().source.is_some();
-    match (app.ui.clone_offset.filter(|_| o.clone_aligned && !slot), app.ui.clone_source.filter(|_| !slot)) {
-        _ if slot => {}
-        (Some(off), _) => p["offset"] = json!(off),
-        (None, Some(src)) => p["source"] = json!(src),
-        (None, None) => return None,
-    }
+    app.session.presets.clone.active().source?;
     Some(p)
 }
 
@@ -666,12 +660,12 @@ pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
     if !matches!(app.active_tool(), Tool::CloneStamp | Tool::Healing) {
         return None;
     }
-    let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
-    match (crate::preset_panels::clone_sample_point(app, Some(at)), app.ui.clone_offset, app.ui.clone_source) {
-        (Some(p), ..) => Some(p),
-        (None, Some(off), _) => Some([at[0] + off[0], at[1] + off[1]]),
-        (None, None, s) => s,
+    let slot = app.session.presets.clone.active();
+    if slot.document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
+        return None;
     }
+    let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
+    crate::preset_panels::clone_sample_point(app, Some(at))
 }
 
 /// Crosshair at [`source_marker_point`].
@@ -925,7 +919,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("all".to_string(), tl!("All Layers")),
             ];
             crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut o.clone_sample, &opts, 130.0);
-            if app.ui.clone_source.is_none() {
+            if app.session.presets.clone.active().source.is_none() {
                 crate::widgets::vline(ui, 22.0);
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             }

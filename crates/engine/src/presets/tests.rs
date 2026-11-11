@@ -819,6 +819,8 @@ fn clone_source_flip_scale_rotation() {
     s.execute("cloneSource.set", json!({"source": [20, 20], "width": 200, "height": 200})).unwrap();
     let mut s2 = clone_doc(16);
     s2.presets.clone = s.presets.clone.clone();
+    // Transfer the transform settings, then pick this document's own source layer.
+    s2.execute("cloneSource.set", json!({"source": [20, 20]})).unwrap();
     s2.execute("paint.cloneStamp", json!({"points": [[40, 24]], "size": 21, "hardness": 100})).unwrap();
     // 200 %: 4 px right of the anchor samples 2 px right of the source.
     let px = layer_px(&s2, 44, 24);

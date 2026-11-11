@@ -1484,6 +1484,175 @@ fn clone_overlay_follows_the_brush_hardness() {
     assert_eq!(clone_overlay_alpha(&big, &mut output)(32, 32), 255, "a 1000 px soft brush previews too");
 }
 
+#[test]
+fn clone_overlay_opacity_and_flow_match_a_stamp_on_another_layer() {
+    let ctx = egui::Context::default();
+    let xf = clone_overlay_view(100.0, 1.0);
+    for depth in [8, 16, 32] {
+        for clipped in [true, false] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 64, "height": 64, "depth": depth})).unwrap();
+            crate::retouch_ui::set_source(&mut app, 16.0, 16.0);
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.ui.tool = Tool::CloneStamp;
+            app.ui.tool_options.clone_sample = "all".into();
+            app.session.tools.brush.size = 20.0;
+            app.session.presets.clone.overlay.clipped = clipped;
+            // Settings change under a stationary cursor, including after a cached full-strength preview.
+            for (opacity, flow) in [(1.0, 1.0), (0.5, 1.0), (1.0, 0.25), (0.5, 0.4)] {
+                let mut cached = clone_overlay_frame(&ctx, &mut app, &xf);
+                cached.textures_delta.clear();
+                app.run("tools.setBrush", json!({"size": 20, "hardness": 1.0, "opacity": opacity, "flow": flow})).unwrap();
+                let revision = app.session.active().unwrap().revision;
+                let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+                let tint = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Mesh(mesh) => mesh.vertices.first().map(|v| v.color.a()),
+                        _ => None,
+                    })
+                    .expect("the overlay mesh");
+                // An unclipped preview may reuse its texture when only tint changes.
+                if output.textures_delta.set.is_empty() {
+                    app.clone_preview = None;
+                    output = clone_overlay_frame(&ctx, &mut app, &xf);
+                }
+                let alpha = clone_overlay_alpha(&app, &mut output)(32, 32) as f32 / 255.0 * tint as f32 / 255.0;
+                assert_eq!(app.session.active().unwrap().revision, revision, "hovering is read-only");
+                let mut params = crate::retouch_ui::clone_params(&app).unwrap();
+                params["points"] = json!([[32, 32]]);
+                app.run("paint.cloneStamp", params).unwrap();
+                let st = app.session.active().unwrap();
+                let printed = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(32, 32)[3];
+                assert!((printed - opacity * flow).abs() < 0.01, "opacity={opacity} flow={flow}: printed {printed}");
+                assert!((alpha - printed).abs() < 0.01, "{depth} clipped={clipped} opacity={opacity} flow={flow}: preview {alpha}, print {printed}");
+                assert!(app.session.undo());
+            }
+        }
+    }
+}
+
+#[test]
+fn clone_overlay_separate_opacity_setting_still_multiplies_the_brush_opacity() {
+    let ctx = egui::Context::default();
+    let mut app = clone_overlay_app(20.0);
+    app.session.tools.brush.opacity = 0.5;
+    app.session.presets.clone.overlay.opacity = 40.0;
+    let mut output = clone_overlay_frame(&ctx, &mut app, &clone_overlay_view(100.0, 1.0));
+    let alpha = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Mesh(mesh) => mesh.vertices.first().map(|v| v.color.a()),
+            _ => None,
+        })
+        .unwrap();
+    output.textures_delta.clear();
+    assert_eq!(alpha, 51, "50% brush opacity times 40% overlay opacity");
+}
+
+#[test]
+fn clone_overlay_refreshes_when_the_source_layer_changes_at_the_same_coordinates() {
+    let ctx = egui::Context::default();
+    let mut app = clone_overlay_app(20.0);
+    app.run("layer.new.layer", json!({})).unwrap();
+    let xf = clone_overlay_view(100.0, 1.0);
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_alpha(&app, &mut output)(32, 32), 255, "the picked white source survives the layer switch");
+    crate::retouch_ui::set_source(&mut app, 16.0, 16.0);
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_alpha(&app, &mut output)(32, 32), 0, "picking the transparent layer refreshes the cached overlay");
+}
+
+#[test]
+fn clone_overlay_strength_changes_leave_the_healing_preview_at_full_strength() {
+    let ctx = egui::Context::default();
+    let mut app = clone_overlay_app(20.0);
+    app.session.tools.brush.opacity = 0.5;
+    app.session.tools.brush.flow = 0.4;
+    let xf = clone_overlay_view(100.0, 1.0);
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert!((i32::from(clone_overlay_alpha(&app, &mut output)(32, 32)) - 102).abs() <= 1);
+    app.ui.tool = Tool::Healing;
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_alpha(&app, &mut output)(32, 32), 255, "Healing Brush still previews its full-strength texture");
+}
+
+fn clone_overlay_center(app: &PhotocraftApp, output: &mut egui::FullOutput) -> Color32 {
+    let cache = app.clone_preview.as_ref().unwrap();
+    let upload = output.textures_delta.set.get(&cache.texture.id()).and_then(|d| d.last()).expect("the source preview was refreshed");
+    let egui::ImageData::Color(image) = &upload.image;
+    let pixel = image.pixels[(32 - cache.rect.y0) as usize * image.width() + (32 - cache.rect.x0) as usize];
+    output.textures_delta.clear();
+    pixel
+}
+
+#[test]
+fn clone_overlay_repicking_on_the_original_layer_updates_preview_and_both_layers() {
+    let ctx = egui::Context::default();
+    let mut app = clone_overlay_app(12.0);
+    let source = app.session.active().unwrap().active_layer.unwrap();
+    for (point, color) in [([16, 16], "#ff0000"), ([8, 8], "#0000ff")] {
+        app.run("paint.pencil", json!({"points": [point], "size": 6, "color": color})).unwrap();
+    }
+    crate::retouch_ui::set_source(&mut app, 16.0, 16.0);
+    app.run("layer.new.layer", json!({})).unwrap();
+    let target = app.session.active().unwrap().active_layer.unwrap();
+    app.run("tools.setBrush", json!({"size": 6, "hardness": 1, "opacity": 1, "flow": 1})).unwrap();
+    let xf = clone_overlay_view(100.0, 1.0);
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_center(&app, &mut output), Color32::RED);
+    let stamp = |app: &mut PhotocraftApp| {
+        let mut params = crate::retouch_ui::clone_params(app).unwrap();
+        params["points"] = json!([[32, 32]]);
+        app.run("paint.cloneStamp", params).unwrap();
+    };
+    stamp(&mut app);
+    app.run("layer.select", json!({"layer": source.0})).unwrap();
+    crate::retouch_ui::set_source(&mut app, 8.0, 8.0);
+    stamp(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.layer(source).unwrap().surface().unwrap().rgba(32, 32), [0.0, 0.0, 1.0, 1.0]);
+    app.run("layer.select", json!({"layer": target.0})).unwrap();
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_center(&app, &mut output), Color32::BLUE);
+    stamp(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.layer(target).unwrap().surface().unwrap().rgba(32, 32), [0.0, 0.0, 1.0, 1.0]);
+}
+
+#[test]
+fn clone_overlay_between_documents_updates_after_source_edits_and_blends_with_the_destination() {
+    let ctx = egui::Context::default();
+    let mut app = clone_overlay_app(12.0);
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("paint.pencil", json!({"points": [[16,16]], "size": 8, "color": "#ff0000"})).unwrap();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("paint.pencil", json!({"points": [[32,32]], "size": 16, "color": "#000000"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("tools.setBrush", json!({"size": 8, "hardness": 1, "opacity": 1, "flow": 1})).unwrap();
+    let xf = clone_overlay_view(100.0, 1.0);
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_center(&app, &mut output), Color32::RED);
+    app.run("cloneSource.overlay", json!({"blend": "difference"})).unwrap();
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_center(&app, &mut output), Color32::RED, "Difference uses the black destination, not the white source document");
+    let revision = app.session.active().unwrap().revision;
+    assert!(app.session.set_active(0));
+    app.run("paint.pencil", json!({"points": [[16,16]], "size": 8, "color": "#00ff00"})).unwrap();
+    assert!(app.session.set_active(1));
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_center(&app, &mut output), Color32::GREEN, "editing another document invalidates the cached source");
+    let mods = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 32.0, y: 32.0, pressure: 1.0 }, mods);
+    assert!(crate::retouch_ui::source_marker_point(&app).is_none(), "the source crosshair belongs to the other document");
+    tool_event(&mut app, ToolEvent::Up { x: 32.0, y: 32.0 }, mods);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(32, 32), [0.0, 1.0, 0.0, 1.0]);
+    app.run("cloneSource.select", json!({"index": 1})).unwrap();
+    assert!(crate::retouch_ui::clone_params(&app).is_none(), "an empty slot cannot reuse coordinates from another document");
+}
+
 /// A scaled Clone Source reads a larger source area than the overlay covers: a large brush's
 /// overlay shrinks around the pointer until that area fits the sampling budget, rather than
 /// vanishing.

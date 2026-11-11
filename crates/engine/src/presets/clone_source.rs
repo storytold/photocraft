@@ -8,6 +8,7 @@
 //! sample point: a 200 % width paints the source twice as wide, a 30° rotation paints it turned
 //! 30° counter-clockwise on screen (Photoshop's sense).
 
+use photocraft_doc::DocId;
 use photocraft_geom::Rect;
 use photocraft_paint::retouch::Region;
 use serde::{Deserialize, Serialize};
@@ -25,8 +26,11 @@ pub struct CloneSource {
     pub source: Option<[f64; 2]>,
     /// Destination point paired with `source` (first aligned stroke after setting it).
     pub anchor: Option<[f64; 2]>,
-    /// Layer the source was set on (informational, like the panel's document/layer line).
+    /// Layer picked with the source; Current Layer sampling reads this layer after switching targets.
     pub layer: Option<u64>,
+    /// Identity of the document picked with the source; absent in older saved slots.
+    #[serde(default)]
+    pub document: Option<DocId>,
     /// W and H in percent.
     pub scale: [f64; 2],
     /// Degrees, counter-clockwise.
@@ -41,7 +45,17 @@ pub struct CloneSource {
 
 impl Default for CloneSource {
     fn default() -> Self {
-        CloneSource { source: None, anchor: None, layer: None, scale: [100.0, 100.0], rotation: 0.0, flip_h: false, flip_v: false, linked: false }
+        CloneSource {
+            source: None,
+            anchor: None,
+            layer: None,
+            document: None,
+            scale: [100.0, 100.0],
+            rotation: 0.0,
+            flip_h: false,
+            flip_v: false,
+            linked: false,
+        }
     }
 }
 
@@ -59,7 +73,7 @@ impl CloneSource {
     }
     fn to_json(&self, i: usize) -> Value {
         json!({
-            "index": i, "source": self.source, "anchor": self.anchor, "offset": self.offset(), "layer": self.layer,
+            "index": i, "source": self.source, "anchor": self.anchor, "offset": self.offset(), "layer": self.layer, "documentId": self.document,
             "width": self.scale[0], "height": self.scale[1], "linked": self.linked, "rotation": self.rotation, "flipH": self.flip_h, "flipV": self.flip_v,
         })
     }
@@ -278,10 +292,17 @@ fn index(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
     }
 }
 
+fn slot_json(s: &Session, i: usize) -> Value {
+    let slot = &s.presets.clone.slots[i.min(SLOTS - 1)];
+    let mut result = slot.to_json(i);
+    result["document"] = json!(slot.document.and_then(|id| s.documents().iter().position(|st| st.doc.id == id)));
+    result
+}
+
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let c = &s.presets.clone;
     Ok(
-        json!({"active": c.active, "sources": c.slots.iter().enumerate().map(|(i, x)| x.to_json(i)).collect::<Vec<_>>(), "overlay": serde_json::to_value(&c.overlay).unwrap_or(Value::Null)}),
+        json!({"active": c.active, "sources": (0..SLOTS).map(|i| slot_json(s, i)).collect::<Vec<_>>(), "overlay": serde_json::to_value(&c.overlay).unwrap_or(Value::Null)}),
     )
 }
 
@@ -292,19 +313,30 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, format!("index {i} out of range (0..{SLOTS})")));
     }
     s.presets.clone.active = i;
-    Ok(s.presets.clone.active().to_json(i))
+    Ok(slot_json(s, i))
 }
 
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "cloneSource.set";
     let i = index(s, p, CMD)?;
-    let active_layer = s.active().and_then(|d| d.active_layer).map(|l| l.0);
+    let doc = match p.get("document") {
+        None => s.active(),
+        Some(value) => {
+            if pt(p, "source").is_none() {
+                return Err(bad(CMD, "document requires a source point"));
+            }
+            let index = value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(CMD, "document must be an open document index"))?;
+            Some(s.documents().get(index).ok_or_else(|| bad(CMD, "the source document is not open"))?)
+        }
+    };
+    let (document, active_layer) = (doc.map(|st| st.doc.id), doc.and_then(|st| st.active_layer).map(|id| id.0));
     let slot = &mut s.presets.clone.slots[i];
     if let Some((x, y)) = pt(p, "source") {
         // A new sample point re-pairs with the next stroke.
         slot.source = Some([x, y]);
         slot.anchor = None;
         slot.layer = p.get("layer").and_then(Value::as_u64).or(active_layer);
+        slot.document = document;
     }
     if let Some((dx, dy)) = pt(p, "offset") {
         // Offset X/Y fields: keep the anchor (or the source as anchor) and move the source.
@@ -353,7 +385,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
         s.presets.clone.active = i;
     }
-    Ok(s.presets.clone.slots[i].to_json(i))
+    Ok(slot_json(s, i))
 }
 
 fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
@@ -417,7 +449,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Set Clone Source",
             menu: &[],
             shortcut: None,
-            params: r##"{"index":0..4?=active,"source":[x,y]? (⌥-click; re-pairs with the next stroke),"offset":[dx,dy]?,"width":%?,"height":%?|"scale":[w%,h%]?,"linked":bool? (W/H link: a lone width or height scales the other by the same factor),"rotation":deg?,"flipH":bool?,"flipV":bool?,"layer":id?,"clear":bool?,"select":bool=true}"##,
+            params: r##"{"index":0..4?=active,"source":[x,y]? (⌥-click; re-pairs with the next stroke),"offset":[dx,dy]?,"width":%?,"height":%?|"scale":[w%,h%]?,"linked":bool? (W/H link: a lone width or height scales the other by the same factor),"rotation":deg?,"flipH":bool?,"flipV":bool?,"layer":id?,"document":open document index?=active (with source),"clear":bool?,"select":bool=true}"##,
             enabled: always,
             run: set,
             journal: true,

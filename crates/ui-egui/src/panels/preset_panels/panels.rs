@@ -577,12 +577,16 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(4.0);
-    let src_line =
-        match (slot.source, slot.layer.and_then(|l| app.session.active().and_then(|d| d.doc.layer(photocraft_doc::LayerId(l)).map(|x| x.name.clone())))) {
-            (Some(_), Some(l)) => format!("Source: {} : {l}", app.session.active().map(|d| d.doc.name.clone()).unwrap_or_default()),
-            (Some(_), None) => "Source: set".to_string(),
-            _ => crate::i18n::fmt(tl!("Source: not set ({key}-click with Clone Stamp)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
-        };
+    let source_document = match slot.document {
+        Some(id) => app.session.documents().iter().find(|st| st.doc.id == id),
+        None => app.session.active(),
+    };
+    let src_line = match (slot.source, slot.layer.and_then(|l| source_document.and_then(|d| d.doc.layer(photocraft_doc::LayerId(l)).map(|x| x.name.clone())))) {
+        (Some(_), _) if source_document.is_none() && slot.document.is_some() => tl!("Source: document closed").into(),
+        (Some(_), Some(l)) => format!("Source: {} : {l}", source_document.map(|d| d.doc.name.as_str()).unwrap_or_default()),
+        (Some(_), None) => "Source: set".to_string(),
+        _ => crate::i18n::fmt(tl!("Source: not set ({key}-click with Clone Stamp)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
+    };
     ui.label(egui::RichText::new(src_line).color(t.text_dim).size(11.0));
     ui.add_space(4.0);
     let lbl = |ui: &mut egui::Ui, s: &str| {
