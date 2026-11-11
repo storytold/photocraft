@@ -31,7 +31,7 @@ the commit in `craft-i18n.rev`; without it PhotoCraft builds and runs in English
 | Nederlands | `nl` | one / other |
 | Magyar | `hu` | one / other (both read the same: "3 réteg") |
 | Tiếng Việt | `vi` | one form |
-| Türkçe | `tr` | one form |
+| Türkçe | `tr` | one / other |
 | ไทย | `th` | one form |
 | தமிழ் | `ta` | one / other |
 | Srpski (latinica) | `sr-latn` | one / few / other (teens use other) |
