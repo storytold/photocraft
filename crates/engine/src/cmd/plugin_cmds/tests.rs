@@ -429,9 +429,76 @@ fn install_writes_to_folder_and_handles_collisions_and_reports_path() {
     let err = s.execute("plugin.install", json!({"data": b64(&bytes1), "replace": false}));
     assert!(err.is_err());
 
+    // Replacing existing plug-ins (both primary slug and collision slot) atomically updates disk
+    // bytes without leaving temporary files behind.
+    let updated1 = wat_plugin("test.slug.one", r#"{"amount":{"type":"number","min":0,"max":1,"default":1}}"#, GREY);
+    let ru1 = s.execute("plugin.install", json!({"data": b64(&updated1)})).unwrap();
+    assert_eq!(ru1.get("written").and_then(Value::as_str), Some(written1));
+    assert_eq!(std::fs::read(written1).unwrap(), updated1);
+    assert_eq!(ru1["params"], r#"{"amount":0..1=1}"#);
+
+    let updated2 = wat_plugin("test_slug-one", r#"{"gain":{"type":"number","min":0,"max":2,"default":1}}"#, GREY);
+    let ru2 = s.execute("plugin.install", json!({"data": b64(&updated2), "replace": true})).unwrap();
+    assert_eq!(ru2.get("written").and_then(Value::as_str), Some(written2));
+    assert_eq!(std::fs::read(written2).unwrap(), updated2);
+    assert_eq!(ru2["params"], r#"{"gain":0..2=1}"#);
+
+    // Replacing via `path` from an external file also updates the destination atomically.
+    let ext_dir = std::env::temp_dir().join(format!("pc-plugin-install-ext-{}", std::process::id()));
+    std::fs::create_dir_all(&ext_dir).unwrap();
+    let updated3 = wat_plugin("test.slug.one", r#"{"mix":{"type":"number","min":0,"max":10,"default":5}}"#, GREY);
+    let ext_file = ext_dir.join("updated.wasm");
+    std::fs::write(&ext_file, &updated3).unwrap();
+    let ru3 = s.execute("plugin.install", json!({"path": ext_file.to_str().unwrap()})).unwrap();
+    assert_eq!(ru3.get("written").and_then(Value::as_str), Some(written1));
+    assert_eq!(ru3.get("source").and_then(Value::as_str), Some(written1));
+    assert_eq!(std::fs::read(written1).unwrap(), updated3);
+    assert_eq!(ru3["params"], r#"{"mix":0..10=5}"#);
+
+    // A failed atomic write leaves the existing destination file intact.
+    let missing_staging = ext_dir.join("missing");
+    assert!(write_plugin_atomically(&missing_staging, std::path::Path::new(written1), b"corrupt").is_err());
+    assert_eq!(std::fs::read(written1).unwrap(), updated3);
+
+    let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "tmp")).collect();
+    assert!(leftovers.is_empty(), "temp files must not remain after install: {leftovers:?}");
+    assert!(s.poll_plugin_folder().is_none(), "updated folder stamp stays in sync");
+
     registry::remove("test.slug.one");
     registry::remove("test_slug-one");
     std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&ext_dir).ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn install_replace_does_not_follow_symlink_at_destination() {
+    let _guard = FOLDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let base = std::env::temp_dir().join(format!("pc-plugin-symlink-{}", std::process::id()));
+    let dir = base.join("plugins");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+
+    let original = wat_plugin("test.slug.link", "{}", GREY);
+    let victim = outside.join("victim.wasm");
+    std::fs::write(&victim, &original).unwrap();
+    let link = dir.join("test_slug_link.wasm");
+    std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"path": "plugIns.additionalPluginsFolder", "value": dir.to_str().unwrap()})).unwrap();
+    s.execute("prefs.set", json!({"path": "plugIns.useAdditionalPluginsFolder", "value": true})).unwrap();
+
+    let updated = wat_plugin("test.slug.link", r#"{"amount":{"type":"number","min":0,"max":1,"default":1}}"#, GREY);
+    let r = s.execute("plugin.install", json!({"data": b64(&updated), "replace": true})).unwrap();
+    assert_eq!(r.get("written").and_then(Value::as_str), Some(link.to_string_lossy().as_ref()));
+    assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "destination symlink should be replaced");
+    assert_eq!(std::fs::read(&link).unwrap(), updated);
+    assert_eq!(std::fs::read(&victim).unwrap(), original, "symlink target outside plug-in folder must remain untouched");
+
+    registry::remove("test.slug.link");
+    std::fs::remove_dir_all(&base).ok();
 }
 
 #[test]
@@ -443,4 +510,28 @@ fn install_from_non_wasm_path_fails() {
     let err = Session::new().execute("plugin.install", json!({"path": bad_file.to_str().unwrap()}));
     assert!(err.is_err());
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn bitmap_documents_refuse_plugin_filters_but_keep_plugin_management() {
+    // #10484: Photoshop 2025 refuses its filter plug-in modules (Solarize, Clouds, Average) on a
+    // Bitmap document and runs them on a Grayscale one. Installing, listing and removing stay.
+    let id = "test.cmds.bitmap";
+    Session::new().execute("plugin.install", json!({"data": b64(&wat_plugin(id, "{}", GREY))})).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 28, "mode": "grayscale", "background": "white"})).unwrap();
+    s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    let before = pixels(&s);
+    let steps = s.active().unwrap().history.past_len();
+    assert!(!s.is_enabled(RUN), "Filter › Plug-ins is greyed out");
+    let e = s.execute(RUN, json!({"id": id})).unwrap_err().to_string();
+    assert!(e.contains("Bitmap mode"), "{e}");
+    assert_eq!(pixels(&s), before);
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no undo step");
+    for cmd in ["plugin.list", "plugin.install", "plugin.remove", "plugin.reload"] {
+        assert!(s.is_enabled(cmd), "{cmd}");
+    }
+    let list = s.execute("plugin.list", json!({})).unwrap();
+    assert!(list["plugins"].as_array().unwrap().iter().any(|p| p["id"] == id));
+    s.execute("plugin.remove", json!({"id": id})).unwrap();
 }

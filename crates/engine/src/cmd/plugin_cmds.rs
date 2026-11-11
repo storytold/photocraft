@@ -255,7 +255,8 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
                             }
                         }
                     }
-                    std::fs::write(&dest, &bytes).map_err(|e| EngineError::Other(format!("failed to write plug-in to {}: {e}", dest.display())))?;
+                    write_plugin_atomically(dir, &dest, &bytes)
+                        .map_err(|e| EngineError::Other(format!("failed to write plug-in to {}: {e}", dest.display())))?;
                     let written_str = dest.display().to_string();
                     plugin = plugin.with_source(written_str.clone());
                     written = Some(written_str);
@@ -269,12 +270,38 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     #[cfg(target_arch = "wasm32")]
     let _ = (s, &mut plugin, wasm_bytes);
 
+    #[cfg(not(target_arch = "wasm32"))]
     let mut result = describe(&registry::install(plugin));
+    #[cfg(target_arch = "wasm32")]
+    let result = describe(&registry::install(plugin));
     #[cfg(not(target_arch = "wasm32"))]
     if let (Some(path), Value::Object(map)) = (written, &mut result) {
         map.insert("written".into(), json!(path));
     }
     Ok(result)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_plugin_atomically(dir: &std::path::Path, dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    // Stage beside `dest` with a non-dot prefix (avoids SMB hiding it across rename) and a
+    // non-.wasm suffix so `folder_stamp` and `load_folder` ignore it until publication.
+    let mut tmp = tempfile::Builder::new().prefix("plugin-install-").suffix(".tmp").tempfile_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    // On Windows MoveFileExW rejects replacing a directory symlink unless unlinked first; Unix
+    // `rename` replaces any symlink atomically in one step without following it.
+    #[cfg(windows)]
+    if let Ok(meta) = std::fs::symlink_metadata(dest)
+        && meta.file_type().is_symlink()
+    {
+        if std::os::windows::fs::FileTypeExt::is_symlink_dir(&meta.file_type()) {
+            std::fs::remove_dir(dest)?;
+        } else {
+            std::fs::remove_file(dest)?;
+        }
+    }
+    tmp.persist(dest).map(|_| ()).map_err(|e| e.error)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
