@@ -383,6 +383,7 @@ pub(super) fn source_image_in(file_name: &str, bytes: &[u8], doc: &Document) -> 
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
+    crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
     let mut src = decode_source(file_name, bytes)?;
     source_into_profile(&mut src, doc)?;
     let img = SourceImage { surface: Arc::new(flattened_source(&src, fmt)?), bounds: src.bounds() };

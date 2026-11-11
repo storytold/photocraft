@@ -324,13 +324,12 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     let bytes = display_source(sm, &bytes);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
-    let mut placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
-    if photocraft_io::svg::is_svg(&bytes) {
-        let mut h = blake3::Hasher::new();
-        h.update(&placed_key);
-        h.update(&crate::color_cmds::document_profile(doc).to_bytes());
-        placed_key = *h.finalize().as_bytes();
-    }
+    // Sources are rendered in the document's profile (SVG, and files with an embedded profile),
+    // so the profile is part of the key: after Assign Profile the stage is rendered again.
+    let mut h = blake3::Hasher::new();
+    h.update(&stack_cache::placed_key(&bytes, fmt, sm, canvas));
+    h.update(&crate::color_cmds::document_profile(doc).to_bytes());
+    let placed_key = *h.finalize().as_bytes();
     let placed = || -> Result<Stage> {
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);

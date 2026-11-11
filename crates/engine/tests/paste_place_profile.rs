@@ -60,6 +60,13 @@ fn a_placed_file_converts_from_its_embedded_profile_and_keeps_it_when_rendered_a
     let again = smart_cmds::render(&d.doc, so).unwrap().unwrap();
     let px = again.pixel(SIDE as i32 / 2, SIDE as i32 / 2);
     assert!(close(rgb8([px[0], px[1], px[2], 1.0]), want), "rendered again {px:?}, want {want:?}");
+
+    // After the document's profile changes (Assign Profile), the next render converts into the
+    // new one instead of reusing the stage rendered for the old profile.
+    let mut assigned: Document = (*d.doc).clone();
+    assigned.icc_profile = Some(Builtin::AdobeRgbCompat.profile().to_bytes());
+    let px = smart_cmds::render(&assigned, so).unwrap().unwrap().pixel(SIDE as i32 / 2, SIDE as i32 / 2);
+    assert!(close(rgb8([px[0], px[1], px[2], 1.0]), ADOBE), "after Assign Profile {px:?}, want {ADOBE:?}");
 }
 
 #[test]

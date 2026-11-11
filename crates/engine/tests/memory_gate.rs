@@ -114,6 +114,27 @@ fn smart_object_render_that_does_not_fit_is_refused_by_name() {
     assert!(photocraft_engine::smart_cmds::source_image("src.png", &bytes, fmt).is_ok());
 }
 
+/// A placed file's re-render in an RGB document (which converts it into the document's profile)
+/// is refused by name too, before it decodes, when it doesn't fit.
+#[test]
+fn an_rgb_documents_smart_object_render_that_does_not_fit_is_refused_by_name() {
+    let room = Room::new(None);
+    let dir = tempfile::tempdir().unwrap();
+    let path = png(dir.path(), "rgb.png", 1500, 1500, "#12ab34");
+    let mut s = new_doc();
+    s.execute("file.placeEmbedded", json!({"path": path})).unwrap();
+    let d = s.active().unwrap();
+    let layer = d.doc.layer(d.active_layer.unwrap()).unwrap();
+    let photocraft_doc::LayerContent::Smart(so) = &layer.content else { panic!("not a smart object") };
+    photocraft_engine::smart_cmds::purge_source_cache();
+    photocraft_engine::smart_cmds::purge_stack_cache();
+    room.set(Some(SMALL));
+    let err = photocraft_engine::smart_cmds::render(&d.doc, so).unwrap_err().to_string();
+    assert!(err.contains("Not enough memory to render the smart object \u{201c}rgb.png\u{201d}"), "{err}");
+    room.set(None);
+    assert!(photocraft_engine::smart_cmds::render(&d.doc, so).is_ok());
+}
+
 #[test]
 fn layered_psd_is_refused_before_decode_without_changing_the_document() {
     use photocraft_psd::{Compression, LayerSpec, PixelData, PsdBuilder};
