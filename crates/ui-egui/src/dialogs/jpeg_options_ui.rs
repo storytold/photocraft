@@ -254,26 +254,32 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         crate::widgets::section_label(ui, tl!("Image Options"));
         ui.horizontal(|ui| {
             let quality_caption = ui.label(tl!("Quality"));
-            let quality_id = ui.next_auto_id();
-            if !ui.is_sizing_pass() && std::mem::take(&mut p.focus_quality_on_open) {
-                ui.memory_mut(|m| m.request_focus(quality_id));
-            }
-            // The arrows step by one quality level while pointer scrubbing stays fine.
-            if ui.is_enabled() && ui.memory(|m| m.has_focus(quality_id)) {
-                let (up, down) = ui.input_mut(|input| {
-                    (
-                        input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                        input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                    )
-                });
-                if up != 0 || down != 0 {
-                    // egui may already have queued a focus move for the consumed arrow.
-                    ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
-                    let stepped = usize::from(quality).saturating_add(up).saturating_sub(down);
-                    quality = u8::try_from(stepped).map_or(MAX_QUALITY, |q| q.min(MAX_QUALITY));
+            // The field sits in its own scope, so the id it takes for itself is stable and is the one
+            // focus is requested for and read from (a DragValue has no `.id()` of its own).
+            ui.push_id("jpeg-quality", |ui| {
+                let quality_id = ui.next_auto_id();
+                if !ui.is_sizing_pass() && std::mem::take(&mut p.focus_quality_on_open) {
+                    ui.memory_mut(|m| m.request_focus(quality_id));
                 }
-            }
-            ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
+                // The arrows step by one quality level while pointer scrubbing stays fine: Up and Right
+                // raise it, Down and Left lower it.
+                if ui.is_enabled() && ui.memory(|m| m.has_focus(quality_id)) {
+                    let (up, down) = ui.input_mut(|input| {
+                        let n = |input: &mut egui::InputState, key| input.count_and_consume_key(egui::Modifiers::NONE, key);
+                        (
+                            n(input, egui::Key::ArrowUp).saturating_add(n(input, egui::Key::ArrowRight)),
+                            n(input, egui::Key::ArrowDown).saturating_add(n(input, egui::Key::ArrowLeft)),
+                        )
+                    });
+                    if up != 0 || down != 0 {
+                        // egui may already have queued a focus move for the consumed arrow.
+                        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                        let stepped = usize::from(quality).saturating_add(up).saturating_sub(down);
+                        quality = u8::try_from(stepped).map_or(MAX_QUALITY, |q| q.min(MAX_QUALITY));
+                    }
+                }
+                ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
+            });
             // Photoshop's presets: picking one sets the quality it starts at.
             let preset = craft_ui::ComboBox::from_id_salt("jpeg-quality-preset").selected_text(quality_label(quality)).show_ui(ui, |ui| {
                 for q in [3, 5, 8, 10] {

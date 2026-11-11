@@ -3,7 +3,7 @@
 //! waiting behind it.
 use super::*;
 use crate::{FileDialogAnswer, jpeg_options_ui};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_codecs::JpegFormat;
 use std::{cell::RefCell, rc::Rc};
 
@@ -392,4 +392,70 @@ fn a_bad_remembered_answer_is_ignored() {
         h.run_steps(2);
         assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.format)), Some(expected), "{saved}");
     }
+}
+
+/// Opens JPEG Options at quality 6 and runs it to a steady state.
+fn open_at_six() -> Prompted {
+    let (mut h, _) = jpeg_app("unused.jpg");
+    h.state_mut().session.prefs.edit(|p| {
+        p.dialogs.insert("file.jpegOptions".into(), json!({"quality": 6}));
+    });
+    h.state_mut().save_as(Some("p.jpg".into())).unwrap();
+    h.run_steps(3);
+    h
+}
+
+/// The Quality field's own widget holds the focus it is given on open, so it shows its focus
+/// ring and keeps the arrows.
+#[test]
+fn jpeg_quality_field_has_the_focused_id() {
+    let h = open_at_six();
+    let focused = h.ctx.memory(|m| m.focused()).expect("Quality starts focused");
+    let field = h.get_all_by_label("Quality").find(|n| (u128::from(n.accesskit_node().id()) >> 64) as u64 == focused.accesskit_id().0);
+    assert!(field.is_some(), "the focused id is not the Quality field's widget");
+}
+
+/// Tabbing away and back (or clicking the field) leaves the arrows stepping by one level.
+#[test]
+fn jpeg_quality_arrows_step_after_tab_back() {
+    let mut h = open_at_six();
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, Key::Tab);
+    h.run_steps(3);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(7));
+    h.key_press(Key::ArrowDown);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(6));
+}
+
+/// Left and Right step the focused Quality field too, and keep the focus on it.
+#[test]
+fn jpeg_quality_left_and_right_step_and_keep_focus() {
+    let mut h = open_at_six();
+    let focused = h.ctx.memory(|m| m.focused());
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(7));
+    h.key_press(Key::ArrowLeft);
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(5));
+    assert_eq!(h.ctx.memory(|m| m.focused()), focused, "the arrows keep the focus on Quality");
+}
+
+/// With the focus elsewhere, the arrows leave Quality alone.
+#[test]
+fn jpeg_quality_arrows_do_nothing_when_unfocused() {
+    let mut h = open_at_six();
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(3);
+    h.key_press(Key::ArrowDown);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(6));
 }
