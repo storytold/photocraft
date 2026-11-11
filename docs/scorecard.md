@@ -110,8 +110,8 @@ Baseline: 2026-10-05, 1 run, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Appl
 | P87 | Toggle a masked adjustment mid-stack in the layered document + refresh | track only | – | – | – | – | – | not run | [#9329](https://github.com/storytold/photocraft/issues/9329) |
 | P88 | Bring forward / send backward a small layer in the many-layer document + refresh | track only | – | – | – | – | – | not run | [#9329](https://github.com/storytold/photocraft/issues/9329) |
 | P89 | App frame after Paste Into on 24 MP (CPU canvas) | track only | – | – | – | – | – | not run | [#9329](https://github.com/storytold/photocraft/issues/9329) |
-| P90 | Free Transform begin, 2 layers on 24 MP (Ctrl+T + first preview frame) | track only | – | – | – | – | – | not run | [#11103](https://github.com/storytold/photocraft/issues/11103) |
-| P91 | Free Transform drag update, 2 layers on 24 MP (scale through new mip levels) | track only | – | – | – | – | – | not run | [#11103](https://github.com/storytold/photocraft/issues/11103) |
+| P90 | Free Transform begin, 2 layers on 24 MP (Ctrl+T + first preview frame) | ≤ 300 ms p95 | – | – | – | – | – | not run | [#11103](https://github.com/storytold/photocraft/issues/11103) |
+| P91 | Free Transform drag update, 2 layers on 24 MP (scale through new mip levels) | ≤ 16 ms max | – | – | – | – | – | not run | [#11103](https://github.com/storytold/photocraft/issues/11103) |
 
 **Not measurable yet** (the code can't do it yet; no number is recorded):
 
