@@ -416,6 +416,7 @@ impl<'a> Encoder<'a> {
         (uv_mode, u_blocks, v_blocks)
     }
 
+    /// Chooses a luma prediction and reconstructs one macroblock for subsequent neighbors.
     // Sub-block indices address several arrays by geometry; ranges read better than iterators here.
     #[allow(clippy::needless_range_loop)]
     fn encode_macroblock(&mut self, mbx: usize, mby: usize) {
@@ -448,7 +449,6 @@ impl<'a> Encoder<'a> {
         let whole_cost = best_sse + 3 * lambda;
 
         // B_PRED: sub-blocks in raster order, each predicted from the reconstruction so far.
-        let saved_y = self.rec_y.data.clone();
         let mut b_modes = [B_DC_PRED; 16];
         let mut b_blocks: Vec<Block> = Vec::with_capacity(16);
         let mut b_sse = 0u64;
@@ -489,8 +489,8 @@ impl<'a> Encoder<'a> {
         let (y_mode, y2, y_blocks) = if b_cost < whole_cost {
             (B_PRED, None, b_blocks)
         } else {
-            // Whole-block mode: undo the B_PRED reconstruction, code 16 blocks + Y2.
-            self.rec_y.data = saved_y;
+            // The luma trial writes only this padded 16x16 macroblock. This path overwrites all
+            // 256 samples from src and best_pred, without reading trial values, before the next block.
             let mut dcs = [0i32; 16];
             let mut ac_blocks: Vec<[i32; 16]> = Vec::with_capacity(16);
             let mut deq_blocks: Vec<[i32; 16]> = Vec::with_capacity(16);
