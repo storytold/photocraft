@@ -112,7 +112,7 @@ fn meets(a: &Rect, b: &Rect) -> bool {
 /// the canvas last showed `shown` and now shows `doc`: keeps the pictures of boards being hidden,
 /// puts back those of boards being shown, and returns what is still to redraw (empty when a
 /// put-back picture covers it all).
-pub(crate) fn apply(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, doc: &Arc<Document>, display_key: u64, damage: Rect) -> Rect {
+pub(crate) fn apply(app: &mut PhotocraftApp, gpu: &GpuCanvas, ctx: &egui::Context, id: DocId, doc: &Arc<Document>, display_key: u64, damage: Rect) -> Rect {
     if !enabled() || damage.is_empty() {
         return damage;
     }
@@ -125,7 +125,7 @@ pub(crate) fn apply(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, doc: &A
     let before: HashMap<LayerId, &photocraft_doc::Layer> = shown.walk().into_iter().map(|(_, _, l)| (l.id, l)).collect();
     let toggled: Vec<LayerId> =
         doc.walk().into_iter().filter(|(_, _, l)| before.get(&l.id).is_some_and(|was| was.visible != l.visible)).map(|(_, _, l)| l.id).collect();
-    follow(app, id, doc, &toggled);
+    follow(app, ctx, id, doc, &toggled);
     let mut restored: Vec<Rect> = Vec::new();
     for (_, _, l) in doc.walk() {
         let Some(was) = before.get(&l.id) else { continue };
@@ -207,24 +207,48 @@ fn still_exact(kept: &Document, now: &Document, rect: Rect) -> bool {
 /// How often (ms) [`Kept::follow`] moves a kept picture's document up to the current one.
 const FOLLOW_MS: f64 = 1000.0;
 
+/// A kept picture's key: its document and its board layer.
+type Key = (DocId, LayerId);
+
 /// Move document `id`'s kept pictures up to `doc` ([`Kept::follow`]), except those of the
 /// `toggled` layers (being kept or put back now), and drop those that aren't exact any more.
-fn follow(app: &mut PhotocraftApp, id: DocId, doc: &Document, toggled: &[LayerId]) {
+fn follow(app: &mut PhotocraftApp, ctx: &egui::Context, id: DocId, doc: &Document, toggled: &[LayerId]) {
     let now_ms = crate::gpu_canvas::now_ms();
-    let mut stale = Vec::new();
-    for (&(d, board), shot) in &mut app.board_cache.shots {
-        if d == id && !toggled.contains(&board) && !shot.kept.follow(board, doc, now_ms) {
-            stale.push((d, board));
-        }
-    }
+    let stale = follow_kept(app.board_cache.shots.iter_mut().map(|(k, s)| (k, &mut s.kept)), id, doc, toggled, now_ms, ctx);
     for k in stale {
         app.board_cache.shots.remove(&k);
     }
 }
 
+/// [`follow`] over these pictures at `now_ms`: the keys of those to drop. While any picture's
+/// follow is put off it asks `ctx` for a frame within [`FOLLOW_MS`], so [`tick`] follows it even
+/// if nothing else redraws: a burst of edits that then stops must not leave a picture holding
+/// tiles that History let go. (No GPU here, so tests drive it directly.)
+fn follow_kept<'a>(
+    kept: impl IntoIterator<Item = (&'a Key, &'a mut Kept)>,
+    id: DocId,
+    doc: &Document,
+    toggled: &[LayerId],
+    now_ms: f64,
+    ctx: &egui::Context,
+) -> Vec<Key> {
+    let mut stale = Vec::new();
+    let mut due = false;
+    for (&(d, board), k) in kept {
+        if d == id && !toggled.contains(&board) && !k.follow(board, doc, now_ms) {
+            stale.push((d, board));
+            continue;
+        }
+        due |= k.due;
+    }
+    if due {
+        ctx.request_repaint_after(std::time::Duration::from_millis(FOLLOW_MS as u64));
+    }
+    stale
+}
+
 /// Follow the pictures [`Kept::follow`] put off, once their interval is over, even if no edit
-/// or redraw comes after: otherwise the last edits of a burst left a picture holding tiles that
-/// History then let go. Called every frame; asks for a frame until none is due ([`schedule`]).
+/// or redraw comes after. Called every frame; [`follow_kept`] asks for frames until none is due.
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut due: Vec<DocId> = app.board_cache.shots.iter().filter(|(_, s)| s.kept.due).map(|(&(d, _), _)| d).collect();
     if due.is_empty() {
@@ -234,21 +258,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     due.dedup();
     for id in due {
         let Some(doc) = app.session.documents().iter().find(|st| st.doc.id == id).map(|st| st.doc.clone()) else { continue };
-        follow(app, id, &doc, &[]);
-    }
-    schedule(app, ctx);
-}
-
-/// Ask for a frame in time for [`tick`] to follow the pictures that are due. Called after
-/// [`apply`] too, which can make one due after this frame's `tick` found none.
-pub(crate) fn schedule(app: &PhotocraftApp, ctx: &egui::Context) {
-    request_follow(app.board_cache.shots.values().map(|s| &s.kept), ctx);
-}
-
-/// [`schedule`] for these pictures: a frame within [`FOLLOW_MS`] if any of them is due.
-fn request_follow<'a>(kept: impl IntoIterator<Item = &'a Kept>, ctx: &egui::Context) {
-    if kept.into_iter().any(|k| k.due) {
-        ctx.request_repaint_after(std::time::Duration::from_millis(FOLLOW_MS as u64));
+        follow(app, ctx, id, &doc, &[]);
     }
 }
 
@@ -384,23 +394,23 @@ mod tests {
         assert!(still_exact(&kept.doc, &s.active().unwrap().doc, rect), "showing the board can put the picture back");
     }
 
-    /// A picture whose follow was put off asks for a frame within the interval, so it is followed
-    /// even if nothing else redraws; with none due, no frame is asked for.
+    /// A follow put off within its interval asks for a frame, so the picture is followed even if
+    /// nothing else redraws: what `apply` runs on each redraw ([`follow_kept`]). A follow that
+    /// isn't put off asks for none.
     #[test]
-    fn a_put_off_picture_asks_for_a_frame() {
+    fn a_put_off_follow_asks_for_a_frame() {
         let (s, left) = halves();
         let doc = s.active().unwrap().doc.clone();
         let rect = reach(&doc, doc.layer(left).unwrap()).unwrap();
-        let mut kept = Kept { doc: doc.clone(), rect, followed: 0.0, due: false };
+        let mut kept = HashMap::from([((doc.id, left), Kept { doc: doc.clone(), rect, followed: 0.0, due: false })]);
         let ctx = egui::Context::default();
         let asked = Arc::new(std::sync::Mutex::new(None));
         let seen = asked.clone();
         ctx.set_request_repaint_callback(move |info| *seen.lock().unwrap() = Some(info.delay));
-        request_follow([&kept], &ctx);
-        assert_eq!(*asked.lock().unwrap(), None, "nothing due, no frame");
-        assert!(kept.follow(left, &doc, 500.0));
-        assert!(kept.due);
-        request_follow([&kept], &ctx);
+        assert!(follow_kept(kept.iter_mut(), doc.id, &doc, &[], 5000.0, &ctx).is_empty(), "still exact");
+        assert_eq!(*asked.lock().unwrap(), None, "followed, nothing due: no frame");
+        assert!(follow_kept(kept.iter_mut(), doc.id, &doc, &[], 5500.0, &ctx).is_empty());
+        assert!(kept[&(doc.id, left)].due, "put off within the interval");
         let delay = asked.lock().unwrap().expect("a frame for the put-off follow");
         assert!(delay <= std::time::Duration::from_millis(FOLLOW_MS as u64), "within the interval: {delay:?}");
     }
