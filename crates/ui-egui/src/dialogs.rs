@@ -77,16 +77,22 @@ fn press_began_on_dialog(ctx: &egui::Context, rects: &[egui::Rect]) -> bool {
     ctx.data(|m| m.get_temp::<bool>(key)).unwrap_or(false)
 }
 
+/// The position `p`, when it is on `canvas` and not over a dialog or one of its popups. Uses the
+/// given position rather than the pointer's hover, so a pointer event's own position is checked
+/// even after the pointer left the window.
+pub(crate) fn free_pointer_at(ctx: &egui::Context, canvas: egui::Rect, p: egui::Pos2) -> Option<egui::Pos2> {
+    if egui::Popup::is_any_open(ctx) {
+        return None;
+    }
+    let rects = rects(ctx);
+    (canvas.contains(p) && !rects.iter().any(|r| r.contains(p))).then_some(p)
+}
+
 /// With a dialog open the rest of the window is inert (egui's modal layer), but like Photoshop the
 /// image can still be panned and zoomed under it. The pointer position when it is over `canvas`
 /// and not over a dialog or one of its popups.
 pub fn free_pointer_over(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui::Pos2> {
-    if egui::Popup::is_any_open(ctx) {
-        return None;
-    }
-    let p = ctx.pointer_hover_pos()?;
-    let rects = rects(ctx);
-    (canvas.contains(p) && !rects.iter().any(|r| r.contains(p))).then_some(p)
+    free_pointer_at(ctx, canvas, ctx.pointer_hover_pos()?)
 }
 
 /// Pan drag under an open dialog: Space-drag, middle-drag, or a drag with the Hand tool, started on
@@ -277,13 +283,16 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 /// it. Returns `Some(true)` / `Some(false)` when the body itself answered OK / Cancel.
 /// The body of a command dialog: the first handler whose marker the fields carry. The prompts and
 /// small editors come first; the rest are in `command_body_more`.
-/// The delete confirmations: a layer from the Layers panel's trash, or a note (#11788).
+/// The delete confirmations: a layer from the Layers panel's trash, a note (#11788), or all notes
+/// (#11791).
 fn delete_prompt(fields: &Fields) -> bool {
-    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields)
+    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields) || crate::analysis_ui::owns_clear_notes(fields)
 }
 
 fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
-    if crate::analysis_ui::owns_delete_note(fields) {
+    if crate::analysis_ui::owns_clear_notes(fields) {
+        crate::analysis_ui::clear_notes_body(ui);
+    } else if crate::analysis_ui::owns_delete_note(fields) {
         crate::analysis_ui::delete_note_body(ui, fields);
     } else {
         crate::delete_layer_prompt::body(ui, fields);
@@ -348,6 +357,9 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::smart_filter_dialog::owns(fields) => crate::smart_filter_dialog::body(app, ui, fields),
         _ if crate::adjust_dialog::owns(fields) => crate::adjust_dialog::body(app, ui, fields),
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
+        _ if crate::canvas_tool_menu::owns_make_selection(fields) => {
+            first_field_focused(ui, id, |ui| crate::canvas_tool_menu::make_selection_body(app, ui, fields))
+        }
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
         _ if crate::equalize_ui::owns(fields) => crate::equalize_ui::body(ui, fields),
@@ -885,6 +897,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::shape_dialog::owns,
     crate::delete_layer_prompt::owns,
     crate::analysis_ui::owns_delete_note,
+    crate::analysis_ui::owns_clear_notes,
     crate::disk_change_prompt::owns,
     crate::actions::owns_stop_message,
     crate::actions::owns_insert_stop,
@@ -998,6 +1011,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
             return Err(e);
         }
     };
+    let revision = app.session.active().map(|st| st.revision);
     let result = crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone());
     if let Ok(r) = &result {
         report_file_errors(app, &d, r);
@@ -1009,6 +1023,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
     match app.filter_preview.as_mut() {
         Some(p) if result.is_ok() && running => p.committing = true,
         _ => app.filter_preview = None,
+    }
+    if result.is_ok() && cmd == "path.toSelection" {
+        crate::canvas_tool_menu::name_make_selection_step(app, &d.fields, &params, revision);
     }
     if result.is_ok()
         && cmd == "path.toSelection"
@@ -1120,6 +1137,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
     match d.kind {
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
+        _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
@@ -1248,6 +1266,8 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
+#[cfg(test)]
+mod arbitrary_ruler_prefill_tests;
 pub(crate) mod bitmap_dialog;
 pub mod blur_pins;
 pub mod brush_preset_dialog;
@@ -1286,6 +1306,8 @@ pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
 pub mod history_options_ui;
 pub mod jpeg_options_ui;
+#[cfg(test)]
+mod label_column_tests;
 pub mod layer_picker;
 pub mod layer_style;
 pub mod liquify_ui;
