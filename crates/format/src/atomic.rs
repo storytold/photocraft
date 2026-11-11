@@ -54,6 +54,12 @@ pub trait AtomicFs {
         let _ = path;
         false
     }
+    /// Create `dir` and any missing parents: the target's folder, before the temporary
+    /// file is written into it. By default the real thing; a test file system whose
+    /// folders are not real directories overrides it.
+    fn create_dir(&self, dir: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(dir)
+    }
     /// Create `tmp` (it must not exist), write all of `bytes` and flush it ([`sync_file`]).
     fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()>;
     /// [`write_new`](Self::write_new), reporting the fraction of `bytes` written so far to
@@ -314,7 +320,7 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, write_tmp: &
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    std::fs::create_dir_all(&dir).map_err(|e| context(e, format!("cannot create the folder {}{}", dir.display(), portal_clause(&target))))?;
+    fs.create_dir(&dir).map_err(|e| context(e, format!("cannot create the folder {}{}", dir.display(), portal_clause(&target))))?;
     if fs.is_readonly(&target) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("cannot save {}: the file is read-only; {UNCHANGED}", path.display())));
     }
@@ -453,10 +459,6 @@ fn sleep_ms(ms: u64) {
 #[cfg(target_arch = "wasm32")]
 fn sleep_ms(_ms: u64) {}
 
-/// Whether `path` lies under the xdg document portal's mount, `$XDG_RUNTIME_DIR/doc`: the
-/// mount sits at the filesystem root, so the components must be `run`, `user`, any one name
-/// (the uid), `doc` from the root — the same names nested in a local folder are a local
-/// folder (#11185).
 /// The clause a failed save to a document-portal folder adds to its error (#11185): the
 /// portal serves the file itself but may not serve the temporary file an atomic save
 /// creates beside it and renames over it, so the failure names its likely cause and its
@@ -474,6 +476,10 @@ fn portal_clause(path: &Path) -> String {
     }
 }
 
+/// Whether `path` lies under the xdg document portal's mount, `$XDG_RUNTIME_DIR/doc`: the
+/// mount sits at the filesystem root, so the components must be `run`, `user`, any one name
+/// (the uid), `doc` from the root — the same names nested in a local folder are a local
+/// folder (#11185).
 fn is_document_portal_path(path: &Path) -> bool {
     let is = |c: Option<Component<'_>>, name: &str| matches!(c, Some(Component::Normal(s)) if s == name);
     let mut c = path.components();
