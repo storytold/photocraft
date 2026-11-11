@@ -553,3 +553,26 @@ fn photoshop_kerning_oracles() {
         assert!(worst <= worst_max && mean <= mean_max, "{name}: mean {mean}, worst {worst}");
     }
 }
+
+/// A type layer's range on its path (a moved start and an end limit) survives a PSD save and
+/// open, without an export warning.
+#[test]
+fn psd_keeps_a_text_path_range() {
+    use photocraft_doc::text::TextShape;
+    use photocraft_doc::vector::Subpath;
+
+    let mut doc = Document::new("range", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut text = layer("hello", &[]);
+    text.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (60.0, 0.0)]), start: 5.0, end: Some(20.0), flip: false };
+    doc.layers.push(Layer::new("limited", LayerContent::Text(text)));
+    let result = photocraft_io::export(&doc, "range.psd", &Default::default()).unwrap();
+    assert!(!result.warnings.iter().any(|w| w.contains("limited")), "{:?}", result.warnings);
+    let back = photocraft_io::import("range.psd", &result.bytes).unwrap().document;
+    let shape = back.layers.iter().find_map(|l| match &l.content {
+        LayerContent::Text(t) => Some(t.shape.clone()),
+        _ => None,
+    });
+    let Some(TextShape::Path { path, start, end: Some(end), flip: false }) = shape else { panic!("{shape:?}") };
+    assert!(!path.closed && path.knots.len() == 2, "the whole path is saved: {path:?}");
+    assert!((start - 5.0).abs() < 0.01 && (end - 20.0).abs() < 0.01, "{start} {end}");
+}

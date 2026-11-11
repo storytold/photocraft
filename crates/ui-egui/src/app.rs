@@ -33,8 +33,13 @@ pub(crate) use thumbs::layer_thumb_frame;
 pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
+    /// Creates a new application state managing the engine session and UI services; the session
+    /// keeps the services' automation policy as the gate actions automation wrote play under.
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
+        // Actions automation wrote keep this gate when the user plays them. Batch and droplets
+        // copy steps instead of the action, so they do not keep the gate yet.
+        session.automation_gate = session.automation_gate.or(services.automation_authorize);
         let mut app = Self {
             session,
             ui: UiState::default(),
@@ -99,6 +104,7 @@ impl PhotocraftApp {
             fonts_ready: false,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             arrange_start: 0,
+            drawing_window: None,
             ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
@@ -141,6 +147,8 @@ impl PhotocraftApp {
             type_layout: None,
             type_clicks: None,
             type_transform_preview: None,
+            type_path_damage: None,
+            type_box_preview: None,
             type_font_preview: None,
             color_picker_preview: None,
             guide_drag: None,
@@ -159,6 +167,8 @@ impl PhotocraftApp {
             clip_read_for_paste: false,
             smart_svg: Default::default(),
             transform_preview: None,
+            transform_area: None,
+            transform_preparing: None,
             move_mods: Default::default(),
             nudge_bundle: Default::default(),
             style_preview: None,
