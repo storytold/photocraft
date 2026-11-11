@@ -172,7 +172,8 @@ fn other_tools_keep_their_reset_tips_and_smoothing() {
             Tool::Brush => (13.0, 0.0, 0.25),
             Tool::BackgroundEraser => (13.0, 1.0, 0.25),
             Tool::Healing => (19.0, 1.0, 0.25),
-            Tool::Burn => (65.0, 0.0, 0.25),
+            Tool::Burn | Tool::Dodge | Tool::Sponge => (65.0, 0.0, 0.25),
+            Tool::CloneStamp => (21.0, 0.0, 0.25),
             _ => {
                 let b = BrushSettings::default();
                 (b.size, b.hardness, b.spacing)
@@ -180,6 +181,7 @@ fn other_tools_keep_their_reset_tips_and_smoothing() {
         };
         let b = &app.session.tools.brush;
         assert_eq!((b.size, b.hardness, b.spacing), expected, "{tool:?}");
-        assert_eq!(b.smoothing.amount, 0.1, "{tool:?}");
+        let smoothing = if tool == Tool::CloneStamp { 0.0 } else { 0.1 };
+        assert_eq!(b.smoothing.amount, smoothing, "{tool:?}");
     }
 }

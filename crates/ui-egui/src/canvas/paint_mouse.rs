@@ -39,11 +39,12 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         }
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing, but
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
-        // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
+        // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
-        // The Background Eraser, Healing Brush, Burn and History Brush start with their own tips
-        // instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671, #12847).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::HistoryBrush) => fresh_brush(tool, &current),
+        // These tools start with their measured Reset Tool tips.
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::HistoryBrush) => {
+            fresh_brush(tool, &current)
+        }
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
             BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, ..current }
@@ -77,25 +78,27 @@ const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 /// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing.
 const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
-/// The Burn tool's tip after Reset Tool (#12671): a 65 px soft round at 25 % spacing.
-const BURN_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
-/// The History Brush's tip after Reset Tool (#12847): a 21 px soft round at 25 % spacing.
-const HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
+/// The Burn, Dodge and Sponge tools' tip after Reset Tool (#12671, #12684, #13029): a 65 px soft
+/// round at 25 % spacing.
+const TONING_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
+/// Clone Stamp and History Brush reset to a 21 px soft round at 25 % spacing (#12601, #12847).
+const CLONE_STAMP_AND_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`], the Burn tool's [`BURN_TOOL_TIP`], the History Brush's
-/// [`HISTORY_BRUSH_TIP`] with zero smoothing; the other tools keep the default tip.
+/// [`HEALING_BRUSH_TIP`], and the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`]. Clone Stamp
+/// and History Brush use [`CLONE_STAMP_AND_HISTORY_BRUSH_TIP`] with no smoothing. The remaining
+/// tools keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
         Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
         Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
-        Tool::Burn => (brush.size, brush.hardness, brush.spacing) = BURN_TOOL_TIP,
-        Tool::HistoryBrush => {
-            (brush.size, brush.hardness, brush.spacing) = HISTORY_BRUSH_TIP;
+        Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
+        Tool::CloneStamp | Tool::HistoryBrush => {
+            (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_AND_HISTORY_BRUSH_TIP;
             brush.smoothing.amount = 0.0;
         }
         _ => {}
