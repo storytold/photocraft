@@ -272,6 +272,20 @@ fn handle_pressed_key(
         Key::T if modifiers.command && !modifiers.shift && !modifiers.alt => {
             let _ = crate::menus::invoke(app, ctx, "window.panel.character", json!({}));
         }
+        // ⌘. throws the session away as the options bar's Cancel does (#12076); ⇧⌘. stays
+        // Increase Type Size. Mid-composition (until its text commits or its reset completes) or
+        // mid ⌘-drag it was not measured and goes on to the ⌘ fallback below, as before.
+        Key::Period
+            if modifiers.command
+                && !modifiers.shift
+                && !modifiers.alt
+                && edit.edit.preedit.is_none()
+                && app.type_ime.incoming.is_none()
+                && !reset_guarded(app, ctx.viewport_id())
+                && !crate::type_transform::active(app) =>
+        {
+            cancel(app)
+        }
         _ if modifiers.command => {
             if key == Key::Z {
                 crate::type_transform::cancel_drag(app);
