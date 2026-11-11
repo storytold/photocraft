@@ -834,8 +834,20 @@ pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64, m
     let Some(id) = app.ui.dialogs.last().filter(|d| color_eyedropper_owns(&d.fields)).map(|d| d.id) else {
         return false;
     };
-    let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return true };
     let Some(mut f) = app.ui.dialogs.last().map(|d| d.fields.clone()) else { return true };
+    if sample_into(app, &mut f, x, y, mods)
+        && let Some(d) = app.ui.dialog_mut(id)
+    {
+        d.fields = f;
+    }
+    true
+}
+
+/// Replace Color's eyedroppers at document point (x, y), into the dialog's fields `f`: from a click
+/// on the canvas or on the dialog's thumbnail (#6281). Returns whether `f` changed; off the image
+/// or over transparency nothing does.
+pub(crate) fn sample_into(app: &mut PhotocraftApp, f: &mut Map<String, Value>, x: f64, y: f64, mods: egui::Modifiers) -> bool {
+    let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return false };
     let tool = f.get("__tool").and_then(Value::as_str);
     let sample = !mods.shift && !mods.alt && tool.is_none_or(|t| t == "sample");
     // A first Add to Sample, before any sample, starts from the clicked colour too: one point
@@ -847,12 +859,9 @@ pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64, m
     }
     // Where it was picked: Localized Color Clusters match the colour near this point (#4457);
     // added and subtracted samples go to `points` / `subtractPoints` in click order.
-    crate::color_range_ui::pick(app, &mut f, [x, y], mods);
+    crate::color_range_ui::pick(app, f, [x, y], mods);
     if let Some(order) = f.get("__order").cloned() {
         f.insert("order".into(), order);
-    }
-    if let Some(d) = app.ui.dialog_mut(id) {
-        d.fields = f;
     }
     true
 }
@@ -1005,6 +1014,12 @@ fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
 
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    body_with(ui, f, &mut |_, _| {});
+}
+
+/// [`body`], with `replacement` drawn where Replace Color's Replacement sliders begin (its
+/// Selection / Image thumbnail, #6281).
+pub(crate) fn body_with(ui: &mut egui::Ui, f: &mut Map<String, Value>, replacement: &mut dyn FnMut(&mut egui::Ui, &mut Map<String, Value>)) {
     let t = Tokens::get(ui.ctx());
     let cmd = f.get("__command").and_then(Value::as_str).unwrap_or_default().to_string();
     // Plug-in dialogs carry their own spec (from the plug-in's manifest).
@@ -1019,6 +1034,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::select_mask_view::controls(ui, f);
     }
     for p in parse_spec(&spec) {
+        if cmd == REPLACE_COLOR && p.key == "hue" {
+            replacement(ui, f);
+        }
         if cmd == "image.mode.indexedColor" && p.key == "matte" {
             indexed_matte_row(ui, f);
             continue;

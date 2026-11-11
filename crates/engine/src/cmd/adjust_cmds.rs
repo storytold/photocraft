@@ -427,62 +427,92 @@ fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(result) = replace_color_range::apply(s, p)? {
         return Ok(result);
     }
-    const CMD: &str = "image.adjustments.replaceColor";
-    let c = crate::commands::color_param(CMD, p, "color", s.tools.foreground)?;
-    let fuzz = num(p, "fuzziness", 40.0).clamp(0.0, 200.0);
     let (h, sat, l) = (num(p, "hue", 0.0).clamp(-180.0, 180.0), num(p, "saturation", 0.0).clamp(-100.0, 100.0), num(p, "lightness", 0.0).clamp(-100.0, 100.0));
-    // Localized Color Clusters, as in Select › Color Range: the colour only matches within Range
-    // (a percentage of the canvas's longer side) of where it was picked.
-    let points = sample_points(p).map_err(|m| bad(CMD, m))?;
-    // Several samples (Add to Sample / Subtract from Sample, #6280): the colours match as
-    // Select › Color Range's do for the same clicks, through its own matcher.
-    // A malformed `subtractPoints` is refused here, as malformed `points` are, rather than read as
-    // no subtraction by the single-colour path.
-    let subtracted = match p.get("subtractPoints") {
-        None => false,
-        Some(v) => !v.as_array().ok_or_else(|| bad(CMD, "`subtractPoints` must be [[x, y], …]"))?.is_empty(),
-    };
-    if subtracted || points.len() > 1 {
-        let mut q = json!({"points": p.get("points").cloned().unwrap_or(Value::Array(Vec::new())), "fuzziness": fuzz});
-        // With no Add samples, the subtraction starts from the dialog's From colour, not the
-        // foreground; with them, the samples alone span the range, as in Color Range.
-        // Forwarded as resolved (a `null` or missing colour is the foreground), as RGB 0..1.
-        if points.is_empty() {
-            q["color"] = json!([c[0], c[1], c[2]]);
-        }
-        for key in ["subtractPoints", "order", "localized", "range"] {
-            if let Some(v) = p.get(key) {
-                q[key] = v.clone();
-            }
-        }
-        let samples = crate::selection_cmds::ColorRangeSamples::new(s, &q).map_err(|e| bad(CMD, e.to_string()))?;
-        return rgba_edit(s, "Replace Color", p, |px, r| {
-            let mask = samples.coverage(px, r.width() as usize, 1.0, [r.x0 as f32, r.y0 as f32]);
-            tone::replace_color_masked(px, &mask, h, sat, l);
-        });
-    }
-    let localized = if p.get("localized").and_then(Value::as_bool).unwrap_or(false) {
-        if points.is_empty() {
-            return Err(bad(CMD, "localized clusters need eyedropper `points` (where the colour was picked)"));
-        }
-        let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
-        Some(num(p, "range", 100.0).clamp(0.0, 100.0) / 100.0 * canvas.width().max(canvas.height()) as f32)
-    } else {
-        None
-    };
-    rgba_edit(s, "Replace Color", p, |px, r| match localized {
-        Some(radius) => {
-            let samples: Vec<_> = points
-                .iter()
-                .map(|&(x, y)| photocraft_algo::selection::RangeSample { color: [c[0], c[1], c[2]], at: Some((x - r.x0 as f32, y - r.y0 as f32)) })
-                .collect();
-            let mask = photocraft_algo::selection::color_range_samples(px, r.width() as usize, &samples, fuzz, Some(radius));
-            tone::replace_color_masked(px, &mask, h, sat, l);
-        }
-        None => {
-            tone::replace_color(px, [c[0], c[1], c[2]], fuzz, h, sat, l);
-        }
+    let matcher = ReplaceColorMatch::new(s, p)?;
+    rgba_edit(s, "Replace Color", p, |px, r| {
+        let mask = matcher.coverage(px, r.width() as usize, 1.0, [r.x0 as f32, r.y0 as f32]);
+        tone::replace_color_masked(px, &mask, h, sat, l);
     })
+}
+
+/// Which pixels Replace Color changes, and how much (0..1), for its RGB-sample params: what the
+/// command applies and what its dialog's Selection thumbnail shows (#6281). Recorded Lab bounds
+/// (`labMinimum` / `labMaximum`, from `.atn` playback) are not covered and are refused.
+pub enum ReplaceColorMatch {
+    /// One colour, matched everywhere.
+    Single { color: [f32; 3], fuzziness: f32 },
+    /// Localized Color Clusters: the colour matches only within `radius` document pixels of where
+    /// it was picked.
+    Localized { color: [f32; 3], fuzziness: f32, points: Vec<(f32, f32)>, radius: f32 },
+    /// Several samples (Add to Sample / Subtract from Sample, #6280), through Select › Color
+    /// Range's matcher.
+    Samples(crate::selection_cmds::ColorRangeSamples),
+}
+
+impl ReplaceColorMatch {
+    pub fn new(s: &Session, p: &Value) -> Result<Self> {
+        const CMD: &str = "image.adjustments.replaceColor";
+        if p.get("labMinimum").is_some() || p.get("labMaximum").is_some() {
+            return Err(bad(CMD, "recorded Lab bounds have no sample-based match"));
+        }
+        let c = crate::commands::color_param(CMD, p, "color", s.tools.foreground)?;
+        let color = [c[0], c[1], c[2]];
+        let fuzziness = num(p, "fuzziness", 40.0).clamp(0.0, 200.0);
+        // Localized Color Clusters, as in Select › Color Range: the colour only matches within Range
+        // (a percentage of the canvas's longer side) of where it was picked.
+        let points = sample_points(p).map_err(|m| bad(CMD, m))?;
+        // Several samples (Add to Sample / Subtract from Sample, #6280): the colours match as
+        // Select › Color Range's do for the same clicks, through its own matcher.
+        // A malformed `subtractPoints` is refused here, as malformed `points` are, rather than read as
+        // no subtraction by the single-colour path.
+        let subtracted = match p.get("subtractPoints") {
+            None => false,
+            Some(v) => !v.as_array().ok_or_else(|| bad(CMD, "`subtractPoints` must be [[x, y], …]"))?.is_empty(),
+        };
+        if subtracted || points.len() > 1 {
+            let mut q = json!({"points": p.get("points").cloned().unwrap_or(Value::Array(Vec::new())), "fuzziness": fuzziness});
+            // With no Add samples, the subtraction starts from the dialog's From colour, not the
+            // foreground; with them, the samples alone span the range, as in Color Range.
+            // Forwarded as resolved (a `null` or missing colour is the foreground), as RGB 0..1.
+            if points.is_empty() {
+                q["color"] = json!(color);
+            }
+            for key in ["subtractPoints", "order", "localized", "range"] {
+                if let Some(v) = p.get(key) {
+                    q[key] = v.clone();
+                }
+            }
+            let samples = crate::selection_cmds::ColorRangeSamples::new(s, &q).map_err(|e| bad(CMD, e.to_string()))?;
+            return Ok(Self::Samples(samples));
+        }
+        if p.get("localized").and_then(Value::as_bool).unwrap_or(false) {
+            if points.is_empty() {
+                return Err(bad(CMD, "localized clusters need eyedropper `points` (where the colour was picked)"));
+            }
+            let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+            let radius = num(p, "range", 100.0).clamp(0.0, 100.0) / 100.0 * canvas.width().max(canvas.height()) as f32;
+            return Ok(Self::Localized { color, fuzziness, points, radius });
+        }
+        Ok(Self::Single { color, fuzziness })
+    }
+
+    /// Coverage of a rectangle of straight RGBA pixels, `width` wide. `scale` is the document
+    /// pixels one input pixel stands for (1 for the document itself, more for a thumbnail);
+    /// `origin` is the rectangle's top left in document pixels.
+    pub fn coverage(&self, px: &[[f32; 4]], width: usize, scale: f32, origin: [f32; 2]) -> Vec<f32> {
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        match self {
+            Self::Single { color, fuzziness } => photocraft_algo::selection::color_range(px, *color, *fuzziness),
+            Self::Localized { color, fuzziness, points, radius } => {
+                let samples: Vec<_> = points
+                    .iter()
+                    .map(|&(x, y)| photocraft_algo::selection::RangeSample { color: *color, at: Some(((x - origin[0]) / scale, (y - origin[1]) / scale)) })
+                    .collect();
+                photocraft_algo::selection::color_range_samples(px, width, &samples, *fuzziness, Some(radius / scale))
+            }
+            Self::Samples(samples) => samples.coverage(px, width, scale, origin),
+        }
+    }
 }
 
 /// The `points` of a command (`[[x, y], …]` in document pixels), or a message saying what is wrong.
