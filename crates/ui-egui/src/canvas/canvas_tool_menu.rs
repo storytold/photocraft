@@ -29,6 +29,10 @@ pub struct CanvasToolMenu {
     /// Zoom Out keep under the pointer.
     #[serde(default)]
     pub anchor: Option<[f64; 2]>,
+    /// The selected tool when Space holds the Hand over it (`tool` is then the Hand): the menu
+    /// closes when that tool changes (#11271).
+    #[serde(default)]
+    pub under: Option<Tool>,
     /// Opened while a Type tool edits text: the text and type rows instead of the tool's actions.
     #[serde(default)]
     pub text: bool,
@@ -316,6 +320,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -807,6 +812,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         transform: true,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -892,6 +898,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         transform: false,
         pasteboard: true,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
@@ -927,6 +934,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: true,
@@ -1091,6 +1099,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text,
         type_layer,
         guide: false,
@@ -1106,7 +1115,8 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
 }
 
 /// Right-click with the Zoom or Hand tool at screen point `pos`, over document point `doc`: the
-/// view menu.
+/// view menu. With the Hand held by Space over another tool, it closes when that tool changes
+/// (#11271).
 pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2], doc: [f64; 2]) -> bool {
     if !is_view_tool(tool) || !pos.iter().all(|v| v.is_finite()) || !doc.iter().all(|v| v.is_finite()) {
         return false;
@@ -1122,6 +1132,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         transform: false,
         pasteboard: false,
         anchor: Some(doc),
+        under: (tool != app.ui.tool).then_some(app.ui.tool),
         text: false,
         type_layer: false,
         guide: false,
@@ -1448,7 +1459,7 @@ fn menu_id() -> egui::Id {
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let Some(menu) = app.ui.canvas_tool_menu.clone() else { return };
     if ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        || app.ui.tool != menu.tool
+        || app.ui.tool != menu.under.unwrap_or(menu.tool)
         || (menu.transform && app.ui.transform.is_none())
         || (menu.text && app.ui.text_edit.is_none())
         || (menu.type_layer && app.ui.text_edit.is_some())
