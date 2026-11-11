@@ -4,7 +4,7 @@
 use egui::Modifiers;
 use serde_json::{Value, json};
 
-use super::delete_anchor_targeted_path_tests::{click, setup, steps};
+use super::delete_anchor_targeted_path_tests::{click, select_layer, setup, shape_path, steps};
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
@@ -94,4 +94,17 @@ fn add_anchor_point_clicks_keep_adding_an_anchor() {
     assert_eq!(knots(&mut app).len(), 5);
     assert_eq!(steps(&app), n + 1);
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
+}
+
+/// A shape with only its own position lock is left alone by a segment drag, as by an anchor click
+/// (#12730, #12825): its bottom edge doesn't move and no history step is added.
+#[test]
+fn a_position_locked_shape_s_segment_does_not_drag() {
+    let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
+    select_layer(&mut app, shape);
+    app.run("layer.lockLayers", json!({"position": true})).unwrap();
+    let (before, n) = (shape_path(&mut app, shape), steps(&app));
+    drag(&mut app, [550.0, 250.0], [550.0, 290.0]);
+    assert_eq!(shape_path(&mut app, shape), before);
+    assert_eq!(steps(&app), n);
 }
