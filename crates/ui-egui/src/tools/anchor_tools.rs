@@ -1,6 +1,7 @@
 //! Add Anchor Point and Delete Anchor Point tools (P group with the Pen, #1044), as in Photoshop.
-//! They edit the paths Direct Selection edits, front first: the work or saved path selected in the
-//! Paths panel, the targeted vector mask or the active shape layer's path, then the work path.
+//! They edit the targeted path only (#12762, #12705): the saved path selected in the Paths panel,
+//! the targeted vector mask or the active shape layer's path (not while that layer is hidden), or the work
+//! path. A top-level shape layer that is not active is left alone, unlike Direct Selection; one inside a group is still edited as before.
 //!
 //! * Add Anchor Point: hovering a segment highlights it and shows where the anchor would go; a
 //!   click inserts it there (`path.addAnchor`). A curve is split without changing its shape.
@@ -16,6 +17,7 @@
 
 use egui::{Color32, Modifiers, Pos2, Stroke};
 use photocraft_doc::vector::Path;
+use photocraft_doc::{LayerContent, LayerId, Locks};
 use photocraft_geom::Point;
 use photocraft_vector::edit::{self, Hit};
 
@@ -38,7 +40,18 @@ pub fn effective(tool: Tool, mods: Modifiers) -> Option<Tool> {
 /// segment (Add) or anchor (Delete) hit on it. An anchor hit with Add, or a segment with Delete,
 /// edits nothing.
 fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
-    let (r, path, hit) = crate::direct_select::hit_target(app, p, false)?;
+    let (r, path, hit) = crate::direct_select::hit_active(app, p)?;
+    // The anchor tools ignore a click on a shape with only its own position lock set (#12730, #12825).
+    if let PathRef::Layer(id) = r
+        && let Some(st) = app.session.active()
+        && let Some(layer) = st.doc.layer(LayerId(id))
+        && matches!(layer.content, LayerContent::Shape(_))
+        && layer.locks == (Locks { position: true, ..Locks::default() })
+        && let Some(at) = st.doc.path_of(layer.id)
+        && at.split_last().is_some_and(|(_, ancestors)| !st.doc.locks_at(ancestors).any())
+    {
+        return None;
+    }
     match (tool, hit) {
         (Tool::AddAnchorPoint, Hit::Segment(..)) | (Tool::DeleteAnchorPoint, Hit::Anchor(_)) => Some((r, path, hit)),
         _ => None,
@@ -186,4 +199,18 @@ fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: 
 }
 
 #[cfg(test)]
+mod add_anchor_lock_tests;
+#[cfg(test)]
+mod add_anchor_targeted_path_tests;
+#[cfg(test)]
+mod delete_anchor_lock_tests;
+#[cfg(test)]
+mod delete_anchor_targeted_path_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod add_anchor_delete_key_tests;
+
+#[cfg(test)]
+mod delete_anchor_escape_tests;
