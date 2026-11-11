@@ -934,6 +934,27 @@ fn accelerated_label_scrubs_go_further_when_fast() {
     let fast = drag(&mut h, fast_moves);
     assert!(fast > 200.0, "a fast drag goes further: {fast}");
     assert!(fast <= 120.0 * super::scrub::SCRUB_ACCEL_MAX, "and no further than the cap: {fast}");
+    // Shift's x10 stacks on the acceleration curve (eliets2's case): the same fast drag with
+    // Shift held moves ten times the accelerated distance, under the same cap scaled by ten.
+    let drag_shift = |h: &mut Harness<'static, f32>, moves: usize| {
+        let before = *h.state();
+        let at = h.get_by_label("Size:").rect().center();
+        h.hover_at(at);
+        h.run();
+        h.drag_at(at);
+        h.step();
+        for i in 1..=moves {
+            h.event(egui::Event::PointerMoved(at + egui::vec2(120.0 * i as f32 / moves as f32, 0.0)));
+            h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+            h.step();
+        }
+        h.drop_at(at + egui::vec2(120.0, 0.0));
+        h.run();
+        *h.state() - before
+    };
+    let shift_fast = drag_shift(&mut h, fast_moves);
+    assert!(shift_fast > 2_000.0, "a fast Shift drag stacks x10 on the curve: {shift_fast}");
+    assert!(shift_fast <= 1_200.0 * super::scrub::SCRUB_ACCEL_MAX, "and no further than ten times the cap: {shift_fast}");
 }
 
 /// A right-aligned OK / Cancel / Apply row as `os` draws it: labels left to right, and the
