@@ -125,3 +125,7 @@ mod bucket_bitmap_alert_tests;
 #[cfg(test)]
 #[path = "remove_locked_alert_tests.rs"]
 mod remove_locked_alert_tests;
+
+#[cfg(test)]
+#[path = "remove_hidden_layer_tests.rs"]
+mod remove_hidden_layer_tests;
