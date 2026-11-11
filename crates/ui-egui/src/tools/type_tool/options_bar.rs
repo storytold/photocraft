@@ -58,30 +58,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             menu.on_hover_text(tl!("Set font style"));
         }
     }
-    let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
-    crate::icons::paint(ui, r, "type", 13.0, t.icon);
-    icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Font size")));
-    // Dynamic Text sets the size from the box: the field and its scrub are greyed out.
-    let fitted = is_fitted(app);
-    // Photoshop's "T" scrubs the size field beside it, like the Character panel's icons (#6437).
-    if !fitted {
-        crate::widgets::scrub_option_icon(ui, &icon, tl!("Set font size"));
-    }
-    let (unit, label) = type_unit(app);
-    let mut display = size * unit;
-    let edited = ui.add_enabled_ui(!fitted, |ui| size_field(ui, &mut display, unit, label));
-    if fitted {
-        edited.response.on_disabled_hover_text(tl!("Size is set by Dynamic Text"));
-    }
-    // A preset is already in points: converting it through the display unit would not round-trip.
-    if let Some(size) = match edited.inner {
-        Some(MetricChoice::Typed(v)) => Some(v / unit),
-        Some(MetricChoice::Preset(pt)) => Some(pt),
-        _ => None,
-    } {
-        app.ui.tool_options.type_size = size;
-        apply(app, ui.ctx(), json!({"size": size, "metricsAsShown": true}));
-    }
+    font_size(app, ui, size);
     dynamic_text_toggle(app, ui);
     let mut aa = target(app)
         .and_then(|(id, _)| app.session.active().and_then(|st| text_layer(&st.doc, LayerId(id))))
@@ -474,6 +451,36 @@ pub(super) fn toggle_cell(ui: &mut egui::Ui, w: f32, on: bool, tip: &str, paint:
 
 /// The font size field, with the ▾ of its preset list inside the field's right edge, as the font
 /// menu and the Layers panel's Opacity have theirs. Its list is anchored to the whole field.
+/// The size icon (it scrubs the field) and field with its presets; greyed out while Dynamic Text
+/// sets the size from the box.
+fn font_size(app: &mut PhotocraftApp, ui: &mut egui::Ui, size: f32) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
+    crate::icons::paint(ui, r, "type", 13.0, t.icon);
+    icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Font size")));
+    // Dynamic Text sets the size from the box: the field and its scrub are greyed out.
+    let fitted = is_fitted(app);
+    // Photoshop's "T" scrubs the size field beside it, like the Character panel's icons (#6437).
+    if !fitted {
+        crate::widgets::scrub_option_icon(ui, &icon, tl!("Set font size"));
+    }
+    let (unit, label) = type_unit(app);
+    let mut display = size * unit;
+    let edited = ui.add_enabled_ui(!fitted, |ui| size_field(ui, &mut display, unit, label));
+    if fitted {
+        edited.response.on_disabled_hover_text(tl!("Size is set by Dynamic Text"));
+    }
+    // A preset is already in points: converting it through the display unit would not round-trip.
+    if let Some(size) = match edited.inner {
+        Some(MetricChoice::Typed(v)) => Some(v / unit),
+        Some(MetricChoice::Preset(pt)) => Some(pt),
+        _ => None,
+    } {
+        app.ui.tool_options.type_size = size;
+        apply(app, ui.ctx(), json!({"size": size, "metricsAsShown": true}));
+    }
+}
+
 fn size_field(ui: &mut egui::Ui, display: &mut f32, unit: f32, label: &str) -> Option<MetricChoice> {
     use crate::widgets::POPUP_ARROW_W;
     let t = crate::theme::Tokens::get(ui.ctx());
