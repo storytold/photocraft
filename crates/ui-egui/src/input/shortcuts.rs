@@ -503,12 +503,20 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // An open menu owns the keyboard (arrows, ↩, Esc), like a native menu; so does the menu bar
     // once Alt or F10 put the keyboard on it (#4988), and an open dropdown list, whose letters
     // pick an option rather than a tool (#1481). A command shortcut (⌘D, F7…) takes the keyboard
-    // off the bar first and runs, as with a native menu bar (#6573).
+    // off the bar first and runs, as with a native menu bar (#6573), and closes an open menu or
+    // list (or a panel's options menu, any popup) and runs, as Photoshop's menus do (#9065).
     crate::menu_keys::leave_for_shortcut(ctx);
     if app.ui.dialogs.is_empty() && app.discard.is_none() && crate::type_tool::commit_shortcut(app, ctx) {
         return false;
     }
+    crate::menu_keys::close_for_shortcut(ctx);
     if crate::menu_nav::is_open(ctx) || crate::menu_keys::is_focused(ctx) || crate::widgets::dropdown_list_open(ctx) {
+        return false;
+    }
+    // A Keyboard Shortcuts field waiting for keys records the key pressed, whatever it is: no
+    // shortcut runs first, not even the view keys that work under dialogs (#8965: ⌘0, ⌘+ zoomed
+    // instead of being recorded).
+    if crate::prefs_ui::capturing_shortcut(app) {
         return false;
     }
     // ⌘Z in a filter or adjustment dialog steps the dialog's settings, not the document (#4697).
@@ -698,10 +706,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
-    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
-    // When the document refuses it, ↩ keeps the draft to commit again; Esc keeps it as the Work Path.
+    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769);
+    // ↩ also deselects the Work Path. When the document refuses it, ↩ keeps the draft to commit
+    // again; Esc keeps it as the Work Path.
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
-        crate::vector_ui::pen_commit(app, false);
+        crate::vector_ui::pen_enter(app);
         return true;
     }
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -712,6 +721,29 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if app.ui.shape_box.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         crate::shape_bounds_box::cancel(app);
         return true;
+    }
+    // An anchor selected with the Add Anchor Point tool: ⌫/Delete removes it and its two segments,
+    // as in Photoshop (#12703), never the active layer.
+    if focus != crate::shortcut_dispatch::Focus::DeletingWidget
+        && let Some((target, [s, k])) = crate::vector_ui::delete_key_deletes_anchor(app)
+    {
+        let mods = ctx.input(|i| i.modifiers);
+        if !mods.command && !mods.ctrl && !mods.shift && !mods.alt && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete))
+        {
+            let mut params = json!({"subpath": s, "knot": k, "segments": true});
+            if let (Some(p), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
+                p.extend(t.clone());
+            }
+            match app.run("path.deleteAnchor", params) {
+                // The anchors shift: the selection would point at the wrong ones.
+                Ok(_) => app.ui.direct_selection = crate::direct_select::DirectSelection::default(),
+                Err(e) => {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                }
+            }
+            return true;
+        }
     }
     // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
     // Photoshop (#5702), never Edit › Clear on the pixels under it.
@@ -773,6 +805,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if new_layer_without_dialog(app, ctx) {
         return true;
     }
+    if app.ui.type_path_drag.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::type_path_placement::cancel(app);
+        return true;
+    }
     // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).
     if crate::shortcut_dispatch::dispatch_pressed(app, ctx, focus, editing) {
         return true;
@@ -819,7 +855,7 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     // An open options bar popup (the Crop Ratio list, the overlay and gear menus) takes the keys
     // first: Esc closes it, and neither key reaches the crop beneath (#7386). Its id is kept in
     // memory from the last frame; `ctx.any_popup_open` only sees this frame's, drawn later.
-    if (!app.ui.polygon.is_empty() || app.ui.crop_rect.is_some()) && !egui::Popup::is_any_open(ctx) {
+    if (!app.ui.polygon.is_empty() || app.ui.crop_rect.is_some()) && !egui::Popup::is_any_open(ctx) && !crate::panels::options_bar::fill_help_takes_keys(ctx) {
         if pressed(Key::Enter) {
             if !app.ui.polygon.is_empty() {
                 crate::canvas::commit_polygon(app);
@@ -885,6 +921,26 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
+    // Delete Anchor Point (#12773): Esc first clears anchors selected on the saved path targeted in
+    // the Paths panel, then deselects that path, so clicks edit nothing. Not while its name is typed
+    // in the panel: egui has already dropped the field's focus, and the panel cancels on Esc.
+    if !esc_taken
+        && app.ui.tool == Tool::DeleteAnchorPoint
+        && !crate::vector_ui::path_renaming(app, ctx)
+        && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
+    {
+        let ds = &app.ui.direct_selection;
+        let selected = ds.target == Some(crate::direct_select::PathRef::Saved(index)) && (!ds.anchors.is_empty() || ds.segment.is_some());
+        if pressed(Key::Escape) {
+            if selected {
+                app.ui.direct_selection.anchors.clear();
+                app.ui.direct_selection.segment = None;
+            } else {
+                app.ui.selected_path = None;
+            }
+            return;
+        }
+    }
     // + / − pick a Path Operation with the Pen tools and Path Selection (`path_components`)…
     crate::path_components::handle_keys(app, ctx);
     // … and otherwise ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the
@@ -925,7 +981,7 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
             if cycle_shift {
                 group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
             }
-            app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
+            let next_tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
                 None => app
@@ -936,6 +992,10 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
                     .find(|last| group.contains(last))
                     .unwrap_or_else(|| group.iter().copied().min_by_key(|tool| crate::panels::toolbar::toolbar_position(*tool)).unwrap_or(t)),
             };
+            if before != next_tool {
+                crate::type_path_placement::cancel(app);
+            }
+            app.ui.tool = next_tool;
             crate::tool_memory::ended_by_tool(app);
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
             let (plain, now) = ctx.input(|i| (!cycle_shift && !i.modifiers.shift && !i.modifiers.alt, i.time));

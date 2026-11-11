@@ -37,7 +37,8 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
 /// Whether a brush-tip circle draws its centre mark.
 /// Clone Stamp and Healing Brush stay an empty circle until Option is held, the source-point
 /// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
-/// Photoshop; the Background Eraser always shows its sampling hotspot.
+/// Photoshop; the Background Eraser always shows its sampling hotspot, and the Remove tool its
+/// centre + (#12550).
 pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
     if tool == Tool::QuickSelection {
         return false;
@@ -45,7 +46,7 @@ pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -
     if matches!(tool, Tool::CloneStamp | Tool::Healing) {
         return option || show_crosshair;
     }
-    show_crosshair || tool == Tool::BackgroundEraser
+    show_crosshair || matches!(tool, Tool::BackgroundEraser | Tool::Remove)
 }
 
 /// The display colour of an RGB triple (0..1 per channel) as an egui colour.
@@ -121,7 +122,7 @@ pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
 
 /// Preferences › Cursors › Other Cursors asks for the precise crosshair, or Caps Lock swaps the
 /// standard cursor for it (and back), as in Photoshop (#4639).
-pub(super) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
+pub(crate) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
     (app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise) != app.caps_lock
 }
 
@@ -148,6 +149,20 @@ pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon 
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
     crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
+    egui::CursorIcon::None
+}
+
+/// The filter dialogs' preview locator: a small square centred on `p`, the point a click centres
+/// the dialog's preview window on (#9648), white between dark edges so it reads on any image.
+/// Draws it at `p` and returns the OS cursor to set (hidden).
+pub(crate) fn preview_locator_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    const SIDE: f32 = 9.0;
+    let rect = Rect::from_center_size(p, vec2(SIDE, SIDE));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-preview-locator")));
+    let dark = Stroke::new(1.0, Color32::from_black_alpha(200));
+    painter.rect_stroke(rect.expand(1.0), 0.0, dark, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect.shrink(1.0), 0.0, dark, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
     egui::CursorIcon::None
 }
 
@@ -259,7 +274,9 @@ fn sample_color(app: &mut PhotocraftApp, x: f64, y: f64, sample_layer: &str) -> 
         return None;
     }
     let size = app.ui.tool_options.eyedropper_size;
-    let v = app.run("document.sampleColor", json!({"x": x, "y": y, "size": size, "sampleLayer": sample_layer})).ok()?;
+    // The box depends on the view zoom at 100 % and below, as in Photoshop (#11751).
+    let zoom = f64::from(app.current_zoom());
+    let v = app.run("document.sampleColor", json!({"x": x, "y": y, "size": size, "sampleLayer": sample_layer, "zoom": zoom})).ok()?;
     match serde_json::from_value::<Vec<f32>>(v).ok()?[..] {
         [r, g, b, a] if a > 0.0 => Some([r, g, b]),
         _ => None,
@@ -298,3 +315,7 @@ mod color_replacement_alt_click_tests;
 #[cfg(test)]
 #[path = "../background_eraser_alt_click_tests.rs"]
 mod background_eraser_alt_click_tests;
+
+#[cfg(test)]
+#[path = "remove_cursor_tests.rs"]
+mod remove_cursor_tests;
