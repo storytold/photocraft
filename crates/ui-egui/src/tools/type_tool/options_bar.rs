@@ -495,3 +495,7 @@ fn size_field(ui: &mut egui::Ui, display: &mut f32, unit: f32, label: &str) -> O
 #[cfg(test)]
 #[path = "size_presets_tests.rs"]
 mod size_presets_tests;
+
+#[cfg(test)]
+#[path = "vertical_mask_align_buttons_tests.rs"]
+mod vertical_mask_align_buttons_tests;

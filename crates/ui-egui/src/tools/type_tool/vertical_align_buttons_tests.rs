@@ -1,7 +1,8 @@
 //! #12059: for vertical text the options bar's alignment buttons are Top / Center / Bottom, after
 //! the targeted text layer's orientation, or with no text targeted the Vertical Type tool's. They
 //! still set left / center / right, and the lit one follows the targeted paragraph. The Horizontal
-//! Type Mask tool keeps the horizontal buttons (not measured).
+//! Type Mask tool keeps the horizontal buttons (not measured); the Vertical Type Mask tool's are in
+//! `vertical_mask_align_buttons_tests` (#12088).
 
 use egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
@@ -12,10 +13,10 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-const HORIZONTAL: [&str; 3] = ["Left align text", "Center text", "Right align text"];
-const VERTICAL: [&str; 3] = ["Top align text", "Center text", "Bottom align text"];
+pub(super) const HORIZONTAL: [&str; 3] = ["Left align text", "Center text", "Right align text"];
+pub(super) const VERTICAL: [&str; 3] = ["Top align text", "Center text", "Bottom align text"];
 
-fn new_app(tool: Tool) -> PhotocraftApp {
+pub(super) fn new_app(tool: Tool) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 400})).unwrap();
     app.sync_views();
@@ -29,7 +30,7 @@ fn text_layer(app: &mut PhotocraftApp, orientation: &str) -> LayerId {
     LayerId(made["layer"].as_u64().unwrap())
 }
 
-fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(super) fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 60.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             ui.horizontal(|ui| super::options_bar(app, ui));
@@ -42,7 +43,7 @@ fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 }
 
 /// Which of the two button sets the bar shows; panics on a mix or neither.
-fn shown(h: &Harness<'static, PhotocraftApp>) -> [&'static str; 3] {
+pub(super) fn shown(h: &Harness<'static, PhotocraftApp>) -> [&'static str; 3] {
     let has = |label: &str| h.query_by_role_and_label(Role::Button, label).is_some();
     match (has("Top align text") && has("Bottom align text"), has("Left align text") && has("Right align text")) {
         (true, false) => VERTICAL,
@@ -52,11 +53,11 @@ fn shown(h: &Harness<'static, PhotocraftApp>) -> [&'static str; 3] {
     }
 }
 
-fn lit(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
+pub(super) fn lit(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
     h.get_by_role_and_label(Role::Button, label).accesskit_node().toggled() == Some(Toggled::True)
 }
 
-fn align_of(app: &PhotocraftApp, id: LayerId) -> TextAlign {
+pub(super) fn align_of(app: &PhotocraftApp, id: LayerId) -> TextAlign {
     match &app.session.active().unwrap().doc.layer(id).unwrap().content {
         LayerContent::Text(t) => t.paragraphs[0].style.align,
         other => panic!("{}", other.kind_name()),
