@@ -177,6 +177,11 @@ fn a_jittery_click_outside_the_box_on_the_image_leaves_it_as_it_was() {
 #[test]
 fn a_double_click_on_the_box_still_commits() {
     let mut h = harness();
+    // Moved 10 px first: committing an unchanged box adds no History step.
+    let t = h.state_mut().ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 10.0, y]);
+    t.pivot[0] += 10.0;
+    h.run_steps(1);
     let before = steps(&h);
     press(&mut h, 200.0, 200.0);
     let p = screen(&h, 200.0, 200.0);
