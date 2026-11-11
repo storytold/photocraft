@@ -183,8 +183,8 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // editing state back: no history step, the piece floating again.
     let before = s.active().filter(|d| d.floating.is_some()).cloned();
     crate::float_cmds::before_command(s, cmd)?;
-    crate::float_cmds::drop_floating(s)?;
-    let result = export_dropped(s, p, write, native_paths, &st);
+    // A drop that fails part-way (a moved mask that cannot be allocated) is rolled back too.
+    let result = crate::float_cmds::drop_floating(s).and_then(|_| export_dropped(s, p, write, native_paths, &st));
     if let (Err(_), Some(before)) = (&result, before)
         && let Some(now) = s.active_mut()
     {
