@@ -88,19 +88,18 @@ fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
     assert_eq!(tip(&mut app), BURN_TIP, "picked after the reset");
 }
 
+/// The Dodge tool shares the Burn tool's tip (#12684); the Sponge keeps the default.
 #[test]
-fn other_toning_tools_keep_their_tips() {
-    for tool in [Tool::Dodge, Tool::Sponge] {
-        let mut a = app();
-        pick(&mut a, tool);
-        scramble(&mut a);
-        invoke(&mut a, "tool.reset", json!({}));
-        assert_eq!(tip(&mut a), DEFAULT_TIP, "{tool:?}");
-        // A first use still takes the current tip, as before.
-        let mut a = app();
-        pick(&mut a, Tool::Pencil);
-        scramble(&mut a);
-        pick(&mut a, tool);
-        assert_eq!(tip(&mut a)[0], 57.0, "{tool:?}, first use");
-    }
+fn the_sponge_tool_keeps_its_tip() {
+    let mut a = app();
+    pick(&mut a, Tool::Sponge);
+    scramble(&mut a);
+    invoke(&mut a, "tool.reset", json!({}));
+    assert_eq!(tip(&mut a), DEFAULT_TIP);
+    // A first use still takes the current tip, as before.
+    let mut a = app();
+    pick(&mut a, Tool::Pencil);
+    scramble(&mut a);
+    pick(&mut a, Tool::Sponge);
+    assert_eq!(tip(&mut a)[0], 57.0, "first use");
 }

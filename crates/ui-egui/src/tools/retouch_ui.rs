@@ -4,6 +4,7 @@
 //! and the clone-source marker.
 
 use egui::{Color32, Stroke, vec2};
+use photocraft_color::BlendMode;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -106,14 +107,38 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
     Some(match tool {
         Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all.blur})),
         Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all.sharpen})),
-        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge})),
+        Tool::Smudge => (
+            "paint.smudge",
+            json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge, "mode": o.smudge_mode.label()}),
+        ),
         Tool::Dodge | Tool::Burn => (
             if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
             json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
         ),
-        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "vibrance": o.vibrance})),
+        // Flow as the bar's field stores it (#12976), so a restored fraction paints what the bar shows.
+        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "flow": crate::eraser_ui::stored_tolerance(o.sponge_flow), "vibrance": o.vibrance})),
         _ => return None,
     })
+}
+
+/// The Smudge tool's Painting Modes in the reference application's order (#12959); its list draws
+/// a line above Darken and above Hue.
+pub(crate) const SMUDGE_MODES: [BlendMode; 7] =
+    [BlendMode::Normal, BlendMode::Darken, BlendMode::Lighten, BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity];
+
+/// Whether the Smudge Mode list draws a line above `mode`.
+pub(crate) fn smudge_mode_starts_group(mode: BlendMode) -> bool {
+    matches!(mode, BlendMode::Darken | BlendMode::Hue)
+}
+
+/// The Smudge options bar's Mode dropdown (#12959), first in the bar after the brush controls.
+fn smudge_mode_dropdown(ui: &mut egui::Ui, mode: &mut BlendMode) {
+    opt(ui, tl!("Mode:"));
+    let opts: Vec<(BlendMode, &str)> = SMUDGE_MODES.iter().map(|m| (*m, m.label())).collect();
+    crate::widgets::dropdown_wheel_grouped(ui, "smudge-mode", tl!("Mode"), mode, &opts, 100.0, |m| smudge_mode_starts_group(*m));
+    if let Some(button) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("smudge-mode"))) {
+        button.on_hover_text(tl!("Painting Mode"));
+    }
 }
 
 /// `paint.colorReplacement` params from the options bar (without `points`): shared by the live
@@ -146,8 +171,8 @@ pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> 
         "scale": o.pattern_stamp_scale,
         "angle": o.pattern_stamp_angle,
         "seed": stroke_seed(points),
-        // The options bar's Mode is the tool's own brush's.
-        "mode": app.session.tools.brush.mode.label(),
+        // The options bar's Mode is the tool's own brush's; Behind is a mode of that list.
+        "mode": if app.session.tools.brush.behind { "Behind" } else { app.session.tools.brush.mode.label() },
     });
     if o.pattern_stamp_aligned
         && let Some(ph) = app.ui.pattern_stamp_phase
@@ -574,6 +599,12 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 /// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
 /// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
+    if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
+        crate::object_finder::clear(app);
+        crate::brush_refusal::prompt(app, tl!(why));
+        return;
+    }
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let sample_all = app.ui.tool_options.sample_all.object_selection;
@@ -938,23 +969,28 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Mode:"));
             let opts = [("desaturate".to_string(), tl!("Desaturate")), ("saturate".to_string(), tl!("Saturate"))];
             crate::widgets::dropdown(ui, "sponge-mode", tl!("Mode"), &mut o.sponge_mode, &opts, 110.0);
+            // Flow (#12976): whole numbers 1..100 with the "Closest value inserted" alert, and a slider arrow.
+            let label = tl!("Flow:");
+            opt(ui, label);
+            let (_, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut o.sponge_flow, 1.0..=100.0, "%", 58.0);
+            cam_amount_slider(ui, tl!("Flow"), &mut o.sponge_flow, 1.0, 100.0, "Flow");
             crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
+            }
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
+            if tool == Tool::Smudge {
+                smudge_mode_dropdown(ui, &mut o.smudge_mode);
+            }
             let label = tl!("Strength:");
             opt(ui, label);
-            // Blur's (#12650) and Sharpen's (#12949) Strength are measured; a copy, so a shared fraction is not rounded.
-            let out_of_range = if matches!(tool, Tool::Blur | Tool::Sharpen) {
-                let mut s = o.strength;
-                let (r, alert) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
-                if r.changed() {
-                    o.strength = s;
-                }
-                alert
-            } else {
-                crate::widgets::value_field(ui, &mut o.strength, 1.0..=100.0, "%", 58.0);
-                false
-            };
+            // Measured for Blur (#12650), Sharpen (#12949) and Smudge (#12962); a copy, so a shared fraction is not rounded.
+            let mut s = o.strength;
+            let (r, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
+            if r.changed() {
+                o.strength = s;
+            }
             if let Some(all) = o.sample_all.slot(tool) {
                 crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
             }
@@ -1132,3 +1168,11 @@ mod cam_options_bar_tests;
 #[cfg(test)]
 #[path = "../burn_bar_tooltips_tests.rs"]
 mod burn_bar_tooltips_tests;
+
+#[cfg(test)]
+#[path = "../smudge_mode_bar_tests.rs"]
+mod smudge_mode_bar_tests;
+
+#[cfg(test)]
+#[path = "../sponge_flow_field_tests.rs"]
+mod sponge_flow_field_tests;

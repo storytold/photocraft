@@ -379,7 +379,9 @@ mod tests {
     #[test]
     fn import_warning_punctuation_is_localized_without_changing_english() {
         let mut app = PhotocraftApp::new(Session::new(), Services::default());
-        for lang in [crate::i18n::Lang::EN, crate::i18n::Lang::from_code("cs").unwrap()] {
+        // English in every build; Czech too when the craft-i18n catalogs are embedded.
+        let czech = crate::i18n::needs_catalogs().then(|| crate::i18n::Lang::from_code("cs").expect("cs registered"));
+        for lang in std::iter::once(crate::i18n::Lang::EN).chain(czech) {
             crate::i18n::with_language(lang, || {
                 let what = crate::i18n::fmt(tl!("Opened {name}"), &[("name", "x.psd")]);
                 let warnings = vec!["first warning".into(), "second warning".into(), "third warning".into()];

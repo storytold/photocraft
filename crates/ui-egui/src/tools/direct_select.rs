@@ -347,6 +347,51 @@ pub(crate) fn hit_target(app: &PhotocraftApp, p: [f64; 2], handles: bool) -> Opt
     })
 }
 
+/// What the anchor tools edit at `p`: a hit on the targeted paths only (`active_paths`), never on
+/// a top-level shape layer that is not active. A hidden active layer shows no path, so it is skipped
+/// (#12762, #12705). Not measured, so as today: a layer inside a hidden group, and a shown shape layer
+/// inside a group, which stays a target without being active.
+pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
+    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+    let st = app.session.active()?;
+    // A path selected in the Paths panel (saved or Work Path) is the only target; otherwise the Pen draft first (as
+    // `candidates` builds it), then the active paths. The draft's destination is private to
+    // `vector_ui`, so it is not filtered here.
+    let targets: Vec<(PathRef, Path)> = match crate::vector_ui::selected_saved_path_index(app) {
+        Some((i, path)) => Some((PathRef::Saved(i), path)).filter(|(r, _)| writable(app, r)).into_iter().collect(),
+        // The Work Path selected in the Paths panel is the only target too, as for Path Selection.
+        None if app.ui.selected_path.as_deref() == Some("work") => active_paths(app).into_iter().filter(|(r, _)| *r == PathRef::Work).collect(),
+        None => {
+            let pen = app
+                .ui
+                .pen
+                .as_ref()
+                .filter(|_| app.ui.pen_doc.is_none_or(|owner| Some(owner) == Some(st.doc.id)))
+                .filter(|p| !p.dragging && !p.knots.is_empty())
+                .map(|p| (PathRef::Pen, crate::vector_ui::pen_path(p)));
+            let mut out: Vec<(PathRef, Path)> = pen.into_iter().chain(active_paths(app)).collect();
+            // Not measured (#12762, #12705): a shape layer inside a group keeps today's behaviour. Every shown,
+            // unlocked one stays a target after the targeted paths, front first, as `candidates` lists it.
+            // A top-level shape layer (depth 0) is a target only as the active layer.
+            let layers = st.doc.walk();
+            let grouped = layers.iter().rev().filter(|(at, depth, _)| *depth > 0 && st.doc.shown_at(at)).filter_map(|(_, _, l)| match &l.content {
+                photocraft_doc::LayerContent::Shape(sh) => Some((PathRef::Layer(l.id.0), sh.path.clone())),
+                _ => None,
+            });
+            for (r, path) in grouped {
+                if writable(app, &r) && !out.iter().any(|(have, _)| *have == r) {
+                    out.push((r, path));
+                }
+            }
+            out
+        }
+    };
+    targets
+        .into_iter()
+        .filter(|(r, _)| !matches!(r, PathRef::Layer(id) if !st.doc.layer(photocraft_doc::LayerId(*id)).is_some_and(|l| l.visible)))
+        .find_map(|(r, path)| edit::hit(&path, Point::new(p[0], p[1]), tol, &[]).map(|h| (r, path, h)))
+}
+
 fn retracted(k: &photocraft_doc::Knot, h: Handle) -> bool {
     let c = if h == Handle::In { k.in_ctrl } else { k.out_ctrl };
     (c.x - k.anchor.x).abs() < 1e-9 && (c.y - k.anchor.y).abs() < 1e-9
