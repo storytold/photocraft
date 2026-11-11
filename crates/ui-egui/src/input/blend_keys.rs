@@ -26,6 +26,18 @@ pub fn stepped<T: Copy + PartialEq>(modes: &[T], current: T, step: i32) -> Optio
     modes.get(usize::try_from(next).ok()?).copied()
 }
 
+/// [`stepped`] passing over the modes `enabled` refuses: from `current`'s place in `modes` (greyed
+/// or not), the first mode `step`'s way that `enabled` accepts, wrapping around.
+pub fn stepped_enabled<T: Copy + PartialEq>(modes: &[T], current: T, step: i32, enabled: impl Fn(T) -> bool) -> Option<T> {
+    let Some(at) = modes.iter().position(|m| *m == current) else {
+        let open: Vec<T> = modes.iter().copied().filter(|m| enabled(*m)).collect();
+        return stepped(&open, current, step);
+    };
+    let n = modes.len();
+    let dir = if step < 0 { n - 1 } else { 1 };
+    (1..n).filter_map(|k| modes.get((at + k * dir) % n).copied()).find(|m| enabled(*m))
+}
+
 /// What a blend mode key asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pick {
@@ -245,13 +257,12 @@ fn set_layers_mode(app: &mut PhotocraftApp, mode: BlendMode) {
 /// layer's.
 pub fn press(app: &mut PhotocraftApp, step: i32) {
     match target(app.ui.tool) {
-        Target::Tool(mut modes) => {
+        Target::Tool(modes) => {
             let current = tool_mode(app);
-            // The Brush and Pencil skip what the document can't paint with (#11815).
-            if matches!(app.ui.tool, Tool::Brush | Tool::Pencil) {
-                modes.retain(|m| crate::brush_mode_menu::choice_enabled(app, (*m, false)));
-            }
-            if let Some(mode) = stepped(&modes, current, step) {
+            // The Brush and Pencil skip what the document can't paint with (#11815), stepping on
+            // from the current mode's place in the whole list even when that mode is greyed.
+            let skip = matches!(app.ui.tool, Tool::Brush | Tool::Pencil);
+            if let Some(mode) = stepped_enabled(&modes, current, step, |m| !skip || crate::brush_mode_menu::choice_enabled(app, (m, false))) {
                 set_tool_mode(app, mode);
             }
         }

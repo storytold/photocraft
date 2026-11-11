@@ -110,6 +110,29 @@ fn shift_plus_and_minus_skip_greyed_modes() {
     assert_eq!(a.session.tools.brush.mode, BlendMode::Dissolve);
 }
 
+#[test]
+fn shift_plus_and_minus_step_on_from_a_greyed_current_mode() {
+    // Screen stays chosen after the document turns 32-bit, where it is greyed: the keys go to its
+    // nearest neighbours that can paint, not to the ends of the list.
+    let mut a = app(json!({"width": 40, "height": 30, "depth": 32}), true);
+    a.run("tools.setBrush", json!({"brush": {"mode": "Screen"}})).unwrap();
+    crate::blend_keys::press(&mut a, 1);
+    assert_eq!(a.session.tools.brush.mode, BlendMode::LinearDodge);
+    a.run("tools.setBrush", json!({"brush": {"mode": "Screen"}})).unwrap();
+    crate::blend_keys::press(&mut a, -1);
+    assert_eq!(a.session.tools.brush.mode, BlendMode::Lighten);
+}
+
+#[test]
+fn stepped_enabled_wraps_and_skips() {
+    let modes = [1, 2, 3, 4, 5];
+    let odd = |m: i32| m % 2 == 1;
+    assert_eq!(crate::blend_keys::stepped_enabled(&modes, 2, 1, odd), Some(3));
+    assert_eq!(crate::blend_keys::stepped_enabled(&modes, 2, -1, odd), Some(1));
+    assert_eq!(crate::blend_keys::stepped_enabled(&modes, 5, 1, odd), Some(1));
+    assert_eq!(crate::blend_keys::stepped_enabled(&modes, 1, -1, odd), Some(5));
+}
+
 fn bar(a: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1600.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), a);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
