@@ -326,6 +326,9 @@ fn set_unit(f: &mut Map<String, Value>, key: &str, unit: &str) {
     f.insert("__unit".into(), json!(unit));
 }
 
+/// Image › Image Size's body: the size readouts, Width and Height (linked by the chain),
+/// Resolution, and Resample with its method. With Resample off the pixel size stays fixed and
+/// only the resolution changes.
 fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
@@ -498,6 +501,8 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
 }
 
+/// Image › Canvas Size's body: the current size, the new Width and Height (absolute or
+/// Relative), the Anchor grid and the canvas extension color.
 fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
