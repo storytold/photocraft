@@ -350,3 +350,34 @@ fn clicking_a_dialog_over_the_docked_canvas_keeps_the_floating_document_active()
     }
     assert_eq!(h.state().session.active_index(), Some(0), "a press on the dialog must not activate the docked document under it");
 }
+
+/// #11612 (review): a press on the bare docked canvas that moves onto an open dialog in the same
+/// frame still activates the docked document: the press position counts, not the later pointer.
+#[test]
+fn a_press_on_the_docked_canvas_then_a_move_onto_a_dialog_in_one_frame_activates_it() {
+    let mut h = harness(14, ThemeKind::Pro);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_index(), Some(0), "the floated document is active");
+    h.get_by_label("More documents").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_index(), Some(0), "opening the menu changes nothing");
+    // The » menu is open: a point of the docked canvas it leaves bare, and one it covers.
+    let canvas = h.state().last_canvas_rect;
+    let grid =
+        |p: (i32, i32)| egui::pos2(canvas.left() + canvas.width() * (p.0 as f32 + 0.5) / 40.0, canvas.top() + canvas.height() * (p.1 as f32 + 0.5) / 40.0);
+    let points = || (0..40).flat_map(move |x| (0..40).map(move |y| grid((x, y))));
+    let bare =
+        points().find(|p| ctx.layer_id_at(*p).is_none_or(|l| l.order == egui::Order::Background)).expect("a point of the docked canvas the menu leaves bare");
+    let on_dialog =
+        points().find(|p| ctx.layer_id_at(*p).is_some_and(|l| l.order != egui::Order::Background)).expect("the open menu covers part of the docked canvas");
+    // One frame (the harness runs a frame per queued event, so these go straight into the input).
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(bare),
+        egui::Event::PointerButton { pos: bare, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerMoved(on_dialog),
+    ]);
+    h.run_steps(1);
+    assert_eq!(h.state().session.active_index(), Some(1), "the press landed on the bare docked canvas, so it activates the docked document");
+}
