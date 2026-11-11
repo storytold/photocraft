@@ -542,13 +542,13 @@ pub fn read_file(bytes: &[u8], format: Format, group: &str) -> std::result::Resu
                     AseEntry::Swatch(s) => loose.extend(conv(s)),
                     AseEntry::Group { name, swatches } => {
                         let items: Vec<Swatch> = swatches.iter().filter_map(&mut conv).collect();
-                        let name = if name.trim().is_empty() { group.to_string() } else { clip(name.trim()) };
+                        let name = if name.trim().is_empty() { clip(group) } else { clip(name.trim()) };
                         out.push(Group::new(&name, items));
                     }
                 }
             }
             if !loose.is_empty() || out.is_empty() {
-                out.insert(0, Group::new(group, loose));
+                out.insert(0, Group::new(&clip(group), loose));
             }
             if skipped > 0 {
                 warnings.push(format!("{skipped} swatches in an unknown colour model were skipped"));

@@ -225,6 +225,10 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) {
     if let (Some(o), Some(t)) = (params.as_object_mut(), r.params(app).as_object()) {
         o.extend(t.clone());
     }
+    // A live shape becomes a regular path: ask first (#12768).
+    if id == "path.deleteAnchor" && crate::dialogs::live_shape_prompt::ask(app, r, &params) {
+        return;
+    }
     match app.run(id, params) {
         Ok(_) if deleted.is_some() => grab_deleted_join(app, r, deleted, p, coalesce),
         Ok(v) if coalesce.is_some() => {
@@ -302,6 +306,8 @@ mod add_anchor_lock_tests;
 mod add_anchor_targeted_path_tests;
 #[cfg(test)]
 mod delete_anchor_drag_tests;
+#[cfg(test)]
+mod delete_anchor_live_shape_tests;
 #[cfg(test)]
 mod delete_anchor_lock_tests;
 #[cfg(test)]
