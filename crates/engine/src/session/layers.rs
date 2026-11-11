@@ -6,10 +6,12 @@ impl Session {
     /// Replace the active document's active layer without creating a history step.
     pub fn select_layer(&mut self, id: LayerId) -> Result<()> {
         let before = self.active_layer_stamp();
+        let publish = !self.event_command_running;
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         if st.doc.layer(id).is_none() {
             return Err(EngineError::NoLayer(id));
         }
+        let previous = (st.active_layer, st.selected_layers.clone());
         st.active_layer = Some(id);
         st.selected_layers = vec![id];
         st.layer_anchor = Some(id);
@@ -21,6 +23,11 @@ impl Session {
             st.saved_revision = st.revision;
         }
         st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        if publish && previous != (st.active_layer, st.selected_layers.clone()) {
+            let doc = st.doc.id.0;
+            let selected: Vec<u64> = st.selected_layers.iter().map(|id| id.0).collect();
+            self.events.push("layers.selected", Some(doc), Some("ui"), serde_json::json!({"active": id.0, "selected": selected}));
+        }
         self.note_layer_change(before);
         Ok(())
     }
@@ -31,12 +38,14 @@ impl Session {
     /// gone is an error and changes nothing. Like [`Self::select_layer`], not an edit.
     pub fn restore_layer_selection(&mut self, active: Option<LayerId>, selected: &[LayerId], anchor: Option<LayerId>) -> Result<()> {
         let before = self.active_layer_stamp();
+        let publish = !self.event_command_running;
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         if let Some(id) = active
             && st.doc.layer(id).is_none()
         {
             return Err(EngineError::NoLayer(id));
         }
+        let previous = (st.active_layer, st.selected_layers.clone());
         st.active_layer = active;
         st.selected_layers = selected.to_vec();
         st.layer_anchor = anchor.filter(|_| active.is_some());
@@ -48,6 +57,11 @@ impl Session {
             st.saved_revision = st.revision;
         }
         st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        if publish && previous != (st.active_layer, st.selected_layers.clone()) {
+            let doc = st.doc.id.0;
+            let selected: Vec<u64> = st.selected_layers.iter().map(|id| id.0).collect();
+            self.events.push("layers.selected", Some(doc), Some("ui"), serde_json::json!({"active": active.map(|id| id.0), "selected": selected}));
+        }
         self.note_layer_change(before);
         Ok(())
     }

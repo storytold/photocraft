@@ -398,6 +398,18 @@ fn fill_rect_shares_covered_tiles_and_edits_stay_local() {
 }
 
 #[test]
+fn a_cow_snapshot_detects_selection_tile_changes_without_pixel_comparison() {
+    let mut surface = Surface::new(PixelFormat::GRAY8);
+    surface.fill_rect(Rect::new(0, 0, 512, 256), &[1.0]);
+    let before = surface.clone();
+    assert!(before.shares_storage_with(&surface));
+    surface.write_pixel(10, 10, &[0.5]);
+    assert!(!before.shares_storage_with(&surface));
+    assert_eq!(before.pixel(10, 10), vec![1.0]);
+    assert_eq!(surface.pixel(10, 10), vec![128.0 / 255.0]);
+}
+
+#[test]
 fn empty_surface_reads_default() {
     let s = Surface::new(PixelFormat::RGBA8);
     assert_eq!(s.pixel(10, -500), vec![0.0; 4]);
