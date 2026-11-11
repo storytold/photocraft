@@ -765,6 +765,19 @@ pub(crate) fn render_list_row(
     (resp, action)
 }
 
+/// Judge a click that opens the recent file `path` as File › Open Recent's item for it, as the
+/// menu does: synthetic input from a client confined to its automation roots can't plant a recent
+/// file outside them and click its Home card open. A user's own click is always allowed.
+fn open_recent_gate(app: &PhotocraftApp, path: &str) -> Result<(), String> {
+    let Some(authorize) = app.services.automation_command.as_ref() else { return Ok(()) };
+    if !app.automation_input {
+        return Ok(());
+    }
+    // The Home list is File › Open Recent's first entries, so the card's index there is its id.
+    let i = app.ui.recent_files.iter().position(|p| p == path).ok_or_else(|| "no such recent file".to_string())?;
+    authorize(&format!("file.openRecent.{i}"), &serde_json::json!({}))
+}
+
 /// The main entry point to render the Home Recent Files visual grid or list.
 pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[String], avail_width: f32) {
     #[cfg(not(target_arch = "wasm32"))]
@@ -868,7 +881,7 @@ pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[S
     if let Some(action) = action_to_take {
         match action {
             RecentAction::Open(path) => {
-                if let Err(e) = app.open_path(&path) {
+                if let Err(e) = open_recent_gate(app, &path).and_then(|()| app.open_path(&path)) {
                     app.open_failed(&crate::file_open::display_name(&path), &e);
                 }
             }
