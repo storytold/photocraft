@@ -487,3 +487,20 @@ fn a_copied_recovery_tree_keeps_its_private_permissions() {
     assert_eq!(std::fs::read(to.join("inner/blob")).unwrap(), b"secret");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_sidecar_from_a_private_folder_is_copied_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = temp("copy-sidecar");
+    let legacy = root.join("legacy");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let from = legacy.join("a.meta");
+    std::fs::write(&from, b"/home/me/doc.psd").unwrap();
+    std::fs::set_permissions(&from, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let to = root.join("a.meta");
+    copy_file(&from, &to).unwrap();
+    assert_eq!(std::fs::metadata(&to).unwrap().permissions().mode() & 0o077, 0);
+    let _ = std::fs::remove_dir_all(&root);
+}

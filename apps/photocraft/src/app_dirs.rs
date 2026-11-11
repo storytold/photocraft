@@ -451,7 +451,17 @@ fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, std::os::unix::fs::PermissionsExt::mode(&src.metadata()?.permissions()) & 0o777);
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut mode = src.metadata()?.permissions().mode() & 0o777;
+        // A file in a private folder was private because of the folder: keep that when it is copied alone.
+        if let Some(parent) = from.parent().filter(|p| !p.as_os_str().is_empty())
+            && std::fs::metadata(parent)?.permissions().mode() & 0o077 == 0
+        {
+            mode &= !0o077;
+        }
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+    }
     let mut dst = options.open(to)?;
     std::io::copy(&mut src, &mut dst)?;
     dst.sync_all()
