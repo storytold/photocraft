@@ -40,6 +40,8 @@ photocraft-ipp = { path = "crates/ipp" }
 
 # external
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+# HEIC/HEIF: the shared decoder (replaces crates/heif; craft-libs#784).
+craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "081078bb1b44aeedfa5bef3d4f13d978dc77510a" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d", features = ["raster"] }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
@@ -139,7 +141,7 @@ opt-level = "s"
 opt-level = "s"
 [profile.wasm-release.package.photocraft-raw]
 opt-level = "s"
-[profile.wasm-release.package.photocraft-heif]
+[profile.wasm-release.package.craft-heif]
 opt-level = "s"
 [profile.wasm-release.package.photocraft-vector]
 opt-level = "s"
