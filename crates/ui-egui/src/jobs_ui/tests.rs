@@ -1149,13 +1149,7 @@ fn splash_active_blocks_escape_job_cancellation() {
     // Press Escape key via Context input
     let ctx = h.ctx.clone();
     ctx.input_mut(|i| {
-        i.events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        })
+        i.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
     });
 
     // Run tick; jobs_ui should NOT cancel the job while splash is active
@@ -1187,13 +1181,7 @@ fn splash_synthetic_batch_allows_escape_job_cancellation() {
     // Press Escape key via Context input
     let ctx = h.ctx.clone();
     ctx.input_mut(|i| {
-        i.events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        })
+        i.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
     });
 
     // Run tick; jobs_ui SHOULD cancel the job because synthetic_batch is present (splash_active is false)
@@ -1264,10 +1252,7 @@ fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_whe
     h.state_mut().splash = Some(splash);
 
     // Shortcuts remain unblocked during appearance delay
-    assert!(
-        !h.state().splash_shortcuts_blocked(now),
-        "shortcuts must remain available during appearance delay when splash is not visible"
-    );
+    assert!(!h.state().splash_shortcuts_blocked(now), "shortcuts must remain available during appearance delay when splash is not visible");
 
     // 2. Splash past appearance delay while system is not ready: actually rendering on screen.
     // should_render is true, time_until_appearance is None.
@@ -1281,27 +1266,18 @@ fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_whe
     h.state_mut().splash = Some(splash_rendered);
 
     // Shortcuts are suppressed while splash renders before system is ready
-    assert!(
-        h.state().splash_shortcuts_blocked(rendered_now),
-        "shortcuts must be suppressed on frames where splash is rendered"
-    );
+    assert!(h.state().splash_shortcuts_blocked(rendered_now), "shortcuts must be suppressed on frames where splash is rendered");
 
     // 3. Synthetic batches bypass splash suppression for automated testing
     h.state_mut().synthetic_batch = Some(Vec::new());
-    assert!(
-        !h.state().splash_shortcuts_blocked(rendered_now),
-        "shortcuts must not be blocked when synthetic batch is active"
-    );
+    assert!(!h.state().splash_shortcuts_blocked(rendered_now), "shortcuts must not be blocked when synthetic batch is active");
     h.state_mut().synthetic_batch = None;
 
     // 4. Once splash is dismissed, shortcuts are unblocked immediately
     if let Some(s) = h.state_mut().splash.as_mut() {
         s.dismiss();
     }
-    assert!(
-        !h.state().splash_shortcuts_blocked(rendered_now),
-        "shortcuts must be unblocked once splash is dismissed"
-    );
+    assert!(!h.state().splash_shortcuts_blocked(rendered_now), "shortcuts must be unblocked once splash is dismissed");
 
     // 5. Notices posted (e.g. during jobs_ui::tick) unblock shortcuts since splash will be dismissed
     let mut splash_active = crate::splash::SplashState::new();
@@ -1309,20 +1285,14 @@ fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_whe
     h.state_mut().splash = Some(splash_active);
     crate::notices::post(h.state_mut(), String::from("Notice"), vec!["Warning".into()], true, None);
     assert!(!h.state().ui.notices.is_empty());
-    assert!(
-        !h.state().splash_shortcuts_blocked(rendered_now),
-        "shortcuts must not be blocked when notices are present"
-    );
+    assert!(!h.state().splash_shortcuts_blocked(rendered_now), "shortcuts must not be blocked when notices are present");
     h.state_mut().ui.notices.clear();
 
     // 6. System readiness unblocks shortcuts matching splash dismissal in ui_frame
     let _ = photocraft_text::shared();
     h.state_mut().fonts_ready = true;
     assert!(h.state().system_ready());
-    assert!(
-        !h.state().splash_shortcuts_blocked(rendered_now),
-        "shortcuts must be unblocked once system is ready"
-    );
+    assert!(!h.state().splash_shortcuts_blocked(rendered_now), "shortcuts must be unblocked once system is ready");
 }
 
 /// Frame-level integration test: verifies that when a background job completes with an error
@@ -1346,34 +1316,33 @@ fn splash_shortcuts_unblocked_when_job_fails_with_notice_during_tick() {
     h.state_mut().system_ready_override = Some(false);
 
     // Verify initial condition: shortcuts are blocked while splash renders without notices.
-    assert!(
-        h.state().splash_shortcuts_blocked(rendered_now),
-        "shortcuts must be blocked while splash renders past appear delay"
-    );
+    assert!(h.state().splash_shortcuts_blocked(rendered_now), "shortcuts must be blocked while splash renders past appear delay");
 
     // Phase 1: Verify control behavior - a key press is suppressed while splash is visible without notices.
     h.key_press(egui::Key::B);
     h.step();
-    assert_eq!(
-        h.state().ui.tool,
-        crate::Tool::Move,
-        "tool shortcut must not run while splash is visible without notices"
-    );
+    assert_eq!(h.state().ui.tool, crate::Tool::Move, "tool shortcut must not run while splash is visible without notices");
 
     // Restore splash for Phase 2: background job completes with an error during tick.
     let mut splash2 = crate::splash::SplashState::new();
     splash2.start_time = now;
     h.state_mut().splash = Some(splash2);
 
-    let r = h.state_mut().session.start_job(
-        "test.failing_job",
-        json!({}),
-        "Failing Filter",
-        false,
-        |_ctx| Err(photocraft_engine::EngineError::Other("simulated worker failure".into())),
-        |_s, ()| Ok(json!({})),
-    ).unwrap();
-    let Started::Job(id) = r else { panic!("expected background job"); };
+    let r = h
+        .state_mut()
+        .session
+        .start_job(
+            "test.failing_job",
+            json!({}),
+            "Failing Filter",
+            false,
+            |_ctx| Err(photocraft_engine::EngineError::Other("simulated worker failure".into())),
+            |_s, ()| Ok(json!({})),
+        )
+        .unwrap();
+    let Started::Job(id) = r else {
+        panic!("expected background job");
+    };
 
     // Wait for the failed job to finish; wait_job records the failure event for tick to drain.
     assert!(h.state_mut().session.wait_job(id).is_err());
@@ -1388,19 +1357,9 @@ fn splash_shortcuts_unblocked_when_job_fails_with_notice_during_tick() {
     // In ui_frame, splash is dismissed due to notices.
     h.step();
 
-    assert!(
-        !h.state().ui.notices.is_empty(),
-        "failed background job must post a notice during tick"
-    );
-    assert_eq!(
-        h.state().ui.tool,
-        crate::Tool::Brush,
-        "shortcuts::handle must execute in the frame to switch tool to Brush"
-    );
-    assert!(
-        h.state().splash.is_none(),
-        "splash must be dismissed in ui_frame when notices arrive"
-    );
+    assert!(!h.state().ui.notices.is_empty(), "failed background job must post a notice during tick");
+    assert_eq!(h.state().ui.tool, crate::Tool::Brush, "shortcuts::handle must execute in the frame to switch tool to Brush");
+    assert!(h.state().splash.is_none(), "splash must be dismissed in ui_frame when notices arrive");
 }
 
 fn identity_app() -> PhotocraftApp {
@@ -1556,3 +1515,17 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     control.assert_untouched(&app);
 }
 
+/// The CJK warm-up is driven by real UI passes through the `cjk_preload_pending` flag (not by a
+/// logic tick count), and the flag clears once `preload_cjk` no longer reports `Pending`.
+#[test]
+fn cjk_preload_flag_is_retried_from_ui_passes_until_settled() {
+    let mut h = app_harness();
+    assert!(h.state().cjk_preload_pending, "the warm-up starts out pending");
+    for _ in 0..8 {
+        h.step();
+        if !h.state().cjk_preload_pending {
+            break;
+        }
+    }
+    assert!(!h.state().cjk_preload_pending, "UI passes must settle the warm-up (Ready or JustInstalled)");
+}

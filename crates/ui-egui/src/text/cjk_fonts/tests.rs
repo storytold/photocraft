@@ -1946,4 +1946,3 @@ fn preload_cjk_returns_ready_for_non_cjk_locale() {
     let status = preload_cjk(&ctx);
     assert_eq!(status, PreloadStatus::Ready);
 }
-

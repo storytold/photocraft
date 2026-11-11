@@ -37,12 +37,7 @@ impl Default for SplashState {
 impl SplashState {
     /// Creates a new startup splash screen state.
     pub fn new() -> Self {
-        Self {
-            start_time: 0.0,
-            duration: SPLASH_SAFETY_TIMEOUT,
-            dismissed: false,
-            fonts_preloaded: true,
-        }
+        Self { start_time: 0.0, duration: SPLASH_SAFETY_TIMEOUT, dismissed: false, fonts_preloaded: true }
     }
 
     /// Ensures that `start_time` is initialized to the current time on the first tick before checks.
@@ -182,11 +177,7 @@ impl SplashState {
             ui.painter().rect_filled(bar_rect, CornerRadius::same(2), Color32::from_white_alpha(20));
 
             let font_ready = photocraft_text::try_shared().is_some();
-            let progress = if font_ready {
-                1.0_f32
-            } else {
-                (elapsed as f32 / 1.5).clamp(0.15, 0.90)
-            };
+            let progress = if font_ready { 1.0_f32 } else { (elapsed as f32 / 1.5).clamp(0.15, 0.90) };
 
             // Filled progress
             let filled_width = (bar_width * progress).max(5.0);

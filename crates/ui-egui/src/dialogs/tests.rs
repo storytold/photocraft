@@ -558,6 +558,9 @@ fn fit_image_is_as_narrow_as_its_content() {
 
 #[test]
 fn german_color_picker_fits_its_actions_and_translates_the_title() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     use egui_kittest::{Harness, kittest::Queryable};
     let lang = crate::i18n::Lang::from_pref("de");
     let text = |key| crate::i18n::with_language(lang, || crate::i18n::t(key).to_owned());
