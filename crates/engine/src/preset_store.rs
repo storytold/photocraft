@@ -1012,6 +1012,10 @@ impl PresetStore {
     /// is written, the presets' bitmaps become stored tiles without their full bitmaps; on an
     /// error the presets are left unchanged.
     fn write_group(&mut self, file: &str, group: &str, items: &mut [&mut BrushPreset]) -> Result<(), String> {
+        // `open` skips a group file whose name is longer, so the presets would vanish on restart.
+        if group.len() > MAX_GROUP_NAME_BYTES {
+            return Err(format!("group name of {} bytes (limit {MAX_GROUP_NAME_BYTES})", group.len()));
+        }
         let others: u64 = self.groups.iter().filter(|(f, _)| f.as_str() != file).map(|(_, g)| g.bytes).sum::<u64>() + self.tips.values().sum::<u64>();
         let mut stored = Vec::with_capacity(items.len());
         let mut tiles = Vec::with_capacity(items.len());

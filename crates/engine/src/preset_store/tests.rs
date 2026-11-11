@@ -307,6 +307,20 @@ fn a_group_file_with_an_overlong_group_name_is_skipped() {
 }
 
 #[test]
+fn a_group_name_over_the_limit_is_not_written() {
+    let dir = TempDir::new("long-group");
+    let (mut s, _) = session(&dir);
+    let long = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    s.tools.presets.push(sampled("Long", &long, tip8(8, 8, 1)));
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let w = s.preset_store.as_mut().unwrap().take_warnings();
+    assert!(w.iter().any(|w| w.contains("group name")), "{w:?}");
+    let (t, _) = session(&dir);
+    assert!(photocraft_paint::presets::find(&t.tools.presets, "Long").is_none());
+}
+
+#[test]
 fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     let dir = TempDir::new("corrupt");
     let (mut s, _) = session(&dir);
