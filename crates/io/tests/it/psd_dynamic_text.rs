@@ -7,31 +7,34 @@ use photocraft_doc::{Document, Layer, LayerContent, TextLayer};
 fn txt2(doc: &Document) -> Vec<u8> {
     let bytes = photocraft_io::export(doc, "d.psd", &Default::default()).unwrap().bytes;
     let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
-    file.global_blocks.iter().find(|b| &b.key == b"Txt2").map(|b| b.data.clone()).expect("Txt2 written for Optical kerning")
+    file.global_blocks.iter().find(|b| &b.key == b"Txt2").map(|b| b.data.clone()).expect("Txt2 written for the Optical layer")
 }
 
 fn doc_with(t: TextLayer) -> Document {
     let mut doc = Document::new("d", photocraft_geom::Size::new(320, 160), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
-    let mut t = t;
-    photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
-    doc.layers.push(Layer::new("fitted", LayerContent::Text(t)));
+    // A second layer with Optical kerning, which lives only in `Txt2`, so the block is written.
+    let optical = CharStyle { font_family: "Inter".into(), size_pt: 12.0, kerning: Kerning::Optical, ..Default::default() };
+    let mut o = TextLayer { text: "Wave".into(), runs: vec![TextRun { len: 4, style: optical }], ..Default::default() };
+    o.sync_summary();
+    for (name, mut l) in [("fitted", t), ("optical", o)] {
+        photocraft_text::TextEngine::new().render_layer(&mut l, doc.resolution_dpi, doc.pixel_format());
+        doc.layers.push(Layer::new(name, LayerContent::Text(l)));
+    }
     doc
 }
 
 #[test]
 fn txt2_describes_the_baked_text() {
     let text = "Hello dynamic world of text";
-    // Optical kerning lives only in `Txt2`, so the block is written.
-    let style = CharStyle { font_family: "Inter".into(), size_pt: 12.0, kerning: Kerning::Optical, ..Default::default() };
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 12.0, kerning: Kerning::Metrics, ..Default::default() };
     let mut t = TextLayer { text: text.into(), runs: vec![TextRun { len: text.len(), style }], ..Default::default() };
     t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 300.0, height: 150.0 };
     t.sync_summary();
     let mut eng = photocraft_text::TextEngine::new();
     t.fit = Some(TextFit::default());
-    let lines = photocraft_text::fit::solve_box(&mut eng, &t, 72.0);
-    assert!(lines.len() >= 2, "{lines:?}");
-    t.fit = Some(TextFit { lines, ..Default::default() });
-    let baked = photocraft_text::fit::bake(&mut eng, &t, 72.0).unwrap();
+    photocraft_text::fit::refit(&mut eng, &mut t, 72.0);
+    assert!(photocraft_text::fit::is_fitted_lines(&t), "{:?}", t.fit);
+    let baked = photocraft_text::fit::bake(&mut eng, &t, 72.0).unwrap_or_else(|e| panic!("{e:?}"));
     let mut unfitted = t.clone();
     unfitted.fit = None;
     assert_ne!(txt2(&doc_with(unfitted)), txt2(&doc_with(baked.clone())), "baking changes what Txt2 holds");
