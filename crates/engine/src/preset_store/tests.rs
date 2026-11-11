@@ -1207,6 +1207,7 @@ fn a_failed_group_write_changes_nothing_else_until_the_next_sync() {
     }
     s.brush_presets_changed();
     s.sync_preset_store();
+    assert_ne!(s.preset_store.as_ref().unwrap().synced_rev, Some(s.tools.presets_rev), "the failed write leaves the revision pending");
     let (t, _) = session(&dir);
     for name in ["Keep", "Stay", "Drop"] {
         assert!(photocraft_paint::presets::find(&t.tools.presets, name).is_some(), "{name}: the old files are all still there");

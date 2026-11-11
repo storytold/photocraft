@@ -912,7 +912,9 @@ impl PresetStore {
     /// Bring the files in line with `presets` (built-ins skipped): write changed groups, delete
     /// removed ones and their unreferenced tips, update the index. The bitmaps of every group
     /// written become stored tiles (#1843): the files hold them, so the presets keep previews only.
-    pub fn sync(&mut self, presets: &mut [BrushPreset]) {
+    ///
+    /// `false` when a group write failed: what was not written is still pending, for the caller to try again.
+    pub fn sync(&mut self, presets: &mut [BrushPreset]) -> bool {
         // User presets by group, in first-appearance order.
         let mut order: Vec<(String, Vec<usize>)> = Vec::new();
         for (i, p) in presets.iter().enumerate().filter(|(_, p)| !p.builtin) {
@@ -936,6 +938,7 @@ impl PresetStore {
         // changed on disk: the old files may be the only copy of the presets that failed, and the
         // next sync retries the rest.
         let mut failed = false;
+        let mut pending = false;
         for k in writes {
             let (group, idx) = &order[k];
             let file = files[k].clone();
@@ -957,6 +960,7 @@ impl PresetStore {
             let mut items: Vec<&mut BrushPreset> = presets.iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
             if let Err(e) = self.write_group(&file, group, &mut items) {
                 failed = true;
+                pending = true;
                 self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
             }
         }
@@ -1008,6 +1012,7 @@ impl PresetStore {
                 Err(e) => self.warnings.push(format!("Couldn't save the brush preset index: {e}")),
             }
         }
+        !pending
     }
 
     /// Write one tip file (`others` bytes are already used by the rest of the store).
@@ -1259,8 +1264,10 @@ impl Session {
         let actions_rev = self.actions.rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
-                st.sync(&mut self.tools.presets);
-                st.synced_rev = Some(rev);
+                // A failed group write leaves the revision pending: the next command tries again.
+                if st.sync(&mut self.tools.presets) {
+                    st.synced_rev = Some(rev);
+                }
                 if link_stored_tips(st, &mut self.tools.brush) {
                     // An embedded tip became a store reference: what the last-brush
                     // persistence would write changed without a command touching the brush.
