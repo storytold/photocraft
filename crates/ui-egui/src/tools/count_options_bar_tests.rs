@@ -213,6 +213,9 @@ fn caption_node(h: &Harness<'static, PhotocraftApp>, text: &str) -> bool {
 fn the_size_captions_are_translated() {
     // The catalogs translate "Marker Size" and "Label Size" (main's captions); the colon follows.
     // A missing catalog row shows the English, so the test doesn't require the translation.
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let _de = crate::i18n::language_scope(crate::i18n::Lang::from_code("de").expect("German"));
     let h = harness(app(1));
     for key in ["Marker Size", "Label Size"] {
