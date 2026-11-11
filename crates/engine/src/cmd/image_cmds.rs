@@ -281,8 +281,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
             Method::Automatic if nw > ow || nh > oh => Resample::PreserveDetails,
             Method::Automatic => Resample::BicubicSharper,
         };
-        resample_doc_with_styles(doc, nw, nh, filter, scale_styles);
-        Ok(())
+        resample_doc_with_styles(doc, nw, nh, filter, scale_styles)
     })?;
     // The size the document has now: without resampling `width`/`height` are ignored (#1815).
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
@@ -350,16 +349,16 @@ pub(crate) fn check_scaled_surfaces(cmd: &str, doc: &mut Document, nw: u32, nh: 
 /// Resamples the whole document (pixels, masks, channels, selection, effects, vectors, guides) to
 /// `nw` x `nh` px with `filter`: the body of Image Size, shared by the Crop tool's W x H x Resolution
 /// mode. Callers check [`check_resample_budget`] first.
-pub(crate) fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) {
-    resample_doc_with_styles(doc, nw, nh, filter, true);
+pub(crate) fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) -> Result<()> {
+    resample_doc_with_styles(doc, nw, nh, filter, true)
 }
 
 /// Resize document content while optionally retaining layer-effect sizes in pixels.
-fn resample_doc_with_styles(doc: &mut Document, nw: u32, nh: u32, filter: Resample, scale_styles: bool) {
+fn resample_doc_with_styles(doc: &mut Document, nw: u32, nh: u32, filter: Resample, scale_styles: bool) -> Result<()> {
     let (ow, oh) = (doc.size.width, doc.size.height);
     let (sx, sy) = (nw as f64 / ow.max(1) as f64, nh as f64 / oh.max(1) as f64);
     if (sx - 1.0).abs() < 1e-12 && (sy - 1.0).abs() < 1e-12 {
-        return;
+        return Ok(());
     }
     // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
     let canvas = Rect::from_xywh(0, 0, ow, oh);
@@ -389,8 +388,9 @@ fn resample_doc_with_styles(doc: &mut Document, nw: u32, nh: u32, filter: Resamp
     // Vector geometry, guides and marks scale with the pixels; vectors re-render sharp.
     crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
     doc.size = Size::new(nw, nh);
-    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
+    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All)?;
     let Ok(()) = crate::smart_cmds::restore_unrendered(doc, taken, |c| Ok::<_, Infallible>(resize_surface_in_canvas(c, sx, sy, filter, canvas)));
+    Ok(())
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -502,7 +502,7 @@ pub(crate) fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bo
     if extends {
         drop_fill_caches(&mut doc.layers);
     }
-    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+    crate::canvas_geom::refresh_shapes(doc);
     Ok(())
 }
 
@@ -619,7 +619,7 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
         if nw > ow as u32 || nh > oh as u32 {
             drop_fill_caches(&mut doc.layers);
         }
-        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+        crate::canvas_geom::refresh_shapes(doc);
         let canvas = doc.bounds();
         let old = Rect::from_xywh(dx, dy, ow as u32, oh as u32);
         // A Background cannot contain transparent pixels. When a transparent
@@ -707,8 +707,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
             crate::crop_fill::fill_uncovered(doc, *active, &crate::crop_fill::Coverage::crop(r, original.width, original.height))?;
         }
         doc.selection = None;
-        target.apply(doc);
-        Ok(())
+        target.apply(doc)
     })?;
     Ok(crop_result(s, json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height() })))
 }
@@ -723,15 +722,16 @@ struct CropTarget {
 
 impl CropTarget {
     /// Applies the target to a document that has just been cropped (inside the crop's history step).
-    fn apply(&self, doc: &mut Document) {
+    fn apply(&self, doc: &mut Document) -> Result<()> {
         if let Some((w, h)) = self.size {
             // As for Image Size: an Indexed Color document holds only its colour table's colours (#6019).
             let filter = if doc.mode == ColorMode::Indexed { Resample::Nearest } else { self.filter };
-            resample_doc(doc, w, h, filter);
+            resample_doc(doc, w, h, filter)?;
         }
         if let Some(r) = self.resolution {
             doc.resolution_dpi = r;
         }
+        Ok(())
     }
 
     /// Where Color Sampler points go: shifted by the crop's origin, then scaled with the pixels
@@ -905,8 +905,7 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
                 crate::crop_fill::fill_uncovered(doc, *active, &coverage)?;
             }
             doc.selection = None;
-            crop_target.apply(doc);
-            Ok(())
+            crop_target.apply(doc)
         })
     })?;
     Ok(crop_result(s, json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(), "angle": angle })))

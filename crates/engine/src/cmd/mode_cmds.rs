@@ -137,7 +137,7 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
             doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
         }
         // Type, shapes and smart objects re-render from their new geometry.
-        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
+        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All)?;
         doc.guides = Default::default();
         Ok(new)
     })?;
@@ -566,7 +566,7 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Bitmap", |doc, active| {
         if (nw, nh) != (doc.size.width, doc.size.height) {
-            crate::image_cmds::resample_doc(doc, nw, nh, photocraft_algo::resample::Resample::Bicubic);
+            crate::image_cmds::resample_doc(doc, nw, nh, photocraft_algo::resample::Resample::Bicubic)?;
         }
         doc.resolution_dpi = dpi;
         let w = doc.size.width as usize;
