@@ -320,5 +320,5 @@ fn one_piece_readback_refuses_a_canvas_it_cannot_hold() {
     // 20000 x 20000 px = 6.4 GB of RGBA32F; refused before any buffer is made.
     let doc = Document::with_background("huge", Size::new(20_000, 20_000), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let e = render_to_vec(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds()).unwrap_err();
-    assert!(e.0.contains("render_bands"), "{}", e.0);
+    assert!(e.0.contains("too large to read back"), "{}", e.0);
 }

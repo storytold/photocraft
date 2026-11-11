@@ -239,7 +239,10 @@ fn main() {
         let (w, h) = arg(&args, "--size").and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))).unwrap_or((7360, 4912));
         synthetic(w, h)
     };
-    assert!(fits(&doc), "canvas {}x{} is over {MAX_BENCH_PIXELS} pixels", doc.size.width, doc.size.height);
+    if !fits(&doc) {
+        eprintln!("canvas {}x{} is over {MAX_BENCH_PIXELS} pixels", doc.size.width, doc.size.height);
+        return;
+    }
     let full = doc.bounds();
     println!("document {}x{} ({} layers)", doc.size.width, doc.size.height, doc.walk().len());
     let mut g = gpu();

@@ -59,8 +59,13 @@ pub fn render_to_vec_stats(
     let rect = rect.intersect(&doc.bounds());
     // This helper holds every staging buffer and the whole result at once (tests and tools): refuse
     // a rectangle whose pixel vector alone would pass 4 GiB. Use `render_bands` for larger ones.
-    if u64::from(rect.width()) * u64::from(rect.height()) > MAX_VEC_READBACK_PIXELS {
-        return Err(Unsupported(format!("{}x{} is too large to read back in one piece; use render_bands", rect.width(), rect.height())));
+    let max_pixels = MAX_VEC_READBACK_PIXELS.min(isize::MAX as u64 / std::mem::size_of::<[f32; 4]>() as u64);
+    if u64::from(rect.width()) * u64::from(rect.height()) > max_pixels {
+        return Err(Unsupported(format!(
+            "{}x{} is too large to read back in one piece; use render_bands (8-bit documents) or the CPU compositor",
+            rect.width(),
+            rect.height()
+        )));
     }
     let mut staging: Vec<(Rect, wgpu::Buffer, u32)> = Vec::new();
     let mut bpp = 16u32;
