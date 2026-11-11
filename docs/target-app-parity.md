@@ -195,6 +195,11 @@ UTF-16 logs match Photoshop 2026. The desktop shows each folder input as a read-
 snapshot while its action runs, with no progress bar. Full live tabs and Layers panel content for
 those inputs remain different. AUTO-219-5 is partial (#4579).
 
+Image Processor also accepts the current document or all open documents as its source
+(2026-11-10). It processes in-memory copies, including unsaved edits and untitled images,
+without changing the open documents or overwriting their source files. Folder input stays
+available. This does not change the overall automation estimate.
+
 ## Remaining effort and calibration
 
 **Calibration.** The repository's history from the first commit (2026-09-30) to 2026-10-10: 1,152
@@ -244,7 +249,7 @@ catalog; checking exports by opening them in Photoshop (the owner's machine has 
 3. Formats: Photoshop's `Info.plist` `CFBundleDocumentTypes` and the PiPL flags of
    `Contents/PlugIns/Required/File Formats`, against `crates/codecs/src/format.rs` and
    `crates/io/src/lib.rs`.
-4. Languages: `cargo xtask i18n-coverage`.
+4. Languages: `cargo xtask i18n-report` (with `CRAFT_I18N_DIR` set to the pinned craft-i18n checkout).
 5. Re-grade the estimated rows from the open issues by area and the corpus floors. Move a number
    only with new evidence, and add a revision-history row.
 

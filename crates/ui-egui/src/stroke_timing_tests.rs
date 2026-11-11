@@ -474,6 +474,9 @@ fn releasing_a_sequential_dab_stroke_commits_what_a_replay_paints() {
         });
         h.state_mut().ui.tool = tool;
         h.run_steps(1);
+        // A tool with its own starting tip (Dodge, #12684) paints with that, not the setup's
+        // brush: give it the setup's tip, as the replay below has.
+        h.state_mut().run("tools.setBrush", json!({"brush": {"size": 24, "hardness": 0.2, "spacing": 0.1}})).unwrap();
         move_to(&mut h, 40.0, 30.0);
         button(&mut h, 40.0, 30.0, true);
         for (x, y) in [(70.0, 40.0), (100.0, 55.0), (130.0, 50.0), (160.0, 70.0)] {

@@ -116,6 +116,7 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G11. Actions and scripting
+- **Done 2026-11-10:** Image Processor accepts the current document or all open documents as its source, including unsaved edits and untitled documents. Resize/export runs on copies; original pixels, history and source files stay intact. Folder processing is still available.
 - **Partial 2026-11-02 (#4579):** Batch accepts recursive folders with flat output and
   last-result-wins names, as measured in Photoshop 2026. It also accepts live open documents,
   extended naming components, stop-on-error, UTF-16 LE logs, and job cancellation. The CLI
@@ -353,6 +354,8 @@ what an agent can't finish alone.
 - **Progress (2026-10-21):** adjustment clipping is reachable above the Properties editor in a compact dock (#5231), with all-theme layout coverage and 8/16/32-bit scope and undo/redo tests. The normal adjustment-layer scope and remaining estimate stay unchanged.
 - **Progress (2026-10-16, #3222):** UI scale presets are complete: 75–125% in 5% steps,
   then 150–300%, remembered through preferences (UI-217-9).
+- **Progress (2026-11-06):** Units & Rulers › Column Size (width, gutter) takes effect: Image
+  Size and Canvas Size offer a Columns width unit (#6214).
 - **Progress (2026-10-15):** Preferences › General › Animated Zoom takes effect: a held Zoom
   tool press zooms continuously about the press point, ⌥ out (#6210, `ui-egui/src/zoom_hold.rs`).
 - **Progress (2026-10-14, #5556):** Character and Paragraph controls stay available without
@@ -363,7 +366,7 @@ what an agent can't finish alone.
 - **Progress (2026-10-15):** the Color panel has Photoshop's panel-menu modes (Hue Cube, Brightness
   Cube, Color Wheel, Grayscale/RGB/HSB/CMYK/Lab/Web Color sliders), its colour ramp and copy
   commands, the same in every theme (UI-217-17, #2569, #6000; `ui-egui/src/color_panel_ui.rs`).
-- **Missing:** 11 of 183 preferences do nothing (scorecard prefs audit, 2026-11-01); panel groups can't
+- **Missing:** 8 of 199 preferences do nothing (scorecard prefs audit, 2026-11-08: Column Size takes effect, #6214); panel groups can't
   float or tear off into OS windows (UI-217-5, #1828, #1213, #2305); more themes (UI-217-11, #2661); a single pixel layer
   copies without its mask and styles (UI-217-23; fill and adjustment layers copy whole, #2344); tool-specific context menus beyond brushes, selections, Pen and
   Crop
@@ -422,13 +425,18 @@ what an agent can't finish alone.
   write (FILE-215-10, #2541; a single flattened page now saves via Save As / Save a Copy / CLI,
   2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
   DICOM, EPS/DCS, Pixar, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
-  Raw; spot plates beyond PSD and TIFF: PDF Separation (FILE-215-17); .atn,
+  Raw; spot plates beyond PSD, TIFF and PDF: the spot ink preview's ink order at overlaps and its
+  look at solidity 0.5 and 1 against reference files (FILE-215-17); .atn,
   .shc, .csh presets (.asl landed 2026-10-20) (FILE-215-15); C2PA (#1050).
 - **Detail:** [`file-format-parity.md`](file-format-parity.md).
 - **Progress (2026-10-30, #10249):** visible spot channels of RGB and CMYK documents print over
   the canvas composite as inks (the Multichannel overprint formula, in Channels panel order), open
   visible, and print in the PSD thumbnail; flatten, export and the merged image stay free of them.
   Open: ink order at overlaps and the look at solidity 0.5 and 1 against reference files.
+- **Progress (2026-10-29):** PDF writes spot channels as overprinting `/Separation` plates after
+  the flattened image, one 8-bit image per channel named after it, and a Multichannel document as
+  its plates alone, so a RIP or Ghostscript's `tiffsep` separates them as named plates (FILE-215-17's
+  PDF Separation part; `pdfSpotPlates: false` on scripted saves leaves them out).
 - **Progress (2026-10-23, #7415 split):** PSD stores and reads spot channels as Photoshop does (ink
   0 = solid) and writes their identifiers (1053); PSDs from PhotoCraft 0.1.0–0.16.0, which stored
   spot ink the other way round, keep their ink.
@@ -495,10 +503,12 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | G9: Units & Rulers › Column Size takes effect as the Columns width unit of Image Size and Canvas Size (#6214); preferences that do nothing 10 → 8 of 199 |
 | 2026-10-27 | minor | G5: Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it after the presets, five handles set its silhouettes, edges, ellipse depths and wrap as in the reference (Bend, H and V stay greyed), and a smart object's stored cylinder opens in Warp mode as a cylinder and commits back as one; no estimate changed |
 | 2026-11-07 | minor | G14: Hasselblad 3FR/FFF, the X2D II 100C's uncompressed CFA, decodes; compressed 3FR still opens as the embedded preview |
 | 2026-11-06 | minor | G12: eraser end of flipped pens on Windows (Windows Ink on) selects the Eraser (#2285); no estimate changed |
 | 2026-10-29 | minor | G17: web build memory handling (#10024): up-front memory checks for Place, Image Size, smart-object re-render and Save; a low-memory warning; a stopped message when the module traps; PSD save reserves its whole output; no estimate changed |
+| 2026-11-10 | minor | Image Processor: current-document and all-open-document sources process in-memory copies, preserving originals and history; folder input remains available; percentages and estimates unchanged |
 | 2026-11-02 | minor | G11: Batch Esc Continue/Stop, one plan and error log across interruptions, and read-only input previews without a progress bar (#4579); live tab parity remains open, AUTO-219-5 partial; readiness and estimate unchanged |
 | 2026-11-02 | minor | Action recording folds Move-tool nudge runs, records keyboard document switches by opening-order offset and places point text by canvas percentage; paragraph boxes remain absolute (AUTO-219-1, #4514); parity percentages unchanged |
 | 2026-11-01 | minor | Action recording stores portable layer targets and whole-text Type steps where unambiguous (AUTO-219-1, #4514); duplicate names remain ambiguous; parity percentages unchanged |
