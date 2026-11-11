@@ -8,8 +8,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::corpus_pins::{
-    self, AG_PSD_COMMIT, HEIC_RS_COMMIT, OPENEXR_COMMIT, PHOTOCRAFT_CORPUS_COMMIT, PHOTOCRAFT_CORPUS_GIMP_COMMIT, PILLOW_HEIF_COMMIT, PNGSUITE_SHA256,
-    PNGSUITE_URL, PSD_TOOLS_COMMIT,
+    self, AG_PSD_COMMIT, HEIC_DECODER_COMMIT, HEIC_RS_COMMIT, OPENEXR_COMMIT, PHOTOCRAFT_CORPUS_COMMIT, PHOTOCRAFT_CORPUS_GIMP_COMMIT, PILLOW_HEIF_COMMIT,
+    PNGSUITE_SHA256, PNGSUITE_URL, PSD_TOOLS_COMMIT,
 };
 use crate::pinned::{PinnedCorpus, USER_AGENT};
 use crate::{cargo, root, run};
@@ -159,8 +159,8 @@ fn list() {
                      ag-psd@{}, manifest xtask/psd-corpus.sha256. Fetch: --psd
   corpus/psd-tools/  [{}] the full psd-tools test set (MIT) at {PSD_TOOLS_COMMIT}
                      manifest xtask/psd-tools-corpus.sha256. Fetch: --psd-tools
-  corpus/heif/       [{}] a few HEIC/HEIF files from heic-rs@{} (MIT OR Apache-2.0) and
-                     pillow-heif@{} (BSD-3-Clause), manifest xtask/heif-corpus.sha256. Fetch: --heif
+  corpus/heif/       [{}] a few HEIC/HEIF files from heic-rs@{}, heic-decoder@{} (MIT OR Apache-2.0)
+                     and pillow-heif@{} (BSD-3-Clause), manifest xtask/heif-corpus.sha256. Fetch: --heif
   corpus/exr/        [{}] the deep OpenEXR test images (BSD-3-Clause), openexr@{}
                      manifest xtask/exr-corpus.sha256. Fetch: --exr
   corpus/affinity/   [{}] public Affinity documents and #1606 samples (CC0, MIT), with PNG references;
@@ -181,6 +181,7 @@ Pins: xtask/src/corpus_pins.rs. Moving one: change it, then --<name> --update-ma
         status(corpus_pins::PSD_TOOLS.is_current()),
         status(corpus_pins::HEIF.is_current()),
         &HEIC_RS_COMMIT[..12],
+        &HEIC_DECODER_COMMIT[..12],
         &PILLOW_HEIF_COMMIT[..12],
         status(corpus_pins::EXR.is_current()),
         &OPENEXR_COMMIT[..12],

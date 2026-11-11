@@ -1,25 +1,24 @@
-//! `photocraft-heif`: the optional HEIF / HEIC (iPhone and Mac photo) decoder.
+//! `photocraft-heif`: the optional HEIF / HEIC (iPhone, Mac and camera photo) decoder.
 //!
-//! A thin wrapper around `heic-rs`, a pure-Rust HEVC still-picture decoder: single pictures and
-//! grid-tiled photos, 8- and 10-bit (10-bit decodes to 16-bit), alpha auxiliary images, ICC,
-//! EXIF and XMP. Its API is plain data ([`Info`], [`Decoded`], [`Error`]) so the crate knows
-//! nothing about the rest of PhotoCraft; `photocraft-codecs` adapts it behind its `heif` feature.
+//! A thin wrapper around `heic-decoder`, a pure-Rust HEVC still-picture decoder whose output
+//! is bit-exact against HM, the HEVC reference decoder: single pictures and grid-tiled photos,
+//! 8/10/12-bit, 4:2:0, 4:2:2, 4:4:4 and monochrome, alpha auxiliary images, ICC, EXIF and XMP.
+//! Its API is plain data ([`Info`], [`Decoded`], [`Error`]) so the crate knows nothing about the
+//! rest of PhotoCraft; `photocraft-codecs` adapts it behind its `heif` feature.
 //!
-//! A grid's ICC profile is inherited from its tiles when the grid item itself carries no `colr`,
-//! which is how phone cameras write it: see [`icc_for_item`].
+//! A grid's ICC profile and `nclx` come from its tiles when the grid item itself carries no `colr`,
+//! which is how phone cameras write them; heic-decoder resolves both.
 //!
 //! HEIF records orientation in the container (`irot`/`imir`, plus a `clap` crop), not in EXIF.
 //! [`Options::apply_transforms`] applies them; with it off, the pixels come back as coded.
 //!
-//! Never panics: heic-rs is young, so every call into it runs under `catch_unwind` and a panic
-//! inside it becomes [`Error::Malformed`].
+//! Never panics: the decoder returns errors on malformed input, and every call into it also runs
+//! under `catch_unwind` as a last resort, so a panic would become [`Error::Malformed`].
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::borrow::Cow;
-
-use heic_rs::PixelLayout;
+use heic_decoder::{DecodeOptions, HeifError};
 
 /// What a HEIF file declares, read from the container alone (no pixel is decoded).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,14 +31,14 @@ pub struct Info {
     pub coded_height: u32,
     /// The primary image has an alpha auxiliary image.
     pub has_alpha: bool,
-    /// More than 8 bits per sample: it decodes to 16-bit.
+    /// More than 8 bits per sample (colour or alpha): it decodes to 16-bit.
     pub sixteen_bit: bool,
 }
 
 /// Decode settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
-    /// Refuse images with more pixels than this (checked before decoding).
+    /// Refuse images with more pixels than this, as coded (checked before decoding).
     pub max_pixels: u64,
     /// Apply the container's rotation, mirror and crop (`irot`/`imir`/`clap`).
     pub apply_transforms: bool,
@@ -52,7 +51,7 @@ impl Default for Options {
 }
 
 /// A decoded image: interleaved RGB or RGBA samples, row-major, no padding. 16-bit samples are
-/// native-endian `u16`s.
+/// native-endian `u16`s spanning `0..=65535`. Alpha is straight (not premultiplied).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decoded {
     pub width: u32,
@@ -91,9 +90,9 @@ pub struct Nclx {
 /// Why a file could not be decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// A valid file using something this decoder does not handle (image sequences, overlays…).
+    /// A valid file using something this decoder does not handle (AVC, layered HEVC…).
     Unsupported(String),
-    /// The image is larger than [`Options::max_pixels`] or holds an oversized box.
+    /// The image is larger than [`Options::max_pixels`] or the decoder's own limit.
     Limit(String),
     /// Broken or truncated data (or a decoder bug, reported the same way).
     Malformed(String),
@@ -111,24 +110,22 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-const SEQUENCE: &str = "this file holds an image sequence; only HEIF still images can be opened";
-
-fn err(e: heic_rs::Error) -> Error {
+fn err(e: HeifError) -> Error {
     match e {
-        heic_rs::Error::Unsupported(what) => Error::Unsupported(what.to_string()),
-        // The primary item is neither an HEVC picture nor a grid of them.
-        heic_rs::Error::MissingBox("hvcC") => Error::Unsupported("the image is an overlay, an identity derivation or not HEVC-coded".into()),
-        heic_rs::Error::PixelLimit { .. } | heic_rs::Error::BoxTooLarge { .. } => Error::Limit(e.to_string()),
+        HeifError::Unsupported(what) => Error::Unsupported(what.to_string()),
+        HeifError::LimitExceeded(_) => Error::Limit(e.to_string()),
         e => Error::Malformed(e.to_string()),
     }
 }
 
-/// Runs `f`, turning a heic-rs panic into an error. Fuzzing found two out-of-range slices in
-/// heic-rs 0.1.1 on malformed files: in its box parser (`boxes.rs:130`) and during reconstruction
-/// (`hevc/decode/recon.rs:70`). The codecs fuzz target also calls heic-rs directly, so its panics
-/// stay visible there.
+/// Runs `f`, turning a decoder panic into an error. heic-decoder is written not to panic
+/// (and is fuzzed for it); this is the last-resort net for a file nobody has tried yet.
 fn guarded<T>(f: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err(Error::Malformed("the HEIF decoder failed on this file".into())))
+}
+
+fn size(v: usize) -> Result<u32, Error> {
+    u32::try_from(v).map_err(|_| Error::Limit(format!("dimension {v} does not fit in 32 bits")))
 }
 
 /// Reads the container's declared size, depth and alpha without decoding pixels, so callers can
@@ -138,18 +135,15 @@ pub fn probe(bytes: &[u8]) -> Result<Info, Error> {
 }
 
 fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
-    let info = heic_rs::probe(bytes).map_err(|e| match e {
-        // No `meta` box: no still image, only a `moov` image sequence (a video track).
-        heic_rs::Error::MissingBox("meta") => Error::Unsupported(SEQUENCE.into()),
-        e => err(e),
-    })?;
+    let info = heic_decoder::probe(bytes).map_err(err)?;
+    let deepest = info.bit_depth_luma.max(info.bit_depth_chroma).max(info.alpha_bit_depth.unwrap_or(0));
     Ok(Info {
-        width: info.width,
-        height: info.height,
-        coded_width: info.coded_width,
-        coded_height: info.coded_height,
-        has_alpha: info.has_alpha,
-        sixteen_bit: info.bit_depth > 8,
+        width: size(info.width)?,
+        height: size(info.height)?,
+        coded_width: size(info.coded_width)?,
+        coded_height: size(info.coded_height)?,
+        has_alpha: info.alpha_bit_depth.is_some(),
+        sixteen_bit: deepest > 8,
     })
 }
 
@@ -160,92 +154,79 @@ pub fn decode(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
 
 fn decode_unguarded(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
     let info = probe_unguarded(bytes)?;
-    let pixel_layout = match (info.has_alpha, info.sixteen_bit) {
-        (true, true) => PixelLayout::Rgba16,
-        (true, false) => PixelLayout::Rgba8,
-        (false, true) => PixelLayout::Rgb16,
-        (false, false) => PixelLayout::Rgb8,
+    // The decoder allocates the coded picture before cropping it, and the transforms never make
+    // it larger, so the coded size bounds the work either way.
+    let (w, h) = (info.coded_width, info.coded_height);
+    let pixels = u64::from(w) * u64::from(h);
+    if pixels > options.max_pixels {
+        return Err(Error::Limit(format!("{w}x{h} as coded is {pixels} pixels, more than the {} allowed", options.max_pixels)));
+    }
+    let image = heic_decoder::decode_with(bytes, &DecodeOptions { apply_transforms: options.apply_transforms }).map_err(err)?;
+    let has_alpha = image.alpha.is_some();
+    let deepest = image.bit_depth_luma.max(image.bit_depth_chroma).max(image.alpha.as_ref().map_or(0, |a| a.bit_depth));
+    let sixteen_bit = deepest > 8;
+    let data = match (has_alpha, sixteen_bit) {
+        (true, true) => {
+            let mut rgba = image.to_rgba16().map_err(err)?;
+            if rgba.premultiplied {
+                unpremultiply(&mut rgba.data, u16::MAX);
+            }
+            rgba.data.iter().flat_map(|v| v.to_ne_bytes()).collect()
+        }
+        (true, false) => {
+            let mut rgba = image.to_rgba8().map_err(err)?;
+            if rgba.premultiplied {
+                unpremultiply(&mut rgba.data, u8::MAX);
+            }
+            rgba.data
+        }
+        (false, true) => image.to_rgb16().map_err(err)?.data.iter().flat_map(|v| v.to_ne_bytes()).collect(),
+        (false, false) => image.to_rgb8().map_err(err)?.data,
     };
-    let raw = heic_rs::DecodeOptions::default()
-        .with_layout(pixel_layout)
-        .with_max_pixels(Some(options.max_pixels))
-        .with_transforms(options.apply_transforms)
-        .with_alpha(info.has_alpha);
-    let decoded = heic_rs::decode(bytes, &raw).map_err(err)?;
-    let (icc, nclx, exif, xmp) = metadata(bytes);
+    let metadata = image.metadata;
+    // The container's `nclx`, inherited from the tiles like the profile. Not `image.color_info`,
+    // which falls back to the HEVC stream's VUI.
+    let nclx = metadata.color_info.map(|c| Nclx {
+        primaries: c.color_primaries,
+        transfer: c.transfer_characteristics,
+        matrix: c.matrix_coefficients,
+        full_range: c.full_range,
+    });
+    let xmp = metadata.xmp.and_then(|x| String::from_utf8(x).ok()).map(|x| x.trim_end_matches('\0').to_string());
     Ok(Decoded {
-        width: decoded.width,
-        height: decoded.height,
-        has_alpha: info.has_alpha,
-        sixteen_bit: info.sixteen_bit,
-        data: decoded.data,
-        icc,
+        width: size(image.width)?,
+        height: size(image.height)?,
+        has_alpha,
+        sixteen_bit,
+        data,
+        icc: metadata.icc_profile,
         nclx,
-        exif,
+        exif: metadata.exif,
         xmp,
     })
 }
 
-type Metadata = (Option<Vec<u8>>, Option<Nclx>, Option<Vec<u8>>, Option<String>);
-
-/// The primary image's ICC profile, `nclx`, EXIF (TIFF structure) and XMP packet. Metadata is a
-/// courtesy: a broken metadata item never fails a decode whose pixels came out fine.
-fn metadata(bytes: &[u8]) -> Metadata {
-    let Ok(ctx) = heic_rs::context::Context::open(bytes) else {
-        return (None, None, None, None);
-    };
-    let id = ctx.meta.primary;
-    let icc = icc_for_item(&ctx, id);
-    let nclx = nclx_for_item(&ctx, id);
-    let exif = ctx.exif(id).ok().flatten().map(<[u8]>::to_vec);
-    let xmp = ctx.xmp_item(id).and_then(|x| ctx.item_data(x).ok()).and_then(|d| match d {
-        Cow::Borrowed(b) => String::from_utf8(b.to_vec()).ok(),
-        Cow::Owned(b) => String::from_utf8(b).ok(),
-    });
-    (icc, nclx, exif, xmp.map(|x| x.trim_end_matches('\0').to_string()))
-}
-
-/// The ICC profile describing `item`, inherited from the coded tiles when the item itself carries
-/// none.
-///
-/// `colr` is optional on a `grid` derivation, and phone cameras write it on the tiles instead: a
-/// OnePlus 11 photograph carries one `prof` (Display P3) on each of its 48 `hvc1` tiles and
-/// nothing on the grid. Asking the primary item alone therefore loses the profile and the photo
-/// opens as if it were sRGB. The tiles are what the mosaic is composed from, so their profile is
-/// the composed image's profile.
-///
-/// heic-rs resolves `nclx` from the primary item in the same way and has the same gap
-/// (tbraun96/heic-rs#6). The sample range cannot be recovered here as well: `DecodeOptions` has no
-/// override for it, so that half has to be fixed upstream.
-fn icc_for_item(ctx: &heic_rs::context::Context<'_>, item: u32) -> Option<Vec<u8>> {
-    inherited(ctx, item, |p| ctx.icc(p).map(<[u8]>::to_vec))
-}
-
-/// The `nclx` colour description of `item`, inherited from its tiles as [`icc_for_item`] does.
-/// A 10-bit HDR HEIC declares its BT.2020 primaries and HLG or PQ transfer only here (#6752).
-fn nclx_for_item(ctx: &heic_rs::context::Context<'_>, item: u32) -> Option<Nclx> {
-    inherited(ctx, item, |p| {
-        p.nclx.map(|n| Nclx { primaries: n.primaries, transfer: n.transfer, matrix: n.matrix_code, full_range: n.range == heic_rs::Range::Full })
-    })
-}
-
-/// `get` of `item`'s properties, or of the first of its grid tiles that has it.
-fn inherited<T>(ctx: &heic_rs::context::Context<'_>, item: u32, get: impl Fn(&heic_rs::props::ItemProps<'_>) -> Option<T>) -> Option<T> {
-    let own = ctx.props(item).ok().and_then(|p| get(&p));
-    if own.is_some() {
-        return own;
+/// Turns premultiplied RGBA (a `prem` reference in the file) into straight alpha, in place.
+/// Fully transparent pixels become black; colour is clamped to the alpha it was scaled by.
+fn unpremultiply<T: Copy + Into<u32> + TryFrom<u32>>(rgba: &mut [T], max: T) {
+    let max: u32 = max.into();
+    for [r, g, b, a] in rgba.as_chunks_mut::<4>().0 {
+        let alpha: u32 = (*a).into();
+        for c in [r, g, b] {
+            let straight = ((*c).into() * max + alpha / 2).checked_div(alpha).unwrap_or(0);
+            if let Ok(v) = T::try_from(straight.min(max)) {
+                *c = v;
+            }
+        }
     }
-    // `Ok(None)` is a coded picture rather than a derivation: no tiles to inherit from.
-    let (_, tiles) = ctx.grid(item).ok()??;
-    tiles.iter().find_map(|&t| ctx.props(t).ok().and_then(|p| get(&p)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Found by the `decode_heif` fuzz target: a malformed box makes heic-rs 0.1.1 slice out of
-    /// range (`boxes.rs:130`). It must be an error, not a crash.
+    /// Made heic-rs 0.1.1 slice out of range in its box parser (fixed in 0.1.2). Kept as a
+    /// regression input: it must be an error, not a crash.
     const HEIC_RS_BOX_PANIC: [u8; 72] = [
         0x00, 0x00, 0x00, 0x24, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0x00, 0x00, 0x00, 0x00, 0x6d, 0x69, 0x66, 0x31, 0x4d, 0x69, 0x50, 0x72, 0x6d,
         0x69, 0x61, 0x66, 0x4d, 0x69, 0x48, 0x42, 0x72, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6d, 0x65, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -253,7 +234,7 @@ mod tests {
     ];
 
     #[test]
-    fn a_heic_rs_panic_is_a_malformed_error() {
+    fn a_malformed_box_is_an_error() {
         for apply_transforms in [true, false] {
             let r = decode(&HEIC_RS_BOX_PANIC, &Options { apply_transforms, ..Default::default() });
             assert!(matches!(r, Err(Error::Malformed(_))), "{r:?}");
@@ -261,11 +242,13 @@ mod tests {
     }
 
     #[test]
-    fn image_sequence_is_unsupported_with_a_clear_message() {
-        // An ftyp and nothing else: a HEIF image sequence would have a moov here instead of a meta.
+    fn a_sequence_brand_without_a_track_is_malformed() {
+        // An ftyp and nothing else: no still image (`meta`) and no image sequence track (`moov`).
+        // A real sequence opens at its first sync frame, so this is a broken file, not an
+        // unsupported one.
         let bytes = b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc";
         for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ())] {
-            assert!(matches!(&r, Err(Error::Unsupported(m)) if m.contains("sequence")), "{r:?}");
+            assert!(matches!(&r, Err(Error::Malformed(m)) if m.contains("meta")), "{r:?}");
         }
     }
 
@@ -284,11 +267,46 @@ mod tests {
         assert!(Error::Malformed("x".into()).to_string().contains("malformed"));
     }
 
-    // A grid whose colour description lives on its tiles, not on the grid item.
-    //
-    // The fixtures below are synthetic containers with no coded data at all: resolving a profile
-    // never decodes a pixel. Each test first asserts the fixture is the shape it claims to be, so
-    // a mistake in the builder cannot look like a passing fix.
+    #[test]
+    fn decoder_errors_map_to_their_kind() {
+        assert!(matches!(err(HeifError::Unsupported("AVC")), Error::Unsupported(m) if m == "AVC"));
+        assert!(matches!(err(HeifError::LimitExceeded("big")), Error::Limit(_)));
+        assert!(matches!(err(HeifError::CabacDesync("x")), Error::Malformed(_)));
+        assert!(matches!(err(HeifError::Truncated { at: 1, needed: 2 }), Error::Malformed(_)));
+    }
+
+    #[test]
+    fn unpremultiply_restores_straight_colour() {
+        let mut px: [u8; 12] = [64, 32, 0, 128, 10, 10, 10, 0, 255, 255, 255, 255];
+        unpremultiply(&mut px, u8::MAX);
+        assert_eq!(px, [128, 64, 0, 128, 0, 0, 0, 0, 255, 255, 255, 255]);
+        // Colour above its alpha (invalid premultiplication) clamps instead of overflowing.
+        let mut px: [u16; 4] = [65535, 1000, 0, 1];
+        unpremultiply(&mut px, u16::MAX);
+        assert_eq!(px, [65535, 65535, 0, 1]);
+    }
+
+    // Synthetic containers around one real coded picture, for container behaviour no corpus file
+    // pins: the `imir` direction and where a grid's ICC profile comes from. Each test first checks
+    // the fixture is the shape it claims to be, so a mistake in the builder cannot look like a pass.
+
+    /// `hvcC` of a 64x64 4:2:0 picture: red top left, green top right, blue bottom left, white
+    /// bottom right. Encoded by macOS `sips` from a PNG generated for this test.
+    const QUAD_HVCC: [u8; 104] = [
+        0x01, 0x03, 0x70, 0x00, 0x00, 0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1e, 0xf0, 0x00, 0xfc, 0xfd, 0xf8, 0xf8, 0x00, 0x00, 0x0b, 0x03, 0xa0, 0x00,
+        0x01, 0x00, 0x17, 0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x03, 0x70, 0x00, 0x00, 0x03, 0x00, 0xb0, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x1e, 0x70,
+        0x24, 0xa1, 0x00, 0x01, 0x00, 0x22, 0x42, 0x01, 0x01, 0x03, 0x70, 0x00, 0x00, 0x03, 0x00, 0xb0, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x1e, 0xa0,
+        0x14, 0x20, 0x41, 0xc1, 0x8f, 0x88, 0x7b, 0x91, 0x65, 0x53, 0x70, 0x20, 0x20, 0x60, 0x08, 0xa2, 0x00, 0x01, 0x00, 0x09, 0x44, 0x01, 0xc0, 0x60, 0x84,
+        0xb2, 0x10, 0x14, 0xc9,
+    ];
+    /// Its coded slice, length-prefixed as HEIF stores it.
+    const QUAD_HEVC: [u8; 107] = [
+        0x00, 0x00, 0x00, 0x67, 0x28, 0x01, 0xaf, 0xa3, 0x57, 0x62, 0x9a, 0xec, 0x27, 0xf8, 0x03, 0x13, 0xff, 0xfc, 0xad, 0xfe, 0x87, 0xf5, 0xa9, 0xbc, 0x31,
+        0x41, 0xfe, 0x0d, 0x57, 0xff, 0xf8, 0x11, 0x5f, 0xff, 0xd1, 0x7e, 0xa3, 0xa9, 0x0f, 0xd8, 0x2a, 0x6e, 0x3e, 0x90, 0x0f, 0x2f, 0xf1, 0xc0, 0x0c, 0x3b,
+        0x8f, 0xff, 0x40, 0x51, 0xda, 0x67, 0x8f, 0xe6, 0x09, 0x34, 0x7e, 0xaf, 0x61, 0x13, 0xf7, 0xd0, 0xe2, 0x58, 0xbb, 0xa1, 0xfd, 0xfd, 0xb1, 0xc1, 0x5a,
+        0x32, 0xe1, 0xe4, 0xf9, 0xa1, 0xc6, 0x73, 0xf3, 0x9f, 0xd5, 0x8e, 0xbb, 0xe1, 0x65, 0xb9, 0x4b, 0x7f, 0xc0, 0xdf, 0x58, 0xfe, 0x29, 0x3a, 0x7f, 0x79,
+        0x8e, 0x9f, 0x42, 0xfd, 0x30, 0xff, 0xc0,
+    ];
 
     /// Stands in for a profile. `colr` hands its payload back without parsing it.
     const TILE_ICC: &[u8] = b"tile-profile";
@@ -327,13 +345,6 @@ mod tests {
         full(b"infe", 2, &p)
     }
 
-    fn iref_dimg(from: u16, to: u16) -> Vec<u8> {
-        let mut p = from.to_be_bytes().to_vec();
-        p.extend_from_slice(&1u16.to_be_bytes());
-        p.extend_from_slice(&to.to_be_bytes());
-        full(b"iref", 0, &bx(b"dimg", &p))
-    }
-
     fn colr_prof(icc: &[u8]) -> Vec<u8> {
         let mut p = b"prof".to_vec();
         p.extend_from_slice(icc);
@@ -367,32 +378,77 @@ mod tests {
         full(b"ipma", 0, &p)
     }
 
-    /// `item`'s bytes live in `idat` (construction method 1) at offset 0.
-    fn iloc_in_idat(item: u16, length: u32) -> Vec<u8> {
-        let mut p = vec![0x44, 0x00];
-        p.extend_from_slice(&1u16.to_be_bytes());
-        p.extend_from_slice(&item.to_be_bytes());
-        p.extend_from_slice(&1u16.to_be_bytes());
-        p.extend_from_slice(&0u16.to_be_bytes());
-        p.extend_from_slice(&1u16.to_be_bytes());
-        p.extend_from_slice(&0u32.to_be_bytes());
-        p.extend_from_slice(&length.to_be_bytes());
-        full(b"iloc", 1, &p)
-    }
-
-    fn file(meta: &[u8]) -> Vec<u8> {
-        let mut ftyp = b"heic".to_vec();
-        ftyp.extend_from_slice(&0u32.to_be_bytes());
-        ftyp.extend_from_slice(b"mif1heic");
-        let mut out = bx(b"ftyp", &ftyp);
-        out.extend_from_slice(&full(b"meta", 0, meta));
+    /// Each `(item, bytes)` lives in `idat` (construction method 1), one after the other.
+    fn idat_and_iloc(items: &[(u16, &[u8])]) -> Vec<u8> {
+        let mut iloc = vec![0x44, 0x00];
+        iloc.extend_from_slice(&u16::try_from(items.len()).unwrap().to_be_bytes());
+        let mut idat = Vec::new();
+        for (item, bytes) in items {
+            iloc.extend_from_slice(&item.to_be_bytes());
+            iloc.extend_from_slice(&1u16.to_be_bytes());
+            iloc.extend_from_slice(&0u16.to_be_bytes());
+            iloc.extend_from_slice(&1u16.to_be_bytes());
+            iloc.extend_from_slice(&u32::try_from(idat.len()).unwrap().to_be_bytes());
+            iloc.extend_from_slice(&u32::try_from(bytes.len()).unwrap().to_be_bytes());
+            idat.extend_from_slice(bytes);
+        }
+        let mut out = bx(b"idat", &idat);
+        out.extend_from_slice(&full(b"iloc", 1, &iloc));
         out
     }
 
-    /// A 1x1 64x64 grid, with `grid_icc` on the grid item and `tile_icc` on its single tile.
-    ///
+    /// `ftyp`, then a `meta` whose primary item is `primary` and whose items are `infes`.
     /// `ipco` children are numbered from 1 in file order; an association byte's top bit marks the
     /// property essential, as macOS writes it.
+    fn file(primary: u16, infes: &[Vec<u8>], ipco: &[u8], assoc: &[(u16, &[u8])], data: &[(u16, &[u8])]) -> Vec<u8> {
+        let mut ftyp = b"heic".to_vec();
+        ftyp.extend_from_slice(&0u32.to_be_bytes());
+        ftyp.extend_from_slice(b"mif1heic");
+        let mut items = u16::try_from(infes.len()).unwrap().to_be_bytes().to_vec();
+        items.extend(infes.iter().flatten());
+        let mut iprp = bx(b"ipco", ipco);
+        iprp.extend_from_slice(&ipma(assoc));
+
+        let mut meta = hdlr();
+        meta.extend_from_slice(&full(b"pitm", 0, &primary.to_be_bytes()));
+        meta.extend_from_slice(&full(b"iinf", 0, &items));
+        if primary == GRID_ID {
+            let mut p = GRID_ID.to_be_bytes().to_vec();
+            p.extend_from_slice(&1u16.to_be_bytes());
+            p.extend_from_slice(&PICTURE_ID.to_be_bytes());
+            meta.extend_from_slice(&full(b"iref", 0, &bx(b"dimg", &p)));
+        }
+        meta.extend_from_slice(&bx(b"iprp", &iprp));
+        meta.extend_from_slice(&idat_and_iloc(data));
+        let mut out = bx(b"ftyp", &ftyp);
+        out.extend_from_slice(&full(b"meta", 0, &meta));
+        out
+    }
+
+    /// The quadrant picture as the primary item, with an `imir` of `mirror_axis` and a `prof`
+    /// of `icc` when given.
+    fn picture_file(mirror_axis: Option<u8>, icc: Option<&[u8]>) -> Vec<u8> {
+        picture_file_colr(mirror_axis, icc.map(colr_prof))
+    }
+
+    /// [`picture_file`] with a whole `colr` box.
+    fn picture_file_colr(mirror_axis: Option<u8>, colr: Option<Vec<u8>>) -> Vec<u8> {
+        let mut ipco = ispe(64, 64);
+        ipco.extend_from_slice(&bx(b"hvcC", &QUAD_HVCC));
+        let mut assoc = vec![0x81, 0x82];
+        if let Some(axis) = mirror_axis {
+            ipco.extend_from_slice(&bx(b"imir", &[axis]));
+            assoc.push(0x80 | u8::try_from(assoc.len() + 1).unwrap());
+        }
+        if let Some(colr) = colr {
+            ipco.extend_from_slice(&colr);
+            assoc.push(0x80 | u8::try_from(assoc.len() + 1).unwrap());
+        }
+        file(PICTURE_ID, &[infe(PICTURE_ID, b"hvc1")], &ipco, &[(PICTURE_ID, assoc.as_slice())], &[(PICTURE_ID, &QUAD_HEVC)])
+    }
+
+    /// A 1x1 64x64 grid of the quadrant picture, with `grid_icc` on the grid item and `tile_icc`
+    /// on its single tile.
     fn grid_file(grid_icc: Option<&[u8]>, tile_icc: Option<&[u8]>) -> Vec<u8> {
         grid_file_colr(grid_icc.map(colr_prof), tile_icc.map(colr_prof))
     }
@@ -400,7 +456,8 @@ mod tests {
     /// [`grid_file`] with whole `colr` boxes.
     fn grid_file_colr(grid_colr: Option<Vec<u8>>, tile_colr: Option<Vec<u8>>) -> Vec<u8> {
         let mut ipco = ispe(64, 64);
-        let (mut grid_assoc, mut tile_assoc, mut index) = (vec![0x81], vec![0x81], 1u8);
+        ipco.extend_from_slice(&bx(b"hvcC", &QUAD_HVCC));
+        let (mut grid_assoc, mut tile_assoc, mut index) = (vec![0x81], vec![0x81, 0x82], 2u8);
         if let Some(colr) = grid_colr {
             index += 1;
             ipco.extend_from_slice(&colr);
@@ -411,119 +468,133 @@ mod tests {
             ipco.extend_from_slice(&colr);
             tile_assoc.push(0x80 | index);
         }
-        let mut iprp = bx(b"ipco", &ipco);
-        iprp.extend_from_slice(&ipma(&[(GRID_ID, grid_assoc.as_slice()), (PICTURE_ID, tile_assoc.as_slice())]));
-
-        let mut items = 2u16.to_be_bytes().to_vec();
-        items.extend_from_slice(&infe(GRID_ID, b"grid"));
-        items.extend_from_slice(&infe(PICTURE_ID, b"hvc1"));
-
         // Version 0, flags 0, one row, one column, 64x64 output.
         const DESCRIPTOR: &[u8] = &[0, 0, 0, 0, 0, 64, 0, 64];
-
-        let mut meta = hdlr();
-        meta.extend_from_slice(&full(b"pitm", 0, &GRID_ID.to_be_bytes()));
-        meta.extend_from_slice(&full(b"iinf", 0, &items));
-        meta.extend_from_slice(&iref_dimg(GRID_ID, PICTURE_ID));
-        meta.extend_from_slice(&bx(b"iprp", &iprp));
-        meta.extend_from_slice(&bx(b"idat", DESCRIPTOR));
-        meta.extend_from_slice(&iloc_in_idat(GRID_ID, u32::try_from(DESCRIPTOR.len()).unwrap()));
-        file(&meta)
+        file(
+            GRID_ID,
+            &[infe(GRID_ID, b"grid"), infe(PICTURE_ID, b"hvc1")],
+            &ipco,
+            &[(GRID_ID, grid_assoc.as_slice()), (PICTURE_ID, tile_assoc.as_slice())],
+            &[(GRID_ID, DESCRIPTOR), (PICTURE_ID, &QUAD_HEVC)],
+        )
     }
 
-    /// One coded picture rather than a derivation, with `icc` on the item itself.
-    fn picture_file(icc: Option<&[u8]>) -> Vec<u8> {
-        picture_file_colr(icc.map(colr_prof))
-    }
-
-    /// [`picture_file`] with a whole `colr` box.
-    fn picture_file_colr(colr: Option<Vec<u8>>) -> Vec<u8> {
+    /// A 1x1 grid of the quadrant picture declaring a `size` x `size` canvas, with a centred
+    /// 64x64 `clap` on the grid item: the probe reports the canvas as the coded size.
+    fn cropped_grid_file(size: u16) -> Vec<u8> {
         let mut ipco = ispe(64, 64);
-        let mut assoc = vec![0x81];
-        if let Some(colr) = colr {
-            ipco.extend_from_slice(&colr);
-            assoc.push(0x82);
-        }
-        let mut iprp = bx(b"ipco", &ipco);
-        iprp.extend_from_slice(&ipma(&[(PICTURE_ID, assoc.as_slice())]));
-
-        let mut items = 1u16.to_be_bytes().to_vec();
-        items.extend_from_slice(&infe(PICTURE_ID, b"hvc1"));
-
-        let mut meta = hdlr();
-        meta.extend_from_slice(&full(b"pitm", 0, &PICTURE_ID.to_be_bytes()));
-        meta.extend_from_slice(&full(b"iinf", 0, &items));
-        meta.extend_from_slice(&bx(b"iprp", &iprp));
-        file(&meta)
+        ipco.extend_from_slice(&bx(b"hvcC", &QUAD_HVCC));
+        ipco.extend_from_slice(&ispe(size.into(), size.into()));
+        let clap: Vec<u8> = [64, 1, 64, 1, 0, 1, 0, 1].iter().flat_map(|v: &u32| v.to_be_bytes()).collect();
+        ipco.extend_from_slice(&bx(b"clap", &clap));
+        let mut descriptor = vec![0, 0, 0, 0];
+        descriptor.extend_from_slice(&size.to_be_bytes());
+        descriptor.extend_from_slice(&size.to_be_bytes());
+        file(
+            GRID_ID,
+            &[infe(GRID_ID, b"grid"), infe(PICTURE_ID, b"hvc1")],
+            &ipco,
+            &[(GRID_ID, &[0x83, 0x84]), (PICTURE_ID, &[0x81, 0x82])],
+            &[(GRID_ID, descriptor.as_slice()), (PICTURE_ID, &QUAD_HEVC)],
+        )
     }
 
-    fn ctx_of(bytes: &[u8]) -> heic_rs::context::Context<'_> {
-        heic_rs::context::Context::open(bytes).expect("the synthetic container must parse")
+    #[test]
+    fn the_pixel_limit_applies_to_the_coded_size_not_the_crop() {
+        let bytes = cropped_grid_file(16384);
+        let info = probe(&bytes).unwrap();
+        assert_eq!((info.width, info.height, info.coded_width, info.coded_height), (64, 64, 16384, 16384));
+        for apply_transforms in [true, false] {
+            let r = decode(&bytes, &Options { max_pixels: 1 << 26, apply_transforms });
+            assert!(matches!(&r, Err(Error::Limit(m)) if m.contains("16384x16384")), "transforms {apply_transforms}: {r:?}");
+        }
+    }
+
+    /// The colour at the centre of each quadrant, as the nearest of the four the picture uses:
+    /// top left, top right, bottom left, bottom right.
+    fn quadrants(d: &Decoded) -> [&'static str; 4] {
+        assert_eq!((d.width, d.height, d.has_alpha, d.sixteen_bit), (64, 64, false, false));
+        [(16, 16), (48, 16), (16, 48), (48, 48)].map(|(x, y)| {
+            let i = (y * 64 + x) * 3;
+            let px = [d.data[i], d.data[i + 1], d.data[i + 2]].map(i32::from);
+            let named = [("red", [255, 0, 0]), ("green", [0, 255, 0]), ("blue", [0, 0, 255]), ("white", [255, 255, 255])];
+            named.iter().min_by_key(|(_, c)| (0..3).map(|k| (px[k] - c[k]).pow(2)).sum::<i32>()).unwrap().0
+        })
+    }
+
+    fn decode_quadrants(bytes: &[u8], apply_transforms: bool) -> [&'static str; 4] {
+        quadrants(&decode(bytes, &Options { apply_transforms, ..Default::default() }).unwrap())
+    }
+
+    #[test]
+    fn the_quadrant_picture_decodes_as_coded() {
+        assert_eq!(decode_quadrants(&picture_file(None, None), true), ["red", "green", "blue", "white"]);
+    }
+
+    #[test]
+    fn imir_axis_0_flips_top_and_bottom() {
+        // As libheif reads it ("flip image vertically") and the Nokia suite describes C042
+        // ("vertically mirrored"). heic-rs, the previous decoder, flipped left-right here.
+        let bytes = picture_file(Some(0), None);
+        assert_eq!(decode_quadrants(&bytes, true), ["blue", "white", "red", "green"]);
+        assert_eq!(decode_quadrants(&bytes, false), ["red", "green", "blue", "white"], "as coded without transforms");
+    }
+
+    #[test]
+    fn imir_axis_1_flips_left_and_right() {
+        let bytes = picture_file(Some(1), None);
+        assert_eq!(decode_quadrants(&bytes, true), ["green", "red", "white", "blue"]);
+        assert_eq!(decode_quadrants(&bytes, false), ["red", "green", "blue", "white"], "as coded without transforms");
+    }
+
+    fn icc_of(bytes: &[u8]) -> Option<Vec<u8>> {
+        decode(bytes, &Options::default()).unwrap().icc
     }
 
     #[test]
     fn a_grid_inherits_its_tiles_icc_profile() {
+        // `colr` is optional on a `grid` derivation, and phone cameras write it on the tiles
+        // instead: a OnePlus 11 photograph carries one `prof` (Display P3) on each of its 48 tiles
+        // and nothing on the grid. Losing it would open the photo as if it were sRGB.
         let bytes = grid_file(None, Some(TILE_ICC));
-        let ctx = ctx_of(&bytes);
-        let primary = ctx.meta.primary;
-        assert_eq!(primary, u32::from(GRID_ID));
-        let (grid, tiles) = ctx.grid(primary).unwrap().expect("a grid derivation");
-        assert_eq!((grid.rows, grid.columns, tiles.len()), (1, 1, 1));
-        assert!(ctx.icc(&ctx.props(primary).unwrap()).is_none(), "the grid item carries no colr of its own");
-        assert_eq!(ctx.icc(&ctx.props(tiles[0]).unwrap()), Some(TILE_ICC), "the tile carries the profile");
-
-        assert_eq!(icc_for_item(&ctx, primary).as_deref(), Some(TILE_ICC));
+        assert_eq!(decode_quadrants(&bytes, true), ["red", "green", "blue", "white"], "a 1x1 grid of the picture");
+        assert_eq!(icc_of(&bytes).as_deref(), Some(TILE_ICC));
     }
 
     #[test]
     fn a_grids_own_profile_wins_over_its_tiles() {
-        let bytes = grid_file(Some(GRID_ICC), Some(TILE_ICC));
-        let ctx = ctx_of(&bytes);
-        assert_eq!(icc_for_item(&ctx, ctx.meta.primary).as_deref(), Some(GRID_ICC));
+        assert_eq!(icc_of(&grid_file(Some(GRID_ICC), Some(TILE_ICC))).as_deref(), Some(GRID_ICC));
     }
 
     #[test]
     fn an_unlabelled_grid_has_no_profile() {
-        let bytes = grid_file(None, None);
-        let ctx = ctx_of(&bytes);
-        assert_eq!(icc_for_item(&ctx, ctx.meta.primary), None);
+        assert_eq!(icc_of(&grid_file(None, None)), None);
     }
 
     #[test]
     fn a_coded_picture_resolves_its_own_profile() {
-        let labelled = picture_file(Some(GRID_ICC));
-        let ctx = ctx_of(&labelled);
-        assert!(ctx.grid(ctx.meta.primary).unwrap().is_none(), "not a derivation");
-        assert_eq!(icc_for_item(&ctx, ctx.meta.primary).as_deref(), Some(GRID_ICC));
-
-        let bare = picture_file(None);
-        let ctx = ctx_of(&bare);
-        assert_eq!(icc_for_item(&ctx, ctx.meta.primary), None);
+        assert_eq!(icc_of(&picture_file(None, Some(GRID_ICC))).as_deref(), Some(GRID_ICC));
+        assert_eq!(icc_of(&picture_file(None, None)), None);
     }
+
     /// An iPhone 10-bit HDR HEIC's description (#6752): BT.2020 primaries, ARIB STD-B67 (HLG)
     /// transfer, BT.2020 non-constant-luminance matrix, full range.
     const HLG: Nclx = Nclx { primaries: 9, transfer: 18, matrix: 9, full_range: true };
 
+    fn nclx_of(bytes: &[u8]) -> Option<Nclx> {
+        decode(bytes, &Options::default()).unwrap().nclx
+    }
+
     #[test]
     fn a_coded_pictures_nclx_is_read() {
-        let bytes = picture_file_colr(Some(colr_nclx(9, 18, 9, true)));
-        let ctx = ctx_of(&bytes);
-        assert_eq!(nclx_for_item(&ctx, ctx.meta.primary), Some(HLG));
-
-        let sdr = picture_file_colr(Some(colr_nclx(1, 13, 6, false)));
-        let ctx = ctx_of(&sdr);
-        assert_eq!(nclx_for_item(&ctx, ctx.meta.primary), Some(Nclx { primaries: 1, transfer: 13, matrix: 6, full_range: false }));
-
-        let bare = picture_file(Some(TILE_ICC));
-        let ctx = ctx_of(&bare);
-        assert_eq!(nclx_for_item(&ctx, ctx.meta.primary), None, "an ICC profile is not an nclx");
+        assert_eq!(nclx_of(&picture_file_colr(None, Some(colr_nclx(9, 18, 9, true)))), Some(HLG));
+        let sdr = Nclx { primaries: 1, transfer: 13, matrix: 6, full_range: false };
+        assert_eq!(nclx_of(&picture_file_colr(None, Some(colr_nclx(1, 13, 6, false)))), Some(sdr));
+        assert_eq!(nclx_of(&picture_file(None, Some(TILE_ICC))), None, "an ICC profile is not an nclx");
     }
 
     #[test]
     fn a_grid_inherits_its_tiles_nclx() {
-        let bytes = grid_file_colr(None, Some(colr_nclx(9, 18, 9, true)));
-        let ctx = ctx_of(&bytes);
-        assert!(ctx.props(ctx.meta.primary).unwrap().nclx.is_none(), "the grid item carries no colr of its own");
-        assert_eq!(nclx_for_item(&ctx, ctx.meta.primary), Some(HLG));
+        assert_eq!(nclx_of(&grid_file_colr(None, Some(colr_nclx(9, 18, 9, true)))), Some(HLG));
     }
 }
