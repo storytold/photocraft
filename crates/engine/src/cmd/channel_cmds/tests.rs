@@ -1382,3 +1382,19 @@ fn the_brush_paints_a_spot_channel_by_its_tone() {
     s.execute("paint.stroke", json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#ffffff"})).unwrap();
     assert_eq!(chan(&s, 0, 10, 10), 0.0, "white takes it away");
 }
+
+/// CodeRabbit on #10217: a blend mode works on the tone a spot channel shows, in the stroke the
+/// canvas previews and in the one it commits. Multiply with black on bare paper is solid ink
+/// (the tone goes to black); Screen with black over that ink changes nothing.
+#[test]
+fn the_brush_blends_on_a_spot_channel_by_its_tone() {
+    let mut s = spot_session();
+    let multiply = json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#000000", "mode": "multiply", "smoothing": 0.0, "seed": 1});
+    let preview = crate::brush_cmds::LiveStroke::begin(&s, &multiply).unwrap();
+    let shown = preview.doc.channels[0].surface.sample_channel(10, 10, 0);
+    s.execute("paint.stroke", multiply).unwrap();
+    assert_eq!((chan(&s, 0, 10, 10), chan(&s, 0, 30, 10)), (1.0, 0.0), "Multiply with black lays solid ink");
+    assert_eq!(shown, 1.0, "the preview shows the ink the commit lays");
+    s.execute("paint.stroke", json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#000000", "mode": "screen"})).unwrap();
+    assert_eq!(chan(&s, 0, 10, 10), 1.0, "Screen with black keeps the ink");
+}

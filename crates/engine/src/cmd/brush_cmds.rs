@@ -244,23 +244,35 @@ fn damage_json(s: &mut Session, dmg: Rect) -> Value {
     json!({ "damage": [dmg.x0, dmg.y0, dmg.width(), dmg.height()] })
 }
 
-/// The target layer (`None` for a channel), brush and zoom of a stroke. On a mask or channel the
-/// eraser paints the background colour (Photoshop).
-fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option<photocraft_doc::LayerId>, BrushSettings, f32)> {
+/// Where a stroke goes and with what: the target layer (`None` for a channel), the brush, the
+/// zoom, and whether the target is a spot channel, which stores ink but takes paint as the tone
+/// it shows (the review and CodeRabbit on #10217): the stroke is laid, and blended in any mode,
+/// on that tone ([`crate::channel_cmds::as_tone`]). On a mask or channel the eraser paints the
+/// background colour (Photoshop).
+fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option<photocraft_doc::LayerId>, BrushSettings, f32, bool)> {
     let gray = is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some();
     let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
     let brush = if gray && brush.erase { BrushSettings { erase: false, color: s.tools.background, ..brush } } else { brush };
-    // A spot channel stores ink and takes paint as the tone it shows (CodeRabbit and the review
-    // on #10217): black paints solid ink, white takes it away. Laying the colour's complement
-    // into the ink is the same as laying the colour into the tone, exactly so in Normal mode.
     let spot = s.active().is_some_and(|d| crate::channel_cmds::is_spot_target(&d.doc, p));
-    let brush = if spot {
-        let c = brush.color;
-        BrushSettings { color: [1.0 - c[0], 1.0 - c[1], 1.0 - c[2], c[3]], color_cmyk: None, ..brush }
-    } else {
-        brush
-    };
-    Ok((id, brush, num(p, "zoom").unwrap_or(1.0)))
+    Ok((id, brush, num(p, "zoom").unwrap_or(1.0), spot))
+}
+
+/// A spot channel's `ink` as the tone it shows over `canvas`, for a stroke to be drawn on.
+fn tone_of(ink: &Surface, canvas: Rect) -> Result<Surface> {
+    let mut tone = ink.clone();
+    crate::channel_cmds::invert_blocks(&mut tone, canvas)?;
+    Ok(tone)
+}
+
+/// Writes `area` of a stroked `tone` back into the spot channel as ink. Only the stroke's own
+/// area goes through the round trip, so the rest of the channel keeps its exact values.
+fn ink_back(tone: &Surface, ink: &mut Surface, area: Rect) -> Result<()> {
+    if area.is_empty() {
+        return Ok(());
+    }
+    let shown = crate::allocation::read_region(tone, area, "a spot channel's stroke")?;
+    ink.try_write_region(area, &shown)?;
+    crate::channel_cmds::invert_region(ink, area)
 }
 
 /// Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so it
@@ -284,7 +296,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
-    let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    let (id, brush, zoom, spot) = stroke_target(s, p, brush)?;
     let cmyk = doc_cmyk_space(s);
     // The live stroke the canvas already rendered for exactly these params: take its pixels
     // instead of rendering the whole stroke again (the hitch at pen-up).
@@ -297,9 +309,17 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 *surf = l.surface;
                 return Ok(l.bounds);
             }
+            let canvas = doc.bounds();
             let sel = doc.selection.clone();
             let table = crate::mode_cmds::paint_color_table(doc, p);
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+            // A spot channel is stroked on the tone it shows (see `stroke_target`).
+            let mut tone = if spot { Some(tone_of(surf, canvas)?) } else { None };
+            let ink = &mut *surf;
+            let surf: &mut Surface = match tone.as_mut() {
+                Some(tone) => tone,
+                None => ink,
+            };
             let mut brush = brush;
             erase_locked(&mut brush, lock, bg);
             if auto_erase {
@@ -334,6 +354,10 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             };
             if let (Some(table), Some(pre)) = (&table, &unpainted) {
                 crate::mode_cmds::keep_in_color_table(table, pre, surf, damage);
+            }
+            if let Some(tone) = &tone {
+                let (ink, _) = crate::channel_cmds::target_surface(doc, id, p)?;
+                ink_back(tone, ink, damage)?;
             }
             Ok(damage)
         })
@@ -465,7 +489,7 @@ fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
     if pts.len() < 3 {
         return Err(bad("paint.stroke", "\"fill\" needs at least three points (a closed region)"));
     }
-    let (id, brush, _zoom) = stroke_target(s, p, brush)?;
+    let (id, brush, _zoom, spot) = stroke_target(s, p, brush)?;
     // A hard brush (hardness 1) keeps the anti-aliased polygon edge; a soft one feathers it by half
     // the brush width, the way its tip fades.
     let feather_px = ((1.0 - brush.hardness.clamp(0.0, 1.0)) * brush.size * 0.5).max(0.0);
@@ -523,7 +547,10 @@ fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
                 }
             }
             let coverage = photocraft_algo::selection::mask_to_surface(&cov, bounds);
-            crate::fill_cmds::blend_color_mask(surf, bounds, color, picked, &coverage, mode, opacity, lock)?;
+            // A spot channel takes the fill as the tone it shows (see `stroke_target`).
+            crate::channel_cmds::as_tone(surf, spot, bounds, |surf| {
+                crate::fill_cmds::blend_color_mask(surf, bounds, color, picked, &coverage, mode, opacity, lock)
+            })?;
             Ok(bounds)
         })
     })?;
@@ -547,6 +574,9 @@ pub struct LiveStroke {
     /// passes it merged (a mirror joining redraws every tile).
     union_live: Option<(photocraft_paint::UnionLive, usize)>,
     pre: Surface,
+    /// On a spot channel, the stroke is drawn here, on the tone the channel shows, and copied
+    /// back as ink (see `stroke_target`); `pre` is then the tone before the stroke.
+    tone: Option<Surface>,
     colors: Option<crate::color_channels::ColorChannels>,
     sel: Option<Surface>,
     lock: bool,
@@ -621,23 +651,25 @@ impl LiveStroke {
         };
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
-        let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
+        let (layer, mut brush, zoom, spot) = stroke_target(s, p, brush)?;
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let base = (st.doc.id, st.revision);
         let mut doc = (*st.doc).clone();
         let sel = doc.selection.clone();
         let table = crate::mode_cmds::paint_color_table(&doc, p);
+        let canvas = doc.bounds();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
+        let tone = if spot { Some(tone_of(surf, canvas)?) } else { None };
         erase_locked(&mut brush, lock, s.tools.background);
         if pencil && flag(p, "autoErase", false) {
             let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
-            apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
+            apply_auto_erase(&mut brush, tone.as_ref().unwrap_or(surf), pts.first(), fg, s.tools.background);
         }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
         let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
         let mirror_distinct = vec![false; mirrors.len()];
-        let pre = surf.clone();
+        let pre = tone.clone().unwrap_or_else(|| surf.clone());
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
             seed,
@@ -648,6 +680,7 @@ impl LiveStroke {
             mirror_distinct,
             union_live: None,
             pre,
+            tone,
             colors: crate::color_channels::target(s, p)?,
             sel,
             lock,
@@ -714,6 +747,11 @@ impl LiveStroke {
                 }
             }
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+            // A spot channel's stroke is drawn on its tone and copied back as ink below.
+            let surf: &mut Surface = match self.tone.as_mut() {
+                Some(tone) => tone,
+                None => surf,
+            };
             if self.mirror_distinct.iter().any(|d| *d) {
                 // The stroke and its distinct mirrors composite as one stroke, as the commit
                 // merges them; only the tiles that changed are redrawn.
@@ -758,6 +796,12 @@ impl LiveStroke {
             }
             Ok(dmg)
         })?;
+        if let Some(tone) = &self.tone {
+            // The tone the stroke changed, back into the channel as ink.
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+            ink_back(tone, surf, dmg)?;
+            return Ok(dmg);
+        }
         // The preview shows the pixels the commit keeps (see `stroke_with`).
         if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.params) {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
