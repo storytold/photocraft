@@ -35,6 +35,8 @@ mod metadata_packets;
 #[cfg(test)]
 mod metadata_tests;
 #[cfg(test)]
+mod optional_mask_budget_tests;
+#[cfg(test)]
 mod path_admission_tests;
 mod paths;
 mod resources;
@@ -425,7 +427,17 @@ impl<'a> Image<'a> {
             return Err(invalid("cyclic or excessively nested source auxiliary coverage"));
         }
         let result = (|| -> Result<std::result::Result<LayerMask, effects::MappingFailure>> {
-            let (name, properties, pixels, children) = self.channel(offset, ctl)?;
+            let pixel_budget = self.budget;
+            let (name, properties, pixels, children) = match self.channel(offset, ctl) {
+                Ok(channel) => channel,
+                Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                Err(error) => {
+                    // A failed optional decode retains no pixels. Its speculative
+                    // sample charge must not starve later independently valid layers.
+                    self.budget = pixel_budget;
+                    return Err(error);
+                }
+            };
             // Independently saved source effect masks use image-global pixels.
             // A nonstandard layer-style placement has no established source meaning.
             if properties.iter().any(|property| property.kind == 15 && property.data.iter().any(|byte| *byte != 0)) {
