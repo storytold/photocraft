@@ -67,11 +67,41 @@ fn opaque_gradients_paint_the_same_with_a_method() {
     assert_ne!(smooth, paint(json!({})));
 }
 
+// Not measured in the Gradient tool: the other methods, and Smooth below 100 % Smoothness, keep
+// today's merged stops (each dense stop takes the nearest stop's alpha).
 #[test]
-fn a_transparent_ramp_with_other_methods_still_paints() {
-    for m in ["classic", "perceptual", "linear"] {
-        let s = drawn(json!({"method": m}));
-        let (a, b) = (alpha_at(&s, 250), alpha_at(&s, 550));
-        assert!(a > b && (0.0..=255.0).contains(&a), "{m}: {a} {b}");
+fn unmeasured_methods_and_smoothness_keep_todays_ramp() {
+    for extra in [json!({"method": "classic"}), json!({"method": "perceptual"}), json!({"method": "linear"}), json!({"method": "smooth", "smoothness": 50})] {
+        let s = drawn(extra.clone());
+        for (x, want) in [(175, 250.0), (250, 191.0), (400, 128.0), (550, 64.0)] {
+            let got = alpha_at(&s, x);
+            assert!((got - want).abs() <= 1.0, "{extra} x={x}: alpha {got:.1}, want {want}");
+        }
+    }
+}
+
+fn drawn_colors(colors: Value) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 800, "height": 600, "background": "transparent"})).unwrap();
+    let p = json!({"colors": colors, "transparency": [[0, 100], [1, 0]], "method": "smooth", "from": [100, 300], "to": [700, 300], "dither": false});
+    s.execute("paint.gradient", p).unwrap();
+    s
+}
+
+#[test]
+fn one_colour_with_a_transparency_ramp_follows_smooth() {
+    let s = drawn_colors(json!(["#ff0000"]));
+    for (x, want) in [(50, 255.0), (250, 179.0), (400, 100.0), (550, 35.0), (750, 0.0)] {
+        let got = alpha_at(&s, x);
+        assert!((got - want).abs() <= 2.0, "x={x}: alpha {got:.1}, want {want}");
+    }
+}
+
+#[test]
+fn legacy_colours_keep_their_own_alpha() {
+    let s = drawn_colors(json!(["#ff000080", "#ff000080"]));
+    for (x, want) in [(50, 128.0), (400, 64.0), (750, 0.0)] {
+        let got = alpha_at(&s, x);
+        assert!((got - want).abs() <= 1.0, "x={x}: alpha {got:.1}, want {want}");
     }
 }

@@ -195,11 +195,10 @@ const OPACITY_RESPONSE: f32 = 0.65;
 
 /// Dense linear opacity stops reproducing Photoshop's interpolation of a gradient's transparency
 /// (Smoothness, opacity midpoints and the method, see [`OPACITY_RESPONSE`]). Returns the input
-/// unchanged when it already interpolates linearly. Smooth follows [`bake_smooth_opacity`].
+/// unchanged when it already interpolates linearly. Smooth keeps Classic's opacity curve here: it
+/// was measured only in the Gradient tool at 100 % Smoothness ([`bake_smooth_opacity`]).
 pub fn bake_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, f32)> {
-    if method == Method::Smooth {
-        return bake_smooth_opacity(stops, midpoints);
-    }
+    let method = if method == Method::Smooth { Method::Classic } else { method };
     let plain_mids = midpoints.iter().all(|m| (m - 0.5).abs() < 1e-3);
     let smoothness = if smoothness.is_finite() { smoothness.clamp(0.0, 1.0) } else { 0.0 };
     if stops.len() < 2 || (smoothness <= 0.0 && method == Method::Classic && plain_mids) {
@@ -246,22 +245,17 @@ const SMOOTH_OPACITY_GAMMA: f32 = 2.2;
 
 /// Smooth's transparency ramp: each opacity stop is a grey whose Oklab lightness is
 /// `(opacity^2.2)^(1/3)`, which the colours' measured Smooth easing ([`SMOOTH_EASE`]) crosses
-/// segment by segment, and the linear value `y = L^3` comes out as opacity `y^(1/2.2)`. Smoothness
-/// doesn't change Smooth; opacity midpoints still move each segment's centre. Constant opacity
-/// comes back unchanged.
-fn bake_smooth_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32]) -> Vec<(f32, f32)> {
+/// segment by segment, and the linear value `y = L^3` comes out as opacity `y^(1/2.2)`. Measured
+/// in the Gradient tool at 100 % Smoothness with 50 % midpoints, the only case that uses it.
+/// Constant opacity comes back as it is, clamped to 0..=1.
+pub fn bake_smooth_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32]) -> Vec<(f32, f32)> {
+    let clamp = |o: f32| if o.is_finite() { o.clamp(0.0, 1.0) } else { 1.0 };
     if stops.len() < 2 || stops.windows(2).all(|w| w[0].1 == w[1].1) {
-        return stops;
+        return stops.into_iter().map(|(t, o)| (t, clamp(o))).collect();
     }
     let mut s = stops;
     s.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let pts: Vec<(f32, [f32; 3])> = s
-        .iter()
-        .map(|(t, o)| {
-            let o = if o.is_finite() { o.clamp(0.0, 1.0) } else { 1.0 };
-            (*t, [o.powf(SMOOTH_OPACITY_GAMMA).cbrt(); 3])
-        })
-        .collect();
+    let pts: Vec<(f32, [f32; 3])> = s.iter().map(|(t, o)| (*t, [clamp(*o).powf(SMOOTH_OPACITY_GAMMA).cbrt(); 3])).collect();
     const N: usize = 96;
     let mut baked: Vec<(f32, f32)> = (0..=N)
         .map(|k| {
@@ -318,11 +312,10 @@ mod tests {
     }
 
     #[test]
-    fn plain_classic_and_constant_smooth_opacity_stay_as_stored() {
+    fn plain_classic_and_smooth_opacity_stay_as_stored() {
         let stops = vec![(1.0, 0.0), (0.0, 1.0)];
         assert_eq!(bake_opacity(stops.clone(), &[0.5], 0.0, Method::Classic), stops);
-        let flat = vec![(0.0, 0.4), (1.0, 0.4)];
-        assert_eq!(bake_opacity(flat.clone(), &[0.5], 0.0, Method::Smooth), flat);
+        assert_eq!(bake_opacity(stops.clone(), &[0.5], 0.0, Method::Smooth), stops);
         assert_eq!(bake_opacity(vec![(0.5, 0.3)], &[], 1.0, Method::Linear), vec![(0.5, 0.3)]);
     }
 
@@ -431,6 +424,14 @@ mod tests {
     }
 
     /// `eval` guards its own stops instead of relying on `bake`'s two-stop check.
+    #[test]
+    fn smooth_opacity_clamps_constant_stops() {
+        let flat = vec![(0.0, 0.4), (1.0, 0.4)];
+        assert_eq!(bake_smooth_opacity(flat.clone(), &[0.5]), flat);
+        assert_eq!(bake_smooth_opacity(vec![(0.0, 2.0), (1.0, 2.0)], &[0.5]), vec![(0.0, 1.0), (1.0, 1.0)]);
+        assert_eq!(bake_smooth_opacity(vec![(0.5, f32::NAN)], &[]), vec![(0.5, 1.0)]);
+    }
+
     #[test]
     fn eval_with_fewer_than_two_stops_does_not_index_out_of_range() {
         assert_eq!(eval(&[], &[], 1.0, 0.5, Method::Smooth), [0.0; 3]);
