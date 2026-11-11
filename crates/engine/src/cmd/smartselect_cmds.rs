@@ -643,6 +643,8 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod object_hard_edge_tests;
 #[cfg(test)]
+mod object_transparent_layer_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
