@@ -140,7 +140,10 @@ pub fn embedded_payload_in_blocks<'a>(blocks: impl IntoIterator<Item = (&'a [u8;
         let mut r = Rd { d: data, p: 0 };
         while let Some(len) = r.u64().and_then(|n| usize::try_from(n).ok()) {
             let Some(item) = r.take(len) else { break };
-            if let Some((id, name, bytes)) = item_data(item)
+            // The uuid comes first in the record: compare it before decoding the file name and
+            // descriptor, which a lookup per layer would otherwise repeat for every record.
+            if item_uuid(item).as_deref() == Some(uuid)
+                && let Some((id, name, bytes)) = item_data(item)
                 && id == uuid
             {
                 return Some((name, bytes));
@@ -172,6 +175,10 @@ fn find_slice_in_blocks<'a>(blocks: impl IntoIterator<Item = (&'a [u8; 4], &'a [
         while let Some(len) = r.u64() {
             let Ok(len) = usize::try_from(len) else { return None };
             let item = r.take(len)?;
+            if item_uuid(item).as_deref() != Some(uuid) {
+                r.p = r.p.next_multiple_of(4);
+                continue;
+            }
             let found = item_header(item).filter(|h| h.0 == uuid).and_then(|(id, name, start, n)| Some((id, name, item.get(start..start.checked_add(n)?)?)));
             if found.is_some() {
                 return found;
@@ -411,6 +418,17 @@ fn selection_uuid<'a>(item: &'a [u8], raw: &[u8], keep: &dyn Fn(&str, &[u8]) -> 
         }
         Err(_) => Ok(None),
     }
+}
+
+/// Every complete raw record of a block (length prefix and padding included), without decoding
+/// their file bytes: what [`contains_item`] compares against, for a caller with many lookups.
+pub fn records(data: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut remaining = data;
+    std::iter::from_fn(move || {
+        let (_, raw) = framed_item(remaining)?;
+        remaining = remaining.get(raw.len()..).unwrap_or_default();
+        Some(raw)
+    })
 }
 
 /// Whether a complete raw record already occurs in a block, without decoding its file bytes.

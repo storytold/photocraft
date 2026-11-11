@@ -263,3 +263,27 @@ fn style_options_take_a_family_with_the_style_picked_under_it() {
     assert_eq!(attrs["font_family"], "Arial", "{attrs}");
     assert_eq!(attrs["font_style"], "Bold Italic", "{attrs}");
 }
+
+#[test]
+fn duplicate_style_ids_list_the_first_and_warn() {
+    let (mut s, _) = session("Hello");
+    let r = s.execute("type.characterStyle.new", json!({"attrs": {"size": 30}, "fromSelection": false})).unwrap();
+    let id = r["id"].as_u64().unwrap() as u32;
+    let dup = CharacterStyleDef { id, name: "Copy".into(), attrs: Default::default() };
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).text_styles.character.push(dup);
+    let l = s.execute("type.characterStyle.list", json!({})).unwrap();
+    assert_eq!(l["styles"].as_array().unwrap().len(), 2, "the second entry with the id is not listed");
+    assert_eq!(l["styles"][1]["name"], "Character Style 1");
+    assert!(l["warnings"][0].as_str().unwrap().contains("duplicate style id"));
+}
+
+#[test]
+fn a_stored_paragraph_style_with_the_reserved_id_is_not_listed_and_warns() {
+    let (mut s, _) = session("Hello");
+    let basic = s.active().unwrap().doc.text_styles.basic.id;
+    let extra = ParagraphStyleDef { id: basic, name: "Shadow".into(), ..Default::default() };
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).text_styles.paragraph.push(extra);
+    let l = s.execute("type.paragraphStyle.list", json!({})).unwrap();
+    assert_eq!(l["styles"].as_array().unwrap().len(), 1, "only Basic Paragraph: the stored style could not be applied");
+    assert!(l["warnings"][0].as_str().unwrap().contains("Shadow"));
+}

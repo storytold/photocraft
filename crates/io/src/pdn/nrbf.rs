@@ -51,6 +51,9 @@ pub(super) struct Class {
     name: String,
     names: Vec<String>,
     primitives: Vec<Option<u8>>,
+    /// Member name → first position: a layer array can look fields up in one object of many
+    /// members thousands of times, and a scan of `names` per lookup was quadratic.
+    index: HashMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -100,7 +103,7 @@ impl Graph {
 
     pub fn optional_field<'a>(&'a self, value: &'a Value, name: &str) -> Result<Option<&'a Value>> {
         match self.resolve(value)? {
-            Value::Object { class, members } => Ok(class.names.iter().position(|n| n == name).and_then(|i| members.get(i))),
+            Value::Object { class, members } => Ok(class.index.get(name).and_then(|&i| members.get(i))),
             _ => Err(invalid("expected a serialized object")),
         }
     }
@@ -362,7 +365,11 @@ impl Parser<'_, '_> {
                 if matches!(tag, 3 | 5) {
                     self.reader.le_i32()?;
                 }
-                let class = Arc::new(Class { name, names, primitives });
+                let mut index = HashMap::with_capacity(names.len());
+                for (i, n) in names.iter().enumerate() {
+                    index.entry(n.clone()).or_insert(i);
+                }
+                let class = Arc::new(Class { name, names, primitives, index });
                 if self.classes.insert(id, class.clone()).is_some() {
                     return Err(invalid("duplicate class metadata"));
                 }

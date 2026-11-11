@@ -48,8 +48,13 @@ pub struct AslImport {
 /// Patterns an effect list refers to: `(name, id)` in first-use order, without repeats.
 pub fn referenced_patterns(effects: &[Effect]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
+    // Seen ids and the names of every reference kept (a reference without an id is a repeat of any
+    // kept one with its name): a style of many pattern strokes must not rescan the list per reference.
+    let (mut ids, mut names): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
     let mut push = |name: &str, id: &str| {
-        if !out.iter().any(|(n, i)| if id.is_empty() { n == name } else { i == id }) {
+        let new = if id.is_empty() { names.insert(name.to_string()) } else { ids.insert(id.to_string()) };
+        if new {
+            names.insert(name.to_string());
             out.push((name.to_string(), id.to_string()));
         }
     };
@@ -279,6 +284,22 @@ mod tests {
                 fill_opacity: None,
             },
         ]
+    }
+
+    /// A name-only reference after a reference with that name and an id is a repeat of it.
+    #[test]
+    fn name_only_reference_repeats_a_named_one() {
+        let overlay = |id: &str| Effect::PatternOverlay {
+            common: FxCommon { enabled: true, blend: BlendMode::Normal, opacity: 1.0 },
+            name: "N".into(),
+            id: id.into(),
+            scale: 1.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        };
+        assert_eq!(referenced_patterns(&[overlay("X"), overlay("")]), vec![("N".to_string(), "X".to_string())]);
+        assert_eq!(referenced_patterns(&[overlay(""), overlay("X")]).len(), 2);
     }
 
     #[test]

@@ -71,15 +71,22 @@ fn groups(bytes: &[u8]) -> Result<Vec<Group>, IoError> {
             continue;
         }
         let mut found: Vec<Group> = Vec::new();
+        // Prefix → slot in `found`, so a file of many prefixes is grouped in one pass.
+        let mut slots: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
         for c in &part.channels {
             let Some((prefix, base)) = channel_base_split(&c.name) else { continue };
             if prefix.chars().last().is_some_and(|ch| ch.is_ascii_digit()) {
                 continue;
             }
-            if found.iter_mut().all(|g| g.prefix != prefix) {
-                found.push(Group { prefix: prefix.to_string(), part: part.index, channels: Vec::new(), alpha: None });
+            // Only RGB(A) channels make or join a group; other suffixes never add an entry.
+            if !matches!(base, "R" | "G" | "B" | "A") {
+                continue;
             }
-            let Some(group) = found.iter_mut().find(|g| g.prefix == prefix) else { continue };
+            let slot = *slots.entry(prefix).or_insert_with(|| {
+                found.push(Group { prefix: prefix.to_string(), part: part.index, channels: Vec::new(), alpha: None });
+                found.len() - 1
+            });
+            let group = &mut found[slot];
             match base {
                 "R" | "G" | "B" => group.channels.push(c.name.clone()),
                 "A" => group.alpha = Some(c.name.clone()),

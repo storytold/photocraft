@@ -10,8 +10,10 @@ use crate::{EngineError, Result, Session};
 /// Append incoming groups whose name the library doesn't already have; returns how many were added.
 fn merge_groups<T>(cur: &mut Vec<Group<T>>, incoming: Vec<Group<T>>) -> usize {
     let mut added = 0;
+    // Names seen so far: a file of many distinct groups must not rescan the growing library.
+    let mut names: std::collections::HashSet<String> = cur.iter().map(|e| e.name.clone()).collect();
     for g in incoming {
-        if !cur.iter().any(|e| e.name == g.name) {
+        if names.insert(g.name.clone()) {
             cur.push(g);
             added += 1;
         }
