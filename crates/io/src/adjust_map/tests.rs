@@ -126,7 +126,7 @@ fn gradient_map_reverse_and_dither_keep_the_stops_block() {
     let original = grdm_with((2, [65535, 65535, 65535, 0]), (7, [10000, 0, 0, 0]));
     let Adjustment::GradientMap { stops, .. } = parse(b"grdm", &original, None, Channels::Cmyk) else { panic!() };
     let mut data = original.clone();
-    let target = Adjustment::GradientMap { stops: stops.clone(), reverse: true, dither: true };
+    let target = Adjustment::GradientMap { stops: stops.clone(), reverse: true, dither: true, source: None };
     assert!(retarget_gradient_map(&mut data, &target, Channels::Cmyk));
     assert_eq!(&data[2..4], &[1, 1]);
     assert_eq!(data[4..], original[4..], "the stops keep their colour spaces");
@@ -135,7 +135,7 @@ fn gradient_map_reverse_and_dither_keep_the_stops_block() {
     let mut edited = stops;
     edited[0].1 = [0.5; 3];
     let mut data2 = original.clone();
-    let target = Adjustment::GradientMap { stops: edited, reverse: false, dither: false };
+    let target = Adjustment::GradientMap { stops: edited, reverse: false, dither: false, source: None };
     assert!(!retarget_gradient_map(&mut data2, &target, Channels::Cmyk));
     assert_eq!(data2, original);
     assert!(!retarget_gradient_map(&mut [], &target, Channels::Cmyk));
@@ -203,8 +203,13 @@ fn roundtrips() {
     let b = write(&inkl);
     assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), inkl);
     rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3].into() });
-    rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: false });
-    rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true });
+    rt(Adjustment::GradientMap {
+        stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])],
+        reverse: true,
+        dither: false,
+        source: None,
+    });
+    rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true, source: None });
     rt(Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -100.0, 100.0]) });
     rt(Adjustment::SelectiveColor { relative: false, adjustments: [[0.0; 4]; 9] });
     rt(Adjustment::Vibrance { vibrance: 35.0, saturation: -12.0 });
@@ -658,7 +663,7 @@ fn degenerate_adjustments_still_get_an_encoding() {
     for (stops, want) in
         [(vec![], vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])]), (vec![(0.3, [0.2, 0.4, 0.6])], vec![(0.0, [0.2, 0.4, 0.6]), (1.0, [0.2, 0.4, 0.6])])]
     {
-        let b = write(&Adjustment::GradientMap { stops, reverse: true, dither: false });
+        let b = write(&Adjustment::GradientMap { stops, reverse: true, dither: false, source: None });
         let back = parse(&b[0].0, &b[0].1, None, Channels::Rgb);
         let Adjustment::GradientMap { stops, reverse: true, .. } = back else { panic!("{back:?}") };
         assert_eq!(stops.len(), want.len());
@@ -714,4 +719,26 @@ fn gray_uses_first_channel_record_for_all() {
 fn legacy_brit_without_cged() {
     let a = parse(b"brit", &[0, 10, 0xff, 0xf6, 0, 127, 0], None, Channels::Rgb);
     assert_eq!(a, Adjustment::BrightnessContrast { brightness: 10.0, contrast: -10.0, legacy: true });
+}
+
+/// #8351: a Photoshop gradient with Smoothness, midpoints and a method keeps its own stops
+/// next to the dense baked ones, and a save writes them back (not the baked stops).
+#[test]
+fn gradient_map_keeps_photoshops_stops_midpoints_and_smoothness() {
+    use photocraft_doc::adjust::GradientSource;
+    let src =
+        GradientSource { stops: vec![(0.0, [0.1, 0.2, 0.6]), (1.0, [1.0, 0.8, 0.2])], midpoints: vec![0.3], smoothness: 0.8, method: "perceptual".into() };
+    let block = write_grdm(&src.stops, &src.midpoints, src.smoothness, crate::gradient_bake::Method::Perceptual, false, true);
+    let a = parse(b"grdm", &block, None, Channels::Rgb);
+    let Adjustment::GradientMap { stops, dither: true, source: Some(kept), .. } = &a else { panic!("{a:?}") };
+    assert!(stops.len() > 2, "rendered from the baked stops");
+    assert_eq!(kept.stops.len(), 2);
+    assert!((kept.midpoints[0] - 0.3).abs() < 1e-6 && (kept.smoothness - 0.8).abs() < 1e-3 && kept.method == "perceptual", "{kept:?}");
+    assert_eq!(*stops, crate::gradient_bake::bake_source(kept), "the baked stops are the source baked");
+    // A save writes Photoshop's two stops back: reading it again gives the same map.
+    let written = write(&a);
+    let back = parse(&written[0].0, &written[0].1, None, Channels::Rgb);
+    assert_eq!(back, a);
+    let Adjustment::GradientMap { source: Some(again), .. } = &back else { panic!() };
+    assert_eq!(again.stops.len(), 2, "two stops in the file, not the baked ones");
 }

@@ -740,19 +740,9 @@ impl LiveStroke {
                 }
                 return Ok(dmg);
             }
-            let mut dmg = Rect::EMPTY;
             let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
-            if !old.is_empty() {
-                // Back to the stroke without the previous tail.
-                surf.write_region(old, &self.pre.read_region(old));
-                self.renderer.mark_dirty(old);
-                dmg = old;
-            }
-            dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
-            if let Some(mut tail) = self.renderer.tail_preview() {
-                self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
-                dmg = dmg.union(&self.tail);
-            }
+            let (dmg, tail) = self.renderer.composite_live(old, &self.pre, surf, self.sel.as_ref(), self.lock);
+            self.tail = tail;
             if let Some(colors) = self.colors {
                 crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
             }
@@ -813,6 +803,33 @@ fn mixer_clean(s: &mut Session, _: &Value) -> Result<Value> {
     s.tools.mixer.clean();
     s.tools.mixer.color = Some(s.tools.foreground);
     Ok(serde_json::to_value(&s.tools.mixer).unwrap_or_default())
+}
+
+/// A Mixer Brush toggle command: its id and the setting it flips.
+type MixerToggle = (&'static str, fn(&mut photocraft_paint::mixer::MixerSettings) -> &mut bool);
+
+/// The Mixer Brush's options-bar switches the toggle commands flip (#11959): (command id, field).
+const MIXER_TOGGLES: [MixerToggle; 3] = [
+    ("brush.mixer.autoLoad", |m| &mut m.load_after_stroke),
+    ("brush.mixer.autoClean", |m| &mut m.clean_after_stroke),
+    ("brush.mixer.sampleAllLayers", |m| &mut m.sample_all_layers),
+];
+
+/// `brush.mixer.autoLoad`, `brush.mixer.autoClean` and `brush.mixer.sampleAllLayers`: flip the
+/// Mixer Brush's Load the brush after each stroke, Clean the brush after each stroke or Sample All
+/// Layers (`on` sets it instead), so Keyboard Shortcuts can give them a key. Returns the new value.
+fn mixer_toggle(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let field = MIXER_TOGGLES.iter().find(|(id, _)| *id == cmd).map(|(_, f)| *f).ok_or_else(|| bad(cmd, "unknown Mixer Brush switch"))?;
+    let on = match p.get("on").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(cmd, "`on` must be true or false"))?),
+    };
+    let value = field(&mut s.tools.brush.mixer);
+    *value = on.unwrap_or(!*value);
+    let on = *value;
+    // Saved like any other brush change (the last-brush persistence watches the revision).
+    s.tools.brush_changed();
+    Ok(json!({ "on": on }))
 }
 
 /// `paint.mixerLoad`: ⌥-click with the Mixer Brush loads the reservoir from the canvas colour at
@@ -1365,6 +1382,30 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("brush.mixer.load", "Load Mixer Brush", r##"{"color":"#rrggbb"|[r,g,b,a?] 0..1?=foreground}"##, always, mixer_load, true),
         spec!("brush.mixer.clean", "Clean Mixer Brush", "{}", always, mixer_clean, true),
+        spec!(
+            "brush.mixer.autoLoad",
+            "Mixer Brush Auto-Load",
+            r#"{"on":bool? (none: toggle)} → {"on":bool} (the Mixer Brush's Load the brush after each stroke)"#,
+            always,
+            |s, p| mixer_toggle(s, p, "brush.mixer.autoLoad"),
+            true
+        ),
+        spec!(
+            "brush.mixer.autoClean",
+            "Mixer Brush Auto-Clean",
+            r#"{"on":bool? (none: toggle)} → {"on":bool} (the Mixer Brush's Clean the brush after each stroke)"#,
+            always,
+            |s, p| mixer_toggle(s, p, "brush.mixer.autoClean"),
+            true
+        ),
+        spec!(
+            "brush.mixer.sampleAllLayers",
+            "Mixer Brush Sample All Layers",
+            r#"{"on":bool? (none: toggle)} → {"on":bool} (the Mixer Brush's Sample All Layers)"#,
+            always,
+            |s, p| mixer_toggle(s, p, "brush.mixer.sampleAllLayers"),
+            true
+        ),
         spec!(
             "paint.mixerLoad",
             "Load Mixer Brush",
