@@ -98,6 +98,8 @@ fn right_click_off_a_sampler_greys_every_row() {
     assert_eq!(samplers(&app).len(), 2, "nothing deleted, no sampler placed");
 }
 
+/// The right-click menu's Delete removes the sampler under the pointer, closes the menu, and
+/// the samplers after it move up a number.
 #[test]
 fn delete_removes_the_sampler_under_the_pointer_and_renumbers_the_rest() {
     let (mut app, ctx) = app();
@@ -112,6 +114,8 @@ fn delete_removes_the_sampler_under_the_pointer_and_renumbers_the_rest() {
     assert_eq!(listed["samplers"][1]["number"], json!(2));
 }
 
+/// Delete never removes a different sampler when the list changes while the menu is open: one
+/// deleted or moved meanwhile, or another document with a sampler at the same index and spot.
 #[test]
 fn delete_never_removes_another_sampler_after_the_list_changes_under_the_menu() {
     let (mut app, ctx) = app();
@@ -150,6 +154,8 @@ fn readout_rows_do_nothing_until_samplers_have_readout_modes() {
     assert_eq!(samplers(&app).len(), 2);
 }
 
+/// A sampler gone while the menu is open, a non-finite point, or no document at all: Delete
+/// greys out and nothing panics.
 #[test]
 fn a_stale_sampler_or_odd_point_fails_gracefully() {
     let (mut app, ctx) = app();

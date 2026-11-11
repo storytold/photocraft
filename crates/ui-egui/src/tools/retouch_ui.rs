@@ -4,6 +4,7 @@
 //! and the clone-source marker.
 
 use egui::{Color32, Stroke, vec2};
+use photocraft_color::BlendMode;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -48,13 +49,55 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 }
 
 /// History Brush params for the live preview and the commit (without `points` and `target`): the
-/// options bar's Mode, which is the tool's own brush's.
+/// options bar's Mode and the tool's own brush. For an Eraser with Erase to History they also
+/// carry `eraseToHistory` and the Eraser's Pencil or Block tip.
 pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
-    json!({
-        "mode": app.session.tools.brush.mode.label(),
-        "opacity": app.session.tools.brush.opacity * 100.0,
-        "flow": app.session.tools.brush.flow * 100.0,
-    })
+    history_brush_params_with(app, app.ui.tool_options.erase_to_history)
+}
+
+/// [`history_brush_params`], with Erase to History on whatever the option says: ⌥ reverses the
+/// option for one stroke.
+fn history_brush_params_with(app: &PhotocraftApp, erase_to_history: bool) -> Value {
+    // The tool's tip goes in the params: the session's brush changes with the tool, if a tool key
+    // is pressed mid-stroke.
+    let brush = &app.session.tools.brush;
+    let mut p = json!({
+        "mode": brush.mode.label(),
+        "opacity": brush.opacity * 100.0,
+        "flow": brush.flow * 100.0,
+        "size": brush.size,
+        "hardness": brush.hardness * 100.0,
+        "spacing": brush.spacing * 100.0,
+    });
+    // The whole brush too (tip shape, sampled tip, dynamics, smoothing), so the commit and any
+    // replay paint with the brush the stroke was pressed with. Stored tips go as references
+    // (`remembered_settings`, as each tool's remembered brush); only with a sampled tip or pattern
+    // too big for that, not yet in the preset store, does the brush go in full. `square` is
+    // written out even when off.
+    let mut whole = photocraft_engine::brush_cmds::remembered_settings(brush).or_else(|| serde_json::to_value(brush).ok()).unwrap_or(Value::Null);
+    if let Some(o) = whole.as_object_mut() {
+        o.insert("square".into(), json!(brush.square));
+        p["brush"] = whole;
+    }
+    if app.ui.tool == Tool::Eraser && erase_to_history {
+        p["eraseToHistory"] = json!(true);
+        // The Eraser's Pencil and Block tips (as `strokes::stroke_params`).
+        if crate::eraser_ui::pencil_mode(app, Tool::Eraser) {
+            p["pencil"] = json!(true);
+            // Pencil mode has no Flow control: the Brush mode's setting must not carry over.
+            p["flow"] = json!(100.0);
+        }
+        if crate::eraser_ui::block_mode(app, Tool::Eraser) {
+            p["block"] = json!(true);
+            p["zoom"] = json!(app.point_zoom());
+        }
+    }
+    p
+}
+
+/// The options a stroke of `tool` keeps from its press (`canvas::Drag::history_params`).
+pub(crate) fn history_params_at_press(app: &PhotocraftApp, tool: Tool, alt: bool) -> Option<Value> {
+    (tool == Tool::HistoryBrush).then(|| history_brush_params_with(app, alt != app.ui.tool_options.erase_to_history))
 }
 
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
@@ -64,14 +107,38 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
     Some(match tool {
         Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all.blur})),
         Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all.sharpen})),
-        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge})),
+        Tool::Smudge => (
+            "paint.smudge",
+            json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge, "mode": o.smudge_mode.label()}),
+        ),
         Tool::Dodge | Tool::Burn => (
             if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
             json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
         ),
-        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "vibrance": o.vibrance})),
+        // Flow as the bar's field stores it (#12976), so a restored fraction paints what the bar shows.
+        Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "flow": crate::eraser_ui::stored_tolerance(o.sponge_flow), "vibrance": o.vibrance})),
         _ => return None,
     })
+}
+
+/// The Smudge tool's Painting Modes in the reference application's order (#12959); its list draws
+/// a line above Darken and above Hue.
+pub(crate) const SMUDGE_MODES: [BlendMode; 7] =
+    [BlendMode::Normal, BlendMode::Darken, BlendMode::Lighten, BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity];
+
+/// Whether the Smudge Mode list draws a line above `mode`.
+pub(crate) fn smudge_mode_starts_group(mode: BlendMode) -> bool {
+    matches!(mode, BlendMode::Darken | BlendMode::Hue)
+}
+
+/// The Smudge options bar's Mode dropdown (#12959), first in the bar after the brush controls.
+fn smudge_mode_dropdown(ui: &mut egui::Ui, mode: &mut BlendMode) {
+    opt(ui, tl!("Mode:"));
+    let opts: Vec<(BlendMode, &str)> = SMUDGE_MODES.iter().map(|m| (*m, m.label())).collect();
+    crate::widgets::dropdown_wheel_grouped(ui, "smudge-mode", tl!("Mode"), mode, &opts, 100.0, |m| smudge_mode_starts_group(*m));
+    if let Some(button) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("smudge-mode"))) {
+        button.on_hover_text(tl!("Painting Mode"));
+    }
 }
 
 /// `paint.colorReplacement` params from the options bar (without `points`): shared by the live
@@ -104,8 +171,8 @@ pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> 
         "scale": o.pattern_stamp_scale,
         "angle": o.pattern_stamp_angle,
         "seed": stroke_seed(points),
-        // The options bar's Mode is the tool's own brush's.
-        "mode": app.session.tools.brush.mode.label(),
+        // The options bar's Mode is the tool's own brush's; Behind is a mode of that list.
+        "mode": if app.session.tools.brush.behind { "Behind" } else { app.session.tools.brush.mode.label() },
     });
     if o.pattern_stamp_aligned
         && let Some(ph) = app.ui.pattern_stamp_phase
@@ -129,6 +196,11 @@ pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
 
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers, line: bool) -> bool {
+    finish_stroke_with(app, tool, points, mods, line, None)
+}
+
+/// [`finish_stroke`], with a History Brush stroke's options as they were at the press.
+pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers, line: bool, history: Option<Value>) -> bool {
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
     let (cmd, mut p): (&str, Value) = match tool {
@@ -157,7 +229,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             };
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
         }
-        Tool::HistoryBrush => ("paint.historyBrush", history_brush_params(app)),
+        Tool::HistoryBrush => ("paint.historyBrush", history.unwrap_or_else(|| history_brush_params(app))),
         Tool::ArtHistoryBrush => (
             "paint.artHistoryBrush",
             json!({
@@ -527,6 +599,12 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 /// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
 /// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
+    if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
+        crate::object_finder::clear(app);
+        crate::brush_refusal::prompt(app, tl!(why));
+        return;
+    }
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let sample_all = app.ui.tool_options.sample_all.object_selection;
@@ -611,11 +689,6 @@ fn opt(ui: &mut egui::Ui, text: &str) {
     let label = ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
     // The caption scrubs and names the field or dropdown drawn right after it.
     crate::widgets::scrub_option_label(ui, &label);
-}
-
-fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
-    opt(ui, label);
-    crate::widgets::value_field(ui, v, 1.0..=100.0, "%", 58.0);
 }
 
 const STRUCTURE_RANGE_ALERT: &str = "An integer between 1 and 7 is required. Closest value inserted.";
@@ -896,10 +969,28 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Mode:"));
             let opts = [("desaturate".to_string(), tl!("Desaturate")), ("saturate".to_string(), tl!("Saturate"))];
             crate::widgets::dropdown(ui, "sponge-mode", tl!("Mode"), &mut o.sponge_mode, &opts, 110.0);
+            // Flow (#12976): whole numbers 1..100 with the "Closest value inserted" alert, and a slider arrow.
+            let label = tl!("Flow:");
+            opt(ui, label);
+            let (_, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut o.sponge_flow, 1.0..=100.0, "%", 58.0);
+            cam_amount_slider(ui, tl!("Flow"), &mut o.sponge_flow, 1.0, 100.0, "Flow");
             crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
+            }
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
-            pct(ui, tl!("Strength:"), &mut o.strength);
+            if tool == Tool::Smudge {
+                smudge_mode_dropdown(ui, &mut o.smudge_mode);
+            }
+            let label = tl!("Strength:");
+            opt(ui, label);
+            // Measured for Blur (#12650), Sharpen (#12949) and Smudge (#12962); a copy, so a shared fraction is not rounded.
+            let mut s = o.strength;
+            let (r, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 1.0..=100.0, "%", 58.0);
+            if r.changed() {
+                o.strength = s;
+            }
             if let Some(all) = o.sample_all.slot(tool) {
                 crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
             }
@@ -908,6 +999,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             if tool == Tool::Smudge {
                 crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
+            }
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
             }
         }
         Tool::ColorReplacement => {
@@ -1074,3 +1168,11 @@ mod cam_options_bar_tests;
 #[cfg(test)]
 #[path = "../burn_bar_tooltips_tests.rs"]
 mod burn_bar_tooltips_tests;
+
+#[cfg(test)]
+#[path = "../smudge_mode_bar_tests.rs"]
+mod smudge_mode_bar_tests;
+
+#[cfg(test)]
+#[path = "../sponge_flow_field_tests.rs"]
+mod sponge_flow_field_tests;
