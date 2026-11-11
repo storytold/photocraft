@@ -13,7 +13,8 @@ fn app() -> PhotocraftApp {
 }
 
 fn shape(app: &mut PhotocraftApp, kind: &str, radius: f64) {
-    app.run("shape.create", json!({"kind": kind, "rect": [400, 300, 200, 100], "radii": [radius; 4], "fill": "#ff0000"})).unwrap();
+    let radii = [radius; 4];
+    app.run("shape.create", json!({"kind": kind, "rect": [400, 300, 200, 100], "radii": radii, "fill": "#ff0000"})).unwrap();
 }
 
 fn gesture(app: &mut PhotocraftApp, [x, y]: [f64; 2], [end_x, end_y]: [f64; 2]) {
