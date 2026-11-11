@@ -965,9 +965,12 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if untouched
             && let Some(w) = &stored
             && let (Some(t), Some(pv)) = (app.ui.transform.as_mut(), app.transform_preview.as_mut())
-            && pv.other_texels.is_some()
+            && pv.other_texels.as_ref().is_some_and(|o| !o.kept)
         {
+            // As the first visit: the box as it is, kept for the way back, and the warp's own.
+            t.warp_box = Some(crate::state::WarpBox { rect: t.rect, quad: t.quad, start: t.start, pivot: t.pivot });
             swap_mode_texels(t, pv);
+            t.start = None;
             t.warp_entry = Some(w.clone());
             t.warp = Some(w.clone());
             return;
@@ -1038,19 +1041,25 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let h = Homography::rect_to_quad(t.rect, t.quad).unwrap_or(Homography::IDENTITY);
     let placed = app.transform_preview.as_ref().and_then(|pv| pv.placed);
     t.warp_box = Some(crate::state::WarpBox { rect: t.rect, quad: t.quad, start: t.start, pivot: t.pivot });
+    // The held warp as the box shows it and a commit would apply it ([`TransformSession::held_doc_warp`]:
+    // under a perspective box its mesh is split first, as a projective map doesn't keep Béziers).
+    let shown = t.held_doc_warp();
     let warp = match t.held_warp.take() {
         // Back from another mode with a warp held: the box's move since then carries it along.
         Some(held) => {
-            let d = Homography::quad_to_quad(t.start_quad(), t.quad).unwrap_or(Homography::IDENTITY);
-            let mesh = held.to_mesh(1, 1).map_points(|p| {
-                let (x, y) = d.apply(p[0], p[1]);
-                [x, y]
+            let warp = shown.unwrap_or_else(|| {
+                let d = Homography::quad_to_quad(t.start_quad(), t.quad).unwrap_or(Homography::IDENTITY);
+                let mesh = held.to_mesh(1, 1).map_points(|p| {
+                    let (x, y) = d.apply(p[0], p[1]);
+                    [x, y]
+                });
+                Warp::custom(mesh, held.bounds)
             });
             t.rect = held.bounds;
             t.quad = corners(held.bounds);
             t.start = None;
             t.warp_entry = None;
-            Warp::custom(mesh, held.bounds)
+            warp
         }
         // A box that opened on a smart object's placement (whose contents couldn't be read here):
         // the warp covers its texels, moved by the box since it opened.
@@ -1120,7 +1129,7 @@ fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [
     let Some(pv) = app.transform_preview.as_mut() else { return false };
     let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
     let unwarped = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}-unwarped"), image, uv);
-    pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.texture, unwarped), rect: box_rect, quad: box_quad });
+    pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.texture, unwarped), rect: box_rect, quad: box_quad, kept: false });
     true
 }
 
@@ -1201,22 +1210,29 @@ pub fn leave_warp(app: &mut PhotocraftApp) {
     // shows the render with it again; changed, it is held like any other (its preview already
     // shows the source unwarped, so it stays).
     if let (Some(t), Some(pv)) = (app.ui.transform.as_mut(), app.transform_preview.as_mut())
-        && pv.other_texels.is_some()
+        && pv.other_texels.as_ref().is_some_and(|o| !o.kept)
         && t.warp_place.is_none()
     {
         let untouched = t.warp.is_none() || t.warp_entry.as_ref() == t.warp.as_ref();
         if untouched {
             t.warp = None;
             t.warp_entry = None;
-            t.warp_box = None;
             swap_mode_texels(t, pv);
+            // The box as Warp opened on it: the swap gives back its rect and quad, and its start
+            // quad (cleared for the warp's box) comes back with its pivot.
+            if let Some(b) = t.warp_box.take() {
+                (t.start, t.pivot) = (b.start, b.pivot);
+            }
             pv.split_tool = None;
             pv.split_pointer = None;
             pv.split_placing = false;
             pv.split_quick = false;
             return;
         }
-        pv.other_texels = None;
+        // Kept, not dropped: Undo back to the box before Warp shows that render again.
+        if let Some(o) = pv.other_texels.as_mut() {
+            o.kept = true;
+        }
     }
     let layer_warp = holds_warp(app);
     let Some(t) = app.ui.transform.as_mut() else { return };

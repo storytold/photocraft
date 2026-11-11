@@ -315,29 +315,13 @@ pub(crate) fn selection_ants(
     let scr = |(x, y): (f64, f64)| xf.to_screen(x as f32, y as f32);
     let doc = |p: [i32; 2]| [f64::from(p[0]), f64::from(p[1])];
     let along = |a: [f64; 2], b: [f64; 2], k: f64| [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
-    // A smart object's warp (being edited, or held under the box) moves the outline as it moves
-    // the contents: from what Warp opened on to the warp shown now (#8927).
-    let contents = match (&t.warp, t.warp_place, &t.held_warp, t.held_place, &t.warp_origin) {
-        (Some(w), Some(place), _, _, Some((w0, p0))) => {
-            photocraft_engine::warp_cmds::contents_move(Homography(*p0), Some(w0.clone()), Homography(place), Some(w.clone())).ok()
-        }
-        (None, _, Some(w), Some(place), Some((w0, p0))) => {
-            photocraft_engine::warp_cmds::contents_move(Homography(*p0), Some(w0.clone()), t.box_move().mul(&Homography(place)), Some(w.clone())).ok()
-        }
-        _ => None,
-    };
     // A layer's warp held under the box: as the box leaves it, as the commit applies it.
     let held = t.held_doc_warp().filter(|_| t.warp.is_none());
-    let warp_map;
-    let bent: Option<&dyn Fn(f64, f64) -> (f64, f64)> = match (&contents, t.warp.as_ref().or(held.as_ref())) {
-        (Some(f), _) => Some(f),
-        (None, Some(w)) => {
-            warp_map = |x: f64, y: f64| w.map(x, y);
-            Some(&warp_map)
-        }
-        _ => None,
-    };
-    if let Some(map) = bent {
+    // A smart object's warp (being edited, or held under the box) moves the outline as it moves
+    // the contents: from what Warp opened on to the warp shown now (#8927).
+    let contents_moves = matches!((&t.warp, t.warp_place, &t.warp_origin), (Some(_), Some(_), Some(_)))
+        || matches!((&t.warp, &t.held_warp, t.held_place, &t.warp_origin), (None, Some(_), Some(_), Some(_)));
+    if contents_moves || t.warp.is_some() || held.is_some() {
         // A warp bends the outline's straight runs: each is drawn in pieces about 8 points long.
         let piece = (8.0 / f64::from(xf.zoom.max(1e-3))).max(1.0);
         let key = AntsKey {
@@ -353,12 +337,35 @@ pub(crate) fn selection_ants(
         };
         let cache = app.transform_preview.as_ref().map(|pv| &pv.ants);
         let mut held_cache = cache.map(|c| c.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        let fresh = match held_cache.as_deref() {
-            Some(Some((k, _))) => *k != key,
-            _ => true,
+        let shapes = |runs: &[Vec<[f64; 2]>]| {
+            let lines = runs.iter().flat_map(|run| run.windows(2).map(|w| (scr((w[0][0], w[0][1])), scr((w[1][0], w[1][1])))));
+            crate::canvas::marching_ants_line_shapes(painter, lines, time)
         };
-        let computed;
-        let runs: &[Vec<[f64; 2]>] = if fresh {
+        // The outline is cached by what moves it: the maps are built only when it changes.
+        if let Some(Some((k, pts))) = held_cache.as_deref()
+            && *k == key
+        {
+            return Some(shapes(pts));
+        }
+        let contents = match (&t.warp, t.warp_place, &t.held_warp, t.held_place, &t.warp_origin) {
+            (Some(w), Some(place), _, _, Some((w0, p0))) => {
+                photocraft_engine::warp_cmds::contents_move(Homography(*p0), Some(w0.clone()), Homography(place), Some(w.clone())).ok()
+            }
+            (None, _, Some(w), Some(place), Some((w0, p0))) => {
+                photocraft_engine::warp_cmds::contents_move(Homography(*p0), Some(w0.clone()), t.box_move().mul(&Homography(place)), Some(w.clone())).ok()
+            }
+            _ => None,
+        };
+        let warp_map;
+        let bent: Option<&dyn Fn(f64, f64) -> (f64, f64)> = match (&contents, t.warp.as_ref().or(held.as_ref())) {
+            (Some(f), _) => Some(f),
+            (None, Some(w)) => {
+                warp_map = |x: f64, y: f64| w.map(x, y);
+                Some(&warp_map)
+            }
+            _ => None,
+        };
+        if let Some(map) = bent {
             let pts: Vec<Vec<[f64; 2]>> = segs
                 .iter()
                 .map(|(a, b)| {
@@ -373,19 +380,14 @@ pub(crate) fn selection_ants(
                         .collect()
                 })
                 .collect();
-            match held_cache.as_deref_mut() {
-                Some(slot) => &slot.insert((key, pts)).1,
-                None => {
-                    computed = pts;
-                    &computed
-                }
+            let out = shapes(&pts);
+            if let Some(slot) = held_cache.as_deref_mut() {
+                *slot = Some((key, pts));
             }
-        } else {
-            held_cache.as_deref().and_then(|c| c.as_ref()).map_or(&[][..], |(_, pts)| pts.as_slice())
-        };
-        let lines = runs.iter().flat_map(|run| run.windows(2).map(|w| (scr((w[0][0], w[0][1])), scr((w[1][0], w[1][1])))));
-        Some(crate::canvas::marching_ants_line_shapes(painter, lines, time))
-    } else if let Some(h) = Homography::quad_to_quad(t.start_quad(), t.quad) {
+            return Some(out);
+        }
+    }
+    if let Some(h) = Homography::quad_to_quad(t.start_quad(), t.quad) {
         // The box's move since it opened (from a smart object's placement, or its rect).
         let s = t.start_quad();
         let r = [

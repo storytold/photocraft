@@ -373,6 +373,42 @@ fn active_budget() -> u64 {
     (1 << 20) * PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true).bytes_per_pixel() as u64
 }
 
+/// [`check_budget`] for a warp by any map `f` (a mesh, not a homography): the result's box is
+/// where `f` takes a grid over `src`, which bounds it for the smooth maps a warp makes.
+pub(crate) fn check_mapped_budget(src: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), what: &str, format: PixelFormat) -> Result<()> {
+    if src.is_empty() {
+        return Ok(());
+    }
+    const N: u32 = 16;
+    let (x0, y0, w, h) = (f64::from(src.x0), f64::from(src.y0), f64::from(src.width()), f64::from(src.height()));
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for j in 0..=N {
+        for i in 0..=N {
+            let (x, y) = f(x0 + w * f64::from(i) / f64::from(N), y0 + h * f64::from(j) / f64::from(N));
+            b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+        }
+    }
+    let reach = f64::from(WARP_REACH);
+    if !b.iter().all(|v| v.is_finite() && v.abs() <= reach) {
+        return Err(EngineError::Other(format!(
+            "too large to transform: the transformed {what} would reach past ±{WARP_REACH} px, the farthest a transform places pixels; the document was not changed"
+        )));
+    }
+    let (rw, rh) = ((b[2] - b[0]).ceil() as u64 + 1, (b[3] - b[1]).ceil() as u64 + 1);
+    let bpp = PixelFormat::new(format.mode, format.sample, true).bytes_per_pixel() as u64;
+    let bytes = rw.saturating_mul(rh).saturating_mul(bpp);
+    let budget = active_budget();
+    if bytes > budget {
+        let mb = |b: u64| b.div_ceil(1 << 20);
+        return Err(EngineError::Other(format!(
+            "too large to transform: the transformed {what} would be {rw} x {rh} px ({} MB), more than the {} MB Memory Usage allows (Preferences › Performance); the document was not changed",
+            mb(bytes),
+            budget >> 20
+        )));
+    }
+    Ok(())
+}
+
 /// Refuse a warp of the content inside `src` (pixels of `format`) by `h` whose result would take
 /// more memory than the budget, or reach past where the warp places pixels (it would be clipped),
 /// before anything is built. `what` names the surface in the message, which names the setting or

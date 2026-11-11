@@ -538,6 +538,8 @@ fn a_smart_objects_warp_is_edited_and_stored_in_source_space() {
         json!({"layer": id.0, "contents": true, "warp": w, "placement": [1, 0, 0]}),
         json!({"layer": id.0, "contents": true, "warp": w, "placement": [0, 0, 0, 0, 0, 0, 0, 0, 0]}),
         json!({"layer": id.0, "contents": true, "warp": w, "placement": "identity"}),
+        json!({"layer": id.0, "contents": true, "warp": w, "placement": [1, 0, 0, 0, 1, 0, 0, 0, 1, "x"]}),
+        json!({"layer": id.0, "contents": true, "warp": w, "placement": [1, 0, 0, 0, null, 1, 0, 0, 0, 1]}),
     ] {
         assert!(s.execute("edit.transform.warp", bad.clone()).is_err(), "accepted {bad}");
     }
@@ -568,6 +570,31 @@ fn a_smart_objects_warp_is_edited_and_stored_in_source_space() {
     // A pixel layer has no contents to warp.
     s.execute("layer.new.layer", json!({})).unwrap();
     assert!(s.execute("edit.transform.warp", json!({"contents": true, "warp": w})).is_err());
+}
+
+/// What moves with the contents is priced before the warp: a selection reaching far past the
+/// smart object is refused when, moved, it would exceed the memory budget, though the smart
+/// object itself would fit; without the selection the same warp goes ahead.
+#[test]
+fn a_contents_warp_prices_the_selection_it_moves() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    let st = s.active().unwrap();
+    let id = st.active_layer.unwrap();
+    let (w, place) = smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap();
+    // 30 times larger: the object 1200 x 900 px, the whole-canvas selection 3840 px a side.
+    let big = Homography([30.0, 0.0, 0.0, 0.0, 30.0, 0.0, 0.0, 0.0, 1.0]).mul(&place);
+    let steps = s.active().unwrap().history.past_len();
+    let r = s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": w, "placement": big.0}));
+    assert!(r.as_ref().is_err_and(|e| e.to_string().contains("selection")), "{r:?}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no step");
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": w, "placement": big.0})).unwrap();
 }
 
 /// The contents warp moves a linked layer mask with the contents, refuses a position-locked
@@ -694,4 +721,19 @@ fn a_warp_saved_without_its_envelope_flag_takes_its_presets() {
     let mut saved = serde_json::to_value(&custom).unwrap();
     saved.as_object_mut().unwrap().remove("envelope");
     assert_eq!(read(saved), custom, "a custom mesh is no envelope");
+}
+
+/// A point outside a warp keeps its offset from the warp's nearest edge point in the warp's
+/// output space: with the same warp before and after (a placement-only move), it doesn't move,
+/// also for a warp that turns its contents (a quarter turn here).
+#[test]
+fn an_unchanged_warp_leaves_what_lies_outside_it_in_place() {
+    let b = [0.0, 0.0, 100.0, 100.0];
+    let turned = Warp::custom(photocraft_geom::warp::BezierMesh::identity(b, 1, 1).map_points(|p| [-p[1], p[0]]), b);
+    let id = Homography::IDENTITY;
+    let same = contents_move(id, Some(turned.clone()), id, Some(turned)).unwrap();
+    for p in [(-50.0, 110.0), (-50.0, 50.0), (-120.0, -10.0), (10.0, 40.0)] {
+        let q = same(p.0, p.1);
+        assert!((q.0 - p.0).abs() < 1e-6 && (q.1 - p.1).abs() < 1e-6, "{p:?} moved to {q:?}");
+    }
 }
