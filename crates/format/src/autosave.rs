@@ -191,8 +191,15 @@ fn worker(rx: Receiver<Job>, bundle: PathBuf, sidecar: PathBuf, last: Arc<Mutex<
 fn write_sidecar(path: &Path, bytes: &[u8]) -> Result<()> {
     // The atomic writer follows a symlink at its destination; a link planted at the sidecar's
     // name in the recovery folder must not redirect the write, so it is replaced, not followed.
-    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        std::fs::remove_file(path)?;
+    if let Ok(meta) = std::fs::symlink_metadata(path)
+        && meta.file_type().is_symlink()
+    {
+        // Windows removes a directory symlink with `remove_dir`, not `remove_file`.
+        #[cfg(windows)]
+        let dir_link = std::os::windows::fs::FileTypeExt::is_symlink_dir(&meta.file_type());
+        #[cfg(not(windows))]
+        let dir_link = false;
+        if dir_link { std::fs::remove_dir(path)? } else { std::fs::remove_file(path)? }
     }
     struct SidecarFs;
     impl crate::atomic::AtomicFs for SidecarFs {
