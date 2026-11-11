@@ -101,3 +101,24 @@ fn a_bad_size_is_an_error_not_a_panic() {
     }
     assert_eq!(s.active().unwrap().color_samplers.len(), 1, "a refused add adds nothing");
 }
+
+#[test]
+fn bitmap_and_multichannel_documents_keep_the_point_readout_at_every_size() {
+    // #11732 did not measure these two modes, so they keep today's behaviour: a Point Sample
+    // reading, whatever Sample Size the Color Sampler and the Eyedropper share.
+    for mode in [photocraft_color::ColorMode::Bitmap, photocraft_color::ColorMode::Multichannel] {
+        let mut s = stripes();
+        s.edit("mode", |doc, _| {
+            doc.mode = mode;
+            Ok(())
+        })
+        .unwrap();
+        s.execute("view.colorSamplers.add", json!({"x": 352, "y": 150})).unwrap();
+        for (size, _) in MEASURED {
+            let l = s.execute("view.colorSamplers.list", json!({"size": size})).unwrap();
+            assert_eq!(l["samplers"][0]["rgb"], json!([255, 255, 255]), "{mode:?} at {size} by {size}");
+        }
+        let r = s.execute("view.colorSamplers.add", json!({"x": 352, "y": 150, "size": 3})).unwrap();
+        assert_eq!(r["point"]["rgb"], json!([255, 255, 255]), "{mode:?}: add reports the point readout");
+    }
+}

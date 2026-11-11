@@ -37,8 +37,10 @@ pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
 /// colour-managed CMYK percentages (the document's CMYK profile when it has one), averaged over
 /// the `size` × `size` box of document pixels centred on it (#11732: the Sample Size the Color
 /// Sampler shares with the Eyedropper; 1 is Point Sample). The box is in document pixels, so the
-/// zoom never changes it.
+/// zoom never changes it. Bitmap and Multichannel documents were not measured, so they keep the
+/// Point Sample reading at every size.
 pub fn readout(doc: &Document, pos: [f64; 2], size: u32) -> ([i32; 3], [i32; 4]) {
+    let size = if matches!(doc.mode, photocraft_color::ColorMode::Bitmap | photocraft_color::ColorMode::Multichannel) { 1 } else { size };
     let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], size, crate::sample_cmds::SampleLayers::All);
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
     let cmyk = photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2]));
