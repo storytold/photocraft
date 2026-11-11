@@ -19,6 +19,7 @@ mod dropdown;
 pub mod field_tab;
 pub mod field_wheel;
 mod fields;
+mod label_column;
 pub(super) mod numeric_expression;
 mod panel;
 pub mod point_curve;
@@ -55,6 +56,7 @@ pub use fields::{
     POPUP_ARROW_W, PopupFieldResponse, VALUE_FIELD_H, compact_value_field, elided_label, elided_label_sensed, popup_value_field, typed_text_parses,
     value_field, value_field_named, value_field_whole_alerting, value_field_with_trailing,
 };
+pub use label_column::{LABEL_COLUMN_GAP, column_label, column_label_padded, label_column_width};
 pub(crate) use panel::body_margin;
 pub use panel::{
     FOOTER_BAR, chevron_icon, drop_line, footer_height, hairline, panel_footer, panel_menu_button, pill_tab, section_label, style_spectrum_popup_menu, surface,
