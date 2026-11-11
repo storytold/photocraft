@@ -921,10 +921,6 @@ pub fn capture(app: &mut PhotocraftApp) {
     }).collect::<Vec<_>>()});
 }
 
-pub(crate) fn home_height(app: &PhotocraftApp) -> f32 {
-    app.services.file_provider.as_ref().filter(|host| host.enabled()).map_or(0.0, |host| 45.0 + host.resources().len().min(6) as f32 * 30.0)
-}
-
 pub(crate) fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some(host) = app.services.file_provider.clone().filter(Host::enabled) else { return };
     let label = host.provider_label().unwrap_or_default();

@@ -94,6 +94,8 @@ pub struct PlacedGlyph {
     pub style: u32,
     /// Orientation of the outline (vertical type).
     pub orient: GlyphOrient,
+    /// Optional line-space glyph center before rotation into text space.
+    pub line_center: Option<f32>,
 }
 
 /// Underline/strikethrough rectangle (text space px).
@@ -137,6 +139,8 @@ pub struct ClusterInfo {
 pub struct TextLayout {
     pub faces: Vec<GlyphFace>,
     pub glyphs: Vec<PlacedGlyph>,
+    /// Layer-text byte range represented by each glyph, in the same order as `glyphs`.
+    pub glyph_ranges: Vec<Range<usize>>,
     pub decorations: Vec<DecorationRect>,
     pub lines: Vec<LineInfo>,
     pub clusters: Vec<ClusterInfo>,
@@ -283,6 +287,7 @@ impl Layouter {
         Self { lcx: LayoutContext::new(), optical: crate::optical::Cache::default() }
     }
 
+    /// Lays out text runs into positioned glyphs, shaped lines, and decoration rectangles at target DPI.
     pub fn layout(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32) -> TextLayout {
         let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
         let runs = t.char_runs();
@@ -317,6 +322,7 @@ impl Layouter {
             // Box and area text wrap, align within their lines and hide what doesn't fit.
             wraps: is_box || area.is_some(),
             box_rect,
+            path_range: crate::warp::path_range_length(&t.shape).map(|n| n.min(f32::MAX as f64) as f32),
             area,
         };
         let mut flow = Flow::default();
@@ -324,7 +330,7 @@ impl Layouter {
             if flow.stop {
                 break;
             }
-            let ps = paras[para_starts.iter().rposition(|&s| s <= prange.start).unwrap_or(0)].style.clone();
+            let ps = paras[run_index_at(&para_starts, prange.start)].style.clone();
             self.layout_paragraph(fonts, &mut out, &mut flow, Para::new(&env, fonts, pi, prange, ps));
         }
         out.styles = styles;
@@ -375,6 +381,9 @@ struct Env<'a> {
     /// Box and area text wrap, align within their lines and hide what doesn't fit.
     wraps: bool,
     box_rect: (f32, f32, f32, f32),
+    /// Available explicit path span in text-space pixels, capped by the curve's capacity.
+    /// `None` keeps legacy alignment around the start anchor (an alignment span of zero).
+    path_range: Option<f32>,
     area: Option<crate::area::AreaShape>,
 }
 

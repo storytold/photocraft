@@ -11,8 +11,7 @@ use crate::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services, menus}
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
-#[path = "../../io/tests/support/recovery_psd.rs"]
-mod recovery_psd;
+use crate::psd_open_tests::recovery_psd;
 
 fn app(connected: bool) -> (PhotocraftApp, Host, Written) {
     let provider = Host::default();
@@ -576,7 +575,7 @@ fn provider_memory_approval_refusal_cannot_launch_an_unowned_open_job() {
             provider.open(request.clone(), "memory.psd".into(), bytes).unwrap();
             file_providers::tick(&mut app, &ctx);
             assert!(app.jobs.opens.is_empty(), "a failed provider request must not leave a local open job");
-            assert!(app.session.jobs().iter().next().is_none());
+            assert!(app.session.jobs().is_empty());
             assert!(app.held_memory_prompts.is_empty() && app.held_opens.is_empty() && app.prompt_order.is_empty());
             assert_eq!(app.session.documents().len(), 1);
             assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
@@ -856,5 +855,143 @@ fn failed_provider_delivery_keeps_save_before_close_retryable_and_preserves_a_la
     assert_eq!(app.session.active().unwrap().saved_revision, 7);
     assert!(app.session.active().unwrap().is_dirty());
     assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(written.borrow().is_empty());
+}
+
+#[test]
+fn local_save_as_keeps_upstream_own_name_and_explicit_name_action_paths() {
+    for (path, expected) in [("out/Drawing.psd", json!({"folder":"out", "extension":"psd"})), ("out/Renamed.psd", json!({"path":"out/Renamed.psd"}))] {
+        let (mut app, provider, written) = app(false);
+        app.save_as(Some(path.into())).unwrap();
+        assert_eq!(app.session.journal.last(), Some(&("file.saveAs".into(), expected)));
+        assert_eq!(written.borrow().last().unwrap().0, path);
+        assert!(provider.take_events().is_empty());
+    }
+}
+
+#[test]
+fn local_plain_save_relabels_only_the_step_from_this_save() {
+    let (mut app, _, _) = app(false);
+    let earlier = ("file.saveAs".into(), json!({"folder":"out", "extension":"psd"}));
+    app.session.journal.push(earlier.clone());
+    let from = app.session.journal.len();
+    app.journal_as_plain_save("out/Drawing.psd", from);
+    assert_eq!(app.session.journal.last(), Some(&earlier));
+    app.save_as(Some("out/Drawing.psd".into())).unwrap();
+    app.journal_as_plain_save("out/Drawing.psd", from);
+    assert_eq!(app.session.journal.last(), Some(&("file.save".into(), json!({}))));
+    assert_eq!(app.session.journal.get(from - 1), Some(&earlier));
+}
+
+#[test]
+fn provider_tiff_answer_preserves_native_options_and_copy_checkpoint() {
+    for discard_layers in [false, true] {
+        let ctx = egui::Context::default();
+        let (mut app, provider, written) = app(true);
+        app.run("layer.new.layer", json!({"name":"Second layer"})).unwrap();
+        let captured = app.session.active().unwrap().revision;
+        let doc = app.session.active().unwrap().doc.id;
+        let exports = Rc::new(RefCell::new(Vec::new()));
+        let observed = exports.clone();
+        app.services.export = Some(Box::new(move |doc, _, settings| {
+            observed.borrow_mut().push((doc.id, settings.tiff_compression, settings.tiff_transparency, settings.tiff_pyramid, settings.tiff_layers));
+            Ok((vec![10, 20, 30], Vec::new()))
+        }));
+        let journal = app.session.journal.clone();
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        let dialog = event(&provider, "saveDialog");
+        provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.tif").unwrap();
+        app.poll_file_dialog(&ctx, None);
+        let prompt = app.tiff_options.as_mut().unwrap();
+        assert!(prompt.layered);
+        prompt.compression = photocraft_codecs::TiffCompression::Deflate;
+        prompt.pyramid = true;
+        prompt.transparency = false;
+        prompt.discard_layers = discard_layers;
+        let transparency = prompt.has_transparency.then_some(false);
+        crate::tiff_options_ui::confirm(&mut app, &ctx);
+        file_providers::capture(&mut app);
+        assert_eq!(exports.borrow().as_slice(), &[(doc, photocraft_codecs::TiffCompression::Deflate, transparency, true, !discard_layers)]);
+        assert_eq!(app.tiff_remembered.compression, photocraft_codecs::TiffCompression::Deflate);
+        assert!(app.tiff_remembered.pyramid);
+        assert_eq!(app.session.journal, journal);
+        assert!(written.borrow().is_empty());
+        let save = event(&provider, "save");
+        assert_eq!(save["documentId"], doc.0.to_string());
+        assert_eq!(save["revision"], captured.to_string());
+        app.session.active_mut().unwrap().revision = captured + 1;
+        provider.result(save["requestId"].as_str().unwrap().into(), "saved".into(), "tiff-resource".into()).unwrap();
+        file_providers::tick(&mut app, &ctx);
+        let saved = app.session.active().unwrap();
+        assert_eq!(saved.saved_revision, if discard_layers { 2 } else { captured });
+        assert!(saved.is_dirty(), "a copy or a later revision cannot be acknowledged as the current editable");
+        assert_eq!(provider.bound(doc), !discard_layers);
+        assert!(saved.path.is_none());
+        assert!(app.ui.recent_files.is_empty());
+        assert_eq!(app.session.journal, journal);
+    }
+}
+
+#[test]
+fn provider_capture_bypasses_the_native_save_commit_worker() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_called = called.clone();
+    app.services.save_file = Some(std::sync::Arc::new(move |_, _, _, _| {
+        worker_called.store(true, std::sync::atomic::Ordering::SeqCst);
+        Err("provider capture must not enter the native save worker".into())
+    }));
+    app.background_jobs = true;
+    let request = start_save(&mut app, &provider, &ctx, "file.saveAs");
+    assert!(app.jobs.saves.is_empty());
+    assert!(app.jobs.last_started.is_none());
+    assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(written.borrow().is_empty());
+    assert_eq!(app.session.active().unwrap().saved_revision, 2);
+    provider.result(request, "saved".into(), "native-job-independent".into()).unwrap();
+    file_providers::tick(&mut app, &ctx);
+    assert_eq!(app.session.active().unwrap().saved_revision, 7);
+    assert!(app.jobs.saves.is_empty());
+    assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn provider_save_all_waits_for_each_durable_ack_before_closing_next_document() {
+    let (mut app, provider, written) = app(true);
+    let first = app.session.active().unwrap().doc.id;
+    app.run("file.new", json!({"width": 2, "height": 2, "name": "Second"})).unwrap();
+    let second = app.session.active().unwrap().doc.id;
+    app.session.active_mut().unwrap().revision = 11;
+    app.session.active_mut().unwrap().saved_revision = 3;
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(800.0, 600.0))
+        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
+        .build_ui_state(|ui, app| crate::discard_ui::show(app, ui.ctx()), app);
+    let ctx = h.ctx.clone();
+    menus::invoke(h.state_mut(), &ctx, "file.closeAll", json!({})).unwrap();
+    crate::discard_ui::answer_control(h.state_mut(), &ctx, "saveAll").unwrap();
+    let first_save = resolve_save(h.state_mut(), &provider, &ctx);
+    assert!(provider.pending_for(first));
+    h.run_steps(2);
+    assert_eq!(h.state().session.documents().len(), 2);
+    assert!(!h.state().file_dialog_open(), "Apply to All cannot start the next chooser before this ACK");
+    provider.result(first_save, "saved".into(), "first-resource".into()).unwrap();
+    file_providers::tick(h.state_mut(), &ctx);
+    assert_eq!(h.state().session.documents().len(), 2, "the ACK still waits for a settled editor pass");
+    crate::discard_ui::finish_provider_save(h.state_mut(), &ctx);
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(h.state().session.active().unwrap().doc.id, second);
+    h.run_steps(2);
+    let second_save = resolve_save(h.state_mut(), &provider, &ctx);
+    assert!(provider.pending_for(second));
+    assert_eq!(h.state().session.active().unwrap().saved_revision, 3);
+    provider.result(second_save, "saved".into(), "second-resource".into()).unwrap();
+    file_providers::tick(h.state_mut(), &ctx);
+    crate::discard_ui::finish_provider_save(h.state_mut(), &ctx);
+    assert!(h.state().session.documents().is_empty());
+    assert!(crate::discard_ui::inspect(h.state()).is_none());
+    assert!(h.state().ui.recent_files.is_empty());
     assert!(written.borrow().is_empty());
 }
