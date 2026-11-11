@@ -142,7 +142,10 @@ pub fn advance(app: &mut PhotocraftApp) {
                     continue;
                 };
                 app.prompt_order.pop_front();
-                let _ = open(app, held, None);
+                let name = held.name.clone();
+                if let Err(error) = open(app, held, None) {
+                    app.open_failed(&name, &error);
+                }
                 if has_open_dialog(app) {
                     return;
                 }
@@ -150,6 +153,9 @@ pub fn advance(app: &mut PhotocraftApp) {
         }
     }
 }
+
+#[cfg(test)]
+mod error_tests;
 
 /// Shows the Embedded Profile Mismatch (or missing profile) prompt for the first queued file.
 fn show(app: &mut PhotocraftApp) {
