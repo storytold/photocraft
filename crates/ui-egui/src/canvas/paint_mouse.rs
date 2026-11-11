@@ -588,3 +588,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../pencil_reset_defaults_tests.rs"]
 mod pencil_reset_defaults_tests;
+
+#[cfg(test)]
+#[path = "remove_right_click_tests.rs"]
+mod remove_right_click_tests;
