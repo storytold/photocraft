@@ -141,3 +141,59 @@ fn state_survives_psd_export_and_import_and_imported_groups_toggle() {
     click(&mut h, p, Modifiers::NONE);
     assert!(!group(&h, "outer").1);
 }
+
+/// Background, a collapsed group "Low Group" at the bottom of the list, 40 fillers above it (so it
+/// sits below the Layers panel's fold) and a collapsed "High Group" on top (#13117).
+fn long_list_with_groups() -> photocraft_engine::Session {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "low child"})).unwrap();
+    s.execute("layer.groupLayers", json!({"name": "Low Group"})).unwrap();
+    for i in 0..40 {
+        s.execute("layer.new.layer", json!({"name": format!("Filler {i}")})).unwrap();
+    }
+    s.execute("layer.new.layer", json!({"name": "high child"})).unwrap();
+    s.execute("layer.groupLayers", json!({"name": "High Group"})).unwrap();
+    s
+}
+
+/// Every text painted in the harness's last frame, with its screen position.
+fn painted_texts(h: &Harness<'_, PhotocraftApp>) -> Vec<(String, Pos2)> {
+    fn walk(s: &egui::Shape, out: &mut Vec<(String, Pos2)>) {
+        match s {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    h.output().shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+    out
+}
+
+/// #13117: a group row scrolled out of view paints nothing, like any other off-screen row; only
+/// its disclosure widget stays (the next test).
+#[test]
+fn off_screen_group_paints_no_row() {
+    let h = harness_with(long_list_with_groups(), 1.0);
+    let window = h.ctx.content_rect();
+    let low = h.get_by_label("Low Group").rect();
+    let high = h.get_by_label("High Group").rect();
+    assert!(low.top() >= window.bottom(), "Low Group sits below the fold: {low:?} vs {window:?}");
+    assert!(window.contains_rect(high), "High Group shows: {high:?}");
+    let named_in = |name: &str, row: egui::Rect| painted_texts(&h).iter().any(|(t, p)| t == name && p.y >= row.top() && p.y <= row.bottom());
+    assert!(named_in("High Group", high), "the on-screen group's name is painted");
+    assert!(!named_in("Low Group", low), "the off-screen group's row paints no name");
+}
+
+/// #13117: skipping the off-screen group's painting keeps its triangle a widget: it is listed for
+/// accessibility, and scrolled to, it still toggles the group.
+#[test]
+fn off_screen_group_disclosure_stays_reachable() {
+    let mut h = harness_with(long_list_with_groups(), 1.0);
+    assert!(h.query_by_label("Expand group Low Group").is_some(), "the off-screen group keeps its disclosure widget");
+    assert!(!group(&h, "Low Group").1);
+    let p = triangle(&mut h, "Low Group").expect("scrolled to the off-screen group's triangle");
+    click(&mut h, p, Modifiers::NONE);
+    assert!(group(&h, "Low Group").1, "clicking it expands the group");
+}
