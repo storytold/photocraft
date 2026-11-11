@@ -914,11 +914,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.sample_all.spot_healing, tl!("Sample All Layers"));
         }
         Tool::Remove => {
-            // Photoshop's options bar: Sample All Layers, Create a new layer, Remove after each
-            // stroke; with strokes waiting, ✓ applies them and ⊘ drops them.
-            crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample All Layers"));
-            ui.add_enabled_ui(composite, |ui| crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create a new layer")));
-            crate::widgets::checkbox(ui, &mut o.remove_after_each_stroke, tl!("Remove after each stroke"));
+            // Photoshop's options bar (#12546): Sample all layers, Remove after each stroke, Create
+            // new layer; with strokes waiting, ✓ applies them and ⊘ drops them.
+            crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample all layers")).on_hover_text(tl!("Sample content from all visible layers"));
+            crate::widgets::checkbox(ui, &mut o.remove_after_each_stroke, tl!("Remove after each stroke"))
+                .on_hover_text(tl!("Remove area after a single stroke"));
+            ui.add_enabled_ui(composite, |ui| {
+                crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create new layer")).on_hover_text(tl!("Create new layer with results"));
+            });
             if !app.remove_pending.is_empty() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::primary_button(ui, "✓", 32.0)
