@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, Box<PhotocraftApp>> {
+pub(super) fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.sync_views();
@@ -37,13 +37,13 @@ fn screen(h: &Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
     crate::canvas::testing::to_screen(h.state(), [f64::from(x), f64::from(y)])
 }
 
-fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, down: bool) {
+pub(super) fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, down: bool) {
     let p = screen(h, x, y);
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-fn move_to(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) {
+pub(super) fn move_to(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) {
     let p = screen(h, x, y);
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -186,7 +186,7 @@ fn painted_width(h: &Harness<'static, Box<PhotocraftApp>>, y: i32) -> usize {
 
 /// Press and release at (`x`, 50) in one frame, the pen reporting `samples` (`None`: cleared, as
 /// a lifting pen or a mouse leaves it) before the UI runs: a tap shorter than a frame.
-fn tap(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, samples: &[Option<f32>]) {
+pub(super) fn tap(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, samples: &[Option<f32>]) {
     use crate::stylus::PenSample;
     move_to(h, x, 50.0);
     for p in samples {
