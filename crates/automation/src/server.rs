@@ -1432,8 +1432,24 @@ mod tests {
         .unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
+        // Keep the real 36 MP filter below the memory-admission limit even after earlier
+        // tests retained allocator pages. Progress 0.1 is reported only after its reservation,
+        // so cancellation targets admitted work instead of depending on a 100 ms delay.
+        let mut waited = Box::pin(mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 32}), &mut waiter, (0, 1)));
+        let started = std::time::Instant::now();
+        loop {
+            tokio::select! {
+                outcome = &mut waited => panic!("the blur ended before it was dropped: {outcome:?}"),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+            }
+            let admitted =
+                mcp.headless_op(|h| Ok(h.session.jobs_with_recent().iter().any(|job| job.state == "running" && job.progress >= 0.1))).await.unwrap().unwrap();
+            if admitted {
+                break;
+            }
+            assert!(started.elapsed().as_secs() < 30, "the blur was not admitted");
+        }
+        drop(waited);
         let t = std::time::Instant::now();
         loop {
             let (running, cancelled) =
