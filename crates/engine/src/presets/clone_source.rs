@@ -262,12 +262,12 @@ pub fn resample(src: &Region, dst: Rect, map: &Mapping, alpha: Option<usize>) ->
     let n = src.ch;
     let mut out = Region::new(dst, n);
     let w = dst.width() as usize;
-    let fetch = |x: i32, y: i32, buf: &mut [f32]| {
-        if x < src.rect.x0 || y < src.rect.y0 || x >= src.rect.x1 || y >= src.rect.y1 {
+    let fetch = |x: f64, y: f64, buf: &mut [f32]| {
+        if x < f64::from(src.rect.x0) || y < f64::from(src.rect.y0) || x >= f64::from(src.rect.x1) || y >= f64::from(src.rect.y1) {
             buf.fill(0.0);
             return;
         }
-        buf.copy_from_slice(src.px(x, y));
+        buf.copy_from_slice(src.px(x as i32, y as i32));
         if let Some(a) = alpha {
             let av = buf[a];
             for (c, v) in buf.iter_mut().enumerate() {
@@ -281,13 +281,20 @@ pub fn resample(src: &Region, dst: Rect, map: &Mapping, alpha: Option<usize>) ->
     for (i, px) in out.data.chunks_exact_mut(n).enumerate() {
         let (x, y) = (dst.x0 + (i % w) as i32, dst.y0 + (i / w) as i32);
         let (sx, sy) = map.map(x as f64 + 0.5, y as f64 + 0.5);
+        // Keep the bilinear neighbours in floating point until the source bounds check:
+        // saturating an off-canvas sample to i32::MAX then adding one used to overflow.
+        // Non-finite mappings have no source pixel and must not introduce NaN alpha.
+        if !sx.is_finite() || !sy.is_finite() {
+            px.fill(0.0);
+            continue;
+        }
         let (fx, fy) = (sx - 0.5, sy - 0.5);
-        let (x0, y0) = (fx.floor() as i32, fy.floor() as i32);
-        let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = ((fx - x0) as f32, (fy - y0) as f32);
         fetch(x0, y0, &mut q[0]);
-        fetch(x0 + 1, y0, &mut q[1]);
-        fetch(x0, y0 + 1, &mut q[2]);
-        fetch(x0 + 1, y0 + 1, &mut q[3]);
+        fetch(x0 + 1.0, y0, &mut q[1]);
+        fetch(x0, y0 + 1.0, &mut q[2]);
+        fetch(x0 + 1.0, y0 + 1.0, &mut q[3]);
         for c in 0..n {
             let top = q[0][c] + (q[1][c] - q[0][c]) * tx;
             let bot = q[2][c] + (q[3][c] - q[2][c]) * tx;
@@ -583,5 +590,22 @@ mod tests {
     fn source_rect_normal_case_unchanged() {
         let m = Mapping { source: (200.0, 0.0), anchor: (10.0, 10.0), m: [1.0, 0.0, 0.0, 1.0] };
         assert_eq!(m.source_rect(Rect::new(0, 0, 24, 16)), Rect::new(188, -12, 216, 8));
+    }
+
+    #[test]
+    fn resample_extreme_sources_are_transparent_without_overflow_or_nan() {
+        let mut source = Region::new(Rect::new(0, 0, 2, 2), 4);
+        for px in source.data.chunks_exact_mut(4) {
+            px.copy_from_slice(&[1.0, 0.0, 0.0, 1.0]);
+        }
+        for at in [(3.0e9, 0.0), (0.0, 3.0e9), (-3.0e9, 0.0), (f64::MAX, f64::MAX), (f64::INFINITY, 0.0), (f64::NAN, 0.0)] {
+            let map = Mapping { source: at, anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
+            assert_eq!(resample(&source, Rect::new(0, 0, 1, 1), &map, Some(3)).data, vec![0.0; 4]);
+        }
+        // The unrepresentable left neighbour is transparent, while the neighbour at MIN
+        // remains valid. Do not saturate both neighbours onto the same edge pixel.
+        source.rect = Rect::new(i32::MIN, 0, i32::MIN + 2, 2);
+        let map = Mapping { source: (f64::from(i32::MIN) - 0.25, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
+        assert_eq!(resample(&source, Rect::new(0, 0, 1, 1), &map, Some(3)).data, vec![1.0, 0.0, 0.0, 0.75]);
     }
 }

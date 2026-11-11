@@ -613,3 +613,25 @@ fn clone_offsets_null_optional_coordinates_keep_the_picked_source_document() {
         assert_eq!(map.m, crate::presets::clone_source::transform_matrix([200.0, 100.0], 90.0, false, false));
     }
 }
+
+#[test]
+fn clone_and_heal_transformed_far_sources_are_finite_and_preserve_the_destination() {
+    for depth in [8, 16, 32] {
+        for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
+            let (mut s, _, target) = setup(depth, "rgb");
+            s.edit("green destination", |doc, _| {
+                let bounds = doc.bounds();
+                doc.layer_mut(target).unwrap().surface_mut().unwrap().fill_rect(bounds, &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+            for source in [[3.0e9, 0.0], [0.0, 3.0e9], [-3.0e9, 0.0], [0.0, -3.0e9], [f64::MAX, f64::MAX]] {
+                s.execute(cmd, json!({"points": [[32,32]], "source": source, "rotation": 45, "size": 8, "hardness": 100})).unwrap();
+                let got = pixel(&s, target, 32, 32);
+                for (got, want) in got.into_iter().zip([0.0, 1.0, 0.0, 1.0]) {
+                    assert!(got.is_finite() && (got - want).abs() < 1e-5, "{cmd} at {depth}-bit, source {source:?}: {got}");
+                }
+            }
+        }
+    }
+}
