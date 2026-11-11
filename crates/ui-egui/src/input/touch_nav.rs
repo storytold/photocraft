@@ -398,11 +398,9 @@ mod tests {
     #[test]
     fn twin_filter_then_normalize_gives_one_press_per_tap() {
         let ctx = Context::default();
-        let button = |pressed| Event::PointerButton { pos: egui::pos2(10.0, 50.0), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-        let frames = [
-            vec![button(true), touch(1, TouchPhase::Start, 10.0)],
-            vec![button(false), Event::PointerGone, touch(1, TouchPhase::End, 10.0)],
-        ];
+        let button =
+            |pressed| Event::PointerButton { pos: egui::pos2(10.0, 50.0), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frames = [vec![button(true), touch(1, TouchPhase::Start, 10.0)], vec![button(false), Event::PointerGone, touch(1, TouchPhase::End, 10.0)]];
         let (mut presses, mut releases) = (0, 0);
         for _ in 0..2 {
             for events in frames.clone() {
