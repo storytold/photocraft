@@ -883,7 +883,7 @@ fn split_tool_places_the_line_where_the_pointer_releases() {
     assert!(us.len() == 3 && has(&us, 0.25), "{us:?}");
     let vs = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap().vs.clone();
     assert!(has(&vs, 1.0 / 3.0) && has(&vs, 2.0 / 3.0), "horizontal sections stay: {vs:?}");
-    assert!(app.transform_preview.as_ref().unwrap().split_tool.is_some(), "the tool stays armed");
+    assert!(app.transform_preview.as_ref().unwrap().split_tool.is_none(), "one split ends the mode");
     // Option-click in the open places both lines, without a button armed.
     app.transform_preview.as_mut().unwrap().split_tool = None;
     let alt = egui::Modifiers::ALT;
