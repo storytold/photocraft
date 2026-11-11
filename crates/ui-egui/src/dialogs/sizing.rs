@@ -222,6 +222,15 @@ fn label(ui: &mut egui::Ui, text: &str, width: f32) {
     crate::widgets::column_label(ui, text, width);
 }
 
+/// Whether a list button's `text` elides in `room`: its text, chevron and padding as the
+/// button lays them out (`widgets::dropdown`), wider than the room left in the row.
+fn resample_value_elided(ui: &egui::Ui, text: &str, room: f32) -> bool {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let text_w = ui.painter().layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER).size().x;
+    let s = ui.spacing();
+    text_w + s.icon_spacing + s.icon_width + 2.0 * s.button_padding.x > room
+}
+
 fn info_row(ui: &mut egui::Ui, k: &str, v: String, label_w: f32) {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
@@ -474,9 +483,16 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             // the list takes what is left, at most its English width, and its value elides
             // rather than running out of the dialog (#9634).
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-            let width = ui.available_width().min(200.0);
-            if crate::widgets::dropdown(ui, "is-resample", tl!("Resample"), &mut cur, &opts, width) {
+            let room = ui.available_width();
+            let shown = opts.iter().find(|(k, _)| *k == cur).map(|(_, l)| *l).unwrap_or_default();
+            let elided = resample_value_elided(ui, shown, room);
+            let list = ui.scope(|ui| crate::widgets::dropdown(ui, "is-resample", tl!("Resample"), &mut cur, &opts, room.min(200.0)));
+            if list.inner {
                 f.insert("resample".into(), json!(cur));
+            }
+            // Hover-only, so it never takes a click from the list under it.
+            if elided {
+                ui.interact(list.response.rect, ui.scope_id().with("is-resample-full"), Sense::hover()).on_hover_text(shown);
             }
         }
     });
