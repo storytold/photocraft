@@ -8,7 +8,12 @@ use photocraft_ui_egui::{
 use serde_json::json;
 
 fn main() {
-    let output = std::env::args().nth(1).unwrap_or_else(|| "/tmp/photocraft-color-picker".into());
+    // Default to a private, unpredictable directory: `save` follows symlinks in a shared one.
+    let output = std::env::args().nth(1).unwrap_or_else(|| {
+        let dir = tempfile::Builder::new().prefix("photocraft-color-picker-").tempdir().expect("output directory").keep();
+        eprintln!("writing to {}", dir.display());
+        dir.to_string_lossy().into_owned()
+    });
     std::fs::create_dir_all(&output).expect("output directory");
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width":800,"height":500,"background":"white"})).unwrap();

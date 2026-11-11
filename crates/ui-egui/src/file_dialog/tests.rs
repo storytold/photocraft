@@ -1086,8 +1086,7 @@ fn relink_to_file_picks_a_file_for_every_instance() {
     assert!(app.ui.status_error);
     assert_eq!(ids.map(|id| smart_source(&app, id)), before);
     // A file picked on disk links both instances to its path.
-    let dir = std::env::temp_dir().join(format!("pcraft-relink-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::Builder::new().prefix("pcraft-relink-").tempdir().unwrap().keep();
     let path = dir.join("art.png");
     std::fs::write(&path, &png).unwrap();
     let path = path.to_string_lossy().into_owned();

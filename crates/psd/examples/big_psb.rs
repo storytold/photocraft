@@ -11,8 +11,19 @@ use photocraft_psd::fixtures::{PSB_CASES, PSD_2GB};
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let out = args.first().map_or_else(|| std::env::temp_dir().join("photocraft-big-psb"), std::path::PathBuf::from);
-    std::fs::create_dir_all(&out)?;
+    // The default folder is created fresh (`create_dir` fails on a planted directory or symlink);
+    // an explicit one is the operator's choice.
+    let out = match args.first() {
+        Some(dir) => {
+            std::fs::create_dir_all(dir)?;
+            std::path::PathBuf::from(dir)
+        }
+        None => {
+            let dir = std::env::temp_dir().join(format!("photocraft-big-psb-{}", std::process::id()));
+            std::fs::create_dir(&dir)?;
+            dir
+        }
+    };
     let wanted = args.get(1..).unwrap_or(&[]);
     for case in PSB_CASES.iter().chain([&PSD_2GB]).filter(|c| wanted.is_empty() || wanted.iter().any(|w| w == c.name)) {
         let path = out.join(case.file_name());

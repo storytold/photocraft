@@ -212,7 +212,7 @@ fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Opt
     }
     harness.run_steps(6);
     let img = harness.render().expect("render");
-    let out = std::env::temp_dir().join(name);
+    let out = screenshot_dir().join(name);
     let _ = img.save(&out);
     eprintln!("screen: {}", out.display());
     Some(Screen { w: img.width(), h: img.height(), px: img.into_raw() })
@@ -284,4 +284,11 @@ fn sixteen_bit_canvas_too_big_for_floats_stays_on_the_gpu_in_8_bit() {
     g.set_canvas_budget(floats);
     assert_eq!(g.format_for(SampleType::U16, size), TextureFormat::Rgba16Float);
     g.release();
+}
+
+/// One private directory per test run for the screenshots: a symlink planted at a fixed name in the
+/// shared temp directory cannot redirect them.
+fn screenshot_dir() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| tempfile::Builder::new().prefix("photocraft-canvas-16f-").tempdir().unwrap().keep())
 }

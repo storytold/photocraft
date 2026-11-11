@@ -11,6 +11,21 @@ use serde_json::json;
 
 const INVERT: &[u8] = include_bytes!("fixtures/invert.wasm");
 
+/// A directory this test creates itself: `create_dir` fails on an existing entry, so a directory or
+/// symlink another user planted at the predictable name is refused, not written through.
+fn fresh_dir(tag: &str) -> std::path::PathBuf {
+    let base = std::env::temp_dir();
+    for n in 0.. {
+        let dir = base.join(format!("{tag}-{}-{n}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => panic!("{}: {e}", dir.display()),
+        }
+    }
+    unreachable!()
+}
+
 /// A module implementing the ABI whose pieces can be swapped: `manifest` JSON, `version`,
 /// `filter` body (params `$buf $len $w $h $ch $fmt $pp $pl`, result i32) and extra items.
 fn module(manifest: &str, version: i32, filter: &str, extra: &str) -> Vec<u8> {
@@ -381,8 +396,7 @@ fn registry_install_list_remove() {
 
 #[test]
 fn folder_loading_skips_bad_files() {
-    let dir = std::env::temp_dir().join(format!("photocraft-plugins-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = fresh_dir("photocraft-plugins-test");
     std::fs::write(dir.join("a-invert.wasm"), INVERT).unwrap();
     std::fs::write(dir.join("b-broken.wasm"), b"\0asm junk").unwrap();
     std::fs::write(dir.join("notes.txt"), b"ignored").unwrap();
@@ -454,8 +468,7 @@ fn content_spread_over_millions_of_bands_is_refused_before_planning_them() {
 #[cfg(unix)]
 #[test]
 fn a_fifo_in_place_of_a_module_file_does_not_block_loading() {
-    let dir = std::env::temp_dir().join(format!("photocraft-plugin-fifo-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = fresh_dir("photocraft-plugin-fifo");
     let path = dir.join("evil.wasm");
     let _ = std::fs::remove_file(&path);
     // `rustix::fs::mknodat` is unavailable on Apple targets. `mkfifo` is the
