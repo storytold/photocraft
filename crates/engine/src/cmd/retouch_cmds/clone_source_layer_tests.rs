@@ -861,3 +861,20 @@ fn clone_no_alpha_healing_sources_match_alpha_sources_in_preview_and_commit() {
         }
     }
 }
+
+/// Nonuniform soft-tip coverage must stay aligned across the opaque destination's working tiles.
+#[test]
+fn clone_no_alpha_soft_stroke_matches_reference_across_multiple_working_patches() {
+    for mode in ["normal", "multiply"] {
+        let (mut actual, target) = no_alpha_scene(16, "rgb", false, false, true, [0, 0], [1.0, 0.0, 0.0, 1.0]);
+        let (mut reference, expected) = no_alpha_scene(16, "rgb", true, true, true, [0, 0], [1.0, 0.0, 0.0, 1.0]);
+        let p = json!({"points": [[32,32],[64,48]], "size": 180, "hardness": 0, "opacity": 50, "flow": 40, "mode": mode});
+        reference.execute("paint.cloneStamp", p.clone()).unwrap();
+        let roi = Rect::new(-64, -64, 160, 160);
+        let expected_surf = reference.active().unwrap().doc.layer(expected).unwrap().surface().unwrap();
+        let live = LiveRetouch::begin(&actual, "paint.cloneStamp", &p).unwrap();
+        assert_opaque_reference(live.doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
+        actual.execute("paint.cloneStamp", p).unwrap();
+        assert_opaque_reference(actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
+    }
+}
