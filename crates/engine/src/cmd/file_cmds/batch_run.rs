@@ -205,7 +205,14 @@ fn process_outputs<'a>(
                 written.record(&out, path);
                 files.push(out);
             }
-            Err(e) => errors.push(json!({"file": path, "error": e.to_string()})),
+            Err(e) => {
+                let mut entry = json!({"file": path, "error": e.to_string()});
+                // Marks a nesting or playback-budget stop, which an enclosing batch step must not swallow.
+                if matches!(e, EngineError::BatchLimit(_)) {
+                    entry["limit"] = json!(true);
+                }
+                errors.push(entry);
+            }
         }
     }
     json!({"files": files, "errors": errors})
@@ -248,10 +255,10 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
 /// before it reads or decodes anything: each level keeps its parent's scratch document open.
 pub(crate) fn check_batch_depth(s: &Session, cmd: &str) -> Result<()> {
     if s.actions.batch_depth >= crate::actions_cmds::MAX_BATCH_DEPTH {
-        return Err(EngineError::BadParams {
-            cmd: cmd.into(),
-            msg: format!("batches and droplets are nested more than {} deep", crate::actions_cmds::MAX_BATCH_DEPTH),
-        });
+        return Err(EngineError::BatchLimit(format!(
+            "invalid parameters for `{cmd}`: batches and droplets are nested more than {} deep",
+            crate::actions_cmds::MAX_BATCH_DEPTH
+        )));
     }
     Ok(())
 }
@@ -295,7 +302,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     if nested {
         playback_steps = s.actions.playback_steps.saturating_add((steps.len().max(1) as u64).saturating_mul(inputs.len() as u64));
         if playback_steps > crate::actions_cmds::MAX_PLAYBACK_STEPS {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: "this batch would exceed the playback step limit of the action that runs it".into() });
+            return Err(EngineError::BatchLimit(format!(
+                "invalid parameters for `{cmd}`: this batch would exceed the playback step limit of the action that runs it"
+            )));
         }
         s.actions.playback_steps = playback_steps;
     }
@@ -304,6 +313,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         playing: s.actions.playing,
         playback_stack: s.actions.playback_stack.clone(),
         playback_steps,
+        budget_shared: nested,
         batch_depth: s.actions.batch_depth.saturating_add(1),
         ..Default::default()
     };
@@ -336,6 +346,11 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     continue;
                 }
                 let r = scratch.execute(id, params.clone())?;
+                // A nested batch or droplet reports its own input failures in `errors`; only the ones
+                // that hit the nesting or shared playback limit fail this input too.
+                if let Some(limit) = r.get("errors").and_then(Value::as_array).and_then(|a| a.iter().find(|e| e.get("limit") == Some(&json!(true)))) {
+                    return Err(EngineError::BatchLimit(limit.get("error").and_then(Value::as_str).unwrap_or("batch limit reached").to_string()));
+                }
                 // A failed step inside a called action makes this file an error, not a saved result.
                 if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
                     return Err(EngineError::Other(error));

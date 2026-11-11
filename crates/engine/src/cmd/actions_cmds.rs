@@ -103,6 +103,10 @@ pub struct ActionState {
     /// Number of steps executed by the current top-level playback tree.
     #[serde(skip)]
     pub playback_steps: u64,
+    /// Set for a batch nested in a played action or another batch: the playback counter it carries
+    /// is shared by every input, so a played action inside it does not restart the count.
+    #[serde(skip)]
+    pub budget_shared: bool,
     /// How many batches (`file.automate.batch`, and droplets through it) are running inside one
     /// another: each runs its steps in a scratch session that carries this on, plus one.
     #[serde(skip)]
@@ -236,7 +240,7 @@ pub fn consume_playback_step(s: &mut Session) -> bool {
 /// Steps of the playback tree the next `actions.play` starts in has charged so far: a top-level
 /// call starts a new tree ([`begin_playback`] resets the counter).
 fn playback_steps_used(s: &Session) -> u64 {
-    if s.actions.playing > 0 { s.actions.playback_steps } else { 0 }
+    if s.actions.playing > 0 || s.actions.budget_shared { s.actions.playback_steps } else { 0 }
 }
 
 /// Steps of `action` playback walks past without running them: the ones before `from` and the
@@ -517,7 +521,7 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
 /// for diagnostics, but record just the named call in the parent action.
 pub fn begin_playback(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
     flush_recording(s)?;
-    if s.actions.playing == 0 {
+    if s.actions.playing == 0 && !s.actions.budget_shared {
         s.actions.playback_steps = 0;
     }
     // The steps that run are charged one by one as they run; the ones walked past are charged
@@ -909,6 +913,22 @@ mod security_tests {
         session.actions.playback_steps = MAX_PLAYBACK_STEPS - 1;
         assert!(consume_playback_step(&mut session));
         assert!(!consume_playback_step(&mut session));
+    }
+
+    /// A played action inside a nested batch (no enclosing playback) continues the shared count the
+    /// batch carries instead of restarting it for each input.
+    #[test]
+    fn a_nested_batch_input_does_not_reset_the_shared_playback_count() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        session.actions.list.push(Action::new("A", vec![("select.all".to_string(), json!({}))]));
+        session.actions.budget_shared = true;
+        session.actions.playback_steps = MAX_PLAYBACK_STEPS;
+        let r = session.execute("actions.play", json!({"action": "A"}));
+        assert!(r.is_err(), "the carried count leaves no room for the action: {r:?}");
+        session.actions.budget_shared = false;
+        let r = session.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert_eq!(r["ran"], 1, "a top-level call starts its own count");
     }
 
     /// An action of mostly disabled steps, called over and over from a parent, is charged for

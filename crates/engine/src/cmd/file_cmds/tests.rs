@@ -2055,8 +2055,12 @@ fn a_droplet_that_runs_itself_stops_at_the_nesting_limit() {
     std::fs::write(&droplet, json!({"photocraftDroplet": 1, "name": "self", "action": {"steps": [step]}, "options": {"format": "png"}}).to_string()).unwrap();
     let mut s = Session::new();
     // Each level runs the next in a scratch session; the innermost is refused, so this returns.
-    s.execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [input], "output": out})).unwrap();
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [input], "output": out})).unwrap();
     assert_eq!(s.actions.batch_depth, 0);
+    // The limit reaches the outermost result: the input failed, nothing was saved unprocessed.
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("nested more than"), "{r}");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(!std::path::Path::new(&out).join("a.png").exists());
     // At the limit, the droplet is refused before its file is read (this one doesn't exist).
     s.actions.batch_depth = crate::actions_cmds::MAX_BATCH_DEPTH;
     let missing = join(&dir, "missing.pcdroplet");
