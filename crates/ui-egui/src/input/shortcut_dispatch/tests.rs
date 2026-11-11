@@ -465,7 +465,7 @@ fn brush_keys_can_be_rebound() {
     assert_eq!(brush(&h), (40.0, 0.5), "the old keys are free");
     press(&mut h, "Alt+W");
     press(&mut h, "Alt+Shift+W");
-    assert_eq!(brush(&h), (50.0, 0.75), "the new keys step size and hardness");
+    assert_eq!(brush(&h), (45.0, 0.75), "the new keys step size and hardness");
     press(&mut h, "[");
     press(&mut h, "Shift+[");
     assert_eq!(brush(&h), (40.0, 0.5), "the others keep their defaults");

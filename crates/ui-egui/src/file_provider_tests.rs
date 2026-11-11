@@ -679,6 +679,33 @@ fn a_bound_native_project_keeps_its_format_and_resource_on_the_next_save() {
     assert!(app.session.active().unwrap().path.is_none());
 }
 
+#[test]
+fn provider_bound_jpeg_with_transparency_is_offered_as_png() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    app.run("file.new", json!({"width": 4, "height": 4, "background": "white"})).unwrap();
+    app.run("layer.new.layerFromBackground", json!({})).unwrap();
+
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let dialog = event(&provider, "saveDialog");
+    provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.jpg").unwrap();
+    app.poll_file_dialog(&ctx, None);
+    crate::jpeg_options_ui::confirm(&mut app, &ctx);
+    let save = event(&provider, "save");
+    provider.result(save["requestId"].as_str().unwrap().into(), "saved".into(), "resource-jpeg".into()).unwrap();
+    file_providers::tick(&mut app, &ctx);
+
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
+    app.run("edit.clear", json!({})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(event(&provider, "saveDialog")["filename"], "drawing.png");
+    assert!(written.borrow().is_empty());
+    assert!(app.session.active().unwrap().path.is_none());
+}
+
 // Original synthetic PhotoCraft raster/native-resource fixture, MIT OR Apache-2.0.
 #[test]
 fn provider_delivery_failure_preserves_native_resources_drafts_and_a_fresh_save_retry() {
