@@ -1,5 +1,15 @@
 use super::*;
 
+fn glyph_at(layout: &photocraft_text::layout::TextLayout, range: std::ops::Range<usize>) -> photocraft_text::layout::PlacedGlyph {
+    // Native LTR paragraphs also shape an injected direction mark, whose range
+    // is empty. Select the actual source cluster rather than a glyph index.
+    assert_eq!(layout.glyphs.len(), layout.glyph_ranges.len());
+    let matching: Vec<_> = layout.glyphs.iter().zip(&layout.glyph_ranges).filter(|(_, source)| **source == range).map(|(glyph, _)| *glyph).collect();
+    assert_eq!(matching.len(), 1, "one visible Latin glyph for source cluster {range:?}");
+    assert_ne!(matching[0].id, 0, "source cluster uses a real font glyph");
+    matching[0]
+}
+
 fn roundtrip(layer: &TextLayer) {
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::{Document, Layer, LayerContent};
@@ -19,15 +29,18 @@ fn inactive_source_kerning_flag_preserves_metrics_glyph_positions_and_explicit_f
         let config = format!("(text \"AV\") (font \"Inter\") (font-size 72){flag}");
         let parsed = decode(config.as_bytes(), 72., (0, 0)).unwrap();
         let layer = parsed.layer;
-        assert_eq!(layer.runs[0].style.kerning, Kerning::Metrics);
         let mut oracle = layer.clone();
         oracle.runs[0].style.kerning = Kerning::Metrics;
         let mut engine = photocraft_text::TextEngine::new();
         let actual = engine.layout(&layer, 72.);
         assert_eq!(actual.glyphs, engine.layout(&oracle, 72.).glyphs);
-        assert_eq!(actual.glyphs.len(), 2);
+        let a = glyph_at(&actual, 0..1);
+        let v = glyph_at(&actual, 1..2);
+        assert!(v.x > a.x);
         oracle.runs[0].style.kerning = Kerning::Off;
-        assert_ne!(actual.glyphs[1].x, engine.layout(&oracle, 72.).glyphs[1].x, "AV exercises actual font kerning");
+        let off = engine.layout(&oracle, 72.);
+        assert_ne!(v.x - a.x, glyph_at(&off, 1..2).x - glyph_at(&off, 0..1).x, "AV exercises actual font kerning");
+        assert_eq!(layer.runs[0].style.kerning, Kerning::Metrics);
         if !flag.is_empty() {
             assert!(parsed.native_policy.iter().any(|note| note.contains("kerning") && note.contains("inactive")));
         }
@@ -53,13 +66,17 @@ fn additional_line_spacing_uses_resolved_markup_sizes_for_multiline_layout() {
     )
     .unwrap();
     let layer = parsed.layer;
+    let layout = photocraft_text::TextEngine::new().layout(&layer, 72.);
+    assert_eq!(layer.text, "A\nA\nA");
+    let first = glyph_at(&layout, 0..1);
+    let second = glyph_at(&layout, 2..3);
+    let third = glyph_at(&layout, 4..5);
+    assert!(third.y > second.y);
+    assert!((second.y - first.y - 87.4).abs() < 0.001, "72pt lines receive additional spacing rather than overlapping");
     for (run, size) in layer.runs.iter().zip([72., 24.]) {
         assert_eq!(run.style.size_pt, size);
         assert!((run.style.leading_pt.unwrap() - (size * 1.2 + 1.)).abs() < 0.0001);
     }
-    let layout = photocraft_text::TextEngine::new().layout(&layer, 72.);
-    assert_eq!(layout.glyphs.len(), 3);
-    assert!((layout.glyphs[1].y - layout.glyphs[0].y - 87.4).abs() < 0.001, "72pt lines receive additional spacing rather than overlapping");
     roundtrip(&layer);
 }
 
