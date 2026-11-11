@@ -138,7 +138,7 @@ fn perf_output_includes_slow_frames() {
     assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"], json!([]));
     app.slow_frames.set_threshold_ms(0.0);
     app.run("file.new", json!({"width": 64, "height": 32})).unwrap();
-    app.finish_frame(1.0);
+    app.finish_frame(&ctx, 1.0);
     let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
     let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
     assert_eq!(last["command"], "file.new", "{last}");
@@ -156,7 +156,7 @@ fn perf_output_includes_slow_frames() {
     let played = app.run("actions.play", json!({"action": "Zoom"})).unwrap();
     assert_eq!(played["ran"], 2, "{played}");
     let outer_ms = app.perf.command_ms;
-    app.finish_frame(1.0);
+    app.finish_frame(&ctx, 1.0);
     let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
     let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
     assert_eq!(last["command"], "actions.play", "{last}");
@@ -890,7 +890,7 @@ fn ui_set_drives_the_layers_panel_artboard_filter() {
     assert_eq!(app.ui.layer_filter_by, FilterBy::Artboard);
     let bad = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "artboards"}}));
     assert_eq!(bad["ok"], false, "{bad}");
-    assert!(bad.to_string().contains("kind, name, effect, mode, attribute, color, smartObject or artboard"), "{bad}");
+    assert!(bad.to_string().contains("kind, name, effect, mode, attribute, color, smartObject, artboard or group"), "{bad}");
     assert_eq!(app.ui.layer_filter_by, FilterBy::Artboard, "a bad value changed nothing");
 }
 
@@ -1116,7 +1116,7 @@ fn ui_set_opens_the_brush_preset_picker_and_sets_its_cards() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();
     let list = &app.ui.brush_picker_list;
-    assert!(list.show_name && list.show_stroke && list.show_tip, "every card part is on by default");
+    assert!(list.show_name && list.show_stroke && !list.show_tip, "the cards show the name and the stroke by default");
     let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerStroke": false}));
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]));
@@ -1160,11 +1160,11 @@ fn ui_inspect_tracks_brush_picker_open_and_closed() {
     assert!(open["result"]["brushPicker"]["pos"].is_array(), "{open}");
     assert_eq!(open["result"]["brushPicker"]["list"]["showName"], true);
     assert_eq!(open["result"]["brushPicker"]["list"]["showStroke"], true);
-    assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], true);
+    assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], false);
 
-    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": false}))["ok"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": true}))["ok"], true);
     let changed = call(&mut app, &ctx, "ui.inspect", json!({}));
-    assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], false);
+    assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], true);
 
     assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
     let closed_again = call(&mut app, &ctx, "ui.inspect", json!({}));
@@ -1422,6 +1422,50 @@ fn automation_save_passes_targa_bits_without_asking() {
     assert_eq!(written.borrow().len(), 3, "a bad tgaBits writes nothing");
 }
 
+/// #8064: `app.save` takes `maximizeCompatibility` for a PSD/PSB's merged image over Preferences ›
+/// File Handling; unset, the preference decides. Anything but a boolean writes nothing.
+#[test]
+fn app_save_takes_maximize_compatibility() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let asked: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let written: Rc<RefCell<Vec<String>>> = Rc::default();
+    let (a, w) = (asked.clone(), written.clone());
+    let services = crate::Services {
+        export: Some(Box::new(move |_d: &photocraft_doc::Document, _p: &str, s: &crate::ExportSettings| {
+            a.borrow_mut().push(s.psd_maximize_compatibility);
+            Ok((b"out".to_vec(), Vec::new()))
+        })),
+        automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
+            w.borrow_mut().push(path.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let saves = [
+        json!({"path": "a.psd"}),
+        json!({"path": "b.psd", "maximizeCompatibility": false}),
+        json!({"path": "c.psd", "maximizeCompatibility": true}),
+        json!({"path": "d.psd", "maximizeCompatibility": null}),
+    ];
+    for params in &saves {
+        let r = call(&mut app, &ctx, "app.save", params.clone());
+        assert_eq!(r["result"]["path"], params["path"], "{r}");
+    }
+    app.session.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = photocraft_engine::prefs::Ask::Never);
+    for params in [json!({"path": "e.psd"}), json!({"path": "f.psd", "maximizeCompatibility": true})] {
+        let r = call(&mut app, &ctx, "app.save", params.clone());
+        assert_eq!(r["result"]["path"], params["path"], "{r}");
+    }
+    assert_eq!(*asked.borrow(), [true, false, true, true, false, true]);
+    let r = call(&mut app, &ctx, "app.save", json!({"path": "g.psd", "maximizeCompatibility": "no"}));
+    assert!(r["error"].as_str().unwrap().contains("maximizeCompatibility"), "{r}");
+    assert_eq!(written.borrow().len(), 6, "a bad maximizeCompatibility writes nothing");
+}
+
 /// `app.save` takes JPEG Options (`quality` 0–12, `jpegFormat`) and never stops at the prompt;
 /// a value it can't read is an error that writes nothing.
 #[test]
@@ -1528,7 +1572,13 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
             Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
         })),
         export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
-        automation_read: Some(Box::new(|path: &str| Ok((path.rsplit('/').next().unwrap_or(path).to_string(), b"x".to_vec())))),
+        automation_read: Some(Box::new(|path: &str| {
+            Ok(crate::AutomationReadResult {
+                name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                bytes: b"x".to_vec(),
+                save_path: Some(path.to_string()),
+            })
+        })),
         automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
             w.borrow_mut().push(path.to_string());
             Ok(())
@@ -1664,7 +1714,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
         })),
         automation_read: Some(Box::new(|path: &str| {
             if path == "zipped.pcraft" {
-                Ok((path.rsplit('/').next().unwrap_or(path).to_string(), b"zip-bytes".to_vec()))
+                Ok(crate::AutomationReadResult { name: path.rsplit('/').next().unwrap_or(path).to_string(), bytes: b"zip-bytes".to_vec(), save_path: None })
             } else {
                 Err(format!("no such path: {path}"))
             }
@@ -2022,6 +2072,35 @@ fn huge_click_count_is_rejected() {
     }
 }
 
+/// #9137: a coordinate past f32's range became `inf`, and on the next frame egui's pointer
+/// delta `inf - inf` panicked outside the dispatch guard, closing the app.
+#[test]
+fn huge_click_coordinate_is_rejected() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    for method in ["ui.click", "ui.move"] {
+        for (field, v) in [("x", 1e308), ("y", -1e308), ("x", 3.5e38), ("y", 1e7), ("x", -1.5e6)] {
+            let (req, _rx) = ControlRequest::new(method, json!({ field: v }));
+            let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!("{method} {field}={v}: accepted") };
+            assert_eq!(r["ok"], false, "{method} {field}={v}: {r}");
+            assert!(r["error"].as_str().unwrap().starts_with(&format!("{field} must be between")), "{r}");
+            assert!(app.synthetic.is_empty(), "a rejected {method} queues nothing");
+        }
+    }
+    // Points at the edges of the range, off-window included, reach egui and run a frame each.
+    let edge = MAX_SCREEN_POINT;
+    for (method, x, y) in [("ui.move", edge, -edge), ("ui.click", -edge, edge), ("ui.click", -5.0, 20.0)] {
+        let (req, _rx) = ControlRequest::new(method, json!({"x": x, "y": y}));
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::AfterInput));
+        while !app.synthetic.is_empty() {
+            let events = app.take_synthetic_step();
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |_| {}).textures_delta.clear();
+        }
+        let pos = ctx.input(|i| i.pointer.latest_pos());
+        assert_eq!(pos, Some(egui::pos2(x as f32, y as f32)), "{method} {x},{y}");
+    }
+}
+
 /// #2449: the error of a rejected synthetic input call, after checking it changed nothing.
 fn rejected(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value, names: &str) -> String {
     let (tool, revision) = (app.ui.tool, app.session.active().map(|d| d.revision));
@@ -2288,6 +2367,71 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     assert_eq!(l.mask.as_ref().unwrap().value(20, 20), 0.0, "the stroke went into the layer mask");
     let photocraft_doc::LayerContent::Smart(sm) = &l.content else { panic!("smart object") };
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
+}
+
+#[test]
+fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let written: Rc<RefCell<Vec<String>>> = Rc::default();
+    let writes = written.clone();
+    let services = crate::Services {
+        import: Some(Box::new(|name: &str, _: &[u8], _: &photocraft_io::ImportOptions| {
+            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+        })),
+        export: Some(Box::new(|_: &Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new())))),
+        automation_read: Some(Box::new(|path: &str| {
+            Ok(crate::AutomationReadResult {
+                name: "same.psd".into(),
+                bytes: b"source".to_vec(),
+                save_path: path.starts_with("work/").then(|| path.to_owned()),
+            })
+        })),
+        automation_write: Some(Box::new(move |path: &str, _: &[u8]| {
+            if path == "failed.psd" {
+                return Err("test write failure".into());
+            }
+            writes.borrow_mut().push(path.to_owned());
+            Ok(())
+        })),
+        write: Some(Box::new(|_, _| Err("ambient writer used".into()))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    let opened = call(&mut app, &ctx, "app.open", json!({"path": "library/same.psd"}));
+    assert_eq!(opened["ok"], true, "{opened}");
+    assert_eq!(app.session.active().unwrap().path, None);
+    assert_eq!(app.ui.recent_files, vec!["library/same.psd"]);
+    app.run("layer.new.layer", json!({"name": "edit"})).unwrap();
+    assert!(app.session.active().unwrap().is_dirty());
+    let refused = call(&mut app, &ctx, "app.save", json!({}));
+    assert!(refused["error"].as_str().unwrap().contains("pass `path`"), "{refused}");
+    assert!(written.borrow().is_empty());
+    assert!(app.session.active().unwrap().is_dirty());
+    let flat = call(&mut app, &ctx, "app.save", json!({"path": "copy.png"}));
+    assert_eq!(flat["ok"], true, "{flat}");
+    assert_eq!(app.session.active().unwrap().path, None);
+    assert!(app.session.active().unwrap().is_dirty());
+    let failed = call(&mut app, &ctx, "app.save", json!({"path": "failed.psd"}));
+    assert_eq!(failed["ok"], false, "{failed}");
+    assert_eq!(app.session.active().unwrap().path, None);
+    assert!(app.session.active().unwrap().is_dirty());
+    let saved = call(&mut app, &ctx, "app.save", json!({"path": "copy.psd"}));
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("copy.psd"));
+    assert!(!app.session.active().unwrap().is_dirty());
+    let again = call(&mut app, &ctx, "app.save", json!({}));
+    assert_eq!(again["ok"], true, "{again}");
+    assert_eq!(*written.borrow(), vec!["copy.png", "copy.psd", "copy.psd"]);
+    let opened = call(&mut app, &ctx, "app.open", json!({"path": "work/same.psd"}));
+    assert_eq!(opened["ok"], true, "{opened}");
+    let saved = call(&mut app, &ctx, "app.save", json!({}));
+    assert_eq!(saved["result"]["path"], "work/same.psd", "{saved}");
 }
 
 fn shift_right(app: &mut PhotocraftApp, ctx: &egui::Context, tool: &str) {
