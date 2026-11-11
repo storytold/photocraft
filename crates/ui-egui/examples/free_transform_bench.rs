@@ -44,9 +44,13 @@ fn view(w: u32, h: u32) -> ViewXform {
     }
 }
 
+/// The texture size limit a desktop GPU reports (egui's default without a renderer is 2048,
+/// which would shrink the preview to a fraction of the layer and hide the cost being measured).
+const MAX_TEXTURE_SIDE: usize = 16384;
+
 /// One frame drawing the open box's preview, in milliseconds.
 fn frame(app: &PhotocraftApp, ctx: &egui::Context, xf: &ViewXform) -> f64 {
-    let input = egui::RawInput { screen_rect: Some(xf.rect), ..Default::default() };
+    let input = egui::RawInput { screen_rect: Some(xf.rect), max_texture_side: Some(MAX_TEXTURE_SIDE), ..Default::default() };
     let start = Instant::now();
     let output = ctx.run_ui(input, |ui| transform_tool::draw_content(app, ui.painter(), xf));
     let ms = start.elapsed().as_secs_f64() * 1e3;
@@ -90,7 +94,7 @@ fn main() {
     }
     let xf = view(w, h);
     let ctx = egui::Context::default();
-    let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+    let _ = ctx.run_ui(egui::RawInput { max_texture_side: Some(MAX_TEXTURE_SIDE), ..Default::default() }, |_| {});
 
     // Ctrl+T and its first preview frame.
     let (mut begin, mut first, mut begin_total) = (Vec::new(), Vec::new(), Vec::new());
