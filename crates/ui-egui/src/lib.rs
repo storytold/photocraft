@@ -592,6 +592,10 @@ pub struct PhotocraftApp {
     pub(crate) hist_job: Option<histogram_panel::HistJob>,
     /// The (document, revision) an Uncached Refresh asked to count at cache level 1.
     pub(crate) hist_uncached: Option<(DocId, u64)>,
+    /// Memoized `tone::selection_key` of the active document's current revision
+    /// (`histogram_panel::update` refreshes it once per frame; the hash walks every tile of the
+    /// selection mask, while any change to the selection arrives as a new document revision).
+    pub(crate) hist_sel_key: Option<(DocId, u64, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// The canvas area the last Free Transform box's preview changes (`transform_tool::damage`).
@@ -840,6 +844,8 @@ mod pen_variants_tests;
 #[cfg(test)]
 mod color_replacement_tests;
 #[cfg(test)]
+mod home_recent_gate_tests;
+#[cfg(test)]
 mod layer_shortcut_tests;
 #[cfg(test)]
 mod live_retouch_tests;
@@ -986,6 +992,9 @@ mod options_bar_mode_wheel_tests;
 mod field_wheel_app_tests;
 
 #[cfg(test)]
+mod brush_shift_drag_axis_tests;
+
+#[cfg(test)]
 mod dropdown_press_tests;
 
 #[cfg(test)]
@@ -1084,3 +1093,5 @@ mod background_eraser_digit_keys_tests;
 
 #[cfg(test)]
 mod clone_stamp_reset_tip_tests;
+#[cfg(test)]
+mod sponge_default_tip_tests;

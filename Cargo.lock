@@ -1435,6 +1435,15 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 
 [[package]]
+name = "craft-heif"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=081078bb1b44aeedfa5bef3d4f13d978dc77510a#081078bb1b44aeedfa5bef3d4f13d978dc77510a"
+dependencies = [
+ "heic-rs",
+ "rayon",
+]
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
@@ -5522,6 +5531,7 @@ dependencies = [
 name = "photocraft-codecs"
 version = "0.20.1"
 dependencies = [
+ "craft-heif",
  "craft-jpeg",
  "exr",
  "flate2",
@@ -5530,7 +5540,6 @@ dependencies = [
  "image-webp",
  "jpeg-encoder",
  "jxl-oxide",
- "photocraft-heif",
  "png 0.18.1",
  "proptest",
  "rayon",
@@ -5670,13 +5679,6 @@ dependencies = [
  "rayon",
  "thiserror 2.0.21",
  "wgpu",
-]
-
-[[package]]
-name = "photocraft-heif"
-version = "0.20.1"
-dependencies = [
- "heic-rs",
 ]
 
 [[package]]

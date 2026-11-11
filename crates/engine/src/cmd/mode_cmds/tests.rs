@@ -145,6 +145,44 @@ fn rotate_arbitrary_rotates_grouped_locked_children_and_preserves_lock() {
 }
 
 /// Rotating the whole image turns every layer mask, linked or not, as Rotate 180° does (#9201).
+/// Image Rotation › Arbitrary turns the pixels of type in a font that isn't installed instead of
+/// re-rendering it in a substitute face (#8860), inside groups too. Type in an installed font
+/// still re-renders.
+#[test]
+fn rotate_arbitrary_keeps_the_pixels_of_type_in_a_missing_font() {
+    for depth in [8, 16, 32] {
+        for (font, kept) in [("No Such Font 8860", true), ("", false)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 100, "height": 60, "depth": depth})).unwrap();
+            let cache = s
+                .edit("type", |doc, _| {
+                    let mut t = photocraft_doc::TextLayer { text: "Hello!".into(), font_family: font.into(), size_pt: 26.0, ..Default::default() };
+                    t.transform = Affine::translate(10.0, 40.0);
+                    // Deliberately not what PhotoCraft would draw, so a re-render shows.
+                    let fmt = doc.pixel_format();
+                    let mut cache = Surface::new(fmt);
+                    cache.fill_rect(Rect::new(10, 20, 90, 40), &photocraft_raster::from_rgba(&fmt, [0.4, 0.2, 0.6, 1.0]));
+                    t.cache = Some(cache.clone());
+                    let ty = Layer::new("Hello!", LayerContent::Text(t));
+                    doc.insert_above(None, Layer::group("Group", vec![ty]));
+                    Ok(cache)
+                })
+                .unwrap();
+            s.execute("image.rotation.arbitrary", json!({"angle": 30, "interpolation": "bilinear"})).unwrap();
+            let LayerContent::Group(g) = &doc(&s).layers.last().unwrap().content else { panic!("group") };
+            let LayerContent::Text(t) = &g.children[0].content else { panic!("type layer") };
+            // The edit's map: 30° clockwise about the centres of the old and new canvases.
+            let new = doc(&s).size;
+            let (sn, cs) = 30f64.to_radians().sin_cos();
+            let (nx, ny) = (f64::from(new.width) / 2.0, f64::from(new.height) / 2.0);
+            let a = [cs, sn, -sn, cs, nx - (cs * 50.0 - sn * 30.0), ny - (sn * 50.0 + cs * 30.0)];
+            let h = Homography([a[0], a[2], a[4], a[1], a[3], a[5], 0.0, 0.0, 1.0]);
+            let turned = photocraft_algo::transform::warp_surface(&cache, cache.content_bounds(), &h, Interp::Bilinear).unwrap();
+            assert_eq!(t.cache.as_ref() == Some(&turned), kept, "font {font:?}, depth {depth}");
+        }
+    }
+}
+
 #[test]
 fn rotate_arbitrary_turns_unlinked_layer_masks() {
     for depth in [8, 16] {
