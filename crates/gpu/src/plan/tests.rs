@@ -32,7 +32,7 @@ fn lab_channel_adjustments_defer_to_the_cpu_in_lab_documents() {
         Adjustment::Posterize { levels: 4 },
         Adjustment::Threshold { level: 0.5 },
         Adjustment::BrightnessContrast { brightness: 10.0, contrast: 5.0, legacy: false },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false },
+        Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false, source: None },
     ];
     for adj in &lab_rules {
         assert!(!adjustment_on_gpu(adj, ColorMode::Lab), "{adj:?}");

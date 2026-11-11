@@ -508,7 +508,7 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
                     conflict(sub, m, "automation_read_root", "bridge")?;
                     conflict(sub, m, "automation_write_root", "bridge")?;
                 }
-                if a.bridge.is_some() && (a.automation.automation_read_root.is_some() || a.automation.automation_write_root.is_some()) {
+                if a.bridge.is_some() && (!a.automation.automation_read_root.is_empty() || a.automation.automation_write_root.is_some()) {
                     return Err(ServerOptionError::BridgeRoots.into_clap(sub));
                 }
                 if a.bridge.is_some() && (m.value_source("gpu") == Some(ValueSource::CommandLine) || m.value_source("no_gpu") == Some(ValueSource::CommandLine))

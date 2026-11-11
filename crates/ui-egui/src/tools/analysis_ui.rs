@@ -22,11 +22,30 @@ use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::{DialogKind, Tool};
 use crate::theme::Tokens;
 
+#[cfg(test)]
+#[path = "count_readout_tests.rs"]
+mod count_readout_tests;
+
+/// The Count tool options bar's number (#11764): with one group (or none), its markers; with two
+/// or more, the markers of the visible groups, then the current group's in brackets (0 while it
+/// is hidden), as "5 (2)". The single-group case counts a hidden group too (not measured, so it
+/// keeps the old total). An out-of-range current index means the last group, as in the Group
+/// dropdown and `count.add`.
+pub(crate) fn count_readout(m: &photocraft_doc::analysis::Measurement) -> String {
+    if m.count_groups.len() < 2 {
+        return m.count_total().to_string();
+    }
+    let visible: usize = m.count_groups.iter().filter(|g| g.visible).map(|g| g.points.len()).sum();
+    let gi = m.active_count_group.min(m.count_groups.len().saturating_sub(1));
+    let current = m.count_groups.get(gi).filter(|g| g.visible).map_or(0, |g| g.points.len());
+    format!("{visible} ({current})")
+}
+
 /// What a pointer drag is doing (not serialised).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
-    /// New ruler line from a point.
-    RulerNew,
+    /// New ruler line from a point; the ruler it replaces comes back if the press doesn't move (#11980).
+    RulerNew(Option<Ruler>),
     /// Moving a ruler handle: 0 start, 1 end, 2 protractor end.
     RulerHandle(u8),
     /// Moving count marker (group, index) from where it was.
@@ -248,6 +267,10 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
 }
 
 #[cfg(test)]
+#[path = "analysis_ruler_click_tests.rs"]
+mod analysis_ruler_click_tests;
+
+#[cfg(test)]
 #[path = "note_show_on_new_tests.rs"]
 mod note_show_on_new_tests;
 
@@ -279,7 +302,6 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         return true;
     };
     let tol = tolerance(app);
-    let samplers: Vec<[f64; 2]> = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
     match (tool, ev) {
         (Tool::Ruler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
@@ -300,14 +322,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 Some(r) if near(r.start) => app.ui.analysis.drag = Some(Drag::RulerHandle(0)),
                 _ => {
                     set_ruler(app, Ruler { start: p, end: p, protractor: None });
-                    app.ui.analysis.drag = Some(Drag::RulerNew);
+                    app.ui.analysis.drag = Some(Drag::RulerNew(cur));
                 }
             }
         }
         (Tool::Ruler, ToolEvent::Move { x, y, .. }) => {
             let (Some(drag), Some(mut r)) = (app.ui.analysis.drag, doc.measurement.ruler) else { return true };
             match drag {
-                Drag::RulerNew | Drag::RulerHandle(1) => r.end = constrain(r.start, [x, y], mods.shift),
+                Drag::RulerNew(_) | Drag::RulerHandle(1) => r.end = constrain(r.start, [x, y], mods.shift),
                 Drag::RulerHandle(0) => r.start = constrain(r.end, [x, y], mods.shift),
                 Drag::RulerHandle(_) => r.protractor = Some(constrain(r.start, [x, y], mods.shift)),
                 _ => return true,
@@ -316,8 +338,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         }
         (Tool::Ruler, ToolEvent::Up { .. }) => {
             let drag = app.ui.analysis.drag.take();
-            if drag == Some(Drag::RulerNew) && doc.measurement.ruler.is_some_and(|r| dist(r.start, r.end) < 0.5) {
-                let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
+            if let Some(Drag::RulerNew(before)) = drag
+                && doc.measurement.ruler.is_some_and(|r| dist(r.start, r.end) < 0.5)
+            {
+                // A click leaves the ruler that was there; with none, it leaves none.
+                match before {
+                    Some(r) => set_ruler(app, r),
+                    None => {
+                        let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
+                    }
+                }
             }
         }
         (Tool::Count, ToolEvent::Down { x, y, .. }) => {
@@ -372,7 +402,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         // there (a click on it moves it to the clicked pixel); Escape cancels either drag.
         (Tool::ColorSampler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
-            match nearest_sampler(&samplers, p, tol) {
+            match sampler_at(app, p) {
                 // ⌥-click a point removes it.
                 Some(i) if mods.alt => {
                     let _ = app.run("view.colorSamplers.delete", json!({"index": i}));
@@ -427,6 +457,13 @@ fn status_on_err(app: &mut PhotocraftApp, r: Result<Value, String>) {
         app.ui.status = e;
         app.ui.status_error = false;
     }
+}
+
+/// The count marker a Count tool click at document point `at` would grab (the click's own hit
+/// test, with its tolerance), or `None`. The cursor uses it too, so it never says "1" where a click
+/// adds a marker (#11773).
+pub(crate) fn count_marker_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<(usize, usize)> {
+    nearest_marker(&app.session.active()?.doc, at, tolerance(app))
 }
 
 fn nearest_marker(d: &Document, at: [f64; 2], tol: f64) -> Option<(usize, usize)> {
@@ -592,7 +629,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Count => {
             let t = Tokens::get(ui.ctx());
             let m = &doc.measurement;
-            ui.label(RichText::new(crate::i18n::fmt(tl!("Count: {n}"), &[("n", &m.count_total().to_string())])).color(t.text).size(11.0));
+            ui.label(RichText::new(crate::i18n::fmt(tl!("Count: {n}"), &[("n", &count_readout(m))])).color(t.text).size(11.0));
             crate::widgets::vline(ui, 22.0);
             if !m.count_groups.is_empty() {
                 let mut gi = m.active_count_group.min(m.count_groups.len() - 1);
@@ -659,6 +696,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::ColorSampler => {
             let t = Tokens::get(ui.ctx());
+            // Sample Size, shared with the Eyedropper as in Photoshop (#11732).
+            ui.label(RichText::new(tl!("Sample Size:")).color(t.text_dim).size(12.0));
+            let sizes = crate::eyedropper_ui::size_options();
+            crate::widgets::dropdown(ui, "color-sampler-size", tl!("Size"), &mut app.ui.tool_options.eyedropper_size, &sizes, 130.0);
+            crate::widgets::vline(ui, 22.0);
             let n = app.session.active().map_or(0, |d| d.color_samplers.len());
             ui.label(
                 RichText::new(crate::i18n::fmt(
@@ -1173,6 +1215,15 @@ pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
             return true;
         }
     }
+    // Escape during a Ruler drag (a new ruler or an end) ends it and keeps the ruler where it is:
+    // no cancel, and the later moves and the release change nothing (#11986).
+    if app.ui.tool == Tool::Ruler
+        && matches!(app.ui.analysis.drag, Some(Drag::RulerNew(_) | Drag::RulerHandle(0 | 1)))
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        app.ui.analysis.drag = None;
+        return true;
+    }
     let Some(index) = app.ui.analysis.note_selected else { return false };
     if app.ui.tool != Tool::Note || app.ui.text_edit.is_some() || matches!(Focus::of(ctx), Focus::Text | Focus::DeletingWidget) {
         return false;
@@ -1199,3 +1250,7 @@ mod analysis_ruler_shift_tests;
 #[cfg(test)]
 #[path = "note_clear_all_tests.rs"]
 mod note_clear_all_tests;
+
+#[cfg(test)]
+#[path = "analysis_ruler_escape_tests.rs"]
+mod analysis_ruler_escape_tests;
