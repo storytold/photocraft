@@ -165,12 +165,61 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
 }
 
 fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
-    let Some((r, path, hit)) = target(app, tool, p) else { return };
+    let Some((r, path, hit)) = target(app, tool, p) else {
+        hide_anchors(app, tool, p);
+        return;
+    };
     if r == PathRef::Pen {
         edit_pen(app, path, hit, p);
         return;
     }
+    // Only a saved path has the measured behaviour (#12769); a vector mask or the Work Path delete at once.
+    if let (Tool::DeleteAnchorPoint, PathRef::Saved(_), Hit::Anchor([s, k])) = (tool, r, hit) {
+        if !crate::direct_select::anchors_shown(app, r, s) {
+            select_shown(app, r, vec![s], vec![[s, k]]);
+            return;
+        }
+        let steps = history_len(app);
+        apply(app, r, hit, p);
+        if history_len(app) != steps {
+            select_follower(app, r, &path, [s, k]);
+        }
+        return;
+    }
     apply(app, r, hit, p);
+}
+
+fn history_len(app: &PhotocraftApp) -> usize {
+    app.session.active().map_or(0, |st| st.history.past_len())
+}
+
+/// Show the anchors of `subpaths` of `r` only, with `anchors` selected: a view change, no history step.
+fn select_shown(app: &mut PhotocraftApp, r: PathRef, subpaths: Vec<usize>, anchors: Vec<[usize; 2]>) {
+    app.ui.direct_selection =
+        DirectSelection { target: Some(r), anchors, shown: Some(subpaths), owner: crate::direct_select::Owner::current(app), ..Default::default() };
+}
+
+/// After Delete Anchor Point removed knot `k` of subpath `s` of `before`: select the anchor that
+/// followed it and keep only that subpath's anchors drawn (#12769). If a subpath went away the
+/// indices moved, so the selection is just cleared.
+fn select_follower(app: &mut PhotocraftApp, r: PathRef, before: &Path, [s, k]: [usize; 2]) {
+    let after = crate::direct_select::path_of(app, &r).and_then(|p| p.subpaths.get(s).cloned().filter(|_| p.subpaths.len() == before.subpaths.len()));
+    let Some(sp) = after else {
+        app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() };
+        return;
+    };
+    let next = if k < sp.knots.len() { Some(k) } else { (sp.closed && !sp.knots.is_empty()).then_some(0) };
+    select_shown(app, r, vec![s], next.map(|k| [s, k]).into_iter().collect());
+}
+
+/// A click on empty canvas hides the saved path's anchors; its outline stays and it stays targeted (#12769).
+fn hide_anchors(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
+    if tool != Tool::DeleteAnchorPoint || crate::direct_select::hit_active(app, p).is_some() {
+        return;
+    }
+    if let Some((i, _)) = crate::vector_ui::selected_saved_path_index(app) {
+        select_shown(app, PathRef::Saved(i), Vec::new(), Vec::new());
+    }
 }
 
 /// Add or delete an anchor of the Pen path being drawn (`path`, from `pen_path`). It isn't in the
@@ -286,3 +335,6 @@ mod add_anchor_delete_key_tests;
 
 #[cfg(test)]
 mod delete_anchor_escape_tests;
+
+#[cfg(test)]
+mod delete_anchor_shown_anchors_tests;
