@@ -16,7 +16,11 @@ pub struct Limits {
     /// PNG also applies this to the aggregate decoded text/XMP UTF-8 bytes,
     /// including keywords, separately from pixels. Animated WebP charges
     /// every retained frame's full pixel copy plus its own copy of the
-    /// file's ICC profile against this budget. This is not a total RSS cap.
+    /// file's ICC profile against this budget. TIFF charges its decode working memory (each
+    /// band worker's strip or tile scratch buffer, decoder state and the frame a JPEG strip or
+    /// tile decodes to) next to the output, runs only as many workers at once as fit, and
+    /// refuses the image when not even one does.
+    /// This is not a total RSS cap.
     pub max_alloc: u64,
 }
 
@@ -286,6 +290,10 @@ pub struct DdsOptions {
     pub mipmaps: bool,
 }
 
+/// The longer side, in pixels, at which a TIFF image pyramid stops: the last level written is
+/// the first one no longer than this ([`EncodeOptions::tiff_pyramid`]).
+pub const TIFF_PYRAMID_MIN: u32 = 64;
+
 /// Options for [`crate::encode`].
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
@@ -310,6 +318,11 @@ pub struct EncodeOptions {
     /// Always write TIFF as BigTIFF (8-byte offsets). Without it a TIFF is written as BigTIFF
     /// only when it could pass the 4 GiB a classic TIFF can address.
     pub tiff_bigtiff: bool,
+    /// TIFF: after the full image, write Photoshop's "Save Image Pyramid" levels: copies at half,
+    /// a quarter, … of the size, each marked reduced-resolution (`NewSubfileType` 1), down to
+    /// [`crate::TIFF_PYRAMID_MIN`] px on the longer side. Readers that don't know pyramids open
+    /// the full image, which comes first.
+    pub tiff_pyramid: bool,
     pub exr_compression: ExrCompression,
     /// DPX bits per sample. `None` follows the image: 8 for 8-bit, 16 otherwise.
     pub dpx_bits: Option<DpxBits>,
@@ -334,6 +347,7 @@ impl Default for EncodeOptions {
             webp_quality: 80,
             tiff_compression: TiffCompression::None,
             tiff_bigtiff: false,
+            tiff_pyramid: false,
             exr_compression: ExrCompression::Zip16,
             dpx_bits: None,
             dds: DdsOptions::default(),
