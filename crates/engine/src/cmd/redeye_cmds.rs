@@ -485,3 +485,7 @@ mod redeye_history_state_tests;
 #[cfg(test)]
 #[path = "redeye_color_mode_tests.rs"]
 mod redeye_color_mode_tests;
+
+#[cfg(test)]
+#[path = "redeye_outside_selection_tests.rs"]
+mod redeye_outside_selection_tests;
