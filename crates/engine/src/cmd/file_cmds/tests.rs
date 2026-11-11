@@ -4529,6 +4529,23 @@ fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recurs
             assert!(s.actions.playback_stack.is_empty());
         }
     }
+    // A duplicate legacy caption is not a resolved occurrence. In particular, the row1
+    // caller must not be positioned at row0 and replay side effects before recursion is seen.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+    s.actions.list.push(Action::new("Duplicate", vec![]));
+    let second = Action::new("Duplicate", vec![("layer.new.layer".into(), json!({"name":"must not replay"})), ("actions.play".into(), json!({"action":1}))]);
+    s.actions.list.push(second.clone());
+    let layers = doc(&s).layers.len();
+    let recording = begin_playback(&mut s, &second).unwrap();
+    assert!(s.actions.playback_stack[0].position.is_none());
+    let error = s.execute("actions.play", json!({"action":1})).unwrap_err().to_string();
+    assert!(error.contains("recursive action"), "{error}");
+    assert_eq!(doc(&s).layers.len(), layers, "immediate recursion cannot replay the first side effect");
+    assert!(!doc(&s).layers.iter().any(|layer| layer.name == "must not replay"));
+    finish_playback(&mut s, recording, &second, 0);
+    assert!(s.actions.playback_stack.is_empty());
+
     // Synthetic callers not in the registered list retain the conservative legacy behavior.
     let mut s = Session::new();
     let driver = Action::new("Synthetic driver", vec![]);

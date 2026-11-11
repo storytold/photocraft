@@ -926,7 +926,17 @@ pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize,
     flush_recording(s)?;
     // Registered identities belong to this library even when the caller uses the public
     // unpositioned helper. Embedded Batch libraries can legitimately reuse their IDs/names.
-    let target = identity::playback_row(&s.actions.list, action).map_or_else(|| PlaybackTarget::from(action), |row| PlaybackTarget::at(s, row, action));
+    let row = match action.action_id.as_deref() {
+        Some(id) => identity::resolve_action_id(&s.actions.list, id),
+        None => {
+            let mut rows = s.actions.list.iter().enumerate().filter(|(_, row)| row.name == action.name);
+            let first = rows.next().map(|(index, _)| index);
+            rows.next().is_none().then_some(first).flatten()
+        }
+    };
+    // A duplicate legacy caption cannot identify which registered occurrence the caller owns.
+    // Preserve conservative name recursion rather than position it at the first matching row.
+    let target = row.map_or_else(|| PlaybackTarget::from(action), |row| PlaybackTarget::at(s, row, action));
     Ok(push_playback(s, target))
 }
 
