@@ -77,6 +77,19 @@ impl DetailPreview {
         self.pending.is_some()
     }
 
+    /// Gives the preview the raw it develops from (its tone curve and sensor data) once that is
+    /// ready: what was developed without it is dropped and develops again.
+    pub(crate) fn set_raw(&mut self, raw_curve: Option<Arc<Vec<[f32; 2]>>>, raw: Option<RawDetail>) {
+        self.raw_curve = raw_curve;
+        self.raw = raw;
+        self.result = None;
+        self.pending = None;
+        self.failed_revision = None;
+        self.crop = None;
+        self.error = None;
+        self.ready = false;
+    }
+
     fn poll(&mut self, revision: u64) {
         let Some((requested_revision, rx)) = &self.pending else { return };
         let requested_revision = *requested_revision;

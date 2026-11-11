@@ -56,6 +56,8 @@ fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
         developed_with: Default::default(),
         demosaic: Default::default(),
         crop: None,
+        active_before: None,
+        conversion: None,
     };
     let mut app = PhotocraftApp::new(session, crate::Services::default());
     app.sync_views();

@@ -627,7 +627,7 @@ fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
                 bounds: doc.bounds(),
                 raw: held.raw.clone(),
                 encoding_gamma: photocraft_engine::lens_cmds::encoding_gamma(&doc),
-                to_document: super::convert::raw_to_document(app, &doc),
+                to_document: super::convert::raw_to_document(app, &doc, held.raw.conversion),
             })
         }
     };

@@ -34,6 +34,7 @@ mod filmstrip;
 mod menu;
 mod open;
 mod proxy;
+mod raw_load;
 mod sidecar;
 
 pub use controls::show;
@@ -112,6 +113,8 @@ pub struct CameraRawDialog {
     /// The default develop at the preview's size, for Auto when the proxy is the binned frame:
     /// averaged once, on the first Auto.
     auto_proxy: std::sync::OnceLock<Vec<[f32; 4]>>,
+    /// The raw source being built on a worker ([`Self::load_raw_source`]).
+    raw_loading: Option<std::sync::mpsc::Receiver<Option<raw_load::RawLoaded>>>,
     /// The proxy develop running on a worker ([`Self::request_render`]).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
@@ -157,6 +160,7 @@ impl CameraRawDialog {
         result["previewPending"] = json!(self.render_pending());
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
         result["detailPending"] = json!(self.detail.pending());
+        result["rawSourcePending"] = json!(self.raw_source_pending());
         result["detailError"] = json!(self.detail.error);
         result["viewportRect"] = json!(self.viewport.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
         result["zoom"] = json!(self.viewport.map(|r| navigation.scale(r, vec2(self.full_w as f32, self.full_h as f32) / self.preview_ppp)));
