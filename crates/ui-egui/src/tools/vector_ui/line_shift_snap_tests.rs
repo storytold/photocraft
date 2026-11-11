@@ -1,0 +1,95 @@
+//! #13243: ⇧ while dragging with the Line tool snaps to multiples of 45° as Photoshop does: a
+//! diagonal line ends at the shorter of the drag's two distances on both axes, a horizontal or
+//! vertical one keeps the full distance along its axis (and its 0.5 px centring on the pixel).
+//! The drag preview shows the same line as the layer, and ⇧ pressed after the start gives the
+//! same line as ⇧ held from the press.
+
+use egui::Modifiers;
+use photocraft_doc::{LayerContent, LiveShape};
+use serde_json::json;
+
+use super::shape_preview;
+use crate::PhotocraftApp;
+use crate::canvas::{ToolEvent, tool_event};
+use crate::state::Tool;
+
+/// The five measured drags from 400,300 and the line Photoshop draws for each: a flat line's
+/// ends move 0.5 px across it, onto the middle of the pixel.
+const CASES: [([f64; 2], [[f64; 2]; 2]); 5] = [
+    ([600.0, 400.0], [[400.0, 299.5], [600.0, 299.5]]),
+    ([600.0, 480.0], [[400.0, 300.0], [580.0, 480.0]]),
+    ([600.0, 520.0], [[400.0, 300.0], [600.0, 500.0]]),
+    ([300.0, 420.0], [[400.0, 300.0], [300.0, 400.0]]),
+    ([450.0, 500.0], [[399.5, 300.0], [399.5, 500.0]]),
+];
+
+const START: [f64; 2] = [400.0, 300.0];
+
+fn app() -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Line;
+    app
+}
+
+/// A drag from `from` to `to`, with `at_press` held at the press and `later` from the first move.
+fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], at_press: Modifiers, later: Modifiers) {
+    tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, at_press);
+    tool_event(app, ToolEvent::Move { x: (from[0] + to[0]) / 2.0, y: (from[1] + to[1]) / 2.0, pressure: 1.0 }, later);
+    tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, later);
+    tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, later);
+}
+
+/// The active layer's shape: its live line's ends, and its outline.
+fn line(app: &PhotocraftApp) -> ([f64; 2], [f64; 2], photocraft_doc::vector::Path) {
+    let st = app.session.active().unwrap();
+    match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+        LayerContent::Shape(s) => match &s.live {
+            Some(LiveShape::Line { from, to, .. } | LiveShape::ArrowLine { from, to, .. }) => (*from, *to, s.path.clone()),
+            other => panic!("a live line, got {other:?}"),
+        },
+        _ => panic!("a shape layer"),
+    }
+}
+
+#[test]
+fn shift_drags_end_where_photoshop_ends_them() {
+    for (to, want) in CASES {
+        let mut app = app();
+        drag(&mut app, START, to, Modifiers::SHIFT, Modifiers::SHIFT);
+        let (from, end, _) = line(&app);
+        assert_eq!([from, end], want, "⇧-drag 400,300 → {to:?}");
+    }
+}
+
+#[test]
+fn shift_pressed_after_the_start_gives_the_same_line() {
+    for (to, _) in CASES {
+        let mut held = app();
+        drag(&mut held, START, to, Modifiers::SHIFT, Modifiers::SHIFT);
+        let mut later = app();
+        drag(&mut later, START, to, Modifiers::NONE, Modifiers::SHIFT);
+        assert_eq!(line(&held), line(&later), "⇧ at the press or after it, → {to:?}");
+    }
+}
+
+#[test]
+fn the_preview_shows_the_line_the_drag_makes() {
+    for (to, _) in CASES {
+        let mut app = app();
+        let preview = shape_preview(&app, Tool::Line, START, to, Modifiers::SHIFT).expect("a preview");
+        drag(&mut app, START, to, Modifiers::NONE, Modifiers::SHIFT);
+        assert_eq!(preview.path, line(&app).2, "preview of → {to:?}");
+    }
+}
+
+#[test]
+fn shift_snaps_every_direction() {
+    // Up-left, up-right and down-left drags snap the same way, mirrored.
+    let o = app().ui.tool_options.clone();
+    for (to, want) in [([200.0, 180.0], [280.0, 180.0]), ([520.0, 100.0], [520.0, 180.0]), ([380.0, 100.0], [399.5, 100.0]), ([200.0, 310.0], [200.0, 299.5])] {
+        let g = super::shape_geometry(&o, Tool::Line, START, to, Modifiers::SHIFT).expect("a line");
+        assert_eq!(g["to"], json!(want), "⇧-drag 400,300 → {to:?}: {g}");
+    }
+}

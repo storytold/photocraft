@@ -231,6 +231,9 @@ mod delete_anchor_options_bar_tests;
 #[cfg(test)]
 mod pen_enter_deselects_tests;
 
+#[cfg(test)]
+mod line_shift_snap_tests;
+
 pub(crate) use pen::freeform_locked_shape;
 
 /// Where a Pen draft goes, captured at its first anchor.

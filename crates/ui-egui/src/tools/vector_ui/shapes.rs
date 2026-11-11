@@ -87,10 +87,19 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
     Some(if tool == Tool::Line {
         let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
         if mods.shift {
-            // Snap to 45°.
-            let a = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
-            let len = dx.hypot(dy);
-            (dx, dy) = (len * a.cos(), len * a.sin());
+            // Snap to a multiple of 45°, as Photoshop does (#13243): a horizontal or vertical
+            // line keeps the drag's distance along its axis, a diagonal one the shorter of the two
+            // distances on both axes. A drag within 30° of an axis snaps to it: Photoshop flattens
+            // a 26.6° drag and keeps a 39.8° one diagonal; the exact boundary is not measured.
+            let tan30 = std::f64::consts::FRAC_PI_6.tan();
+            (dx, dy) = if dy.abs() < dx.abs() * tan30 {
+                (dx, 0.0)
+            } else if dx.abs() < dy.abs() * tan30 {
+                (0.0, dy)
+            } else {
+                let m = dx.abs().min(dy.abs());
+                (m.copysign(dx), m.copysign(dy))
+            };
         }
         if dx.hypot(dy) < 1.0 {
             return None;
