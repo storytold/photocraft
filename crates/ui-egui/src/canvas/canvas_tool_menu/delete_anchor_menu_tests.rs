@@ -5,7 +5,7 @@
 
 use egui::Modifiers;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::vector::Path;
 use serde_json::json;
 
@@ -176,6 +176,16 @@ fn a_point_entry_expires_once_the_path_is_edited() {
     super::choose(h.state_mut(), &ctx, "path.deleteAnchor");
     assert_eq!(saved(h.state()), after_add, "the stale entry deleted nothing");
     assert_eq!(steps(h.state()), n, "and added no history step");
+}
+
+/// The expired entry is drawn disabled, not just rejected on click (#12771, CodeRabbit).
+#[test]
+fn an_expired_point_entry_is_drawn_disabled() {
+    let mut h = right_clicked(Tool::DeleteAnchorPoint, [300.0, 300.0]);
+    assert!(!h.get_by_label("Delete Anchor Point").accesskit_node().is_disabled(), "enabled while the path is as it was");
+    h.state_mut().run("path.addAnchor", json!({"name": "Path 1", "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+    h.run();
+    assert!(h.get_by_label("Delete Anchor Point").accesskit_node().is_disabled(), "disabled once the path is edited");
 }
 
 /// A shape with only its own position lock is ignored by the anchor tools' click (#12730, #12825),

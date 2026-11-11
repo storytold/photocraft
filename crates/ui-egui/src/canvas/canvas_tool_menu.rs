@@ -1727,7 +1727,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                 }
                 if let Some((command, ..)) = &menu.point {
                     let item = egui::Button::new(point_label(command)).min_size(egui::vec2(200.0, 20.0));
-                    if ui.add(item).clicked() {
+                    if ui.add_enabled(available(app, &menu, command), item).clicked() {
                         selected = Some(command.clone());
                     }
                     ui.separator();
