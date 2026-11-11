@@ -11,7 +11,8 @@ pub enum SelCursor {
     Cut,
     /// Arrow with a second arrow: ⌥ lifts a copy of them instead.
     Copy,
-    /// Plain arrow: a floating piece, moved again by a plain drag until it is dropped.
+    /// Plain arrow: a floating piece, moved again by the Move tool (⌘ with a marquee) until it is
+    /// dropped.
     Piece,
     /// Hollow arrowhead: the selected pixels are being dragged.
     Dragging,
