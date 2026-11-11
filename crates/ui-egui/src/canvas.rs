@@ -1860,6 +1860,13 @@ fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size:
     egui::CursorIcon::None
 }
 
+/// Which arrow Direct Selection paints (#13220): `None` for the crosshair that Preferences ›
+/// Cursors › Other Cursors asks for, else `Some(false)` for its own hollow arrow and `Some(true)`
+/// for Path Selection's solid one, which the reference draws while Ctrl/Cmd is held.
+fn direct_selection_arrow(precise: bool, command: bool) -> Option<bool> {
+    (!precise).then_some(command)
+}
+
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
     let painter = input.painter;
     let xf = input.xf;
@@ -1994,6 +2001,18 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         // precise Other Cursors (#4639).
         Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
             if precise_other_cursor(app) { egui::CursorIcon::Crosshair } else { pen_cursor(ui.ctx(), tool, p) }
+        }
+        // The path tools' arrowheads (#13220): Direct Selection's own hollow arrow, and Path
+        // Selection's solid one while Ctrl/Cmd is held. Shift and Ctrl+Alt were not measured, so
+        // they keep the hollow arrow, and Preferences › Cursors › Other Cursors keeps its crosshair.
+        Tool::DirectSelection => {
+            match direct_selection_arrow(precise_other_cursor(app), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).command) {
+                None => egui::CursorIcon::Crosshair,
+                Some(solid) => {
+                    crate::icons::arrow_cursor(ui.ctx(), p, solid);
+                    egui::CursorIcon::None
+                }
+            }
         }
         // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
         Tool::Move if crate::move_mods::copying(app, alt) => egui::CursorIcon::Copy,
@@ -3330,6 +3349,9 @@ mod multi_channel_ui_tests {
 
 pub(crate) use drag::cancel_stale_vector_drag;
 
+#[cfg(test)]
+#[path = "direct_selection_cursor_tests.rs"]
+mod direct_selection_cursor_tests;
 #[cfg(test)]
 #[path = "pen_gesture_owner_tests.rs"]
 mod pen_gesture_owner_tests;
