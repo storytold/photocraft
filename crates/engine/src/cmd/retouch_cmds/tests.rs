@@ -537,6 +537,38 @@ fn protect_detail_drags_at_the_default_spacing_widen_the_halo_without_banding() 
 }
 
 #[test]
+fn protect_detail_sharpens_with_every_stamp_of_a_count_but_not_with_airbrush_repeats() {
+    // Scattering's Count with Scatter 0 lays several stamps on the same centre; with size jitter
+    // each has its own footprint, and each must sharpen (the stamps after the first used to get no
+    // share at all). An airbrush click repeats the same stamp, which still adds nothing, so the
+    // measured click is kept.
+    let click = |set: &dyn Fn(&mut photocraft_paint::BrushSettings)| {
+        let mut s = session(80, 40, 8, "rgb");
+        paint_layer(&mut s, |x, _| if x < 40 { [96.0 / 255.0, 96.0 / 255.0, 96.0 / 255.0, 1.0] } else { [160.0 / 255.0, 160.0 / 255.0, 160.0 / 255.0, 1.0] });
+        set(&mut s.tools.brush);
+        s.execute("paint.sharpen", json!({"points": [[40, 20]], "size": 40, "hardness": 100, "strength": 100})).unwrap();
+        (0..80).map(|x| (rgba(&s, x, 20)[0] * 255.0).round() as i32).collect::<Vec<i32>>()
+    };
+    let jitter = |b: &mut photocraft_paint::BrushSettings| {
+        b.shape_dynamics.enabled = true;
+        b.shape_dynamics.size.jitter = 1.0;
+        b.shape_dynamics.size.minimum = 0.0;
+    };
+    let one = click(&|b| jitter(b));
+    let four = click(&|b| {
+        jitter(b);
+        b.scattering.enabled = true;
+        b.scattering.count = 4;
+    });
+    let moved = |row: &[i32]| row.iter().enumerate().map(|(x, v)| (v - if x < 40 { 96 } else { 160 }).abs()).sum::<i32>();
+    assert!(moved(&four) > moved(&one), "Count 4 sharpens more than its first stamp alone: {four:?} vs {one:?}");
+    assert!(four.iter().all(|v| (1..=254).contains(v)), "no black and white bands: {four:?}");
+    let plain = click(&|_| {});
+    let airbrush = click(&|b| b.build_up = true);
+    assert_eq!(airbrush, plain, "an airbrush click repeats its stamp, which adds nothing");
+}
+
+#[test]
 fn smudge_moves_colour_along_the_stroke() {
     for depth in DEPTHS {
         let mut s = session(100, 30, depth, "rgb");

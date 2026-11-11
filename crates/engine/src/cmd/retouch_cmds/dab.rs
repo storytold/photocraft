@@ -30,6 +30,33 @@ fn protect_detail_share(moved: Option<f32>, radius: f32) -> f32 {
     moved.map_or(1.0, |m| (m / (2.0 * radius.max(0.5) * PROTECT_DETAIL_SPACING)).clamp(0.0, 1.0))
 }
 
+/// Tracks the previous dab of a Protect Detail stroke for [`protect_detail_share`].
+#[derive(Default)]
+struct ProtectDetailShares {
+    prev: Option<(photocraft_paint::Dab, f32)>,
+}
+
+impl ProtectDetailShares {
+    /// The share of a full dab that `d` applies. A dab at the previous one's centre but with
+    /// another shape is another stamp of the same step (Scattering's Count with Scatter 0 and
+    /// size, angle or roundness jitter), so it applies that step's share; an exact repeat
+    /// (airbrush build-up while held still) adds nothing.
+    fn next(&mut self, d: &photocraft_paint::Dab) -> f32 {
+        let share = match self.prev {
+            Some((p, s)) if p.center == d.center => {
+                let same_stamp = p.radius == d.radius && p.angle == d.angle && p.roundness == d.roundness && p.flip_x == d.flip_x && p.flip_y == d.flip_y;
+                if same_stamp { 0.0 } else { s }
+            }
+            Some((p, _)) => protect_detail_share(Some((d.center.x - p.center.x).hypot(d.center.y - p.center.y) as f32), d.radius),
+            None => protect_detail_share(None, d.radius),
+        };
+        // A repeat keeps the step's share for the stamps after it.
+        let kept = if share == 0.0 { self.prev.map_or(share, |(_, s)| s) } else { share };
+        self.prev = Some((*d, kept));
+        share
+    }
+}
+
 /// Apply an RGB colour transform `f(rgb, strength)` to each covered pixel of a dab (through straight
 /// RGBA, so it works for Gray/CMYK/Lab too; untouched pixels are never round-tripped).
 fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32, spacing: f32, f: impl Fn([f32; 3], f32) -> [f32; 3]) {
@@ -252,12 +279,9 @@ impl DabTool {
             Self::Sponge { saturate, vibrance } => Box::new(move |work, fp| color_dab(&fmt, work, fp, 0.5, sp, |c, k| sponge(c, k, saturate, vibrance))),
             Self::Focus { sharpen, strength, protect, sigma } => {
                 let a = alpha_index(&fmt);
-                // Protect Detail: where the previous dab was, for `protect_detail_share`.
-                let mut last: Option<(f64, f64)> = None;
+                let mut shares = ProtectDetailShares::default();
                 Box::new(move |work, fp| {
-                    let c = (fp.dab.center.x, fp.dab.center.y);
-                    let moved = last.replace(c).map(|(x, y)| (c.0 - x).hypot(c.1 - y) as f32);
-                    let share = protect_detail_share(moved, fp.dab.radius);
+                    let share = shares.next(&fp.dab);
                     let r = fp.rect.intersect(&work.rect);
                     if r.is_empty() || (sharpen && protect && share <= 0.0) {
                         return;
