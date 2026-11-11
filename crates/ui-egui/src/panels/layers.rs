@@ -531,7 +531,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // A row click commits even when it selects the layer already being edited (#5584).
         // Finish before selection changes so the existing type session keeps its own target.
         if id == "layer.select" && app.ui.text_edit.is_some() {
-            crate::type_tool::commit(app);
+            crate::type_tool::commit_before_selecting(app, p.get("layer").and_then(serde_json::Value::as_u64));
         }
         if id == "ui.maskTarget" {
             app.end_filter_mask_view();

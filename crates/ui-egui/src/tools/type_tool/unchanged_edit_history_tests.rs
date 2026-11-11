@@ -35,6 +35,14 @@ fn text_of(app: &PhotocraftApp, id: LayerId) -> String {
     t.text.clone()
 }
 
+/// [`text_of`] in document `doc`, active or not.
+fn text_of_in(app: &PhotocraftApp, doc: usize, id: LayerId) -> String {
+    let LayerContent::Text(t) = &app.session.documents()[doc].doc.layer(id).unwrap().content else {
+        panic!("the layer is not a type layer");
+    };
+    t.text.clone()
+}
+
 fn first_size(app: &PhotocraftApp, id: LayerId) -> f32 {
     let LayerContent::Text(t) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { return 0.0 };
     t.char_runs().first().map(|r| r.style.size_pt).unwrap_or_default()
@@ -160,4 +168,51 @@ fn an_unchanged_edit_ended_by_another_tool_records_nothing() {
     assert!(app.ui.text_edit.is_none());
     assert_eq!(history(&app), before, "the tool switch is not an edit of the layer");
     assert_eq!(text_of(&app, id), "Hello");
+}
+
+/// A Layers panel click on another layer's row commits before it selects that layer (#5584), so
+/// both of the tool's checks still see the edited layer: the panel says it is a layer switch, and
+/// an unchanged session records nothing, as when the layer is selected first.
+#[test]
+fn an_unchanged_edit_ended_by_a_layers_panel_click_on_another_layer_records_nothing() {
+    let (mut app, id) = app();
+    let other = LayerId(app.run("layer.new.layer", json!({"name": "Pixels"})).unwrap()["layer"].as_u64().unwrap());
+    app.run("layer.select", json!({"layer": id.0})).unwrap();
+    click_into(&mut app, id);
+    let before = history(&app);
+    // The panel's order: commit first, then select.
+    crate::type_tool::commit_before_selecting(&mut app, Some(other.0));
+    app.run("layer.select", json!({"layer": other.0})).unwrap();
+    assert!(app.ui.text_edit.is_none(), "the row click ends the session");
+    assert_eq!(history(&app), before, "a layer switch adds no state");
+    assert_eq!(text_of(&app, id), "Hello");
+}
+
+/// A Layers panel click on the edited layer's own row ends the edit like a commit (#5584), so it
+/// records the state.
+#[test]
+fn a_layers_panel_click_on_the_edited_layers_row_records_one_state() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    let before = history(&app);
+    crate::type_tool::commit_before_selecting(&mut app, Some(id.0));
+    ended(&app, id, &before, "click on the edited layer's row");
+}
+
+/// Another document becoming active ends the edit in its own document (#6483), which is made
+/// active again for the commit: that is a document switch, and an unchanged session records
+/// nothing there.
+#[test]
+fn an_unchanged_edit_ended_by_another_document_records_nothing() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    let home = app.session.active_index().unwrap();
+    let before = history(&app);
+    app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
+    assert_ne!(app.session.active_index(), Some(home), "the new document is active");
+    super::end_if_left(&mut app);
+    assert!(app.ui.text_edit.is_none(), "the document switch ends the session");
+    assert_ne!(app.session.active_index(), Some(home), "the new document stays active");
+    assert_eq!(app.session.documents()[home].history.entries(), before, "no state in the edited layer's document");
+    assert_eq!(text_of_in(&app, home, id), "Hello");
 }

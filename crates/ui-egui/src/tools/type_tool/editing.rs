@@ -409,24 +409,41 @@ pub(crate) fn commit_shortcut(app: &mut PhotocraftApp, ctx: &egui::Context) -> b
 /// result, since a Type Mask always replaces the selection (#12073); the parameter stays so its
 /// callers don't change.
 pub fn commit_with(app: &mut PhotocraftApp, _mods: egui::Modifiers) {
+    commit_ending(app, true);
+}
+
+/// The commit a Layers panel row click makes before it selects `layer` (#5584): a click on another
+/// layer's row is a layer switch (#6483), so an unchanged session records nothing (#12050); a click
+/// on the edited layer's own row ends the edit like any other commit.
+pub(crate) fn commit_before_selecting(app: &mut PhotocraftApp, layer: Option<u64>) {
+    let switches = app.ui.text_edit.as_ref().is_some_and(|ed| layer.is_some_and(|l| l != ed.layer));
+    commit_ending(app, !switches);
+}
+
+/// [`commit_with`]'s body. `by_user`: the user ended the edit (a commit gesture), rather than a
+/// switch to another layer or document taking the work over, which records nothing for an
+/// unchanged session (#12050).
+fn commit_ending(app: &mut PhotocraftApp, by_user: bool) {
     app.ui.type_insertion_style = None;
     // A box drag in progress keeps the box it reached, as when every move was applied.
     crate::type_box_preview::flush(app);
     crate::type_font_preview::clear(app);
     let current = app.session.active_index();
     let Some(home) = app.ui.text_edit.as_ref().map(|ed| edit_home(app, ed)) else {
-        return commit_here(app);
+        return commit_here(app, by_user);
     };
     match home {
         Some(home) if Some(home) != current => {
             // An edit left in a background document commits there, in its own history (#6483).
+            // Another document is active, so a document switch ended the edit: an unchanged
+            // session records nothing there, even though its own document is active now.
             app.session.set_active(home);
-            commit_here(app);
+            commit_here(app, false);
             if let Some(i) = current {
                 app.session.set_active(i);
             }
         }
-        Some(_) => commit_here(app),
+        Some(_) => commit_here(app, by_user),
         // Its document closed: there is nothing to commit into, and the layer id may name a
         // layer of another document.
         None => {
@@ -447,11 +464,11 @@ pub(super) fn edit_home(app: &PhotocraftApp, ed: &TextEdit) -> Option<usize> {
 }
 
 /// [`commit_with`] in the active document, which is the edit's own.
-fn commit_here(app: &mut PhotocraftApp) {
+fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
     // Read before the tool and the layer move on below: #12050 measures the commits the user
     // makes, and an unchanged edit that ends because a tool switch or another layer took the
     // work over (#6483) keeps today's behaviour of recording nothing.
-    let ends_an_edit = user_ends_the_edit(app);
+    let ends_an_edit = by_user && user_ends_the_edit(app);
     if app.ui.tool.is_type() {
         crate::type_transform::finish(app);
     }
