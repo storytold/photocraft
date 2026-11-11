@@ -34,11 +34,11 @@ fn work(app: &PhotocraftApp) -> Path {
     app.session.active().unwrap().doc.work_path.clone().unwrap()
 }
 
-fn steps(app: &PhotocraftApp) -> usize {
+pub(super) fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.entries().len()
 }
 
-fn click(app: &mut PhotocraftApp, at: [f64; 2], mods: Modifiers) {
+pub(super) fn click(app: &mut PhotocraftApp, at: [f64; 2], mods: Modifiers) {
     tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, mods);
     tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, mods);
 }
