@@ -228,23 +228,18 @@ pub fn decode_planes(compression: Compression, data: &[u8], layout: &PlaneLayout
 /// Bytes a PSD RLE stream (two-byte row counts) of `rows` rows grows by when written as PSB
 /// (four-byte row counts); an error when `data` is too short to hold the count table.
 pub(crate) fn rle_widening(data: &[u8], rows: usize) -> Result<u64> {
-    let table = rows.checked_mul(2).ok_or(PsdError::LimitExceeded("row count overflow"))?;
-    if data.len() < table {
-        return Err(PsdError::UnexpectedEof { offset: data.len(), needed: table - data.len() });
-    }
-    Ok(table as u64)
+    rle_widening_len(data.len() as u64, rows)
 }
 
-/// Writes a PSD RLE stream (two-byte row counts) as the PSB one (four-byte row counts): the packed
-/// rows are the same in both versions, only the count table widens.
-pub(crate) fn put_widened_rle(out: &mut Vec<u8>, data: &[u8], rows: usize) -> Result<()> {
-    let table_len = usize::try_from(rle_widening(data, rows)?).map_err(|_| PsdError::LimitExceeded("row count overflow"))?;
-    let (table, packed) = data.split_at_checked(table_len).ok_or_else(|| PsdError::invalid("RLE row-count table out of range"))?;
-    for count in table.as_chunks::<2>().0 {
-        out.extend_from_slice(&[0, 0, count[0], count[1]]);
+/// [`rle_widening`] from the stream's length alone, so data still in its source (or staged on
+/// the scratch disk) is not read to measure it.
+pub(crate) fn rle_widening_len(len: u64, rows: usize) -> Result<u64> {
+    let table = rows.checked_mul(2).ok_or(PsdError::LimitExceeded("row count overflow"))? as u64;
+    if len < table {
+        let offset = usize::try_from(len).unwrap_or(usize::MAX);
+        return Err(PsdError::UnexpectedEof { offset, needed: usize::try_from(table - len).unwrap_or(usize::MAX) });
     }
-    out.extend_from_slice(packed);
-    Ok(())
+    Ok(table)
 }
 
 /// Encodes planar data (excluding the 2-byte compression field).
@@ -379,60 +374,67 @@ fn encode_rle(decoded: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
     if rows == 0 {
         return Ok(Vec::new());
     }
-    // Rows are independent, so they pack in parallel chunks and concatenate in order.
+    // Rows are independent, so they pack in parallel chunks of rows. Two passes: the first only
+    // measures each packed row, so the output is allocated once at its exact size and the second
+    // packs every row straight into its place. Collecting packed chunks and then copying them into
+    // the output held the encoded image twice, with growth slack, at the save's peak (#6607).
     let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32) };
     let chunk_rows = rows.div_ceil(threads).max(1);
-    struct Chunk {
-        counts: Vec<u8>,
-        packed: Vec<u8>,
-    }
-    let pack_chunk = |first: usize, count: usize| -> Result<Chunk> {
-        let mut chunk = Chunk { counts: vec![0u8; count * cs], packed: Vec::new() };
-        for row in first..first + count {
-            let start = chunk.packed.len();
-            packbits::encode(&decoded[row * rb..(row + 1) * rb], &mut chunk.packed);
-            let n = chunk.packed.len() - start;
-            if cs == 2 {
-                let n = u16::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row exceeds 65535 bytes (use PSB)"))?;
-                chunk.counts[(row - first) * 2..(row - first) * 2 + 2].copy_from_slice(&n.to_be_bytes());
-            } else {
-                let n = u32::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row too large"))?;
-                chunk.counts[(row - first) * 4..(row - first) * 4 + 4].copy_from_slice(&n.to_be_bytes());
-            }
+    let row = |r: usize| &decoded[r * rb..(r + 1) * rb];
+    let mut lens = vec![0usize; rows];
+    for_each_chunk(threads, lens.chunks_mut(chunk_rows).enumerate().collect(), |(c, lens): (usize, &mut [usize])| {
+        let mut scratch = Vec::with_capacity(rb + rb.div_ceil(128));
+        for (i, len) in lens.iter_mut().enumerate() {
+            scratch.clear();
+            packbits::encode(row(c * chunk_rows + i), &mut scratch);
+            *len = scratch.len();
         }
-        Ok(chunk)
-    };
-    let chunk_list: Vec<Chunk> = if threads == 1 {
-        vec![pack_chunk(0, rows)?]
-    } else {
-        std::thread::scope(|scope| -> Result<Vec<Chunk>> {
-            let handles: Vec<_> = (0..threads)
-                .map(|t| {
-                    let first = t * chunk_rows;
-                    let count = chunk_rows.min(rows.saturating_sub(first));
-                    scope.spawn(move || pack_chunk(first, count))
-                })
-                .collect();
-            // Join every worker first, then surface the first error like the sequential
-            // path would instead of aborting the scope with a thread panic.
-            let mut all = Vec::with_capacity(threads);
-            for h in handles {
-                all.push(h.join().map_err(|_| PsdError::LimitExceeded("an RLE worker panicked"))??);
-            }
-            Ok(all)
-        })?
-    };
-    let packed_total: usize = chunk_list.iter().map(|c| c.packed.len()).sum();
-    let mut out = vec![0u8; rows * cs + packed_total];
-    let mut counts_at = 0usize;
-    let mut packed_at = rows * cs;
-    for chunk in &chunk_list {
-        out[counts_at..counts_at + chunk.counts.len()].copy_from_slice(&chunk.counts);
-        counts_at += chunk.counts.len();
-        out[packed_at..packed_at + chunk.packed.len()].copy_from_slice(&chunk.packed);
-        packed_at += chunk.packed.len();
+    })?;
+    let mut out = vec![0u8; rows * cs + lens.iter().sum::<usize>()];
+    let (counts, mut packed) = out.split_at_mut(rows * cs);
+    for (count, &n) in counts.chunks_exact_mut(cs).zip(&lens) {
+        if cs == 2 {
+            let n = u16::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row exceeds 65535 bytes (use PSB)"))?;
+            count.copy_from_slice(&n.to_be_bytes());
+        } else {
+            let n = u32::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row too large"))?;
+            count.copy_from_slice(&n.to_be_bytes());
+        }
     }
+    let mut parts = Vec::with_capacity(threads);
+    for (c, lens) in lens.chunks(chunk_rows).enumerate() {
+        let (part, rest) = packed.split_at_mut(lens.iter().sum());
+        parts.push((c, lens, part));
+        packed = rest;
+    }
+    for_each_chunk(threads, parts, |(c, lens, mut part): (usize, &[usize], &mut [u8])| {
+        let mut scratch = Vec::with_capacity(rb + rb.div_ceil(128));
+        for (i, &n) in lens.iter().enumerate() {
+            scratch.clear();
+            packbits::encode(row(c * chunk_rows + i), &mut scratch);
+            let (dst, rest) = std::mem::take(&mut part).split_at_mut(n);
+            dst.copy_from_slice(&scratch);
+            part = rest;
+        }
+    })?;
     Ok(out)
+}
+
+/// Runs `f` on every item, each on its own thread unless `threads` is 1 (wasm32).
+fn for_each_chunk<T: Send>(threads: usize, items: Vec<T>, f: impl Fn(T) + Sync) -> Result<()> {
+    if threads == 1 {
+        items.into_iter().for_each(f);
+        return Ok(());
+    }
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = items.into_iter().map(|item| scope.spawn(|| f(item))).collect();
+        // Join every worker instead of aborting the scope with a thread panic.
+        let mut ok = true;
+        for h in handles {
+            ok &= h.join().is_ok();
+        }
+        if ok { Ok(()) } else { Err(PsdError::LimitExceeded("an RLE worker panicked")) }
+    })
 }
 
 /// zlib-compresses `data` at the default level.
@@ -495,22 +497,35 @@ pub fn predict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
                 }
             }
             16 => {
-                for i in (1..w).rev() {
-                    let a = u16::from_be_bytes([row[2 * i], row[2 * i + 1]]);
-                    let b = u16::from_be_bytes([row[2 * i - 2], row[2 * i - 1]]);
-                    row[2 * i..2 * i + 2].copy_from_slice(&a.wrapping_sub(b).to_be_bytes());
+                // One forward pass: the previous *original* sample stays in a
+                // register, so nothing is re-read after being overwritten.
+                let mut prev = 0u16;
+                for s in row.as_chunks_mut::<2>().0 {
+                    let cur = u16::from_be_bytes(*s);
+                    *s = cur.wrapping_sub(prev).to_be_bytes();
+                    prev = cur;
                 }
             }
             32 => {
                 scratch.clear();
                 scratch.resize(rb, 0);
-                for i in 0..w {
-                    for k in 0..4 {
-                        scratch[k * w + i] = row[4 * i + k];
-                    }
+                // Split into four byte planes (MSB first) and delta the whole
+                // plane-major row. Plane k's first delta uses the last byte of
+                // plane k - 1, so seed each plane's "previous" with it.
+                let mut prev = [0u8; 4];
+                if let Some(l) = row.as_chunks::<4>().0.last() {
+                    prev = [0, l[0], l[1], l[2]];
                 }
-                for i in (1..rb).rev() {
-                    scratch[i] = scratch[i].wrapping_sub(scratch[i - 1]);
+                let (p0, rest) = scratch.split_at_mut(w);
+                let (p1, rest) = rest.split_at_mut(w);
+                let (p2, p3) = rest.split_at_mut(w);
+                let planes = p0.iter_mut().zip(p1.iter_mut()).zip(p2.iter_mut().zip(p3.iter_mut()));
+                for (s, ((o0, o1), (o2, o3))) in row.as_chunks::<4>().0.iter().zip(planes) {
+                    *o0 = s[0].wrapping_sub(prev[0]);
+                    *o1 = s[1].wrapping_sub(prev[1]);
+                    *o2 = s[2].wrapping_sub(prev[2]);
+                    *o3 = s[3].wrapping_sub(prev[3]);
+                    prev = [s[0], s[1], s[2], s[3]];
                 }
                 row.copy_from_slice(&scratch);
             }
@@ -536,22 +551,33 @@ pub fn unpredict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
                 }
             }
             16 => {
-                for i in 1..w {
-                    let a = u16::from_be_bytes([row[2 * i], row[2 * i + 1]]);
-                    let b = u16::from_be_bytes([row[2 * i - 2], row[2 * i - 1]]);
-                    row[2 * i..2 * i + 2].copy_from_slice(&a.wrapping_add(b).to_be_bytes());
+                // Running sum carried in a register; one pass over the row.
+                let mut acc = 0u16;
+                for s in row.as_chunks_mut::<2>().0 {
+                    acc = acc.wrapping_add(u16::from_be_bytes(*s));
+                    *s = acc.to_be_bytes();
                 }
             }
             32 => {
-                for i in 1..rb {
-                    row[i] = row[i].wrapping_add(row[i - 1]);
-                }
                 scratch.clear();
                 scratch.extend_from_slice(row);
-                for i in 0..w {
-                    for k in 0..4 {
-                        row[4 * i + k] = scratch[k * w + i];
-                    }
+                // The byte-wise running sum runs across the four planes, so
+                // plane k starts at the wrapping total of planes 0..k.
+                let (p0, rest) = scratch.split_at(w);
+                let (p1, rest) = rest.split_at(w);
+                let (p2, p3) = rest.split_at(w);
+                let sum = |p: &[u8]| p.iter().fold(0u8, |a, &b| a.wrapping_add(b));
+                let b1 = sum(p0);
+                let b2 = b1.wrapping_add(sum(p1));
+                let b3 = b2.wrapping_add(sum(p2));
+                let mut acc = [0u8, b1, b2, b3];
+                let planes = p0.iter().zip(p1).zip(p2.iter().zip(p3));
+                for (o, ((&s0, &s1), (&s2, &s3))) in row.as_chunks_mut::<4>().0.iter_mut().zip(planes) {
+                    acc[0] = acc[0].wrapping_add(s0);
+                    acc[1] = acc[1].wrapping_add(s1);
+                    acc[2] = acc[2].wrapping_add(s2);
+                    acc[3] = acc[3].wrapping_add(s3);
+                    *o = acc;
                 }
             }
             d => return Err(PsdError::Unsupported(format!("prediction for depth {d}"))),
@@ -612,7 +638,20 @@ mod parallel_rle_equivalence {
             let parallel = encode_rle(&data, &layout).expect("parallel encode");
             let sequential = encode_rle_sequential(&data, &layout).expect("sequential encode");
             assert_eq!(parallel, sequential, "rows {rows} rb {rb}");
+            // #6607: measured first, then packed in place: one allocation, exactly the file's size.
+            assert_eq!(parallel.capacity(), parallel.len(), "rows {rows} rb {rb}: the output grew or was over-allocated");
         }
+    }
+
+    /// A row too long for a PSD's 16-bit RLE count is the same error from the two-pass encoder.
+    #[test]
+    fn rle_rows_past_sixteen_bits_are_refused_in_psd() {
+        let layout_for = |rows: usize, rb: usize, version: Version| PlaneLayout { planes: 1, width: rb, height: rows, depth: 8, version };
+        let rb = 70_000;
+        let layout = layout_for(3, rb, Version::Psd);
+        let noise: Vec<u8> = (0..3 * rb).map(|i| (i * 31 % 251) as u8).collect();
+        assert_eq!(encode_rle(&noise, &layout), Err(PsdError::LimitExceeded("RLE row exceeds 65535 bytes (use PSB)")));
+        assert_eq!(encode_rle(&noise, &layout_for(3, rb, Version::Psb)), encode_rle_sequential(&noise, &layout_for(3, rb, Version::Psb)));
     }
 
     /// The pre-parallel encoder, kept as the oracle.
