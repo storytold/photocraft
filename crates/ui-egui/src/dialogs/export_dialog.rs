@@ -1071,7 +1071,9 @@ fn confirm_document(app: &mut PhotocraftApp, f: &Map<String, Value>, timestamp: 
         if !f.contains_key("__layer") {
             let mut step = settings_of(&f);
             step.insert("path".into(), json!(path));
-            app.session.journal.push((COMMAND.into(), Value::Object(step)));
+            let step = Value::Object(step);
+            photocraft_engine::actions_cmds::note_automation_step(&mut app.session, COMMAND, &step);
+            app.session.journal.push((COMMAND.into(), step));
         }
         Ok(r)
     })
