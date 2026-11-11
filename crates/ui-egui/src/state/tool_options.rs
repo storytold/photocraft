@@ -84,6 +84,9 @@ pub struct ToolOptions {
     pub protect_tones: bool,
     /// Sponge: desaturate | saturate, vibrance.
     pub sponge_mode: String,
+    /// Sponge: Flow %, whole numbers 1..100 (#12976). Settings saved before it load as 50.
+    #[serde(default = "fifty")]
+    pub sponge_flow: f32,
     pub vibrance: bool,
     /// Blur/Sharpen/Smudge strength %, Sharpen protect detail, Smudge finger painting.
     pub strength: f32,
@@ -260,6 +263,10 @@ pub struct ToolOptions {
     /// `paint.pencil`), as in Photoshop's options bar (#2662).
     #[serde(default = "default_eraser_mode")]
     pub eraser_mode: String,
+    /// Eraser › Erase to History: the Eraser paints the History panel's source state back
+    /// instead of erasing, as in Photoshop.
+    #[serde(default)]
+    pub erase_to_history: bool,
     /// Mixer Brush › Useful mixer brush combinations: the entry last picked, an index into
     /// `brush_controls::MIXER_COMBINATIONS` (0 = Custom, #11946).
     pub mixer_combination: usize,
@@ -476,6 +483,7 @@ impl Default for ToolOptions {
             exposure: 50.0,
             protect_tones: true,
             sponge_mode: "desaturate".into(),
+            sponge_flow: 50.0,
             vibrance: true,
             strength: 50.0,
             protect_detail: true,
@@ -546,6 +554,7 @@ impl Default for ToolOptions {
             brush_clear: false,
             pencil_clear: false,
             eraser_mode: default_eraser_mode(),
+            erase_to_history: false,
             mixer_combination: 0,
             magnetic_width: 10.0,
             magnetic_contrast: 10.0,
