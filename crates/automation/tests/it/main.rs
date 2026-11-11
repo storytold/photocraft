@@ -4,6 +4,7 @@ mod agent_tasks;
 mod agent_tasks_extended;
 mod agent_tasks_more;
 mod bridge;
+mod bridge_token;
 mod gpu_backend;
 mod inactive_save;
 mod krita;
