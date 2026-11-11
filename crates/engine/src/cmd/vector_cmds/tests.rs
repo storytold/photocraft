@@ -568,6 +568,26 @@ fn open_pen_paths_make_the_same_selection_as_closed_paths() {
     }
 }
 
+/// ⇧⌘↩, ⌥⌘↩ and ⇧⌥⌘↩'s commands are Make Selection from Path with their mode (#7726), whatever
+/// `mode` the params ask for.
+#[test]
+fn the_fixed_mode_path_commands_combine_as_their_mode() {
+    let mut s = session(80, 80, 8);
+    let square = |x: f64| path_json(&vector::shapes::rect(x, 20.0, 30.0, 30.0));
+    s.execute("path.set", json!({"name": "Sq", "path": square(30.0)})).unwrap();
+    for (id, mode) in [("path.addToSelection", "add"), ("path.subtractFromSelection", "subtract"), ("path.intersectWithSelection", "intersect")] {
+        s.execute("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 30, "antiAlias": false})).unwrap();
+        s.execute("path.toSelection", json!({"name": "Sq", "mode": mode, "antiAlias": false})).unwrap();
+        let want = selection_mask(&s);
+        s.execute("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 30, "antiAlias": false})).unwrap();
+        s.execute(id, json!({"name": "Sq", "mode": "replace", "antiAlias": false})).unwrap();
+        assert_eq!(selection_mask(&s), want, "{id} is mode {mode}");
+    }
+    // Intersecting keeps only the 10 px both squares cover.
+    let mask = selection_mask(&s);
+    assert_eq!(mask.iter().filter(|v| **v > 0.5).count(), 10 * 30);
+}
+
 #[test]
 fn selection_to_work_path_roundtrip_iou() {
     let mut s = session(240, 180, 8);
@@ -653,6 +673,9 @@ fn stroke_path_simulate_pressure_tapers_both_ends() {
     let coverage = |simulate: bool, x: i32| -> usize {
         let mut s = session(200, 60, 8);
         s.execute("layer.new.layer", json!({})).unwrap();
+        // Simulate Pressure tapers a brush that follows pen pressure; the default brush stopped
+        // doing that on its own (#11809).
+        s.execute("tools.setBrush", json!({"brush": {"pressureSize": true}})).unwrap();
         s.execute("path.set", json!({"path": {"subpaths": [{"closed": false, "knots": [[20, 30], [180, 30]]}]}})).unwrap();
         let p = json!({"tool": "brush", "size": 20, "hardness": 1.0, "color": "#000000", "opacity": 100, "simulatePressure": simulate});
         s.execute("path.stroke", p).unwrap();

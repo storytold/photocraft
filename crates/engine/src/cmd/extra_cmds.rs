@@ -74,14 +74,16 @@ pub(crate) fn step_key(s: &Session, what: &str) -> String {
 /// area, the pixels, and the selection coverage per pixel; results are blended back by coverage,
 /// and transparency stays locked when the layer locks it. When `p` targets an alpha channel, the
 /// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
-/// grayscale surface is rewritten instead, as the core filters do (#935).
-fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
+/// grayscale surface is rewritten instead, as the core filters do (#935). With `whole` the whole
+/// canvas is rewritten: `f` still gets the selection coverage, and every pixel takes its result
+/// in full.
+fn map_pixels_in(s: &mut Session, label: &str, p: &Value, whole: bool, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
     let id = layer_param(s, p)?;
     let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
     s.edit(label, |doc, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
-        let area = selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+        let area = if whole { canvas } else { selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas)) };
         let (surf, lock_alpha) = if channel {
             let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), p)? else { return Ok(()) };
             (surf, false)
@@ -109,7 +111,7 @@ fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut
         f(area, &mut px, &cover);
         let mut enc = [0.0f32; 8];
         for (i, out) in raw.chunks_exact_mut(n).enumerate() {
-            let k = cover[i];
+            let k = if whole { 1.0 } else { cover[i] };
             if k <= 0.0 {
                 continue;
             }
@@ -230,9 +232,16 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Histogram equalization, like Photoshop's: one CDF over the R, G and B values of
-/// the selected pixels, applied to every channel.
+/// the selected pixels, applied to every channel. With a selection, `selectedAreaOnly: false`
+/// applies the selection's mapping to the layer within the canvas (Photoshop's Equalize Entire
+/// Image Based On Selected Area).
 fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
-    map_pixels(s, "Equalize", p, |_, px, cover| {
+    let whole = match p.get("selectedAreaOnly") {
+        None => false,
+        Some(Value::Bool(only)) => !only,
+        Some(_) => return Err(EngineError::BadParams { cmd: "image.adjustments.equalize".into(), msg: "selectedAreaOnly must be true or false".into() }),
+    };
+    map_pixels_in(s, "Equalize", p, whole, |_, px, cover| {
         let mut hist = [0f64; 256];
         for (p, &k) in px.iter().zip(cover) {
             if k > 0.0 && p[3] > 0.0 {
@@ -262,37 +271,46 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
-/// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
-fn average(s: &mut Session, p: &Value) -> Result<Value> {
-    map_pixels(s, "Average", p, |_, px, cover| {
-        let (mut sum, mut wsum, mut asum, mut n) = ([0f64; 3], 0f64, 0f64, 0f64);
-        for (p, &k) in px.iter().zip(cover) {
-            let w = (p[3] * k) as f64;
-            for c in 0..3 {
-                sum[c] += p[c] as f64 * w;
-            }
-            wsum += w;
-            asum += (p[3] * k) as f64;
-            n += k as f64;
-        }
-        if wsum <= 0.0 {
-            return;
-        }
-        let avg = [(sum[0] / wsum) as f32, (sum[1] / wsum) as f32, (sum[2] / wsum) as f32, (asum / n.max(1e-9)) as f32];
-        px.fill(avg);
-    })
-}
-
 // ---------- transform presets ----------
 
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
-const TRANSFORM_TARGET: &str =
-    r#"{"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask turns alone)}"#;
+const TRANSFORM_TARGET: &str = r#"{"target":"pixels"|"mask"|"vectorMask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, a vector mask, an alpha channel or the Quick Mask turns alone)}"#;
+
+/// The active layer's vector mask when the target names it, with its path's control bounds.
+/// The path tools' Free Transform and `path.transform` reuse those bounds, so a flip mirrors
+/// anchors and Bézier handles about the same box (#12283).
+fn targeted_vector_mask(s: &Session, p: &Value) -> Result<Option<(LayerId, [f64; 4])>> {
+    let explicit = p.get("target").and_then(Value::as_str) == Some("vectorMask");
+    let panel = p.get("target").is_none() && s.active().is_some_and(|d| d.channel_view.target == crate::channel_cmds::ChannelTarget::VectorMask);
+    if !explicit && !panel {
+        return Ok(None);
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
+    let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let vm = l.vector_mask.as_ref().ok_or_else(|| EngineError::Other("the active layer has no vector mask".into()))?;
+    let (x0, y0, x1, y1) = vm.path.control_bounds().ok_or_else(|| EngineError::Other("nothing to transform".into()))?;
+    Ok(Some((id, [x0, y0, x1, y1])))
+}
 
 /// Flips and turns about the centre of the box Free Transform would open: with a selection
 /// limiting the transform it is the selection's own bounds, as in Photoshop, so Select All
 /// mirrors across the canvas (#6928); otherwise the content's bounds.
 fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
+    // A targeted vector mask turns its own path, not the layer's pixels (and whether or not the
+    // mask is linked): reuse `path.transform` for its geometry and History step.
+    if let Some((id, [x0, y0, x1, y1])) = targeted_vector_mask(s, p)? {
+        let (sx, sy) = (x0 + x1, y0 + y1);
+        let (cx, cy) = (sx / 2.0, sy / 2.0);
+        let m: [f64; 6] = match kind {
+            "rotate180" => [-1.0, 0.0, 0.0, -1.0, sx, sy],
+            "rotate90Cw" => [0.0, 1.0, -1.0, 0.0, cx + cy, cy - cx],
+            "rotate90Ccw" => [0.0, -1.0, 1.0, 0.0, cx - cy, cx + cy],
+            "flipHorizontal" => [-1.0, 0.0, 0.0, 1.0, sx, 0.0],
+            _ => [1.0, 0.0, 0.0, -1.0, 0.0, sy],
+        };
+        return s.execute("path.transform", json!({"name": "layer", "layer": id.0, "vectorMask": true, "matrix": m}));
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // A targeted alpha channel, the Quick Mask or an unlinked layer mask turns by itself (#2835).
     let (b, mut params) = match crate::transform_cmds::lone_target(&d.doc, d.active_layer, p)? {
@@ -389,7 +407,6 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     let key = step_key(s, "pasteInto");
     params["coalesce"] = json!(key);
     params["target"] = json!("pixels");
-    let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let r = s.execute("edit.paste", params)?;
     let id = layer_param(s, &Value::Null)?;
     s.execute("layer.layerMask.revealAll", json!({"layer": id.0, "coalesce": key}))?;
@@ -400,9 +417,9 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
         Ok(())
     });
     s.coalesce_request = None;
+    // Three revisions: `Session::dispatch` reports what the whole command changed, so only where
+    // the masked paste draws is recomposited (#2901).
     r2?;
-    // Only where the masked paste draws needs recompositing (#2901).
-    crate::layer_multi_cmds::note_insert(s, &before);
     Ok(r)
 }
 
@@ -882,7 +899,15 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"selected": true}))
         }),
-        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, equalize),
+        spec!(
+            "image.adjustments.equalize",
+            "Equalize",
+            &["Image", "Adjustments"],
+            None,
+            r#"{"selectedAreaOnly":bool=true (with a selection, false equalizes the layer within the canvas by the selection's histogram)}"#,
+            has_pixels,
+            equalize
+        ),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let all = reveal_all_bounds(&d.doc);
@@ -1098,7 +1123,6 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             show_only
         ),
-        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, average),
     ]
 }
 

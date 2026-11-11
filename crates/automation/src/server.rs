@@ -50,7 +50,8 @@ pub struct DocIndex {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OpenParams {
-    /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
+    /// Path beneath the configured automation read roots: relative (forward slashes, searched
+    /// in launch order) or absolute. Only a missing file tries the next root.
     pub path: String,
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
@@ -113,6 +114,11 @@ pub struct ExportLayersParams {
     /// Encoder quality, 0..12, for the formats that take one.
     #[serde(default)]
     pub quality: Option<f64>,
+    /// PSD/PSB: write the real merged image (Photoshop's Maximize Compatibility); false writes
+    /// Photoshop's white placeholder (Bitmap, Indexed Color and Duotone documents still write the
+    /// real image). Unset: the engine's Preferences › File Handling decides.
+    #[serde(default, rename = "maximizeCompatibility")]
+    pub maximize_compatibility: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -174,6 +180,7 @@ pub struct SaveParams {
     /// The extension selects the format. Omit to write back to the document's own file, which
     /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
     /// `path`, so a flattened or converted copy never replaces the opened file.
+    /// A document opened from a different read capability needs an explicit path first.
     #[serde(default)]
     pub path: Option<String>,
     /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
@@ -214,6 +221,13 @@ pub struct SaveParams {
     /// The save may omit it; check the manifest's `full_composite` member. Off by default.
     #[serde(default, rename = "pcraftFullComposite")]
     pub pcraft_full_composite: Option<bool>,
+    /// PSD/PSB: write the real merged image (Photoshop's Maximize Compatibility). false writes
+    /// Photoshop's white placeholder instead: a smaller file and a faster save, but readers that
+    /// show only the merged image see white. Bitmap, Indexed Color and Duotone documents still
+    /// write the real image. Unset: the real image (in bridge mode, the app's
+    /// Preferences › File Handling decides).
+    #[serde(default, rename = "maximizeCompatibility")]
+    pub maximize_compatibility: Option<bool>,
     #[serde(default)]
     pub index: Option<usize>,
 }
@@ -798,6 +812,9 @@ impl PhotocraftMcp {
         if let Some(v) = p.quality {
             opts.insert("quality".into(), json!(v));
         }
+        if let Some(v) = p.maximize_compatibility {
+            opts.insert("maximizeCompatibility".into(), json!(v));
+        }
         let opts = Value::Object(opts);
         // Bridge mode runs the app on this machine, which writes its own paths like any command.
         let mut bridge_params = opts.clone();
@@ -1186,9 +1203,10 @@ impl PhotocraftMcp {
         if let Some(b) = self.bridge_client() {
             // The bridge forwards to the running app's `app.save`, which takes only an optional
             // path (without one it writes back to the document's own layered file, as headless
-            // does), the Targa bits, the DDS options and the TIFF compression, transparency and
-            // pyramid, so the other options are headless-only. Saying so beats saving with
-            // defaults while the caller believes their quality or format was applied.
+            // does), the Targa bits, the DDS options, the TIFF compression, transparency and
+            // pyramid, and Maximize Compatibility, so the other options are headless-only. Saying
+            // so beats saving with defaults while the caller believes their quality or format was
+            // applied.
             let unsupported: Vec<&str> = [
                 p.format.is_some().then_some("format"),
                 p.quality.is_some().then_some("quality"),
@@ -1226,6 +1244,9 @@ impl PhotocraftMcp {
             if p.tiff_pyramid {
                 params["tiffPyramid"] = json!(true);
             }
+            if let Some(maximize) = p.maximize_compatibility {
+                params["maximizeCompatibility"] = json!(maximize);
+            }
             return to_result(b.call("app.save", params).await);
         }
         let Some(r) = self
@@ -1243,6 +1264,9 @@ impl PhotocraftMcp {
                 }
                 opts.encode.tiff_pyramid = p.tiff_pyramid;
                 opts.encode.dds = photocraft_io::DdsOptions { compression: dds_compression.unwrap_or_default(), mipmaps: p.dds_mipmaps };
+                if let Some(maximize) = p.maximize_compatibility {
+                    opts.psd_maximize_compatibility = maximize;
+                }
                 if let Some(q) = p.quality {
                     opts.encode.jpeg_quality = q;
                     opts.encode.webp_quality = q;

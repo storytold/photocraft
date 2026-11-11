@@ -223,6 +223,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
             return None;
         }
         let all = Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
+        // The context-free bound: it moves with the layer. `change_bounds_in` is an in-place bound
+        // (the layers beneath an adjustment, or a clip base, stay put), so it can't be translated.
         let bounds = ids.iter().try_fold(Rect::EMPTY, |acc, id| Some(acc.union(&photocraft_compose::change_bounds(doc.layer(*id)?, all)?)));
         let canvas = doc.bounds();
         let moving = with_descendants(&doc, &ids);
@@ -383,7 +385,8 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
         return;
     }
     // `nest`: a layer dropped on another artboard joins it (Photoshop's auto-nesting).
-    let Ok(result) = app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": true})) else {
+    let Ok(result) = app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": app.ui.artboard_tool.auto_nest}))
+    else {
         return;
     };
     // A layer that changed board is clipped by its new board, not the old one the preview showed,
