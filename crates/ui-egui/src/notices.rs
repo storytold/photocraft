@@ -79,8 +79,17 @@ pub(crate) fn post_persistent(app: &mut PhotocraftApp, title: &str, lines: Vec<S
 /// Bound the notice stack, preferentially evicting temporary unpinned messages.
 fn cap_notices(app: &mut PhotocraftApp) {
     while app.ui.notices.len() > MAX_NOTICES {
-        let oldest_temporary = app.ui.notices.iter().position(|notice| notice.dismiss_pref.is_none() && !notice.sticky && !notice.persistent).unwrap_or(0);
-        app.ui.notices.remove(oldest_temporary);
+        let candidate = app
+            .ui
+            .notices
+            .iter()
+            .position(|notice| notice.dismiss_pref.is_none() && !notice.sticky && !notice.persistent)
+            .or_else(|| app.ui.notices.iter().position(|notice| !notice.sticky && !notice.persistent));
+        if let Some(idx) = candidate {
+            app.ui.notices.remove(idx);
+        } else {
+            break;
+        }
     }
 }
 
@@ -512,5 +521,34 @@ mod tests {
         crate::dock::refresh_restore_status(&mut app);
         assert!(app.ui.notices.is_empty());
         assert!(app.ui.docking_kept.is_some());
+    }
+
+    #[test]
+    /// Preserve the persistent restore notice even when subsequent notices carry a dismiss preference.
+    fn restore_notice_survives_dismissible_notice_overflow_until_acknowledged() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        let mut saved = crate::dock::snapshot(&app);
+        saved["docking"] = serde_json::json!({"version":2,"layout":{"kind":"unreadable"}});
+        crate::dock::apply(&mut app, &saved);
+        let id = app.ui.notices.iter().find(|n| n.persistent).unwrap().id;
+
+        // Post three notices with dismiss_pref set (exceeding MAX_NOTICES = 3).
+        for i in 1..=3 {
+            post(&mut app, format!("Pref {i}"), vec![], false, Some("ui.dismissPref"));
+        }
+
+        // The persistent restore notice must remain untouched until acknowledged or workspace replaced.
+        assert!(app.ui.notices.iter().any(|n| n.id == id && n.persistent));
+        assert_eq!(app.ui.notices.len(), MAX_NOTICES);
+
+        // Acknowledge the restore notice:
+        dismiss(&mut app, id);
+        assert!(!app.ui.notices.iter().any(|n| n.id == id));
+
+        // Or replacing the workspace clears it:
+        crate::dock::apply(&mut app, &saved);
+        assert!(app.ui.notices.iter().any(|n| n.persistent));
+        crate::menus::apply_workspace(&mut app);
+        assert!(!app.ui.notices.iter().any(|n| n.persistent));
     }
 }
