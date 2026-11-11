@@ -357,12 +357,16 @@ pub fn specs() -> Vec<CommandSpec> {
             r#""tolerance":px=0.1 (bakes the components' path operations into plain combined outlines, traced from the exact coverage)"#.into(),
             merge_components,
         ),
-        spec(
-            "path.deleteComponents",
-            "Delete Selection",
-            r#""subpaths":[i,…] (indices of the first subpath of each component to delete from a saved path, shape path or vector mask)"#.into(),
-            delete_components,
-        ),
+        CommandSpec {
+            id: "path.deleteComponents",
+            label: "Delete Selection",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"name":str|"layer" (a saved path name or a shape path or vector mask),"layer":id? (with "layer"),"subpaths":[i,…] (the first subpath of each component to delete)} → {name,path}"#,
+            enabled: has_doc,
+            run: delete_components,
+            journal: true,
+        },
         spec(
             "path.setOperation",
             "Path Operation",
