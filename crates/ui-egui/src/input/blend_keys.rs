@@ -32,7 +32,7 @@ pub enum Pick {
     Mode(BlendMode),
     /// Painting tools only: paint transparency.
     Clear,
-    /// Brush and Pencil: paint behind the layer's pixels.
+    /// Brush, Pencil and Pattern Stamp: paint behind the layer's pixels.
     Behind,
 }
 

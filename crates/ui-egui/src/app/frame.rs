@@ -120,9 +120,11 @@ impl PhotocraftApp {
         self.drain_os_events(ctx);
         // While files are dragged over the window it gets no pointer events: keep frames coming so
         // the tab strip can follow the pointer.
-        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+        let hovering = ctx.input(|i| i.raw.hovered_files.len());
+        if hovering > 0 {
             ctx.request_repaint();
         }
+        crate::file_open::log_drag_over(ctx, hovering);
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if !dropped.is_empty() {
             let at = self.cursor_pos(ctx);

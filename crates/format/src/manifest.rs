@@ -370,6 +370,8 @@ fn default_channel_opacity() -> f32 {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MetadataM {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_conversion: Option<ImportConversionM>,
     pub xmp: Option<String>,
     pub exif: Option<Hash>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -378,6 +380,14 @@ pub struct MetadataM {
     pub psd_resources: Vec<(u16, String, Hash)>,
     /// (signature hex, key hex, blob)
     pub psd_global_blocks: Vec<(String, String, Hash)>,
+}
+
+/// Optional historical information. Both record and binary payloads use the normal blob store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportConversionM {
+    pub schema_version: u32,
+    pub record: Hash,
+    pub attachments: Vec<Hash>,
 }
 
 #[cfg(test)]

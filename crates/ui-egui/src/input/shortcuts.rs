@@ -503,12 +503,20 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // An open menu owns the keyboard (arrows, ↩, Esc), like a native menu; so does the menu bar
     // once Alt or F10 put the keyboard on it (#4988), and an open dropdown list, whose letters
     // pick an option rather than a tool (#1481). A command shortcut (⌘D, F7…) takes the keyboard
-    // off the bar first and runs, as with a native menu bar (#6573).
+    // off the bar first and runs, as with a native menu bar (#6573), and closes an open menu or
+    // list (or a panel's options menu, any popup) and runs, as Photoshop's menus do (#9065).
     crate::menu_keys::leave_for_shortcut(ctx);
     if app.ui.dialogs.is_empty() && app.discard.is_none() && crate::type_tool::commit_shortcut(app, ctx) {
         return false;
     }
+    crate::menu_keys::close_for_shortcut(ctx);
     if crate::menu_nav::is_open(ctx) || crate::menu_keys::is_focused(ctx) || crate::widgets::dropdown_list_open(ctx) {
+        return false;
+    }
+    // A Keyboard Shortcuts field waiting for keys records the key pressed, whatever it is: no
+    // shortcut runs first, not even the view keys that work under dialogs (#8965: ⌘0, ⌘+ zoomed
+    // instead of being recorded).
+    if crate::prefs_ui::capturing_shortcut(app) {
         return false;
     }
     // ⌘Z in a filter or adjustment dialog steps the dialog's settings, not the document (#4697).
@@ -912,6 +920,26 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.status_error = true;
         }
         return;
+    }
+    // Delete Anchor Point (#12773): Esc first clears anchors selected on the saved path targeted in
+    // the Paths panel, then deselects that path, so clicks edit nothing. Not while its name is typed
+    // in the panel: egui has already dropped the field's focus, and the panel cancels on Esc.
+    if !esc_taken
+        && app.ui.tool == Tool::DeleteAnchorPoint
+        && !crate::vector_ui::path_renaming(app, ctx)
+        && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
+    {
+        let ds = &app.ui.direct_selection;
+        let selected = ds.target == Some(crate::direct_select::PathRef::Saved(index)) && (!ds.anchors.is_empty() || ds.segment.is_some());
+        if pressed(Key::Escape) {
+            if selected {
+                app.ui.direct_selection.anchors.clear();
+                app.ui.direct_selection.segment = None;
+            } else {
+                app.ui.selected_path = None;
+            }
+            return;
+        }
     }
     // + / − pick a Path Operation with the Pen tools and Path Selection (`path_components`)…
     crate::path_components::handle_keys(app, ctx);
