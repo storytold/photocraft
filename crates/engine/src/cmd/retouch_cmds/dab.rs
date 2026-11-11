@@ -1,8 +1,8 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
-    BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect, Region, Result,
-    Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag, from_rgba_into,
-    has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
+    BlendMode, BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect,
+    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, blend_from_str, damage_json,
+    dodge_burn, flag, from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -129,7 +129,18 @@ pub(super) enum DabTool {
     Tone { burn: bool, range: ToneRange, exposure: f32, protect: bool },
     Sponge { saturate: bool, vibrance: bool },
     Focus { sharpen: bool, strength: f32, protect: bool, sigma: f32 },
-    Smudge { strength: f32, finger: Option<[f32; 4]>, max_size: f32 },
+    Smudge { strength: f32, finger: Option<[f32; 4]>, max_size: f32, mode: BlendMode },
+}
+
+/// `paint.smudge`'s `mode` (#12959): the options bar's seven Painting Modes, Normal when absent.
+fn smudge_mode(p: &Value, cmd: &str) -> Result<BlendMode> {
+    use BlendMode::{Color, Darken, Hue, Lighten, Luminosity, Normal, Saturation};
+    let Some(v) = p.get("mode") else { return Ok(Normal) };
+    let named = v.as_str().and_then(blend_from_str).filter(|m| matches!(m, Normal | Darken | Lighten | Hue | Saturation | Color | Luminosity));
+    named.ok_or_else(|| {
+        let given = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
+        bad(cmd, format!("unknown mode `{given}` (normal|darken|lighten|hue|saturation|color|luminosity)"))
+    })
 }
 
 /// One dab's edit of the working copy.
@@ -200,7 +211,8 @@ impl DabTool {
             }
             "paint.smudge" => {
                 let finger = flag(p, "fingerPainting", false).then_some(s.tools.foreground);
-                (Self::Smudge { strength: num(p, "strength", 50.0).clamp(1.0, 100.0) / 100.0, finger, max_size: stroke.brush.size }, "Smudge Tool")
+                let strength = num(p, "strength", 50.0).clamp(1.0, 100.0) / 100.0;
+                (Self::Smudge { strength, finger, max_size: stroke.brush.size, mode: smudge_mode(p, cmd)? }, "Smudge Tool")
             }
             o => return Err(bad(o, "not a sequential-dab tool")),
         })
@@ -255,10 +267,13 @@ impl DabTool {
                     });
                 })
             }
-            Self::Smudge { strength, finger, max_size } => {
+            Self::Smudge { strength, finger, max_size, mode } => {
                 let finger_px = finger.map(|fg| photocraft_raster::from_rgba(&fmt, fg));
+                // The Mode was measured in 8-bit RGB (#12959); other colour modes and depths smudge as Normal.
+                let measured = fmt.mode == photocraft_color::ColorMode::Rgb && fmt.sample == photocraft_color::SampleType::U8;
+                let mode = if measured { mode } else { BlendMode::Normal };
                 // Premultiplied mixing: transparent pixels carry no colour, so no dark fringes.
-                let mut sm = Smudge::new(strength, finger_px, max_size).with_alpha(alpha_index(&fmt));
+                let mut sm = Smudge::new(strength, finger_px, max_size).with_alpha(alpha_index(&fmt)).with_mode(mode);
                 Box::new(move |work, fp| sm.dab(work, fp))
             }
         }
@@ -700,3 +715,7 @@ mod dodge_refuses_indexed_tests;
 #[cfg(test)]
 #[path = "sharpen_refuses_indexed_tests.rs"]
 mod sharpen_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "smudge_mode_tests.rs"]
+mod smudge_mode_tests;

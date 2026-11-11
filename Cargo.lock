@@ -5777,6 +5777,7 @@ version = "0.20.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "craft-i18n",
  "craft-print",
  "craft-ui",
  "craft-update",
@@ -9743,6 +9744,7 @@ name = "xtask"
 version = "0.20.1"
 dependencies = [
  "chrono",
+ "craft-i18n",
  "serde",
  "serde_json",
  "tempfile",

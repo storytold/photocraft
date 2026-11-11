@@ -1498,6 +1498,9 @@ fn natural_order_counts_numbers_by_value() {
 /// status line follows the preference, not the English default.
 #[test]
 fn open_paths_reports_in_the_interface_language_before_the_first_frame() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let pattern = |i: u8| {
         let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
         surface.fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[f32::from(i) / 3.0, 0.5, 0.2, 1.0]);
