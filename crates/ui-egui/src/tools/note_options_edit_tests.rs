@@ -228,3 +228,41 @@ fn switching_documents_shows_and_edits_that_documents_selected_note() {
     assert_eq!(note(app, 0).author, "Bob", "the other document's author doesn't overwrite it");
     assert_eq!(steps(app), before, "no history step");
 }
+
+/// A selected note whose author and colour change under the bar (undo, redo, a recorded action)
+/// shows the committed values, not the ones it loaded when it was selected.
+#[test]
+fn undo_and_redo_show_the_notes_committed_author_and_colour_in_the_bar() {
+    let mut app = app();
+    select(&mut app, 0);
+    app.run("notes.set", json!({"index": 0, "author": "Tester", "color": [1.0, 0.0, 0.0]})).unwrap();
+    let mut h = harness(app);
+    assert_eq!(h.state().ui.analysis.note_author, "Tester", "the edit shows");
+    assert!(close(h.state().ui.analysis.note_color, [1.0, 0.0, 0.0]));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(note(h.state(), 0).author, "");
+    assert_eq!(h.state().ui.analysis.note_author, "", "undo shows the restored author");
+    assert!(close(h.state().ui.analysis.note_color, BLUE), "undo shows the restored colour");
+    h.state_mut().run("edit.redo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.analysis.note_author, "Tester", "redo shows the author again");
+}
+
+/// What is being typed in the Author field is a draft: a refresh of the committed values leaves it.
+#[test]
+fn a_refresh_after_undo_keeps_the_author_draft() {
+    let mut app = app();
+    select(&mut app, 0);
+    app.run("notes.set", json!({"index": 0, "author": "Tester"})).unwrap();
+    let mut h = harness(app);
+    h.get_by_label("Author:").click();
+    h.run_steps(2);
+    h.get_by_label("Author:").type_text("x");
+    h.run_steps(2);
+    let draft = h.state().ui.analysis.note_author.clone();
+    assert_eq!(draft, "Testerx");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.analysis.note_author, draft, "the draft stays while the field has focus");
+}

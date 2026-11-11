@@ -65,6 +65,10 @@ pub struct AnalysisUi {
     /// the selection has moved on, the bar loads the note now selected (#11790).
     #[serde(skip)]
     pub note_shown: Option<(u64, usize)>,
+    /// The author and colour the shown note had when the bar last read them, so a change made
+    /// elsewhere (undo, redo, a recorded action) is noticed and shown (#11790).
+    #[serde(skip)]
+    pub note_loaded: Option<(String, [f32; 3])>,
     /// Ruler options bar: show values in the measurement scale's units.
     pub use_measurement_scale: bool,
     /// Open dialog: (kind, fields). Kinds: "scale", "dataPoints", "scaleMarker".
@@ -85,6 +89,7 @@ impl Default for AnalysisUi {
             note_default_author: String::new(),
             note_default_color: photocraft_engine::notes_cmds::DEFAULT_NOTE_COLOR,
             note_shown: None,
+            note_loaded: None,
             use_measurement_scale: false,
             dialog: None,
             drag: None,
@@ -680,13 +685,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                     a.note_author.clone_from(&a.note_default_author);
                     a.note_color = a.note_default_color;
                     a.note_shown = None;
+                    a.note_loaded = None;
                 }
                 // Another document's note, or a note selected without loading it: show this one.
                 Some(i) if app.ui.analysis.note_shown != app.session.active().map(|d| (d.doc.id.0, i)) => show_note_options(app, i),
-                Some(_) => {}
+                // The same note, changed since the bar read it (undo, redo): show what it holds now,
+                // but never replace an Author draft being typed.
+                Some(i) => refresh_note_options(app, i, ui.memory(|m| m.has_focus(note_author_id(ui)))),
             }
             let author_label = ui.label(RichText::new(tl!("Author:")).color(t.text_dim).size(11.0));
-            let author = ui.add(egui::TextEdit::singleline(&mut app.ui.analysis.note_author).desired_width(120.0)).labelled_by(author_label.id);
+            let author =
+                ui.add(egui::TextEdit::singleline(&mut app.ui.analysis.note_author).id(note_author_id(ui)).desired_width(120.0)).labelled_by(author_label.id);
             match selected {
                 None if author.changed() => app.ui.analysis.note_default_author.clone_from(&app.ui.analysis.note_author),
                 // Enter commits it to the selected note: one "Note Author" step. An unchanged
@@ -902,9 +911,30 @@ pub(crate) fn selected_note(app: &PhotocraftApp) -> Option<usize> {
 fn show_note_options(app: &mut PhotocraftApp, i: usize) {
     let Some(note) = app.session.active().and_then(|d| d.doc.notes.get(i)) else { return };
     let (author, color) = (note.author.clone(), note.color.to_rgb());
+    app.ui.analysis.note_loaded = Some((author.clone(), color));
     app.ui.analysis.note_author = author;
     app.ui.analysis.note_color = color;
     app.ui.analysis.note_shown = app.session.active().map(|d| (d.doc.id.0, i));
+}
+
+/// The Author field's id, to tell a draft being typed from a value that can be refreshed.
+fn note_author_id(ui: &egui::Ui) -> egui::Id {
+    ui.make_persistent_id(egui::IdSalt::new("note-options-author"))
+}
+
+/// Brings the bar up to date with note `i` when its author or colour changed since the bar read
+/// them (undo, redo, a recorded action). With `keep_draft` the Author field's text is left alone.
+fn refresh_note_options(app: &mut PhotocraftApp, i: usize, keep_draft: bool) {
+    let Some(note) = app.session.active().and_then(|d| d.doc.notes.get(i)) else { return };
+    let committed = (note.author.clone(), note.color.to_rgb());
+    if app.ui.analysis.note_loaded.as_ref() == Some(&committed) {
+        return;
+    }
+    app.ui.analysis.note_color = committed.1;
+    if !keep_draft {
+        app.ui.analysis.note_author.clone_from(&committed.0);
+    }
+    app.ui.analysis.note_loaded = Some(committed);
 }
 
 fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
