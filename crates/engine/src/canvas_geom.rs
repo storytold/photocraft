@@ -349,31 +349,22 @@ pub(crate) fn map_missing_font_type<E>(layers: &mut [Layer], map: &mut dyn FnMut
     Ok(())
 }
 
-/// Re-renders what `what` names. A smart object whose refresh fails (its smart filters are over a
-/// budget, say) fails the edit, which aborts before commit; one whose source is unavailable keeps
-/// its mapped cache.
-pub(crate) fn refresh(doc: &mut Document, what: Refresh) -> crate::Result<()> {
-    fn rec(snapshot: &Document, layers: &mut [Layer], what: Refresh) -> crate::Result<()> {
+pub(crate) fn refresh(doc: &mut Document, what: Refresh) {
+    fn rec(snapshot: &Document, layers: &mut [Layer], what: Refresh) {
         for l in layers {
             match &mut l.content {
-                LayerContent::Group(g) => rec(snapshot, &mut g.children, what)?,
+                LayerContent::Group(g) => rec(snapshot, &mut g.children, what),
                 LayerContent::Shape(sh) => crate::vector_cmds::refresh_shape(snapshot, sh),
                 LayerContent::Text(t) if what == Refresh::All && !keeps_own_pixels(t) => crate::type_cmds::refresh(snapshot, t),
                 LayerContent::Smart(_) if what == Refresh::All => {
-                    crate::smart_cmds::refresh_layer(snapshot, l)?;
+                    let _ = crate::smart_cmds::refresh_layer(snapshot, l);
                 }
                 _ => {}
             }
         }
-        Ok(())
     }
     let snapshot = doc.clone();
-    rec(&snapshot, &mut doc.layers, what)
-}
-
-/// [`refresh`] of shapes only, which cannot fail.
-pub(crate) fn refresh_shapes(doc: &mut Document) {
-    let _ = refresh(doc, Refresh::Shapes);
+    rec(&snapshot, &mut doc.layers, what);
 }
 
 /// Image › Image Rotation by a right angle or a flip.

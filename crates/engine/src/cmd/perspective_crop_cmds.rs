@@ -199,7 +199,7 @@ fn apply(doc: &mut Document, q: &[[f64; 2]; 4], h: &Homography, size: (u32, u32)
     doc.selection = None;
     crate::canvas_geom::transform_geometry(doc, &nearest_affine(q, f64::from(w), f64::from(ht)));
     doc.size = Size::new(w, ht);
-    crate::canvas_geom::refresh_shapes(doc);
+    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     Ok(())
 }
 

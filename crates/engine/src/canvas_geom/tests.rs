@@ -103,7 +103,7 @@ fn check_turn(depth: u64, mode: &str, t: Turn) {
     // Re-rendering every type, shape and smart object from its *geometry* gives the same image,
     // so the transforms (not only the cached pixels) moved.
     let mut d = doc(&s).clone();
-    refresh(&mut d, Refresh::All).unwrap();
+    refresh(&mut d, Refresh::All);
     let (mean, big) = diff(&photocraft_compose::flatten(&d).px, &want);
     assert!(mean < 2.0 / 255.0 && big < 0.01, "{t:?} {depth} {mode} re-rendered: mean {mean} big {big}");
     // Undo restores the original, bit-exactly.
@@ -306,7 +306,7 @@ fn canvas_size_and_crop_move_vector_geometry() {
     assert_eq!(d.slices.list[0].rect, Rect::new(21, 12, 31, 18));
     // The old canvas shows unchanged at its new offset, also after re-rendering from geometry.
     let mut r = d.clone();
-    refresh(&mut r, Refresh::All).unwrap();
+    refresh(&mut r, Refresh::All);
     for img in [photocraft_compose::flatten(d), photocraft_compose::flatten(&r)] {
         let nw = img.rect.width() as usize;
         let shifted: Vec<[f32; 4]> = (0..H as usize).flat_map(|y| img.px[(y + 10) * nw + 20..(y + 10) * nw + 20 + W as usize].to_vec()).collect();

@@ -395,7 +395,7 @@ fn resample_doc_with_styles(doc: &mut Document, cmd: &str, nw: u32, nh: u32, fil
     // Vector geometry, guides and marks scale with the pixels; vectors re-render sharp.
     crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
     doc.size = Size::new(nw, nh);
-    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All)?;
+    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
     let Ok(()) = crate::smart_cmds::restore_unrendered(doc, taken, |c| Ok::<_, Infallible>(resize_surface_in_canvas(c, sx, sy, filter, canvas)));
     Ok(())
 }
@@ -602,7 +602,7 @@ pub(crate) fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bo
     if extends {
         drop_fill_caches(&mut doc.layers);
     }
-    crate::canvas_geom::refresh_shapes(doc);
+    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     Ok(())
 }
 
@@ -719,7 +719,7 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
         if nw > ow as u32 || nh > oh as u32 {
             drop_fill_caches(&mut doc.layers);
         }
-        crate::canvas_geom::refresh_shapes(doc);
+        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
         let canvas = doc.bounds();
         let old = Rect::from_xywh(dx, dy, ow as u32, oh as u32);
         // A Background cannot contain transparent pixels. When a transparent

@@ -141,7 +141,7 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // Type, shapes and smart objects re-render from their new geometry; type in a missing
         // font keeps its turned pixels.
-        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All)?;
+        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
         doc.guides = Default::default();
         Ok(new)
     })?;

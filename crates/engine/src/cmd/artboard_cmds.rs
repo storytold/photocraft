@@ -228,7 +228,7 @@ pub(crate) fn fit_canvas(doc: &mut Document) -> (i32, i32) {
         doc.size = size;
         // Shape pixels are cut at the canvas: a board moved past the old edge rendered its
         // shapes against it, leaving them missing or clipped (#2389).
-        crate::canvas_geom::refresh_shapes(doc);
+        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     }
     (sx, sy)
 }
@@ -571,7 +571,7 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
         if (sx, sy) != (0, 0) {
             crate::image_cmds::translate_doc(doc, cmd, sx, sy)?;
             doc.size = Size::new(grown(doc.size.width, sx), grown(doc.size.height, sy));
-            crate::canvas_geom::refresh_shapes(doc);
+            crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
         }
         let (Some(x0), Some(y0), Some(x1), Some(y1)) = (rect.x0.checked_add(sx), rect.y0.checked_add(sy), rect.x1.checked_add(sx), rect.y1.checked_add(sy))
         else {
