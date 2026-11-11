@@ -494,9 +494,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     let preview_key = raw_key ^ display_key;
     // Nothing said what changed: compare with the document the canvas last showed
     // (`doc_diff`), so a change no tool or preview bounds still redraws only where it can
-    // differ. A sweep then redraws the rest as a safety net (below).
+    // differ. With `PHOTOCRAFT_SWEEP_SAFETY_NET` set, a sweep also redraws the rest (below).
     let mut from_diff = false;
-    // Only where the sweep that backs it up can run (`sweep::eligible`); elsewhere a change
+    // Only where sweeps can run (`sweep::eligible`); elsewhere a change
     // nothing bounded redraws everything, as before.
     if damage.is_none()
         && crate::canvas::sweep::eligible(app, &doc)
@@ -576,9 +576,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     if let Some((region, everything)) = sweep_region(app, &gpu, id, &doc, damage, present) {
         crate::background_redraw::cancel(app, id);
         gpu_budget(app, &gpu, idx, partial, visible);
-        // A compared change (`from_diff`) sweeps everything, the safety net below in one, but
-        // the area it found changed is drawn first: on a canvas of hundreds of layers the whole
-        // sweep takes seconds, and what changed showed only when the sweep reached it.
+        // A compared change (`from_diff`) draws the area it found changed first. With the
+        // opt-in safety net on, a sweep of everything follows it: on a canvas of hundreds of
+        // layers that sweep takes seconds, so the changed area must not wait for it.
         if everything {
             crate::canvas::sweep::start(app, &doc, visible);
         } else if from_diff {

@@ -5,9 +5,11 @@
 //! a second on the UI thread, long enough for a Wayland compositor to drop the window; in blocks
 //! the window keeps answering, and until a block is redrawn it shows what it showed before.
 //!
-//! A sweep is also the safety net behind [`super::doc_diff`]: after a change whose area was worked
-//! out by comparing documents, a sweep redraws everything, so if that comparison ever missed a
-//! pixel, it shows for a moment at most, never for good.
+//! A sweep can also be a safety net behind [`super::doc_diff`], but only with
+//! `PHOTOCRAFT_SWEEP_SAFETY_NET` set (to check the comparison while debugging): after a change
+//! whose area was worked out by comparing documents, it redraws everything. By default the
+//! comparison claims an area only when every difference it found is bounded, and redraws
+//! everything itself otherwise.
 //!
 //! Only on the GPU path, only with background jobs (the desktop app), and only for canvases of at
 //! least [`SWEEP_MIN_PX`]; elsewhere the canvas redraws in one go as before. A block that doesn't
@@ -97,6 +99,7 @@ pub(crate) fn safety_net(app: &mut PhotocraftApp, doc: &Document, visible: Rect)
     }
 }
 
+/// Whether `PHOTOCRAFT_SWEEP_SAFETY_NET` is set, read once ([`safety_net`]).
 fn safety_net_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PHOTOCRAFT_SWEEP_SAFETY_NET").is_some())
@@ -224,6 +227,7 @@ fn blocks(region: Rect, canvas: Rect, visible: Rect) -> Vec<Rect> {
 mod tests {
     use super::*;
 
+    /// The blocks cover every pixel once, and the ones in view are drawn first.
     #[test]
     fn blocks_cover_the_canvas_once_and_draw_the_view_first() {
         let bounds = Rect::new(0, 0, 10_000, 5_000);
@@ -237,6 +241,7 @@ mod tests {
         assert!(last.intersect(&visible).is_empty(), "far blocks come last: {last:?}");
     }
 
+    /// Overlapping regions split into the same grid blocks, so they can be deduplicated.
     #[test]
     fn blocks_of_overlapping_regions_are_the_same_rectangles() {
         let canvas = Rect::new(0, 0, 10_000, 5_000);
@@ -251,16 +256,19 @@ mod tests {
         assert!(covered.contains(100, 100) && covered.contains(2_999, 1_499), "the region is covered: {covered:?}");
     }
 
+    /// An app with background jobs on, as on the desktop.
     fn app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.background_jobs = true;
         app
     }
 
+    /// An empty RGB document of `w` x `h` pixels.
     fn doc(w: u32, h: u32) -> Arc<Document> {
         Arc::new(Document::new("t", photocraft_geom::Size::new(w, h), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8))
     }
 
+    /// Sweeps need a canvas of at least `SWEEP_MIN_PX`, background jobs, and no failed sweep.
     #[test]
     fn only_large_canvases_with_background_jobs_and_no_failed_sweep_are_eligible() {
         let mut app = app();
@@ -274,6 +282,7 @@ mod tests {
         assert!(!eligible(&app, &big), "a failed sweep");
     }
 
+    /// A block the CPU compositor drew ends the sweep until a full refresh lands.
     #[test]
     fn a_block_off_the_gpu_fails_the_sweep_until_a_full_refresh_lands() {
         let mut app = app();
@@ -292,6 +301,7 @@ mod tests {
         assert!(!running(&app, big.id));
     }
 
+    /// A region added twice queues its blocks once, at the front.
     #[test]
     fn adding_a_region_twice_queues_its_blocks_once_and_first() {
         let mut app = app();
@@ -309,6 +319,7 @@ mod tests {
         assert!(!last.intersect(&region).is_empty(), "the region is drawn first: {last:?}");
     }
 
+    /// The safety net keeps a running sweep, and the changed area is drawn before the rest.
     #[test]
     fn the_safety_net_keeps_a_running_sweep_and_draws_the_change_first() {
         let mut app = app();
@@ -333,6 +344,7 @@ mod tests {
         assert_eq!(running(&app, big.id), safety_net_on());
     }
 
+    /// A comparison needs the same document shown with the same display key.
     #[test]
     fn a_comparison_needs_the_same_display() {
         let mut app = app();
