@@ -98,6 +98,24 @@ fn the_converted_layer_keeps_its_link_effects_and_fill_opacity() {
 }
 
 #[test]
+fn the_converted_layer_keeps_its_psd_id_and_xmp_packet() {
+    let mut s = session();
+    let top = add_layer(&mut s, "Top");
+    s.edit("layer properties", |d, _| {
+        let l = d.layer_mut(top).unwrap();
+        l.psd_id = Some(42);
+        l.xmp = Some(std::sync::Arc::from("<x:xmpmeta>top</x:xmpmeta>"));
+        Ok(())
+    })
+    .unwrap();
+    s.execute(CREATE, drag()).unwrap();
+    let l = s.active().unwrap().doc.layer(top).unwrap();
+    assert!(matches!(l.content, LayerContent::Fill(_)));
+    assert_eq!(l.psd_id, Some(42), "the PSD layer id stays stable across round trips");
+    assert_eq!(l.xmp.as_deref(), Some("<x:xmpmeta>top</x:xmpmeta>"));
+}
+
+#[test]
 fn with_a_selection_the_converted_layers_mask_is_the_selection() {
     let mut s = session();
     let top = add_layer(&mut s, "Top");
