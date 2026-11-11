@@ -3595,6 +3595,24 @@ fn fit_lines_force_breaks() {
     assert!(!l.overflowed);
 }
 
+/// A paragraph run edge inside a paragraph (as imported or hand-edited `paragraphs` can have)
+/// doesn't restyle the paragraph's later solved lines: all of them take its first run's style,
+/// as unsolved layout does.
+#[test]
+fn solved_lines_share_their_paragraphs_style() {
+    let mut t = box_layer("aa bb cc", 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.paragraphs = vec![
+        ParagraphRun { len: 3, style: ParagraphStyle::default() },
+        ParagraphRun { len: 5, style: ParagraphStyle { align: TextAlign::Right, ..Default::default() } },
+    ];
+    t.fit = fit_lines(&[(0, 1.0), (3, 1.0), (6, 1.0)]);
+    let l = layout_of(&t);
+    assert_eq!(l.lines.len(), 3, "{:?}", l.lines);
+    for line in &l.lines {
+        assert!(line.x0 < 1.0, "every line is left-aligned like the first: {line:?}");
+    }
+}
+
 #[test]
 fn fit_lines_keep_paragraphs() {
     let mut t = box_layer("aa bb\ncc", 20.0, (0.0, 0.0, 4000.0, 400.0));
