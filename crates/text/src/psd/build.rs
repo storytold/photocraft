@@ -525,6 +525,12 @@ fn td_restyled(entry: &E, layer: &TextLayer, fonts: &mut Vec<E>, dpi: f32) -> Op
         base
     } else {
         compacted = compact(base, &["RunData", "StyleSheet", "Features"]).filter(|c| copies_fit_plus(c, spans.len(), TD_ADDED_KEYS, TD_ADDED_KEY_BYTES))?;
+        // As for the Txt2 runs: a restyle that would drop the fill colour dictionary is not made, so
+        // the entry keeps the colour the file has rather than none.
+        let paint = ["RunData", "StyleSheet", "Features", "FillColor"];
+        if base.path(&paint).is_some() && compacted.path(&paint).is_none() {
+            return None;
+        }
         &compacted
     };
     let default = CharStyle::default();
@@ -1117,7 +1123,7 @@ pub fn build_tysh(layer: &TextLayer, dpi: f32, ink: Option<[f32; 4]>) -> Vec<u8>
 
 #[cfg(test)]
 mod copy_budget_tests {
-    use super::{CharStyle, E, TextLayer, txt2_style_runs};
+    use super::{CharStyle, E, TextLayer, td_restyled, txt2_style_runs};
     use photocraft_doc::text::TextRun;
 
     /// A style edit on a layer whose template holds an oversized value still writes the layer's
@@ -1155,5 +1161,19 @@ mod copy_budget_tests {
         let runs = (0..100).map(|i| TextRun { len: 1, style: CharStyle { size_pt: if i % 2 == 0 { 30.0 } else { 40.0 }, ..Default::default() } }).collect();
         let layer = TextLayer { text, runs, ..Default::default() };
         assert_eq!(txt2_style_runs(&layer, &base, &mut Vec::new(), 72.0), Err(super::Txt2Error::FillColourDropped));
+    }
+
+    /// The legacy `TextObjects` copy: an oversized fill-colour dictionary is not compacted away, so
+    /// the entry is left with the colour the file has instead of a colourless restyle.
+    #[test]
+    fn an_oversized_legacy_fill_colour_keeps_the_entry() {
+        let colour = E::Dict(vec![("Color".into(), E::Dict(vec![("Pad".into(), E::String("x".repeat(1 << 20)))]))]);
+        let features = E::Dict(vec![("FillColor".into(), colour)]);
+        let run = E::Dict(vec![("RunData".into(), E::Dict(vec![("StyleSheet".into(), E::Dict(vec![("Features".into(), features)]))]))]);
+        let entry = E::Dict(vec![("Model".into(), E::Dict(vec![("StyleRun".into(), E::Dict(vec![("RunArray".into(), E::Array(vec![run]))]))]))]);
+        let text = "ab".repeat(50);
+        let runs = (0..100).map(|i| TextRun { len: 1, style: CharStyle { size_pt: if i % 2 == 0 { 30.0 } else { 40.0 }, ..Default::default() } }).collect();
+        let layer = TextLayer { text, runs, ..Default::default() };
+        assert_eq!(td_restyled(&entry, &layer, &mut Vec::new(), 72.0), None);
     }
 }
