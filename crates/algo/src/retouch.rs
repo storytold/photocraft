@@ -127,8 +127,20 @@ pub fn sponge_rgb(c: [f32; 3], amount: f32, saturate: bool, vibrance: bool) -> [
     let flow = 2.0 * amount * (1.0 + remaining) * (1.0 + remaining * remaining);
     let grey = luma(c);
     if !vibrance {
-        let gain = 1.0 + flow * if saturate { 0.4 } else { -0.2 };
-        return compress_gamut(c.map(|v| grey + (v - grey) * gain), grey);
+        let mut gain = 1.0 - 0.2 * flow;
+        if saturate {
+            gain = 1.0 + 0.4 * flow;
+            // Limit the gain before applying it to all three channels, using the same luma pivot.
+            let shadow = grey - lo;
+            if gain * shadow > grey {
+                gain = grey / shadow;
+            }
+            let highlight = hi - grey;
+            if gain * highlight > 1.0 - grey {
+                gain = (1.0 - grey) / highlight;
+            }
+        }
+        return c.map(|v| grey + (v - grey) * gain);
     }
 
     // Vibrance changes the channel extrema asymmetrically. The shadow response tapers near
