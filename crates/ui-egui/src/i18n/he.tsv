@@ -68,6 +68,8 @@
 	Open…	פתח…
 	Open As…	פתח בתור…
 	Open EXR Parts…	פתח חלקי EXR…
+	Edit in Raw Editor	עריכה בעורך RAW
+	Develop in Raw Editor	פיתוח בעורך RAW
 	Add beauty precomp from the AOVs	הוסף הרכבה (beauty) מראש מתוך AOVs
 	Both	שניהם
 	Left	שמאל
@@ -1903,6 +1905,7 @@
 	Cache levels	רמות מטמון
 	Cache tile size	גודל אריח מטמון
 	RAW Defaults	ברירות מחדל RAW
+	External editor	עורך חיצוני
 	Canvas border	גבול קנבס
 	Show canvas dots	הצג נקודות קנבס
 	Clip thumbnails to layer bounds	גזור תמונות ממוזערות לגבולות השכבה

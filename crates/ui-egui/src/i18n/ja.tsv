@@ -189,6 +189,8 @@
 	Open…	開く…
 	Open As…	形式を指定して開く…
 	Open EXR Parts…	EXRパートを開く…
+	Edit in Raw Editor	RAWエディターで編集
+	Develop in Raw Editor	RAWエディターで現像
 	Add beauty precomp from the AOVs	AOVからビューティーをプリコンポーズして追加
 	Both	両方
 	Left	左
@@ -2041,6 +2043,7 @@
 	Cache levels	キャッシュレベル
 	Cache tile size	キャッシュタイルのサイズ
 	RAW Defaults	RAWの既定値
+	External editor	外部エディター
 	Canvas border	カンバスの境界
 	Show canvas dots	カンバスのドットを表示
 	Clip thumbnails to layer bounds	サムネールをレイヤーの境界でクリップ

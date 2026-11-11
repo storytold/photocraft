@@ -180,6 +180,8 @@
 	Open…	Apri…
 	Open As…	Apri come…
 	Open EXR Parts…	Apri parti EXR…
+	Edit in Raw Editor	Modifica nell'editor RAW
+	Develop in Raw Editor	Sviluppa nell'editor RAW
 	Add beauty precomp from the AOVs	Aggiungi la precomposizione del passaggio beauty dagli AOV
 	Both	Entrambe
 	Left	Sinistra
@@ -2030,6 +2032,7 @@
 	Cache levels	Livelli cache
 	Cache tile size	Dimensione tile cache
 	RAW Defaults	Predefiniti RAW
+	External editor	Editor esterno
 	Canvas border	Bordo quadro
 	Show canvas dots	Mostra punti del quadro
 	Clip thumbnails to layer bounds	Ritaglia le miniature ai limiti del livello

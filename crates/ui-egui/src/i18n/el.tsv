@@ -138,6 +138,8 @@
 	Open…	Άνοιγμα…
 	Open As…	Άνοιγμα ως…
 	Open EXR Parts…	Άνοιγμα τμημάτων EXR…
+	Edit in Raw Editor	Επεξεργασία σε επεξεργαστή RAW
+	Develop in Raw Editor	Εμφάνιση σε επεξεργαστή RAW
 	Add beauty precomp from the AOVs	Προσθήκη προ-σύνθεσης ομορφιάς από τα AOV
 	Both	Και τα δύο
 	Left	Αριστερά
@@ -1774,6 +1776,7 @@
 	Cache levels	Επίπεδα προσωρινής μνήμης
 	Cache tile size	Μέγεθος πλακιδίου προσωρινής μνήμης
 	RAW Defaults	Προεπιλογές RAW
+	External editor	Εξωτερικός επεξεργαστής
 	Canvas border	Περίγραμμα καμβά
 	Show canvas dots	Εμφάνιση κουκκίδων καμβά
 	Clip thumbnails to layer bounds	Περικοπή μικρογραφιών στα όρια του επιπέδου

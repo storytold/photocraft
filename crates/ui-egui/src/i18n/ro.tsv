@@ -110,6 +110,8 @@
 	Open…	Deschidere…
 	Open As…	Deschidere ca…
 	Open EXR Parts…	Deschidere părți EXR…
+	Edit in Raw Editor	Editează în editorul RAW
+	Develop in Raw Editor	Developează în editorul RAW
 	Add beauty precomp from the AOVs	Adăugare precompunere „beauty” din AOV-uri
 	Both	Ambele
 	Left	Stânga
@@ -1945,6 +1947,7 @@
 	Cache levels	Niveluri cache
 	Cache tile size	Dimensiune mozaic cache
 	RAW Defaults	Valori implicite RAW
+	External editor	Editor extern
 	Canvas border	Margine pânză
 	Show canvas dots	Afișare puncte pânză
 	Clip thumbnails to layer bounds	Decupare miniaturi la limitele stratului

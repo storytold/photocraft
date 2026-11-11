@@ -55,6 +55,8 @@
 	Open…	გახსნა…
 	Open As…	გახსნა, როგორც…
 	Open EXR Parts…	EXR ნაწილების გახსნა…
+	Edit in Raw Editor	RAW რედაქტორში რედაქტირება
+	Develop in Raw Editor	RAW რედაქტორში დამუშავება
 	Add beauty precomp from the AOVs	საბაზო კომპოზიციის (beauty) დამატება AOV-ებიდან
 	Both	ორივე
 	Left	მარცხნივ
@@ -1812,6 +1814,7 @@
 	Cache levels	ქეშის დონეები
 	Cache tile size	ქეშის ფილის ზომა
 	RAW Defaults	RAW-ის ნაგულისხმევი პარამეტრები
+	External editor	გარე რედაქტორი
 	Canvas border	ტილოს საზღვარი
 	Show canvas dots	ტილოს წერტილების ჩვენება
 	Canvas color	ტილოს ფერი

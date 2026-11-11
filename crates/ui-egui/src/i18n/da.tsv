@@ -80,6 +80,8 @@
 	Open	Åbn
 	Open As…	Åbn som…
 	Open EXR Parts…	Åbn EXR-dele…
+	Edit in Raw Editor	Rediger i RAW-editor
+	Develop in Raw Editor	Fremkald i RAW-editor
 	Add beauty precomp from the AOVs	Tilføj beauty-precomp fra AOV'erne
 	Both	Begge
 	Left	Venstre
@@ -2347,6 +2349,7 @@
 	Cache levels	Cacheniveauer
 	Cache tile size	Flisestørrelse for cache
 	RAW Defaults	RAW-standarder
+	External editor	Ekstern editor
 	Canvas border	Lærredskant
 	Show canvas dots	Vis lærredsprikker
 	Clip thumbnails to layer bounds	Klip miniaturer til laggrænser

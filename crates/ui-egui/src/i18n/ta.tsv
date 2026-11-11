@@ -54,6 +54,8 @@
 	Open…	திற…
 	Open As…	இவ்வாறு திற…
 	Open EXR Parts…	EXR பகுதிகளைத் திற…
+	Edit in Raw Editor	RAW திருத்தியில் திருத்து
+	Develop in Raw Editor	RAW திருத்தியில் படத்தை உருவாக்கு
 	Add beauty precomp from the AOVs	AOV-களிலிருந்து பியூட்டி ப்ரீகாம்ப் சேர்
 	Both	இரண்டும்
 	Left	இடது
@@ -1897,6 +1899,7 @@
 	Cache levels	தற்காலிக சேமிப்பு நிலைகள்
 	Cache tile size	தற்காலிக சேமிப்பு ஓடு அளவு
 	RAW Defaults	RAW இயல்புநிலைகள்
+	External editor	வெளிப்புறத் திருத்தி
 	Canvas border	படச்சட்ட விளிம்பு
 	Show canvas dots	படச்சட்ட புள்ளிகளைக் காண்பி
 	Clip thumbnails to layer bounds	சிறுபடங்களை அடுக்கு எல்லைக்கு வெட்டு

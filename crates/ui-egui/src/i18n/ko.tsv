@@ -160,6 +160,8 @@
 	Open…	열기…
 	Open As…	형식을 지정하여 열기…
 	Open EXR Parts…	EXR 파트 열기…
+	Edit in Raw Editor	RAW 편집기에서 편집
+	Develop in Raw Editor	RAW 편집기에서 현상
 	Add beauty precomp from the AOVs	AOV에서 뷰티 프리컴포지션 추가
 	Both	양쪽
 	Left	왼쪽
@@ -2015,6 +2017,7 @@
 	Cache levels	캐시 레벨
 	Cache tile size	캐시 타일 크기
 	RAW Defaults	RAW 기본값
+	External editor	외부 편집기
 	Canvas border	캔버스 테두리
 	Show canvas dots	캔버스 점 표시
 	Clip thumbnails to layer bounds	썸네일을 레이어 경계로 자르기

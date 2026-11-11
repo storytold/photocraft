@@ -162,6 +162,8 @@
 	Open…	Abrir…
 	Open As…	Abrir como…
 	Open EXR Parts…	Abrir partes EXR…
+	Edit in Raw Editor	Editar no editor RAW
+	Develop in Raw Editor	Revelar no editor RAW
 	Add beauty precomp from the AOVs	Adicionar a pré-composição da beleza a partir dos AOVs
 	Both	Ambas
 	Left	Esquerda
@@ -1985,6 +1987,7 @@
 	Cache levels	Níveis do cache
 	Cache tile size	Tamanho do bloco do cache
 	RAW Defaults	Padrões RAW
+	External editor	Editor externo
 	Canvas border	Borda da tela de pintura
 	Show canvas dots	Mostrar pontos da tela de pintura
 	Clip thumbnails to layer bounds	Recortar miniaturas aos limites da camada

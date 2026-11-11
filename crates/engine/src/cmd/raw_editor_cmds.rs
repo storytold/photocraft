@@ -1,6 +1,6 @@
 //! File › Edit in Raw Editor and File › Develop in Raw Editor: a round trip through darktable or
-//! RapidRAW, the free raw editors, as separate programs (Preferences › Camera Raw › External
-//! Editor).
+//! RapidRAW, the free raw editors, as separate programs (Preferences › RAW Defaults › External
+//! editor).
 //!
 //! Edit opens the raw file in the editor's window. Develop runs the editor's documented headless
 //! export (`darktable-cli`, `RapidRAW export`), which applies the edits saved beside the raw (an
@@ -53,7 +53,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
-/// Which editor `path` (Preferences › Camera Raw › External Editor) is, by its file name:
+/// Which editor `path` (Preferences › RAW Defaults › External editor) is, by its file name:
 /// `darktable`, `darktable-cli`, `RapidRAW` (with `.exe` on Windows) or their `.app` bundles,
 /// matched without case, and where its window program and headless exporter are. Another name is
 /// refused because PhotoCraft doesn't know its command line. This picks the editor; it doesn't
@@ -61,7 +61,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 pub fn editor_paths(path: &str) -> std::result::Result<EditorPaths, String> {
     let path = path.trim();
     if path.is_empty() {
-        return Err("no raw editor is set: choose darktable or RapidRAW in Preferences › Camera Raw › External Editor".into());
+        return Err("no raw editor is set: choose darktable or RapidRAW in Preferences › RAW Defaults › External editor".into());
     }
     let p = Path::new(path);
     let file = p.file_name().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -273,7 +273,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit in Raw Editor",
             menu: &["File"],
             shortcut: None,
-            params: r#"{"path":string?,"dryRun":bool=false} → {editor, path} (or {editor, program, args} with dryRun): open a raw file (default: the active document's) in darktable or RapidRAW, as set in Preferences › Camera Raw › External Editor"#,
+            params: r#"{"path":string?,"dryRun":bool=false} → {editor, path} (or {editor, program, args} with dryRun): open a raw file (default: the active document's) in darktable or RapidRAW, as set in Preferences › RAW Defaults › External editor"#,
             enabled: native,
             journal: false,
             run: edit,

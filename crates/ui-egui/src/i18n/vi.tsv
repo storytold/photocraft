@@ -1552,6 +1552,7 @@ cameraRaw	Shadows	Vùng tối
 	Brush picker	Bộ chọn cọ
 	Cache tile size	Kích thước ô đệm
 	RAW Defaults	Mặc định RAW
+	External editor	Trình chỉnh sửa bên ngoài
 	Canvas border	Viền canvas
 	Canvas color	Màu canvas
 	Canvas custom color	Màu canvas tùy chỉnh
@@ -2464,6 +2465,8 @@ shape	Appearance	Diện mạo
 	Front Image	Ảnh phía trước
 	Next Document	Tài liệu tiếp theo
 	Open EXR Parts…	Mở các phần EXR…
+	Edit in Raw Editor	Chỉnh sửa trong trình chỉnh sửa RAW
+	Develop in Raw Editor	Hiện ảnh trong trình chỉnh sửa RAW
 	Pencil	Bút chì
 	PhotoCraft — Screen Color Picker	PhotoCraft — Bộ chọn màu màn hình
 	Previous Document	Tài liệu trước

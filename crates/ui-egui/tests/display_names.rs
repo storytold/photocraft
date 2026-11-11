@@ -188,6 +188,35 @@ fn guard_distinguishes_labels_from_identifiers_and_comments() {
 }
 
 #[test]
+fn external_raw_editor_labels_are_translated_in_every_catalog() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/i18n");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(dir).expect("catalog directory") {
+        let path = entry.expect("catalog entry").path();
+        if path.extension().is_none_or(|ext| ext != "tsv") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("UTF-8 catalog");
+        for label in ["Edit in Raw Editor", "Develop in Raw Editor", "External editor"] {
+            let translations: Vec<_> = text
+                .lines()
+                .filter_map(|line| {
+                    let mut columns = line.split('\t');
+                    match (columns.next(), columns.next(), columns.next(), columns.next()) {
+                        (Some(""), Some(source), Some(translation), None) if source == label => Some(translation),
+                        _ => None,
+                    }
+                })
+                .collect();
+            assert_eq!(translations.len(), 1, "{}: expected one {label:?} entry", path.display());
+            assert!(!translations[0].trim().is_empty(), "{}: empty {label:?} translation", path.display());
+        }
+        checked += 1;
+    }
+    assert!(checked > 0, "no bundled catalogs checked");
+}
+
+#[test]
 fn catalogs_do_not_restore_retired_display_names() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/i18n");
     for entry in std::fs::read_dir(dir).expect("catalog directory") {

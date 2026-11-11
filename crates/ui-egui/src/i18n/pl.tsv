@@ -165,6 +165,8 @@
 	Open…	Otwórz…
 	Open As…	Otwórz jako…
 	Open EXR Parts…	Otwórz części EXR…
+	Edit in Raw Editor	Edytuj w edytorze RAW
+	Develop in Raw Editor	Wywołaj w edytorze RAW
 	Add beauty precomp from the AOVs	Dodaj wstępną kompozycję piękna z AOV-ów
 	Both	Obie
 	Left	Lewa
@@ -2027,6 +2029,7 @@
 	Cache levels	Poziomy pamięci podręcznej
 	Cache tile size	Rozmiar kafla pamięci podręcznej
 	RAW Defaults	Domyślne ustawienia RAW
+	External editor	Zewnętrzny edytor
 	Canvas border	Obramowanie płótna
 	Show canvas dots	Pokaż kropki płótna
 	Clip thumbnails to layer bounds	Przycinaj miniatury do granic warstwy

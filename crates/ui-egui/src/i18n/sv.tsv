@@ -78,6 +78,8 @@
 	Open	Öppna
 	Open As…	Öppna som…
 	Open EXR Parts…	Öppna EXR-delar…
+	Edit in Raw Editor	Redigera i RAW-redigerare
+	Develop in Raw Editor	Framkalla i RAW-redigerare
 	Add beauty precomp from the AOVs	Lägg till beauty-förkomposition från AOV:er
 	Both	Båda
 	Left	Vänster
@@ -2345,6 +2347,7 @@
 	Cache levels	Cachenivåer
 	Cache tile size	Storlek på cacheblock
 	RAW Defaults	Standardinställningar för RAW
+	External editor	Extern redigerare
 	Canvas border	Arbetsytans kant
 	Show canvas dots	Visa punkter på arbetsytan
 	Clip thumbnails to layer bounds	Begränsa miniatyrer till lagergränser

@@ -68,6 +68,8 @@
 	Open…	کھولیں…
 	Open As…	بطور کھولیں…
 	Open EXR Parts…	EXR پارٹس کھولیں…
+	Edit in Raw Editor	RAW ایڈیٹر میں ترمیم کریں
+	Develop in Raw Editor	RAW ایڈیٹر میں ڈیولپ کریں
 	Add beauty precomp from the AOVs	AOVs سے بیوٹی پری کمپ شامل کریں
 	Both	دونوں
 	Left	بائیں
@@ -1903,6 +1905,7 @@
 	Cache levels	کیشے لیولز
 	Cache tile size	کیشے ٹائل حجم
 	RAW Defaults	RAW ڈیفالٹس
+	External editor	بیرونی ایڈیٹر
 	Canvas border	کینوس بارڈر
 	Show canvas dots	کینوس نقطے دکھائیں
 	Clip thumbnails to layer bounds	تھمب نیلز کو تہہ کی حدود میں کلپ کریں

@@ -89,6 +89,8 @@
 	Open…	Aç…
 	Open As…	Farklı Aç…
 	Open EXR Parts…	EXR Parçalarını Aç…
+	Edit in Raw Editor	RAW düzenleyicide düzenle
+	Develop in Raw Editor	RAW düzenleyicide geliştir
 	Add beauty precomp from the AOVs	AOV'lerden güzellik ön kompozisyonu ekle
 	Both	Her İkisi
 	Left	Sol
@@ -1915,6 +1917,7 @@
 	Cache levels	Önbellek düzeyleri
 	Cache tile size	Önbellek kutucuğu boyutu
 	RAW Defaults	RAW Varsayılanları
+	External editor	Harici düzenleyici
 	Canvas border	Tuval kenarlığı
 	Show canvas dots	Tuval noktalarını göster
 	Clip thumbnails to layer bounds	Küçük resimleri katman sınırlarına kırp

@@ -75,6 +75,8 @@
 	Open	เปิด
 	Open As…	เปิดเป็น…
 	Open EXR Parts…	เปิดอะไหล่ EXR…
+	Edit in Raw Editor	แก้ไขในโปรแกรมแก้ไข RAW
+	Develop in Raw Editor	ประมวลผลในโปรแกรมแก้ไข RAW
 	Add beauty precomp from the AOVs	เพิ่มความสวยงามพรีคอมพ์จาก AOVs
 	Both	ทั้งสองอย่าง
 	Left	ซ้าย
@@ -2327,6 +2329,7 @@
 	Cache levels	ระดับแคช
 	Cache tile size	ขนาดไทล์แคช
 	RAW Defaults	ค่าเริ่มต้น RAW
+	External editor	โปรแกรมแก้ไขภายนอก
 	Canvas border	ขอบผ้าใบ
 	Show canvas dots	แสดงจุดผ้าใบ
 	Clip thumbnails to layer bounds	คลิปภาพขนาดย่อให้เป็นขอบเขตของเลเยอร์

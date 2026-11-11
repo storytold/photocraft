@@ -266,6 +266,8 @@
 	Open	Открыть
 	Open As…	Открыть как…
 	Open EXR Parts…	Открыть части EXR…
+	Edit in Raw Editor	Редактировать в RAW-редакторе
+	Develop in Raw Editor	Проявить в RAW-редакторе
 	Add beauty precomp from the AOVs	Добавить предкомпозит красоты из AOV
 	Both	Оба
 	Left	Левый
@@ -2442,6 +2444,7 @@
 	Cache levels	Уровни кэша
 	Cache tile size	Размер блока кэша
 	RAW Defaults	Настройки RAW по умолчанию
+	External editor	Внешний редактор
 	Canvas border	Рамка холста
 	Show canvas dots	Показывать точки холста
 	Clip thumbnails to layer bounds	Обрезать миниатюры по границам слоя

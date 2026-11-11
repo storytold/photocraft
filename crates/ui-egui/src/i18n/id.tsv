@@ -158,6 +158,8 @@
 	Open…	Buka…
 	Open As…	Buka Sebagai…
 	Open EXR Parts…	Buka bagian EXR…
+	Edit in Raw Editor	Edit di Editor RAW
+	Develop in Raw Editor	Kembangkan di Editor RAW
 	Add beauty precomp from the AOVs	Tambahkan prakomposisi beauty dari AOV
 	Both	Keduanya
 	Left	Kiri
@@ -2002,6 +2004,7 @@
 	Cache levels	Level cache
 	Cache tile size	Ukuran tile cache
 	RAW Defaults	Default RAW
+	External editor	Editor eksternal
 	Canvas border	Border kanvas
 	Show canvas dots	Tampilkan titik kanvas
 	Clip thumbnails to layer bounds	Pangkas thumbnail ke batas layer

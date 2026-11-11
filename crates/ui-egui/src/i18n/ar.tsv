@@ -75,6 +75,8 @@
 	Open…	فتح…
 	Open As…	فتح باسم…
 	Open EXR Parts…	فتح أجزاء EXR…
+	Edit in Raw Editor	تحرير في محرر RAW
+	Develop in Raw Editor	تطوير في محرر RAW
 	Add beauty precomp from the AOVs	إضافة تركيبة جمالية مسبقة من AOVs
 	Both	كلاهما
 	Left	يسار
@@ -1937,6 +1939,7 @@
 	Cache levels	مستويات ذاكرة التخزين المؤقت
 	Cache tile size	حجم بلاطة ذاكرة التخزين المؤقت
 	RAW Defaults	إعدادات RAW الافتراضية
+	External editor	محرر خارجي
 	Canvas border	حدود مساحة الرسم
 	Show canvas dots	إظهار نقاط مساحة الرسم
 	Clip thumbnails to layer bounds	قصر الصور المصغرة على حدود الطبقة

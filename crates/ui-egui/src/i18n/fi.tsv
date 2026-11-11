@@ -81,6 +81,8 @@
 	Open	Avaa
 	Open As…	Avaa muodossa…
 	Open EXR Parts…	Avaa EXR-osat…
+	Edit in Raw Editor	Muokkaa RAW-editorissa
+	Develop in Raw Editor	Kehitä RAW-editorissa
 	Add beauty precomp from the AOVs	Lisää beauty-esikompositio AOV-kanavista
 	Both	Molemmat
 	Left	Vasen
@@ -2348,6 +2350,7 @@
 	Cache levels	Välimuistitasot
 	Cache tile size	Välimuistin laatan koko
 	RAW Defaults	RAW-oletukset
+	External editor	Ulkoinen editori
 	Canvas border	Kankaan reunus
 	Show canvas dots	Näytä kankaan pisteet
 	Clip thumbnails to layer bounds	Rajaa pikkukuvat tason rajoihin

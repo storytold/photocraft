@@ -197,6 +197,8 @@
 	Open…	Otevřít…
 	Open As…	Otevřít jako…
 	Open EXR Parts…	Otevřít části EXR…
+	Edit in Raw Editor	Upravit v editoru RAW
+	Develop in Raw Editor	Vyvolat v editoru RAW
 	Add beauty precomp from the AOVs	Přidat předběžnou kompozici krásy z AOV
 	Both	Obě
 	Left	Vlevo
@@ -2055,6 +2057,7 @@
 	Cache levels	Úrovně mezipaměti
 	Cache tile size	Velikost dlaždice mezipaměti
 	RAW Defaults	Výchozí nastavení RAW
+	External editor	Externí editor
 	Canvas border	Okraj plátna
 	Show canvas dots	Zobrazit tečky plátna
 	Clip thumbnails to layer bounds	Oříznout miniatury na hranice vrstvy

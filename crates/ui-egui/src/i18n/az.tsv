@@ -53,6 +53,8 @@
 	Open	Aç
 	Open As…	Fərqli aç…
 	Open EXR Parts…	EXR hissələrini aç…
+	Edit in Raw Editor	RAW redaktorunda redaktə et
+	Develop in Raw Editor	RAW redaktorunda emal et
 	Add beauty precomp from the AOVs	AOV-lərdən gözəllik prekompunu əlavə edin
 	Both	Hər ikisi
 	Left	Sol
@@ -2211,6 +2213,7 @@
 	Cache levels	Keş səviyyələri
 	Cache tile size	Keş kafel ölçüsü
 	RAW Defaults	RAW ilkin ayarları
+	External editor	Xarici redaktor
 	Canvas border	Kətan haşiyəsi
 	Show canvas dots	Kətan nöqtələrini göstərin
 	Clip thumbnails to layer bounds	Miniatürləri qat sərhədlərinə kəsin

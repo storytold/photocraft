@@ -122,6 +122,8 @@
 	Open…	Openen…
 	Open As…	Openen als…
 	Open EXR Parts…	EXR-delen openen…
+	Edit in Raw Editor	Bewerken in RAW-editor
+	Develop in Raw Editor	Ontwikkelen in RAW-editor
 	Add beauty precomp from the AOVs	Schoonheidsvoorcompositie toevoegen vanuit de AOV's
 	Both	Beide
 	Left	Links
@@ -1962,6 +1964,7 @@
 	Cache levels	Cacheniveaus
 	Cache tile size	Tegelgrootte cache
 	RAW Defaults	RAW-standaardwaarden
+	External editor	Externe editor
 	Canvas border	Canvasrand
 	Show canvas dots	Canvasstippen tonen
 	Clip thumbnails to layer bounds	Miniaturen bijsnijden tot laaggrenzen

@@ -58,6 +58,8 @@
 	Open…	Otvori…
 	Open As…	Otvori kao…
 	Open EXR Parts…	Otvori EXR dijelove…
+	Edit in Raw Editor	Uredi u RAW uređivaču
+	Develop in Raw Editor	Razvij u RAW uređivaču
 	Add beauty precomp from the AOVs	Dodaj beauty predkompoziciju iz AOV-ova
 	Both	Oboje
 	Left	Lijevo
@@ -1861,6 +1863,7 @@
 	Cache levels	Nivoi keša
 	Cache tile size	Veličina pločice keša
 	RAW Defaults	Zadane RAW postavke
+	External editor	Vanjski uređivač
 	Canvas border	Okvir platna
 	Show canvas dots	Prikaži tačke platna
 	Clip thumbnails to layer bounds	Ograniči sličice na granice sloja

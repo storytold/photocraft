@@ -168,6 +168,8 @@
 	Open…	打开…
 	Open As…	打开为…
 	Open EXR Parts…	打开 EXR 分段…
+	Edit in Raw Editor	在 RAW 编辑器中编辑
+	Develop in Raw Editor	在 RAW 编辑器中显影
 	Add beauty precomp from the AOVs	从 AOV 预合成美丽通道
 	Both	两者
 	Left	左
@@ -2066,6 +2068,7 @@
 	Cache levels	缓存级别
 	Cache tile size	缓存图块大小
 	RAW Defaults	RAW 默认设置
+	External editor	外部编辑器
 	Canvas border	画布边框
 	Show canvas dots	显示画布圆点
 	Clip thumbnails to layer bounds	将缩略图裁剪到图层边界
