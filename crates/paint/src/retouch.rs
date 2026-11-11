@@ -857,8 +857,8 @@ mod tests {
                     let mut b = a.clone();
                     let mut sm_a = Smudge::new(0.7, finger.clone(), 14.0).with_alpha(alpha);
                     let mut sm_b = sm_a.clone();
-                    apply_dab_stroke(&mut a, &st, None, false, 0, |w, fp| sm_a.dab(w, fp));
-                    apply_dab_stroke(&mut b, &st, None, false, 0, |w, fp| reference_dab(&mut sm_b, w, fp));
+                    apply_dab_stroke(&mut a, &st, None, false, 0, |w, fp| sm_a.dab(w, fp)).unwrap();
+                    apply_dab_stroke(&mut b, &st, None, false, 0, |w, fp| reference_dab(&mut sm_b, w, fp)).unwrap();
                     let rect = Rect::new(-20, -20, 120, 90);
                     assert_eq!(a.read_region(rect), b.read_region(rect), "{fmt:?} finger {} {path:?}", finger.is_some());
                     assert_eq!(sm_a.carry, sm_b.carry, "{fmt:?} carry");
@@ -895,7 +895,7 @@ mod tests {
                     }
                 }
             };
-            let bounds = apply_dab_stroke(&mut got, &st, Some(&sel), false, 0, effect);
+            let bounds = apply_dab_stroke(&mut got, &st, Some(&sel), false, 0, effect).unwrap();
             let orig = Region::read(&want, bounds);
             let mut work = orig.clone();
             let ctx = crate::BrushContext::new(&st.brush);
