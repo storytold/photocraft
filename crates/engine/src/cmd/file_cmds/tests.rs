@@ -2112,6 +2112,21 @@ fn vectorcraft_smart_render_converts_into_the_document_profile() {
     assert!((warped.pixel(5, 20)[0] - 0.214).abs() < 0.01, "{:?}", warped.pixel(5, 20));
 }
 
+/// A VectorCraft smart object scaled past Memory Usage is refused before its artboard is drawn
+/// again at the placement's scale.
+#[test]
+fn vectorcraft_smart_render_checks_memory_before_drawing_at_scale() {
+    let s = session(40, 40, 8);
+    let doc = (*s.active().unwrap().doc).clone();
+    let bytes = Arc::new(vectorcraft_file(1_000, 1_000, "0 0 1"));
+    let smart = SmartObject::new(SmartSource::Embedded { file_name: "Large.vectorcraft".into(), bytes }, Affine { m: [4.0, 0.0, 0.0, 4.0, 0.0, 0.0] }, None);
+    let draws = || crate::smart_cmds::VECTORCRAFT_DRAWS.with(std::cell::Cell::get);
+    let before = draws();
+    let e = crate::smart_cmds::render(&doc, &smart).unwrap_err();
+    assert!(e.to_string().contains("too large to transform"), "{e}");
+    assert_eq!(draws(), before, "the artboard was drawn before the refusal");
+}
+
 #[test]
 fn vectorcraft_raster_place_converts_before_resampling_at_every_depth() {
     for depth in [8, 16, 32] {

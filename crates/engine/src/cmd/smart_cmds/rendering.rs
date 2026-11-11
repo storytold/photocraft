@@ -189,22 +189,20 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
     } else if photocraft_io::vectorcraft::is_vectorcraft(bytes) {
         let limit = photocraft_io::vectorcraft::scale_limit(bytes).map_err(|e| other(format!("can't draw the VectorCraft smart object: {e}")))?;
         let k = vector_scale(sm).min(f64::from(limit));
-        Some((vectorcraft_source_image_in(name, bytes, doc, k)?, k))
+        // The drawn artboard is as large as the placed result, so the budget is checked first.
+        let check = |bounds: Rect| crate::transform_cmds::check_budget(bounds, &scaled_placement(sm, k), "smart object", fmt);
+        Some((vectorcraft_source_image_in(name, bytes, doc, k, check)?, k))
     } else {
         None
     };
     if let Some((img, k)) = scaled {
+        let h = scaled_placement(sm, k);
+        crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
         return Ok(match &sm.perspective {
-            Some(p) => {
-                let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
-                let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
-                crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
-                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?
-            }
+            Some(_) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?,
             None => {
                 let [a, b, c, d, e, f] = sm.transform.m;
                 let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
-                crate::transform_cmds::check_budget(img.bounds, &affine_homography(&t), "smart object", fmt)?;
                 photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)?
             }
         });
@@ -213,7 +211,7 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
         Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode)?, doc)?,
         None if photocraft_io::svg::is_svg(bytes) => svg_source_image_in(bytes, doc, 1.0)?,
         Some(mode) if photocraft_io::vectorcraft::is_vectorcraft(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA8, mode)?, doc)?,
-        None if photocraft_io::vectorcraft::is_vectorcraft(bytes) => vectorcraft_source_image_in(name, bytes, doc, 1.0)?,
+        None if photocraft_io::vectorcraft::is_vectorcraft(bytes) => vectorcraft_source_image_in(name, bytes, doc, 1.0, |_| Ok(()))?,
         Some(mode) => stack_image(name, bytes, fmt, mode)?,
         None => source_image(name, bytes, fmt)?,
     };
@@ -226,6 +224,21 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
         Some(_) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, sm.warp.as_ref())?,
         None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
     })
+}
+
+/// The placement of a source drawn at `k` times its own size: the smart object's placement with
+/// its scale divided by `k`.
+fn scaled_placement(sm: &SmartObject, k: f64) -> Homography {
+    match &sm.perspective {
+        Some(p) => {
+            let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
+            Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8])
+        }
+        None => {
+            let [a, b, c, d, e, f] = sm.transform.m;
+            affine_homography(&Affine { m: [a / k, b / k, c / k, d / k, e, f] })
+        }
+    }
 }
 
 #[cfg(test)]
