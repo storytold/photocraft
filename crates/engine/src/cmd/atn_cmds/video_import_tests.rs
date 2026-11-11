@@ -55,6 +55,21 @@ fn a_recorded_step_loads_and_saves_back_unchanged() {
     }
 }
 
+/// The descriptor's class name is the step's label (localised in a real recording) and its class
+/// id varies with the writer: neither is a setting, so the step still maps, as every other mapped
+/// event does, and saves with the `null` header export always writes.
+#[test]
+fn a_recorded_header_does_not_keep_the_step() {
+    let path = "C:\\Footage\\clip.mov";
+    let mut d = recorded(path, false);
+    d.name = UnicodeString::new_nul("Calques d'images vidéo");
+    d.class_id = Id::new("importVideoToLayers");
+    let (mut s, r) = load(d);
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    assert_eq!(s.actions.list[0].steps[0], (IMPORT.to_string(), json!({"path": path})));
+    assert_eq!(saved(&mut s), ("importVideoToLayers".to_string(), Some(recorded(path, false).to_bytes())));
+}
+
 /// A loaded step imports every frame of the footage as a layer of its own, in order, as one
 /// undoable edit.
 #[test]
