@@ -302,3 +302,103 @@ fn transform_task_bar_does_not_report_its_rect_as_crop_after_cancel() {
     assert_eq!(crop_bar["visible"], false);
     assert!(crop_bar["rect"].is_null());
 }
+
+/// The frame owns its press even when egui gives the underlying canvas the drag sense.
+#[test]
+fn transform_task_bar_frame_drag_preserves_the_open_transform() {
+    for edge in ["top", "bottom", "right"] {
+        let mut h = open_box();
+        let app = h.state();
+        let transform = app.ui.transform.as_ref().unwrap();
+        let before = (transform.session, transform.pivot, transform.quad);
+        let before_history = history(&h);
+        let [x0, y0, x1, y1] = crate::transform_task_bar::shown_rect(app, &h.ctx).unwrap();
+        let frame = Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
+        let from = match edge {
+            "top" => pos2(frame.center().x, frame.top() + 1.0),
+            "bottom" => pos2(frame.center().x, frame.bottom() - 1.0),
+            _ => pos2(frame.right() - 1.0, frame.center().y),
+        };
+        let to = from + egui::vec2(35.0, 25.0);
+        let xf = ViewXform::active(app).unwrap();
+        assert!(xf.rect.contains(from) && xf.rect.contains(to), "frame drag must stay on canvas");
+        assert!(frame.contains(from), "frame drag must begin inside the visible bar");
+        let hit = crate::transform_tool::box_hit(app, transform, xf.to_doc(from), crate::transform_tool::handle_tolerance(app));
+        assert!(matches!(hit, crate::transform_tool::Hit::Outside), "frame sample must be outside transform controls: {edge} {hit:?}");
+        task_bar_screen_drag(&mut h, from, to);
+        let after = h.state().ui.transform.as_ref().map(|t| (t.session, t.pivot, t.quad));
+        assert_eq!(after, Some(before), "dragging the bar's {edge} frame must leave the open transform unchanged");
+        assert_eq!(history(&h), before_history, "frame drag must not commit an edit");
+    }
+}
+
+/// The frame guard must still allow a canvas rotation gesture with an outside-bar origin.
+#[test]
+fn transform_task_bar_frame_guard_preserves_off_bar_rotation() {
+    let mut h = open_box();
+    let app = h.state();
+    let transform = app.ui.transform.as_ref().unwrap();
+    let before = (transform.session, transform.pivot, transform.quad);
+    let before_history = history(&h);
+    let xf = ViewXform::active(app).unwrap();
+    let corner = xf.to_screen(transform.quad[1][0] as f32, transform.quad[1][1] as f32);
+    let from = corner + egui::vec2(20.0, -20.0);
+    let to = corner + egui::vec2(45.0, 0.0);
+    let [x0, y0, x1, y1] = crate::transform_task_bar::shown_rect(app, &h.ctx).unwrap();
+    assert!(!Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)).contains(from));
+    assert!(xf.rect.contains(from) && xf.rect.contains(to));
+    let hit = crate::transform_tool::box_hit(app, transform, xf.to_doc(from), crate::transform_tool::handle_tolerance(app));
+    assert!(matches!(hit, crate::transform_tool::Hit::Outside), "control must start in the rotation zone: {hit:?}");
+    task_bar_screen_drag(&mut h, from, to);
+    let after = h.state().ui.transform.as_ref().unwrap();
+    assert_eq!((after.session, after.pivot), (before.0, before.1));
+    assert_ne!(after.quad, before.2, "a real off-bar canvas drag must rotate the transform");
+    assert_eq!(history(&h), before_history);
+}
+
+fn task_bar_screen_drag(h: &mut AppHarness, from: egui::Pos2, to: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=6 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (step as f32 / 6.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+}
+
+/// Crop uses the same floating frame and canvas drag routing as Free Transform.
+#[test]
+fn crop_task_bar_frame_drag_preserves_crop_but_off_bar_drag_rotates() {
+    for on_bar in [true, false] {
+        let mut h = harness();
+        control(&mut h, "ui.set", json!({"tool": "crop"}));
+        h.state_mut().ui.crop_rect = Some([100.0, 100.0, 200.0, 160.0]);
+        h.run_steps(4);
+        let app = h.state();
+        assert!(crate::crop_task_bar::eligible(app));
+        let before = (app.ui.crop_rect, app.ui.crop_angle);
+        let before_history = history(&h);
+        let [x0, y0, x1, y1] = app.ui.task_bar_shown.expect("Crop bar must be visible");
+        let frame = Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
+        let xf = ViewXform::active(app).unwrap();
+        let (from, to) = if on_bar {
+            let from = pos2(frame.center().x, frame.bottom() - 1.0);
+            (from, from + egui::vec2(35.0, 25.0))
+        } else {
+            (xf.to_screen(250.0, 130.0), xf.to_screen(150.0, 230.0))
+        };
+        assert_eq!(frame.contains(from), on_bar, "origin must identify the intended owner");
+        assert!(xf.rect.contains(from) && xf.rect.contains(to));
+        task_bar_screen_drag(&mut h, from, to);
+        let after = (h.state().ui.crop_rect, h.state().ui.crop_angle);
+        if on_bar {
+            assert_eq!(after, before, "dragging the Crop bar frame must not edit the crop");
+        } else {
+            assert_ne!(after.1, before.1, "the off-bar Crop rotation control must still work");
+        }
+        assert_eq!(history(&h), before_history, "an uncommitted crop drag must not edit document history");
+    }
+}
