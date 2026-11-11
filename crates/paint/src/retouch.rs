@@ -236,14 +236,14 @@ pub fn apply_coverage(
             continue;
         }
         let src = paint.px(x, y);
-        // A transparent source cannot paint. Skip it before a blend-mode RGB round trip can
-        // change untouched native CMYK/Lab values (or Normal blending can round float values).
-        if a.and_then(|a| src.get(a)).is_some_and(|alpha| *alpha <= 0.0) {
-            continue;
-        }
         if blend == BlendMode::Normal {
             over_native(&fmt, px, src, k, lock_transparency);
         } else {
+            // A transparent source cannot paint. Skip it before an RGB round trip changes
+            // untouched native CMYK/Lab values; Normal handles zero weight in over_native.
+            if a.and_then(|a| src.get(a)).is_some_and(|alpha| *alpha <= 0.0) {
+                continue;
+            }
             let d = to_rgba(&fmt, px);
             let s = to_rgba(&fmt, src);
             let o =
