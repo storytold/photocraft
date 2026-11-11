@@ -27,7 +27,7 @@ fn timestamp_quick_export_ask_and_same_folder_preserve_original() {
     answer(&open, Some(FileDialogAnswer::SaveTo(suggested.clone())));
     app.poll_file_dialog(&ctx, None);
     assert!(!app.ui.status_error, "{}", app.ui.status);
-    assert!(app.ui.status.contains(&suggested));
+    assert_eq!(app.ui.status, format!("Exported {suggested}"));
     assert!(selected.exists(), "the engine must write the picker name without a second timestamp");
     app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
     menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
@@ -59,16 +59,21 @@ fn pending_quick_export_keeps_its_naming_mode() {
         app.run("prefs.set", json!({"path": "export.quickExportNaming", "value": changed})).unwrap();
         answer(&open, Some(FileDialogAnswer::SaveTo(suggested.clone())));
         app.poll_file_dialog(&ctx, None);
-        assert!(!app.ui.status_error, "{opened} -> {changed}: {}", app.ui.status);
         if opened == "timestamp" {
             assert_eq!(std::fs::read(&suggested).unwrap(), b"earlier export");
             let path = Path::new(&suggested);
             let unique = path.with_file_name(format!("{}_1.png", path.file_stem().unwrap().to_str().unwrap()));
             assert!(unique.exists(), "the captured Timestamp policy must keep exclusive publication without restamping");
+            assert!(app.ui.status_error, "a changed destination must show a warning");
+            assert!(app.ui.status.contains("was not replaced"), "{}", app.ui.status);
+            assert!(app.ui.status.contains(&suggested), "the warning must identify the preserved file");
+            assert!(app.ui.status.contains(unique.to_str().unwrap()), "the status must identify the exported file");
         } else {
             assert_eq!(Path::new(&suggested).file_name().unwrap(), "photo.png");
             assert_ne!(std::fs::read(&suggested).unwrap(), b"earlier export");
             assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "Default must keep the selected filename");
+            assert!(!app.ui.status_error, "{opened} -> {changed}: {}", app.ui.status);
+            assert_eq!(app.ui.status, format!("Exported {suggested}"));
         }
         assert_eq!(app.session.prefs().export.quick_export_naming.name(), changed, "the later preference must remain stored");
     }

@@ -1184,7 +1184,17 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
         }
         return app.pick_export(&suggested, move |app, path| {
             app.refocus(doc)?;
-            quick_export(app, json!({"path": path, "preparedPath": prepared_path, "naming": naming}))
+            let result = quick_export(app, json!({"path": &path, "preparedPath": prepared_path, "naming": naming}))?;
+            if prepared_path
+                && let Some(exported) = result.get("path").and_then(Value::as_str)
+                && std::path::Path::new(exported) != std::path::Path::new(&path)
+            {
+                let template = "The selected file {path} was not replaced; Timestamp naming preserved it.";
+                let warning = crate::i18n::fmt(tl!(template), &[("path", &path)]);
+                let what = app.ui.status.clone();
+                crate::notices::io_warnings(app, &what, &[warning]);
+            }
+            Ok(result)
         });
     }
     let mut f = Map::new();
