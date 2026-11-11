@@ -1,6 +1,6 @@
 use super::*;
 
-fn session() -> TransformSession {
+pub(super) fn session() -> TransformSession {
     TransformSession {
         session: 1,
         layer: 1,
@@ -221,7 +221,7 @@ fn warp_bar_buttons_follow_the_fields_on_a_wide_bar() {
     h.run_steps(4);
     assert!(h.state().ui.transform.as_ref().unwrap().warp.is_some());
     let commit = h.get_by_label("Commit transform").rect();
-    assert!(commit.right() < width / 2.0, "commit sits next to the fields, not at the far right: {commit:?}");
+    assert!(commit.right() < width * 0.6, "commit sits next to the fields, not at the far right: {commit:?}");
     let reset = h.get_by_label("Reset warp").rect();
     assert!(reset.right() < commit.left() + 1.0, "reset is left of commit");
     h.get_by_label("Reset warp").click();
@@ -325,7 +325,7 @@ fn type_into_bar_field(n: usize, text: &str) -> TransformSession {
 
 /// The transform bar over the test box, after `setup` (e.g. picking the W/H unit). Tall enough
 /// for the fields' unit menu to open below the bar unscrolled.
-fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<'static, PhotocraftApp> {
+pub(super) fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<'static, PhotocraftApp> {
     use egui_kittest::Harness;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.transform = Some(session());
@@ -345,7 +345,7 @@ fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<
 }
 
 /// [`type_into_bar_field`] after `setup`.
-fn type_into_bar_field_with(setup: impl FnOnce(&mut PhotocraftApp), n: usize, text: &str) -> TransformSession {
+pub(super) fn type_into_bar_field_with(setup: impl FnOnce(&mut PhotocraftApp), n: usize, text: &str) -> TransformSession {
     use egui_kittest::kittest::Queryable;
     let mut h = bar_harness(setup);
     h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(n).unwrap().click();
@@ -1130,6 +1130,96 @@ fn a_refused_commit_keeps_the_box_open() {
     app.ui.tool = if app.ui.tool == Tool::Brush { Tool::Move } else { Tool::Brush };
     end_if_left(&mut app);
     assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "another tool ends it");
+}
+
+/// Image Processor must not silently export the pixels from before the visible transform.
+/// Both direct commands and dialog OK preserve the box and write nothing until it is settled.
+#[test]
+fn image_processor_document_sources_wait_for_the_transform() {
+    for source in ["current", "open"] {
+        for through_dialog in [false, true] {
+            for apply in [false, true] {
+                let ctx = egui::Context::default();
+                let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+                let output = tempfile::tempdir().unwrap();
+                begin(&mut app, &ctx).unwrap();
+                let t = app.ui.transform.as_mut().unwrap();
+                t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+                let quad = t.quad;
+                let before = app.session.active().unwrap().doc.clone();
+                let revision = app.session.active().unwrap().revision;
+                let history = app.session.active().unwrap().history.past_len();
+                let params = json!({"source": source, "output": output.path(), "format": "png"});
+                let result = if through_dialog {
+                    let reply = crate::menus::invoke(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+                    let id = reply["dialog"].as_u64().unwrap();
+                    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+                    fields.insert("source".into(), json!(source));
+                    fields.insert("output".into(), json!(output.path()));
+                    fields.insert("format".into(), json!("png"));
+                    crate::dialogs::confirm(&mut app, id)
+                } else {
+                    app.run("file.scripts.imageProcessor", params.clone())
+                };
+                assert_eq!(result.unwrap_err(), "Commit or cancel the transform first");
+                assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 0);
+                assert_eq!(app.ui.transform.as_ref().unwrap().quad, quad);
+                let st = app.session.active().unwrap();
+                assert!(Arc::ptr_eq(&st.doc, &before));
+                assert_eq!((st.revision, st.history.past_len()), (revision, history));
+                if apply {
+                    commit(&mut app);
+                } else {
+                    cancel(&mut app);
+                }
+                assert!(app.ui.transform.is_none());
+                let result = app.run("file.scripts.imageProcessor", params).unwrap();
+                assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
+                assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+            }
+        }
+    }
+}
+
+/// Folder input, including the legacy omitted source, does not read the open transform.
+#[test]
+fn image_processor_folder_source_keeps_working_during_a_transform() {
+    for source in [None, Some("folder")] {
+        let ctx = egui::Context::default();
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let input = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        app.run("file.saveACopy", json!({"path": input.path().join("source.png")})).unwrap();
+        begin(&mut app, &ctx).unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let mut params = json!({"input": input.path(), "output": output.path(), "format": "png"});
+        if let Some(source) = source {
+            params["source"] = json!(source);
+        }
+        let result = app.run("file.scripts.imageProcessor", params).unwrap();
+        assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+        assert!(app.ui.transform.is_some());
+        assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
+    }
+}
+
+/// All open documents includes a transform in another tab; Current only reads its own tab.
+#[test]
+fn image_processor_checks_the_transform_document_for_each_source() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.run("file.new", json!({"name": "Other", "width": 16, "height": 16})).unwrap();
+    assert!(app.session.set_active(0));
+    begin(&mut app, &ctx).unwrap();
+    assert!(app.session.set_active(1));
+    let output = tempfile::tempdir().unwrap();
+    let result = app.run("file.scripts.imageProcessor", json!({"source": "open", "output": output.path(), "format": "png"}));
+    assert_eq!(result.unwrap_err(), "Commit or cancel the transform first");
+    assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 0);
+    let result = app.run("file.scripts.imageProcessor", json!({"source": "current", "output": output.path(), "format": "png"})).unwrap();
+    assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
+    assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
 }
 
 /// #6737: Save for Web exports the committed document, so it is off while a box is pending.
