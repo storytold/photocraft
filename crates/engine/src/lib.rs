@@ -359,6 +359,9 @@ mod eraser_gray_background_tests;
 mod fill_layer_mode_tests;
 #[cfg(test)]
 mod mixer_indexed_bitmap_tests;
+
+#[cfg(test)]
+mod mixer_toggle_commands_tests;
 #[cfg(test)]
 mod pattern_mode_tests;
 #[cfg(test)]
