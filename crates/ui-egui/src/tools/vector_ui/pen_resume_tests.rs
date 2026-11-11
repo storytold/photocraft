@@ -356,12 +356,13 @@ fn redo_does_not_put_a_finished_path_beside_its_edited_draft() {
     assert!(app.session.active().unwrap().doc.work_path.is_none(), "no finished path beside the draft");
     assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots);
 
-    // Back to what Undo gave back, Redo finishes it again.
+    // Undo saves the edited anchor: Redo restores it before considering the old finish.
     press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
     assert!(crate::menus::is_enabled(&app, "edit.redo"));
     menu(&mut app, "edit.redo");
-    assert!(app.ui.pen.is_none());
-    assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots.len(), 3);
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots);
+    assert!(app.session.active().unwrap().doc.work_path.is_none());
+    assert!(!crate::menus::is_enabled(&app, "edit.redo"), "the restored edited draft still blocks the old finish");
 }
 
 #[test]
@@ -484,11 +485,15 @@ fn redo_finishes_a_carried_on_path_again_in_place() {
     assert!(app.ui.pen.is_none());
     assert_eq!(work_path(&app), finished, "one subpath again, not a second one beside it");
 
-    // With the draft dropped, Redo brings the finish back, and Undo gives the path back again.
+    // With the draft dropped, Redo restores the carried draft's anchors before its finish.
     menu(&mut app, "edit.undo");
     menu(&mut app, "edit.undo");
     menu(&mut app, "edit.undo");
     assert!(app.ui.pen.is_none());
+    menu(&mut app, "edit.redo");
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), carried.len() - 1);
+    menu(&mut app, "edit.redo");
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(carried.clone()));
     menu(&mut app, "edit.redo");
     assert_eq!(work_path(&app), finished);
     menu(&mut app, "edit.undo");

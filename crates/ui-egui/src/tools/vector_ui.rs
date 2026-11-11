@@ -388,3 +388,7 @@ pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
     app.ui.status_error = true;
     true
 }
+
+#[cfg(test)]
+#[path = "vector_ui/pen_history_integration_tests.rs"]
+mod pen_history_integration_tests;

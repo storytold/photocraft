@@ -183,7 +183,7 @@ pub fn pen_undo_last_point(app: &mut PhotocraftApp) -> bool {
 /// Only replay a step on its unchanged source document and expected draft.
 pub fn pen_can_redo(app: &PhotocraftApp) -> bool {
     // Modal boxes own Undo/Redo until they are applied or cancelled.
-    if app.ui.transform.is_some() || crate::crop_ui::pending(app) {
+    if super::pen_resume::box_steps(app, "edit.redo") || crate::crop_ui::pending(app) {
         return false;
     }
     app.ui.pen_redo.last().is_some_and(|step| {
@@ -197,7 +197,7 @@ pub fn pen_can_redo(app: &PhotocraftApp) -> bool {
 
 pub fn pen_redo_last_point(app: &mut PhotocraftApp) -> bool {
     // A modal Redo belongs to the box; it neither replays nor discards draft anchors.
-    if app.ui.transform.is_some() || crate::crop_ui::pending(app) {
+    if super::pen_resume::box_steps(app, "edit.redo") || crate::crop_ui::pending(app) {
         return false;
     }
     if !pen_can_redo(app) {
@@ -207,7 +207,9 @@ pub fn pen_redo_last_point(app: &mut PhotocraftApp) -> bool {
     let Some(step) = app.ui.pen_redo.pop() else { return false };
     app.ui.pen_doc = step.before.owner.as_ref().map(|owner| owner.document);
     app.ui.pen = Some(step.before);
-    app.ui.direct_selection = Default::default();
+    if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
+        app.ui.direct_selection = Default::default();
+    }
     true
 }
 

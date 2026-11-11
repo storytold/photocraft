@@ -17,9 +17,6 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if let Some(on) = crate::vector_ui::pen_history_enabled(app, id) {
         return on;
     }
-    if id == "edit.redo" && crate::vector_ui::pen_can_redo(app) {
-        return true;
-    }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
         return false;
