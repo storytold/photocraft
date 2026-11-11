@@ -241,6 +241,18 @@ fn converting(tool: Tool, mods: Modifiers, pen_idle: bool) -> bool {
     !mods.command && (tool == Tool::ConvertPoint || (tool == Tool::Pen && mods.alt && pen_idle))
 }
 
+/// The selected anchor when it is the only one and an endpoint of an open subpath of the active
+/// path: where the Curvature Pen carries the path on from (#10726), as Photoshop does after a
+/// click, or ⌘/Ctrl-click, on the last point. The path, the subpath's index and the knot's.
+pub(crate) fn selected_open_end(app: &PhotocraftApp) -> Option<(PathRef, usize, usize)> {
+    let ds = &app.ui.direct_selection;
+    let ([[s, k]], Some(target)) = (ds.anchors.as_slice(), ds.target) else { return None };
+    let (_, path) = active_paths(app).into_iter().find(|(r, _)| *r == target)?;
+    let sub = path.subpaths.get(*s).filter(|sub| !sub.closed)?;
+    sub.knots.get(*k).filter(|_| *k == 0 || *k + 1 == sub.knots.len())?;
+    Some((target, *s, *k))
+}
+
 /// Is the Curvature Pen idle (no path being drawn, no ⌘/Ctrl)? Then it edits the active path in
 /// place, as in Photoshop: a press on one of its anchors drags it, with no modifier.
 fn curvature_idle(app: &PhotocraftApp, mods: Modifiers) -> bool {
@@ -335,6 +347,51 @@ pub(crate) fn hit_target(app: &PhotocraftApp, p: [f64; 2], handles: bool) -> Opt
     })
 }
 
+/// What the anchor tools edit at `p`: a hit on the targeted paths only (`active_paths`), never on
+/// a top-level shape layer that is not active. A hidden active layer shows no path, so it is skipped
+/// (#12762, #12705). Not measured, so as today: a layer inside a hidden group, and a shown shape layer
+/// inside a group, which stays a target without being active.
+pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
+    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+    let st = app.session.active()?;
+    // A path selected in the Paths panel (saved or Work Path) is the only target; otherwise the Pen draft first (as
+    // `candidates` builds it), then the active paths. The draft's destination is private to
+    // `vector_ui`, so it is not filtered here.
+    let targets: Vec<(PathRef, Path)> = match crate::vector_ui::selected_saved_path_index(app) {
+        Some((i, path)) => Some((PathRef::Saved(i), path)).filter(|(r, _)| writable(app, r)).into_iter().collect(),
+        // The Work Path selected in the Paths panel is the only target too, as for Path Selection.
+        None if app.ui.selected_path.as_deref() == Some("work") => active_paths(app).into_iter().filter(|(r, _)| *r == PathRef::Work).collect(),
+        None => {
+            let pen = app
+                .ui
+                .pen
+                .as_ref()
+                .filter(|_| app.ui.pen_doc.is_none_or(|owner| Some(owner) == Some(st.doc.id)))
+                .filter(|p| !p.dragging && !p.knots.is_empty())
+                .map(|p| (PathRef::Pen, crate::vector_ui::pen_path(p)));
+            let mut out: Vec<(PathRef, Path)> = pen.into_iter().chain(active_paths(app)).collect();
+            // Not measured (#12762, #12705): a shape layer inside a group keeps today's behaviour. Every shown,
+            // unlocked one stays a target after the targeted paths, front first, as `candidates` lists it.
+            // A top-level shape layer (depth 0) is a target only as the active layer.
+            let layers = st.doc.walk();
+            let grouped = layers.iter().rev().filter(|(at, depth, _)| *depth > 0 && st.doc.shown_at(at)).filter_map(|(_, _, l)| match &l.content {
+                photocraft_doc::LayerContent::Shape(sh) => Some((PathRef::Layer(l.id.0), sh.path.clone())),
+                _ => None,
+            });
+            for (r, path) in grouped {
+                if writable(app, &r) && !out.iter().any(|(have, _)| *have == r) {
+                    out.push((r, path));
+                }
+            }
+            out
+        }
+    };
+    targets
+        .into_iter()
+        .filter(|(r, _)| !matches!(r, PathRef::Layer(id) if !st.doc.layer(photocraft_doc::LayerId(*id)).is_some_and(|l| l.visible)))
+        .find_map(|(r, path)| edit::hit(&path, Point::new(p[0], p[1]), tol, &[]).map(|h| (r, path, h)))
+}
+
 fn retracted(k: &photocraft_doc::Knot, h: Handle) -> bool {
     let c = if h == Handle::In { k.in_ctrl } else { k.out_ctrl };
     (c.x - k.anchor.x).abs() < 1e-9 && (c.y - k.anchor.y).abs() < 1e-9
@@ -418,7 +475,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         ToolEvent::Up { x, y } => match app.ui.direct_selection.drag.take() {
             Some(Drag::Edit { target, base, edit, start, .. }) => {
                 let end = edit.constrain(start, [x, y], mods.shift);
-                release(app, target, &base, &edit, start, end);
+                release(app, target, &base, &edit, start, end, mods);
                 app.ui.direct_selection.coalesce = None;
                 true
             }
@@ -588,7 +645,7 @@ fn curvature_press(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
 
 /// End of an edit drag: commit it as one command. A click (no movement) commits nothing, except
 /// Pen + ⌥ on an anchor, which makes it a corner. The Pen path being drawn takes the edit directly.
-fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, start: [f64; 2], end: [f64; 2]) {
+fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, start: [f64; 2], end: [f64; 2], mods: Modifiers) {
     let moved = (end[0] - start[0]).hypot(end[1] - start[1]) * f64::from(app.point_zoom()) >= 1.0;
     if target == PathRef::Pen {
         let edited = match edit {
@@ -609,6 +666,17 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
         _ if !moved => return,
         e => e.command(start, end),
     };
+    // The Convert Point tool names its steps as the reference does; the Pen's ⌥ and Direct
+    // Selection (Convert Point with ⌘ too) keep the commands' own names.
+    let convert_tool = app.ui.tool == Tool::ConvertPoint && !direct(app.ui.tool, mods);
+    let step_name = match edit {
+        Edit::Convert(_) if convert_tool => Some("Change Anchor Point"),
+        Edit::Handle(.., true) if convert_tool => Some("Corner Drag"),
+        _ => None,
+    };
+    if let (Some(p), Some(name)) = (params.as_object_mut(), step_name) {
+        p.insert("stepName".into(), json!(name));
+    }
     if let (Some(p), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
         p.extend(t.clone());
     }
@@ -741,6 +809,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod convert_point_history_tests;
 
 #[cfg(test)]
 mod freeform_command_tests {
