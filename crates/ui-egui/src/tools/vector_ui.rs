@@ -64,7 +64,7 @@ pub use pen::{
 };
 #[cfg(test)]
 use pen::{closing, pen_path_op};
-pub use shapes::{create_shape, draw_shape_preview, finish_shape, is_shape_tool, shape_bounds};
+pub use shapes::{RECTANGLE_HISTORY_NAME, create_shape, draw_shape_preview, finish_shape, is_shape_tool, shape_bounds};
 #[cfg(test)]
 use shapes::{shape_geometry, shape_preview};
 

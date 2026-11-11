@@ -371,4 +371,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod rectangle_tool_history_name_tests;
+
+#[cfg(test)]
 mod tests;

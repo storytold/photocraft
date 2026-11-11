@@ -137,6 +137,9 @@ pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2],
     Some([x, y, x + w, y + h])
 }
 
+/// The History name of a Rectangle tool drag and of Create Rectangle OK (#13332).
+pub const RECTANGLE_HISTORY_NAME: &str = "Rectangle Tool";
+
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
 pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     if draws_path(&app.ui.tool_options) {
@@ -152,7 +155,11 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             .unwrap_or_else(|| photocraft_doc::vector::Path { fill_rule: outline.fill_rule, ..Default::default() });
         let outline = as_one_component(&outline, path.fill_rule).unwrap_or(outline);
         path.subpaths.extend(outline.subpaths);
-        let r = app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&path)}));
+        let mut params = json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&path)});
+        if tool == Tool::Rectangle {
+            params["historyName"] = json!(RECTANGLE_HISTORY_NAME);
+        }
+        let r = app.run("path.set", params);
         match r {
             Ok(_) => app.ui.selected_path = Some("work".into()),
             Err(e) => {
@@ -170,6 +177,9 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             crate::preset_panels::finish_custom_shape(app, rect, mods.shift, fill, stroke);
         }
         return;
+    }
+    if tool == Tool::Rectangle {
+        p["historyName"] = json!(RECTANGLE_HISTORY_NAME);
     }
     if let Err(e) = create_shape(app, p) {
         app.ui.status = e;
