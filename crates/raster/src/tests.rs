@@ -449,6 +449,81 @@ fn content_bounds_and_prune() {
 }
 
 #[test]
+fn a_clear_pixels_colour_is_not_content() {
+    // An encoder may leave white under the clear pixels (unassociated alpha). The layer's bounds
+    // are the pixels whose alpha is not zero, as Photoshop measures them, not the white's box.
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 100, 100), &[1.0, 1.0, 1.0, 0.0]);
+    s.fill_rect(Rect::new(40, 30, 60, 50), &[0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s.content_bounds(), Rect::new(40, 30, 60, 50));
+    // The colour is still there: only the bounds ignore it.
+    assert_eq!(s.pixel(0, 0), vec![1.0, 1.0, 1.0, 0.0]);
+    // The sample type decides what "clear" is.
+    let mut s16 = Surface::new(PixelFormat::RGBA16);
+    s16.fill_rect(Rect::new(0, 0, 20, 20), &[1.0, 1.0, 1.0, 0.0]);
+    s16.fill_rect(Rect::new(3, 4, 9, 10), &[0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s16.content_bounds(), Rect::new(3, 4, 9, 10));
+    // A float surface whose default alpha is `-0.0` is transparent too. Its bytes are not zero
+    // (`00 00 00 80`), so a byte-wise test for the default pixel would call the surface opaque
+    // and count the white canvas — whose alpha is `+0.0`, different bytes — as content.
+    let mut s32 = Surface::with_default(PixelFormat::RGBA32F, &[1.0, 1.0, 1.0, -0.0]);
+    s32.fill_rect(Rect::new(0, 0, 64, 64), &[1.0, 1.0, 1.0, 0.0]);
+    s32.fill_rect(Rect::new(8, 9, 24, 25), &[0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s32.content_bounds(), Rect::new(8, 9, 24, 25));
+    // A surface with no alpha channel has only its colour to measure.
+    let mut g = Surface::new(PixelFormat::GRAY8);
+    g.fill_rect(Rect::new(0, 0, 10, 10), &[1.0]);
+    assert_eq!(g.content_bounds(), Rect::new(0, 0, 10, 10));
+    // Nor does an opaque default pixel turn a colour into a clear one.
+    let mut opaque = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 1.0]);
+    opaque.fill_rect(Rect::new(2, 2, 5, 5), &[0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(opaque.content_bounds(), Rect::new(2, 2, 5, 5));
+}
+
+#[test]
+fn alpha_is_clear_never_panics_on_a_short_slice_or_a_late_offset() {
+    // A public predicate over a pixel slice it did not measure: a short slice, a sample that
+    // straddles the end and an offset near `usize::MAX` are all "not clear", never an index panic.
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        assert!(!alpha_is_clear(&[], 0, sample), "{sample:?}: empty pixel");
+        assert!(!alpha_is_clear(&[0], 1, sample), "{sample:?}: offset past the end");
+        assert!(!alpha_is_clear(&[0, 0], usize::MAX, sample), "{sample:?}: offset near usize::MAX");
+    }
+    // A sample that straddles the end of a short pixel is not clear, and does not panic.
+    assert!(!alpha_is_clear(&[0, 0], 1, SampleType::U16));
+    assert!(!alpha_is_clear(&[0, 0, 0], 1, SampleType::F32));
+    assert!(alpha_is_clear(&[0, 7, 8, 9], 0, SampleType::U8));
+    assert!(alpha_is_clear(&[0, 0], 0, SampleType::U16));
+    assert!(alpha_is_clear(&0f32.to_ne_bytes(), 0, SampleType::F32));
+    // `-0.0` is zero, and its bytes are not: the one predicate the surface and the cached path
+    // share has to call it clear (#9824).
+    assert!(alpha_is_clear(&(-0.0f32).to_ne_bytes(), 0, SampleType::F32));
+    assert!(!alpha_is_clear(&f32::MIN_POSITIVE.to_ne_bytes(), 0, SampleType::F32));
+}
+
+#[test]
+fn a_move_keeps_the_colour_under_the_clear_pixels() {
+    // `Surface::translated` drops the pixels outside the rect it is handed, so a move must be
+    // given everything the surface stores: the white under a clear pixel is invisible, but it is
+    // stored data and a drag must not erase it (#9824).
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 40, 40), &[1.0, 1.0, 1.0, 0.0]);
+    s.fill_rect(Rect::new(10, 10, 20, 20), &[0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s.content_bounds(), Rect::new(10, 10, 20, 20), "the artwork's box");
+    assert_eq!(s.stored_bounds(), Rect::new(0, 0, 40, 40), "the white is stored");
+
+    let moved = s.translated(5, 0, s.stored_bounds());
+    assert_eq!(moved.pixel(5, 0), vec![1.0, 1.0, 1.0, 0.0], "the colour under the clear pixels moved too");
+    assert_eq!(moved.pixel(15, 10), vec![0.0, 0.0, 0.0, 1.0], "the artwork moved by the same offset");
+    assert_eq!(moved.content_bounds(), Rect::new(15, 10, 25, 20));
+
+    // Moving by the visible box alone is what dropped that colour; pinned so a later caller
+    // cannot quietly narrow it back.
+    let narrowed = s.translated(5, 0, s.content_bounds());
+    assert_eq!(narrowed.pixel(5, 0), vec![0.0, 0.0, 0.0, 0.0], "the visible box drops the stored white");
+}
+
+#[test]
 fn prune_in_batches_drops_what_prune_drops() {
     let mut whole = Surface::new(PixelFormat::RGBA8);
     whole.fill_rect(Rect::new(300, 10, 310, 20), &[1.0, 1.0, 1.0, 1.0]);

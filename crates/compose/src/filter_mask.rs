@@ -15,7 +15,11 @@ use photocraft_raster::Surface;
 /// channel layout. Pixels the mask hides entirely are `base`'s.
 pub fn mix(base: &Surface, filtered: &Surface, mask: &LayerMask) -> Surface {
     let fmt = base.format();
-    let area = base.content_bounds().union(&filtered.content_bounds());
+    // Every tile that holds data, not the exact content: Photoshop's cache carries white under
+    // the clear pixels, and where the mask hides the filter those have to be written empty, so a
+    // tile holding only clear-but-white pixels still needs visiting (`content_bounds` no longer
+    // reports them — a clear pixel's colour is not content).
+    let area = base.tile_bounds().union(&filtered.tile_bounds());
     let mut out = filtered.clone();
     if area.is_empty() || filtered.format() != fmt {
         return out;
@@ -66,7 +70,8 @@ const HIDDEN: f32 = 1.0 / 1024.0;
 /// doesn't show there.
 pub fn unmix(base: &Surface, mixed: &Surface, mask: &LayerMask) -> Surface {
     let fmt = base.format();
-    let area = base.content_bounds().union(&mixed.content_bounds());
+    // As in [`mix`]: tiles, since a tile of clear-but-white pixels still has to be written.
+    let area = base.tile_bounds().union(&mixed.tile_bounds());
     let mut out = mixed.clone();
     if area.is_empty() || mixed.format() != fmt {
         return out;

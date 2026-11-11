@@ -501,7 +501,9 @@ fn flatten_whole(doc: &Document, cmd: &str) -> Result<photocraft_compose::Buffer
 ///
 /// Fails, before moving anything, when some pixels would land outside the i32 coordinate
 /// range: the surface copy saturates its target rectangle there, which no longer matches
-/// the pixel data and panics (#959).
+/// the pixel data and panics (#959). The check measures the stored extent, because that is
+/// what `translate_surface` moves: a layer's visible content can fit while the colour under
+/// its clear pixels does not, and that colour would be dropped by the shift instead.
 pub(crate) fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> Result<()> {
     if dx == 0 && dy == 0 {
         return Ok(());
@@ -510,10 +512,10 @@ pub(crate) fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> 
         r.is_empty() || (r.x0.checked_add(dx).is_some() && r.x1.checked_add(dx).is_some() && r.y0.checked_add(dy).is_some() && r.y1.checked_add(dy).is_some())
     };
     let mut ok = true;
-    for_each_surface(&mut doc.layers, true, &mut |surf, _| ok = ok && fits(surf.content_bounds()));
+    for_each_surface(&mut doc.layers, true, &mut |surf, _| ok = ok && fits(surf.stored_bounds()));
     ok = ok
-        && doc.channels.iter().chain(doc.quick_mask.as_ref()).all(|ch| fits(ch.surface.content_bounds()))
-        && doc.selection.as_ref().is_none_or(|sel| fits(sel.content_bounds()));
+        && doc.channels.iter().chain(doc.quick_mask.as_ref()).all(|ch| fits(ch.surface.stored_bounds()))
+        && doc.selection.as_ref().is_none_or(|sel| fits(sel.stored_bounds()));
     if !ok {
         return Err(bad(cmd, format!("moving the document by ({dx}, {dy}) would push its pixels outside the 32-bit coordinate range")));
     }

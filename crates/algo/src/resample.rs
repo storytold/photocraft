@@ -686,14 +686,20 @@ impl ResizeSteps {
 }
 
 /// Moves a surface by whole pixels (default pixel kept).
+///
+/// The extent handed to [`Surface::translated`] is every stored pixel, not the visible content:
+/// the colour an encoder leaves under a clear pixel is stored data, and a move has to carry it
+/// instead of dropping it (#9824).
 pub fn translate_surface(s: &Surface, dx: i32, dy: i32) -> Surface {
-    s.translated(dx, dy, s.content_bounds())
+    s.translated(dx, dy, s.stored_bounds())
 }
 
 /// Keeps only the pixels inside `keep` (others become the default pixel).
 pub fn crop_surface(s: &Surface, keep: Rect) -> Surface {
     let mut out = Surface::with_default(s.format(), &s.default_pixel());
-    let r = s.content_bounds().intersect(&keep);
+    // Everything inside `keep` is stored, clear or not: the rect decides which pixels the crop
+    // drops, and it must not drop the colour under a clear pixel inside the crop (#9824).
+    let r = s.stored_bounds().intersect(&keep);
     if !r.is_empty() {
         out.write_interleaved(r, &s.to_interleaved(r));
     }

@@ -583,3 +583,29 @@ fn plain_documents_lose_nothing() {
     cmyk.mode = ColorMode::Cmyk;
     assert_eq!(losses(&cmyk).len(), 1, "a document OpenRaster can't hold at all");
 }
+
+#[test]
+fn a_layer_whose_clear_pixels_span_the_canvas_still_saves() {
+    // #9824: `pixels` gates a raster layer on the rect that `crop` writes, so a colour stored
+    // under clear pixels — invisible, and dropped by `crop` either way — must not decide whether
+    // the save succeeds. The stored box here is 7200×7200 (829 MB of floats, past
+    // `MAX_EXPORT_LAYER_BYTES`); the visible box is the 200×200 of art.
+    let art = Rect::from_xywh(3400, 3400, 200, 200);
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.write_interleaved(art, &[20, 40, 60, 255].repeat(200 * 200));
+    s.write_interleaved(Rect::from_xywh(0, 0, 1, 1), &[255, 255, 255, 0]);
+    s.write_interleaved(Rect::from_xywh(7199, 7199, 1, 1), &[255, 255, 255, 0]);
+    let stored = s.stored_bounds();
+    assert_eq!(stored, Rect::new(0, 0, 7200, 7200));
+    let stored_bytes = u64::from(stored.width()) * u64::from(stored.height()) * 16;
+    assert!(stored_bytes > MAX_EXPORT_LAYER_BYTES, "the premise: {stored_bytes} floats exceed the cap");
+
+    let mut d = Document::new("cap.ora", Size { width: 7200, height: 7200 }, ColorMode::Rgb, SampleType::U8);
+    d.layers = vec![Layer::new("Art", LayerContent::Raster(s))];
+    let out = export(&d).expect("the stored box is not written, so it must not gate the save");
+
+    let back = crate::import("cap.ora", &out.bytes).unwrap();
+    let LayerContent::Raster(b) = &back.document.layers[0].content else { panic!("not a raster layer") };
+    assert_eq!(b.content_bounds(), art, "the written rect is the visible box");
+    assert_eq!(b.to_interleaved(art), [20u8, 40, 60, 255].repeat(200 * 200), "the art is unchanged");
+}

@@ -980,9 +980,10 @@ fn crop_target_budgets_the_hidden_pixels_it_resamples() {
             p["angle"] = json!(a);
         }
         let err = s.execute("image.crop", p).unwrap_err().to_string();
-        // Since the crop turns the Background into Layer 0 (#10867), the turned layer's
-        // bounds are 2001 px a side, resampled x100 to 200100.
-        let want = if angle.is_some() { "200100 x 200100 px is 40040 megapixels" } else { "200000 x 200000 px is 40000 megapixels" };
+        // The crop turns the Background into Layer 0 (#10867), and the turn leaves a ring of clear
+        // pixels around it that the bounds do not count (#9824): the layer measures 2000 px a
+        // side, resampled x100 to 200000.
+        let want = "200000 x 200000 px is 40000 megapixels";
         assert!(err.contains(want) && err.contains("Delete Cropped Pixels"), "{angle:?}: {err}");
         assert_eq!(doc(&s).size, Size::new(2000, 2000), "{angle:?}: the document is unchanged");
         assert_eq!(s.active().unwrap().history.past_len(), past, "{angle:?}: no history step");
@@ -1248,4 +1249,24 @@ fn trim_and_duplicate_merged_on_too_large_document_fail_gracefully_without_panic
     assert_eq!(doc(&s).layers.len(), initial_layers, "layer count unchanged after failed duplicate");
     assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed duplicate");
     assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed duplicate");
+}
+
+/// The overflow guard in `translate_doc` has to measure what actually moves. A surface's visible
+/// content can sit inside the range while the colour stored under its clear pixels does not, and
+/// `translate_surface` shifts the stored extent (an overflowing target rectangle makes ShiftBuilder
+/// drop the pixels or wrap their coordinates, #959).
+#[test]
+fn moving_a_document_rejects_stored_pixels_that_would_wrap() {
+    let mut s = session();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("paint", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        surf.fill_rect(Rect::new(0, 0, 8, 8), &[1.0, 0.0, 0.0, 1.0]);
+        // White under zero alpha at the far end of the coordinate range: invisible, so not content.
+        surf.fill_rect(Rect::new(i32::MAX - 64, 0, i32::MAX - 1, 8), &[1.0, 1.0, 1.0, 0.0]);
+        Ok(())
+    })
+    .unwrap();
+    let err = s.edit("move", |doc, _| translate_doc(doc, "test", 100, 0)).unwrap_err();
+    assert!(err.to_string().contains("32-bit"), "{err}");
 }

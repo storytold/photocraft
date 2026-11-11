@@ -79,7 +79,7 @@ impl CutParts {
         let mut outline: Option<Surface> = None;
         let fill = !copy && (mask || doc.is_background(layer));
         // A mask's untouched pixels (its default, e.g. white) move too, so take the whole canvas.
-        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { base.content_bounds() });
+        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { base.stored_bounds() });
         if !b.is_empty() {
             piece = cut_piece(&base, sel, b, with_alpha)?;
             // The moved pixels' selection is what they took with them: the alpha the piece
@@ -128,12 +128,16 @@ impl CutParts {
         } else {
             l.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?
         };
+        // An all-clear piece composites to nothing: the early return is about visible pixels.
         if self.piece_bounds.is_empty() {
             *surf = self.rest.clone();
             return Ok(());
         }
         let mut out = self.rest.clone();
-        let piece = self.piece.translated(dx, dy, self.piece_bounds);
+        // Every stored tile moves, not just the visible box, so the shift drops nothing before the
+        // composite. The composite below blends by alpha, so the colour under the piece's clear
+        // pixels is not put down at the drop: same as before #9824, and invisible either way.
+        let piece = self.piece.translated(dx, dy, self.piece.tile_bounds());
         if self.mask {
             crate::fill_cmds::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
         } else {

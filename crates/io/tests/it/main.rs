@@ -11,6 +11,7 @@ mod banded;
 mod blend_modes_corpus;
 mod cancel;
 mod channels;
+mod clear_pixels;
 mod cmyk_composite_export;
 mod cmyk_export;
 mod color;
