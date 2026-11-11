@@ -496,6 +496,7 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
                 }
                 match super::effects::literal_rgb(&super::effects::ColorLiteral { encoding, pixels: bytes, profile }) {
                     Ok([r, g, b, a]) => style.color = Color::rgba(r, g, b, a),
+                    Err(error @ super::effects::LiteralColorError::GrayLabPcsTransfer) => return Err(crate::IoError::Unsupported(error.to_string())),
                     Err(message) => note(&mut notes, format!("Source text color retained; native black approximation used: {message}")),
                 }
             }
@@ -534,6 +535,9 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
     }
     if direction.starts_with("ttb") {
         layer.orientation = Orientation::Vertical;
+        // Mixed source vertical text rotates Roman glyphs; upright source text
+        // keeps them upright. Markup and requested-font styles inherit this flag.
+        style.rotate_roman = direction == "ttb-rtl";
         note(&mut notes, "Vertical source typography uses native vertical text layout".into());
     }
     if scalar(&fields, "box-mode")?.unwrap_or("dynamic") == "fixed" {

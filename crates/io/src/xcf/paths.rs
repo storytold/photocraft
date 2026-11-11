@@ -69,6 +69,7 @@ fn paint(c: &mut Cursor<'_>, notes: &mut Vec<String>) -> Result<Fill> {
         } else {
             match super::effects::literal_rgb(&super::effects::ColorLiteral { encoding: &encoding, pixels: raw, profile }) {
                 Ok([r, g, b, a]) => Color::rgba(r, g, b, a),
+                Err(error @ super::effects::LiteralColorError::GrayLabPcsTransfer) => return Err(crate::IoError::Unsupported(error.to_string())),
                 Err(_) => {
                     // Encoding names may approach 1 MiB and one layer record can be
                     // referenced repeatedly. Keep diagnostics independent of their size;

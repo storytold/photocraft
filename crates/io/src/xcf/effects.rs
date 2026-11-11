@@ -10,7 +10,7 @@ pub(super) use config::parse_config;
 
 pub(super) use envelope::{decode, read_pointers};
 
-pub(super) use resources::literal_rgb;
+pub(super) use resources::{LiteralColorError, literal_rgb};
 
 /// One parsed effect; file order and argument order remain explicit.
 #[derive(Debug)]

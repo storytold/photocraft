@@ -18,6 +18,8 @@
 
 mod color;
 mod conversion;
+#[cfg(test)]
+mod dpi_review_tests;
 mod layers;
 mod samples;
 mod wire;
@@ -30,6 +32,8 @@ mod metadata;
 mod metadata_packets;
 #[cfg(test)]
 mod metadata_tests;
+#[cfg(test)]
+mod path_admission_tests;
 mod paths;
 mod resources;
 #[cfg(test)]
@@ -938,7 +942,7 @@ pub(crate) fn import_with_sample_order(
         outcomes: conversion::Outcomes::new(version)?,
         clipped_to_backdrop: 0,
         initial_view: Default::default(),
-        resolution_dpi: image_props.iter().find(|p| p.kind == 19).and_then(|p| be_f32(p.data)).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(72.0),
+        resolution_dpi: metadata::image_resolution(&image_props, 72.0),
         pending_effects: Vec::new(),
         path_tattoos: HashMap::new(),
         pending_vectors: Vec::new(),
@@ -1211,8 +1215,20 @@ fn import_paths<'a>(
     _owner: usize,
     ctl: &Interrupt<'_>,
 ) -> Result<()> {
-    let mut remaining = MAX_METADATA_BYTES;
-    let mut records = Vec::new();
+    import_paths_with_allowance(document, image, properties, pointers, ctl, MAX_METADATA_BYTES)
+}
+
+/// Share one allowance across framed source payloads and each owned native record.
+/// Repeated pointers must pay for every retained copy, not merely their shared input bytes.
+fn import_paths_with_allowance<'a>(
+    document: &mut Document,
+    image: &mut Image<'a>,
+    properties: &[Prop<'a>],
+    pointers: &[usize],
+    ctl: &Interrupt<'_>,
+    mut remaining: usize,
+) -> Result<()> {
+    let mut records: Vec<SavedPathRecord<'a>> = Vec::new();
     let mut ordinal = 0usize;
     for property in properties.iter().filter(|p| matches!(p.kind, 23 | 25)) {
         ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -1229,24 +1245,42 @@ fn import_paths<'a>(
             return Err(invalid("more than 1,024 saved paths"));
         }
         for path in paths {
+            admit_path(&mut remaining, &path)?;
             records.push((ordinal, property.offset, path, None));
             ordinal += 1;
         }
     }
     for &offset in pointers {
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        let mut cursor = image.c.at(offset);
-        let name = cursor.string()?;
-        let length = cursor.u32()? as usize;
+        // Outer framing is optional too: a length extending past EOF cannot
+        // invalidate independently framed drawable pixels, nor justify a raw attachment.
+        let frame = (|| -> Result<_> {
+            let mut cursor = image.c.at(offset);
+            let name = cursor.string_bytes()?;
+            let length = cursor.u32()? as usize;
+            cursor.take(length)?;
+            let raw = image.c.b.get(offset..cursor.pos).ok_or_else(|| invalid("saved path range"))?;
+            Ok((name, length, raw))
+        })();
+        let (name, length, raw) = match frame {
+            Ok(frame) => frame,
+            Err(error) => {
+                unavailable_path(image, ordinal, offset, "", &error, None)?;
+                ordinal += 1;
+                continue;
+            }
+        };
         remaining = remaining.checked_sub(length).ok_or_else(|| invalid("saved paths exceed the 32 MiB geometry allowance"))?;
-        cursor.take(length)?;
-        let raw = image.c.b.get(offset..cursor.pos).ok_or_else(|| invalid("saved path range"))?;
+        let name = std::str::from_utf8(name).unwrap_or("Invalid UTF-8 path name");
         if records.len() >= MAX_CHANNELS {
             return Err(invalid("more than 1,024 saved paths"));
         }
         match paths::standalone(&image.c, offset) {
-            Ok(path) => records.push((ordinal, offset, path, Some(raw))),
-            Err(error) => unavailable_path(image, ordinal, offset, &name, &error, Some(raw))?,
+            Ok(path) => {
+                admit_path(&mut remaining, &path)?;
+                records.push((ordinal, offset, path, Some(raw)));
+            }
+            Err(error) => unavailable_path(image, ordinal, offset, name, &error, Some(raw))?,
         }
         ordinal += 1;
     }
@@ -1283,6 +1317,28 @@ fn import_paths<'a>(
         document.paths.push(path.named);
     }
     // Raw source path properties are already covered by the image's bounded inert retention.
+    Ok(())
+}
+
+type SavedPathRecord<'a> = (usize, usize, paths::DecodedPath, Option<&'a [u8]>);
+
+/// Account for owned strings, native geometry capacities and the retained record itself
+/// before pushing it. Wire payload lengths omit names and undercount native knot storage.
+fn admit_path(remaining: &mut usize, path: &paths::DecodedPath) -> Result<()> {
+    let overflow = || invalid("saved path retained geometry size overflow");
+    let mut bytes = std::mem::size_of::<SavedPathRecord<'_>>()
+        .checked_add(path.named.name.capacity())
+        .and_then(|bytes| bytes.checked_add(path.named.psd_raw.as_ref().map_or(0, |raw| raw.capacity())))
+        .ok_or_else(overflow)?;
+    bytes = bytes
+        .checked_add(path.named.path.subpaths.capacity().checked_mul(std::mem::size_of::<photocraft_doc::vector::Subpath>()).ok_or_else(overflow)?)
+        .ok_or_else(overflow)?;
+    for subpath in &path.named.path.subpaths {
+        bytes = bytes
+            .checked_add(subpath.knots.capacity().checked_mul(std::mem::size_of::<photocraft_doc::vector::Knot>()).ok_or_else(overflow)?)
+            .ok_or_else(overflow)?;
+    }
+    *remaining = remaining.checked_sub(bytes).ok_or_else(|| invalid("saved paths exceed the 32 MiB geometry and metadata allowance"))?;
     Ok(())
 }
 

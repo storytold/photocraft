@@ -2,9 +2,35 @@
 use super::ColorLiteral;
 use photocraft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, Transform};
 
+#[cfg(test)]
+mod review_tests;
+
+/// A transfer rewrite that cannot preserve its PCS must retain the saved raster,
+/// rather than taking callers' ordinary explicit color-approximation path.
+#[derive(Debug)]
+pub(in crate::xcf) enum LiteralColorError {
+    GrayLabPcsTransfer,
+    Other(String),
+}
+
+impl std::fmt::Display for LiteralColorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GrayLabPcsTransfer => f.write_str("stored Gray Lab PCS requires a PCS-aware sample transfer-curve conversion"),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<&str> for LiteralColorError {
+    fn from(message: &str) -> Self {
+        Self::Other(message.into())
+    }
+}
+
 /// Decode only portable byte encodings. Native-endian source float blobs have no
 /// byte-order marker; guessing from the importing machine would corrupt colors.
-pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], String> {
+pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], LiteralColorError> {
     // IEEE positive zero has identical bytes in either byte order. This exact
     // transparent default is portable without guessing the author's host.
     if matches!(value.encoding, "RGBA float" | "R'G'B'A float" | "R~G~B~A float")
@@ -24,10 +50,10 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
         "YA u8" => (1, true, true, true),
         "Y u8" => (1, false, true, true),
         _ => {
-            return Err(format!(
+            return Err(LiteralColorError::Other(format!(
                 "stored color encoding {} is not independently portable; native-endian float colors need source byte-order evidence",
                 value.encoding
-            ));
+            )));
         }
     };
     if value.pixels.len() != channels + usize::from(alpha) {
@@ -43,7 +69,7 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
     let mut source = if value.profile.is_empty() {
         fallback.profile().clone()
     } else {
-        Profile::parse(value.profile).map_err(|error| format!("stored literal ICC: {error}"))?
+        Profile::parse(value.profile).map_err(|error| LiteralColorError::Other(format!("stored literal ICC: {error}")))?
     };
     let expected = if gray { ColorSpace::Gray } else { ColorSpace::Rgb };
     if source.color_space != expected {
@@ -56,13 +82,18 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
         }
         let curve = if linear { Curve::Identity } else { photocraft_cms::curve::srgb_trc() };
         if gray {
+            // Gray Lab PCS curves yield L*/100, not luminance. An Identity or
+            // sRGB luminance curve would silently change the literal's meaning.
+            if source.pcs == photocraft_cms::Pcs::Lab {
+                return Err(LiteralColorError::GrayLabPcsTransfer);
+            }
             source.gray_trc = Some(curve);
         } else {
             source.trc = Some([curve.clone(), curve.clone(), curve]);
         }
     }
     let transform = Transform::new(&source, Builtin::Srgb.profile(), Intent::RelativeColorimetric, false)
-        .map_err(|error| format!("stored literal native color conversion: {error}"))?;
+        .map_err(|error| LiteralColorError::Other(format!("stored literal native color conversion: {error}")))?;
     let samples: Vec<_> = value.pixels.iter().take(channels).map(|v| f32::from(*v) / 255.0).collect();
     let mut rgb = [0.0; 3];
     transform.convert_f32(&samples, channels, &mut rgb, 3, false);

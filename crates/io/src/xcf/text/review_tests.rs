@@ -91,3 +91,60 @@ fn unsupported_left_to_right_vertical_columns_do_not_replace_saved_raster() {
         assert!(matches!(decode(config.as_bytes(), 72., (3, 4)), Err(crate::IoError::Unsupported(_))), "{direction}");
     }
 }
+
+#[test]
+fn mixed_and_upright_vertical_text_keep_run_and_glyph_orientation_after_native_roundtrip() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{Document, Layer, LayerContent};
+    use photocraft_geom::Size;
+    use photocraft_text::layout::GlyphOrient;
+
+    for (direction, mixed) in [("ttb-rtl", true), ("ttb-rtl-upright", false)] {
+        for content in [
+            r#"(text "漢A字B")"#,
+            r#"(markup "<markup>漢<b>A</b><span font_family='Inter'>字B</span></markup>")"#,
+            r#"(markup "<markup>漢<span font='native'>A</span>字<i>B</i></markup>" (markupfont "native" (font (family "Inter") (weight 200))))"#,
+        ] {
+            let config = format!("{content} (font \"Inter\") (font-size 24) (base-direction {direction})");
+            let layer = decode(config.as_bytes(), 72., (20, 20)).unwrap().layer;
+            assert_eq!(layer.text, "漢A字B");
+            assert_eq!(layer.orientation, Orientation::Vertical);
+            assert!(layer.runs.iter().all(|run| run.style.rotate_roman == mixed), "{config}");
+            let mut engine = photocraft_text::TextEngine::new();
+            let layout = engine.layout(&layer, 72.);
+            assert!(layout.vertical);
+            assert!(!layout.glyphs.is_empty());
+            let mut cjk = 0;
+            let mut roman = 0;
+            for (glyph, range) in layout.glyphs.iter().zip(&layout.glyph_ranges) {
+                match layer.text.get(range.clone()).unwrap() {
+                    "漢" | "字" => {
+                        cjk += 1;
+                        assert_eq!(glyph.orient, GlyphOrient::Upright, "CJK stays upright: {config}");
+                    }
+                    "A" | "B" => {
+                        roman += 1;
+                        assert_ne!(glyph.id, 0, "real Latin font glyph");
+                        assert_eq!(glyph.orient, if mixed { GlyphOrient::Rotated } else { GlyphOrient::Upright }, "{config}");
+                    }
+                    other => panic!("unexpected glyph range {other:?}"),
+                }
+            }
+            assert_eq!((cjk, roman), (2, 2), "both scripts reached native shaping");
+            let (_, pixels) = engine.render(&layer, 72., PixelFormat::RGBA8);
+            assert!(!pixels.surface.content_bounds().is_empty());
+            let mut document = Document::new("Vertical", Size::new(128, 128), ColorMode::Rgb, SampleType::U8);
+            document.layers.push(Layer::new("Vertical", LayerContent::Text(layer.clone())));
+            let saved = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+            let LayerContent::Text(reopened) = &reopened.layers[0].content else { panic!("editable text on reopen") };
+            assert_eq!(reopened, &layer);
+            let reopened_layout = engine.layout(reopened, 72.);
+            assert_eq!(reopened_layout.glyph_ranges, layout.glyph_ranges);
+            assert_eq!(reopened_layout.glyphs, layout.glyphs);
+            let (_, reopened_pixels) = engine.render(reopened, 72., PixelFormat::RGBA8);
+            assert_eq!(reopened_pixels.rect, pixels.rect);
+            assert_eq!(reopened_pixels.surface, pixels.surface);
+        }
+    }
+}
