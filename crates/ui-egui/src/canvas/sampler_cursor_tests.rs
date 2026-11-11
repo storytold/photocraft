@@ -65,27 +65,29 @@ fn hover_at(h: &mut Harness<'static, PhotocraftApp>, doc_x: f32, doc_y: f32, m: 
     h.output().platform_output.cursor_icon
 }
 
+/// The eyedropper's pipette: the OS bitmap where one uploads, else drawn (#12523).
+fn pipette_shown(h: &Harness<'static, PhotocraftApp>) -> bool {
+    crate::tool_cursor::pipette_shown(&h.ctx, &h.output().platform_output)
+}
+
 #[test]
 fn off_sampler_no_key_or_shift_or_alt_shows_eyedropper_with_sampler_target() {
     let mut h = harness();
 
     // 1. Off a sampler, no key: eyedropper with small sampler target at top-left.
-    let icon = hover_at(&mut h, 80.0, 80.0, Modifiers::NONE);
-    assert_eq!(icon, egui::CursorIcon::None, "pipette cursor replaces OS pointer");
-    assert!(cursor_area_visible(&h, "pc-icon-cursor"), "pipette icon is drawn");
+    hover_at(&mut h, 80.0, 80.0, Modifiers::NONE);
+    assert!(pipette_shown(&h), "pipette cursor replaces OS pointer");
     assert!(cursor_area_visible(&h, "pc-sampler-badge"), "sampler target at top-left is drawn");
     assert!(!cursor_badge_visible(&h, "sampler") && !cursor_badge_visible(&h, "scissors"), "arrow badge is not drawn off sampler");
 
     // 2. Off a sampler, Shift held: still eyedropper with sampler target.
-    let icon_shift = hover_at(&mut h, 80.0, 80.0, Modifiers::SHIFT);
-    assert_eq!(icon_shift, egui::CursorIcon::None);
-    assert!(cursor_area_visible(&h, "pc-icon-cursor"));
+    hover_at(&mut h, 80.0, 80.0, Modifiers::SHIFT);
+    assert!(pipette_shown(&h));
     assert!(cursor_area_visible(&h, "pc-sampler-badge"));
 
     // 3. Off a sampler, Alt held: still eyedropper with sampler target.
-    let icon_alt = hover_at(&mut h, 80.0, 80.0, Modifiers::ALT);
-    assert_eq!(icon_alt, egui::CursorIcon::None);
-    assert!(cursor_area_visible(&h, "pc-icon-cursor"));
+    hover_at(&mut h, 80.0, 80.0, Modifiers::ALT);
+    assert!(pipette_shown(&h));
     assert!(cursor_area_visible(&h, "pc-sampler-badge"));
 }
 
@@ -96,7 +98,7 @@ fn off_sampler_precise_other_cursors_shows_crosshair() {
 
     let icon = hover_at(&mut h, 80.0, 80.0, Modifiers::NONE);
     assert_eq!(icon, egui::CursorIcon::Crosshair, "Precise Other Cursors shows crosshair off sampler");
-    assert!(!cursor_area_visible(&h, "pc-icon-cursor"), "no pipette icon with precise cursor");
+    assert!(!pipette_shown(&h), "no pipette with precise cursor");
     assert!(!cursor_area_visible(&h, "pc-sampler-badge"), "no sampler badge with precise cursor");
 }
 
@@ -111,7 +113,7 @@ fn over_sampler_shows_arrow_with_sampler_target_and_alt_shows_scissors() {
     assert_eq!(icon, egui::CursorIcon::Default, "over sampler uses standard arrow pointer");
     assert!(cursor_badge_visible(&h, "sampler"), "sampler target badge is drawn");
     assert!(!cursor_badge_visible(&h, "scissors"), "scissors badge is not drawn without Alt");
-    assert!(!cursor_area_visible(&h, "pc-icon-cursor"), "no pipette icon over sampler");
+    assert!(!pipette_shown(&h), "no pipette over sampler");
 
     // Even with Precise Other Cursors, over a sampler is the arrow cursor.
     h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
@@ -159,9 +161,9 @@ fn cursor_follows_sampler_hit_test_tolerance() {
     assert!(cursor_badge_visible(&h, "sampler"));
     assert!(!cursor_badge_visible(&h, "scissors"));
 
-    // Outside hit square (dx = 8.0 > 7.0): off sampler -> CursorIcon::None (eyedropper).
-    let icon_out = hover_at(&mut h, 158.0, 150.0, Modifiers::NONE);
-    assert_eq!(icon_out, egui::CursorIcon::None, "dx = 8 px is outside tolerance");
+    // Outside hit square (dx = 8.0 > 7.0): off sampler -> the eyedropper's pipette.
+    hover_at(&mut h, 158.0, 150.0, Modifiers::NONE);
+    assert!(pipette_shown(&h), "dx = 8 px is outside tolerance");
     assert!(cursor_area_visible(&h, "pc-sampler-badge"));
 
     // A press at dx = 6 grabs the existing sampler.
