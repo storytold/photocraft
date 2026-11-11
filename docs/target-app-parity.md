@@ -37,7 +37,7 @@ ready for real work 25–35%) was closer; ~700 merged PRs since then moved both 
 | Mainstream practitioner | ~43% | 1,700–2,800 | Depth in the 11 weekly areas (1,180–2,000), performance budgets, stability on real machines, PSD exchange with Photoshop |
 | Essentials user | ~61% | 400–700 | Startup and GPU robustness, brush and transform responsiveness, Type tool, discoverability (flyouts, commit buttons), AVIF/PDF open |
 
-Hours calibrated as in [Remaining effort](#remaining-effort-and-calibration) (2–9 h per checklist
+Hours use the [2026-10-10 calibration](#remaining-effort-and-calibration) (2–9 h per checklist
 item, 8–20 h per format or subsystem, from the repo's 1,004 merged PRs); each tier is a subset of
 the one above. About 80% parallelizes (independent crates and command modules); performance
 architecture and the PSD writer are the serial parts.
@@ -73,6 +73,7 @@ architecture and the PSD writer are the serial parts.
 ## Ready for real work: ~45% (weighted)
 
 Weights reflect what a working Photoshop user depends on (photographers, retouchers, designers).
+Remaining hours use the [2026-10-10 calibration](#remaining-effort-and-calibration).
 
 | Dimension | Weight | % ready | Remaining (agent-h) | Evidence | Detail |
 |---|---:|---:|---:|---|---|
@@ -168,7 +169,8 @@ RGB8/16/32f cases and an opt-in Photoshop 26.6.1 RGB8 re-render after clearing c
 this does not raise the broad filter estimate or any corpus floor.
 
 Percent is ready-for-real-work for that area (depth and fidelity, not presence). Hours are to full
-parity for the area and are already contained in the dimension rows above.
+parity for the area and are already contained in the dimension rows above, using the
+[2026-10-10 calibration](#remaining-effort-and-calibration).
 
 | Area | % | Hours | Notes |
 |---|---:|---:|---|
@@ -197,9 +199,13 @@ those inputs remain different. AUTO-219-5 is partial (#4579).
 
 ## Remaining effort and calibration
 
-**Calibration.** The repository's history from the first commit (2026-09-30) to 2026-10-10: 1,152
+**Calibration snapshot: 2026-10-10.** The effort and parallelism estimates retain this historical
+snapshot; they have not been recalibrated using subsequent merged PRs.
+
+The repository's history from the first commit (2026-09-30) to 2026-10-10: 1,152
 commits on `main` and 1,004 merged PRs in 10.5 days. Median PR open-to-merge time is 3.4 h
-(p75 6.4 h, p90 14.3 h; that includes CI and review queueing). Comparable features:
+(p75 6.4 h, p90 14.3 h; that includes CI and review queueing). These elapsed times are not direct
+measurements of agent computation. Comparable features:
 
 | Feature | PRs | Lines added | PR hours |
 |---|---|---:|---:|
@@ -213,13 +219,13 @@ commits on `main` and 1,004 merged PRs in 10.5 days. Median PR open-to-merge tim
 | Korean catalog and live switching | #582, #604 | ~3,800 | 13.0 |
 
 So one checklist item of tool or UI depth costs about 2–9 agent-hours including tests, and a new
-format or subsystem 8–20. With roughly 2–4 agent-hours per merged PR, the ~1,000 PRs so far
+format or subsystem 8–20. With roughly 2–4 agent-hours per merged PR, the ~1,000 PRs in that snapshot
 represent about **2,000–4,000 agent-hours**, which took ready-for-real-work from 0 to ~45%. The
 remaining points are harder per point (fidelity against Photoshop's unpublished maths, feel,
 performance on large documents, user-reported long tail), so the remaining estimate is not lower
 than the work already done.
 
-**Totals.**
+**Totals (2026-10-10 calibration).**
 
 | Milestone | Scope | Opus 5.5 agent-hours |
 |---|---|---:|
@@ -595,6 +601,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | Marked the effort calibration as a historical snapshot and dated table references on current main; numerical estimates unchanged |
 | 2026-11-02 | minor | Automation Batch: Esc Continue/Stop preserves one file plan and error log; a read-only input preview replaces the progress bar; full live tabs remain open, AUTO-219-5 partial (#4579); percentages and estimates unchanged |
 | 2026-11-02 | minor | AUTO-219-1: action recording folds Move-tool nudges, records relative document switches and scales point text placement to the playback canvas; duplicate names and paragraph box placement remain open; Automation parity estimate unchanged |
 | 2026-11-01 | minor | AUTO-219-1: action recording uses implicit or uniquely named layers and folds Type keystrokes into whole-text steps; duplicate names remain ambiguous; Automation parity estimate unchanged |

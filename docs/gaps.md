@@ -12,8 +12,9 @@ GitHub issues.
 No gap blocks alpha: the [alpha gate](roadmap.md#alpha-gate) passes. "Blocks beta" marks what
 stands between alpha and beta.
 
-Hours are Opus 5.5 agent-hours, one agent working sequentially, including tests. **Human** marks
-what an agent can't finish alone.
+Hours are Opus 5.5 agent-hours, one agent working sequentially, including tests. All estimates
+below use the [2026-10-10 calibration](target-app-parity.md#remaining-effort-and-calibration),
+without recalibration using subsequent merged PRs. **Human** marks what an agent can't finish alone.
 
 ## Summary
 
@@ -494,6 +495,7 @@ what an agent can't finish alone.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-08 | minor | G9: Units & Rulers › Column Size takes effect as the Columns width unit of Image Size and Canvas Size (#6214); preferences that do nothing 10 → 8 of 199 |
+| 2026-11-08 | minor | Clarified that all gap estimates retain the historical effort calibration on current main; numerical estimates unchanged |
 | 2026-10-27 | minor | G5: Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it after the presets, five handles set its silhouettes, edges, ellipse depths and wrap as in the reference (Bend, H and V stay greyed), and a smart object's stored cylinder opens in Warp mode as a cylinder and commits back as one; no estimate changed |
 | 2026-11-07 | minor | G14: Hasselblad 3FR/FFF, the X2D II 100C's uncompressed CFA, decodes; compressed 3FR still opens as the embedded preview |
 | 2026-11-06 | minor | G12: eraser end of flipped pens on Windows (Windows Ink on) selects the Eraser (#2285); no estimate changed |
