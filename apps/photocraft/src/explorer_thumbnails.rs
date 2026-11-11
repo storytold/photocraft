@@ -10,17 +10,23 @@
 //! registration lock; the registry work for a real change runs on its own thread.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use photocraft_engine::prefs::ExplorerThumbnails;
 use serde_json::Value;
 
 /// The preference value this process last saw: read at launch, then updated by every save
-/// (0 = launch has not run). A save that leaves it unchanged is not a request to change anything.
+/// (0 = launch has not run / baseline uninitialized). A save that leaves it unchanged is not a request to change anything.
 static SEEN: AtomicU8 = AtomicU8::new(0);
+
+/// Tracks whether an automatic registration retry is pending. Keeps automatic retries isolated
+/// from explicit user selections to prevent overwriting third-party PSD handlers.
+static RETRY_PENDING: AtomicBool = AtomicBool::new(false);
+
 /// Serializes this process's registration threads (startup and preference changes).
 static REGISTRATION_LOCK: Mutex<()> = Mutex::new(());
+
 /// The preferences file, so a worker can re-read what is persisted now (set by [`startup`]).
 static PREFS_FILE: OnceLock<PathBuf> = OnceLock::new();
 
@@ -63,6 +69,16 @@ fn current_mode() -> Option<ExplorerThumbnails> {
     PREFS_FILE.get().and_then(|path| read_mode(path))
 }
 
+/// Safely re-arms a failed request for subsequent save attempts without overwriting a newer pending choice.
+fn rearm_failed_request_if_current(failed_mode: ExplorerThumbnails) {
+    if let Some(current) = current_mode()
+        && current == failed_mode
+    {
+        let _ = SEEN.compare_exchange(code(failed_mode), 0, Ordering::SeqCst, Ordering::SeqCst);
+        RETRY_PENDING.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Only the normal per-user install writes the registry: a portable copy leaves nothing behind, a
 /// `PHOTOCRAFT_CONFIG_DIR` run (tests, agents) must not touch the real user's settings, and a
 /// 32-bit build's class registration is invisible to the 64-bit Explorer.
@@ -81,8 +97,7 @@ fn in_background(work: impl FnOnce() + Send + 'static) {
 /// At launch: unless the preference is Off, register the thumbnails, except where another program
 /// (Photoshop) already provides them. Turning them off is only ever done from the preferences.
 ///
-/// The preference is read here, before any save can happen, so that [`after_save`] can tell a
-/// changed setting from an unrelated save.
+/// If startup read fails, baseline SEEN remains 0 (uninitialized) until UI preference load.
 pub fn startup(prefs_file: Option<&Path>) {
     if !applies() {
         return;
@@ -90,20 +105,23 @@ pub fn startup(prefs_file: Option<&Path>) {
     if let Some(path) = prefs_file {
         let _ = PREFS_FILE.set(path.to_path_buf());
     }
-    let text = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
-    SEEN.store(code(wanted(&text)), Ordering::SeqCst);
+
+    let mode_read = prefs_file.and_then(read_mode);
+    if let Some(mode) = mode_read {
+        SEEN.store(code(mode), Ordering::SeqCst);
+    } else {
+        SEEN.store(0, Ordering::SeqCst);
+    }
+
     in_background(|| {
         let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let lock_result = photocraft_shell::with_registration_lock(|| {
-            // The persisted value, read under the lock: another instance may have changed the
-            // setting since this process read it at launch.
             let Some(mode) = current_mode() else {
                 return Ok(());
             };
             if mode == ExplorerThumbnails::Off {
                 photocraft_shell::enable_explorer_thumbnails(false, true)
             } else {
-                // Typically fails because the DLL is not beside the executable (a development build).
                 photocraft_shell::ensure_explorer_thumbnails(mode == ExplorerThumbnails::WithLogo)
             }
         });
@@ -111,45 +129,56 @@ pub fn startup(prefs_file: Option<&Path>) {
         match lock_result {
             Ok(()) => {}
             Err(e) => {
-                log::debug!("Explorer thumbnails: {e}");
-                // Forget that this value was seen, allowing retries if a transient lock error occurred.
+                log::debug!("Explorer thumbnails startup/lock retry failed: {e}");
                 if let Some(mode) = current_mode() {
-                    let _ = SEEN.compare_exchange(code(mode), 0, Ordering::SeqCst, Ordering::SeqCst);
+                    rearm_failed_request_if_current(mode);
                 }
             }
         }
     });
 }
 
-/// After the preferences were written: apply a change of the setting, and only a change. The
-/// user's explicit choice takes `.psd` over from other programs, and Off removes only PhotoCraft's
-/// own registration. Any other save returns at once, without the registry or the lock, so it cannot
-/// overwrite another program's handler or stall the window.
-///
-/// A change that failed is tried again with the next save. The worker applies the value persisted
-/// when it holds the lock, so a stale value cannot override another instance's newer choice.
+/// Called during UI preferences initialization to set the comparison baseline if startup read failed.
+#[allow(dead_code)]
+pub fn init_baseline_from_ui(ui_mode: Option<ExplorerThumbnails>) {
+    let mode = ui_mode.unwrap_or_default();
+    let _ = SEEN.compare_exchange(0, code(mode), Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// After the preferences were written: apply a change of the setting, and only a change.
 pub fn after_save(text: &str) {
-    if !applies() || !note(&SEEN, wanted(text)) {
+    let new_mode = wanted(text);
+    let is_changed = note(&SEEN, new_mode);
+    let is_retry = RETRY_PENDING.swap(false, Ordering::SeqCst);
+
+    if !applies() || (!is_changed && !is_retry) {
         return;
     }
-    in_background(|| {
+
+    in_background(move || {
         let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let lock_result = photocraft_shell::with_registration_lock(|| {
-            // The persisted value, read under the lock: it is this save's value unless another
-            // instance has saved a different one since, which is then the one in force.
             let Some(mode) = current_mode() else {
                 return Ok(());
             };
-            photocraft_shell::enable_explorer_thumbnails(mode != ExplorerThumbnails::Off, mode == ExplorerThumbnails::WithLogo)
+
+            if is_changed {
+                photocraft_shell::enable_explorer_thumbnails(mode != ExplorerThumbnails::Off, mode == ExplorerThumbnails::WithLogo)
+            } else if mode == ExplorerThumbnails::Off {
+                photocraft_shell::enable_explorer_thumbnails(false, true)
+            } else {
+                photocraft_shell::ensure_explorer_thumbnails(mode == ExplorerThumbnails::WithLogo)
+            }
         });
 
         match lock_result {
             Ok(()) => {}
             Err(e) => {
-                log::debug!("Explorer thumbnails: {e}");
-                // Forget that this value was seen, so the next save tries again.
+                log::debug!("Explorer thumbnails registration failed: {e}");
                 if let Some(mode) = current_mode() {
-                    let _ = SEEN.compare_exchange(code(mode), 0, Ordering::SeqCst, Ordering::SeqCst);
+                    rearm_failed_request_if_current(mode);
+                } else {
+                    RETRY_PENDING.store(true, Ordering::SeqCst);
                 }
             }
         }
@@ -159,6 +188,7 @@ pub fn after_save(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn on_with_logo_unless_the_preference_says_otherwise() {
@@ -168,7 +198,6 @@ mod tests {
         assert_eq!(wanted(r#"{"fileHandling": {"explorerThumbnails": "off"}}"#), ExplorerThumbnails::Off);
         assert_eq!(wanted(r#"{"fileHandling": {"explorerThumbnails": "noLogo"}}"#), ExplorerThumbnails::NoLogo);
         assert_eq!(wanted(r#"{"fileHandling": {"explorerThumbnails": "withLogo"}}"#), ExplorerThumbnails::WithLogo);
-        // The earlier boolean form and unknown values fall back to the default.
         assert_eq!(wanted(r#"{"fileHandling": {"explorerThumbnails": false}}"#), ExplorerThumbnails::WithLogo);
         assert_eq!(wanted(r#"{"fileHandling": {"explorerThumbnails": "sometimes"}}"#), ExplorerThumbnails::WithLogo);
     }
@@ -190,7 +219,7 @@ mod tests {
         assert_eq!(read_mode(&path), Some(ExplorerThumbnails::Off));
         std::fs::write(&path, r#"{"fileHandling": {"explorerThumbnails": "withLogo"}}"#).unwrap();
         assert_eq!(read_mode(&path), Some(ExplorerThumbnails::WithLogo));
-        std::fs::remove_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -199,16 +228,22 @@ mod tests {
         let _ = PREFS_FILE.set(path.clone());
         SEEN.store(code(ExplorerThumbnails::Off), Ordering::SeqCst);
 
-        // When PREFS_FILE exists in OnceLock but points to an unreadable file, current_mode must return None
-        // to avoid applying process-local SEEN value.
         assert_eq!(current_mode(), None);
+    }
+
+    /// Helper for testable worker logic accepting path and callback.
+    fn execute_test_worker<F>(path: &Path, on_apply: F) -> Option<ExplorerThumbnails>
+    where
+        F: FnOnce(Option<ExplorerThumbnails>),
+    {
+        let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let mode = read_mode(path);
+        on_apply(mode);
+        mode
     }
 
     #[test]
     fn concurrent_workers_re_read_persisted_file_order() {
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicBool;
-
         let path = std::env::temp_dir().join(format!("photocraft-explorer-thumbnails-race-{}.json", std::process::id()));
         std::fs::write(&path, r#"{"fileHandling": {"explorerThumbnails": "withLogo"}}"#).unwrap();
 
@@ -219,12 +254,13 @@ mod tests {
         let applied_mode_clone = Arc::clone(&applied_mode);
         let worker_finished_clone = Arc::clone(&worker_finished);
 
-        // Simulate Worker 1 holding the lock and re-reading the latest file state
         let handle = std::thread::spawn(move || {
-            // Process 2 updates the file mid-flight before Worker 1 evaluates `current_mode()`
+            // Update preferences file mid-flight before worker evaluates read_mode() under lock
             std::fs::write(&path_clone, r#"{"fileHandling": {"explorerThumbnails": "off"}}"#).unwrap();
-            let mode = read_mode(&path_clone);
-            *applied_mode_clone.lock().unwrap() = mode;
+
+            execute_test_worker(&path_clone, |mode| {
+                *applied_mode_clone.lock().unwrap() = mode;
+            });
             worker_finished_clone.store(true, Ordering::SeqCst);
         });
 
@@ -239,14 +275,11 @@ mod tests {
     #[test]
     fn only_a_changed_preference_counts_as_a_choice() {
         let seen = AtomicU8::new(code(ExplorerThumbnails::WithLogo));
-        // Unrelated saves repeat the value in force: never a request to touch the registry.
         assert!(!note(&seen, ExplorerThumbnails::WithLogo));
         assert!(!note(&seen, ExplorerThumbnails::WithLogo));
-        // A real change is, once.
         assert!(note(&seen, ExplorerThumbnails::Off));
         assert!(!note(&seen, ExplorerThumbnails::Off));
         assert!(note(&seen, ExplorerThumbnails::NoLogo));
-        // After a failed apply the value is forgotten, so the next save retries it.
         seen.store(0, Ordering::SeqCst);
         assert!(note(&seen, ExplorerThumbnails::NoLogo));
     }
