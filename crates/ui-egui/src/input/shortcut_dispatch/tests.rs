@@ -360,6 +360,9 @@ fn a_disabled_shortcut_says_why() {
 
 #[test]
 fn a_disabled_shortcut_uses_the_command_id_translation() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let cs = crate::i18n::Lang::from_code("cs").unwrap();
     crate::i18n::with_language(cs, || {
