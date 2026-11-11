@@ -65,9 +65,18 @@ fn the_vertical_buttons_set_left_center_and_right_on_the_mask_text_and_the_tool(
 
 #[test]
 fn idle_the_vertical_buttons_set_the_tool_default() {
+    // The idle tool does not lay out text, unlike the editing cases above. Finish the
+    // background font scan before measuring click positions: replacing the loading
+    // placeholder with the font controls changes the bar's widget layout and ids.
+    let _ = photocraft_text::shared();
     let mut h = bar(new_app(Tool::VerticalTypeMask));
-    h.get_by_role_and_label(Role::Button, "Bottom align text").click();
-    h.run_steps(2);
-    assert_eq!(h.state().ui.tool_options.type_align, "right");
-    assert!(lit(&h, "Bottom align text"));
+    for (label, value) in [("Bottom align text", "right"), ("Center text", "center"), ("Top align text", "left")] {
+        h.get_by_role_and_label(Role::Button, label).click();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.tool_options.type_align, value, "{label}");
+        for other in VERTICAL {
+            assert_eq!(lit(&h, other), other == label, "{label} clicked: {other}");
+        }
+        assert!(h.state().ui.text_edit.is_none(), "{label}: still idle");
+    }
 }
