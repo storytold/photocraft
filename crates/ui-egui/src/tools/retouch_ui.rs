@@ -364,7 +364,10 @@ fn patch_offset_for(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     let (dx, dy) = if dx.is_finite() && dy.is_finite() { (dx.clamp(-1e7, 1e7) as i32, dy.clamp(-1e7, 1e7) as i32) } else { (0, 0) };
     let Some((canvas, sel)) = app.session.active().and_then(|st| Some((st.doc.bounds(), st.doc.selection.clone()?))) else { return [dx, dy] };
     let key = u64::MAX - app.session.active().map_or(0, |st| st.doc.id.0);
-    let b = app.cached_bounds(key, &sel).intersect(&canvas);
+    // An inverted selection (its default pixel selected) covers the canvas outside its tiles; the engine
+    // plans a Content-Aware Move over the canvas then, not over the bounds of the unselected hole.
+    let inverted = tool == Tool::ContentAwareMove && sel.default_pixel().first().is_some_and(|v| *v > 0.0);
+    let b = if inverted { canvas } else { app.cached_bounds(key, &sel).intersect(&canvas) };
     if b.is_empty() {
         return [dx, dy];
     }

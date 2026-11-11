@@ -1255,3 +1255,19 @@ fn patch_offset_follows_the_drags_own_tool() {
     assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-59, 0]);
     app.drag = None;
 }
+
+/// #12453: an inverted selection (Select All minus a hole near the edge) is planned by the engine over
+/// the canvas, so the drag clamp uses the canvas too, not the bounds of the unselected hole.
+#[test]
+fn content_aware_move_drag_clamp_uses_the_canvas_for_an_inverted_selection() {
+    let mut app = app();
+    app.ui.tool = Tool::ContentAwareMove;
+    let mut sel = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]);
+    sel.write_interleaved(photocraft_geom::Rect::new(90, 20, 98, 40), &[0u8; 8 * 20]);
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).selection = Some(sel);
+    // Clamped to the hole's bounds this would stop at 9 (100 - 90 - 1); on the canvas a one pixel
+    // overlap allows up to 99.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [70.0, 30.0]), [20, 0]);
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [1000.0, 30.0]), [99, 0]);
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-1000.0, 30.0]), [-99, 0]);
+}
