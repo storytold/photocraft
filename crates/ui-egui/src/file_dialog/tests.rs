@@ -722,11 +722,12 @@ fn a_save_asks_before_replacing_the_file_its_lowercased_extension_names() {
     }
 }
 
-/// Opening an uppercase JPEG and confirming its own name in File › Save overwrites that exact
+/// Opening an uppercase JPEG and confirming its own name in File › Save As overwrites that exact
 /// entry. Before this regression test, the native dialog confirmed `photo.JPG`, then PhotoCraft
-/// wrote `photo.jpg`, leaving both files on a case-sensitive NTFS mount.
+/// wrote `photo.jpg`, leaving both files on a case-sensitive NTFS mount. File › Save over a flat
+/// JPEG writes in place without the dialog, so this goes through File › Save As.
 #[test]
-fn plain_save_overwrites_an_existing_uppercase_extension_without_renaming_it() {
+fn save_as_overwrites_an_existing_uppercase_extension_without_renaming_it() {
     let ctx = egui::Context::default();
     let path = "/pics/photo.JPG";
     let (mut app, open, written) = jpeg_app(None, false);
@@ -734,7 +735,7 @@ fn plain_save_overwrites_an_existing_uppercase_extension_without_renaming_it() {
     changed_by_another_app(&disk, path);
     app.opened_from(path);
 
-    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
     answer(&open, Some(FileDialogAnswer::SaveTo(path.into())));
     app.poll_file_dialog(&ctx, None);
