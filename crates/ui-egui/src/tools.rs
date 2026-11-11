@@ -64,6 +64,9 @@ pub mod zoom_tool;
 mod gradient_mode_greyed_tests;
 
 #[cfg(test)]
+mod object_selection_mode_tests;
+
+#[cfg(test)]
 mod count_show_extras_tests;
 #[cfg(test)]
 mod crop_options_labels_tests;
