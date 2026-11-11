@@ -9,6 +9,7 @@
 //! one undo step per click / stroke.
 
 use photocraft_algo::selection as sel;
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_paint::Stroke;
@@ -106,7 +107,10 @@ fn magic_eraser(s: &mut Session, p: &Value) -> Result<Value> {
         let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::NoLayer(id))?;
         (d.doc.bounds(), sel::rgba8_image(surf, d.doc.bounds()))
     };
-    let region = sel::wand_region(&img, area, (x, y), tolerance, contiguous, anti_alias);
+    // The reference's colour distance is measured for 8-bit RGB only (#11995).
+    let rgb8 = s.active().is_some_and(|d| d.doc.mode == ColorMode::Rgb && d.doc.depth == SampleType::U8);
+    let distance = if rgb8 { sel::ColorDistance::Spread } else { sel::ColorDistance::LargestChannel };
+    let region = sel::wand_region_by(&img, area, (x, y), tolerance, contiguous, anti_alias, None, distance);
     drop(img);
     let Some(region) = region else { return Ok(damage(s, Rect::EMPTY, false)) };
     let bg = s.tools.background;
@@ -129,15 +133,20 @@ fn magic_eraser(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(damage(s, dmg, true))
 }
 
-/// The stroke, settings and layer of a `paint.backgroundEraser` (shared by the command and its
-/// live preview), after the same checks.
-fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSettings, LayerId)> {
+/// The reference application's alert for a colour-channel target that isn't the composite (#12488).
+const CHANNEL_TARGET_REFUSED: &str = "Could not use the background eraser because the target channels do not cover the composite.";
+
+/// The stroke, settings, layer and colour-channel target of a `paint.backgroundEraser` (shared by
+/// the command and its live preview), after the same checks.
+fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSettings, LayerId, Option<crate::color_channels::ColorChannels>)> {
     const CMD: &str = "paint.backgroundEraser";
     let pts = crate::brush_cmds::parse_points(p, CMD)?;
     if pts.iter().any(|q| !q.x.is_finite() || !q.y.is_finite() || q.x.abs() > 1e7 || q.y.abs() > 1e7) {
         return Err(bad(CMD, "`points` must be finite canvas coordinates"));
     }
     let brush = crate::brush_cmds::resolve_brush(s, p, CMD)?;
+    // The inks a colour was picked as, for a CMYK document (#12352).
+    let picked = |c: [f32; 4]| s.tools.picked_cmyk([c[0], c[1], c[2]]).map(|k| ([c[0], c[1], c[2]], k));
     let bs = BgEraseSettings {
         sampling: enum_param(p, CMD, "sampling", Sampling::Continuous, "continuous|once|backgroundSwatch")?,
         limits: enum_param(p, CMD, "limits", Limits::Contiguous, "discontiguous|contiguous|findEdges")?,
@@ -145,6 +154,8 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
         protect_foreground: flag(p, "protectForegroundColor", false),
         foreground: s.tools.foreground,
         background: s.tools.background,
+        foreground_cmyk: picked(s.tools.foreground),
+        background_cmyk: picked(s.tools.background),
     };
     let id = active_pixel_layer(s, p, CMD)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -154,14 +165,18 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
     if let Some(e) = pixels_locked(&d.doc, l) {
         return Err(e);
     }
-    Ok((Stroke { brush, points: pts }, bs, id))
+    let colors = crate::color_channels::target(s, p)?;
+    // Measured: one colour channel of an RGB document. Other partial sets keep erasing those channels.
+    if d.doc.mode == ColorMode::Rgb && colors.is_some_and(|c| c.len() == 1) {
+        return Err(EngineError::Other(CHANNEL_TARGET_REFUSED.into()));
+    }
+    Ok((Stroke { brush, points: pts }, bs, id, colors))
 }
 
 /// `paint.backgroundEraser`: a stroke erasing colours similar to the sampled one.
 fn background_eraser(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.backgroundEraser";
-    let (stroke, bs, id) = background_eraser_setup(s, p)?;
-    let colors = crate::color_channels::target(s, p)?;
+    let (stroke, bs, id, colors) = background_eraser_setup(s, p)?;
     let bg = s.tools.background;
     let dmg = s.edit("Background Eraser", |doc, _| {
         let selection = doc.selection.clone();
@@ -226,10 +241,9 @@ fn selected_background_effect(
 /// preview at the last point is the committed result.
 pub fn live_background_eraser(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
     const CMD: &str = "paint.backgroundEraser";
-    let (stroke, bs, id) = background_eraser_setup(s, p)?;
+    let (stroke, bs, id, colors) = background_eraser_setup(s, p)?;
     let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
     doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    let colors = crate::color_channels::target(s, p)?;
     let bg = s.tools.background;
     if colors.is_none() {
         crate::extra_cmds::background_to_layer(&mut doc, id);
@@ -284,7 +298,13 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod magic_eraser_tolerance_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 #[path = "background_eraser_transparency_lock_tests.rs"]
 mod transparency_lock_tests;
+
+#[cfg(test)]
+#[path = "background_eraser_channel_target_tests.rs"]
+mod channel_target_tests;
