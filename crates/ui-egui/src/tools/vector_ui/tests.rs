@@ -1818,8 +1818,9 @@ fn pixel_align_live_line_preview_matches_commit() {
                         .then(&photocraft_geom::Affine::rotate(angle))
                         .then(&photocraft_geom::Affine::translate(7.25, 13.5));
                     let projected = super::shapes::preview_for_view(preview.clone(), &transform, zoom);
-                    let alignment = photocraft_geom::Affine::translate(if vertical { 0.5 } else { 0.0 }, if vertical { 0.0 } else { 0.5 });
-                    assert_eq!(projected.path, preview.path.transform(&alignment).transform(&transform));
+                    // Shape creation already places the line's sides on document pixel edges.
+                    // The view transform must not add another half-pixel alignment offset.
+                    assert_eq!(projected.path, preview.path.transform(&transform));
                     assert!(projected.live.is_none(), "view-space rendering must not apply alignment twice");
                 }
             }
