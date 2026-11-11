@@ -35,6 +35,7 @@ mod files;
 mod menu_item;
 
 mod steps_artboard;
+mod steps_artboard_section;
 mod steps_automate;
 mod steps_batch;
 mod steps_calculations;
@@ -187,6 +188,9 @@ mod tests;
 mod layer_props_tests;
 
 #[cfg(test)]
+mod layer_list_tests;
+
+#[cfg(test)]
 mod automate_tests;
 
 #[cfg(test)]
@@ -203,3 +207,6 @@ mod render_tests;
 
 #[cfg(test)]
 mod recorded_tools_tests;
+
+#[cfg(test)]
+mod artboard_section_tests;
