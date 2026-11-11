@@ -283,10 +283,10 @@ pub fn start_open(
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
     let name = &app.open_name(name);
-    // A pathless open (drop, paste) has nothing to read again: keep its bytes until the job ends so
-    // a raw can be re-developed by Camera Raw (#12415).
+    // A pathless open (drop, paste) of a raw has nothing to read again: keep its bytes until the job
+    // ends so Camera Raw can re-develop it (#12415). Any other file holds no second copy.
     let kept = match (&source, &path) {
-        (OpenSource::Bytes(b), None) => Some(b.clone()),
+        (OpenSource::Bytes(b), None) if photocraft_io::raw::is_raw(b) => Some(b.clone()),
         _ => None,
     };
     match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {

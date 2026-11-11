@@ -1362,6 +1362,7 @@ fn a_pathless_raw_background_open_keeps_its_bytes_for_camera_raw() {
     let kept = raw.bytes.as_ref().expect("the sensor data is kept for Open");
     assert_eq!(kept.as_slice(), dng.as_slice());
     open_raw(&mut app, &ctx, raw).unwrap();
+    assert!(app.jobs.open_bytes.is_empty(), "the bytes were handed over, not left behind");
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
     assert!(r.get("openingRaw").is_some(), "{r}");
     let before = mean_red(&app);
@@ -1394,7 +1395,8 @@ fn a_pathless_png_background_open_keeps_nothing() {
     assert_eq!(app.session.documents().len(), 1);
 }
 
-/// A cancelled open prompt clears the open tabs; the jobs still end, and their kept bytes go too.
+/// A cancelled open prompt clears the open tabs and frees the kept bytes at once, through the
+/// prompt's real Cancel answer; the jobs still end afterwards without anything left over.
 #[test]
 fn a_cancelled_open_prompt_frees_kept_raw_bytes() {
     let (mut app, dng) = raw_app();
@@ -1402,12 +1404,101 @@ fn a_cancelled_open_prompt_frees_kept_raw_bytes() {
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0001.dng", &dng).unwrap();
     assert_eq!(app.jobs.open_bytes.len(), 1, "kept while the job runs");
-    // The Cancel path of the open prompt drops the tab before the job's end event arrives.
-    app.jobs.opens.clear();
+    let r = crate::open_prompt::answer(&mut app, None).unwrap();
+    assert_eq!(r["cancelled"], 0);
+    assert!(app.jobs.opens.is_empty(), "Cancel drops the open tabs");
+    assert!(app.jobs.open_bytes.is_empty(), "Cancel frees the kept bytes");
     let t = std::time::Instant::now();
-    while !app.jobs.open_bytes.is_empty() && t.elapsed() < std::time::Duration::from_secs(30) {
+    while t.elapsed() < std::time::Duration::from_millis(300) {
         crate::jobs_ui::tick(&mut app, &ctx);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(app.jobs.open_bytes.is_empty(), "every job end frees its kept bytes");
+    assert!(app.jobs.open_bytes.is_empty());
+}
+
+/// Inline (background jobs off, or the web) the bytes go straight to the Camera Raw open dialog
+/// and nothing is parked in `open_bytes`.
+#[test]
+fn a_pathless_raw_inline_open_hands_its_bytes_to_camera_raw() {
+    let (mut app, dng) = raw_app();
+    app.background_jobs = false;
+    app.open_bytes("IMG_0001.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).expect("a raw open queues the dialog");
+    assert_eq!(raw.bytes.as_ref().expect("the sensor data is kept for Open").as_slice(), dng.as_slice());
+    assert!(app.jobs.open_bytes.is_empty());
+}
+
+/// Ticks until no background open is left, whatever its outcome.
+fn drain_opens(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let t = std::time::Instant::now();
+    while (!app.jobs.opens.is_empty() || !app.jobs.open_bytes.is_empty()) && t.elapsed() < std::time::Duration::from_secs(30) {
+        crate::jobs_ui::tick(app, ctx);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// A raw whose decode fails ends its job Failed with its tab still there: the kept bytes go and
+/// no Camera Raw dialog is queued.
+#[test]
+fn a_pathless_raw_open_that_fails_frees_its_bytes() {
+    let (mut app, dng) = raw_app();
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    // The longest cut that still reads as a raw but no longer develops: the data behind the header is gone.
+    let limits = photocraft_raw::Limits::default();
+    let cut = (1..dng.len())
+        .rev()
+        .find(|&n| photocraft_io::raw::is_raw(&dng[..n]) && photocraft_raw::decode(&dng[..n], &limits).is_err())
+        .expect("some truncation is still a raw but fails to decode");
+    let broken = &dng[..cut];
+    app.open_bytes("IMG_0001.dng", broken).unwrap();
+    assert_eq!(app.jobs.open_bytes.len(), 1, "kept while the job runs");
+    drain_opens(&mut app, &ctx);
+    assert!(app.jobs.opens.is_empty(), "the open ended");
+    assert!(app.jobs.open_bytes.is_empty(), "a failed open frees its kept bytes");
+    assert!(app.raw_shelf.is_empty(), "a failed open queues no Camera Raw dialog");
+    assert!(app.session.documents().is_empty());
+}
+
+/// A cancelled job (its tab still listed) frees the kept bytes and queues no dialog.
+#[test]
+fn a_pathless_raw_open_that_is_cancelled_frees_its_bytes() {
+    let (mut app, dng) = raw_app();
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    app.open_bytes("IMG_0001.dng", &dng).unwrap();
+    let job = app.jobs.opens.first().expect("the open tab").job;
+    assert!(app.session.cancel_job(job), "the job was still running");
+    drain_opens(&mut app, &ctx);
+    assert!(app.jobs.opens.is_empty());
+    assert!(app.jobs.open_bytes.is_empty(), "a cancelled open frees its kept bytes");
+    assert!(app.raw_shelf.is_empty(), "a cancelled open queues no Camera Raw dialog");
+    assert!(app.session.documents().is_empty());
+}
+
+/// A raw opened from a path can be read again: nothing is kept.
+#[test]
+fn a_raw_opened_with_a_path_keeps_nothing() {
+    let (mut app, dng) = raw_app();
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    app.open_bytes_from("IMG_0001.dng", &dng, Some("/photos/IMG_0001.dng")).unwrap();
+    assert!(app.jobs.open_bytes.is_empty(), "no copy while the job runs");
+    drain_opens(&mut app, &ctx);
+    assert!(app.jobs.open_bytes.is_empty());
+}
+
+/// A pathless PNG parks no bytes, not even while its job runs.
+#[test]
+fn a_pathless_png_keeps_no_bytes() {
+    let (mut app, _) = raw_app();
+    app.background_jobs = true;
+    let png = {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let doc = (*s.active().unwrap().doc).clone();
+        photocraft_io::export(&doc, "a.png", &Default::default()).unwrap().bytes
+    };
+    app.open_bytes("a.png", &png).unwrap();
+    assert!(app.jobs.open_bytes.is_empty(), "nothing is kept for a PNG, even while the open runs");
 }
