@@ -45,7 +45,18 @@ pub fn read_abr_with(bytes: &[u8], group: &str, ctl: &photocraft_raster::Interru
     ctl.progress(0.1);
     let cancel = || ctl.cancelled();
     let progress = |p: f32| ctl.progress(0.1 + 0.9 * p);
-    map_file_with(&f, group, &photocraft_raster::Interrupt::new(&cancel, &progress)).map_err(|e| e.to_string())
+    map_file_owned(f, group, &photocraft_raster::Interrupt::new(&cancel, &progress))
+}
+
+/// Like [`read_abr_with`], taking ownership of `bytes` so the encoded `.abr` buffer is released
+/// as soon as parsing finishes, before `GrayTile` tips are allocated.
+pub fn read_abr_owned(bytes: Vec<u8>, group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, String> {
+    let f = abr::parse(&bytes).map_err(|e| format!("not a readable brush file (.abr): {e}"))?;
+    drop(bytes);
+    ctl.progress(0.1);
+    let cancel = || ctl.cancelled();
+    let progress = |p: f32| ctl.progress(0.1 + 0.9 * p);
+    map_file_owned(f, group, &photocraft_raster::Interrupt::new(&cancel, &progress))
 }
 
 /// Map a parsed file.
@@ -57,7 +68,13 @@ pub fn map_file(f: &AbrFile, group: &str) -> AbrImport {
 /// [`map_file`] that checks `ctl` before each brush.
 pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, photocraft_raster::Cancelled> {
     let mut out = AbrImport { version: f.version, warnings: f.warnings.clone(), ..Default::default() };
-    let mut m = Mapper { file: f, warnings: BTreeSet::new(), unknown: BTreeSet::new(), tips: Default::default() };
+    let mut m = Mapper {
+        samples: SampleSource::Borrowed(&f.samples),
+        patterns: &f.patterns,
+        warnings: BTreeSet::new(),
+        unknown: BTreeSet::new(),
+        tips: Default::default(),
+    };
     let total = f.legacy.len().max(f.samples.len()).max(f.presets.len()).max(1) as f32;
     let step = |i: usize| -> Result<(), photocraft_raster::Cancelled> {
         ctl.check()?;
@@ -81,8 +98,11 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
                     format!("{} px Round", diameter),
                 ),
                 LegacyTip::Sampled(s) => {
-                    let (tip, size) = m.tip(s);
-                    (BrushSettings { size, tip, aliased: !b.anti_alias, ..base }, format!("Sampled Brush {}", i + 1))
+                    let Ok((tile, size)) = sample_to_tile(s.width, s.height, s.depth, SampleBytes::Borrowed(&s.data), &mut m.warnings) else {
+                        m.warnings.insert(format!("brush {}: not enough memory for sampled tip; skipped", i + 1));
+                        continue;
+                    };
+                    (BrushSettings { size, tip: TipShape::Sampled(tile), aliased: !b.anti_alias, ..base }, format!("Sampled Brush {}", i + 1))
                 }
             };
             let name = if b.name.trim().is_empty() { default_name } else { b.name.trim().to_string() };
@@ -90,9 +110,12 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
         }
     } else if f.presets.is_empty() {
         // Tips without a settings section (early v6 files): one preset per tip.
-        for (i, s) in f.samples.iter().enumerate() {
+        for i in 0..f.samples.len() {
             step(i)?;
-            let (tip, size) = m.tip(s);
+            let Ok((tip, size)) = m.tip_index(i) else {
+                m.warnings.insert(format!("sampled tip {}: not enough memory; skipped", i + 1));
+                continue;
+            };
             let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip, ..Default::default() };
             out.presets.push(BrushPreset {
                 name: format!("Sampled Brush {}", i + 1),
@@ -110,8 +133,98 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
             match m.preset(d) {
                 // The file's folders nest inside `group`, as Photoshop nests them inside a folder
                 // named after the imported file.
-                Some(brush) => {
+                Ok(Some(brush)) => {
                     let folder = f.folders.get(i).cloned().unwrap_or_default();
+                    out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), folder, captures: Default::default() });
+                }
+                Ok(None) => {
+                    m.warnings.insert(format!("\"{name}\": its sampled tip is missing from the file; skipped"));
+                }
+                Err(oom) => {
+                    m.warnings.insert(format!("\"{name}\": {oom}; skipped"));
+                }
+            }
+        }
+    }
+    out.warnings.extend(m.warnings);
+    if !m.unknown.is_empty() {
+        out.warnings.push(format!("settings without a PhotoCraft equivalent were ignored: {}", m.unknown.into_iter().collect::<Vec<_>>().join(", ")));
+    }
+    ctl.progress(1.0);
+    Ok(out)
+}
+
+/// Maps `f` while consuming decoded sample buffers as each tip is converted to a [`GrayTile`],
+/// returning an error if cancelling or if memory is exhausted.
+fn map_file_owned(mut f: AbrFile, group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, String> {
+    const OOM: &str = "not enough memory for brush presets";
+    let legacy = std::mem::take(&mut f.legacy);
+    let presets = std::mem::take(&mut f.presets);
+    let folders = std::mem::take(&mut f.folders);
+    let mut out = AbrImport { version: f.version, warnings: std::mem::take(&mut f.warnings), ..Default::default() };
+    let total = legacy.len().max(f.samples.len()).max(presets.len()).max(1) as f32;
+    let mut m = Mapper {
+        samples: SampleSource::Owned(&mut f.samples),
+        patterns: &f.patterns,
+        warnings: BTreeSet::new(),
+        unknown: BTreeSet::new(),
+        tips: Default::default(),
+    };
+    let step = |i: usize| -> Result<(), String> {
+        ctl.check().map_err(|e| e.to_string())?;
+        ctl.progress(i as f32 / total);
+        Ok(())
+    };
+    if !legacy.is_empty() {
+        for (i, b) in legacy.into_iter().enumerate() {
+            step(i)?;
+            let spacing = if b.spacing == 0 { 0.25 } else { f32::from(b.spacing) / 100.0 };
+            let base = BrushSettings { pressure_size: false, spacing, ..Default::default() };
+            let (brush, default_name) = match b.tip {
+                LegacyTip::Computed { diameter, hardness, angle, roundness } => (
+                    BrushSettings {
+                        size: f32::from(diameter.max(1)),
+                        hardness: (f32::from(hardness) / 100.0).clamp(0.0, 1.0),
+                        angle: f32::from(angle),
+                        roundness: (f32::from(roundness) / 100.0).clamp(0.01, 1.0),
+                        ..base
+                    },
+                    format!("{diameter} px Round"),
+                ),
+                LegacyTip::Sampled(s) => {
+                    let (tile, size) = sample_to_tile(s.width, s.height, s.depth, SampleBytes::Owned(s.data), &mut m.warnings)?;
+                    (BrushSettings { size, tip: TipShape::Sampled(tile), aliased: !b.anti_alias, ..base }, format!("Sampled Brush {}", i + 1))
+                }
+            };
+            let name = if b.name.trim().is_empty() { default_name } else { b.name.trim().to_string() };
+            out.presets.try_reserve(1).map_err(|_| OOM.to_string())?;
+            out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), folder: Vec::new(), captures: Default::default() });
+        }
+    } else if presets.is_empty() {
+        let count = m.samples.len();
+        for i in 0..count {
+            step(i)?;
+            let (tip, size) = m.tip_index(i)?;
+            let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip, ..Default::default() };
+            out.presets.try_reserve(1).map_err(|_| OOM.to_string())?;
+            out.presets.push(BrushPreset {
+                name: format!("Sampled Brush {}", i + 1),
+                brush,
+                builtin: false,
+                group: group.to_string(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+    } else {
+        let mut folders_iter = folders.into_iter();
+        for (i, d) in presets.into_iter().enumerate() {
+            step(i)?;
+            let folder = folders_iter.next().unwrap_or_default();
+            let name = text(&d, "Nm  ").filter(|n| !n.trim().is_empty()).map(|n| n.trim().to_string()).unwrap_or_else(|| format!("Brush {}", i + 1));
+            match m.preset(&d)? {
+                Some(brush) => {
+                    out.presets.try_reserve(1).map_err(|_| OOM.to_string())?;
                     out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), folder, captures: Default::default() });
                 }
                 None => {
@@ -251,30 +364,129 @@ const KNOWN: &[&str] = &[
     "toolOptions",
 ];
 
+enum SampleSource<'a> {
+    Borrowed(&'a [AbrSample]),
+    Owned(&'a mut [AbrSample]),
+}
+
+impl SampleSource<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Borrowed(s) => s.len(),
+            Self::Owned(s) => s.len(),
+        }
+    }
+
+    fn find_id(&self, id: &str) -> Option<usize> {
+        let slice: &[AbrSample] = match self {
+            Self::Borrowed(s) => s,
+            Self::Owned(s) => s,
+        };
+        slice.iter().position(|s| s.id == id).or_else(|| (slice.len() == 1).then_some(0))
+    }
+}
+
+enum SampleBytes<'a> {
+    Borrowed(&'a [u8]),
+    Owned(Vec<u8>),
+}
+
+impl SampleBytes<'_> {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(b) => b,
+            Self::Owned(b) => b,
+        }
+    }
+}
+
+fn sample_to_tile(width: u32, height: u32, depth: u16, bytes: SampleBytes<'_>, warnings: &mut BTreeSet<String>) -> Result<(GrayTile, f32), String> {
+    const OOM: &str = "not enough memory for sampled brush tip";
+    let size = width.max(height) as f32;
+    let u16s = if width <= MAX_TIP_EDGE && height <= MAX_TIP_EDGE {
+        let raw = bytes.as_slice();
+        let n = if depth == 16 { raw.len() / 2 } else { raw.len() };
+        let mut out = Vec::new();
+        out.try_reserve_exact(n).map_err(|_| OOM.to_string())?;
+        if depth == 16 {
+            for c in raw.as_chunks::<2>().0 {
+                let x = f32::from(u16::from_be_bytes(*c)) / 65535.0;
+                out.push((x.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+            }
+        } else {
+            for &v in raw {
+                let x = f32::from(v) / 255.0;
+                out.push((x.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+            }
+        }
+        drop(bytes);
+        out
+    } else {
+        let raw = bytes.as_slice();
+        let n = if depth == 16 { raw.len() / 2 } else { raw.len() };
+        let mut unit = Vec::new();
+        unit.try_reserve_exact(n).map_err(|_| OOM.to_string())?;
+        if depth == 16 {
+            for c in raw.as_chunks::<2>().0 {
+                unit.push(f32::from(u16::from_be_bytes(*c)) / 65535.0);
+            }
+        } else {
+            for &v in raw {
+                unit.push(f32::from(v) / 255.0);
+            }
+        }
+        drop(bytes);
+        let (w, h, v) = fit_checked(width, height, unit, MAX_TIP_EDGE)?;
+        if (w, h) != (width, height) {
+            warnings.insert(format!("tips larger than {MAX_TIP_EDGE} px were downsampled"));
+        }
+        let mut out = Vec::new();
+        out.try_reserve_exact(v.len()).map_err(|_| OOM.to_string())?;
+        for &x in &v {
+            out.push((x.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+        }
+        drop(v);
+        let mut arc_probe = Vec::<u8>::new();
+        arc_probe.try_reserve_exact(out.len().saturating_mul(2).saturating_add(64)).map_err(|_| OOM.to_string())?;
+        drop(arc_probe);
+        return Ok((GrayTile { width: w, height: h, data: out.into() }, size));
+    };
+    let mut arc_probe = Vec::<u8>::new();
+    arc_probe.try_reserve_exact(u16s.len().saturating_mul(2).saturating_add(64)).map_err(|_| OOM.to_string())?;
+    drop(arc_probe);
+    Ok((GrayTile { width, height, data: u16s.into() }, size))
+}
+
 struct Mapper<'a> {
-    file: &'a AbrFile,
+    samples: SampleSource<'a>,
+    patterns: &'a [PsdPattern],
     warnings: BTreeSet<String>,
     unknown: BTreeSet<String>,
-    /// Tips already converted, by sample: presets can name one sample thousands of times, and a
-    /// tile clones by sharing its data.
-    tips: std::collections::HashMap<*const AbrSample, (photocraft_paint::tile::GrayTile, f32)>,
+    /// Tips already converted, by sample index: presets can name one sample thousands of times,
+    /// and a tile clones by sharing its data.
+    tips: std::collections::HashMap<usize, (photocraft_paint::tile::GrayTile, f32)>,
 }
 
 impl Mapper<'_> {
     /// A sampled tip (downsampled to [`MAX_TIP_EDGE`]) and its size (larger side).
-    fn tip(&mut self, s: &AbrSample) -> (TipShape, f32) {
-        if let Some((tile, size)) = self.tips.get(&std::ptr::from_ref(s)) {
-            return (TipShape::Sampled(tile.clone()), *size);
+    fn tip_index(&mut self, idx: usize) -> Result<(TipShape, f32), String> {
+        if let Some((tile, size)) = self.tips.get(&idx) {
+            return Ok((TipShape::Sampled(tile.clone()), *size));
         }
-        let v = s.to_unit();
-        let (w, h, v) = fit(s.width, s.height, v, MAX_TIP_EDGE);
-        if (w, h) != (s.width, s.height) {
-            self.warnings.insert(format!("tips larger than {MAX_TIP_EDGE} px were downsampled"));
-        }
-        let data = v.iter().map(|x| (x.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect();
-        let (tile, size) = (GrayTile { width: w, height: h, data }, s.width.max(s.height) as f32);
-        self.tips.insert(std::ptr::from_ref(s), (tile.clone(), size));
-        (TipShape::Sampled(tile), size)
+        let (width, height, depth, bytes) = match &mut self.samples {
+            SampleSource::Borrowed(samples) => {
+                let s = samples.get(idx).ok_or_else(|| "sampled brush tip index out of range".to_string())?;
+                (s.width, s.height, s.depth, SampleBytes::Borrowed(&s.data))
+            }
+            SampleSource::Owned(samples) => {
+                let s = samples.get_mut(idx).ok_or_else(|| "sampled brush tip index out of range".to_string())?;
+                (s.width, s.height, s.depth, SampleBytes::Owned(std::mem::take(&mut s.data)))
+            }
+        };
+        let (tile, size) = sample_to_tile(width, height, depth, bytes, &mut self.warnings)?;
+        self.tips.try_reserve(1).map_err(|_| "not enough memory for brush presets".to_string())?;
+        self.tips.insert(idx, (tile.clone(), size));
+        Ok((TipShape::Sampled(tile), size))
     }
 
     fn dynamic(&mut self, d: Option<&Descriptor>) -> Dynamic {
@@ -304,22 +516,23 @@ impl Mapper<'_> {
 
     /// Tip-shape fields from a `computedBrush` / `sampledBrush` object. `None` when the sampled
     /// tip it references is missing.
-    fn tip_shape(&mut self, t: &Descriptor) -> Option<(TipShape, Option<f32>)> {
+    fn tip_shape(&mut self, t: &Descriptor) -> Result<Option<(TipShape, Option<f32>)>, String> {
         let sampled = t.class_id.is("sampledBrush") || get(t, "sampledData").is_some();
         if !sampled {
-            return Some((TipShape::Round, None));
+            return Ok(Some((TipShape::Round, None)));
         }
         let id = text(t, "sampledData").unwrap_or_default();
-        let s = self.file.samples.iter().find(|s| s.id == id).or_else(|| self.file.samples.first().filter(|_| self.file.samples.len() == 1))?;
-        let (tip, size) = self.tip(s);
-        Some((tip, Some(size)))
+        let Some(idx) = self.samples.find_id(&id) else {
+            return Ok(None);
+        };
+        let (tip, size) = self.tip_index(idx)?;
+        Ok(Some((tip, Some(size))))
     }
 
     fn pattern(&mut self, t: &Descriptor) -> Pattern {
         let id = text(t, "Idnt").unwrap_or_default();
         let name = text(t, "Nm  ").unwrap_or_default();
-        let found =
-            self.file.patterns.iter().find(|p| !id.is_empty() && p.id == id).or_else(|| self.file.patterns.iter().find(|p| !name.is_empty() && p.name == name));
+        let found = self.patterns.iter().find(|p| !id.is_empty() && p.id == id).or_else(|| self.patterns.iter().find(|p| !name.is_empty() && p.name == name));
         match found.and_then(pattern_tile) {
             Some(tile) => Pattern::Tile(tile),
             None => {
@@ -349,7 +562,7 @@ impl Mapper<'_> {
         }
     }
 
-    fn preset(&mut self, d: &Descriptor) -> Option<BrushSettings> {
+    fn preset(&mut self, d: &Descriptor) -> Result<Option<BrushSettings>, String> {
         for (k, _) in &d.items {
             let k = String::from_utf8_lossy(k.as_bytes()).to_string();
             if !KNOWN.contains(&k.as_str()) {
@@ -358,7 +571,9 @@ impl Mapper<'_> {
         }
         let mut b = BrushSettings { pressure_size: false, spacing: 0.25, ..Default::default() };
         if let Some(t) = obj(d, "Brsh") {
-            let (tip, sampled_size) = self.tip_shape(t)?;
+            let Some((tip, sampled_size)) = self.tip_shape(t)? else {
+                return Ok(None);
+            };
             b.tip = tip;
             b.size = num(t, "Dmtr").map(|v| v as f32).or(sampled_size).unwrap_or(b.size).clamp(1.0, 5000.0);
             if let Some(v) = pct(t, "Hrdn") {
@@ -422,7 +637,7 @@ impl Mapper<'_> {
         if let Some(db) = obj(d, "dualBrush").filter(|db| boolean(db, "useDualBrush") == Some(true)) {
             let mut dual = DualBrush { enabled: true, ..Default::default() };
             if let Some(t) = obj(db, "Brsh") {
-                match self.tip_shape(t) {
+                match self.tip_shape(t)? {
                     Some((tip, sampled_size)) => {
                         dual.tip = tip;
                         dual.size = num(t, "Dmtr").map(|v| v as f32).or(sampled_size).unwrap_or(dual.size).clamp(1.0, 5000.0);
@@ -521,7 +736,7 @@ impl Mapper<'_> {
                 self.warnings.insert("tool blend modes stored with presets are not applied".into());
             }
         }
-        Some(b)
+        Ok(Some(b))
     }
 }
 
@@ -534,9 +749,31 @@ fn fit(w: u32, h: u32, v: Vec<f32>, max: u32) -> (u32, u32, Vec<f32>) {
     if w <= max && h <= max {
         return (w, h, v);
     }
-    let k = (w.max(h) as f32 / max as f32).max(1.0);
-    let (nw, nh) = (((w as f32 / k).round() as u32).clamp(1, max), ((h as f32 / k).round() as u32).clamp(1, max));
+    let (nw, nh) = fit_dims(w, h, max);
     let mut out = vec![0.0f32; nw as usize * nh as usize];
+    fit_into(w, h, &v, nw, nh, &mut out);
+    (nw, nh, out)
+}
+
+fn fit_checked(w: u32, h: u32, v: Vec<f32>, max: u32) -> Result<(u32, u32, Vec<f32>), String> {
+    if w <= max && h <= max {
+        return Ok((w, h, v));
+    }
+    let (nw, nh) = fit_dims(w, h, max);
+    let len = nw as usize * nh as usize;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(|_| "not enough memory for sampled brush tip".to_string())?;
+    out.resize(len, 0.0);
+    fit_into(w, h, &v, nw, nh, &mut out);
+    Ok((nw, nh, out))
+}
+
+fn fit_dims(w: u32, h: u32, max: u32) -> (u32, u32) {
+    let k = (w.max(h) as f32 / max as f32).max(1.0);
+    (((w as f32 / k).round() as u32).clamp(1, max), ((h as f32 / k).round() as u32).clamp(1, max))
+}
+
+fn fit_into(w: u32, h: u32, v: &[f32], nw: u32, nh: u32, out: &mut [f32]) {
     // Source rows/columns `[i * n / m, (i + 1) * n / m)` (at least one) for output index `i` of
     // `m`; in u64, as `(i + 1) * n` passes u32 for a plane over 2^32 / `max` long. The parsers'
     // edge caps keep today's inputs below that, but this function should not depend on them.
@@ -560,7 +797,6 @@ fn fit(w: u32, h: u32, v: Vec<f32>, max: u32) -> (u32, u32, Vec<f32>) {
             out[(y * nw + x) as usize] = if n > 0 { sum / n as f32 } else { 0.0 };
         }
     }
-    (nw, nh, out)
 }
 
 /// A pattern as a grayscale texture tile (luminance; transparent areas count as white).

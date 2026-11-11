@@ -43,11 +43,12 @@ use crate::patterns::{PatternBudget, PsdPattern, parse_pattern_block_with, write
 pub const MAX_EDGE: u32 = 8192;
 /// Most brushes read from one file.
 pub const MAX_BRUSHES: usize = 20_000;
-/// Cap on decoded sample bytes over the whole file. 32-bit targets (wasm) keep 512 MiB: the file,
-/// its base64 copies and the decoded tips must all fit a 4 GiB address space, and running out
-/// there aborts instead of returning an error.
-pub const MAX_TOTAL_BYTES: usize = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 512 << 20 };
-const _: () = assert!(cfg!(target_pointer_width = "64") || MAX_TOTAL_BYTES == 512 << 20);
+/// Cap on decoded sample bytes over the whole file (2 GiB on 64-bit targets, matching Photoshop's
+/// 2 GB `.abr` limit). 32-bit targets (wasm) keep 512 MiB: the file, its base64 copies and the
+/// decoded tips must all fit a 4 GiB address space, and running out there aborts instead of
+/// returning an error.
+pub const MAX_TOTAL_BYTES: usize = if cfg!(target_pointer_width = "64") { 2 << 30 } else { 512 << 20 };
+const _: () = assert!((cfg!(target_pointer_width = "64") && MAX_TOTAL_BYTES == 2 << 30) || MAX_TOTAL_BYTES == 512 << 20);
 
 /// A sampled tip: one grayscale plane where the maximum value is full paint.
 #[derive(Debug, Clone, PartialEq)]
@@ -263,8 +264,12 @@ fn parse_v12(r: &mut Rd, version: u16, out: &mut AbrFile) -> Result<()> {
             }
         })();
         match parsed {
-            Ok(Some(lb)) => out.legacy.push(lb),
+            Ok(Some(lb)) => {
+                out.legacy.try_reserve(1).map_err(|_| PsdError::OutOfMemory("not enough memory for brush presets"))?;
+                out.legacy.push(lb);
+            }
             Ok(None) => {}
+            Err(e @ PsdError::OutOfMemory(_)) => return Err(e),
             Err(PsdError::LimitExceeded(m)) if m.contains("MAX_TOTAL_BYTES") => return Err(PsdError::LimitExceeded(m)),
             Err(e) => out.warnings.push(format!("brush {}: {e}; skipped", i + 1)),
         }
@@ -299,7 +304,11 @@ fn read_samp(data: &[u8], subversion: u16, out: &mut AbrFile, budget: &mut Budge
             read_sample_body(&mut b, id, budget)
         })();
         match parsed {
-            Ok(s) => out.samples.push(s),
+            Ok(s) => {
+                out.samples.try_reserve(1).map_err(|_| PsdError::OutOfMemory("not enough memory for brush samples"))?;
+                out.samples.push(s);
+            }
+            Err(e @ PsdError::OutOfMemory(_)) => return Err(e),
             Err(PsdError::LimitExceeded(m)) if m.contains("MAX_TOTAL_BYTES") => return Err(PsdError::LimitExceeded(m)),
             Err(e) => out.warnings.push(format!("sampled tip {}: {e}; skipped", out.samples.len() + 1)),
         }
