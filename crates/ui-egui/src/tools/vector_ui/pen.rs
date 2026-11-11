@@ -970,3 +970,7 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
 #[cfg(test)]
 #[path = "freeform_history_name_tests.rs"]
 mod freeform_history_name_tests;
+
+#[cfg(test)]
+#[path = "pen_alt_drag_segment_tests.rs"]
+mod pen_alt_drag_segment_tests;
