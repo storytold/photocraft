@@ -86,6 +86,11 @@ pub(super) fn align_line_edges(a: [f64; 2], b: [f64; 2], weight: f64, keep_angle
 pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
     Some(if tool == Tool::Line {
         let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
+        // Too short a drag draws nothing. Measured before ⇧ shortens a diagonal, so a short
+        // fractional drag still reaches `align_line_edges`, which rounds it to whole pixels.
+        if dx.hypot(dy) < 1.0 {
+            return None;
+        }
         if mods.shift {
             // Snap to a multiple of 45°, as Photoshop does (#13243): a horizontal or vertical
             // line keeps the drag's distance along its axis, a diagonal one the shorter of the two
@@ -100,9 +105,6 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
                 let m = dx.abs().min(dy.abs());
                 (m.copysign(dx), m.copysign(dy))
             };
-        }
-        if dx.hypot(dy) < 1.0 {
-            return None;
         }
         let (from, to, weight) = align_line_edges(start, [start[0] + dx, start[1] + dy], f64::from(o.line_weight.max(1.0)), mods.shift)?;
         json!({"kind": "line", "from": from, "to": to, "weight": weight,

@@ -25,6 +25,7 @@ const CASES: [([f64; 2], [[f64; 2]; 2]); 5] = [
 
 const START: [f64; 2] = [400.0, 300.0];
 
+/// A new 800 × 600 document with the Line tool picked.
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
@@ -53,6 +54,7 @@ fn line(app: &PhotocraftApp) -> ([f64; 2], [f64; 2], photocraft_doc::vector::Pat
     }
 }
 
+/// The measured ⇧-drags end where Photoshop ends them.
 #[test]
 fn shift_drags_end_where_photoshop_ends_them() {
     for (to, want) in CASES {
@@ -63,6 +65,7 @@ fn shift_drags_end_where_photoshop_ends_them() {
     }
 }
 
+/// ⇧ pressed after the drag started constrains the line as ⇧ held from the press does.
 #[test]
 fn shift_pressed_after_the_start_gives_the_same_line() {
     for (to, _) in CASES {
@@ -74,6 +77,7 @@ fn shift_pressed_after_the_start_gives_the_same_line() {
     }
 }
 
+/// The drag preview's outline is the outline of the layer the drag makes.
 #[test]
 fn the_preview_shows_the_line_the_drag_makes() {
     for (to, _) in CASES {
@@ -84,12 +88,22 @@ fn the_preview_shows_the_line_the_drag_makes() {
     }
 }
 
+/// Up-left, up-right and down-left drags snap the same way, mirrored.
 #[test]
 fn shift_snaps_every_direction() {
-    // Up-left, up-right and down-left drags snap the same way, mirrored.
     let o = app().ui.tool_options.clone();
     for (to, want) in [([200.0, 180.0], [280.0, 180.0]), ([520.0, 100.0], [520.0, 180.0]), ([380.0, 100.0], [399.5, 100.0]), ([200.0, 310.0], [200.0, 299.5])] {
         let g = super::shape_geometry(&o, Tool::Line, START, to, Modifiers::SHIFT).expect("a line");
         assert_eq!(g["to"], json!(want), "⇧-drag 400,300 → {to:?}: {g}");
     }
+}
+
+/// CodeRabbit on #13283: a short fractional ⇧-drag still draws a one-pixel diagonal. Snapped to
+/// 0.65 × 0.65 it is shorter than a pixel, but the drag itself is not, and its ends round to a
+/// whole-pixel 45° step.
+#[test]
+fn a_short_fractional_shift_drag_still_draws_a_diagonal() {
+    let o = app().ui.tool_options.clone();
+    let g = super::shape_geometry(&o, Tool::Line, [10.0, 10.0], [11.1, 10.65], Modifiers::SHIFT).expect("a line");
+    assert_eq!((g["from"].clone(), g["to"].clone()), (json!([10.0, 10.0]), json!([11.0, 11.0])), "{g}");
 }
