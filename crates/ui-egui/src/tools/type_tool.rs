@@ -137,3 +137,6 @@ mod mask_escape_tests;
 
 #[cfg(test)]
 mod unchanged_edit_history_tests;
+
+#[cfg(test)]
+mod mask_active_layer_tests;
