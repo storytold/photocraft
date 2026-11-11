@@ -108,6 +108,9 @@ mod tests {
     /// Actual dropdown text input keeps dotted/dotless prefixes and decomposed I+dot distinct.
     #[test]
     fn azerbaijani_dropdown_type_ahead_handles_both_i_pairs() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
         let az = crate::i18n::Lang::from_code("az").unwrap();
@@ -202,6 +205,9 @@ mod tests {
     /// the language comes back within the pause.
     #[test]
     fn a_language_change_forgets_the_letters_typed_before() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
         let en = crate::i18n::Lang::EN;
