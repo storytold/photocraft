@@ -410,17 +410,33 @@ fn para_json(d: &ParagraphStyleDef, styles: &TextStyles) -> Value {
     json!({ "id": d.id, "name": d.name, "paragraphAttrs": d.para_attrs, "characterAttrs": d.char_attrs, "resolved": { "paragraph": styles.resolve_para_def(Some(d)), "character": styles.resolve_char_def(Some(d), None, FAMILY) } })
 }
 
+/// Styles with an id already seen are dropped (id lookups resolve to the first, so the first wins)
+/// and named in `warnings`.
+fn first_by_id<'a, T>(defs: &'a [T], id: impl Fn(&T) -> u32, name: impl Fn(&T) -> &str, warnings: &mut Vec<String>) -> Vec<&'a T> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for d in defs {
+        if seen.insert(id(d)) {
+            out.push(d);
+        } else {
+            warnings.push(format!("duplicate style id {} (`{}`) ignored: the first style with that id wins", id(d), name(d)));
+        }
+    }
+    out
+}
+
 fn list(s: &Session, p: &Value, paragraph: bool) -> Result<Value> {
     let st = styles(s)?;
     let cur = current(s, p);
+    let mut warnings = Vec::new();
     Ok(if paragraph {
         let mut v = vec![para_json(&st.basic, &st)];
-        v.extend(st.paragraph.iter().map(|d| para_json(d, &st)));
-        json!({ "styles": v, "current": cur })
+        v.extend(first_by_id(&st.paragraph, |d| d.id, |d| &d.name, &mut warnings).into_iter().map(|d| para_json(d, &st)));
+        json!({ "styles": v, "current": cur, "warnings": warnings })
     } else {
         let mut v = vec![json!({ "id": 0, "name": ts::NO_CHARACTER_STYLE, "attrs": {} })];
-        v.extend(st.character.iter().map(|d| char_json(d, &st)));
-        json!({ "styles": v, "current": cur })
+        v.extend(first_by_id(&st.character, |d| d.id, |d| &d.name, &mut warnings).into_iter().map(|d| char_json(d, &st)));
+        json!({ "styles": v, "current": cur, "warnings": warnings })
     })
 }
 
