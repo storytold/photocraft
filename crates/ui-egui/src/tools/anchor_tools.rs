@@ -98,8 +98,38 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     }
     let Some(tool) = effective(app.ui.tool, mods) else { return false };
     if let ToolEvent::Down { x, y, .. } = ev {
+        if tool == Tool::DeleteAnchorPoint && start_segment_drag(app, [x, y], mods) {
+            return true;
+        }
         click(app, tool, [x, y]);
     }
+    true
+}
+
+/// Delete Anchor Point (#12767): a press on a straight segment of the targeted path starts Direct
+/// Selection's segment drag (`Edit::Segment`, `path.bendSegment`, **Drag Segment**); the drag's
+/// Move and Up reach `direct_select::pointer` first. A click without movement records nothing.
+/// Not measured, so as today (a press on a segment does nothing): a curved segment, ⇧, a segment of
+/// a path whose anchors are all selected, and the Pen path being drawn. False when the press is not
+/// on such a segment (an anchor press goes on to delete).
+fn start_segment_drag(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) -> bool {
+    if mods.shift {
+        return false;
+    }
+    let Some((r, path, Hit::Segment(k, t))) = crate::direct_select::hit_active(app, p) else { return false };
+    let Some(sp) = path.subpaths.get(k[0]) else { return false };
+    let end = if k[1] + 1 < sp.knots.len() { k[1] + 1 } else { 0 };
+    let straight = sp.knots.get(k[1]).zip(sp.knots.get(end)).is_some_and(|(a, b)| a.out_ctrl == a.anchor && b.in_ctrl == b.anchor);
+    let ds = &app.ui.direct_selection;
+    let all_selected = ds.target == Some(r) && (0..path.subpaths.len()).all(|s| edit::subpath_anchors(&path, s).iter().all(|a| ds.anchors.contains(a)));
+    if r == PathRef::Pen || all_selected || !straight {
+        return false;
+    }
+    let owner = crate::direct_select::Owner::current(app);
+    let ds = &mut app.ui.direct_selection;
+    *ds = DirectSelection { target: Some(r), segment: Some(k), owner, ..Default::default() };
+    ds.drag =
+        Some(crate::direct_select::Drag::Edit { target: r, base: path, edit: crate::direct_select::Edit::Segment(k, t), start: p, end: p, preview: None });
     true
 }
 
@@ -188,6 +218,8 @@ fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: 
 
 #[cfg(test)]
 mod add_anchor_targeted_path_tests;
+#[cfg(test)]
+mod delete_anchor_drag_segment_tests;
 #[cfg(test)]
 mod delete_anchor_targeted_path_tests;
 #[cfg(test)]
