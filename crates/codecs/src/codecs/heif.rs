@@ -56,7 +56,10 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
         limits.check_bytes(info.coded_width, info.coded_height, peak)?;
     }
     // Photoshop on macOS opens HEIC through Apple's decoder, so match its chroma upsampling.
-    let options = craft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation, chroma: craft_heif::Chroma::Apple };
+    // A grid's payload can declare a larger canvas than the `ispe` probed above. craft-heif holds
+    // the canvas it really decodes to `max_pixels`, so `max_alloc` is passed down as pixels too.
+    let max_pixels = limits.max_pixels.min(limits.max_alloc / peak);
+    let options = craft_heif::Options { max_pixels, apply_transforms: !keep_orientation, chroma: craft_heif::Chroma::Apple };
     let mut decoded = craft_heif::decode(bytes, &options).map_err(err)?;
     // The decoder re-reads the container; trust its output's shape, not the probe's.
     let layout = if decoded.has_alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
@@ -141,6 +144,27 @@ mod tests {
         let with = |max_alloc| crate::decode_with(&bytes, &crate::DecodeOptions { limits: Limits { max_alloc, ..Default::default() }, ..Default::default() });
         assert!(matches!(with(peak - 1), Err(CodecError::LimitExceeded(_))));
         assert_eq!(with(peak).unwrap().sample_type(), crate::image::SampleType::F32);
+    }
+
+    /// A grid whose payload declares a larger canvas (64 x 64) than its `ispe` (33 x 33): the
+    /// byte budget applies to the canvas that is decoded, not the one the container declares.
+    #[cfg(feature = "heif")]
+    #[test]
+    fn a_grid_canvas_larger_than_its_declared_size_is_held_to_max_alloc() {
+        use craft_heif::testdata::{Spec, build};
+        let grey = |_, _| [128u16, 128, 128];
+        let mut bytes = build(&Spec::new(33, 33, &grey));
+        // The grid item's payload: version, flags, rows - 1, columns - 1, output width and height.
+        let at = bytes.windows(8).position(|w| w == [0, 0, 1, 1, 0, 33, 0, 33]).unwrap();
+        bytes[at + 5] = 64;
+        bytes[at + 7] = 64;
+        let with = |max_alloc| crate::decode_with(&bytes, &crate::DecodeOptions { limits: Limits { max_alloc, ..Default::default() }, ..Default::default() });
+        // Enough for the declared 33 x 33 (three bytes a sample at the peak), not for 64 x 64.
+        // Refused by the decoder before it allocates the canvas, not by the size check on its output.
+        match with(33 * 33 * 3 * 3) {
+            Err(CodecError::LimitExceeded(m)) => assert!(m.contains("pixel limit"), "{m}"),
+            r => panic!("{:?}", r.map(|i| i.dimensions())),
+        }
     }
 
     #[cfg(feature = "heif")]
