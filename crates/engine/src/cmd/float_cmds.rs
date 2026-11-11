@@ -363,6 +363,7 @@ fn keeps_floating(id: &str) -> bool {
             | "select.drop"
             | "file.export.saveForWebLegacy"
             | "layer.copyToDocument"
+            | "file.scripts.imageProcessor"
             | "brush.mixer.sample"
             | "brush.mixer.load"
             | "brush.mixer.clean"
