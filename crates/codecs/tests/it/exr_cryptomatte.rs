@@ -269,3 +269,43 @@ fn hostile_input_never_panics() {
     let e = cryptomatte_layers(&bytes, &Limits { max_alloc: 8, ..Limits::default() }).unwrap_err();
     assert!(e.to_string().contains("exceed"), "{e}");
 }
+
+/// Layers list in the header's channel order, not alphabetically: the canonical names are
+/// chosen so name-sorting and channel order disagree — ASCII name sort puts `Cobject`
+/// (capital C) before `asset`, while the header's channel list holds `asset00` first (the
+/// writer sorts channel names). The file's channel order is the declaration order, so the
+/// default layer of a selection is `asset` (#2811's review).
+#[test]
+fn layers_list_in_file_order_not_alphabetically() {
+    let (w, h) = (4usize, 4usize);
+    let (object, asset) = (cryptomatte_id("object"), cryptomatte_id("asset"));
+    let mk = |n: &str, v: Vec<f32>| AnyChannel::new(n, FlatSamples::F32(v));
+    let list = vec![
+        mk("R", vec![0.5; w * h]),
+        mk("G", vec![0.5; w * h]),
+        mk("B", vec![0.5; w * h]),
+        mk("asset00.red", vec![asset; w * h]),
+        mk("asset00.green", vec![1.0; w * h]),
+        mk("cobject00.red", vec![object; w * h]),
+        mk("cobject00.green", vec![1.0; w * h]),
+    ];
+    let mut attrs = LayerAttributes::named("order");
+    for (name, canonical) in [("cobject", "Cobject"), ("asset", "asset")] {
+        let key = cryptomatte_key(canonical);
+        attrs.other.insert(text(&format!("cryptomatte/{key}/name")), AttributeValue::Text(text(canonical)));
+        let manifest = format!("{{\"{name}\":\"{:08x}\"}}", cryptomatte_id(name).to_bits());
+        attrs.other.insert(text(&format!("cryptomatte/{key}/manifest")), AttributeValue::Text(text(&manifest)));
+    }
+    let layer = Layer::new(
+        (w, h),
+        attrs,
+        Encoding { compression: Compression::Uncompressed, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing },
+        AnyChannels::sort(list.into_iter().collect()),
+    );
+    let image = exr::image::Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (w, h))), vec![layer]);
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write().to_buffered(&mut out).expect("write");
+    let found = cryptomatte_layers(&out.into_inner(), &Limits::default()).unwrap();
+    let names: Vec<&str> = found.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["asset", "Cobject"], "file channel order: asset00 is declared first");
+}

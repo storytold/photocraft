@@ -161,6 +161,10 @@ pub(crate) fn layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLay
         // and distinct file-controlled keys can all name the same layer, which would turn
         // channel discovery into O(keys * channels) work and allocate a fresh list each time.
         let mut streams_for: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        // Layers in the file's own order: the header's attribute map iterates arbitrarily, and
+        // sorting by name lists `CryptoAsset` before a `CryptoObject` the file declares first.
+        // The position of a layer's first channel in the header's channel list is that order.
+        let mut part_layers: Vec<(usize, CryptomatteLayer)> = Vec::new();
         for key in cryptomatte_keys(&header.own_attributes.other) {
             let Some(name) = attribute(&header.own_attributes.other, &key, "name") else { continue };
             let channels = streams_for.entry(name.clone()).or_insert_with(|| layer_streams(header, name.as_str())).clone();
@@ -171,18 +175,27 @@ pub(crate) fn layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLay
                 .filter(|m| m.len() <= MANIFEST_CAP)
                 .map(|m| parse_manifest(m.as_str()))
                 .unwrap_or_default();
-            out.push(CryptomatteLayer {
-                part,
-                name,
-                key: key.clone(),
-                conversion: attribute(&header.own_attributes.other, &key, "conversion"),
-                manifest,
-                sidecar_manifest: attribute(&header.own_attributes.other, &key, "manif_file"),
-                channels,
-            });
+            // The position of the layer's first channel in the header's channel list. The
+            // streams carry their indices ("asset00"), the list its suffixes ("asset00.red"),
+            // so a channel belongs to a stream when `split_stream` resolves it to that name.
+            let index =
+                header.channels.list.iter().position(|c| split_stream(&c.name.to_string()).is_some_and(|s| channels.contains(&s.stream))).unwrap_or(usize::MAX);
+            part_layers.push((
+                index,
+                CryptomatteLayer {
+                    part,
+                    name,
+                    key: key.clone(),
+                    conversion: attribute(&header.own_attributes.other, &key, "conversion"),
+                    manifest,
+                    sidecar_manifest: attribute(&header.own_attributes.other, &key, "manif_file"),
+                    channels,
+                },
+            ));
         }
+        part_layers.sort_by_key(|(index, _)| *index);
+        out.extend(part_layers.into_iter().map(|(_, layer)| layer));
     }
-    out.sort_by(|a, b| (&a.part, &a.name).cmp(&(&b.part, &b.name)));
     Ok(out)
 }
 
