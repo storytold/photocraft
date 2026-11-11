@@ -1166,8 +1166,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 crate::widgets::slider_row(ui, tl!("Display Opacity"), &mut settings.overlay_opacity, 0.0..=100.0, "%", None);
                 crate::widgets::checkbox(ui, &mut settings.fill_closed, tl!("Fill Closed Strokes"));
             });
-            brush.hardness = hardness / 100.0;
-            brush.opacity = opacity / 100.0;
+            // Only an edited field is converted back: the percent round trip can move a value by
+            // one ulp, which would send a brush update every frame with nothing changed.
+            if hardness != before.hardness * 100.0 {
+                brush.hardness = hardness / 100.0;
+            }
+            if opacity != before.opacity * 100.0 {
+                brush.opacity = opacity / 100.0;
+            }
             crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
         }
         Tool::QuickSelection => {

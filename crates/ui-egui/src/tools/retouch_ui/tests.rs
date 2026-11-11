@@ -1343,3 +1343,32 @@ fn selection_brush_applies_subpixel_preset_size() {
     tool_event(&mut app, ToolEvent::Up { x: 40.5, y: 30.5 }, mods);
     assert!(app.session.active().unwrap().doc.selection.as_ref().is_some_and(|m| m.sample_channel(40, 30, 0) > 0.0));
 }
+
+/// Showing the Selection Brush bar without touching it keeps hardness and opacity bit for bit:
+/// their percent round trip (x * 100 / 100) moves some values by one ulp.
+#[test]
+fn selection_brush_options_bar_keeps_untouched_hardness_and_opacity() {
+    use crate::theme::ThemeKind;
+    use egui::vec2;
+    let mut app = app();
+    app.ui.tool = Tool::SelectionBrush;
+    crate::canvas::paint_mouse::sync_tool_brush(&mut app);
+    let v = 0.010_041_639_f32;
+    assert_ne!(v * 100.0 / 100.0, v, "the value must drift on the round trip");
+    app.session.tools.brush.hardness = v;
+    app.session.tools.brush.opacity = v;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::panels::options_bar(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
+    h.run_steps(4);
+    let brush = &h.state().session.tools.brush;
+    assert_eq!(brush.hardness.to_bits(), v.to_bits());
+    assert_eq!(brush.opacity.to_bits(), v.to_bits());
+}
