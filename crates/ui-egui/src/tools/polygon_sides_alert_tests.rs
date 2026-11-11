@@ -1,6 +1,6 @@
 //! #13304: the Polygon tool's Sides takes whole numbers 3..100; a value typed past the range becomes
 //! the closest one and, once the field is left, the reference's "Closest value inserted" alert with
-//! OK says so. A scrub past either end stops there without one.
+//! OK says so. A scrub or an arrow-key step past either end stops there without one.
 
 use egui::accesskit::Role;
 use egui::vec2;
@@ -86,6 +86,23 @@ fn sides_that_are_no_number_keep_the_value_without_an_alert() {
     type_sides(&mut h, "abc");
     assert_eq!(sides(&h), 5, "the previous value stays");
     assert!(alerts(&h).is_empty(), "no number, no alert");
+}
+
+#[test]
+fn arrow_steps_past_either_end_stop_there_without_an_alert() {
+    for (start, key, want) in [("99", egui::Key::ArrowUp, 100), ("4", egui::Key::ArrowDown, 3)] {
+        let mut h = bar();
+        type_sides(&mut h, start);
+        click_sides(&mut h);
+        for _ in 0..3 {
+            h.key_press(key);
+            h.run_steps(1);
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(sides(&h), want, "{start}: the steps reached the end");
+        assert!(alerts(&h).is_empty(), "{start}: an arrow step stops at the end without an alert");
+    }
 }
 
 #[test]
