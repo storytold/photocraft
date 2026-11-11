@@ -3142,7 +3142,7 @@ fn transform_preview_preserves_displayed_profile_colors() {
         app.session
             .edit("original color sample", |doc, active| {
                 if wide_gamut {
-                    doc.icc_profile = Some(photocraft_cms::Builtin::AdobeRgbCompat.profile().to_bytes());
+                    doc.icc_profile = Some(craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes());
                 }
                 doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(bounds, &[0.55, 0.35, 0.2, 1.0]);
                 Ok(())

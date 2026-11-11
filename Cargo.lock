@@ -1404,6 +1404,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cms"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=78c7cc81584522161f3e670228207d3b5a5db929#78c7cc81584522161f3e670228207d3b5a5db929"
+dependencies = [
+ "md-5",
+ "rayon",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
@@ -5332,6 +5341,7 @@ dependencies = [
  "chrono",
  "clap",
  "core-graphics2",
+ "craft-cms",
  "craft-update",
  "dispatch2",
  "eframe",
@@ -5345,7 +5355,6 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "open",
  "photocraft-automation",
- "photocraft-cms",
  "photocraft-codecs",
  "photocraft-color",
  "photocraft-compose",
@@ -5441,8 +5450,8 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "craft-cms",
  "photocraft-automation",
- "photocraft-cms",
  "photocraft-codecs",
  "photocraft-doc",
  "photocraft-engine",
@@ -5458,14 +5467,6 @@ dependencies = [
  "tokio",
  "winresource",
  "xtask",
-]
-
-[[package]]
-name = "photocraft-cms"
-version = "0.20.1"
-dependencies = [
- "moxcms",
- "rayon",
 ]
 
 [[package]]
@@ -5496,7 +5497,7 @@ dependencies = [
 name = "photocraft-color"
 version = "0.20.1"
 dependencies = [
- "photocraft-cms",
+ "craft-cms",
  "serde",
 ]
 
@@ -5504,8 +5505,8 @@ dependencies = [
 name = "photocraft-compose"
 version = "0.20.1"
 dependencies = [
+ "craft-cms",
  "criterion",
- "photocraft-cms",
  "photocraft-color",
  "photocraft-doc",
  "photocraft-geom",
@@ -5534,12 +5535,12 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "chrono",
+ "craft-cms",
  "craft-print",
  "exr",
  "flate2",
  "photocraft-affinity",
  "photocraft-algo",
- "photocraft-cms",
  "photocraft-codecs",
  "photocraft-color",
  "photocraft-compose",
@@ -5606,10 +5607,10 @@ name = "photocraft-gpu"
 version = "0.20.1"
 dependencies = [
  "bytemuck",
+ "craft-cms",
  "half",
  "log",
  "photocraft-algo",
- "photocraft-cms",
  "photocraft-color",
  "photocraft-compose",
  "photocraft-doc",
@@ -5627,6 +5628,7 @@ name = "photocraft-io"
 version = "0.20.1"
 dependencies = [
  "blake3",
+ "craft-cms",
  "craft-docpath",
  "craft-pdf",
  "crc32fast",
@@ -5637,7 +5639,6 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "photocraft-affinity",
  "photocraft-algo",
- "photocraft-cms",
  "photocraft-codecs",
  "photocraft-color",
  "photocraft-compose",
@@ -5677,7 +5678,7 @@ dependencies = [
 name = "photocraft-paint"
 version = "0.20.1"
 dependencies = [
- "photocraft-cms",
+ "craft-cms",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",
@@ -5790,6 +5791,7 @@ version = "0.20.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "craft-cms",
  "craft-i18n",
  "craft-print",
  "craft-ui",
@@ -5804,7 +5806,6 @@ dependencies = [
  "icu_locale_core",
  "log",
  "photocraft-algo",
- "photocraft-cms",
  "photocraft-codecs",
  "photocraft-color",
  "photocraft-compose",
