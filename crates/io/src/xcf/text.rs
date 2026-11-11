@@ -16,6 +16,9 @@ use super::{Result, invalid};
 const MAX_NODES: usize = 65_536;
 const MAX_DEPTH: usize = 32;
 
+#[cfg(test)]
+mod review_tests;
+
 #[derive(Debug)]
 enum Value {
     Atom(Vec<u8>),
@@ -467,6 +470,9 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
         ..Default::default()
     };
     let direction = scalar(&fields, "base-direction")?.unwrap_or("ltr");
+    if matches!(direction, "ttb-ltr" | "ttb-ltr-upright") {
+        return Err(crate::IoError::Unsupported("left-to-right vertical source columns cannot use native right-to-left column layout".into()));
+    }
     if direction.starts_with("ttb") {
         layer.orientation = Orientation::Vertical;
         note(&mut notes, "Vertical source typography uses native vertical text layout".into());
@@ -681,21 +687,25 @@ fn requested_font(fields: &[Value], style: &mut CharStyle) -> Result<()> {
     style.font_style = scalar(fields, "style")?.unwrap_or("").into();
     style.postscript_name = scalar(fields, "psname")?.filter(|name| !name.is_empty()).map(str::to_owned);
     let weight = number(fields, "weight", 80., 0., 215.)?;
-    style.weight = if weight >= 205. {
-        900
-    } else if weight >= 200. {
-        700
-    } else if weight >= 180. {
-        600
-    } else if weight >= 100. {
-        500
-    } else if weight <= 40. {
-        300
-    } else {
-        400
-    };
+    style.weight = fontconfig_weight(weight);
     style.italic = number(fields, "slant", 0., 0., 110.)? != 0.;
     Ok(())
+}
+
+/// Convert Fontconfig's public weight scale to native OpenType requests, interpolating
+/// intermediate values and retaining the native editable endpoints.
+fn fontconfig_weight(weight: f64) -> u16 {
+    const WEIGHTS: &[(f64, f64)] = &[
+        (0., 100.), (40., 200.), (50., 300.), (55., 350.), (75., 380.),
+        (80., 400.), (100., 500.), (180., 600.), (200., 700.), (205., 800.),
+        (210., 900.), (215., 900.),
+    ];
+    for pair in WEIGHTS.windows(2) {
+        if let [(a, x), (b, y)] = pair && weight <= *b {
+            return (x + (weight - a) * (y - x) / (b - a)).round().clamp(100., 900.) as u16;
+        }
+    }
+    900
 }
 
 /// Decode explicit `pt` syntax or a Pango-scaled magnitude. Font sizes use points; device-distance attributes still require DPI conversion.
@@ -831,6 +841,14 @@ fn font_description(source: &str, style: &mut CharStyle, dpi: f64, apply_size: b
     ];
     let suffix = words.iter().rposition(|word| !OPTIONS.contains(&word.to_ascii_lowercase().replace('-', "").as_str())).map_or(0, |index| index + 1);
     let style_names = words.split_off(suffix);
+    // A complete font description supplies normal defaults for omitted face options;
+    // it must not accidentally inherit the preceding span's bold/italic face identity.
+    style.weight = 400;
+    style.italic = false;
+    style.caps = Caps::Normal;
+    style.horizontal_scale = 1.;
+    style.font_style.clear();
+    style.postscript_name = None;
     for word in &style_names {
         let option = word.to_ascii_lowercase().replace('-', "");
         match option.as_str() {
@@ -918,6 +936,11 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                     font_description(requested, &mut style, dpi, true, notes)?;
                 }
             }
+            if matches!(ancestor.tag_name().name(), "b" | "i" | "tt") || ancestor.attributes().any(|a| matches!(a.name(), "font_family" | "face" | "weight" | "font_weight" | "style" | "font_style")) {
+                // Native layout resolves a PostScript identity before a family/style
+                // request; an overriding request must not retain the old exact face.
+                style.postscript_name = None;
+            }
             match ancestor.tag_name().name() {
                 "markup" | "span" => {}
                 "b" => style.weight = 700,
@@ -931,6 +954,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                 "small" => style.size_pt /= 1.2,
                 _ => note(notes, format!("Source markup element {} is retained without native formatting", ancestor.tag_name().name())),
             }
+            let mut explicit_alpha = None;
             for a in ancestor.attributes() {
                 match a.name() {
                     "font" | "font_desc" => {}
@@ -1052,11 +1076,16 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                         if !alpha.is_finite() || !(0.0..=max).contains(&alpha) {
                             return Err(invalid("markup alpha out of bounds"));
                         }
-                        style.color.alpha = alpha / max;
+                        explicit_alpha = Some(alpha / max);
                     }
                     "lang" => style.language = Some(a.value().replace('_', "-")),
                     _ => note(notes, format!("Source markup attribute {} is retained without native formatting", a.name())),
                 }
+            }
+            // Explicit opacity overrides an RGBA foreground independently of XML
+            // attribute order; each nested span still inherits the resolved parent.
+            if let Some(alpha) = explicit_alpha {
+                style.color.alpha = alpha;
             }
             style.tracking = spacing_pt * 1000. / style.size_pt;
             if !style.tracking.is_finite() || style.tracking.abs() > 1_000_000. {
