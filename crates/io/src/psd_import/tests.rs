@@ -151,7 +151,7 @@ fn spots(doc: &Document) -> Vec<bool> {
 /// straight (the maximum = solid ink), no 1053, and `version_info` as resource 1057. `padded`
 /// lays DisplayInfo out in the 14-byte records of 0.1.0 to 0.7.0.
 fn as_earlier_photocraft_saved(doc: &Document, version_info: Vec<u8>, padded: bool) -> Vec<u8> {
-    let mut file = crate::psd_export::document_to_psd(doc);
+    let mut file = crate::psd_export::document_to_psd(doc).unwrap();
     assert!(!file.merged_has_alpha());
     file.resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS);
     for r in &mut file.resources {
@@ -259,7 +259,7 @@ fn other_files_without_alpha_identifiers_use_photoshop_polarity() {
     ];
     for (what, info) in cases {
         // Photoshop's polarity, as this version writes it, without 1053.
-        let mut file = crate::psd_export::document_to_psd(&doc);
+        let mut file = crate::psd_export::document_to_psd(&doc).unwrap();
         file.resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS && r.id != ids::VERSION_INFO);
         file.resources.extend(info.map(|d| ImageResource::new(ids::VERSION_INFO, d)));
         let bytes = file.to_bytes().unwrap();
@@ -292,7 +292,7 @@ fn the_earlier_photocraft_rule_needs_a_spot_and_no_alpha_identifiers() {
 /// those channels' planes as Photoshop stored them (it had read and written them straight),
 /// and stored the channels added after them straight.
 fn as_earlier_photocraft_resaved(doc: &Document, stale_ids: &[u32], kept: usize) -> Vec<u8> {
-    let mut file = crate::psd_export::document_to_psd(doc);
+    let mut file = crate::psd_export::document_to_psd(doc).unwrap();
     file.resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS && r.id != ids::VERSION_INFO);
     file.resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, stale_ids.iter().flat_map(|id| id.to_be_bytes()).collect()));
     file.resources.push(ImageResource::new(ids::VERSION_INFO, version_info_2026(true)));
@@ -542,7 +542,7 @@ fn a_fatal_layer_error_skips_the_extra_channel_conversion() {
             self.bytes.as_slice().read_at(offset, buf)
         }
     }
-    let bytes = crate::psd_export::document_to_psd(&channels_document(SampleType::U8)).to_bytes().unwrap();
+    let bytes = crate::psd_export::document_to_psd(&channels_document(SampleType::U8)).unwrap().to_bytes().unwrap();
     let whole = PsdFile::from_bytes(&bytes).unwrap();
     assert!(merged_needed(&whole), "the extra channels come from the merged image");
     let converted = psd_to_document_global(&whole, &photocraft_raster::Interrupt::NONE, None, Vec::new(), false).unwrap();
@@ -599,4 +599,31 @@ fn only_allocation_failures_are_fatal_to_a_layer_channel() {
         Some(crate::IoError::OutOfMemory(message)) => assert!(message.contains("layer \"Layer 1\" channel 2"), "{message}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// A standalone legacy conversion that is over budget is refused *before* it waits for the
+/// decode gate, so an ineligible file never blocks behind an active decode. The legacy API keeps
+/// its warning (the ordinary import path still receives the fatal error).
+#[test]
+fn legacy_conversion_refuses_before_waiting_for_the_decode_gate() {
+    let mut file = testgen::small(Version::Psd, Compression::Zip);
+    // 30,000² tiles are several GiB: far past the hard budget of the 4 GiB machine below.
+    file.layers_mut()[0].rect = photocraft_psd::Rect::from_xywh(0, 0, 30_000, 30_000);
+    let snapshot = crate::memory::MemorySnapshot { available_ram: Some(4 << 30), swap_free: None, commit_headroom: None };
+    let ctl = photocraft_raster::Interrupt::NONE;
+    let _guard = crate::psd_gate::acquire_decode_admission(&ctl).expect("active decode");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let (doc, warnings) = crate::memory::with_mock_memory(snapshot, || crate::psd_to_document(&file));
+        tx.send((doc.layers.len(), warnings)).ok();
+    });
+
+    // The refusal arrives while this thread still holds the gate: the legacy call never waited.
+    let (layers, warnings) = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("a refused legacy conversion must not wait for the decode gate");
+    assert_eq!(layers, 0, "a refused conversion returns an empty document");
+    assert!(warnings.iter().any(|w| w.contains("pixel memory")), "{warnings:?}");
+
+    drop(_guard);
+    handle.join().expect("worker thread");
 }
