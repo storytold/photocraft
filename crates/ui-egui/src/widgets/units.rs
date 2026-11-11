@@ -149,6 +149,36 @@ pub(super) fn plain(text: &str) -> Option<f64> {
     clean(text).parse().ok()
 }
 
+/// The typed text without spaces (`1 234`), with a Unicode minus as `-`, and a decimal comma as a
+/// point (`0,3`, as typed where the comma is the decimal separator, #10729) when the text has no
+/// point; beside a point (`1.234,5`) a comma is left as it is, so the text stays invalid rather
+/// than guessed.
+///
+/// The comma is read that way only where the system's separator is not the point
+/// ([`crate::i18n::decimal_separator`]): where it is, a typed `1,234` is a thousands group, and
+/// reading it as `1.234` would be out by a factor of a thousand rather than invalid (review on
+/// #10729). Where the separator can't be read (macOS, Linux, the web) the field takes both, as
+/// `zoom_field` does.
 fn clean(text: &str) -> String {
-    text.chars().filter(|c| !c.is_whitespace()).map(|c| if c == '−' { '-' } else { c }).collect()
+    let bare: String = text.chars().filter(|c| !c.is_whitespace()).map(|c| if c == '−' { '-' } else { c }).collect();
+    if crate::i18n::decimal_separator() == Some('.') {
+        return bare;
+    }
+    // Each number decides for itself, so `1,5+2.0` commits 3.5 rather than being refused for a
+    // point the other operand carries (CodeRabbit on #10729). A number holding both stays as it
+    // is, so `1.234,5` is still invalid rather than guessed at.
+    let mut out = String::with_capacity(bare.len());
+    for part in bare.split_inclusive(|c: char| !matches!(c, '0'..='9' | ',' | '.')) {
+        let (number, tail) = match part.chars().next_back().filter(|c| !matches!(c, '0'..='9' | ',' | '.')) {
+            Some(end) => (&part[..part.len() - end.len_utf8()], Some(end)),
+            None => (part, None),
+        };
+        if number.contains(',') && !number.contains('.') {
+            out.extend(number.chars().map(|c| if c == ',' { '.' } else { c }));
+        } else {
+            out.push_str(number);
+        }
+        out.extend(tail);
+    }
+    out
 }
