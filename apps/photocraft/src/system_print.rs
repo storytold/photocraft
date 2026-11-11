@@ -14,6 +14,9 @@ on run argv
     tell application "Preview"
     activate
     set printName to item 1 of argv
+    set printCopies to (item 2 of argv) as integer
+    set printCollating to (item 3 of argv) is "true"
+    set printPrinter to item 4 of argv
     set printDocument to missing value
     repeat 200 times
       if exists document printName then
@@ -24,7 +27,11 @@ on run argv
     end repeat
     if printDocument is missing value then error "Preview did not open the PhotoCraft print document"
     try
-      print printDocument with print dialog
+      if printPrinter is "" then
+        print printDocument with properties {copies:printCopies, collating:printCollating} with print dialog
+      else
+        print printDocument with properties {copies:printCopies, collating:printCollating, target printer:printPrinter} with print dialog
+      end if
       close printDocument
       return "printed"
     on error errorMessage number errorNumber
@@ -39,10 +46,12 @@ on run argv
 end run
 "#;
 
+/// Returns the desktop callback that opens the platform print confirmation for a rendered PDF.
 pub fn dialog() -> SystemPrintDialog {
     Arc::new(show)
 }
 
+/// Keeps the temporary PDF alive while the synchronous platform confirmation is open.
 fn show(pdf: &[u8], settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     if photocraft_engine::print_cmds::printing_disabled() {
         return Err("printing is disabled in this process; use dryRun: true".into());
@@ -58,7 +67,14 @@ fn show(pdf: &[u8], settings: &SystemPrintSettings) -> Result<SystemPrintOutcome
 }
 
 #[cfg(target_os = "macos")]
-fn platform(path: &std::path::Path, _settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
+/// Serializes the Preview settings supported by its public AppleScript dictionary.
+fn mac_print_arguments(settings: &SystemPrintSettings) -> [String; 3] {
+    [settings.copies.to_string(), if settings.collate { "true" } else { "false" }.into(), settings.printer.clone().unwrap_or_default()]
+}
+
+#[cfg(target_os = "macos")]
+/// Opens the PDF in Preview and waits for its macOS print sheet to finish or be cancelled.
+fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     // Opening through Launch Services gives sandboxed Preview a file-access extension. Asking
     // Preview to open a private tempfile directly through AppleScript instead produces a
     // misleading "you don't have permission" alert before the print sheet appears.
@@ -77,6 +93,7 @@ fn platform(path: &std::path::Path, _settings: &SystemPrintSettings) -> Result<S
     let result = std::process::Command::new("/usr/bin/osascript")
         .args(["-e", MAC_PRINT_SCRIPT, "--"])
         .arg(name)
+        .args(mac_print_arguments(settings))
         .output()
         .map_err(|e| format!("could not open the macOS print dialog: {e}"))?;
     if !result.status.success() {
@@ -85,12 +102,34 @@ fn platform(path: &std::path::Path, _settings: &SystemPrintSettings) -> Result<S
     if String::from_utf8_lossy(&result.stdout).trim() == "cancelled" { Ok(SystemPrintOutcome::Cancelled) } else { Ok(SystemPrintOutcome::Printed) }
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_receives_supported_initial_print_settings() {
+        let settings = SystemPrintSettings {
+            title: "proof".into(),
+            printer: Some("Studio".into()),
+            copies: 3,
+            collate: false,
+            duplex: Some(photocraft_engine::print_cmds::SystemPrintDuplex::LongEdge),
+            paper: (612.0, 792.0),
+            landscape: false,
+            driver_options: Vec::new(),
+        };
+        assert_eq!(mac_print_arguments(&settings), ["3", "false", "Studio"]);
+    }
+}
+
 #[cfg(target_os = "linux")]
+/// Opens the desktop's XDG Print portal confirmation.
 fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     crate::print_portal::confirm(path, settings)
 }
 
 #[cfg(target_os = "windows")]
+/// Opens the native Windows print dialog through the bundled PowerShell adapter.
 fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     let script = include_str!("system_print_windows.ps1");
     let result = std::process::Command::new("powershell.exe")
