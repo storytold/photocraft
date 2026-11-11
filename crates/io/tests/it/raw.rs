@@ -183,6 +183,12 @@ fn a_developed_raw_keeps_its_camera_when_the_exif_directory_empties() {
 /// A NEF-like file with Nikon's (undocumented) compression and a full-size
 /// baseline JPEG preview in IFD0.
 fn nef_with_preview() -> Vec<u8> {
+    nef_with_preview_exif(false)
+}
+
+/// The same; `adobe_rgb`: the EXIF says the camera was set to Adobe RGB (ColorSpace
+/// Uncalibrated, InteropIndex "R03"), as on a Sony body, and the JPEG carries no profile.
+fn nef_with_preview_exif(adobe_rgb: bool) -> Vec<u8> {
     let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
     let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
     let mut t = TiffBuilder::default();
@@ -199,14 +205,30 @@ fn nef_with_preview() -> Vec<u8> {
         (33421, Val::Short(vec![2, 2])),
         (33422, Val::Byte(vec![0, 1, 1, 2])),
     ]);
-    let ifd0 = t.ifd(vec![
+    let mut tags = vec![
         (271, Val::Ascii("NIKON CORPORATION".into())),
         (330, Val::Ifds(vec![raw])),
         (513, Val::Blobs(vec![preview])),
         (514, Val::Long(vec![jpeg.len() as u32])),
-    ]);
+    ];
+    if adobe_rgb {
+        let interop = t.ifd(vec![(0x0001, Val::Ascii("R03".into()))]);
+        let exif = t.ifd(vec![(0xA001, Val::Short(vec![0xFFFF])), (0xA005, Val::Ifds(vec![interop]))]);
+        tags.push((34665, Val::Ifds(vec![exif])));
+    }
+    let ifd0 = t.ifd(tags);
     t.chain = vec![ifd0];
     t.build()
+}
+
+#[test]
+fn a_preview_fallback_keeps_the_colour_space_the_raw_states() {
+    let tagged = import("DSC_0001.NEF", &nef_with_preview_exif(true)).unwrap();
+    let icc = tagged.document.icc_profile.as_deref().expect("an Adobe RGB preview opens tagged");
+    let profile = photocraft_cms::Profile::parse(icc).unwrap();
+    assert!(profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()));
+    // Unstated: untagged sRGB, as before.
+    assert!(import("DSC_0001.NEF", &nef_with_preview()).unwrap().document.icc_profile.is_none());
 }
 
 #[test]
@@ -314,6 +336,38 @@ fn cr3_opens_its_upright_camera_jpeg_with_explicit_preview_warning() {
 }
 
 #[test]
+fn damaged_raw_opens_its_camera_jpeg_with_a_warning() {
+    use photocraft_raw::testgen::{RafPacking, RafSpec, XTRANS};
+    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![120; 32 * 20 * 3]).unwrap();
+    let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+    // A lossless compressed RAF (all-zero samples) with a real camera JPEG.
+    let mut spec = RafSpec::new(780, 18, vec![0; 780 * 18], XTRANS.to_vec());
+    spec.packing = RafPacking::Compressed { lossy: false };
+    spec.black = vec![0];
+    spec.preview_jpeg = Some(jpeg);
+    let mut b = spec.build();
+    assert_eq!(import("DSCF0001.RAF", &b).unwrap().document.depth, SampleType::U16, "intact: developed");
+
+    // Zero bits inside the first stripe overrun the residual escape: malformed sensor data.
+    let at = b.windows(5).position(|w| w == b"IS\x01\x10\x0e").unwrap();
+    b[at + 96..at + 160].fill(0);
+    let r = import("DSCF0001.RAF", &b).unwrap();
+    assert_eq!((r.document.size.width, r.document.size.height, r.document.depth), (32, 20, SampleType::U8));
+    assert!(r.warnings[0].contains("damaged") && r.warnings[0].contains("8-bit, not the raw sensor data"), "{:?}", r.warnings);
+
+    // Without a usable preview it stays an error.
+    spec.preview_jpeg = None;
+    let mut b = spec.build();
+    let at = b.windows(5).position(|w| w == b"IS\x01\x10\x0e").unwrap();
+    b[at + 96..at + 160].fill(0);
+    match import("DSCF0001.RAF", &b) {
+        Err(e @ IoError::Raw(_)) => assert!(e.to_string().contains("malformed"), "{e}"),
+        Err(e) => panic!("expected a raw error, got {e}"),
+        Ok(_) => panic!("damaged sensor data without a preview must not open"),
+    }
+}
+
+#[test]
 fn truncated_raws_do_not_panic() {
     let b = nef_with_preview();
     for n in (0..b.len()).step_by(7) {
@@ -418,6 +472,36 @@ fn uncalibrated_raw_takes_its_colour_from_the_camera_jpeg() {
     assert!(fitted(&r.warnings) && !fallback(&r.warnings), "{:?}", r.warnings);
     assert_eq!((r.document.size.width, r.document.size.height), (480, 320));
     assert_eq!(r.document.depth, SampleType::U16);
+}
+
+/// #9985: a sidecar's crop is measured on the raw as stored, before its Orientation turns it
+/// upright: the developed frame is cropped to the same sensor pixels, whichever way it is turned.
+#[test]
+fn camera_raw_tuning_crops_in_the_stored_orientation() {
+    use photocraft_io::camera_raw_xmp::Crop;
+    use photocraft_io::raw::{RawTuning, import_raw_tuned};
+    let (w, h) = (40, 24);
+    // Stored pixels x 4..24, y 6..18; then the upright frame's size and the same pixels in it.
+    let crop = Crop { top: 0.25, left: 0.1, bottom: 0.75, right: 0.6 };
+    for (orientation, size, [x0, y0, x1, y1]) in
+        [(1, (40, 24), [4, 6, 24, 18]), (3, (40, 24), [16, 6, 36, 18]), (6, (24, 40), [6, 4, 18, 24]), (8, (24, 40), [6, 16, 18, 36])]
+    {
+        let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535));
+        spec.as_shot_neutral = Some([0.6, 1.0, 0.8]);
+        spec.orientation = orientation;
+        let bytes = spec.build();
+        let (full, _) = import_raw_tuned("shot.dng", &bytes, &RawTuning::default()).unwrap();
+        let (cut, _) = import_raw_tuned("shot.dng", &bytes, &RawTuning { crop: Some(crop), ..Default::default() }).unwrap();
+        assert_eq!((full.document.size.width, full.document.size.height), size, "orientation {orientation}");
+        assert_eq!((cut.document.size.width, cut.document.size.height), (x1 - x0, y1 - y0), "orientation {orientation}");
+        assert!(cut.warnings.iter().any(|n| n.contains(&format!("cropped to {}×{}", x1 - x0, y1 - y0))), "{:?}", cut.warnings);
+        let full = photocraft_io::document_to_image(&full.document, &mut Vec::new()).unwrap();
+        let cut = photocraft_io::document_to_image(&cut.document, &mut Vec::new()).unwrap();
+        // 16-bit RGB: 6 bytes a pixel.
+        let row = |y: u32| &full.data()[((y * size.0 + x0) * 6) as usize..((y * size.0 + x1) * 6) as usize];
+        let expected: Vec<u8> = (y0..y1).flat_map(|y| row(y).to_vec()).collect();
+        assert_eq!(cut.data(), expected, "orientation {orientation}: the crop is the same pixels of the uncropped develop");
+    }
 }
 
 #[test]
