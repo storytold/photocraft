@@ -234,6 +234,9 @@ mod pen_enter_deselects_tests;
 #[cfg(test)]
 mod ellipse_shift_circle_tests;
 
+#[cfg(test)]
+mod pen_mode_menu_tests;
+
 pub(crate) use pen::freeform_locked_shape;
 
 /// Where a Pen draft goes, captured at its first anchor.
