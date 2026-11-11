@@ -1,7 +1,7 @@
 //! #12059: for vertical text the options bar's alignment buttons are Top / Center / Bottom, after
 //! the targeted text layer's orientation, or with no text targeted the Vertical Type tool's. They
-//! still set left / center / right, and the lit one follows the targeted paragraph. The Type Mask
-//! tools keep the horizontal buttons (not measured).
+//! still set left / center / right, and the lit one follows the targeted paragraph. The Horizontal
+//! Type Mask tool keeps the horizontal buttons (not measured).
 
 use egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
@@ -113,14 +113,12 @@ fn the_vertical_buttons_set_left_center_and_right_and_follow_the_paragraph() {
 }
 
 #[test]
-fn the_type_mask_tools_keep_the_horizontal_buttons() {
-    for tool in [Tool::VerticalTypeMask, Tool::HorizontalTypeMask] {
-        assert_eq!(shown(&bar(new_app(tool))), HORIZONTAL, "{tool:?}, idle");
-        let mut app = new_app(tool);
-        super::pointer_up(&mut app, [400.0, 100.0], [400.0, 100.0]);
-        assert!(app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask), "{tool:?}: typing a mask");
-        assert_eq!(shown(&bar(app)), HORIZONTAL, "{tool:?}, editing");
-    }
+fn the_horizontal_type_mask_tool_keeps_the_horizontal_buttons() {
+    assert_eq!(shown(&bar(new_app(Tool::HorizontalTypeMask))), HORIZONTAL, "idle");
+    let mut app = new_app(Tool::HorizontalTypeMask);
+    super::pointer_up(&mut app, [400.0, 100.0], [400.0, 100.0]);
+    assert!(app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask), "typing a mask");
+    assert_eq!(shown(&bar(app)), HORIZONTAL, "editing");
 }
 
 /// Clicking Toggle text orientation switches the buttons in the same frame (the toggle is drawn
