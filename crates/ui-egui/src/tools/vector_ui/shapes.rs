@@ -96,11 +96,13 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             // line keeps the drag's distance along its axis, a diagonal one the shorter of the two
             // distances on both axes. A drag within 30° of an axis snaps to it: Photoshop flattens
             // a 26.6° drag and keeps a 39.8° one diagonal; the exact boundary is not measured.
+            // An axis line is at least a pixel long: a drag of a pixel or more can keep as little
+            // as 0.87 px along its axis, and `align_line_edges` could round both ends together.
             let tan30 = std::f64::consts::FRAC_PI_6.tan();
             (dx, dy) = if dy.abs() < dx.abs() * tan30 {
-                (dx, 0.0)
+                (dx.abs().max(1.0).copysign(dx), 0.0)
             } else if dx.abs() < dy.abs() * tan30 {
-                (0.0, dy)
+                (0.0, dy.abs().max(1.0).copysign(dy))
             } else {
                 let m = dx.abs().min(dy.abs());
                 (m.copysign(dx), m.copysign(dy))

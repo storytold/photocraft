@@ -107,3 +107,25 @@ fn a_short_fractional_shift_drag_still_draws_a_diagonal() {
     let g = super::shape_geometry(&o, Tool::Line, [10.0, 10.0], [11.1, 10.65], Modifiers::SHIFT).expect("a line");
     assert_eq!((g["from"].clone(), g["to"].clone()), (json!([10.0, 10.0]), json!([11.0, 11.0])), "{g}");
 }
+
+/// CodeRabbit on #13283: a short ⇧-drag near an axis still draws a one-pixel line. With
+/// Preferences › Tools › Snap Vector Tools and Transforms to Pixel Grid off, 0.96 × 0.30 snaps
+/// flat, and its 0.96 px along the axis would round both ends to x 201; the preview and the layer
+/// both show a line one pixel long.
+#[test]
+fn a_short_shift_drag_near_an_axis_still_draws_a_line() {
+    for (from, to, want) in [
+        ([200.51, 100.0], [201.47, 100.30], [[201.0, 99.5], [202.0, 99.5]]),
+        ([200.0, 100.51], [200.30, 101.47], [[199.5, 101.0], [199.5, 102.0]]),
+        ([201.47, 100.0], [200.51, 100.30], [[201.0, 99.5], [200.0, 99.5]]),
+    ] {
+        let mut app = app();
+        app.run("prefs.set", json!({"path": "tools.snapVectorToolsAndTransformsToPixelGrid", "value": false})).unwrap();
+        app.ui.views[0].zoom = 16.0;
+        let preview = shape_preview(&app, Tool::Line, from, to, Modifiers::SHIFT).expect("a preview");
+        drag(&mut app, from, to, Modifiers::SHIFT, Modifiers::SHIFT);
+        let (a, b, path) = line(&app);
+        assert_eq!([a, b], want, "⇧-drag {from:?} → {to:?}");
+        assert_eq!(preview.path, path, "preview of {from:?} → {to:?}");
+    }
+}
