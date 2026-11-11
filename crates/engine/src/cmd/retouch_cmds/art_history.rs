@@ -563,3 +563,7 @@ mod art_history_noop_state_tests;
 #[cfg(test)]
 #[path = "art_history_mode_mismatch_tests.rs"]
 mod art_history_mode_mismatch_tests;
+
+#[cfg(test)]
+#[path = "art_history_depth_tests.rs"]
+mod art_history_depth_tests;
