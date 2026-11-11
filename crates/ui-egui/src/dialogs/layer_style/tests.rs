@@ -224,7 +224,7 @@ fn every_effect_row_shows_a_checkbox() {
                 return;
             }
             let mut f = fields.clone();
-            body_with_response(app, ui, &mut f, false);
+            body_with_response(app, ui, &mut f, false, 0);
         },
         app,
     );
@@ -650,7 +650,7 @@ fn body_keeps_invalid_params_and_renders_without_panicking() {
         fields.insert("effects".into(), json!([{"id": "fx1", "kind": "dropShadow", "on": true, "params": bad.clone()}]));
 
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            body_with_response(&mut app, ui, &mut fields, false);
+            body_with_response(&mut app, ui, &mut fields, false, 0);
         });
         out.textures_delta.clear();
 
@@ -662,7 +662,7 @@ fn body_keeps_invalid_params_and_renders_without_panicking() {
         fields.insert("p:blendingOptions".into(), bad.clone());
         fields.insert("effects".into(), bad.clone());
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            body_with_response(&mut app, ui, &mut fields, false);
+            body_with_response(&mut app, ui, &mut fields, false, 0);
         });
         out.textures_delta.clear();
         assert_eq!(fields.get("p:blendingOptions"), Some(&bad));
@@ -691,7 +691,7 @@ fn blending_page_renders_for_every_mode_and_odd_fields() {
         let mut f = initial_fields(&layer, Some(BLENDING), 120.0);
         set_blending_fields(&mut f, &layer, mode);
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            body_with_response(&mut app, ui, &mut f, false);
+            body_with_response(&mut app, ui, &mut f, false, 0);
         });
         out.textures_delta.clear();
         assert_eq!(f["p:blendingOptions"]["knockout"], "deep", "{mode:?}");
@@ -702,7 +702,7 @@ fn blending_page_renders_for_every_mode_and_odd_fields() {
         bo["blendIf"] = json!([{"thisLayer": [300, -5, "a"]}]);
         f.insert("channelNames".into(), json!([]));
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            body_with_response(&mut app, ui, &mut f, false);
+            body_with_response(&mut app, ui, &mut f, false, 0);
         });
         out.textures_delta.clear();
     }

@@ -23,6 +23,7 @@ use crate::{PhotocraftApp, widgets};
 
 #[cfg(test)]
 mod bevel_modes_tests;
+pub(crate) mod blend_hover;
 pub(crate) mod color_picker;
 mod contour;
 mod gradient_field;
@@ -920,16 +921,21 @@ fn fx_checkbox(p: &egui::Painter, cb: egui::Rect, on: bool, t: &Tokens) {
     }
 }
 
+/// [`body_with_response`] outside a dialog (id 0, which no dialog has): a hovered blend mode
+/// previews nothing.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let _ = body_with_response(app, ui, f, true);
+    let _ = body_with_response(app, ui, f, true, 0);
 }
 
 /// Layer Style's body, laid out like Photoshop's: the effect list over its fx / move / delete
 /// bar, the selected page, and a column with OK, Cancel, New Style…, Preview and the preview
-/// swatch. Returns OK (true) or Cancel (false) once chosen; Enter is OK.
-pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, interactive: bool) -> Option<bool> {
+/// swatch. Returns OK (true) or Cancel (false) once chosen; Enter is OK. `dialog` is the dialog's
+/// id: the mode hovered in its Blend Mode lists previews on the canvas (#5945).
+pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, interactive: bool, dialog: u64) -> Option<bool> {
     let selected = f.get("selected").and_then(Value::as_str).unwrap_or("dropShadow").to_string();
     let mut style_click: Option<String> = None;
+    // The mode under the pointer in the page's open Blend Mode list (live preview, #5945).
+    let mut blend_hovered: Option<(&'static str, String)> = None;
     let mut new_style = false;
     let mut outcome = None;
     let invalid = validate_params(f).err();
@@ -947,13 +953,14 @@ pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Ma
                 .id_salt("layer-style-page")
                 .max_height(h)
                 .auto_shrink(false)
-                .show(ui, |ui| page(app, ui, f, &selected, invalid.as_deref(), &mut style_click));
+                .show(ui, |ui| page(app, ui, f, &selected, invalid.as_deref(), &mut style_click, &mut blend_hovered));
         });
         ui.vertical(|ui| {
             ui.set_width(SIDE_W);
             outcome = side_column(app, ui, f, &mut new_style);
         });
     });
+    blend_hover::hover(app, ui.ctx(), dialog, &selected, blend_hovered);
     // Style swatch clicks apply to the layer (Photoshop does this immediately);
     // New Style… saves the dialog's pending state as a preset.
     if let Some(name) = style_click {
@@ -1035,20 +1042,27 @@ fn channel_names_of(f: &Map<String, Value>) -> Vec<String> {
 }
 
 /// The Blending Options page: General Blending, Advanced Blending and Blend If, as in Photoshop.
-fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
+/// Returns the layer blend mode under the pointer in the open Blend Mode list, if any.
+fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let num = |p: &Value, k: &str, d: f64| p.get(k).and_then(Value::as_f64).unwrap_or(d) as f32;
     widgets::section_label(ui, "General Blending");
-    ui.horizontal(|ui| {
-        widgets::row_label(ui, "Blend Mode", LABEL_W);
-        let mut cur = p.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
-        // Photoshop's modes, plus the layer's own Paint.NET mode when it has one (an imported .pdn).
-        let own = photocraft_color::BlendMode::PAINT_NET_MODES.into_iter().find(|m| m.label() == cur);
-        let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.into_iter().chain(own).map(|m| (m.label().to_string(), m.label())).collect();
-        if widgets::dropdown(ui, "fx-blend-blendingOptions", tl!("Blend Mode"), &mut cur, &opts, 150.0) {
-            p["blend"] = json!(cur);
-        }
-    });
+    let hovered = ui
+        .horizontal(|ui| {
+            widgets::row_label(ui, "Blend Mode", LABEL_W);
+            let mut cur = p.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
+            // Photoshop's modes, plus the layer's own Paint.NET mode when it has one (an imported .pdn).
+            let own = photocraft_color::BlendMode::PAINT_NET_MODES.into_iter().find(|m| m.label() == cur);
+            let opts: Vec<(String, &str)> =
+                photocraft_color::BlendMode::LAYER_MODES.into_iter().chain(own).map(|m| (m.label().to_string(), m.label())).collect();
+            // A click, a key or each wheel notch (#1747) chooses; the hovered row only previews.
+            let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, "fx-blend-blendingOptions", tl!("Blend Mode"), &mut cur, &opts, 150.0);
+            if !chosen.is_empty() {
+                p["blend"] = json!(cur);
+            }
+            hovered.filter(|_| chosen.is_empty() && ui.is_enabled())
+        })
+        .inner;
     let mut v = num(p, "opacity", 100.0);
     if widgets::slider_line(ui, "Opacity", LABEL_W, &mut v, 0.0..=100.0, "%").changed() {
         p["opacity"] = json!(v.round());
@@ -1094,7 +1108,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
     // Blend If: the channel, then Current Layer / Underlying Layer split sliders (Alt-drag splits).
     let entries = p.get("blendIf").and_then(Value::as_array).map_or(0, Vec::len);
     if entries == 0 {
-        return;
+        return hovered;
     }
     let sel = p.get("blendIfChannel").and_then(Value::as_u64).map_or(0, |v| v as usize).min(entries - 1);
     ui.horizontal(|ui| {
@@ -1133,6 +1147,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         }
         ui.add_space(4.0);
     }
+    hovered
 }
 
 /// A Blend If range from the dialog's JSON (`[blackLo, blackHi, whiteLo, whiteHi]`), full when absent.
@@ -1569,8 +1584,18 @@ fn checkbox_line(ui: &mut egui::Ui, on: &mut bool, label: &str) -> bool {
     .inner
 }
 
-/// The selected page: the Styles gallery, Blending Options, or an effect's parameters.
-fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str, invalid: Option<&str>, style_click: &mut Option<String>) {
+/// The selected page: the Styles gallery, Blending Options, or an effect's parameters. A mode
+/// hovered in one of its open Blend Mode lists goes to `blend_hovered`, with the parameter the
+/// list edits.
+fn page(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    f: &mut Map<String, Value>,
+    selected: &str,
+    invalid: Option<&str>,
+    style_click: &mut Option<String>,
+    blend_hovered: &mut Option<(&'static str, String)>,
+) {
     let t = Tokens::get(ui.ctx());
     // Photoshop's rows sit close together: every page fits the dialog without scrolling.
     ui.spacing_mut().item_spacing.y = 3.0;
@@ -1623,7 +1648,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
         let names = channel_names_of(f);
         let key = format!("p:{BLENDING}");
         let Some(mut p) = f.get(&key).filter(|v| v.is_object()).cloned() else { return };
-        blending_page(ui, &mut p, &names);
+        *blend_hovered = blending_page(ui, &mut p, &names).map(|mode| ("blend", mode));
         f.insert(key, p);
         return;
     }
@@ -1676,10 +1701,14 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                     widgets::row_label(ui, label, LABEL_W);
                     let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or("Normal").to_string();
                     let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-                    if widgets::dropdown(ui, &format!("fx-blend-{selected}-{key}"), tl!(&label), &mut cur, &opts, 150.0) {
+                    // A click, a key or each wheel notch (#1747) chooses; the hovered row only previews.
+                    let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, &format!("fx-blend-{selected}-{key}"), tl!(&label), &mut cur, &opts, 150.0);
+                    if !chosen.is_empty() {
                         let value = json!(cur);
                         disp[key] = value.clone();
                         set_param(f, selected, key, value);
+                    } else if let Some(mode) = hovered.filter(|_| ui.is_enabled()) {
+                        *blend_hovered = Some((key, mode));
                     }
                 });
             }
