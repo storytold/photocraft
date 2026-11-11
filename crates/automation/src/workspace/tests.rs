@@ -487,6 +487,14 @@ fn windows_handle_relative_helpers_match_the_capability_operations() {
         assert_eq!(std::fs::read(outside.join("target.png")).unwrap(), b"outside");
     }
     let _ = std::fs::remove_file(inside.join("plain.tmp"));
+}
+
+/// Handle-relative directory helpers create nested paths and refuse files and junction escapes.
+#[cfg(windows)]
+#[test]
+fn windows_handle_relative_helpers_create_directories_without_following_junctions() {
+    let (inside, outside, workspace) = roots("unc-directory-helpers");
+    let root = workspace.write.as_ref().unwrap();
 
     create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
     assert!(inside.join("a/b/c").is_dir());
