@@ -92,6 +92,8 @@ pub struct ToolOptions {
     pub strength: f32,
     pub protect_detail: bool,
     pub finger_painting: bool,
+    /// Smudge › Mode (#12959): Normal, Darken, Lighten, Hue, Saturation, Color or Luminosity.
+    pub smudge_mode: photocraft_color::BlendMode,
     /// Quick Selection enhance edge.
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
@@ -492,6 +494,7 @@ impl Default for ToolOptions {
             strength: 50.0,
             protect_detail: true,
             finger_painting: false,
+            smudge_mode: photocraft_color::BlendMode::Normal,
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
