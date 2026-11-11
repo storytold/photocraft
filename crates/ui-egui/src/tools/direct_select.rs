@@ -942,6 +942,9 @@ mod convert_point_history_tests;
 mod convert_point_targeted_path_tests;
 
 #[cfg(test)]
+mod convert_point_tolerance_tests;
+
+#[cfg(test)]
 mod freeform_command_tests {
     use super::*;
 
