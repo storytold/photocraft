@@ -24,6 +24,8 @@ use print::{drag_print_position, driver_paper_is_wide, print_params, print_previ
 use print::{print_body, print_confirm};
 pub use web::open_web;
 #[cfg(test)]
+use web::web_params;
+#[cfg(test)]
 use web::{WEB_COMMAND, WebCache, WebProxy, advance_preview, download_for_web, variants, web_frame_document};
 use web::{web_body, web_confirm};
 
@@ -213,10 +215,16 @@ fn b(f: &Map<String, Value>, k: &str, d: bool) -> bool {
 #[path = "file_ui/web_preview.rs"]
 mod web_preview;
 
+/// Draw a compact dropdown whose selected value wraps within its assigned width.
 fn dropdown_str(ui: &mut egui::Ui, id: &str, name: &str, f: &mut Map<String, Value>, key: &str, opts: &[(&str, &str)], w: f32) {
     let mut v = s(f, key, opts.first().map_or("", |o| o.0));
     let o: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, id, name, &mut v, &o, w) {
+    let changed = ui.scope(|ui| {
+        ui.set_max_width(w);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+        crate::widgets::dropdown(ui, id, name, &mut v, &o, w)
+    });
+    if changed.inner {
         f.insert(key.into(), json!(v));
     }
 }
