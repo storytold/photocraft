@@ -9,9 +9,9 @@
 //! registry alone, so it can neither take `.psd` over from another program nor wait for the
 //! registration lock; the registry work for a real change runs on its own thread.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use photocraft_engine::prefs::ExplorerThumbnails;
 use serde_json::Value;
@@ -21,6 +21,8 @@ use serde_json::Value;
 static SEEN: AtomicU8 = AtomicU8::new(0);
 /// Serializes this process's registration threads (startup and preference changes).
 static REGISTRATION_LOCK: Mutex<()> = Mutex::new(());
+/// The preferences file, so a worker can re-read what is persisted now (set by [`startup`]).
+static PREFS_FILE: OnceLock<PathBuf> = OnceLock::new();
 
 /// A stable number for each mode, used to remember what was last seen.
 fn code(mode: ExplorerThumbnails) -> u8 {
@@ -47,6 +49,19 @@ fn wanted(text: &str) -> ExplorerThumbnails {
     v.get("fileHandling").and_then(|f| f.get("explorerThumbnails")).and_then(Value::as_str).and_then(ExplorerThumbnails::parse).unwrap_or_default()
 }
 
+/// The preference persisted in `path`; `None` when the file cannot be read.
+fn read_mode(path: &Path) -> Option<ExplorerThumbnails> {
+    std::fs::read_to_string(path).ok().map(|text| wanted(&text))
+}
+
+/// The value a worker should apply. Called while holding the cross-process registration lock: another
+/// instance may have saved a different setting since this process last saw one, and a stale
+/// process-local value must not restore an outdated registration. Falls back to the last value this
+/// process saw when the file cannot be read.
+fn current_mode() -> Option<ExplorerThumbnails> {
+    PREFS_FILE.get().and_then(|path| read_mode(path)).or_else(|| mode_from(SEEN.load(Ordering::SeqCst)))
+}
+
 /// Only the normal per-user install writes the registry: a portable copy leaves nothing behind, a
 /// `PHOTOCRAFT_CONFIG_DIR` run (tests, agents) must not touch the real user's settings, and a
 /// 32-bit build's class registration is invisible to the 64-bit Explorer.
@@ -71,13 +86,17 @@ pub fn startup(prefs_file: Option<&Path>) {
     if !applies() {
         return;
     }
+    if let Some(path) = prefs_file {
+        let _ = PREFS_FILE.set(path.to_path_buf());
+    }
     let text = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
     SEEN.store(code(wanted(&text)), Ordering::SeqCst);
     in_background(|| {
         let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         photocraft_shell::with_registration_lock(|| {
-            // The newest value: the user may have changed the setting while this was waiting.
-            let Some(mode) = mode_from(SEEN.load(Ordering::SeqCst)) else {
+            // The persisted value, read under the lock: another instance may have changed the
+            // setting since this process read it at launch.
+            let Some(mode) = current_mode() else {
                 return;
             };
             let result = if mode == ExplorerThumbnails::Off {
@@ -98,7 +117,8 @@ pub fn startup(prefs_file: Option<&Path>) {
 /// own registration. Any other save returns at once, without the registry or the lock, so it cannot
 /// overwrite another program's handler or stall the window.
 ///
-/// A change that failed is tried again with the next save.
+/// A change that failed is tried again with the next save. The worker applies the value persisted
+/// when it holds the lock, so a stale value cannot override another instance's newer choice.
 pub fn after_save(text: &str) {
     if !applies() || !note(&SEEN, wanted(text)) {
         return;
@@ -106,8 +126,9 @@ pub fn after_save(text: &str) {
     in_background(|| {
         let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         photocraft_shell::with_registration_lock(|| {
-            // The newest value, in case the setting changed again while this was waiting.
-            let Some(mode) = mode_from(SEEN.load(Ordering::SeqCst)) else {
+            // The persisted value, read under the lock: it is this save's value unless another
+            // instance has saved a different one since, which is then the one in force.
+            let Some(mode) = current_mode() else {
                 return;
             };
             if let Err(e) = photocraft_shell::enable_explorer_thumbnails(mode != ExplorerThumbnails::Off, mode == ExplorerThumbnails::WithLogo) {
@@ -144,6 +165,17 @@ mod tests {
         }
         assert_eq!(mode_from(0), None);
         assert_eq!(mode_from(200), None);
+    }
+
+    #[test]
+    fn the_persisted_preference_is_read_from_the_file() {
+        let path = std::env::temp_dir().join(format!("photocraft-explorer-thumbnails-{}.json", std::process::id()));
+        assert_eq!(read_mode(&path), None, "a missing file is not a preference");
+        std::fs::write(&path, r#"{"fileHandling": {"explorerThumbnails": "off"}}"#).unwrap();
+        assert_eq!(read_mode(&path), Some(ExplorerThumbnails::Off));
+        std::fs::write(&path, r#"{"fileHandling": {"autosave": false}}"#).unwrap();
+        assert_eq!(read_mode(&path), Some(ExplorerThumbnails::WithLogo));
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
