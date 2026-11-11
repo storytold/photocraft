@@ -267,3 +267,14 @@ fn duplicate_style_ids_list_the_first_and_warn() {
     assert_eq!(l["styles"][1]["name"], "Character Style 1");
     assert!(l["warnings"][0].as_str().unwrap().contains("duplicate style id"));
 }
+
+#[test]
+fn a_stored_paragraph_style_with_the_reserved_id_is_not_listed_and_warns() {
+    let (mut s, _) = session("Hello");
+    let basic = s.active().unwrap().doc.text_styles.basic.id;
+    let extra = ParagraphStyleDef { id: basic, name: "Shadow".into(), ..Default::default() };
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).text_styles.paragraph.push(extra);
+    let l = s.execute("type.paragraphStyle.list", json!({})).unwrap();
+    assert_eq!(l["styles"].as_array().unwrap().len(), 1, "only Basic Paragraph: the stored style could not be applied");
+    assert!(l["warnings"][0].as_str().unwrap().contains("Shadow"));
+}

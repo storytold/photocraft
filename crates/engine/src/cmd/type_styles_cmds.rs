@@ -411,9 +411,10 @@ fn para_json(d: &ParagraphStyleDef, styles: &TextStyles) -> Value {
 }
 
 /// Styles with an id already seen are dropped (id lookups resolve to the first, so the first wins)
-/// and named in `warnings`.
-fn first_by_id<'a, T>(defs: &'a [T], id: impl Fn(&T) -> u32, name: impl Fn(&T) -> &str, warnings: &mut Vec<String>) -> Vec<&'a T> {
-    let mut seen = HashSet::new();
+/// and named in `warnings`. `listed` is the id of the entry the list starts with (Basic Paragraph,
+/// or No Character Style): a stored style with that id could never be selected either.
+fn first_by_id<'a, T>(defs: &'a [T], listed: u32, id: impl Fn(&T) -> u32, name: impl Fn(&T) -> &str, warnings: &mut Vec<String>) -> Vec<&'a T> {
+    let mut seen = HashSet::from([listed]);
     let mut out = Vec::new();
     for d in defs {
         if seen.insert(id(d)) {
@@ -431,11 +432,11 @@ fn list(s: &Session, p: &Value, paragraph: bool) -> Result<Value> {
     let mut warnings = Vec::new();
     Ok(if paragraph {
         let mut v = vec![para_json(&st.basic, &st)];
-        v.extend(first_by_id(&st.paragraph, |d| d.id, |d| &d.name, &mut warnings).into_iter().map(|d| para_json(d, &st)));
+        v.extend(first_by_id(&st.paragraph, st.basic.id, |d| d.id, |d| &d.name, &mut warnings).into_iter().map(|d| para_json(d, &st)));
         json!({ "styles": v, "current": cur, "warnings": warnings })
     } else {
         let mut v = vec![json!({ "id": 0, "name": ts::NO_CHARACTER_STYLE, "attrs": {} })];
-        v.extend(first_by_id(&st.character, |d| d.id, |d| &d.name, &mut warnings).into_iter().map(|d| char_json(d, &st)));
+        v.extend(first_by_id(&st.character, 0, |d| d.id, |d| &d.name, &mut warnings).into_iter().map(|d| char_json(d, &st)));
         json!({ "styles": v, "current": cur, "warnings": warnings })
     })
 }

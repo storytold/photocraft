@@ -475,7 +475,12 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
         .iter()
         .any(|(_, k, data)| is_lnk(k) && !d.doc.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == k && std::sync::Arc::ptr_eq(dd, data)));
     for (_, dk, dd) in d.doc.metadata.psd_global_blocks.iter().filter(|(_, k, _)| clipboard_links && is_lnk(k)) {
-        present.entry(*dk).or_default().extend(photocraft_io::linked::records(dd));
+        // Fallible inserts: a block of many small records must fail the paste, not abort the process.
+        let set = present.entry(*dk).or_default();
+        for record in photocraft_io::linked::records(dd) {
+            set.try_reserve(1).map_err(|_| EngineError::Other("not enough memory to paste smart-object source records".into()))?;
+            set.insert(record);
+        }
     }
     for (signature, key, data) in copies.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")) {
         if d.doc.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == key && std::sync::Arc::ptr_eq(dd, data)) {
