@@ -55,6 +55,9 @@ fn fill_mode(p: &Value) -> Result<FillMode> {
     }
 }
 
+/// The reference's alert for a Paint Bucket click in a Bitmap document (#12536).
+pub const BITMAP_REFUSAL: &str = "Could not use the paint bucket because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
 fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let fg = s.tools.foreground;
     let c = color(p.get("color"), fg);
@@ -63,6 +66,10 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = opacity(p, "paint.bucket")?;
     let mode = fill_mode(p)?;
     let all = b(p, "sampleAllLayers", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
+    // Before the region, the target and the document copy: a Bitmap click changes nothing.
+    if s.active().is_some_and(|d| d.doc.mode == photocraft_color::ColorMode::Bitmap) {
+        return Err(EngineError::Other(BITMAP_REFUSAL.into()));
+    }
     // Other visible layers can define the region, but the fill still writes only to the target.
     let region = if all {
         let (area, img) = crate::selection_cmds::sample_rgba8(s, true)?;
@@ -212,3 +219,6 @@ mod tests;
 
 #[cfg(test)]
 mod bucket_no_op_history_tests;
+
+#[cfg(test)]
+mod bucket_bitmap_tests;
