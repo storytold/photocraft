@@ -3386,3 +3386,38 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
 }
+
+/// tanish2k09 on #10406: an armed eyedropper owns the image of the primary canvas only, the one
+/// its picks come from and its pipette is drawn on. A secondary canvas (a Window › Arrange › New
+/// Window view) is never left without a cursor for it.
+#[test]
+fn an_armed_eyedropper_hides_no_cursor_on_a_secondary_canvas() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Move;
+    let id = crate::adjust_dialog::open(&mut app, "image.adjustments.curves").unwrap();
+    let base = app.ui.dialog_mut(id).map(|d| crate::filter_dialog::params_of(&d.fields)).unwrap();
+    let dialog = app.ui.dialog_mut(id).unwrap();
+    dialog.fields.insert("__curvePicker".into(), json!("black"));
+    dialog.fields.insert("__curvePickerBase".into(), base);
+    assert!(crate::adjust_dialog::picker_armed(&app), "the black-point eyedropper is armed");
+    let view = app.ui.views[0].clone();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+    let cursor = |app: &mut PhotocraftApp, primary: bool| {
+        let mut icon = egui::CursorIcon::Default;
+        for _ in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::PointerMoved(Pos2::new(200.0, 150.0)));
+            let mut out = ctx.run_ui(input, |ui| {
+                canvas_view(app, ui, 0, rect, view.clone(), primary);
+            });
+            out.textures_delta.clear();
+            icon = out.platform_output.cursor_icon;
+        }
+        icon
+    };
+    assert_eq!(cursor(&mut app, true), egui::CursorIcon::None, "the primary canvas hides the icon under the pipette it draws");
+    assert_ne!(cursor(&mut app, false), egui::CursorIcon::None, "a secondary canvas keeps a cursor");
+}
