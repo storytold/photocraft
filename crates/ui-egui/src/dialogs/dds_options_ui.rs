@@ -101,9 +101,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.record_answered_save_as(p.record, &mut step);
             app.write_document(p.path, &settings, p.copy)
         });
-        if written.is_ok() {
-            // An action being recorded keeps the Save As or Save a Copy with this answer.
-            app.session.journal.push((p.record.into(), step));
+        if let Ok(w) = &written {
+            // An action being recorded keeps the Save As or Save a Copy with this answer, once
+            // written (#7889).
+            app.journal_save(w.is_none(), (p.record.into(), step));
         }
         match written {
             Err(e) => {
