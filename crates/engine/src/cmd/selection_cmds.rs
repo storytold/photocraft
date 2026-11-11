@@ -680,6 +680,7 @@ pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[
             Rect::EMPTY
         };
         let window = feather_window(bounds, area, feather);
+        check_edge_samples(cmd, pts, window, p)?;
         let mask = sel::polygon_window(pts, area, window, b(p, "antiAlias", true));
         let mask = sel::feather(&mask, window.width() as usize, window.height() as usize, feather);
         let selected = s.edit(label, |doc, _| {
@@ -694,6 +695,7 @@ pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[
     // And only the columns it spans: a narrow outline on a wide canvas must not allocate every
     // row at the canvas's width. `polygon_window` keeps the whole-canvas arithmetic.
     let band = polygon_window_rect(pts, area);
+    check_edge_samples(cmd, pts, band, p)?;
     let mask = sel::polygon_window(pts, area, band, b(p, "antiAlias", true));
     let m = mode(p);
     let selected = s.edit(label, |doc, _| {
@@ -701,6 +703,16 @@ pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[
         Ok(doc.selection.is_some())
     })?;
     Ok(json!({ "selected": selected }))
+}
+
+/// Refuses a polygon whose rasterization over `window` would visit more than [`sel::MAX_EDGE_SAMPLES`]
+/// edge samples (every edge on every sub-row it spans), as [`sel::polygon_surface`] does.
+fn check_edge_samples(cmd: &str, pts: &[(f32, f32)], window: Rect, p: &Value) -> Result<()> {
+    let sub = if b(p, "antiAlias", true) { 4 } else { 1 };
+    if sel::polygon_edge_samples(pts, window, sub) > sel::MAX_EDGE_SAMPLES {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "the outline has too many edges over too many rows to rasterize".into() });
+    }
+    Ok(())
 }
 
 /// The full-width rows of `area` that points `pts` span (empty when none are finite).
@@ -715,12 +727,14 @@ fn polygon_rows(pts: &[(f32, f32)], area: Rect) -> Rect {
     if y0 >= y1 { Rect::EMPTY } else { Rect::new(area.x0, y0, area.x1, y1) }
 }
 
-/// [`polygon_rows`] cut to the columns the polygon spans (a pixel either side for coverage).
+/// [`polygon_rows`] cut to the columns the polygon spans (two pixels either side for coverage).
 fn polygon_window_rect(pts: &[(f32, f32)], area: Rect) -> Rect {
     let rows = polygon_rows(pts, area);
-    // A non-finite x (JSON `1e40` is `inf` as f32) makes spans whose columns a narrow band would cut,
-    // so such a polygon takes the full-width rows, as it did before bands.
-    if pts.iter().any(|p| !p.0.is_finite()) {
+    // A non-finite coordinate (JSON `1e40` is `inf` as f32), or one so large that `f32` rounding of an
+    // edge's crossing could land outside the vertices' columns, makes spans a narrow band would cut:
+    // such a polygon takes the full-width rows, as it did before bands.
+    const BOUNDED: f32 = 1_048_576.0;
+    if pts.iter().any(|p| !(p.0.abs() <= BOUNDED && p.1.abs() <= BOUNDED)) {
         return rows;
     }
     let xs = pts.iter().map(|p| p.0).filter(|x| x.is_finite());
@@ -729,7 +743,7 @@ fn polygon_window_rect(pts: &[(f32, f32)], area: Rect) -> Rect {
         return Rect::EMPTY;
     }
     let clamp = |v: f32| v.clamp(area.x0 as f32, area.x1 as f32) as i32;
-    rows.intersect(&Rect::new(clamp(lo.floor() - 1.0), rows.y0, clamp(hi.ceil() + 1.0), rows.y1))
+    rows.intersect(&Rect::new(clamp(lo.floor() - 2.0), rows.y0, clamp(hi.ceil() + 2.0), rows.y1))
 }
 
 /// [`sel::combine`] of a mask covering only `band` (zero elsewhere), giving exactly what the

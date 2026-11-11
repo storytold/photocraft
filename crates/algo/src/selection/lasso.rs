@@ -96,6 +96,18 @@ struct Edge {
     b: (f32, f32),
 }
 
+/// Edge samples rasterizing `points` over the rows of `clip` costs at `sub` sub-rows per row: every
+/// edge is visited on every sub-row it spans, so this is the work, to compare with [`MAX_EDGE_SAMPLES`].
+pub fn polygon_edge_samples(points: &[(f32, f32)], clip: Rect, sub: u64) -> u64 {
+    let (y0, y1) = (clip.y0 as f32, clip.y1 as f32);
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .filter(|(a, b)| a.1 < b.1 || b.1 < a.1)
+        .map(|(a, b)| ((a.1.max(b.1).min(y1) - a.1.min(b.1).max(y0)).max(0.0) as u64 + 1).saturating_mul(sub))
+        .fold(0u64, u64::saturating_add)
+}
+
 /// The anti-aliased (even-odd) polygon through `points`, cut to `clip`, as a GRAY8 selection: the
 /// bytes of [`super::polygon`] over `clip`, quantised. Edge tiles are rasterised, tiles wholly
 /// inside share one solid tile. `None` when the edges cross more than [`MAX_PAINTED_TILES`] tiles.
@@ -123,9 +135,7 @@ pub fn polygon_surface(points: &[(f32, f32)], clip: Rect) -> Option<Surface> {
         })
         .collect();
     edges.sort_by(|p, q| p.top.total_cmp(&q.top));
-    let (y0, y1) = (clip.y0 as f32, clip.y1 as f32);
-    let samples: u64 = edges.iter().map(|e| ((e.bottom.min(y1) - e.top.max(y0)).max(0.0) as u64 + 1) * SUB as u64).sum();
-    if samples > MAX_EDGE_SAMPLES {
+    if polygon_edge_samples(points, clip, SUB as u64) > MAX_EDGE_SAMPLES {
         return None;
     }
     let crossings = |e: &[&Edge], y: f32, xs: &mut Vec<f32>| {
