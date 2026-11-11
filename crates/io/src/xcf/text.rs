@@ -17,6 +17,8 @@ const MAX_NODES: usize = 65_536;
 const MAX_DEPTH: usize = 32;
 
 #[cfg(test)]
+mod review_round2_tests;
+#[cfg(test)]
 mod review_tests;
 
 #[derive(Debug)]
@@ -430,7 +432,19 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
             _ => note(&mut notes, "Unrecognized requested font resource; native fallback font used".into()),
         }
     }
-    style.kerning = if scalar(&fields, "kerning")?.unwrap_or("no") == "yes" { Kerning::Metrics } else { Kerning::Off };
+    // The saved GIMP flag is inactive: default shaping still uses font kerning.
+    style.kerning = Kerning::Metrics;
+    if let Some(flag) = scalar(&fields, "kerning")? {
+        let flag = match flag {
+            "yes" => "yes",
+            "no" => "no",
+            _ => "unrecognized (raw source preserved)",
+        };
+        note(
+            &mut native_policy,
+            format!("Source kerning flag {flag} is retained as inactive metadata; native metrics kerning and explicit font features apply"),
+        );
+    }
     // Base letter spacing is a device-pixel distance, independently of the font-size unit.
     let tracking_pt = device_points(number(&fields, "letter-spacing", 0.0, -8192.0, 8192.0)?, dpi)?;
     style.tracking = (f64::from(tracking_pt) * 1000.0 / f64::from(size_pt)) as f32;
@@ -439,20 +453,6 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
     }
     style.language = scalar(&fields, "language")?.filter(|s| !s.is_empty()).map(|s| s.replace('_', "-"));
     let extra_leading = number(&fields, "line-spacing", 0.0, -8192.0, 8192.0)? * scale;
-    if extra_leading != 0.0 {
-        let leading = f64::from(size_pt) * 1.2 + extra_leading;
-        if leading.is_finite() && (0.001..=8192.0).contains(&leading) {
-            style.leading_pt = Some(leading as f32);
-        }
-        note(
-            &mut notes,
-            "Source additional line spacing becomes explicit native leading relative to PhotoCraft's 1.2-em default; native font metrics and layout apply"
-                .into(),
-        );
-        if style.leading_pt.is_none() {
-            note(&mut notes, "Source line spacing falls outside native positive leading; native automatic leading retained".into());
-        }
-    }
     if let Some(color) = field(&fields, "color")? {
         match color {
             [Value::List(v)] if v.first().and_then(|v| v.text().ok()) == Some("color-rgba") && v.len() == 5 => {
@@ -610,6 +610,23 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
     } else {
         layer.text = scalar(&fields, "text")?.unwrap_or("").into();
         layer.runs.push(TextRun { len: layer.text.len(), style });
+    }
+    // Resolve markup sizes first: inherited leading based on the base size can
+    // make large markup lines overlap despite positive source extra spacing.
+    if extra_leading != 0.0 {
+        note(
+            &mut notes,
+            "Source additional line spacing becomes explicit native leading relative to PhotoCraft's 1.2-em default; native font metrics and layout apply"
+                .into(),
+        );
+        for run in &mut layer.runs {
+            let leading = f64::from(run.style.size_pt) * 1.2 + extra_leading;
+            if leading.is_finite() && (0.001..=8192.0).contains(&leading) {
+                run.style.leading_pt = Some(leading as f32);
+            } else {
+                note(&mut notes, "Source line spacing falls outside native positive leading; native automatic leading retained".into());
+            }
+        }
     }
     layer.paragraphs.push(ParagraphRun { len: layer.text.len(), style: para });
     layer.sync_summary();
@@ -992,12 +1009,17 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
     for node in xml.descendants().filter(roxmltree::Node::is_text) {
         let value = node.text().unwrap_or("");
         let mut style = base.clone();
+        // Pango selects size and scale independently. Nested percentages replace
+        // the active scale; an absolute size does not discard inherited scale.
+        let mut unscaled_size = base.size_pt;
+        let mut size_scale = 1.0;
         let mut spacing_pt = base.tracking * base.size_pt / 1000.;
         let ancestors: Vec<_> = node.ancestors().filter(roxmltree::Node::is_element).collect();
         if ancestors.len() > MAX_DEPTH {
             return Err(invalid("text markup nesting exceeds limit"));
         }
         for ancestor in ancestors.iter().rev() {
+            style.size_pt = unscaled_size;
             if ancestor.tag_name().namespace().is_some() || ancestor.attributes().any(|attribute| attribute.namespace().is_some()) {
                 return Err(crate::IoError::Unsupported("namespaced markup does not have an admitted native text-formatting meaning".into()));
             }
@@ -1012,6 +1034,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                     font_description(requested, &mut style, dpi, true, notes)?;
                 }
             }
+            unscaled_size = style.size_pt;
             if matches!(ancestor.tag_name().name(), "b" | "i" | "tt")
                 || ancestor.attributes().any(|a| matches!(a.name(), "font_family" | "face" | "weight" | "font_weight" | "style" | "font_style"))
             {
@@ -1028,8 +1051,8 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                 "sub" => style.baseline = FontBaseline::Subscript,
                 "sup" => style.baseline = FontBaseline::Superscript,
                 "tt" => style.font_family = "monospace".into(),
-                "big" => style.size_pt *= 1.2,
-                "small" => style.size_pt /= 1.2,
+                "big" => size_scale *= 1.2,
+                "small" => size_scale /= 1.2,
                 _ => note(notes, format!("Source markup element {} is retained without native formatting", ancestor.tag_name().name())),
             }
             let mut explicit_alpha = None;
@@ -1129,24 +1152,21 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                         }
                     }
                     "size" | "font_size" => {
-                        style.size_pt = match a.value() {
-                            "xx-small" => base.size_pt / (1.2 * 1.2 * 1.2),
-                            "x-small" => base.size_pt / (1.2 * 1.2),
-                            "small" => base.size_pt / 1.2,
-                            "medium" => base.size_pt,
-                            "large" => base.size_pt * 1.2,
-                            "x-large" => base.size_pt * 1.2 * 1.2,
-                            "xx-large" => base.size_pt * 1.2 * 1.2 * 1.2,
-                            "smaller" => style.size_pt / 1.2,
-                            "larger" => style.size_pt * 1.2,
+                        match a.value() {
+                            "xx-small" => size_scale = 1. / (1.2 * 1.2 * 1.2),
+                            "x-small" => size_scale = 1. / (1.2 * 1.2),
+                            "small" => size_scale = 1. / 1.2,
+                            "medium" => size_scale = 1.,
+                            "large" => size_scale = 1.2,
+                            "x-large" => size_scale = 1.2 * 1.2,
+                            "xx-large" => size_scale = 1.2 * 1.2 * 1.2,
+                            "smaller" => size_scale /= 1.2,
+                            "larger" => size_scale *= 1.2,
                             s if s.ends_with('%') => {
-                                style.size_pt * s.trim_end_matches('%').parse::<f32>().map_err(|_| invalid("invalid markup font percentage"))? / 100.
+                                size_scale = s.trim_end_matches('%').parse::<f32>().map_err(|_| invalid("invalid markup font percentage"))? / 100.;
                             }
-                            s => pango_points(s)?,
+                            s => unscaled_size = pango_points(s)?,
                         };
-                        if !style.size_pt.is_finite() || !(0.001..=8192.0).contains(&style.size_pt) {
-                            return Err(invalid("markup font size out of bounds"));
-                        }
                     }
                     "alpha" | "foreground_alpha" | "fgalpha" => {
                         let (value, max) = if let Some(value) = a.value().strip_suffix('%') { (value, 100.) } else { (a.value(), 65535.) };
@@ -1164,6 +1184,10 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
             // attribute order; each nested span still inherits the resolved parent.
             if let Some(alpha) = explicit_alpha {
                 style.color.alpha = alpha;
+            }
+            style.size_pt = unscaled_size * size_scale;
+            if !style.size_pt.is_finite() || !(0.001..=8192.0).contains(&style.size_pt) {
+                return Err(invalid("markup font size out of bounds"));
             }
             style.tracking = spacing_pt * 1000. / style.size_pt;
             if !style.tracking.is_finite() || style.tracking.abs() > 1_000_000. {

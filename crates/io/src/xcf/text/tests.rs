@@ -209,7 +209,7 @@ fn native_markup_baseline_spacing_features_and_sizes_preserve_utf8_runs() {
     assert_eq!(first.size_pt, 20.);
     assert_eq!(first.baseline_shift_pt, 1.5);
     assert_eq!(first.tracking, 50.);
-    assert_eq!(first.leading_pt, Some(14.));
+    assert_eq!(first.leading_pt, Some(26.));
     assert_eq!(first.caps, Caps::SmallCaps);
     assert_eq!(first.horizontal_scale, 0.75);
     assert_eq!(first.color.alpha, 128. / 255.);
