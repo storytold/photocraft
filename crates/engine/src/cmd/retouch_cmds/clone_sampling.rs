@@ -14,6 +14,7 @@ pub(super) struct CloneFrom {
     other: Option<(Arc<Document>, u64)>,
     layer: Option<LayerId>,
     transform: Option<Arc<Transform>>,
+    pixels: bool,
 }
 
 impl CloneFrom {
@@ -29,7 +30,14 @@ impl CloneFrom {
             (None, None) => true,
             _ => false,
         };
-        document && self.layer == other.layer && colors
+        document && self.layer == other.layer && colors && self.pixels == other.pixels
+    }
+
+    /// Pixel cloning carries coverage independently of the destination's stored alpha flag.
+    /// Masks and channels retain their existing scalar sampling semantics.
+    pub(super) fn sample_format(&self, surf: &Surface) -> PixelFormat {
+        let fmt = surf.format();
+        if self.pixels { alpha_format(fmt) } else { fmt }
     }
 
     /// Read a source region into the destination's native channels, optionally wrapping its canvas.
@@ -45,7 +53,7 @@ impl CloneFrom {
         cmd: &str,
     ) -> Result<Region> {
         let doc = self.other.as_ref().map_or(pre, |(doc, _)| doc.as_ref());
-        let fmt = surf.format();
+        let fmt = self.sample_format(surf);
         if self.other.is_some() && fmt.mode != pre.mode {
             return Err(bad(cmd, "the destination layer color model does not match its document"));
         }
@@ -63,24 +71,88 @@ impl CloneFrom {
                 }
                 (sample(doc, target, sampled, which, rect), sampled.format())
             };
-            convert_region(region, from, fmt, self.transform.as_deref(), cmd)
+            convert_region(region, from, fmt, self.transform.as_deref(), self.pixels.then(|| doc.bounds()), cmd)
         };
         if wrap { periodic::sample_with(doc.bounds(), fmt.channels(), rect, cmd, read) } else { read(rect) }
     }
 }
 
+/// Native colour/depth with an explicit coverage channel for intermediate paint pixels.
+pub(super) fn alpha_format(fmt: PixelFormat) -> PixelFormat {
+    PixelFormat::new(fmt.mode, fmt.sample, true)
+}
+
+/// Lift opaque native pixels into an alpha-bearing working region without a colour conversion.
+pub(super) fn opaque_alpha(region: Region, fmt: PixelFormat) -> Region {
+    if fmt.alpha {
+        return region;
+    }
+    let n = fmt.channels();
+    let mut out = Region::new(region.rect, n + 1);
+    for (src, dst) in region.data.chunks_exact(n).zip(out.data.chunks_exact_mut(n + 1)) {
+        if let Some(colors) = dst.get_mut(..n) {
+            colors.copy_from_slice(src);
+        }
+        if let Some(alpha) = dst.last_mut() {
+            *alpha = 1.0;
+        }
+    }
+    out
+}
+
+/// Clear only sampled rows/spans outside the source canvas, without another full pixel buffer.
+fn clip_canvas(region: &mut Region, bounds: Rect) {
+    let n = region.ch;
+    let row_values = region.width().saturating_mul(n);
+    if row_values == 0 {
+        return;
+    }
+    let x0 = i64::from(region.rect.x0);
+    let x1 = i64::from(region.rect.x1);
+    let left = (i64::from(bounds.x0).clamp(x0, x1) - x0) as usize;
+    let right = (i64::from(bounds.x1).clamp(x0, x1) - x0) as usize;
+    for (row_index, row) in region.data.chunks_exact_mut(row_values).enumerate() {
+        let y = i64::from(region.rect.y0) + row_index as i64;
+        if y < i64::from(bounds.y0) || y >= i64::from(bounds.y1) {
+            row.fill(0.0);
+        } else {
+            if let Some(span) = row.get_mut(..left.saturating_mul(n)) {
+                span.fill(0.0);
+            }
+            if let Some(span) = row.get_mut(right.saturating_mul(n)..) {
+                span.fill(0.0);
+            }
+        }
+    }
+}
+
 /// Convert only the sampled region; preserve alpha and skip identical-profile HDR conversion.
-fn convert_region(region: Region, from: PixelFormat, to: PixelFormat, transform: Option<&Transform>, cmd: &str) -> Result<Region> {
+fn convert_region(mut region: Region, from: PixelFormat, to: PixelFormat, transform: Option<&Transform>, canvas: Option<Rect>, cmd: &str) -> Result<Region> {
     // A malformed document can contain a surface whose model disagrees with its ICC profile.
     // Check the native strides before the transform indexes them or its bounded scratch buffer.
     if transform.is_some_and(|t| t.inputs() != from.mode.color_channels() || t.outputs() != to.mode.color_channels() || t.outputs() > 16) {
         return Err(bad(cmd, "clone source color channels do not match the document profiles"));
     }
+    let inside_canvas = canvas.is_none_or(|bounds| region.rect.intersect(&bounds) == region.rect);
     if transform.is_none() && from.mode == to.mode && from.alpha == to.alpha {
+        if !inside_canvas && let Some(bounds) = canvas {
+            clip_canvas(&mut region, bounds);
+        }
         return Ok(region);
     }
     let mut out = Region::new(region.rect, to.channels());
-    for (src, dst) in region.data.chunks_exact(from.channels()).zip(out.data.chunks_exact_mut(to.channels())) {
+    let width = region.width();
+    let canvas = canvas.filter(|_| !inside_canvas);
+    for (i, (src, dst)) in region.data.chunks_exact(from.channels()).zip(out.data.chunks_exact_mut(to.channels())).enumerate() {
+        // A surface without alpha is opaque inside its document canvas, including black
+        // default pixels. Outside that canvas it has no sample, regardless of stored defaults.
+        if let Some(bounds) = canvas {
+            let x = i64::from(region.rect.x0) + (i % width) as i64;
+            let y = i64::from(region.rect.y0) + (i / width) as i64;
+            if x < i64::from(bounds.x0) || y < i64::from(bounds.y0) || x >= i64::from(bounds.x1) || y >= i64::from(bounds.y1) {
+                continue;
+            }
+        }
         if let Some(transform) = transform {
             let colors = to.mode.color_channels();
             let mut converted = [0.0; 16];
@@ -147,7 +219,7 @@ pub(super) fn resolve(s: &Session, p: &Value, cmd: &str) -> Result<CloneFrom> {
         }
     }
     let transform = if external { color_transform(s, &st.doc, which, cmd)? } else { None };
-    Ok(CloneFrom { other: external.then(|| (st.doc.clone(), st.revision)), layer, transform })
+    Ok(CloneFrom { other: external.then(|| (st.doc.clone(), st.revision)), layer, transform, pixels: true })
 }
 
 /// Choose the sampled pixel/composite profile and cache its conversion to the destination profile.

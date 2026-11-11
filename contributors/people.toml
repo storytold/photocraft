@@ -17,6 +17,9 @@
 [people.brianblakely]
 sync_github_name = true
 
+[people.mlo0352]
+sync_github_name = true
+
 [people.abdul-karim-mia]
 real_name = "Abdul karim mia"
 sync_github_name = false
@@ -329,6 +332,3 @@ sync_github_name = false
 [people.tomgardenart]
 display_name = "Nostella"
 sync_github_name = false
-
-[people.mlo0352]
-sync_github_name = true

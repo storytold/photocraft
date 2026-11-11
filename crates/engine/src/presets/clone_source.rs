@@ -355,6 +355,7 @@ fn slot_json(s: &Session, i: usize) -> Value {
     result
 }
 
+/// Report all slot geometry and stable identities with their current open-document indexes.
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let c = &s.presets.clone;
     Ok(
@@ -362,6 +363,7 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
     )
 }
 
+/// Select a validated slot without changing its source, pairing or transform.
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "cloneSource.select";
     p.get("index").filter(|v| !v.is_null()).ok_or_else(|| bad(CMD, "missing `index`"))?;
@@ -370,6 +372,7 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(slot_json(s, i))
 }
 
+/// Validate a source/transform edit atomically, using the displayed reference for numeric offsets.
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "cloneSource.set";
     let i = index(s, p, CMD)?;
@@ -457,6 +460,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(slot_json(s, i))
 }
 
+/// Reset scale/rotation/flips while retaining source identity and established pairings.
 fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index(s, p, "cloneSource.resetTransform")?;
     let slot = &mut s.presets.clone.slots[i];
@@ -464,6 +468,7 @@ fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(slot_json(s, i))
 }
 
+/// Update transient overlay appearance without editing image pixels or source geometry.
 fn overlay(s: &mut Session, p: &Value) -> Result<Value> {
     let o = &mut s.presets.clone.overlay;
     let flag = |k: &str| p.get(k).and_then(Value::as_bool);

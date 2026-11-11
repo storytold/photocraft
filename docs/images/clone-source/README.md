@@ -40,3 +40,5 @@ Stamp; Healing Brush additionally permits Grayscale on either side. The sampler 
 previews enforce those rules while converting compatible source/destination ICC profiles.
 The current 2026 help omits that compatibility detail; this follows the explicit reference
 rather than claiming a measurement of current Photoshop.
+
+Source-edge regressions also cover sources and destinations without stored alpha, including opaque black. Canvas coverage survives native-channel conversion, affine filtering and wrapping; the destination storage format is retained.

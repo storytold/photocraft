@@ -1,6 +1,7 @@
 use super::*;
 use crate::presets::clone_source::Mapping;
 
+/// Create a native colour-gradient source and an empty destination without re-picking.
 fn setup(depth: u64, mode: &str) -> (Session, LayerId, LayerId) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 64, "depth": depth, "mode": mode})).unwrap();
@@ -25,14 +26,17 @@ fn setup(depth: u64, mode: &str) -> (Session, LayerId, LayerId) {
     (s, source, target)
 }
 
+/// Read a layer as RGBA so assertions can compare different native depths and models.
 fn pixel(s: &Session, id: LayerId, x: i32, y: i32) -> [f32; 4] {
     s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().rgba(x, y)
 }
 
+/// Use one hard dab whose opacity and flow give twenty-percent centre coverage.
 fn params(wrap: bool) -> Value {
     json!({"points": [[48, 48]], "size": 12, "hardness": 100, "opacity": 50, "flow": 40, "wrap": wrap})
 }
 
+/// A picked layer must remain the source through target switches and every rendering path.
 #[test]
 fn clone_current_layer_keeps_the_picked_source_for_preview_live_commit_and_undo() {
     for depth in [8, 16, 32] {
@@ -68,6 +72,7 @@ fn clone_current_layer_keeps_the_picked_source_for_preview_live_commit_and_undo(
     }
 }
 
+/// Missing source identities must fail atomically instead of sampling another layer.
 #[test]
 fn clone_deleted_source_and_invalid_source_layer_fail_without_edits() {
     let (mut s, source, target) = setup(8, "rgb");
@@ -85,6 +90,7 @@ fn clone_deleted_source_and_invalid_source_layer_fail_without_edits() {
     }
 }
 
+/// Transparency is valid source data, and an explicit source-layer override takes precedence.
 #[test]
 fn clone_transparent_source_and_explicit_source_layer_are_respected() {
     let (mut s, source, target) = setup(16, "rgb");
@@ -97,6 +103,7 @@ fn clone_transparent_source_and_explicit_source_layer_are_respected() {
     assert!((pixel(&s, target, 48, 48)[3] - 0.2).abs() < 0.01);
 }
 
+/// Retaining Current Layer sources must preserve existing same-document composite sampling.
 #[test]
 fn clone_source_layer_does_not_change_composite_sampling_modes() {
     for which in ["currentAndBelow", "all"] {
@@ -110,6 +117,7 @@ fn clone_source_layer_does_not_change_composite_sampling_modes() {
     }
 }
 
+/// Matching coordinates alone cannot authorize cached pixels from another sampled layer.
 #[test]
 fn clone_live_commit_rejects_a_changed_source_layer_with_the_same_coordinates() {
     let (mut s, _, target) = setup(8, "rgb");
@@ -118,6 +126,7 @@ fn clone_live_commit_rejects_a_changed_source_layer_with_the_same_coordinates() 
     assert!(s.offer_live_retouch(live).is_err());
 }
 
+/// Re-picking after a return to the original layer updates local and cross-layer painting.
 #[test]
 fn clone_repicking_on_the_original_layer_updates_both_layers() {
     for depth in [8, 16, 32] {
@@ -140,6 +149,7 @@ fn clone_repicking_on_the_original_layer_updates_both_layers() {
     }
 }
 
+/// Cross-document sampling must agree across previews, live pixels, replay and history.
 #[test]
 fn clone_sources_work_between_documents_with_preview_live_commit_and_undo() {
     for depth in [8, 16, 32] {
@@ -174,6 +184,7 @@ fn clone_sources_work_between_documents_with_preview_live_commit_and_undo() {
     }
 }
 
+/// Compatible profiles convert through CMS while identical profiles preserve native ink values.
 #[test]
 fn clone_cross_document_matching_color_modes_and_profiles_use_cms() {
     use photocraft_cms::{Builtin, TransformOptions};
@@ -213,6 +224,7 @@ fn clone_cross_document_matching_color_modes_and_profiles_use_cms() {
     }
 }
 
+/// Preview, live and committed painting must enforce the same documented mode compatibility.
 #[test]
 fn clone_and_heal_cross_document_mode_compatibility_matches_preview_live_and_commit() {
     for from in ["rgb", "gray", "cmyk", "lab"] {
@@ -241,6 +253,7 @@ fn clone_and_heal_cross_document_mode_compatibility_matches_preview_live_and_com
     }
 }
 
+/// Frozen pixels cannot survive source edits or closure; fresh replay must sample current data.
 #[test]
 fn clone_closed_source_document_and_stale_live_pixels_fail_gracefully() {
     let (mut s, source, _) = setup(8, "rgb");
@@ -272,6 +285,7 @@ fn clone_closed_source_document_and_stale_live_pixels_fail_gracefully() {
     }
 }
 
+/// A persisted document ID must not accidentally revive an already-closed clone source.
 #[test]
 fn clone_closed_source_cannot_be_revived_by_reopening_a_saved_copy() {
     let (mut s, source, _) = setup(8, "rgb");
@@ -298,6 +312,7 @@ fn clone_closed_source_cannot_be_revived_by_reopening_a_saved_copy() {
     assert!((got[3] - 0.2).abs() < 0.01);
 }
 
+/// New source identities must coexist with older slots that never stored a document ID.
 #[test]
 fn clone_source_document_json_and_legacy_slots_are_compatible() {
     let (mut s, _, _) = setup(8, "rgb");
@@ -310,6 +325,7 @@ fn clone_source_document_json_and_legacy_slots_are_compatible() {
     assert!(old.document.is_none());
 }
 
+/// Every slot reply keeps stable identity while open-tab indexes may change.
 #[test]
 fn clone_source_replies_keep_document_identity_when_resetting_transforms() {
     let (mut s, _, _) = setup(8, "rgb");
@@ -336,6 +352,7 @@ fn clone_source_replies_keep_document_identity_when_resetting_transforms() {
     assert_eq!(reset["documentId"], json!(document_id));
 }
 
+/// Source conversion must preserve float light above white and distinguish absent/stored alpha.
 #[test]
 fn clone_between_documents_preserves_float_hdr_and_source_alpha() {
     for alpha in [false, true] {
@@ -355,6 +372,7 @@ fn clone_between_documents_preserves_float_hdr_and_source_alpha() {
     }
 }
 
+/// Unsupported external mask destinations must refuse without modifying their document.
 #[test]
 fn clone_cross_document_mask_targets_refuse_instead_of_sampling_the_wrong_document() {
     let (mut s, _, _) = setup(8, "rgb");
@@ -368,6 +386,7 @@ fn clone_cross_document_mask_targets_refuse_instead_of_sampling_the_wrong_docume
     assert_eq!(s.active().unwrap().doc, before);
 }
 
+/// Malformed document/layer colour models must produce ordinary errors before pixel edits.
 #[test]
 fn clone_cross_document_mismatched_surface_models_fail_without_panicking_or_editing() {
     for change_source in [true, false] {
@@ -390,6 +409,7 @@ fn clone_cross_document_mismatched_surface_models_fail_without_panicking_or_edit
     }
 }
 
+/// All four finite canvas edges must agree across sampling modes, depths and rendering paths.
 #[test]
 fn clone_source_edges_clip_preview_live_and_committed_stamps() {
     for depth in [8, 16, 32] {
@@ -441,6 +461,7 @@ fn clone_source_edges_clip_preview_live_and_committed_stamps() {
     }
 }
 
+/// Missing source pixels must leave previously painted destination colours intact.
 #[test]
 fn clone_clipped_source_preserves_existing_destination_pixels_on_the_original_layer() {
     let (mut s, source, _) = setup(16, "rgb");
@@ -461,6 +482,7 @@ fn clone_clipped_source_preserves_existing_destination_pixels_on_the_original_la
     }
 }
 
+/// Periodic sampling uses source dimensions even when the destination canvas is larger.
 #[test]
 fn clone_pattern_preview_wraps_at_the_source_document_edges() {
     let (mut s, source, _) = setup(16, "rgb");
@@ -476,6 +498,7 @@ fn clone_pattern_preview_wraps_at_the_source_document_edges() {
     assert_eq!(pixel(&s, target, 50, 48), want, "wrapping uses the 64 px source canvas, not the 80 px destination");
 }
 
+/// Exercise the real five-thousand-pixel limit on a twenty-four-megapixel destination.
 #[test]
 #[ignore = "allocates full 5,000 px clone coverage and pixel buffers; run explicitly with one test thread"]
 fn clone_maximum_size_stamp_keeps_straight_source_edges() {
@@ -499,6 +522,7 @@ fn clone_maximum_size_stamp_keeps_straight_source_edges() {
     }
 }
 
+/// Unaligned strokes update their readout without turning that report into an aligned origin.
 #[test]
 fn clone_offsets_report_each_unaligned_stroke_without_persisting_its_alignment() {
     for depth in [8, 16, 32] {
@@ -515,6 +539,7 @@ fn clone_offsets_report_each_unaligned_stroke_without_persisting_its_alignment()
     }
 }
 
+/// Mode changes preserve aligned sampling while numeric edits use the pairing being reported.
 #[test]
 fn clone_offsets_follow_mode_toggles_and_manual_edits_use_the_reported_pairing() {
     for depth in [8, 16, 32] {
@@ -539,6 +564,7 @@ fn clone_offsets_follow_mode_toggles_and_manual_edits_use_the_reported_pairing()
     }
 }
 
+/// An offset edit has an explicit reference and cannot partially mutate slots on invalid input.
 #[test]
 fn clone_offsets_accept_a_preview_reference_and_reject_invalid_points_atomically() {
     let (mut s, _, _) = setup(16, "rgb");
@@ -559,6 +585,7 @@ fn clone_offsets_accept_a_preview_reference_and_reject_invalid_points_atomically
     }
 }
 
+/// Only successful slot-based painting may record a source pairing.
 #[test]
 fn clone_offsets_do_not_record_previews_failed_strokes_or_explicit_command_sources() {
     for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
@@ -591,6 +618,7 @@ fn clone_offsets_do_not_record_previews_failed_strokes_or_explicit_command_sourc
     }
 }
 
+/// Old slots remain readable; re-picking clears pairings and invalid slot indexes fail safely.
 #[test]
 fn clone_offsets_keep_legacy_pairings_and_clear_readouts_when_a_source_is_repicked() {
     let (mut s, source, _) = setup(16, "rgb");
@@ -617,6 +645,7 @@ fn clone_offsets_keep_legacy_pairings_and_clear_readouts_when_a_source_is_repick
     assert!(matches!(s.execute("cloneSource.resetTransform", json!({})), Err(EngineError::BadParams { .. })));
 }
 
+/// A small destination dab must not request an unbounded transformed source buffer.
 #[test]
 fn clone_offsets_scaled_source_reads_are_bounded_before_allocation() {
     for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
@@ -630,6 +659,7 @@ fn clone_offsets_scaled_source_reads_are_bounded_before_allocation() {
     }
 }
 
+/// Null optional fields must not silently change document selection or source transforms.
 #[test]
 fn clone_offsets_null_optional_coordinates_keep_the_picked_source_document() {
     for depth in [8, 16, 32] {
@@ -648,6 +678,7 @@ fn clone_offsets_null_optional_coordinates_keep_the_picked_source_document() {
     }
 }
 
+/// Extreme affine source coordinates must resolve to missing pixels without overflow or NaN.
 #[test]
 fn clone_and_heal_transformed_far_sources_are_finite_and_preserve_the_destination() {
     for depth in [8, 16, 32] {
@@ -665,6 +696,167 @@ fn clone_and_heal_transformed_far_sources_are_finite_and_preserve_the_destinatio
                 for (got, want) in got.into_iter().zip([0.0, 1.0, 0.0, 1.0]) {
                     assert!(got.is_finite() && (got - want).abs() < 1e-5, "{cmd} at {depth}-bit, source {source:?}: {got}");
                 }
+            }
+        }
+    }
+}
+
+/// Build equivalent opaque sources with/without stored alpha, using quantized fixture colours.
+fn no_alpha_scene(depth: u64, mode: &str, source_alpha: bool, target_alpha: bool, external: bool, at: [i32; 2], color: [f32; 4]) -> (Session, LayerId) {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64, "depth": depth, "mode": mode})).unwrap();
+    let source = s.active().unwrap().active_layer.unwrap();
+    s.edit("opaque source", |doc, _| {
+        let bounds = doc.bounds();
+        let surf = doc.layer_mut(source).unwrap().surface_mut().unwrap();
+        let fmt = PixelFormat::new(surf.format().mode, surf.format().sample, source_alpha);
+        let mut quantized = Surface::new(fmt);
+        quantized.write_region(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, color));
+        let values = quantized.read_region(Rect::new(0, 0, 1, 1));
+        *surf = if source_alpha {
+            let mut finite = Surface::new(fmt);
+            finite.fill_rect(bounds, &values);
+            finite
+        } else {
+            Surface::with_default(fmt, &values)
+        };
+        Ok(())
+    })
+    .unwrap();
+    s.execute("cloneSource.set", json!({"source": at})).unwrap();
+    if external {
+        s.execute("file.new", json!({"width": 80, "height": 80, "depth": depth, "mode": mode})).unwrap();
+    }
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let target = s.active().unwrap().active_layer.unwrap();
+    s.edit("blue destination", |doc, _| {
+        let surf = doc.layer_mut(target).unwrap().surface_mut().unwrap();
+        let fmt = PixelFormat::new(surf.format().mode, surf.format().sample, target_alpha);
+        let mut quantized = Surface::new(fmt);
+        quantized.write_region(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 1.0, 1.0]));
+        *surf = Surface::with_default(fmt, &quantized.read_region(Rect::new(0, 0, 1, 1)));
+        Ok(())
+    })
+    .unwrap();
+    (s, target)
+}
+
+/// Compare native values with an opaque alpha-bearing reference at the same colour/depth.
+fn assert_opaque_reference(actual: &Surface, expected: &Surface, rect: Rect) {
+    let (n, en) = (actual.channels(), expected.channels());
+    for (i, (a, e)) in actual.read_region(rect).chunks_exact(n).zip(expected.read_region(rect).chunks_exact(en)).enumerate() {
+        assert_eq!(a, &e[..n], "native pixel {i}, {:?}", actual.format());
+    }
+}
+
+/// Canvas coverage is independent of stored alpha, including opaque black and wrapped sources.
+#[test]
+fn clone_no_alpha_sources_clip_preview_live_and_commit_at_all_canvas_corners() {
+    for depth in [8, 16, 32] {
+        for mode in ["rgb", "gray", "cmyk", "lab"] {
+            for target_alpha in [false, true] {
+                for external in [false, true] {
+                    for wrap in [false, true] {
+                        for at in [[0, 0], [63, 0], [0, 63], [63, 63]] {
+                            let color = if at[0] == at[1] { [0.0, 0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0, 1.0] };
+                            let (mut actual, target) = no_alpha_scene(depth, mode, false, target_alpha, external, at, color);
+                            let (mut reference, expected) = no_alpha_scene(depth, mode, true, true, external, at, color);
+                            let initial = actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap().clone();
+                            let fmt = initial.format();
+                            let map = Mapping { source: (at[0] as f64, at[1] as f64), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0] };
+                            let roi = Rect::new(24, 24, 40, 40);
+                            let shown = clone_preview_periodic(&actual, roi, &map, "current", wrap).unwrap();
+                            let wanted = clone_preview_periodic(&reference, roi, &map, "current", wrap).unwrap();
+                            for (i, (a, e)) in shown.px.iter().zip(&wanted.px).enumerate() {
+                                assert_eq!(a, e, "preview {i}: {depth}/{mode}/{target_alpha}/{external}/{wrap}/{at:?}");
+                            }
+                            let p = json!({"points": [[32,32]], "size": 12, "hardness": 100, "opacity": 50, "flow": 40, "wrap": wrap});
+                            reference.execute("paint.cloneStamp", p.clone()).unwrap();
+                            let expected_surf = reference.active().unwrap().doc.layer(expected).unwrap().surface().unwrap();
+                            let live = LiveRetouch::begin(&actual, "paint.cloneStamp", &p).unwrap();
+                            assert_opaque_reference(live.doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
+                            actual.offer_live_retouch(live).unwrap();
+                            assert_eq!(actual.execute("paint.cloneStamp", p.clone()).unwrap()["fromLive"], true);
+                            assert_opaque_reference(actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
+                            assert!(actual.undo());
+                            actual.execute("paint.cloneStamp", p).unwrap();
+                            let surf = actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap();
+                            assert_eq!(surf.format(), fmt, "cloning must retain the destination's native format");
+                            assert_opaque_reference(surf, expected_surf, roi);
+                            if !wrap {
+                                let x = if at[0] == 0 { 31 } else { 33 };
+                                let y = if at[1] == 0 { 31 } else { 33 };
+                                let outside = Rect::new(x, y, x + 1, y + 1);
+                                assert_eq!(surf.read_region(outside), initial.read_region(outside), "missing source leaves destination pixels intact");
+                                assert_eq!(shown.px[((y - 24) * 16 + x - 24) as usize][3], 0.0);
+                            }
+                            let inside = Rect::new(32, 32, 33, 33);
+                            assert_ne!(surf.read_region(inside), initial.read_region(inside), "opaque black must paint inside the source canvas");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Affine filtering, blend modes and source composites retain alpha-bearing source coverage.
+#[test]
+fn clone_no_alpha_sources_match_alpha_sources_with_transforms_and_composites() {
+    for mode in ["rgb", "cmyk"] {
+        for which in ["current", "currentAndBelow", "all"] {
+            for blend in ["normal", "multiply", "lighten"] {
+                for wrap in [false, true] {
+                    let color = if blend == "normal" { [0.0, 0.0, 0.0, 1.0] } else { [1.0, 0.25, 0.75, 1.0] };
+                    let (mut actual, target) = no_alpha_scene(32, mode, false, false, true, [0, 0], color);
+                    let (mut reference, expected) = no_alpha_scene(32, mode, true, true, true, [0, 0], color);
+                    for session in [&mut actual, &mut reference] {
+                        session.execute("cloneSource.set", json!({"width": 150, "height": 75, "rotation": 30, "flipH": true})).unwrap();
+                    }
+                    let p =
+                        json!({"points": [[32,32]], "size": 12, "hardness": 100, "opacity": 50, "flow": 40, "sampleLayer": which, "mode": blend, "wrap": wrap});
+                    let (map, _) = crate::presets::clone_source::resolve(&actual, &p, (32.0, 32.0), "paint.cloneStamp").unwrap();
+                    let roi = Rect::new(24, 24, 40, 40);
+                    let preview = clone_preview_periodic(&actual, roi, &map, which, wrap).unwrap();
+                    let wanted = clone_preview_periodic(&reference, roi, &map, which, wrap).unwrap();
+                    for (a, e) in preview.px.iter().zip(&wanted.px) {
+                        assert_eq!(a, e, "{mode}/{which}/{blend}/{wrap}");
+                    }
+                    reference.execute("paint.cloneStamp", p.clone()).unwrap();
+                    let expected_surf = reference.active().unwrap().doc.layer(expected).unwrap().surface().unwrap();
+                    let live = LiveRetouch::begin(&actual, "paint.cloneStamp", &p).unwrap();
+                    assert_opaque_reference(live.doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
+                    actual.offer_live_retouch(live).unwrap();
+                    assert_eq!(actual.execute("paint.cloneStamp", p.clone()).unwrap()["fromLive"], true);
+                    assert!(actual.undo());
+                    actual.execute("paint.cloneStamp", p).unwrap();
+                    assert_opaque_reference(actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
+                }
+            }
+        }
+    }
+}
+
+/// The shared Healing Brush sampler keeps opaque destinations equivalent to alpha-bearing ones.
+#[test]
+fn clone_no_alpha_healing_sources_match_alpha_sources_in_preview_and_commit() {
+    for depth in [16, 32] {
+        for which in ["current", "currentAndBelow", "all"] {
+            for wrap in [false, true] {
+                let (mut actual, target) = no_alpha_scene(depth, "rgb", false, false, true, [0, 0], [0.5, 0.5, 0.5, 1.0]);
+                let (mut reference, expected) = no_alpha_scene(depth, "rgb", true, true, true, [0, 0], [0.5, 0.5, 0.5, 1.0]);
+                let p = json!({"points": [[32,32]], "size": 12, "hardness": 100, "sampleLayer": which, "wrap": wrap});
+                let roi = Rect::new(24, 24, 40, 40);
+                let live = LiveRetouch::begin(&actual, "paint.healingBrush", &p).unwrap();
+                let expected_live = LiveRetouch::begin(&reference, "paint.healingBrush", &p).unwrap();
+                assert_opaque_reference(live.doc.layer(target).unwrap().surface().unwrap(), expected_live.doc.layer(expected).unwrap().surface().unwrap(), roi);
+                actual.execute("paint.healingBrush", p.clone()).unwrap();
+                reference.execute("paint.healingBrush", p).unwrap();
+                assert_opaque_reference(
+                    actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap(),
+                    reference.active().unwrap().doc.layer(expected).unwrap().surface().unwrap(),
+                    roi,
+                );
             }
         }
     }

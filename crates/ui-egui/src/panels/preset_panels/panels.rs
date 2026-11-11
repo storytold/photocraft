@@ -549,6 +549,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ------------------------------------------------------------------ Clone Source
 
+/// Display source identity and edit the resolved pairing/transform through engine commands.
 pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let cs = app.session.presets.clone.clone();

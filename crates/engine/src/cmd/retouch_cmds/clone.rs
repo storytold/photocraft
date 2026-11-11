@@ -48,7 +48,63 @@ pub(super) fn clone_sample(
         return Err(bad(cmd, "transformed clone source exceeds the sampling budget; increase source scale or reduce the brush"));
     }
     let src = read(source_rect)?;
-    Ok(crate::presets::clone_source::resample(&src, rect, map, alpha_index(&surf.format())))
+    Ok(crate::presets::clone_source::resample(&src, rect, map, alpha_index(&source.sample_format(surf))))
+}
+
+/// Composite explicit source coverage onto a destination that may store no alpha channel.
+/// Small working patches keep temporary allocations bounded and preserve native colours/depth.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_clone_coverage(
+    target: &mut Surface,
+    rect: Rect,
+    cov: &[f32],
+    opacity: f32,
+    selection: Option<&Surface>,
+    lock: bool,
+    paint: &Region,
+    mode: BlendMode,
+) -> Rect {
+    let fmt = target.format();
+    let n = fmt.channels();
+    if fmt.alpha || paint.ch == n || rect.is_empty() {
+        return apply_coverage(target, rect, cov, opacity, selection, lock, paint, mode);
+    }
+    let full_width = rect.width() as usize;
+    let mut y = rect.y0;
+    while y < rect.y1 {
+        let y1 = y.saturating_add(64).min(rect.y1);
+        let mut x = rect.x0;
+        while x < rect.x1 {
+            let x1 = x.saturating_add(64).min(rect.x1);
+            let block = Rect::new(x, y, x1, y1);
+            let width = block.width() as usize;
+            let mut block_cov = vec![0.0; width * block.height() as usize];
+            for (row, values) in block_cov.chunks_exact_mut(width).enumerate() {
+                let offset = (y.abs_diff(rect.y0) as usize + row).saturating_mul(full_width).saturating_add(x.abs_diff(rect.x0) as usize);
+                if let Some(source) = cov.get(offset..offset.saturating_add(width)) {
+                    values.copy_from_slice(source);
+                }
+            }
+            // Transparent source spans cannot change an opaque target. Skip them by alpha,
+            // never by colour: an all-zero black source pixel is still valid opaque paint.
+            let covered = block_cov.iter().any(|value| *value > 0.0);
+            let sampled = covered && (y..y1).any(|py| (x..x1).any(|px| paint.px(px, py).get(n).is_some_and(|alpha| *alpha > 0.0)));
+            if !sampled {
+                x = x1;
+                continue;
+            }
+            let working = clone_sampling::opaque_alpha(Region::read(target, block), fmt);
+            // Quantize only when writing back to the real target, not before blending.
+            let mut patch = Surface::new(PixelFormat::new(fmt.mode, SampleType::F32, true));
+            working.write(&mut patch);
+            apply_coverage(&mut patch, block, &block_cov, opacity, selection, lock, paint, mode);
+            let native: Vec<_> = patch.read_region(block).chunks_exact(n + 1).flat_map(|px| px.iter().take(n).copied()).collect();
+            target.write_region(block, &native);
+            x = x1;
+        }
+        y = y1;
+    }
+    rect
 }
 
 /// Read-only clone overlay. Shares the stroke sampler without anchoring a source or editing history.
@@ -122,7 +178,8 @@ fn preview_periodic(
         }
     };
     let region = clone_sample(&d.doc, Some(id), surf, which, &source, rect, map, wrap, "clone.preview")?;
-    let px = region.data.chunks_exact(surf.format().channels()).map(|p| to_rgba(&surf.format(), p)).collect();
+    let fmt = source.sample_format(surf);
+    let px = region.data.chunks_exact(fmt.channels()).map(|p| to_rgba(&fmt, p)).collect();
     Ok(photocraft_compose::Buffer { rect, px })
 }
 
@@ -160,6 +217,7 @@ pub(super) fn clamp_samples(fmt: &PixelFormat, data: &mut [f32]) {
 // Clone Stamp / Healing Brush / History Brush
 // ---------------------------------------------------------------------------------------------
 
+/// Paint from a frozen source and record its pairing only after the destination edit succeeds.
 pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.cloneStamp";
     let (stroke, id) = parse_brush(s, p, CMD)?;
@@ -180,12 +238,15 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(l.bounds);
         }
         if flag(p, "wrap", false) {
-            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, |before, r| clone_sample(pre, id, before, which, &source, r, &map, true, CMD));
+            let fmt = source.sample_format(surf);
+            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, fmt, |before, r| {
+                clone_sample(pre, id, before, which, &source, r, &map, true, CMD)
+            });
         }
         let (bounds, cov) = coverage(CMD, &stroke)?;
         // Samples come from the pre-stroke state, so pixels painted earlier in the stroke are never re-cloned.
         let paint = clone_sample(pre, id, surf, which, &source, bounds, &map, flag(p, "wrap", false), CMD)?;
-        Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
+        Ok(apply_clone_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
     })?;
     crate::presets::clone_source::remember_mapping(s, p, &map);
     let mut r = clone_result(dmg, off, aligned, p, &stroke);
@@ -415,6 +476,7 @@ impl LiveRetouch {
             lock: self.lock,
             mode: self.mode,
             cmd: live_cmd,
+            paint_format: source.sample_format(pre_surf),
         }
         .draw(dirty, &self.brush, &self.points, paint)
     }
@@ -433,8 +495,14 @@ impl LiveRetouch {
         };
         // The Pattern Stamp's Behind goes beneath the pixels, as its commit lays it.
         let behind = matches!(self.paint, LivePaint::Pattern { behind: true, .. });
+        let clone = matches!(self.paint, LivePaint::Clone { .. });
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         surf.write_region(r, &self.pre_surf.read_region(r));
-        Ok(pattern_stamp::lay_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, behind).union(&r))
+        let damage = if clone {
+            apply_clone_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode)
+        } else {
+            pattern_stamp::lay_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, behind)
+        };
+        Ok(damage.union(&r))
     }
 }

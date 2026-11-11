@@ -2,6 +2,7 @@ use super::*;
 use crate::canvas::{Drag, ToolEvent, tool_event};
 use photocraft_engine::Session;
 
+/// Create two distinguishable source colours and an empty layer for real mouse strokes.
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
@@ -15,6 +16,7 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// Exercise the same Down/Up path used by canvas interaction.
 fn stamp(app: &mut PhotocraftApp, at: [f64; 2]) {
     remember_clone_cursor(app, at);
     tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, egui::Modifiers::NONE);
@@ -22,6 +24,7 @@ fn stamp(app: &mut PhotocraftApp, at: [f64; 2]) {
     assert!(!app.ui.status_error, "{}", app.ui.status);
 }
 
+/// Hover may change a displayed pairing but cannot alter source state or document revision.
 #[test]
 fn clone_offset_hover_readout_does_not_establish_a_painting_anchor() {
     for aligned in [false, true] {
@@ -38,6 +41,7 @@ fn clone_offset_hover_readout_does_not_establish_a_painting_anchor() {
     }
 }
 
+/// Entering the panel must retain the last canvas reference for a numeric offset edit.
 #[test]
 fn clone_offset_edit_before_painting_uses_the_preview_reference_and_matches_pixels() {
     for aligned in [false, true] {
@@ -56,6 +60,7 @@ fn clone_offset_edit_before_painting_uses_the_preview_reference_and_matches_pixe
     }
 }
 
+/// Reporting an unaligned stroke must not discard the established aligned sampling origin.
 #[test]
 fn clone_offset_readout_tracks_aligned_mode_without_replacing_its_saved_anchor() {
     let mut app = app();
@@ -73,6 +78,7 @@ fn clone_offset_readout_tracks_aligned_mode_without_replacing_its_saved_anchor()
     assert_eq!(app.session.presets.clone.active().anchor, original_anchor);
 }
 
+/// A slot switch changes the source; a cursor from another destination cannot set its reference.
 #[test]
 fn clone_offset_readout_uses_the_selected_slot_and_destination_document() {
     let mut app = app();
@@ -94,6 +100,7 @@ fn clone_offset_readout_uses_the_selected_slot_and_destination_document() {
     assert_eq!(clone_offset_readout(&app), Some([0.0, 0.0]), "a cursor from another document cannot become this one's reference");
 }
 
+/// The marker and readout use the same scaled, rotated or flipped mapping as sampling.
 #[test]
 fn clone_offsets_share_transformed_sampling_geometry_during_a_stroke() {
     for (transform, want) in [
@@ -116,6 +123,7 @@ fn clone_offsets_share_transformed_sampling_geometry_during_a_stroke() {
     }
 }
 
+/// Invalid cursor positions and restored UI state must not invent a preview reference.
 #[test]
 fn clone_offset_cursor_is_transient_and_rejects_nonfinite_positions() {
     let mut app = app();
@@ -131,6 +139,7 @@ fn clone_offset_cursor_is_transient_and_rejects_nonfinite_positions() {
     assert!(restored.clone_cursor.is_none());
 }
 
+/// View zoom changes screen geometry while document-space displacement remains constant.
 #[test]
 fn clone_offset_readout_is_in_document_pixels_at_different_canvas_zooms() {
     let mut app = app();
