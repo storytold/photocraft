@@ -15,6 +15,9 @@ PhotoCraft's English labels; no proprietary translation resources were used.
 German translations: PhotoCraft contributors, original translations of
 PhotoCraft's English labels; no proprietary translation resources were used.
 
+Bengali translations: PhotoCraft contributors, original translations of
+PhotoCraft's English labels; no proprietary translation resources were used.
+
 Spanish translations: contributed by @gorevyoneticisi with OpenAI Codex as an AI contributor.
 The resulting catalog is licensed under MIT OR Apache-2.0 as stated above; the translations are
 original translations of PhotoCraft's English labels, and no proprietary translation resources

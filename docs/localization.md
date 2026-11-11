@@ -19,6 +19,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Español | `es` | one / other |
 | Čeština | `cs` | one / few / other |
 | Deutsch | `de` | one / other |
+| বাংলা | `bn` | singular for 0 and 1 / plural for 2+ |
 | Bahasa Indonesia | `id` | one form |
 | Português (Brasil) | `pt-br` | singular for 0 and 1 / plural for 2+ |
 | Italiano | `it` | one / other |

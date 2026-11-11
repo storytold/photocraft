@@ -105,6 +105,11 @@ fn plural_pt(n: u64) -> usize {
     usize::from(n > 1)
 }
 
+/// Bengali (CLDR): 0 and 1 take the singular, everything else the plural.
+fn plural_bengali(n: u64) -> usize {
+    usize::from(n > 1)
+}
+
 /// Romanian (CLDR): 1 → one; 0, or n % 100 in 1–19 → few (these take the bare plural noun, e.g.
 /// "2 straturi", "0 straturi", "119 straturi"); everything else (20, 100, 121, ...) → other (these
 /// take "de" plus the plural noun, e.g. "20 de straturi", "121 de straturi"), which matches
@@ -216,7 +221,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 35] = [
+pub static LANGUAGES: [LangInfo; 36] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -251,6 +256,8 @@ pub static LANGUAGES: [LangInfo; 35] = [
     LangInfo { code: "hu", name: "Magyar", source: catalog!("hu"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Turkish; `tr`, `tr-TR` and `tr_TR` locales resolve here.
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Bengali; `bn`, `bn-BD` and `bn-IN` locales all resolve here (see `candidates`).
+    LangInfo { code: "bn", name: "বাংলা", source: catalog!("bn"), plural: plural_bengali, complete_menus: true, catalog: OnceLock::new() },
     // Azerbaijani (Latin script); regional and explicit Latin-script tags resolve here.
     LangInfo { code: "az", name: "Azərbaycanca", source: catalog!("az"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.

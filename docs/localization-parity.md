@@ -1,10 +1,11 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-06 · **Change:** minor (Georgian interface catalog; previously minor: Azerbaijani UI catalog merged with current languages; native review pending; Bosnian UI catalog; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-08 · **Change:** minor (Bengali UI catalog; previously minor: Georgian interface catalog; previously minor: Azerbaijani UI catalog merged with current languages; native review pending; Bosnian UI catalog; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
-[Simplified Chinese](localization-zh-hans.md), [Italian](localization-it.md), [Russian](localization-ru.md), [Georgian](localization-ka.md).
+[Simplified Chinese](localization-zh-hans.md), [Italian](localization-it.md), [Russian](localization-ru.md), [Georgian](localization-ka.md),
+[Bengali](localization-bn.md).
 
 **How measured.** `cargo xtask i18n-coverage` (`xtask/src/i18n_coverage.rs`) defines the key
 universe: `tl!("…")` literals and `trn(` plurals in `ui-egui` (tests excluded), menu-catalog
@@ -66,7 +67,10 @@ completed for the current UI) and Norwegian Bokmål `nb` (4,552 rows, combined f
 concept; none has had a native-speaker review yet. Bosnian `bs` (4,552 rows, Latin script,
 Ijekavian, added 2026-10-30) covers the same keys; its one/few/other plurals reuse the Russian
 rule, and Cyrillic `bs` locales read it too. It is AI-assisted, shares its wording with
-storytold/craft-i18n `locales/bs/`, and has not had a native-speaker review yet.
+storytold/craft-i18n `locales/bs/`, and has not had a native-speaker review yet. Bengali `bn`
+(3,983 rows, [notes](localization-bn.md)) covered 2,327 of 2,400 measured keys (97%) on
+2026-11-08; the strings main added since fall back to English. Its plurals use the CLDR rule
+(singular for 0 and 1). It has not had a native-speaker review yet.
 
 Azerbaijani `az` (Latin script) brings the runtime registry to 29 languages including
 English. Its catalog has 4,606 entries, including the initial dynamic-label key union, current OpenType menus and five frame labels
@@ -119,3 +123,5 @@ engine localization or native review is complete.
 | 2026-10-29 | minor | Swedish (`sv`) UI catalog: every measured key plus the dynamic labels, combined from #5985 and #9536 |
 | 2026-10-29 | minor | Finnish (`fi`), Danish (`da`) and Norwegian Bokmål (`nb`) UI catalogs: every measured key plus the dynamic labels, combined from #5666, #6961, #7267, #8072 and #9025 |
 | 2026-10-30 | minor | Bosnian (`bs`, Latin, Ijekavian) catalog: the same 4,552 keys as the newest catalogs, `bs-*` locales (Cyrillic included) and one/few/other plurals |
+| 2026-11-06 | minor | Bengali (`bn`) catalog brought up to date with main: registry moved to `i18n.rs` (29 languages), strings added since 2026-10-13 translated, `docs/localization.md` row restored |
+| 2026-11-08 | minor | Bengali (`bn`) merged with current main (36 languages); coverage measured at 2,327 of 2,400 keys; the web build's served-font fallback now covers the Bengali script (`Beng`) |

@@ -417,6 +417,22 @@ fn bosnian_plural_rule_handles_teens_and_compound_counts() {
 }
 
 #[test]
+fn bengali_resolves_and_pluralises() {
+    let bn = Lang::from_code("bn").expect("bn registered");
+    assert_eq!(bn.name(), "বাংলা");
+    for tag in ["bn", "bn-BD", "bn-IN", "bn_BD.UTF-8", "bn_IN.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(bn), "{tag}");
+        assert_eq!(Lang::from_pref(tag), bn, "{tag}");
+    }
+    // CLDR: 0 and 1 take the singular, everything else the plural.
+    let forms: Vec<usize> = [0, 1, 2, 21].into_iter().map(bn.0.plural).collect();
+    assert_eq!(forms, [0, 0, 1, 1]);
+    assert_eq!(tr(bn, "File"), "ফাইল");
+    assert_eq!(trn(bn, 1, "{n} layer", "{n} layers"), "1টি লেয়ার");
+    assert_eq!(trn(bn, 3, "{n} layer", "{n} layers"), "3টি লেয়ার");
+}
+
+#[test]
 fn catalog_kinds_are_parsed_and_looked_up() {
     let c = Catalog::parse("# c\n\tHello\tこんにちは\n@id\tfile.save\t保存する\nmenu\tWindows\tウィンドウ群\n@plural\t{n} file|{n} files\t{n} 個\n\n");
     assert_eq!(c.plain("Hello"), Some("こんにちは"));

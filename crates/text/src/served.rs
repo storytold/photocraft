@@ -11,7 +11,7 @@
 //!
 //! Script fallback: the manifest's `scripts` field says which scripts a font is for. The first
 //! served family listed for a script the bundled fonts don't cover (Arabic, Hebrew, Devanagari,
-//! Thai, Khmer, Lao, Burmese, Japanese, Chinese, Korean) is that script's fallback: text in that script asks for it
+//! Bengali, Thai, Khmer, Lao, Burmese, Japanese, Chinese, Korean) is that script's fallback: text in that script asks for it
 //! ([`request_for_text`], from layout), the font database puts it in the fallback stack once it
 //! arrives, and the web shell asks up front for the scripts of the browser's languages
 //! ([`request_for_languages`]). The manifest's SHA-256 becomes the fetch's Subresource Integrity
@@ -98,7 +98,7 @@ pub fn is_relative_path(p: &str) -> bool {
 
 /// The scripts a served font can be the fallback for: those the bundled fonts (Inter, which covers
 /// Latin, Greek and Cyrillic) lack, as ISO 15924 codes.
-const FALLBACK_SCRIPTS: &[&str] = &["Arab", "Hebr", "Deva", "Thai", "Khmr", "Laoo", "Mymr", "Jpan", "Hans", "Hant", "Kore"];
+const FALLBACK_SCRIPTS: &[&str] = &["Arab", "Hebr", "Deva", "Beng", "Thai", "Khmr", "Laoo", "Mymr", "Jpan", "Hans", "Hant", "Kore"];
 
 /// The script fallbacks in `fonts`: for each script in [`FALLBACK_SCRIPTS`], the first family in
 /// manifest order that lists it, as `(script, family)` in order of first appearance.
@@ -130,6 +130,7 @@ pub fn script_of(c: char, order: &[crate::cjk::CjkScript; 4]) -> Option<&'static
         0x0590..=0x05FF | 0xFB1D..=0xFB4F => "Hebr",
         0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF | 0x1EE00..=0x1EEFF => "Arab",
         0x0900..=0x097F | 0xA8E0..=0xA8FF => "Deva",
+        0x0980..=0x09FF => "Beng",
         0x0E00..=0x0E7F => "Thai",
         0x1780..=0x17FF | 0x19E0..=0x19FF => "Khmr",
         0x0E80..=0x0EFF => "Laoo",
@@ -148,6 +149,7 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
         "ar" | "fa" | "ur" | "ps" | "ckb" | "sd" | "ug" => "Arab",
         "he" | "iw" | "yi" => "Hebr",
         "hi" | "mr" | "ne" | "sa" => "Deva",
+        "bn" | "as" => "Beng",
         "th" => "Thai",
         "km" => "Khmr",
         "lo" => "Laoo",
@@ -449,11 +451,16 @@ mod tests {
         let text = "Noto Sans Arabic | Regular | fonts/a.ttf | Arab\n\
             Cairo | Regular | fonts/c.ttf | Arab,Latn\n\
             Lobster | Regular | fonts/l.ttf | Latn,Cyrl\n\
-            BIZ UDPGothic | Regular | fonts/b.ttf | Jpan,Latn\n";
+            BIZ UDPGothic | Regular | fonts/b.ttf | Jpan,Latn\n\
+            Noto Sans Bengali | Regular | fonts/nb.ttf | Beng\n";
         let (fonts, _) = parse_manifest(text);
         assert_eq!(
             script_fallbacks(&fonts),
-            [("Arab".to_string(), "Noto Sans Arabic".to_string()), ("Jpan".to_string(), "BIZ UDPGothic".to_string())],
+            [
+                ("Arab".to_string(), "Noto Sans Arabic".to_string()),
+                ("Jpan".to_string(), "BIZ UDPGothic".to_string()),
+                ("Beng".to_string(), "Noto Sans Bengali".to_string()),
+            ],
             "Latin and Cyrillic are the bundled fonts' job"
         );
     }
@@ -468,6 +475,8 @@ mod tests {
             ('ﻻ', Some("Arab")),
             ('ש', Some("Hebr")),
             ('क', Some("Deva")),
+            ('ব', Some("Beng")),
+            ('৳', Some("Beng")),
             ('ก', Some("Thai")),
             ('ខ', Some("Khmr")),
             ('ៗ', Some("Khmr")),
@@ -493,6 +502,9 @@ mod tests {
             ("ar-EG", Some("Arab")),
             ("fa-IR", Some("Arab")),
             ("he", Some("Hebr")),
+            ("bn", Some("Beng")),
+            ("bn-BD", Some("Beng")),
+            ("bn_IN", Some("Beng")),
             ("km-KH", Some("Khmr")),
             ("lo", Some("Laoo")),
             ("my-MM", Some("Mymr")),
