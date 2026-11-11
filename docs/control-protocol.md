@@ -824,9 +824,10 @@ and iconic caps; constrained dock-edge rendering still reserves canvas space. Na
 `dock.hidden_tabs` and intact native-group collapse settings are also preserved. A
 legacy `dock` replacement that changes flat group order or heights is rejected after
 customization: use `window.panel.layout` to change a custom split tree. A replacement
-that changes legacy collapse settings is also rejected when a custom root group mixes
-panels from different native groups; use `window.panel.group` to collapse or expand
-that group. Validation is atomic across mixed `ui.set` requests.
+that changes legacy collapse settings applies the requested minimized state to every
+native group the current custom workspace can represent; when a mixed custom root group
+contains panels from multiple native groups, each affected group is updated without
+partial application. Validation remains atomic across the whole `ui.set` request.
 
 `window.panel.group {panel, operation}` applies `close`, `collapse`, `expand`, `up`,
 or `down` to the panel's entire current group. With `operation:"move"`, provide

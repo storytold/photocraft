@@ -2506,6 +2506,25 @@ fn the_default_dock_holds_the_icon_column_beside_the_canvas_in_both_themes() {
     }
 }
 
+#[test]
+fn an_icon_only_default_layout_keeps_an_expanded_width_for_docking_actions() {
+    let mut app = app();
+    for group in [Group::Color, Group::Properties, Group::Character, Group::Layers] {
+        *group.shown_mut(&mut app.ui.panels) = false;
+    }
+    let layout = super::default_layout::layout(&app, false);
+    let Some(Node::Split { second, .. }) = &layout.root else { panic!("the canvas is beside the icon dock") };
+    let Node::Dock { columns, .. } = second.as_ref() else { panic!("the icon dock is present") };
+    assert_eq!(columns.len(), 1);
+    assert!(columns[0].iconic);
+    assert!(columns[0].width > 0.0, "the icon column retains an expanded width");
+    assert!((display_width(&columns[0]) - ICONIC_WIDTH).abs() < 0.5, "the icon column still displays at its collapsed width");
+
+    app.ui.docking = Some(Workspace::new(layout));
+    assert!(valid_workspace(app.ui.docking.as_ref().unwrap()), "the icon-only default layout is valid");
+    assert!(app.run("window.panel.group", json!({"panel":"navigator","operation":"expand"})).is_ok());
+}
+
 /// A panel drags out of the icon column into the panel column and back: the two columns are one
 /// dock, not a rail beside it.
 #[test]

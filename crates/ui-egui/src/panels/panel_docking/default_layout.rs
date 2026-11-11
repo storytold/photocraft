@@ -56,7 +56,7 @@ pub(crate) fn layout(app: &PhotocraftApp, all: bool) -> craft_ui::docking::Layou
         return craft_ui::docking::Layout { root: Some(with_canvas(Node::Dock { side: Side::End, columns: Vec::new() }, 0.0)), floating };
     }
     let (columns, total) = if groups.is_empty() {
-        (vec![icon_column(icon_groups, 0.0)], ICONIC_WIDTH)
+        (vec![icon_column(icon_groups, width)], ICONIC_WIDTH)
     } else if icon_groups.is_empty() {
         (vec![Column::new(groups, width)], width)
     } else {
