@@ -660,7 +660,7 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
         // Patch / Content-Aware Move dragging the selection: its outline follows the pointer.
         Tool::Patch | Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
             let start = d.start;
-            let [dx, dy] = crate::retouch_ui::patch_offset(app, start, last);
+            let [dx, dy] = crate::retouch_ui::patch_offset(app, start, crate::retouch_ui::patch_end(d, last));
             if let Some((_, _, segs)) = &app.outline_cache {
                 let moved: Vec<crate::outline::Segment> = segs.iter().map(|(a, b)| ([a[0] + dx, a[1] + dy], [b[0] + dx, b[1] + dy])).collect();
                 marching_ants_segments(painter, xf, &moved, painter.ctx().input(|i| i.time));
