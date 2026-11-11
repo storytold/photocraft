@@ -935,6 +935,13 @@ pub(crate) fn freeform_finish_owned(app: &mut PhotocraftApp, points: &[[f64; 3]]
     // The trace must still be longer than the former 4 × 6 screen px to close: unchanged.
     let min_length = 24.0 / zoom;
     let length: f64 = trace.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
+    // Photoshop draws nothing for a 2 px drag at 100 %, as for a click (#12831). Other zooms are
+    // not measured: only a stroke within 2 px both on screen and in the document is dropped, and
+    // ⌥-clicked straight segments keep their anchors. The 1e-3 absorbs the f32 screen-to-document
+    // mapping, which makes a real 2 px drag 2 ± 6e-5 px long.
+    if straight.is_empty() && length <= 2.0_f64.min(2.0 / zoom) + 1e-3 {
+        return;
+    }
     let closed = near_start(first, last, reach) && length > min_length;
     let fit = f64::from(app.ui.tool_options.curve_fit);
     let pen = if straight.is_empty() {
