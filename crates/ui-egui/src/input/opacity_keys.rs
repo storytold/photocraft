@@ -68,12 +68,17 @@ fn has_smoothing(tool: Tool) -> bool {
     matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser)
 }
 
+/// One digit press of this frame: a plain or ⇧ digit, or an ⌥ digit for Smoothing.
+enum Press {
+    Digit(u8, bool),
+    Smoothing(u8),
+}
+
 /// Consumes this frame's unmodified (or ⇧) digit presses and applies them, and ⌥+digit presses
-/// for the tools with a Smoothing field.
+/// for the tools with a Smoothing field, in the order they were typed.
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let smoothing = has_smoothing(app.ui.tool);
-    let mut alt_presses: Vec<u8> = Vec::new();
-    let presses: Vec<(u8, bool)> = ctx.input_mut(|i| {
+    let presses: Vec<Press> = ctx.input_mut(|i| {
         let mut out = Vec::new();
         i.events.retain(|e| match e {
             // ⌥+digit: one tens value each (1 = 10% … 0 = 100%), never two digits.
@@ -83,7 +88,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 match physical_key.and_then(digit).or_else(|| digit(*key)) {
                     Some(d) => {
                         if !repeat {
-                            alt_presses.push(d);
+                            out.push(Press::Smoothing(d));
                         }
                         false
                     }
@@ -97,7 +102,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         // A held key's auto-repeat is still one digit, not a second one typed
                         // quickly (holding 4 set 44%, #953); it is consumed all the same.
                         if !repeat {
-                            out.push((d, modifiers.shift));
+                            out.push(Press::Digit(d, modifiers.shift));
                         }
                         false
                     }
@@ -108,13 +113,17 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
         out
     });
-    for d in alt_presses {
-        let amount = if d == 0 { 1.0 } else { f64::from(d) / 10.0 };
-        let _ = app.run("tools.setBrush", json!({ "brush": { "smoothing": { "enabled": true, "amount": amount } } }));
-    }
     let now = crate::gpu_canvas::now_ms();
-    for (d, shift) in presses {
-        press(app, d, shift, now);
+    for p in presses {
+        match p {
+            Press::Digit(d, shift) => press(app, d, shift, now),
+            Press::Smoothing(d) => {
+                // An ⌥ digit ends a two-digit Opacity value: 4, ⌥3, 5 is 50%, not 45%.
+                app.opacity_keys = None;
+                let amount = if d == 0 { 1.0 } else { f64::from(d) / 10.0 };
+                let _ = app.run("tools.setBrush", json!({ "brush": { "smoothing": { "enabled": true, "amount": amount } } }));
+            }
+        }
     }
 }
 

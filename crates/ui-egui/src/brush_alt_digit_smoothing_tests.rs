@@ -27,6 +27,14 @@ fn key(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modifi
     ctx.end_pass().textures_delta.clear();
 }
 
+/// Several key presses in one frame, in this order.
+fn keys(app: &mut PhotocraftApp, ctx: &egui::Context, presses: &[(Key, Modifiers)]) {
+    let events = presses.iter().map(|&(key, modifiers)| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }).collect();
+    ctx.begin_pass(egui::RawInput { events, ..Default::default() });
+    crate::shortcuts::handle(app, ctx);
+    ctx.end_pass().textures_delta.clear();
+}
+
 fn brush(app: &PhotocraftApp) -> (f32, f32, f32) {
     let b = &app.session.tools.brush;
     (b.smoothing.amount, b.opacity, b.flow)
@@ -39,6 +47,7 @@ fn alt_digits_set_the_smoothing() {
         let mut a = app(tool);
         let (_, opacity, flow) = brush(&a);
         for (k, want) in [(Key::Num3, 0.3), (Key::Num1, 0.1), (Key::Num9, 0.9), (Key::Num0, 1.0)] {
+            a.session.tools.brush.smoothing.enabled = false;
             key(&mut a, &ctx, k, Modifiers::ALT);
             let (smoothing, o, f) = brush(&a);
             assert!((smoothing - want).abs() < 1e-6, "{tool:?} {k:?}: {smoothing}");
@@ -74,9 +83,8 @@ fn plain_and_shift_digits_still_set_opacity_and_flow() {
     let ctx = egui::Context::default();
     let mut a = app(Tool::Brush);
     let smoothing = brush(&a).0;
-    key(&mut a, &ctx, Key::Num4, Modifiers::NONE);
-    key(&mut a, &ctx, Key::Num5, Modifiers::NONE);
-    key(&mut a, &ctx, Key::Num3, Modifiers::SHIFT);
+    // One frame, so the two digits are "typed quickly" however slow the test runner is.
+    keys(&mut a, &ctx, &[(Key::Num4, Modifiers::NONE), (Key::Num5, Modifiers::NONE), (Key::Num3, Modifiers::SHIFT)]);
     let (s, o, f) = brush(&a);
     assert!((o - 0.45).abs() < 1e-6 && (f - 0.3).abs() < 1e-6, "{o} {f}");
     assert_eq!(s, smoothing);
@@ -96,5 +104,27 @@ fn tools_without_a_smoothing_field_ignore_alt_digits() {
         key(&mut a, &ctx, Key::Num3, Modifiers::ALT);
         assert_eq!((brush(&a), a.ui.tool_options.fill_opacity), before, "{tool:?}");
         assert_eq!(layer(&a), opacity, "{tool:?}: the layer's Opacity stays");
+    }
+}
+
+#[test]
+fn an_alt_digit_ends_a_two_digit_opacity() {
+    // 4, ⌥3, 5 in one frame: the presses run in order and ⌥3 ends the "45", so 5 sets 50%.
+    let ctx = egui::Context::default();
+    let mut a = app(Tool::Brush);
+    keys(&mut a, &ctx, &[(Key::Num4, Modifiers::NONE), (Key::Num3, Modifiers::ALT), (Key::Num5, Modifiers::NONE)]);
+    let (s, o, _) = brush(&a);
+    assert!((s - 0.3).abs() < 1e-6, "{s}");
+    assert!((o - 0.5).abs() < 1e-6, "{o}");
+}
+
+#[test]
+fn alt_with_other_modifiers_does_not_set_the_smoothing() {
+    let ctx = egui::Context::default();
+    let mut a = app(Tool::Brush);
+    let smoothing = brush(&a).0;
+    for m in [Modifiers::ALT | Modifiers::SHIFT, Modifiers::ALT | Modifiers::CTRL, Modifiers::ALT | Modifiers::COMMAND] {
+        key(&mut a, &ctx, Key::Num3, m);
+        assert_eq!(brush(&a).0, smoothing, "{m:?}");
     }
 }
