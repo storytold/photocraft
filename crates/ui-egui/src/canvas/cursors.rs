@@ -36,9 +36,10 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
 
 /// Whether a brush-tip circle draws its centre mark.
 /// Clone Stamp and Healing Brush stay an empty circle until Option is held, the source-point
-/// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
-/// Photoshop; the Background Eraser always shows its sampling hotspot, and the Remove tool its
-/// centre + (#12550).
+/// cursor (the Healing Brush's ⌥ with Normal Brush Tip shows the sample target instead, #12113).
+/// Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in Photoshop;
+/// the Background Eraser always shows its sampling hotspot, and the Remove tool its centre +
+/// (#12550).
 pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
     if tool == Tool::QuickSelection {
         return false;
@@ -213,8 +214,9 @@ pub(super) fn alt_pick_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, 
     }
 }
 
-/// The Mixer Brush's ⌥ cursor, the reference's sample target (#11957): a small circle with a
-/// crosshair through it, centred on the hotspot. Draws it at `p` and returns the OS cursor to set.
+/// The Mixer Brush's and the Healing Brush's ⌥ cursor, the reference's sample target (#11957,
+/// #12113): a small circle with a crosshair through it, centred on the hotspot. Draws it at `p`
+/// and returns the OS cursor to set.
 pub(crate) fn sample_target_cursor(painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
     let across = vec![vec2(-8.0, 0.0), vec2(8.0, 0.0)];
     let down = vec![vec2(0.0, -8.0), vec2(0.0, 8.0)];
