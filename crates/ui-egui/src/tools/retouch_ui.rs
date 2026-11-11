@@ -1233,3 +1233,7 @@ mod healing_indexed_alert_tests;
 #[cfg(test)]
 #[path = "../clone_stamp_no_source_alert_tests.rs"]
 mod clone_stamp_no_source_alert_tests;
+
+#[cfg(test)]
+#[path = "remove_options_bar_labels_tests.rs"]
+mod remove_options_bar_labels_tests;
