@@ -9,9 +9,13 @@ use crate::state::{LayerThumbnailContents, LayerThumbnailSize, LayersPanelDialog
 
 const OPTIONS_PREF: &str = "ui.layersPanelOptions";
 
-/// Save independently of Workspace > Remember Workspace Changes, as Photoshop does.
+/// Save independently of Workspace > Remember Workspace Changes, as Photoshop does. A pick of the
+/// current value writes nothing unless the saved entry is missing or stale.
 pub fn persist_options(app: &mut PhotocraftApp) {
     if let Ok(value) = serde_json::to_value(&app.ui.layers_panel_options) {
+        if app.session.prefs().dialogs.get(OPTIONS_PREF) == Some(&value) {
+            return;
+        }
         app.session.prefs.edit(|p| {
             p.dialogs.insert(OPTIONS_PREF.into(), value);
         });

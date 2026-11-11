@@ -3,7 +3,7 @@ use super::*;
 /// The open canvas context menu's rows for `ui.state`: the spelling suggestions first (type edit
 /// menu over a misspelled word), then the menu's own rows.
 fn context_entries(app: &PhotocraftApp, menu: &crate::canvas_tool_menu::CanvasToolMenu) -> Vec<Value> {
-    use crate::canvas_tool_menu::{crop_rows, entry_enabled, rows, spelling_rows};
+    use crate::canvas_tool_menu::{crop_rows, entry_enabled, row_label, rows, spelling_rows};
     let spelling = spelling_rows(menu);
     let mut entries: Vec<Value> = spelling.iter().map(|(label, id)| json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)})).collect();
     if !spelling.is_empty() {
@@ -14,7 +14,7 @@ fn context_entries(app: &PhotocraftApp, menu: &crate::canvas_tool_menu::CanvasTo
         None => json!({"separator": true}),
     }));
     entries.extend(rows(menu).iter().map(|row| match row {
-        Some((label, id)) => json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)}),
+        Some((label, id)) => json!({"label": row_label(app, menu, label, id), "id": id, "enabled": entry_enabled(app, menu, id)}),
         None => json!({"separator": true}),
     }));
     entries
@@ -29,6 +29,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
+    // Last frame's task bar rect, unless the bar can't show now (hidden by `ui.set` before the
+    // next draw).
+    let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app));
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "scratch": photocraft_raster::spill::stats(),
@@ -92,6 +95,15 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             })
         }),
         "panels": app.ui.panels,
+        // The contextual task bar (#10890): Window › Contextual Task Bar, whether it shows now and
+        // where (screen points), and its place (pinned, dragged-to corner).
+        "taskBar": json!({
+            "enabled": app.ui.panels.context_task_bar,
+            "visible": task_bar_rect.is_some(),
+            "rect": task_bar_rect,
+            "pinned": app.ui.panels.task_bar.pinned,
+            "at": app.ui.panels.task_bar.at,
+        }),
         "dockTabs": app.ui.dock_tabs,
         "dock": app.ui.dock,
         "docking": app.ui.docking,
