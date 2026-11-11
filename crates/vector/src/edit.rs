@@ -230,7 +230,7 @@ pub fn join_knot(before: &Path, [s, k]: [usize; 2]) -> Option<[usize; 2]> {
 /// Delete Anchor Point dragged (#12766): bends the straight segment leaving `knot` (the join of the
 /// deleted anchor's neighbours) so it follows the pointer `to`. `press` is where the drag began. Q,
 /// the press projected onto the chord between the two anchors, sits at fraction t (clamped to
-/// [0.05, 0.95]) and D = `to` - Q; the leaving knot's out handle and the next knot's in handle move
+/// [0.05, 0.95]) and D = `to` - L(t), L(t) being the join's own point at t; the leaving knot's out handle and the next knot's in handle move
 /// by D scaled with B1 / (B1^2 + B2^2) and B2 / (B1^2 + B2^2) (B1 = 3(1-t)^2t, B2 = 3(1-t)t^2), the
 /// smallest handle move that carries the curve's point at t onto the pointer. Both knots become smooth;
 /// every other handle stays. Refused (unchanged) when the join is not straight or the outer handles
@@ -252,17 +252,23 @@ pub fn bend_join(path: &mut Path, knot: [usize; 2], press: Point, to: Point) -> 
         return Err("the neighbours coincide".into());
     }
     let f = ((press.x - a.anchor.x) * cx + (press.y - a.anchor.y) * cy) / len2;
-    let q = Point::new(a.anchor.x + cx * f, a.anchor.y + cy * f);
     let t = f.clamp(0.05, 0.95);
     let u = 1.0 - t;
     let (b1, b2) = (3.0 * u * u * t, 3.0 * u * t * t);
     let n = b1 * b1 + b2 * b2;
-    let d = [to.x - q.x, to.y - q.y];
+    // The join's own point at t (not the press's projection, which differs off-centre).
+    let l = eval(&[a.anchor, a.out_ctrl, b.in_ctrl, b.anchor], t);
+    let d = [to.x - l.x, to.y - l.y];
+    let out = add(a.anchor, [d[0] * b1 / n, d[1] * b1 / n]);
+    let inn = add(b.anchor, [d[0] * b2 / n, d[1] * b2 / n]);
+    if ![out.x, out.y, inn.x, inn.y].iter().all(|c| c.is_finite()) {
+        return Err("the bend overflows".into());
+    }
     let ka = knot_mut(path, knot)?;
-    ka.out_ctrl = add(ka.anchor, [d[0] * b1 / n, d[1] * b1 / n]);
+    ka.out_ctrl = out;
     ka.smooth = true;
     let kb = knot_mut(path, end)?;
-    kb.in_ctrl = add(kb.anchor, [d[0] * b2 / n, d[1] * b2 / n]);
+    kb.in_ctrl = inn;
     kb.smooth = true;
     Ok([knot, end])
 }
@@ -854,6 +860,23 @@ mod tests {
         assert!(bend_join(&mut p, [0, 0], Point::new(300.0, 300.0), Point::new(f64::NAN, 1.0)).is_err());
         assert!(bend_join(&mut p, [0, 9], Point::new(300.0, 300.0), Point::new(1.0, 1.0)).is_err());
         assert_eq!(p, joined());
+    }
+
+    #[test]
+    fn an_off_centre_press_bends_the_curve_through_the_pointer_at_its_t() {
+        let mut p = Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 50.0)])]);
+        let [a, b] = bend_join(&mut p, [0, 0], Point::new(25.0, 0.0), Point::new(25.0, 40.0)).unwrap();
+        let (ka, kb) = (at(&p, a[0], a[1]), at(&p, b[0], b[1]));
+        let m = eval(&[ka.anchor, ka.out_ctrl, kb.in_ctrl, kb.anchor], 0.25);
+        assert!((m.x - 25.0).abs() < 1e-6 && (m.y - 40.0).abs() < 1e-6, "{m:?}");
+    }
+
+    #[test]
+    fn a_join_bend_that_overflows_is_refused_and_leaves_the_path_alone() {
+        let mut p = Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)])]);
+        let before = p.clone();
+        assert!(bend_join(&mut p, [0, 0], Point::new(0.0, 0.0), Point::new(1e308, 0.0)).is_err());
+        assert_eq!(p, before);
     }
 
     #[test]
