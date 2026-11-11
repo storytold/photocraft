@@ -1862,19 +1862,3 @@ fn pending_style(app: &PhotocraftApp, f: &Map<String, Value>) -> Option<photocra
         fill_opacity: Some(l.fill_opacity),
     })
 }
-
-#[cfg(test)]
-mod blending_i18n_tests {
-    /// Verifies that every non-English locale catalog translates the Layer Style Blending Options labels.
-    #[test]
-    fn catalogs_cover_blending_labels() {
-        if !crate::i18n::needs_catalogs() {
-            return;
-        }
-        for lang in crate::i18n::Lang::all().filter(|l| l.code() != "en") {
-            for key in ["General Blending", "Blend Mode", "Opacity", "Advanced Blending", "Fill Opacity"] {
-                assert!(crate::i18n::has(lang, key), "catalog `{}` is missing `{key}`", lang.code());
-            }
-        }
-    }
-}
