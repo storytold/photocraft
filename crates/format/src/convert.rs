@@ -13,7 +13,7 @@ use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
 
 use crate::manifest::{
     ChannelM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM, PatternM,
-    SmartSourceM, SurfaceM, TileRef,
+    SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
 };
 use crate::{FormatError, Result};
 
@@ -45,6 +45,8 @@ pub(crate) trait Fetch {
     /// Canonical (little-endian) tile bytes of the given expected length.
     fn tile(&mut self, hash: &str, len: usize) -> Result<Vec<u8>>;
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>>;
+    /// Fetch an optional display payload without allocating beyond its stricter limit.
+    fn blob_bounded(&mut self, hash: &str, limit: usize) -> Result<Arc<Vec<u8>>>;
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -79,9 +81,7 @@ fn key4(s: &str) -> Result<[u8; 4]> {
     unhex(s)?.try_into().map_err(|_| FormatError::corrupt(format!("bad 4-byte key `{s}`")))
 }
 
-pub(crate) fn is_valid_hash(h: &str) -> bool {
-    h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
+pub(crate) use craft_pcraft_format::is_valid_hash;
 
 /// Convert native-endian sample bytes to little-endian in place (and back:
 /// the swap is an involution).
@@ -108,7 +108,7 @@ fn surface_m(s: &Surface, sink: &mut dyn Sink) -> SurfaceM {
     let mut dp = vec![0u8; f.bytes_per_pixel()];
     encode_pixel(&f, &s.default_pixel(), &mut dp);
     swap_to_le(&mut dp, f.sample);
-    SurfaceM { format: f, default: hex(&dp), tiles: s.tiles().map(|(c, t)| TileRef { tx: c.tx, ty: c.ty, hash: sink.tile(f, t) }).collect() }
+    SurfaceM { format: f, default: hex(&dp), tiles: s.tiles().map(|(c, t)| TileRef::new(c.tx, c.ty, sink.tile(f, t))).collect() }
 }
 
 fn opt_blob(b: &Option<Arc<Vec<u8>>>, sink: &mut dyn Sink) -> Option<Hash> {
@@ -157,7 +157,16 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             psd_raw: opt_blob(&s.psd_raw, sink),
             path: s.path.clone(),
             stroke: s.stroke.clone(),
-            live: s.live.clone(),
+            // Older PhotoCraft versions cannot deserialize ArrowLine.
+            // The saved path preserves the arrow's visual appearance.
+            live: match &s.live {
+                Some(photocraft_doc::LiveShape::ArrowLine { .. }) => None,
+                other => other.clone(),
+            },
+            arrow_live: match &s.live {
+                Some(arrow @ photocraft_doc::LiveShape::ArrowLine { .. }) => Some(arrow.clone()),
+                _ => None,
+            },
             density: s.density,
             feather: s.feather,
         },
@@ -167,6 +176,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
                 SmartSource::Embedded { file_name, bytes } => SmartSourceM::Embedded { file_name: file_name.clone(), blob: sink.blob(bytes) },
                 SmartSource::Linked { path } => SmartSourceM::Linked { path: path.clone() },
             },
+            vector_preview: s.vector_preview.as_ref().map(|preview| VectorPreviewM { source_hash: preview.source_hash, svg: sink.blob(&preview.svg) }),
             transform: s.transform,
             smart_filters: s.smart_filters.clone(),
             cache: s.cache.as_ref().map(|c| surface_m(c, sink)),
@@ -201,6 +211,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             feather: m.feather,
         }),
         vector_mask: l.vector_mask.clone(),
+        frame: l.frame.as_deref().cloned(),
         effects: EffectsM {
             enabled: l.effects.enabled,
             items: l.effects.items.clone(),
@@ -227,8 +238,11 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
-pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
-    DocM {
+/// Build native document manifest data, sending durable conversion provenance through the same bounded content sink as
+/// other stored data.
+pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
+    let import_conversion = d.metadata.import_conversion.as_deref().map(|report| crate::import_conversion::to_manifest(report, sink)).transpose()?;
+    Ok(DocM {
         id: d.id.0,
         name: d.name.clone(),
         size: d.size,
@@ -242,6 +256,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         ruler_origin: d.ruler_origin,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
         metadata: MetadataM {
+            import_conversion,
             xmp: d.metadata.xmp.as_deref().map(str::to_owned),
             exif: opt_blob(&d.metadata.exif, sink),
             text: d.metadata.text.clone(),
@@ -271,7 +286,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         notes: d.notes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
-    }
+    })
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
@@ -357,7 +372,7 @@ impl Loader<'_> {
             if let Some(tile) = self.tiles.get(&f.sample).and_then(|m| m.get(&t.hash)) {
                 // One hash names one byte string, so a cached tile of another length means
                 // the same hash was referenced from formats of different pixel sizes.
-                if tile.bytes().len() != len {
+                if tile.len() != len {
                     return Err(FormatError::corrupt(format!("tile {} is referenced with different sizes", t.hash)));
                 }
                 s.put_tiles([(c, tile.clone())]);
@@ -453,6 +468,9 @@ impl Loader<'_> {
     /// One layer, given its already converted group children.
     #[inline(never)]
     fn layer_with(&mut self, m: &LayerM, children: Vec<Layer>) -> Result<Layer> {
+        // Unusable frame metadata is dropped rather than making the whole document unreadable;
+        // the group and its vector mask still load.
+        let frame = m.frame.clone().filter(|f| f.valid() && matches!(m.content, ContentM::Group { .. }));
         let content = match &m.content {
             ContentM::Raster { surface } => LayerContent::Raster(self.surface(surface)?),
             ContentM::Group { expanded, artboard, frame_stroke, .. } => {
@@ -477,43 +495,62 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, live, density, feather } => LayerContent::Shape(ShapeLayer {
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, live, arrow_live, density, feather } => LayerContent::Shape(ShapeLayer {
                 path: path.clone(),
                 fill: fill.clone(),
                 stroke: stroke.clone(),
-                live: live.clone(),
+                live: arrow_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. })).cloned().or_else(|| live.clone()),
                 cache: self.opt_surface(cache)?,
                 psd_raw: self.opt_blob(psd_raw)?,
                 density: *density,
                 feather: *feather,
             }),
-            ContentM::Smart { contents_id, source, transform, smart_filters, cache, psd_raw, filters_enabled, filter_mask, warp, stack_mode, perspective } => {
-                LayerContent::Smart(SmartObject {
-                    contents_id: self.contents_id(*contents_id, source),
-                    source: match source {
-                        SmartSourceM::Embedded { file_name, blob } => SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? },
-                        SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },
-                    },
-                    transform: *transform,
-                    smart_filters: smart_filters.clone(),
-                    cache: self.opt_surface(cache)?,
-                    psd_raw: self.opt_blob(psd_raw)?,
-                    filters_enabled: *filters_enabled,
-                    filter_mask: match filter_mask {
-                        Some(mm) => Some(LayerMask {
-                            surface: self.surface(&mm.surface)?,
-                            enabled: mm.enabled,
-                            linked: mm.linked,
-                            density: mm.density,
-                            feather: mm.feather,
-                        }),
-                        None => None,
-                    },
-                    warp: warp.clone().filter(|w| w.mesh.as_ref().is_none_or(|m| m.is_valid())),
-                    stack_mode: *stack_mode,
-                    perspective: perspective.filter(|p| p.iter().all(|v| v.is_finite())),
-                })
-            }
+            ContentM::Smart {
+                contents_id,
+                source,
+                vector_preview,
+                transform,
+                smart_filters,
+                cache,
+                psd_raw,
+                filters_enabled,
+                filter_mask,
+                warp,
+                stack_mode,
+                perspective,
+            } => LayerContent::Smart(SmartObject {
+                contents_id: self.contents_id(*contents_id, source),
+                source: match source {
+                    SmartSourceM::Embedded { file_name, blob } => SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? },
+                    SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },
+                },
+                vector_preview: match vector_preview {
+                    // A display-only preview must not prevent recovery of the native source
+                    // and cached pixels if its optional blob is missing or damaged.
+                    Some(preview) => {
+                        self.fetch.blob_bounded(&preview.svg, 16 << 20).ok().map(|svg| photocraft_doc::VectorPreview { source_hash: preview.source_hash, svg })
+                    }
+                    None => None,
+                },
+                transform: *transform,
+                smart_filters: smart_filters.clone(),
+                cache: self.opt_surface(cache)?,
+                psd_raw: self.opt_blob(psd_raw)?,
+                filters_enabled: *filters_enabled,
+                filter_mask: match filter_mask {
+                    Some(mm) => Some(LayerMask {
+                        surface: self.surface(&mm.surface)?,
+                        enabled: mm.enabled,
+                        linked: mm.linked,
+                        density: mm.density,
+                        feather: mm.feather,
+                    }),
+                    None => None,
+                },
+                warp: warp.clone().filter(|w| w.mesh.as_ref().is_none_or(|m| m.is_valid())),
+                stack_mode: *stack_mode,
+                perspective: perspective.filter(|p| p.iter().all(|v| v.is_finite())),
+            }),
         };
         let mask = match &m.mask {
             Some(mm) => {
@@ -540,6 +577,7 @@ impl Loader<'_> {
             clipped: m.clipped,
             mask,
             vector_mask: m.vector_mask.clone(),
+            frame: frame.map(Box::new),
             effects: Effects {
                 enabled: m.effects.enabled,
                 items: m.effects.items.clone(),
@@ -560,6 +598,8 @@ impl Loader<'_> {
         })
     }
 
+    /// Reconstruct checked native data while reserving/remapping IDs, validating resources and preserving references
+    /// plus opaque conversion provenance.
     pub(crate) fn document(&mut self, m: &DocM) -> Result<Document> {
         // Reserve every stored id before allocating identities missing from older bundles. If an
         // id is implausibly large, remap the whole document while retaining shared contents groups.
@@ -589,6 +629,7 @@ impl Loader<'_> {
         }
         let quick_mask = m.quick_mask.as_ref().map(|c| self.channel(c)).transpose()?;
         let mut md = Metadata {
+            import_conversion: m.metadata.import_conversion.as_ref().map(|report| crate::import_conversion::from_manifest(report, self.fetch)).transpose()?,
             xmp: m.metadata.xmp.as_deref().map(std::sync::Arc::from),
             exif: self.opt_blob(&m.metadata.exif)?,
             text: m.metadata.text.clone(),
