@@ -2855,4 +2855,25 @@ fn content_aware_move_keeps_an_inverted_selection() {
     let r = s.execute("paint.contentAwareMove", json!({"offset": [20, 0]}));
     assert!(r.is_ok(), "{r:?}");
     assert!(s.active().unwrap().doc.selection.is_some(), "the inverted selection survives the move");
+    assert!(selected(&s, 10, 10), "a pixel far from the hole is still selected");
+    assert!(selected(&s, 120, 30), "so is the old position of the hole");
+}
+
+#[test]
+fn content_aware_move_heavily_scaled_down_landing_on_no_pixel_is_refused() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20, "ellipse": true})).unwrap();
+    let probe = [(105, 31), (96, 41), (127, 0), (100, 26), (60, 10)];
+    let before: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let bounds = s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+    // Scaled to 1% about its centre the selection is a fraction of a pixel wide: its whole mapped
+    // bounds are on the canvas but no pixel centre falls inside it.
+    for mode in ["move", "extend"] {
+        let r = s.execute("paint.contentAwareMove", json!({"offset": [-40, 0], "scaleX": 1, "scaleY": 1, "mode": mode}));
+        assert!(r.is_err(), "{mode}: {r:?}");
+    }
+    let after: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    assert_eq!(before, after, "the document is unchanged");
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), bounds, "so is the selection");
 }

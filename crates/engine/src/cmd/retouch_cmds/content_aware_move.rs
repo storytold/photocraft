@@ -240,23 +240,14 @@ fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
 /// Whether any selected pixel of the moved (or transformed) selection falls inside `dest`, the
 /// part of its bounds that is on the canvas. A round selection dragged towards a corner can keep
 /// only a corner of its bounding box there; moving that would erase the old place and paste nothing.
-/// Cheap when it can be: a move whose whole bounds land answers at once (`area` of a normal
-/// selection is the bounds of its set pixels, so it holds one; an inverted selection's `area` is
-/// the canvas, which may hold none, so it is always checked), and the rest reads only the part of
-/// the selection that lands, in bands, and stops at the first selected pixel.
+/// Always scanned, never assumed from the bounds: a heavily scaled-down selection can land on no
+/// pixel centre although its whole bounds are on the canvas. The plain path reads in 64-row bands,
+/// the transformed path reads the coverage of the inverse-mapped sub-rect once; both stop at the
+/// first selected pixel.
 fn selected_pixel_lands(sel: &Surface, area: Rect, map: Option<&Homography>, (dx, dy): (i32, i32), dest: Rect) -> bool {
-    let inverted = sel.default_pixel().first().copied().unwrap_or(0.0) > 0.0;
     match map {
-        None => {
-            if !inverted && area.translate(dx, dy) == dest {
-                return true;
-            }
-            any_selected(sel, dest.translate(-dx, -dy))
-        }
+        None => any_selected(sel, dest.translate(-dx, -dy)),
         Some(h) => {
-            if !inverted && mapped_bounds(h, area) == dest {
-                return true;
-            }
             // `run_move` reports the collapsed transform.
             let Some(inv) = h.inverse() else { return true };
             let corners = [(dest.x0, dest.y0), (dest.x1, dest.y0), (dest.x0, dest.y1), (dest.x1, dest.y1)].map(|(x, y)| inv.apply(f64::from(x), f64::from(y)));
