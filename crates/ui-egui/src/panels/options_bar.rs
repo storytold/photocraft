@@ -1055,3 +1055,7 @@ mod sharpen_strength_alert_tests;
 #[cfg(test)]
 #[path = "../smudge_strength_alert_tests.rs"]
 mod smudge_strength_alert_tests;
+
+#[cfg(test)]
+#[path = "../pattern_stamp_opacity_flow_tests.rs"]
+mod pattern_stamp_opacity_flow_tests;
