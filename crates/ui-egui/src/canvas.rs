@@ -1043,7 +1043,10 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     let capture_press =
         tool.is_type() || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
     let tool_press = egui::Id::unique(("tool-pointer-press-modifiers", idx));
+    // Read from the raw events, so a dialog's modal layer doesn't block it: gated here, or a ⌘-press
+    // under a dialog would start a type transform (#12896).
     if capture_press
+        && !under_dialog
         && !input.menu_dismiss_press
         && let Some((p, press_mods)) = ui.input(|i| {
             i.events.iter().find_map(|e| match e {
@@ -2615,6 +2618,9 @@ mod pattern_drag_tests;
 
 #[cfg(test)]
 mod tabs_tests;
+
+#[cfg(test)]
+mod doc_window_dialog_tests;
 
 #[cfg(test)]
 mod tests;
