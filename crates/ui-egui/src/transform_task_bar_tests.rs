@@ -369,6 +369,82 @@ fn task_bar_screen_drag(h: &mut AppHarness, from: egui::Pos2, to: egui::Pos2) {
     h.run_steps(3);
 }
 
+fn task_bar_screen_rect(h: &mut AppHarness) -> Rect {
+    let shown = bar(h);
+    assert_eq!(shown["visible"], true);
+    let [x0, y0, x1, y1]: [f32; 4] = serde_json::from_value(shown["rect"].clone()).unwrap();
+    Rect::from_min_max(pos2(x0, y0), pos2(x1, y1))
+}
+
+/// Hit the real 12-point child grip, not the surrounding Area or an inspection command.
+fn drag_task_bar_grip(h: &mut AppHarness) -> Rect {
+    let before = task_bar_screen_rect(h);
+    let grip = h.get_by_label("Move bar").rect();
+    assert!((grip.width() - 12.0).abs() <= 0.1, "the shared grip remains twelve points wide: {grip:?}");
+    assert!(before.contains_rect(grip), "the pointer must hit the grip inside the visible bar");
+    assert!(h.state().ui.panels.task_bar.at.is_none(), "a fresh bar follows its frame before the drag");
+    let area = ViewXform::active(h.state()).unwrap().rect;
+    let from = grip.center();
+    let delta = egui::vec2(40.0, -24.0);
+    assert!(area.contains(from) && area.contains(from + delta));
+    let document = h.state().session.active().unwrap().doc.clone();
+    let edits = history(h);
+    task_bar_screen_drag(h, from, from + delta);
+    let after = task_bar_screen_rect(h);
+    let movement = after.min - before.min;
+    assert!(movement.length() > 12.0 && movement.dot(delta) > 0.0, "the grip must move the bar: {before:?} -> {after:?}");
+    let place = h.state().ui.panels.task_bar;
+    let [x, y] = place.at.expect("a grip drag stores the canvas-relative bar position");
+    assert!((after.min - (area.min + egui::vec2(x, y))).length() <= 1.0, "the displayed bar must use the saved position");
+    assert_eq!(bar(h)["at"], json!([x, y]));
+    // This is the same serialized panel-layout field used across restarts, not a transient Area rect.
+    let restored: crate::state::TaskBarPlace = serde_json::from_value(serde_json::to_value(place).unwrap()).unwrap();
+    assert_eq!(restored, place);
+    h.run_steps(4);
+    assert_eq!(h.state().ui.panels.task_bar, place, "the drop stays saved on later canvas passes");
+    assert!((task_bar_screen_rect(h).min - after.min).length() <= 1.0);
+    assert!(std::sync::Arc::ptr_eq(&document, &h.state().session.active().unwrap().doc));
+    assert_eq!(history(h), edits, "moving the bar must not commit a document edit");
+    after
+}
+
+#[test]
+fn transform_task_bar_grip_drag_moves_the_saved_bar_without_changing_the_box() {
+    let mut h = open_box();
+    let transform = h.state().ui.transform.as_ref().unwrap();
+    let before = (transform.session, transform.pivot, transform.quad);
+    let edits = history(&h);
+    let shown = drag_task_bar_grip(&mut h);
+    let transform = h.state().ui.transform.as_ref().expect("the same transform stays open");
+    assert_eq!((transform.session, transform.pivot, transform.quad), before);
+    // A real pointer click after the grip drop still reaches a child button through the Area sense.
+    let button = h.get_by_label("Rotate 90° Clockwise").rect().center();
+    assert!(shown.contains(button));
+    task_bar_screen_drag(&mut h, button, button);
+    let transform = h.state().ui.transform.as_ref().unwrap();
+    assert_eq!((transform.session, transform.pivot), (before.0, before.1));
+    assert_ne!(transform.quad, before.2, "the relocated rotation button still works");
+    assert_eq!(history(&h), edits);
+}
+
+#[test]
+fn crop_task_bar_grip_drag_moves_the_saved_bar_without_changing_the_crop() {
+    let mut h = harness();
+    control(&mut h, "ui.set", json!({"tool": "crop"}));
+    h.state_mut().ui.crop_rect = Some([100.0, 100.0, 200.0, 160.0]);
+    h.run_steps(4);
+    assert!(crate::crop_task_bar::eligible(h.state()));
+    let before = (h.state().ui.crop_rect, h.state().ui.crop_angle);
+    let edits = history(&h);
+    let shown = drag_task_bar_grip(&mut h);
+    assert_eq!((h.state().ui.crop_rect, h.state().ui.crop_angle), before);
+    let cancel = h.get_by_label("Cancel").rect().center();
+    assert!(shown.contains(cancel));
+    task_bar_screen_drag(&mut h, cancel, cancel);
+    assert!(h.state().ui.crop_rect.is_none(), "the relocated Cancel button still dismisses the crop");
+    assert_eq!(history(&h), edits);
+}
+
 /// Crop uses the same floating frame and canvas drag routing as Free Transform.
 #[test]
 fn crop_task_bar_frame_drag_preserves_crop_but_off_bar_drag_rotates() {
