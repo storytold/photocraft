@@ -1,6 +1,6 @@
 use super::defaults::{apply, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
 use super::editing::{cancel, commit_with};
-use super::fonts::{font_picker, font_picker_tip, fonts_ready, selected_style, style_label, styles};
+use super::fonts::{font_picker, font_picker_tip, fonts_ready, selected_style, style_options, styles};
 use super::keys::is_vertical;
 use super::panel::{MetricChoice, SIZE_PRESETS, preset_items};
 use super::{Color32, LayerId, PhotocraftApp, Stroke, byte_of, insertion_style, json, selected_styles, text_layer};
@@ -46,7 +46,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         font_picker_tip(ui, tl!("Search and select fonts"));
         let style_family = if fam.is_empty() { styles_at(app).map(|(c, _)| c.font_family).unwrap_or_default() } else { fam.clone() };
-        let opts: Vec<(String, String)> = styles(&style_family).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
+        let opts = style_options(&style_family, &style);
         let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
         if crate::widgets::dropdown(ui, "type-style", tl!("Style"), &mut style, &opts_ref, 110.0) {
             app.ui.tool_options.type_style = style.clone();

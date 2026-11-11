@@ -1849,6 +1849,114 @@ fn postscript_only_style_shows_actual_subfamily() {
     assert_eq!(super::selected_style(&style), "SemiBold");
 }
 
+/// #6085: PSD text runs carry only a PostScript name (`font_style` is empty). Variable-font named
+/// instances and uninstalled non-regular faces must show their real style and axis coordinates
+/// instead of reverting the Style dropdown to "Regular".
+#[test]
+fn postscript_variable_instances_and_weighted_runs_do_not_revert_to_regular() {
+    use photocraft_doc::text::CharStyle;
+    {
+        let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        if !eng.fonts.has_family("UI Var Test") {
+            let source = photocraft_text::fonts::INTER_REGULAR.as_slice();
+            let fixed = |v: f32| ((v * 65536.0).round() as i32).to_be_bytes();
+            let names = [
+                (1u16, "UI Var Test"),
+                (2, "Regular"),
+                (6, "UIVarTest-Regular"),
+                (16, "UI Var Test"),
+                (256, "Weight"),
+                (257, "Width"),
+                (258, "Light Condensed"),
+                (259, "UIVarTest-Black"),
+                (260, "Heavy"),
+            ];
+            let mut name = Vec::new();
+            let mut strings = Vec::new();
+            for v in [0u16, names.len() as u16, (6 + names.len() * 12) as u16] {
+                name.extend(v.to_be_bytes());
+            }
+            for (id, value) in names {
+                let encoded: Vec<_> = value.encode_utf16().flat_map(u16::to_be_bytes).collect();
+                for n in [3, 1, 0x409, id, encoded.len() as u16, strings.len() as u16] {
+                    name.extend(n.to_be_bytes());
+                }
+                strings.extend(encoded);
+            }
+            name.extend(strings);
+            let mut fvar = Vec::new();
+            for n in [1u16, 0, 16, 2, 2, 20, 2, 14] {
+                fvar.extend(n.to_be_bytes());
+            }
+            for (tag, min, default, max, name_id) in [(b"wght", 100.0, 400.0, 900.0, 256u16), (b"wdth", 75.0, 100.0, 100.0, 257)] {
+                fvar.extend(tag);
+                for v in [min, default, max] {
+                    fvar.extend(fixed(v));
+                }
+                fvar.extend([0, 0]);
+                fvar.extend(name_id.to_be_bytes());
+            }
+            for (subfamily, coords, ps) in [(258u16, [300.0, 75.0], 0xFFFFu16), (260, [900.0, 100.0], 259)] {
+                fvar.extend(subfamily.to_be_bytes());
+                fvar.extend([0, 0]);
+                for v in coords {
+                    fvar.extend(fixed(v));
+                }
+                fvar.extend(ps.to_be_bytes());
+            }
+            let count = u16::from_be_bytes(source[4..6].try_into().unwrap()) as usize;
+            let mut tables: Vec<([u8; 4], Vec<u8>)> = (0..count)
+                .map(|i| {
+                    let r = 12 + i * 16;
+                    let at = u32::from_be_bytes(source[r + 8..r + 12].try_into().unwrap()) as usize;
+                    let len = u32::from_be_bytes(source[r + 12..r + 16].try_into().unwrap()) as usize;
+                    (source[r..r + 4].try_into().unwrap(), source[at..at + len].to_vec())
+                })
+                .filter(|(tag, _)| tag != b"name")
+                .collect();
+            tables.push((*b"name", name));
+            tables.push((*b"fvar", fvar));
+            tables.sort_by_key(|(tag, _)| *tag);
+            let mut out = source[0..4].to_vec();
+            for n in [tables.len() as u16, 0, 0, 0] {
+                out.extend(n.to_be_bytes());
+            }
+            let mut at = 12 + 16 * tables.len();
+            for (tag, data) in &tables {
+                out.extend(tag);
+                out.extend(0u32.to_be_bytes());
+                out.extend((at as u32).to_be_bytes());
+                out.extend((data.len() as u32).to_be_bytes());
+                at += data.len().next_multiple_of(4);
+            }
+            for (_, data) in &tables {
+                out.extend(data);
+                out.resize(out.len().next_multiple_of(4), 0);
+            }
+            eng.fonts.register_font_data(out);
+        }
+    }
+
+    let styles = super::styles("UI Var Test");
+    assert!(styles.contains(&"Light Condensed".into()), "{styles:?}");
+    assert!(styles.contains(&"Heavy".into()), "{styles:?}");
+
+    let inst_style =
+        CharStyle { font_family: "UI Var Test".into(), weight: 300, postscript_name: Some("UIVarTest-LightCondensed".into()), ..Default::default() };
+    assert_eq!(super::selected_style(&inst_style), "Light Condensed");
+    assert_eq!(super::axis_value(&inst_style, &("wdth".into(), 75.0, 100.0, 100.0)), 75.0);
+
+    let heavy_style = CharStyle { font_family: "UI Var Test".into(), weight: 900, postscript_name: Some("UIVarTest-Black".into()), ..Default::default() };
+    assert_eq!(super::selected_style(&heavy_style), "Heavy");
+
+    let missing_bold =
+        CharStyle { font_family: "Missing PSD Sans".into(), weight: 700, postscript_name: Some("MissingPSDSans-Bold".into()), ..Default::default() };
+    assert_eq!(super::selected_style(&missing_bold), "Bold");
+
+    let missing_bold_italic = CharStyle { italic: true, ..missing_bold };
+    assert_eq!(super::selected_style(&missing_bold_italic), "Bold Italic");
+}
+
 /// A variable face lists every standard weight of its `wght` axis, not only its default instance
 /// (Montserrat from Google Fonts: its default instance is Thin).
 #[test]
