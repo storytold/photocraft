@@ -540,6 +540,24 @@ fn number_edit(
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
     let before = *value;
+    // Exact channels use the same unsnapped unit as arrows/wheel for assistive stepping.
+    // Consume only our requests so DragValue cannot apply its drag-speed rounding first.
+    let exact_step = field_step(&range, decimals, opts.step_from_decimals);
+    let mut accessible_steps = 0.0_f64;
+    if round_trip && ui.is_enabled() {
+        ui.input_mut(|input| {
+            input.consume_accesskit_action_requests(id, |request| {
+                match request.action {
+                    egui::accesskit::Action::Increment => accessible_steps += 1.0,
+                    egui::accesskit::Action::Decrement => accessible_steps -= 1.0,
+                    egui::accesskit::Action::SetValue
+                        if matches!(request.data.as_ref(), Some(egui::accesskit::ActionData::NumericValue(value)) if !value.is_finite()) => {}
+                    _ => return false,
+                }
+                true
+            })
+        });
+    }
     let speed = if fine { 0.01 } else { 0.5 };
     let wrapping = wrap_drag && crate::scrub_wrap::active(ui);
     let wrapped_drag = wrapping && ui.input(|i| i.pointer.primary_down());
@@ -555,7 +573,7 @@ fn number_edit(
             // scaled to 2400 pt in a 1296 pt field, must not change it (#5717).
             .clamp_existing_to_range(false)
             // A warp is an absolute-position jump. The scoped scrub below removes that jump.
-            .speed(if wrapped_drag { 0.0 } else { speed })
+            .speed(if wrapped_drag || round_trip { 0.0 } else { speed })
             .custom_formatter(move |v, _| format(v))
             .update_while_editing(!math && !hold_typed)
             // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
@@ -600,6 +618,32 @@ fn number_edit(
                 v
             }),
     );
+    if round_trip {
+        // DragValue's smart aim and decimal rounding are appropriate for ordinary fields,
+        // but exact f32 channels retain their fractional origin throughout a scrub.
+        let precise_id = id.with("exact-drag");
+        if resp.drag_started() {
+            ui.data_mut(|data| data.insert_temp(precise_id, f64::from(before)));
+        }
+        if resp.dragged() {
+            let delta = resp.drag_delta();
+            let slow = ui.input(|input| input.modifiers.shift);
+            let precise = ui.data(|data| data.get_temp::<f64>(precise_id)).unwrap_or(f64::from(before));
+            let precise = precise + f64::from(delta.x - delta.y) * f64::from(speed) / if slow { 10.0 } else { 1.0 };
+            ui.data_mut(|data| data.insert_temp(precise_id, precise));
+            *value = precise.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
+        }
+        if resp.drag_stopped() {
+            ui.data_mut(|data| data.remove_temp::<f64>(precise_id));
+        }
+        if accessible_steps != 0.0 {
+            *value = (f64::from(*value) + accessible_steps * f64::from(exact_step)) as f32;
+        }
+        // AccessKit SetValue also bypasses the text parser; reject its non-finite values.
+        if !value.is_finite() {
+            *value = before;
+        }
+    }
     if hold_typed {
         // A scrub always applies; a typed value applies unless this frame's guard vetoes it.
         let scrub = resp.dragged() || resp.drag_started() || resp.drag_stopped();
@@ -619,6 +663,12 @@ fn number_edit(
     // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
     if *value != before && lo <= hi {
         *value = value.clamp(lo, hi);
+    }
+    if round_trip {
+        ui.ctx().accesskit_node_builder(resp.id, |builder| {
+            builder.set_numeric_value_step(f64::from(exact_step));
+            builder.set_numeric_value(f64::from(*value));
+        });
     }
     resp.flags.set(egui::response::Flags::CHANGED, *value != before);
     resp

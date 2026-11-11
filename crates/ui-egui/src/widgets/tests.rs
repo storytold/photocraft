@@ -2156,3 +2156,81 @@ fn a_grouped_dropdown_list_draws_a_line_above_each_group_and_keeps_its_width() {
     assert!((rows[0].top() - plain[0].top()).abs() < 0.5, "no line above the first row: {rows:?} vs {plain:?}");
     assert_eq!(list.width(), plain_list.width(), "the line doesn't widen the list");
 }
+
+#[test]
+fn exact_value_field_pointer_scrubs_keep_the_fractional_origin() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    for shift in [false, true] {
+        let mut h = Harness::new_ui_state(
+            |ui, value: &mut f32| {
+                super::value_field_exact(ui, value, f32::MIN..=f32::MAX, 120.0).accessible_name("Exact drag");
+            },
+            0.12345679_f32,
+        );
+        h.run();
+        let at = h.get_by_role_and_label(Role::SpinButton, "Exact drag").rect().center();
+        let modifiers = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers });
+        h.run();
+        let end = at + egui::vec2(20.0, 0.0);
+        h.event(egui::Event::PointerMoved(end));
+        h.run();
+        let expected = (f64::from(0.12345679_f32) + if shift { 1.0 } else { 10.0 }) as f32;
+        assert_eq!(*h.state(), expected, "pointer scrub must not smart-aim or decimal-round its fractional origin");
+        h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers });
+        h.run();
+        assert_eq!(*h.state(), expected, "release/passive frames preserve the scrub result");
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run();
+    }
+}
+
+#[test]
+fn exact_value_field_accesskit_steps_match_arrows_and_reject_nonfinite_values() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let initial = 0.12345679_f32;
+    let mut h = Harness::new_ui_state(
+        |ui, value: &mut f32| {
+            super::value_field_exact(ui, value, f32::MIN..=f32::MAX, 120.0).accessible_name("Exact accessible");
+        },
+        initial,
+    );
+    h.run();
+    h.get_by_role_and_label(Role::SpinButton, "Exact accessible").increment_accesskit();
+    h.run();
+    assert_eq!(*h.state(), initial + 1.0, "assistive increment uses the arrow/wheel unit without rounding");
+    h.get_by_role_and_label(Role::SpinButton, "Exact accessible").decrement_accesskit();
+    h.run();
+    let stepped = (initial + 1.0) - 1.0;
+    assert_eq!(*h.state(), stepped);
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        h.get_by_role_and_label(Role::SpinButton, "Exact accessible").set_value_accesskit(invalid);
+        h.run();
+        assert_eq!(*h.state(), stepped, "nonfinite assistive values cannot enter the document");
+    }
+    let mut bounded = Harness::new_ui_state(
+        |ui, value: &mut f32| {
+            super::value_field_exact(ui, value, 0.0..=1.0, 120.0).accessible_name("Bounded exact");
+        },
+        0.995_f32,
+    );
+    bounded.run();
+    bounded.get_by_role_and_label(Role::SpinButton, "Bounded exact").increment_accesskit();
+    bounded.run();
+    assert_eq!(*bounded.state(), 1.0, "bounded exact fields still clamp edits");
+    // Ordinary numerical fields retain egui's drag-speed stepping and rounding.
+    let mut ordinary = Harness::new_ui_state(
+        |ui, value: &mut f32| {
+            super::value_field(ui, value, -100.0..=100.0, "", 120.0).accessible_name("Ordinary accessible");
+        },
+        initial,
+    );
+    ordinary.run();
+    ordinary.get_by_role_and_label(Role::SpinButton, "Ordinary accessible").increment_accesskit();
+    ordinary.run();
+    assert_eq!(*ordinary.state(), 0.6);
+}
