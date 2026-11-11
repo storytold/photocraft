@@ -1115,3 +1115,7 @@ mod pen_alt_drag_segment_tests;
 #[cfg(test)]
 #[path = "freeform_close_tolerance_tests.rs"]
 mod freeform_close_tolerance_tests;
+
+#[cfg(test)]
+#[path = "freeform_short_drag_tests.rs"]
+mod freeform_short_drag_tests;

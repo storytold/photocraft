@@ -10,7 +10,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// The measured document: 800 × 600 px with the Freeform Pen in Path mode at `zoom`.
-fn app(zoom: f32) -> PhotocraftApp {
+pub(super) fn app(zoom: f32) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
