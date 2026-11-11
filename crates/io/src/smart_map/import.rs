@@ -2,7 +2,7 @@ use super::export::{CELL_SIZE, blend_options, is_meta, pi, rgbc, whole};
 use super::placed::enumv;
 use super::{
     BlendMode, Descriptor, Id, J, Map, ReferenceItem, SmartFilter, UNSUPPORTED_FILTER, UnicodeString, Value, bool_or, camera_raw, displace, enum_of, get_desc,
-    hue_sat, json, num, perspective_warp, text_of,
+    hue_sat, json, num, perspective_warp, puppet, text_of,
 };
 
 // ---------- the filters we model ----------
@@ -710,7 +710,11 @@ fn gallery_params(item: &Descriptor, f: &Descriptor) -> Option<J> {
         let mut params = Map::new();
         if g.key == "halftonePattern" {
             // Do not turn an unfamiliar shape or malformed setting into the engine's defaults:
-            // keeping the whole item opaque preserves it through a subsequent save.
+            // keeping the whole item opaque preserves it through a subsequent save. That covers
+            // the stack's own descriptor too: a key beside `GEfs` would not be written back.
+            if f.get("GEfs").is_some() && !(f.class_id.is(GALLERY_CLASS) && only_keys(f, &["GEfs"])) {
+                return None;
+            }
             if !e.class_id.is(GALLERY_CLASS)
                 || !only_keys(e, &["GEfk", "HlSz", "Cntr", "ScrT", "GELv"])
                 || !matches!(e.get("GEfk"), Some(Value::Enumerated { type_id, .. }) if type_id.is("GEft"))
@@ -863,6 +867,7 @@ pub fn filter_from_item(item: &Descriptor) -> SmartFilter {
         Some(displace::CLASS) => displace::import_params(item).map(|p| (displace::COMMAND, p)),
         Some(hue_sat::CLASS) => fltr.and_then(hue_sat::import_params).map(|p| (hue_sat::COMMAND, p)),
         Some(perspective_warp::CLASS) => perspective_warp::import_params(item).map(|p| (perspective_warp::COMMAND, p)),
+        Some(puppet::CLASS) => puppet::import_params(item).map(|p| (puppet::COMMAND, p)),
         Some(GALLERY_CLASS) => fltr.and_then(|f| gallery_params(item, f)).map(|p| (GALLERY_COMMAND, p)),
         Some(c @ ("Fbrs" | "Clds" | "DfrC")) => fltr.and_then(|f| coloured_params(c, item, f)),
         // A `Fltr` that is there but not a descriptor is settings we can't read: kept verbatim

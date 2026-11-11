@@ -280,3 +280,20 @@ fn sandbox_refuses_to_rewrite_the_portal_grant() {
     assert_eq!(save_as(&conn, request("art.psd"), true), Ok(Some(PathBuf::from("/run/user/1000/doc/id/art.png"))));
     daemon.kill().ok();
 }
+
+/// #9630: in a sandbox the default Save As dialog shows the whole name, so accepting it grants
+/// `test.psd` and the save goes through. From the bare stem (`test`) the granted name got `.psd`
+/// added afterwards, and the guard refused every default save.
+#[test]
+fn sandboxed_default_save_as_is_granted_the_name_it_writes() {
+    let Some((conn, seen, mut daemon)) = mock_portal(vec![(0, Some(("file:///run/user/1000/doc/id/test.psd", "PSD Document")))]) else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    let req = crate::services::portal_request("/home/me/test.psd", true);
+    assert_eq!(save_as(&conn, req, true), Ok(Some(PathBuf::from("/run/user/1000/doc/id/test.psd"))));
+    assert_eq!(seen.lock().unwrap()[0].0.as_deref(), Some("test.psd"), "the dialog opened on the whole name");
+    // Outside a sandbox the dialog still opens on the stem (#6121).
+    assert_eq!(crate::services::portal_request("/home/me/test.psd", false).name.as_deref(), Some("test"));
+    daemon.kill().ok();
+}
