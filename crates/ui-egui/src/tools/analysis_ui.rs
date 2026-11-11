@@ -25,8 +25,8 @@ use crate::theme::Tokens;
 /// What a pointer drag is doing (not serialised).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
-    /// New ruler line from a point.
-    RulerNew,
+    /// New ruler line from a point; the ruler it replaces comes back if the press doesn't move (#11980).
+    RulerNew(Option<Ruler>),
     /// Moving a ruler handle: 0 start, 1 end, 2 protractor end.
     RulerHandle(u8),
     /// Moving count marker (group, index) from where it was.
@@ -248,6 +248,10 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
 }
 
 #[cfg(test)]
+#[path = "analysis_ruler_click_tests.rs"]
+mod analysis_ruler_click_tests;
+
+#[cfg(test)]
 #[path = "note_show_on_new_tests.rs"]
 mod note_show_on_new_tests;
 
@@ -279,7 +283,6 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         return true;
     };
     let tol = tolerance(app);
-    let samplers: Vec<[f64; 2]> = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
     match (tool, ev) {
         (Tool::Ruler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
@@ -300,14 +303,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 Some(r) if near(r.start) => app.ui.analysis.drag = Some(Drag::RulerHandle(0)),
                 _ => {
                     set_ruler(app, Ruler { start: p, end: p, protractor: None });
-                    app.ui.analysis.drag = Some(Drag::RulerNew);
+                    app.ui.analysis.drag = Some(Drag::RulerNew(cur));
                 }
             }
         }
         (Tool::Ruler, ToolEvent::Move { x, y, .. }) => {
             let (Some(drag), Some(mut r)) = (app.ui.analysis.drag, doc.measurement.ruler) else { return true };
             match drag {
-                Drag::RulerNew | Drag::RulerHandle(1) => r.end = constrain(r.start, [x, y], mods.shift),
+                Drag::RulerNew(_) | Drag::RulerHandle(1) => r.end = constrain(r.start, [x, y], mods.shift),
                 Drag::RulerHandle(0) => r.start = constrain(r.end, [x, y], mods.shift),
                 Drag::RulerHandle(_) => r.protractor = Some(constrain(r.start, [x, y], mods.shift)),
                 _ => return true,
@@ -316,8 +319,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         }
         (Tool::Ruler, ToolEvent::Up { .. }) => {
             let drag = app.ui.analysis.drag.take();
-            if drag == Some(Drag::RulerNew) && doc.measurement.ruler.is_some_and(|r| dist(r.start, r.end) < 0.5) {
-                let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
+            if let Some(Drag::RulerNew(before)) = drag
+                && doc.measurement.ruler.is_some_and(|r| dist(r.start, r.end) < 0.5)
+            {
+                // A click leaves the ruler that was there; with none, it leaves none.
+                match before {
+                    Some(r) => set_ruler(app, r),
+                    None => {
+                        let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
+                    }
+                }
             }
         }
         (Tool::Count, ToolEvent::Down { x, y, .. }) => {
@@ -328,7 +339,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
                 Some((g, i)) => app.ui.analysis.drag = Some(Drag::Count(g, i, [x, y])),
                 None if !mods.alt => {
-                    let _ = app.run("count.add", json!({"x": x, "y": y}));
+                    // A marker that stays invisible looks like the click did nothing, so adding one
+                    // brings View > Show > Count back. It is view state, not a history step.
+                    let added = app.run("count.add", json!({"x": x, "y": y})).is_ok();
+                    app.ui.view.show.count |= added;
                 }
                 None => {}
             }
@@ -369,7 +383,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         // there (a click on it moves it to the clicked pixel); Escape cancels either drag.
         (Tool::ColorSampler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
-            match nearest_sampler(&samplers, p, tol) {
+            match sampler_at(app, p) {
                 // ⌥-click a point removes it.
                 Some(i) if mods.alt => {
                     let _ = app.run("view.colorSamplers.delete", json!({"index": i}));
@@ -424,6 +438,13 @@ fn status_on_err(app: &mut PhotocraftApp, r: Result<Value, String>) {
         app.ui.status = e;
         app.ui.status_error = false;
     }
+}
+
+/// The count marker a Count tool click at document point `at` would grab (the click's own hit
+/// test, with its tolerance), or `None`. The cursor uses it too, so it never says "1" where a click
+/// adds a marker (#11773).
+pub(crate) fn count_marker_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<(usize, usize)> {
+    nearest_marker(&app.session.active()?.doc, at, tolerance(app))
 }
 
 fn nearest_marker(d: &Document, at: [f64; 2], tol: f64) -> Option<(usize, usize)> {
@@ -645,9 +666,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Color")).clicked() {
                 crate::color_picker_ui::open_for_target(app, "noteColor", &crate::color_picker_ui::title_for(tl!("Color")), rgb);
             }
+            // Clear All asks first (#11791); `notes.delete {"all": true}` itself never does.
             if ui.add_enabled_ui(!doc.notes.is_empty(), |ui| crate::widgets::secondary_button(ui, tl!("Clear All"), 0.0)).inner.clicked() {
-                let _ = app.run("notes.delete", json!({"all": true}));
-                app.ui.analysis.note_selected = None;
+                ask_clear_notes(app);
             }
             if crate::icons::button(ui, "message-square", 22.0, app.ui.analysis.notes, tl!("Show or hide the Notes panel")).clicked() {
                 app.ui.analysis.notes = !app.ui.analysis.notes;
@@ -656,6 +677,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::ColorSampler => {
             let t = Tokens::get(ui.ctx());
+            // Sample Size, shared with the Eyedropper as in Photoshop (#11732).
+            ui.label(RichText::new(tl!("Sample Size:")).color(t.text_dim).size(12.0));
+            let sizes = crate::eyedropper_ui::size_options();
+            crate::widgets::dropdown(ui, "color-sampler-size", tl!("Size"), &mut app.ui.tool_options.eyedropper_size, &sizes, 130.0);
+            crate::widgets::vline(ui, 22.0);
             let n = app.session.active().map_or(0, |d| d.color_samplers.len());
             ui.label(
                 RichText::new(crate::i18n::fmt(
@@ -1055,6 +1081,45 @@ mod sampler_drag_tests;
 
 /// Marks the "Delete this note?" alert (#11788).
 const DELETE_NOTE_MARK: &str = "__deleteNote";
+
+/// Marks the "Are you sure you want to delete all notes?" alert (#11791).
+const CLEAR_NOTES_MARK: &str = "__clearAllNotes";
+
+/// The Note tool's Clear All: Photoshop's alert, OK / Cancel (#11791). OK deletes every note in one
+/// "Delete all Notes" step; Cancel (or Escape) changes nothing.
+pub fn ask_clear_notes(app: &mut PhotocraftApp) {
+    let Some(doc) = app.session.active().filter(|s| !s.doc.notes.is_empty()).map(|s| s.doc.id.0) else { return };
+    if app.ui.dialogs.iter().any(|d| owns_clear_notes(&d.fields)) {
+        return;
+    }
+    let mut f = Map::new();
+    f.insert(CLEAR_NOTES_MARK.into(), json!(true));
+    f.insert("__command".into(), json!("notes.delete"));
+    f.insert("__label".into(), json!(tl!("Clear All")));
+    f.insert("document".into(), json!(doc));
+    app.ui.open_dialog(crate::state::DialogKind::Command, f);
+}
+
+pub fn owns_clear_notes(fields: &Map<String, Value>) -> bool {
+    fields.contains_key(CLEAR_NOTES_MARK)
+}
+
+pub fn clear_notes_body(ui: &mut egui::Ui) {
+    ui.label(tl!("Are you sure you want to delete all notes?"));
+}
+
+/// OK: every note goes in one step, nothing stays selected, and the options bar shows the tool
+/// defaults again (a selected note had put its author and colour there).
+pub fn confirm_clear_notes(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    if app.session.active().map(|s| s.doc.id.0) != fields.get("document").and_then(Value::as_u64) {
+        return Err(tl!("The document changed. Please choose Clear All again.").into());
+    }
+    let result = app.run("notes.delete", json!({"all": true}))?;
+    let defaults = AnalysisUi::default();
+    let a = &mut app.ui.analysis;
+    (a.note_selected, a.note_author, a.note_color) = (None, defaults.note_author, defaults.note_color);
+    Ok(result)
+}
 /// Its "Don't show again", kept with the other dialog preferences.
 const DELETE_NOTE_PREF: &str = "notes.delete.confirmation";
 
@@ -1138,6 +1203,15 @@ pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
             return true;
         }
     }
+    // Escape during a Ruler drag (a new ruler or an end) ends it and keeps the ruler where it is:
+    // no cancel, and the later moves and the release change nothing (#11986).
+    if app.ui.tool == Tool::Ruler
+        && matches!(app.ui.analysis.drag, Some(Drag::RulerNew(_) | Drag::RulerHandle(0 | 1)))
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        app.ui.analysis.drag = None;
+        return true;
+    }
     let Some(index) = app.ui.analysis.note_selected else { return false };
     if app.ui.tool != Tool::Note || app.ui.text_edit.is_some() || matches!(Focus::of(ctx), Focus::Text | Focus::DeletingWidget) {
         return false;
@@ -1160,3 +1234,11 @@ mod note_delete_key_tests;
 #[cfg(test)]
 #[path = "analysis_ruler_shift_tests.rs"]
 mod analysis_ruler_shift_tests;
+
+#[cfg(test)]
+#[path = "note_clear_all_tests.rs"]
+mod note_clear_all_tests;
+
+#[cfg(test)]
+#[path = "analysis_ruler_escape_tests.rs"]
+mod analysis_ruler_escape_tests;
