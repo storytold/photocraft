@@ -1043,7 +1043,10 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     let capture_press =
         tool.is_type() || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
     let tool_press = egui::Id::unique(("tool-pointer-press-modifiers", idx));
+    // Read from the raw events, so a dialog's modal layer doesn't block it: gated here, or a ⌘-press
+    // under a dialog would start a type transform (#12896).
     if capture_press
+        && !under_dialog
         && !input.menu_dismiss_press
         && let Some((p, press_mods)) = ui.input(|i| {
             i.events.iter().find_map(|e| match e {
@@ -1892,15 +1895,10 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 && !app.services.right_button_down.as_ref().is_some_and(|f| f())
                 && alt_picks(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) =>
         {
-            // While it samples (button held), the comparison ring replaces the cursor (#213).
-            if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
-                icon
-            } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-                egui::CursorIcon::Crosshair
-            } else {
-                pipette_cursor(ui.ctx(), p)
-            }
+            cursors::alt_pick_cursor(app, painter, xf, p, response.is_pointer_button_down_on(), t)
         }
+        // Over a layer it can't paint (Lock All), the Mixer Brush shows a no-entry sign (#11957).
+        Tool::MixerBrush if cursors::mixer_target_locked(app) => cursors::no_entry_cursor(painter, p),
         t if t.is_brushlike() || t == Tool::QuickSelection => {
             // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
             // full size), precise crosshair, or the standard pointer.
@@ -1957,12 +1955,15 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         }
         // The Color Sampler (#11744):
         // - Over a sampler: arrow with the sampler target, or with Alt the arrow with scissors.
+        //   Dragging one keeps the arrow with the sampler target until release, though the stored
+        //   point stays behind, and without scissors: Alt removes only on the press (#13063).
         // - Off a sampler: eyedropper with the sampler target at its top-left, or the crosshair
         //   for precise Other Cursors.
         Tool::ColorSampler => {
             let [x, y] = xf.to_doc(p);
-            if crate::analysis_ui::sampler_at(app, [x, y]).is_some() {
-                sampler_hover_cursor(ui.ctx(), p, alt || app.ui.shell.sticky_alt)
+            let dragging = matches!(app.ui.analysis.drag, Some(crate::analysis_ui::Drag::Sampler(..)));
+            if dragging || crate::analysis_ui::sampler_at(app, [x, y]).is_some() {
+                sampler_hover_cursor(ui.ctx(), p, !dragging && (alt || app.ui.shell.sticky_alt))
             } else if precise_other_cursor(app) {
                 egui::CursorIcon::Crosshair
             } else {
@@ -2620,6 +2621,9 @@ mod pattern_drag_tests;
 
 #[cfg(test)]
 mod tabs_tests;
+
+#[cfg(test)]
+mod doc_window_dialog_tests;
 
 #[cfg(test)]
 mod tests;

@@ -28,7 +28,7 @@ pub(super) fn choose_open(app: &mut PhotocraftApp, command: &str) {
     choose(app, &Context::default(), command);
 }
 
-pub(super) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
@@ -45,7 +45,7 @@ pub(super) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp>
     h
 }
 
-pub(super) fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
+pub(crate) fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
     h.event(egui::Event::ModifiersChanged(modifiers));
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
