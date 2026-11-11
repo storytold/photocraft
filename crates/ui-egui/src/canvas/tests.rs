@@ -1921,11 +1921,11 @@ fn painting_a_group_is_refused_at_the_press_with_a_message() {
         app.ui.dialogs.clear();
         app.ui.tool = tool;
         tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        // The Brush has its own measured alert, tested in `brush_refusal_alert_tests` (#11898).
-        let want = if tool == Tool::Brush {
-            "Could not use the brush tool because the pixels in a group cannot be edited without merging the group.".to_string()
-        } else {
-            format!("Could not use the {} because the target layer is a group.", tool.label())
+        // Brush and Classic gradient use the measured alerts (#11898, #12017).
+        let want = match tool {
+            Tool::Brush => "Could not use the brush tool because the pixels in a group cannot be edited without merging the group.".to_string(),
+            Tool::Gradient => "Could not use the gradient tool because the pixels in a group cannot be edited without merging the group.".to_string(),
+            _ => format!("Could not use the {} because the target layer is a group.", tool.label()),
         };
         assert_eq!(errors(&app), [want], "{tool:?}");
         assert!(app.drag.is_none() && app.live_stroke.is_none(), "{tool:?} starts no stroke");
