@@ -627,8 +627,10 @@ impl Writer<'_> {
         let canvas = self.doc.bounds();
         let (rect, mut buf) = match &layer.content {
             LayerContent::Raster(s) => {
-                // An ORA layer rect is its visible pixels: `crop` below drops clear pixels, so
-                // the written rect excludes them (#9824).
+                // An ORA layer rect is its visible pixels when the surface defaults to clear: `crop`
+                // below drops clear pixels, so the written rect excludes them (#9824). A surface with
+                // an opaque default has no invisible pixels, so the rect covers everything that
+                // differs from it — which is what `crop` keeps.
                 let r = s.content_bounds();
                 admit_layer(r)?;
                 (r, photocraft_compose::surface_to_buffer(s, r).into_px())
