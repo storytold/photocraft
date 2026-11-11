@@ -126,13 +126,13 @@ impl Filter {
     pub fn effective(&self) -> Self {
         let mut f = Self { on: self.on, by: self.by, ..Self::default() };
         match self.by {
-            FilterBy::Kind => f.kinds = self.kinds.clone(),
+            FilterBy::Kind => f.kinds = as_set(&self.kinds),
             FilterBy::Name => f.name = self.name.trim().to_lowercase(),
             FilterBy::Effect => f.effect = self.effect,
             FilterBy::Mode => f.mode = self.mode,
             FilterBy::Attribute => f.attribute = self.attribute,
             FilterBy::Color => f.color = self.color,
-            FilterBy::SmartObject => f.smart = self.smart.clone(),
+            FilterBy::SmartObject => f.smart = as_set(&self.smart),
             FilterBy::Artboard | FilterBy::Group => {}
         }
         f
@@ -431,6 +431,15 @@ fn controls(filter: &mut Filter, ui: &mut egui::Ui) {
 pub mod effect;
 pub mod find;
 mod group;
+/// Kind and Smart Object buttons are a set: the same buttons in another order, or one twice,
+/// are the same criterion.
+fn as_set(values: &[String]) -> Vec<String> {
+    let mut v = values.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 #[cfg(test)]
 mod group_tests;
 

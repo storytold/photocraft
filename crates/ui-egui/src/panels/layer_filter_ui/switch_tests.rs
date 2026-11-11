@@ -446,6 +446,19 @@ fn dormant_criteria_leave_the_switch_and_the_selection_alone() {
     assert_eq!(app.session.active().unwrap().selected_layers(), [blue], "a dormant edit is not a new application");
 }
 
+/// Kind and Smart Object buttons are a set: reordering them is no new criterion, so it does not
+/// undo a manual Off.
+#[test]
+fn reordered_kind_and_smart_buttons_are_the_same_criterion() {
+    let mut app = app();
+    set(&mut app, json!({"by":"kind","kinds":["pixel","type"],"on":false}));
+    set(&mut app, json!({"kinds":["type","pixel","type"]}));
+    assert!(!Filter::of(&app).on, "the same Kind buttons in another order keep the manual off");
+    set(&mut app, json!({"by":"smartObject","smart":["linked","embedded"],"on":false}));
+    set(&mut app, json!({"smart":["embedded","linked"]}));
+    assert!(!Filter::of(&app).on, "the same Smart Object buttons in another order keep the manual off");
+}
+
 /// `ui.set` deselects what the new filter hides at once, also with Filter Options › Hide.
 #[test]
 fn control_patch_deselects_hidden_layers_with_the_row_hidden() {
