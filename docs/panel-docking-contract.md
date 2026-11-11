@@ -30,7 +30,7 @@ gaps. Keep upstream's default behavior for other consumers of these optional hoo
 
 The shared host APIs were accepted in storytold/craft-libs#470. PhotoCraft now
 pins `craft-ui` to the immutable merge revision
-`ea1fbeb05b94bb692b27b687adb2ac1e5abc640f`, without a local override or vendored
+`1b34eba41e62138fc2438d2734523b302840b45d`, without a local override or vendored
 copy. The temporary snapshot revision guard is removed with that snapshot.
 Other craft-libs dependencies retain their own upstream pins. Future UI revision
 changes still require adapter tests and visual checks; a revision alone cannot

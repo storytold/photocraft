@@ -278,7 +278,6 @@ Paragraph; the rest open as in-app floating windows.
 |---|---|---|
 | 2026-11-10 | minor | Panel integration updated to PhotoCraft 0.22.0: floating Tools uses only the one/two-column header toggle; document-tab and canvas-edge mouse targets removed. Existing saved layouts remain readable. Prefs audit: 9 of 199; no parity percentage changed. Desktop contributor acceptance remains pending. |
 | 2026-11-02 | minor | Compact panel docking and fitted resize/seam ownership prepared as a separate review unit after shared API acceptance. Auto-Show Hidden Panels is read; prefs audit 10 of 183. Offscreen evidence does not verify physical mixed-DPI/monitor behavior. Floating Tools follows separately. |
-
 | 2026-11-08 | minor | Actions panel: an action or step row dragged onto the trash is deleted, and one dragged onto Create new action is duplicated right after itself (#12373) |
 | 2026-10-27 | minor | Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it, its five handles set its seven values as in the reference, and a smart object's stored cylinder opens as one. Scores unchanged. |
 | 2026-11-08 | minor | Image › Adjustments › Photo Filter… keeps Preserve Luminosity from its last OK; filter, colour and density reopen at Warming Filter (85) and 25 %, measured in the reference application (#9879); no percentage changed |
@@ -291,7 +290,6 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-11-05 | minor | Image › Adjustments › Selective Color keeps each colour's own Cyan, Magenta, Yellow and Black, and OK and Preview apply all nine colours; the dialog and the Properties panel share one editor (#11463) |
 | 2026-11-02 | minor | Filter dialogs with a preview window: a click on the image centres the preview there, under a small square pointer, as in Photoshop (#9648). Scores unchanged. |
 | 2026-11-02 | minor | Edit › Transform › Distort: the side handles move their edge freely, both its corners by the drag, stopping before the box folds as a corner does; Perspective's side handles skew along their edge, as in Photoshop (#10085). Not a new command, so no percentage changed |
-
 | 2026-11-01 | minor | Every preference takes effect: 11 of 183 do nothing (was 12); Graphics Adapter always worked, but startup read it by raw JSON key, which the scorecard audit can't see |
 | 2026-10-31 | minor | Layers panel filter-type dropdown: Color filters by the layers' label colour (#5898); Kind, Name, Mode, Color, Smart Object and Artboard, the other three missing; no percentage changed |
 | 2026-10-29 | minor | Paragraph box overflow: text a box can't hold enlarges the box's lower-right handle and shows a black + in it, as the reference application does (#8311); agents read `typeBoxOverflow` in `ui.inspect`. Not a new command, so no percentage changed |
