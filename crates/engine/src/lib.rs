@@ -349,6 +349,8 @@ mod brush_pressure_size_default_tests;
 #[cfg(test)]
 mod embed_all_linked_tests;
 #[cfg(test)]
+mod eraser_gray_background_tests;
+#[cfg(test)]
 mod fill_layer_mode_tests;
 #[cfg(test)]
 mod mixer_indexed_bitmap_tests;
@@ -365,3 +367,5 @@ mod fx_mode_tests;
 #[cfg(test)]
 mod brush_clear_background_tests;
 pub mod command_hints;
+#[cfg(test)]
+mod pencil_auto_erase_exact_tests;

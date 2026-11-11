@@ -593,6 +593,58 @@ fn rounded_outline_changes_coverage(a: [f64; 2], b: [f64; 2]) -> bool {
     })
 }
 
+/// Together with positive triangle Jacobians, a simple boundary keeps the GPU mesh unfolded.
+/// A mesh can wrap over itself with positive Jacobians everywhere, so local tests alone do
+/// not suffice. Such overlaps need the CPU's fold ordering and coverage compositing.
+fn unfolded_boundary(points: &[[f64; 2]], row: usize) -> Option<()> {
+    let rows = points.len().checked_div(row)?;
+    if !(2..=513).contains(&row) || !(2..=513).contains(&rows) || points.len() % row != 0 {
+        return None;
+    }
+    let vertex = |x: usize, y: usize| points.get(y.checked_mul(row)?.checked_add(x)?).copied();
+    let mut boundary = Vec::new();
+    for x in 0..row {
+        boundary.push(vertex(x, 0)?);
+    }
+    for y in 1..rows {
+        boundary.push(vertex(row - 1, y)?);
+    }
+    for x in (0..row - 1).rev() {
+        boundary.push(vertex(x, rows - 1)?);
+    }
+    for y in (1..rows - 1).rev() {
+        boundary.push(vertex(0, y)?);
+    }
+    if boundary.iter().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    // Be conservative about contacts that f32 vertex rounding could turn into crossings.
+    let epsilon = boundary.iter().flatten().fold(1.0f64, |a, v| a.max(v.abs())) * f64::from(f32::EPSILON) * 2.0;
+    let mut edges: Vec<_> = boundary.iter().copied().zip(boundary.iter().copied().cycle().skip(1)).take(boundary.len()).enumerate().collect();
+    edges.sort_unstable_by(|(_, (a, b)), (_, (c, d))| a[0].min(b[0]).total_cmp(&c[0].min(d[0])));
+    let side = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+        let (x, y, u, v) = (b[0] - a[0], b[1] - a[1], c[0] - a[0], c[1] - a[1]);
+        let cross = x * v - y * u;
+        let tolerance = epsilon * (x.abs() + y.abs() + u.abs() + v.abs() + epsilon);
+        if cross.abs() <= tolerance { 0.0 } else { cross.signum() }
+    };
+    for (i, &(index, (a, b))) in edges.iter().enumerate() {
+        for &(other, (c, d)) in edges.get(i + 1..)? {
+            if c[0].min(d[0]) > a[0].max(b[0]) + epsilon {
+                break;
+            }
+            let distance = index.abs_diff(other);
+            if distance == 1 || distance + 1 == boundary.len() || c[1].min(d[1]) > a[1].max(b[1]) + epsilon || a[1].min(b[1]) > c[1].max(d[1]) + epsilon {
+                continue;
+            }
+            if side(a, b, c) * side(a, b, d) <= 0.0 && side(c, d, a) * side(c, d, b) <= 0.0 {
+                return None;
+            }
+        }
+    }
+    Some(())
+}
+
 fn warp_geometry(w: &photocraft_geom::warp::Warp, rect: [f64; 4], factor: f64) -> Option<(Vec<f32>, Vec<u32>)> {
     // Bound cloning, tessellation and index allocation before visiting input-driven knots.
     if !factor.is_finite() || factor <= 0.0 || w.mesh.as_ref().is_some_and(|m| m.us.len() > 65 || m.vs.len() > 65 || m.points.len() > 193 * 193) {
@@ -639,8 +691,8 @@ fn warp_geometry(w: &photocraft_geom::warp::Warp, rect: [f64; 4], factor: f64) -
             vertices.extend([dst[0] as f32, dst[1] as f32, src[0] as f32, src[1] as f32]);
         }
     }
-    // Strong reductions/folds need the CPU oracle's footprint filter. Also retain the
-    // engine's row-major ordering for the GPU triangles, rather than the overlay's z-order.
+    // Strong reductions and folds need the CPU oracle. Unfolded triangles can use row order;
+    // overlapping ones need its fold ordering and coverage compositing.
     let mut indices = Vec::new();
     for j in 0..vs.len().saturating_sub(1) {
         for i in 0..us.len().saturating_sub(1) {
@@ -688,6 +740,9 @@ fn warp_geometry(w: &photocraft_geom::warp::Warp, rect: [f64; 4], factor: f64) -
             }
             indices.extend([a, right_index, diagonal_index, a, diagonal_index, bottom_index]);
         }
+    }
+    if !affine {
+        unfolded_boundary(&mapped, us.len())?;
     }
     Some((vertices, indices))
 }
@@ -1080,5 +1135,42 @@ mod tests {
         );
         assert!(!rounded_outline_changes_coverage([0.0, 0.0], [4.0, 0.0]));
         assert!(rounded_outline_changes_coverage([0.0, 0.0], [10000.0, 1.0]), "outline scans stay bounded");
+    }
+
+    #[test]
+    fn a_positive_jacobian_does_not_admit_an_overlapping_warp_boundary() {
+        let row = 5;
+        let rows = 65;
+        // A strip wrapped twice around a ring. Every cell keeps its orientation, but
+        // two different source regions cover the same destination and need fold stacking.
+        let mapped: Vec<[f64; 2]> = (0..rows)
+            .flat_map(|y| {
+                (0..row).map(move |x| {
+                    let angle = 4.0 * std::f64::consts::PI * y as f64 / (rows - 1) as f64;
+                    let radius = 20.0 + x as f64;
+                    [radius * angle.cos(), radius * angle.sin()]
+                })
+            })
+            .collect();
+        for y in 0..rows - 1 {
+            for x in 0..row - 1 {
+                let a = y * row + x;
+                for [i, j, k] in [[a, a + 1, a + row + 1], [a, a + row + 1, a + row]] {
+                    let (p, q, r) = (mapped[i], mapped[j], mapped[k]);
+                    assert!((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]) > 0.0);
+                }
+            }
+        }
+        assert!(unfolded_boundary(&mapped, row).is_none());
+    }
+
+    #[test]
+    fn an_unfolded_thin_boundary_is_accepted_and_invalid_grids_are_refused() {
+        let mapped: Vec<[f64; 2]> = (0..5).flat_map(|y| (0..9).map(move |x| [x as f64 + y as f64 * 0.05, y as f64 * 0.1])).collect();
+        assert!(unfolded_boundary(&mapped, 9).is_some());
+        assert!(unfolded_boundary(&mapped, 0).is_none());
+        assert!(unfolded_boundary(&mapped, 1).is_none());
+        assert!(unfolded_boundary(&mapped, 8).is_none());
+        assert!(unfolded_boundary(&[[f64::NAN, 0.0]; 4], 2).is_none());
     }
 }

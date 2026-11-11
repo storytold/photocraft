@@ -11,7 +11,7 @@ fn a_warp_box_holding_the_whole_layer_gives_what_compositing_over_the_cleared_la
         let w = Warp::preset(WarpStyle::Flag, 35.0, rect_f(rect));
         // What the warp built before the shortcut: the warp composited over the cleared layer.
         let map = |x: f64, y: f64| w.map(x, y);
-        let warped = warp_mesh_surface_with(&surf, rect, &map, Interp::Bicubic, &Interrupt::NONE).unwrap();
+        let warped = warp_mesh_surface_with(&surf, rect, &map, Fold::IN_PLACE, Interp::Bicubic, &Interrupt::NONE).unwrap();
         let mut want = surf.clone();
         crate::pixels::try_clear_surface(&mut want, rect, None).unwrap();
         crate::transform_cmds::composite_over(&mut want, &warped);
@@ -499,4 +499,28 @@ fn a_cancelled_warp_stops_in_a_selected_linked_mask() {
     let ctl = Interrupt::cancel_only(&|| true);
     let r = warp_layer(Some(&sel), Locks::default(), &mut l, &w, rect, Interp::Bicubic, None, &ctl);
     assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+}
+
+#[test]
+fn scalar_warp_uses_native_fold_stacking() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    let frame = Rect::new(0, 0, 64, 48);
+    let bounds = rect_f(frame);
+    let mut mesh = BezierMesh::identity(bounds, 1, 1);
+    // Both halves land on the right; the left half is turned over and lies on top.
+    for (i, p) in mesh.points.iter_mut().enumerate() {
+        p[0] = [64.0, 64.0 / 3.0, 64.0 / 3.0, 64.0][i % 4];
+    }
+    let warp = Warp::custom(mesh, bounds);
+    let map = |x: f64, y: f64| warp.map(x, y);
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut source = Surface::new(PixelFormat::new(ColorMode::Grayscale, sample, false));
+        source.fill_rect(Rect::new(0, 0, 32, 48), &[1.0]);
+        source.fill_rect(Rect::new(32, 0, 64, 48), &[0.2]);
+        let expected = warp_mesh_gray_with(&source, &map, Fold::IN_PLACE, Interp::Nearest);
+        let rows = warp_mesh_gray_with(&source, &map, Fold::Rows, Interp::Nearest);
+        assert_ne!(expected.read_region(frame), rows.read_region(frame), "the fixture distinguishes fold order: {sample:?}");
+        let actual = warp_scalar(&source, None, frame, &warp, Interp::Nearest, &Interrupt::NONE).unwrap();
+        assert_eq!(actual.read_region(frame), expected.read_region(frame), "native scalar fold: {sample:?}");
+    }
 }

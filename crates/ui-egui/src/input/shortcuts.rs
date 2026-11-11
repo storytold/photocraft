@@ -698,10 +698,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
-    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
-    // When the document refuses it, ↩ keeps the draft to commit again; Esc keeps it as the Work Path.
+    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769);
+    // ↩ also deselects the Work Path. When the document refuses it, ↩ keeps the draft to commit
+    // again; Esc keeps it as the Work Path.
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
-        crate::vector_ui::pen_commit(app, false);
+        crate::vector_ui::pen_enter(app);
         return true;
     }
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -911,6 +912,26 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.status_error = true;
         }
         return;
+    }
+    // Delete Anchor Point (#12773): Esc first clears anchors selected on the saved path targeted in
+    // the Paths panel, then deselects that path, so clicks edit nothing. Not while its name is typed
+    // in the panel: egui has already dropped the field's focus, and the panel cancels on Esc.
+    if !esc_taken
+        && app.ui.tool == Tool::DeleteAnchorPoint
+        && !crate::vector_ui::path_renaming(app, ctx)
+        && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
+    {
+        let ds = &app.ui.direct_selection;
+        let selected = ds.target == Some(crate::direct_select::PathRef::Saved(index)) && (!ds.anchors.is_empty() || ds.segment.is_some());
+        if pressed(Key::Escape) {
+            if selected {
+                app.ui.direct_selection.anchors.clear();
+                app.ui.direct_selection.segment = None;
+            } else {
+                app.ui.selected_path = None;
+            }
+            return;
+        }
     }
     // + / − pick a Path Operation with the Pen tools and Path Selection (`path_components`)…
     crate::path_components::handle_keys(app, ctx);
