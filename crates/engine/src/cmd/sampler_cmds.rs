@@ -16,6 +16,12 @@ use crate::{DocState, EngineError, Result, Session};
 /// Photoshop's Color Sampler limit: at most 10 points per document.
 pub const MAX_SAMPLERS: usize = 10;
 
+/// The refusal `view.colorSamplers.add` gives at [`MAX_SAMPLERS`], so a caller can tell it from
+/// other failures.
+pub fn limit_message() -> String {
+    format!("Color Sampler limit reached: at most {MAX_SAMPLERS} points per document")
+}
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -103,7 +109,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     change(s, |st| {
         let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
         if st.color_samplers.len() >= MAX_SAMPLERS {
-            return Err(EngineError::Other(format!("Color Sampler limit reached: at most {MAX_SAMPLERS} points per document")));
+            return Err(EngineError::Other(limit_message()));
         }
         st.color_samplers.push(pos);
         let i = st.color_samplers.len() - 1;

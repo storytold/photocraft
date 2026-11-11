@@ -212,12 +212,41 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
         return false;
     }
     match ev {
+        // ⇧⌥-click adds a colour sampler at the clicked pixel instead, as the Color Sampler tool
+        // places one: no foreground change, nothing painted (#11890). A refused point (the
+        // document's limit) reports in the status bar as that tool's does; off the canvas, as that
+        // tool, it places none and says nothing. A press on an existing point wasn't measured, so
+        // it samples the foreground as before.
+        ToolEvent::Down { x, y, .. } if mods.shift && !on_sampler(app, x, y) => {
+            let size = app.session.active().map(|d| d.doc.size);
+            let inside = size.is_some_and(|s| (0.0..f64::from(s.width)).contains(&x) && (0.0..f64::from(s.height)).contains(&y));
+            if inside && let Err(e) = app.run("view.colorSamplers.add", json!({"x": x, "y": y})) {
+                // Only the limit is a plain report; any other refusal (a failed Pen draft left in
+                // another document) stays an error, also when the document is full.
+                let limit = e == photocraft_engine::sampler_cmds::limit_message();
+                app.ui.status = e;
+                app.ui.status_error = !limit;
+            }
+        }
+        // While ⇧⌥ stay held after that press, moves sample nothing.
+        ToolEvent::Move { .. } if mods.shift => {}
         // Without ⌥: the sample sets the foreground colour, whatever the Eyedropper would do.
         ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => sample_eyedropper(app, x, y, egui::Modifiers::NONE),
         ToolEvent::Up { .. } => app.alt_sampling = false,
     }
     true
 }
+
+/// Is document point (x, y) on a colour sampler, within the Color Sampler tool's reach of one (7
+/// screen pixels)?
+fn on_sampler(app: &PhotocraftApp, x: f64, y: f64) -> bool {
+    let tol = 7.0 / f64::from(app.point_zoom().max(0.01));
+    app.session.active().is_some_and(|d| d.color_samplers.iter().any(|q| (q[0] - x).hypot(q[1] - y) <= tol))
+}
+
+#[cfg(test)]
+#[path = "../brush_shift_alt_sampler_tests.rs"]
+mod brush_shift_alt_sampler_tests;
 
 /// Sample the image or targeted raster mask at (x, y) using the configured Sample Size.
 /// Write a valid sample to the foreground swatch, or to the background swatch with Alt.
