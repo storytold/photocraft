@@ -23,15 +23,50 @@ use crate::gpu_canvas::{CanvasSnapshot, GpuCanvas};
 
 /// One kept picture: the board's rectangle as the canvas showed it, and the document it showed.
 struct Shot {
-    /// What the canvas showed, or since [`follow`] the current document with the board shown,
-    /// which composites the same in the picture's rectangle and keeps no older tiles alive.
-    doc: Arc<Document>,
+    kept: Kept,
     display_key: u64,
     snap: CanvasSnapshot,
     /// For least-recently-used eviction.
     used: u64,
-    /// When [`follow`] last moved `doc` up to the current document (`now_ms`).
+}
+
+/// What a kept picture shows, apart from its GPU copy (so tests need no GPU).
+struct Kept {
+    /// What the canvas showed, or since [`Kept::follow`] the current document with the board
+    /// shown, which composites the same in `rect` and keeps no older tiles alive.
+    doc: Arc<Document>,
+    /// The picture's rectangle on the canvas.
+    rect: Rect,
+    /// When [`Kept::follow`] last moved `doc` up to the current document (`now_ms`).
     followed: f64,
+    /// [`Kept::follow`] was put off within its interval: [`tick`] follows it once the interval is
+    /// over, with or without another edit.
+    due: bool,
+}
+
+impl Kept {
+    /// Move up to `doc`: if the picture is still exact for `doc` with layer `board` shown, hold
+    /// that document (the board shown) instead, which shares its tiles with what the session
+    /// holds, so no tiles History has let go stay alive outside Memory Usage. Within
+    /// [`FOLLOW_MS`] of the last time, only marks the picture `due`, so painting doesn't compare
+    /// documents every frame. False when the picture isn't exact any more: showing its board would
+    /// redraw it anyway, so it should go.
+    fn follow(&mut self, board: LayerId, doc: &Document, now_ms: f64) -> bool {
+        if now_ms - self.followed < FOLLOW_MS {
+            self.due = true;
+            return true;
+        }
+        let mut now = doc.clone();
+        let Some(layer) = now.layer_mut(board) else { return false };
+        layer.visible = true;
+        if !still_exact(&self.doc, &now, self.rect) {
+            return false;
+        }
+        self.doc = Arc::new(now);
+        self.followed = now_ms;
+        self.due = false;
+        true
+    }
 }
 
 /// The kept pictures of every open document's hidden layers.
@@ -131,8 +166,8 @@ fn keep(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId, rec
     cache.clock += 1;
     // The layer's id, not its name: names are the user's text and stay out of the log.
     log::info!("storyboard cache: kept layer {} ({}x{}, {} MB; {} kept)", board.0, rect.width(), rect.height(), snap.bytes >> 20, cache.shots.len() + 1);
-    let followed = crate::gpu_canvas::now_ms();
-    cache.shots.insert((id, board), Shot { doc: shown.clone(), display_key, snap, used: cache.clock, followed });
+    let kept = Kept { doc: shown.clone(), rect: snap.rect, followed: crate::gpu_canvas::now_ms(), due: false };
+    cache.shots.insert((id, board), Shot { kept, display_key, snap, used: cache.clock });
 }
 
 /// Put layer `board`'s kept picture back over `rect` of document `id`'s display texture, if it is
@@ -141,7 +176,7 @@ fn put_back(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId,
     let cache = &mut app.board_cache;
     let Some(shot) = cache.shots.get_mut(&(id, board)) else { return false };
     // Exact only if nothing that composites inside the rectangle changed since it was kept.
-    let same = shot.display_key == display_key && shot.snap.rect == rect && still_exact(&shot.doc, doc, rect);
+    let same = shot.display_key == display_key && shot.snap.rect == rect && still_exact(&shot.kept.doc, doc, rect);
     if !same {
         log::info!("storyboard cache: layer {} changed since it was kept; redrawing it", board.0);
         cache.shots.remove(&(id, board));
@@ -169,37 +204,40 @@ fn still_exact(kept: &Document, now: &Document, rect: Rect) -> bool {
     super::doc_diff::changed_area(kept, now).is_some_and(|r| r.is_empty() || !meets(&r.inflate(reach), &rect))
 }
 
-/// How often (ms) [`follow`] moves a kept picture's document up to the current one.
+/// How often (ms) [`Kept::follow`] moves a kept picture's document up to the current one.
 const FOLLOW_MS: f64 = 1000.0;
 
-/// Move document `id`'s kept pictures up to `doc`, except those of the `toggled` layers (being
-/// kept or put back now): a picture still exact for `doc` with its board shown now holds that
-/// document (with the board shown) instead of the older one it was taken from, so it keeps no
-/// tiles alive that History has let go, outside Memory Usage; a picture that isn't exact any
-/// more is dropped, as showing its board would redraw it anyway. At most once a second for each
-/// picture, so painting doesn't compare documents every frame.
-fn follow(app: &mut PhotocraftApp, id: DocId, doc: &Arc<Document>, toggled: &[LayerId]) {
+/// Move document `id`'s kept pictures up to `doc` ([`Kept::follow`]), except those of the
+/// `toggled` layers (being kept or put back now), and drop those that aren't exact any more.
+fn follow(app: &mut PhotocraftApp, id: DocId, doc: &Document, toggled: &[LayerId]) {
     let now_ms = crate::gpu_canvas::now_ms();
     let mut stale = Vec::new();
     for (&(d, board), shot) in &mut app.board_cache.shots {
-        if d != id || toggled.contains(&board) || now_ms - shot.followed < FOLLOW_MS {
-            continue;
-        }
-        let mut now = (**doc).clone();
-        let Some(layer) = now.layer_mut(board) else {
-            stale.push((d, board));
-            continue;
-        };
-        layer.visible = true;
-        if still_exact(&shot.doc, &now, shot.snap.rect) {
-            shot.doc = Arc::new(now);
-            shot.followed = now_ms;
-        } else {
+        if d == id && !toggled.contains(&board) && !shot.kept.follow(board, doc, now_ms) {
             stale.push((d, board));
         }
     }
     for k in stale {
         app.board_cache.shots.remove(&k);
+    }
+}
+
+/// Follow the pictures [`Kept::follow`] put off, once their interval is over, even if no edit
+/// or redraw comes after: otherwise the last edits of a burst left a picture holding tiles that
+/// History then let go. Called every frame; asks for a frame until none is due.
+pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let mut due: Vec<DocId> = app.board_cache.shots.iter().filter(|(_, s)| s.kept.due).map(|(&(d, _), _)| d).collect();
+    if due.is_empty() {
+        return;
+    }
+    due.sort_by_key(|d| d.0);
+    due.dedup();
+    for id in due {
+        let Some(doc) = app.session.documents().iter().find(|st| st.doc.id == id).map(|st| st.doc.clone()) else { continue };
+        follow(app, id, &doc, &[]);
+    }
+    if app.board_cache.shots.values().any(|s| s.kept.due) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(FOLLOW_MS as u64));
     }
 }
 
@@ -299,5 +337,39 @@ mod tests {
         let rect = reach(&kept, kept.layer(left).unwrap()).unwrap();
         paint(&mut s);
         assert!(!still_exact(&kept, &s.active().unwrap().doc.clone(), rect), "the stroke carries it inside");
+    }
+
+    /// A picture whose follow was put off doesn't keep the old document once the interval is
+    /// over, even with no edit after (what `tick` does every frame): the board was hidden outside
+    /// History, two edits came within the interval, and History then let them go. Showing the
+    /// board again, also outside History, still finds the picture exact.
+    #[test]
+    fn a_put_off_picture_lets_the_old_document_go_without_another_edit() {
+        let (mut s, left) = halves();
+        let shown = s.active().unwrap().doc.clone();
+        let rect = reach(&shown, shown.layer(left).unwrap()).unwrap();
+        let mut kept = Kept { doc: shown, rect, followed: 0.0, due: false };
+        let old = Arc::downgrade(&kept.doc);
+        let set_visible = |s: &mut Session, on: bool| Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(left).unwrap().visible = on;
+        let paint = |s: &mut Session, x: i32| {
+            let right = s.active().unwrap().doc.layers[1].id;
+            s.edit("paint", |doc, _| {
+                doc.layer_mut(right).unwrap().surface_mut().unwrap().fill_rect(Rect::new(x, 100, x + 10, 110), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        };
+        set_visible(&mut s, false);
+        paint(&mut s, 4500);
+        paint(&mut s, 5000);
+        assert!(kept.follow(left, &s.active().unwrap().doc, 500.0));
+        assert!(kept.due, "put off within the interval");
+        s.active_mut().unwrap().history.clear();
+        assert!(old.upgrade().is_some(), "only the picture holds the old document now");
+        assert!(kept.follow(left, &s.active().unwrap().doc, 1500.0), "still exact: the edits are elsewhere");
+        assert!(!kept.due);
+        assert!(old.upgrade().is_none(), "the old document is gone");
+        set_visible(&mut s, true);
+        assert!(still_exact(&kept.doc, &s.active().unwrap().doc, rect), "showing the board can put the picture back");
     }
 }

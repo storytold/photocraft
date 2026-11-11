@@ -457,6 +457,7 @@ pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
 /// Returns false if there is no GPU canvas.
 pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible: DRect) -> bool {
     let Some(gpu) = app.gpu.clone() else { return false };
+    crate::canvas::board_cache::tick(app, ctx);
     let Some((revision, last_damage, id)) = app
         .session
         .documents()
