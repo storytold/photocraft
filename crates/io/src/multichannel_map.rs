@@ -290,7 +290,7 @@ mod export_tests {
                     encode_be(1.0 - v[0], sample, &mut planes);
                 }
             }
-            let (file, _) = document_to_psd(&doc, false, None);
+            let (file, _) = document_to_psd(&doc, false, None, None);
             assert_eq!(file.image_data, ImageData::encode(Compression::Rle, &planes, &file.header).unwrap());
         }
     }

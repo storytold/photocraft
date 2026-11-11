@@ -23,7 +23,7 @@ fn fill_channels_match_allocating_pixel_conversion() {
             }
             let planes = crate::pixels::deinterleave(&bytes, fmt.channels(), sample, &vec![false; fmt.channels()]);
             doc.layers.push(layer);
-            let file = document_to_psd(&doc);
+            let file = document_to_psd(&doc).unwrap();
             assert_eq!(
                 file.layers()[0].channels.iter().map(|c| c.id).collect::<Vec<_>>(),
                 std::iter::once(-1).chain(0..mode.color_channels() as i16).collect::<Vec<_>>()
@@ -73,7 +73,7 @@ fn oversized_sparse_mask_fails_export_without_allocating_its_dense_rectangle() {
     }
     layer.mask = Some(mask);
     doc.layers.push(layer);
-    assert!(matches!(document_to_psd(&doc).to_bytes(), Err(photocraft_psd::PsdError::LimitExceeded(_))));
+    assert!(matches!(document_to_psd(&doc).unwrap().to_bytes(), Err(photocraft_psd::PsdError::LimitExceeded(_))));
     assert!(crate::export(&doc, "psd", &Default::default()).is_err());
 }
 
@@ -156,7 +156,7 @@ fn owned_layer_planes_keep_the_borrowed_encoders_bytes() {
             invert.push(false);
             let planes = crate::pixels::deinterleave(&bytes, fmt.channels(), sample, &invert);
             doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
-            let file = document_to_psd(&doc);
+            let file = document_to_psd(&doc).unwrap();
             let channels = &file.layers()[0].channels;
             assert_eq!(channels.iter().map(|c| c.id).collect::<Vec<_>>(), (-1..mode.color_channels() as i16).collect::<Vec<_>>());
             for channel in channels {
@@ -203,9 +203,9 @@ fn background_colour_channels_match_an_unlocked_layer_at_every_depth() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
         for depth in SampleType::ALL {
             let mut doc = Document::with_background("bg", photocraft_geom::Size::new(13, 7), mode, depth, photocraft_color::Color::rgb(0.2, 0.4, 0.6));
-            let background = document_to_psd(&doc);
+            let background = document_to_psd(&doc).unwrap();
             doc.layers[0].locks.position = false;
-            let unlocked = document_to_psd(&doc);
+            let unlocked = document_to_psd(&doc).unwrap();
             let without_alpha = |file: &PsdFile| file.layers()[0].channels.iter().filter(|c| c.id != -1).cloned().collect::<Vec<_>>();
             assert_eq!(without_alpha(&background), without_alpha(&unlocked), "{mode:?} {depth:?}");
             assert_eq!(background.layers()[0].channels.len(), mode.color_channels());

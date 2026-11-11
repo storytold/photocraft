@@ -543,7 +543,7 @@ mod tests {
                     deinterleave(&bytes, ch, sample, &invert)
                 };
                 let pattern = photocraft_doc::Pattern { id: "test".into(), name: "test".into(), width: 7, height: 260, surface: surface.clone() };
-                let encoded = crate::pattern_map::to_psd(&pattern);
+                let encoded = crate::pattern_map::to_psd(&pattern).unwrap();
                 let expected = staged(&surface, r);
                 assert_eq!(encoded.channels, expected[..ch - 1]);
                 assert_eq!(encoded.alpha.as_ref(), expected.last());
