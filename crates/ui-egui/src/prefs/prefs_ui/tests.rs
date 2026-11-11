@@ -145,6 +145,9 @@ fn preferences_search_matches_editable_fields_across_sections() {
 /// The preview language controls translated search; English schema paths keep their aliases.
 #[test]
 fn azerbaijani_preferences_search_keeps_dotted_i_and_schema_aliases() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let az = crate::i18n::Lang::from_code("az").unwrap();
     crate::i18n::with_language(az, || {
         let values = prefs::Preferences::default().to_json();
@@ -2140,6 +2143,8 @@ fn edit_dialogs_open() {
     app.sync_views();
     let d = crate::menus::invoke(&mut app, &ctx, "edit.colorSettings", json!({})).unwrap()["dialog"].as_u64().unwrap();
     assert_eq!(app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["workingRgb"], "srgb");
+    // Working Spaces › Spot, filled from the current setting like the others.
+    assert_eq!(app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["spotDotGain"], json!(app.session.color.settings.spot_dot_gain));
     let note = app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["__note"].as_str().unwrap().to_string();
     assert!(note.starts_with("Monitor profile in use: sRGB") && note.contains("fallback"), "{note}");
     assert!(crate::menus::invoke(&mut app, &ctx, "edit.fade", json!({})).is_err());

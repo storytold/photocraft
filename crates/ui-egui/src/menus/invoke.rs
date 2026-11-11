@@ -799,6 +799,8 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
         }
         _ if id.starts_with(crate::native_menu::LANGUAGE_PREFIX) => {
             let code = &id[crate::native_menu::LANGUAGE_PREFIX.len()..];
+            // Serbian was `sr` before the catalogs moved to craft-i18n; old scripts still switch.
+            let code = if code.eq_ignore_ascii_case("sr") { "sr-latn" } else { code };
             if code != "auto" && !crate::i18n::Lang::all().any(|lang| lang.code() == code) {
                 Some(Err(format!("unknown UI language `{code}`")))
             } else {

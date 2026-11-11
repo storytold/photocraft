@@ -191,6 +191,9 @@ fn mnemonic_labels_bracket_the_key() {
 /// Fixed ASCII access keys do not mistake a dotted Azerbaijani i for dotless I.
 #[test]
 fn azerbaijani_dialog_button_mnemonics_use_locale_casing() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let az = crate::i18n::Lang::from_code("az").unwrap();
     crate::i18n::with_language(az, || {
         assert_eq!(button_label(false, "i", Some(Key::I)), "i (I)");
@@ -480,6 +483,9 @@ fn macos_hides_mnemonics_but_other_platforms_keep_them() {
 fn one_dialog_shows_every_key_in_the_same_style() {
     let buttons = [("Yes", Some(Key::Y)), ("No", Some(Key::N)), ("Cancel", Some(Key::C))];
     assert_eq!(button_labels(false, &buttons), ["(Y)es", "(N)o", "(C)ancel"]);
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let german = crate::i18n::Lang::from_code("de").unwrap();
     crate::i18n::with_language(german, || {
         let shown: Vec<&str> = buttons.iter().map(|(label, _)| crate::i18n::tr(german, label)).collect();
@@ -696,6 +702,42 @@ fn saving_from_the_prompt_closes_after_an_unconfirmed_write() {
     assert_eq!(*written.borrow(), ["/pics/kept.psd"]);
     assert!(h.state().discard.is_none());
     assert!(h.state().session.documents().is_empty(), "closed after one write");
+}
+
+/// Synthetic input pressing the drawn prompt's Save key (Y) goes through `show()` and is judged
+/// as `file.save`: a policy that refuses it writes nothing, keeps the prompt and the document,
+/// and reports the refusal in the status bar.
+#[test]
+fn a_synthetic_save_press_on_the_drawn_prompt_is_refused_and_reported() {
+    use std::{cell::RefCell, rc::Rc};
+    let written: Rc<RefCell<Vec<String>>> = Rc::default();
+    let w = written.clone();
+    let mut app = app_with_docs(1);
+    make_dirty(&mut app, 0);
+    app.session.active_mut().unwrap().path = Some("/pics/kept.psd".into());
+    app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+    app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
+        w.borrow_mut().push(p.to_string());
+        Ok(())
+    }));
+    app.services.automation_command =
+        Some(Box::new(|id: &str, _: &Value| if id == "file.save" { Err(format!("automation command `{id}` is disabled")) } else { Ok(()) }));
+    let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
+    // Queue Y as synthetic input and feed its step to the harness, as an offscreen host does.
+    let key = |pressed: bool| egui::Event::Key { key: Key::Y, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.state_mut().synthetic.extend([key(true), key(false)]);
+    let step = h.state_mut().take_synthetic_step();
+    assert_eq!(step.len(), 2, "press and release in one step");
+    assert!(h.state().automation_input, "the step is marked as automation input");
+    for event in step {
+        h.event(event);
+    }
+    h.run_steps(3);
+    assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());
+    assert_eq!(docs_left(&h), Some(1), "the prompt stays up");
+    assert_eq!(h.state().session.documents().len(), 1, "the document stays open");
+    assert!(h.state().ui.status.contains("file.save"), "status: {:?}", h.state().ui.status);
+    assert!(h.state().ui.status_error, "the refusal is shown as an error");
 }
 
 #[path = "tests/tiff_tests.rs"]
