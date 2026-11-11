@@ -25,7 +25,7 @@ fn main() {
             p.manifest().params_notation().escape_debug()
         ),
         Err(e) => {
-            eprintln!("not a valid plug-in: {e}");
+            eprintln!("not a valid plug-in: {}", e.to_string().escape_debug());
             std::process::exit(1);
         }
     }

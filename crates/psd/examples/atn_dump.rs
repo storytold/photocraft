@@ -53,7 +53,7 @@ fn main() {
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("{path}: {e}");
+                eprintln!("{}: {e}", clean(&path));
                 failed = true;
                 continue;
             }
@@ -61,7 +61,8 @@ fn main() {
         match atn::parse(&bytes) {
             Ok(f) => {
                 println!(
-                    "== {path}: set {:?}, {} actions{}{}",
+                    "== {}: set {:?}, {} actions{}{}",
+                    clean(&path),
                     f.name.to_string_lossy(),
                     f.actions.len(),
                     f.encoding.as_deref().map(|e| format!(", names in {}", clean(e))).unwrap_or_default(),
@@ -79,7 +80,7 @@ fn main() {
                 }
             }
             Err(e) => {
-                println!("== {path}: {}", clean(&e.to_string()));
+                println!("== {}: {}", clean(&path), clean(&e.to_string()));
                 failed = true;
             }
         }
