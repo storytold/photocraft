@@ -132,3 +132,5 @@ winresource = "0.1"
 [dev-dependencies]
 # Opt-in native save-back acceptance transports embedded sources through engine JSON.
 base64 = "=0.22.1"
+# The clipboard tests build ICC-tagged images on every platform (the app itself uses it on Linux).
+photocraft-cms = { workspace = true }

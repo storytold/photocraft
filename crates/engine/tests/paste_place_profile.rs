@@ -42,7 +42,11 @@ fn close(a: [u8; 3], b: [u8; 3]) -> bool {
 }
 
 fn new_doc(s: &mut Session, profile: &str) {
-    s.execute("file.new", json!({"width": SIDE, "height": SIDE, "profile": profile})).unwrap();
+    new_doc_at(s, profile, 8);
+}
+
+fn new_doc_at(s: &mut Session, profile: &str, depth: u32) {
+    s.execute("file.new", json!({"width": SIDE, "height": SIDE, "profile": profile, "depth": depth})).unwrap();
 }
 
 #[test]
@@ -99,4 +103,50 @@ fn pasted_pixels_convert_from_the_profile_they_were_copied_in() {
     // New from Clipboard keeps the profile the pixels are in.
     s.execute("file.newFromClipboard", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.icc_profile, Some(Builtin::AdobeRgbCompat.profile().to_bytes()));
+}
+
+#[test]
+fn stack_mode_keeps_a_placed_files_converted_colours() {
+    // A one-layer Mean stack is the picture itself, so turning Stack Mode on must not change its
+    // colours: the combined layers are converted from the file's profile as a plain placement is.
+    let mut s = Session::new();
+    new_doc(&mut s, "srgb");
+    file_cmds::place_bytes(&mut s, "rubens.png", adobe_png(), None, &json!({})).unwrap();
+    let d = s.active().unwrap();
+    let LayerContent::Smart(so) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not a smart object") };
+    let mut stacked = so.clone();
+    stacked.stack_mode = Some(photocraft_doc::StackMode::Mean);
+    let px = smart_cmds::render(&d.doc, &stacked).unwrap().unwrap().pixel(SIDE as i32 / 2, SIDE as i32 / 2);
+    assert!(close(rgb8([px[0], px[1], px[2], 1.0]), in_srgb()), "stacked {px:?}, want {:?}", in_srgb());
+}
+
+#[test]
+fn placing_and_pasting_convert_into_16_and_32_bit_documents() {
+    // The U8 source goes through the depth conversion too: the colours land the same at every depth.
+    let want = in_srgb();
+    for depth in [16, 32] {
+        let mut s = Session::new();
+        new_doc_at(&mut s, "srgb", depth);
+        file_cmds::place_bytes(&mut s, "rubens.png", adobe_png(), None, &json!({})).unwrap();
+        assert!(close(centre(&s), want), "{depth}-bit placed {:?}, want {want:?}", centre(&s));
+        let d = s.active().unwrap();
+        let LayerContent::Smart(so) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not a smart object") };
+        let px = smart_cmds::render(&d.doc, so).unwrap().unwrap().pixel(SIDE as i32 / 2, SIDE as i32 / 2);
+        // A 32-bit document holds linear light; its pixels are compared once encoded.
+        let enc = |v: f32| if depth == 32 { photocraft_color::convert::linear_to_srgb(v) } else { v };
+        assert!(close(rgb8([enc(px[0]), enc(px[1]), enc(px[2]), 1.0]), want), "{depth}-bit rendered again {px:?}, want {want:?}");
+
+        // Pasted from an Adobe RGB document of the same depth.
+        let mut src = Session::new();
+        new_doc_at(&mut src, "adobe-rgb-compat", depth);
+        file_cmds::place_bytes(&mut src, "rubens.png", adobe_png(), None, &json!({})).unwrap();
+        src.execute("layer.rasterize.smartObject", json!({})).unwrap();
+        assert!(close(centre(&src), ADOBE), "{depth}-bit source {:?}", centre(&src));
+        src.execute("edit.copy", json!({})).unwrap();
+        let clip = src.clipboard.clone();
+        new_doc_at(&mut s, "srgb", depth);
+        s.clipboard = clip;
+        s.execute("edit.paste", json!({})).unwrap();
+        assert!(close(centre(&s), want), "{depth}-bit pasted {:?}, want {want:?}", centre(&s));
+    }
 }

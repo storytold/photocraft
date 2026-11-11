@@ -1,7 +1,7 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_image_in, source_surface_from_buffer, svg_source_image_in,
-    vector_scale,
+    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_conversion, source_image_in, source_surface_from_buffer,
+    svg_source_image_in, vector_scale,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
@@ -12,9 +12,21 @@ use std::sync::Mutex;
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
 /// group's layers) combined per pixel with `mode`. Cached like [`source_image`], keyed by mode.
 pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
+    stack_image_with(file_name, bytes, fmt, mode, None)
+}
+
+/// [`stack_image`] in `dest`'s colours: the combined layers of a source with an embedded profile
+/// are converted into `dest`'s, as [`source_image_in`] converts a plain placement, so turning
+/// Stack Mode on doesn't change a picture's colours. The profile is part of the cache key.
+fn stack_image_in(file_name: &str, bytes: &[u8], dest: &Document, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
+    stack_image_with(file_name, bytes, dest.pixel_format(), mode, Some(dest))
+}
+
+fn stack_image_with(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode, dest: Option<&Document>) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
     let mut key = cache_key(bytes, fmt);
-    key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes()].concat()).as_bytes();
+    let profile = dest.filter(|d| d.mode == photocraft_color::ColorMode::Rgb).map(|d| crate::color_cmds::document_profile(d).to_bytes());
+    key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes(), profile.as_ref().map_or(&[][..], |p| &p[..])].concat()).as_bytes();
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
@@ -60,7 +72,15 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
         photocraft_doc::StackMode::Variance => Stat::Variance,
     };
     let buf = photocraft_compose::Buffer { rect: bounds, px: photocraft_algo::stack::combine(&frames, stat) };
-    let img = SourceImage { surface: Arc::new(source_surface_from_buffer(&doc, &buf, fmt)?), bounds };
+    let mut surface = source_surface_from_buffer(&doc, &buf, fmt)?;
+    // The layers combine in the source's colours, and the result is converted, as Photoshop
+    // converts a smart object's contents (a Mean of converted values would differ).
+    if let Some((from, to)) = dest.and_then(|d| source_conversion(&doc, d)) {
+        let t = photocraft_cms::Transform::new(&from, &to, photocraft_cms::Intent::RelativeColorimetric, true)
+            .map_err(|e| other(format!("can't convert the smart object's colours: {e}")))?;
+        surface = crate::color_cmds::convert_surface(&surface, photocraft_color::ColorMode::Rgb, fmt, &t).convert(fmt);
+    }
+    let img = SourceImage { surface: Arc::new(surface), bounds };
     cache_put(key, img.clone());
     Ok(img)
 }
@@ -192,7 +212,7 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
     let img = match sm.stack_mode {
         Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode)?, doc)?,
         None if photocraft_io::svg::is_svg(bytes) => svg_source_image_in(bytes, doc, 1.0)?,
-        Some(mode) => stack_image(name, bytes, fmt, mode)?,
+        Some(mode) => stack_image_in(name, bytes, doc, mode)?,
         None => source_image_in(name, bytes, doc)?,
     };
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge

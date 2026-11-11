@@ -689,7 +689,16 @@ fn a_clipboard_png_keeps_its_embedded_profile() {
     img.icc = Some(icc.clone());
     let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).unwrap();
     let got = image_from_offers(&["image/png".to_string()], |_| Some(png.clone()));
-    assert_eq!(got.map(|(w, h, _, profile)| (w, h, profile)), Some((4, 2, Some(icc))));
+    assert_eq!(got.map(|(w, h, _, profile)| (w, h, profile)), Some((4, 2, Some(icc.clone()))));
+    // A source that lists a JPEG or BMP of the same picture first still pastes the PNG.
+    let offers = ["image/jpeg", "image/bmp", "image/png"].map(String::from);
+    let mut asked = Vec::new();
+    let got = image_from_offers(&offers, |mime| {
+        asked.push(mime.to_string());
+        Some(if mime == "image/png" { png.clone() } else { encoded(photocraft_codecs::Format::Bmp, 4, 2) })
+    });
+    assert_eq!(got.map(|(.., profile)| profile), Some(Some(icc)));
+    assert_eq!(asked, ["image/png"], "the PNG is read first");
 }
 
 #[test]

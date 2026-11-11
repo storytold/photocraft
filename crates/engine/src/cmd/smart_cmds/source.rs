@@ -356,15 +356,20 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
 /// placed file. An untagged source, one whose tag is unreadable or not RGB, or one in another mode,
 /// is taken as it is.
 pub(crate) fn source_into_profile(src: &mut Document, dest: &Document) -> Result<()> {
-    if dest.mode != ColorMode::Rgb || src.mode != ColorMode::Rgb {
-        return Ok(());
-    }
-    let Some(from) = src.icc_profile.as_ref().and_then(|b| crate::color_cmds::profile_from_bytes(b).ok()) else { return Ok(()) };
-    let to = crate::color_cmds::document_profile(dest);
-    if from.color_space != crate::color_cmds::mode_space(ColorMode::Rgb) || from.same_colors(&to) {
-        return Ok(());
-    }
+    let Some((_, to)) = source_conversion(src, dest) else { return Ok(()) };
     crate::color_cmds::convert_document(src, &to, photocraft_cms::Intent::RelativeColorimetric, true)
+}
+
+/// The profiles an RGB source's colours convert between to land in RGB `dest`'s: its embedded
+/// RGB profile and `dest`'s. `None` when there is nothing to convert (another mode, no or an
+/// unreadable profile, or the same colours).
+pub(super) fn source_conversion(src: &Document, dest: &Document) -> Option<(Arc<photocraft_cms::Profile>, Arc<photocraft_cms::Profile>)> {
+    if dest.mode != ColorMode::Rgb || src.mode != ColorMode::Rgb {
+        return None;
+    }
+    let from = src.icc_profile.as_ref().and_then(|b| crate::color_cmds::profile_from_bytes(b).ok())?;
+    let to = crate::color_cmds::document_profile(dest);
+    (from.color_space == crate::color_cmds::mode_space(ColorMode::Rgb) && !from.same_colors(&to)).then_some((from, to))
 }
 
 /// [`source_image`] in `doc`'s colours: a source with an embedded profile is converted into

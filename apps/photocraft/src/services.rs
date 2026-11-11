@@ -620,11 +620,14 @@ fn wayland_clipboard_image() -> Option<ClipboardImage> {
     })
 }
 
-/// The first clipboard offer, in the source's order, that `fetch` returns as a decodable image,
-/// upright as RGBA8. Only `image/*` types are fetched, so text offers are never transferred.
+/// The first clipboard offer that `fetch` returns as a decodable image, upright as RGBA8: `image/png`
+/// first, as it keeps transparency and the embedded profile a JPEG or BMP offer of the same picture
+/// may lack, then the others in the source's order. Only `image/*` types are fetched, so text
+/// offers are never transferred.
 #[cfg(any(target_os = "linux", test))]
 fn image_from_offers(offers: &[String], mut fetch: impl FnMut(&str) -> Option<Vec<u8>>) -> Option<ClipboardImage> {
-    offers.iter().filter(|mime| mime.starts_with("image/")).find_map(|mime| {
+    let (png, others): (Vec<&String>, Vec<&String>) = offers.iter().filter(|mime| mime.starts_with("image/")).partition(|mime| *mime == "image/png");
+    png.into_iter().chain(others).find_map(|mime| {
         let bytes = fetch(mime)?;
         // TGA has no magic number (see `image_from_files`), so trust it only when the type says so.
         if photocraft_codecs::detect(&bytes)? == photocraft_codecs::Format::Tga && !mime.contains("tga") {
