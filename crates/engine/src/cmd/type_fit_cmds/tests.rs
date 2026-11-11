@@ -398,6 +398,20 @@ fn refused_targets() {
     assert!(e.contains("one type layer"), "{e}");
     assert!(text(&s, a).fit.is_none() && text(&s, b).fit.is_none());
 
+    // With both selected, the menus are off, but a call that names one of them acts on it.
+    s.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+    assert!(s.active().unwrap().selected_layers().len() > 1);
+    assert!(!s.is_enabled("type.convertToDynamicText"));
+    let e = s.execute("type.convertToDynamicText", json!({})).unwrap_err().to_string();
+    assert!(e.contains("one type layer"), "{e}");
+    s.execute("type.convertToDynamicText", json!({"layer": a.0})).unwrap();
+    assert!(text(&s, a).fit.is_some() && text(&s, b).fit.is_none());
+    s.execute("type.setDynamicText", json!({"layer": a.0, "wordGap": 20})).unwrap();
+    let e = s.execute("type.setDynamicText", json!({"layer": b.0, "wordGap": 20})).unwrap_err().to_string();
+    assert!(e.contains("not Dynamic Text"), "{e}");
+    s.execute("type.releaseDynamicText", json!({"layer": a.0})).unwrap();
+    assert!(text(&s, a).fit.is_none());
+
     // Not a type layer.
     let mut s = session();
     let bg = s.active().unwrap().active_layer.unwrap();
