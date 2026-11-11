@@ -162,19 +162,23 @@ impl PreviewTextures {
             }
             building.push((level, display_key));
         }
-        let (images, uploaded, building) = (Arc::clone(&self.images), Arc::clone(&self.uploaded), Arc::clone(&self.building));
+        // Only the preview owns `uploaded`: workers hold it weakly, so another level still building
+        // doesn't count as a preview to upload for.
+        let (images, uploaded, building) = (Arc::clone(&self.images), Arc::downgrade(&self.uploaded), Arc::clone(&self.building));
         let (ctx, base_uv, name) = (ctx.clone(), self.base_uv, format!("{}-{level}-linear", self.name));
         let display = display.map(share_display);
         let job = move || {
             let built = level_of(&images, base_uv, level);
-            // Nobody left to show it (the box closed meanwhile): don't upload.
-            if let Some((img, uv)) = built.filter(|_| Arc::strong_count(&uploaded) > 1) {
+            // Nobody left to show it (the box closed meanwhile): neither convert nor upload.
+            if let Some((img, uv)) = built.filter(|_| uploaded.strong_count() > 0) {
                 let img = display.as_ref().map_or_else(|| Arc::clone(&img), |d| Arc::new(display_image(&img, d)));
-                let tex = ctx.load_texture(name, img, TextureOptions::LINEAR);
-                let mut up = uploaded.lock().unwrap_or_else(PoisonError::into_inner);
-                // A monitor profile change meanwhile released this display's uploads: drop it.
-                if up.iter().all(|l| l.display_key == display_key) && !up.iter().any(|l| l.level == level && !l.nearest) {
-                    up.push(Level { level, display_key, nearest: false, tex, uv });
+                if let Some(uploaded) = uploaded.upgrade() {
+                    let tex = ctx.load_texture(name, img, TextureOptions::LINEAR);
+                    let mut up = uploaded.lock().unwrap_or_else(PoisonError::into_inner);
+                    // A monitor profile change meanwhile released this display's uploads: drop it.
+                    if up.iter().all(|l| l.display_key == display_key) && !up.iter().any(|l| l.level == level && !l.nearest) {
+                        up.push(Level { level, display_key, nearest: false, tex, uv });
+                    }
                 }
             }
             building.lock().unwrap_or_else(PoisonError::into_inner).retain(|b| *b != (level, display_key));
