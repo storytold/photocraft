@@ -1191,16 +1191,16 @@ fn a_group_that_cannot_be_saved_keeps_the_old_group_file_and_tips() {
 }
 
 #[test]
-fn a_failed_group_write_does_not_keep_unrelated_deleted_groups() {
-    let dir = TempDir::new("keep-unrelated");
+fn a_failed_group_write_changes_nothing_else_until_the_next_sync() {
+    let dir = TempDir::new("fail-fast");
     let (mut s, _) = session(&dir);
     s.tools.presets.push(sampled("Keep", "Old", tip8(8, 8, 1)));
+    s.tools.presets.push(sampled("Stay", "Old", tip8(8, 8, 3)));
     s.tools.presets.push(sampled("Drop", "Gone", tip8(8, 8, 2)));
     s.brush_presets_changed();
     s.sync_preset_store();
-    let before = dir.files();
-    assert_eq!(before.iter().filter(|f| f.ends_with(".pcbrushes")).count(), 2, "{before:?}");
-    // "Keep" moves to a group name that cannot be written; "Drop" is deleted.
+    // "Keep" moves to a group that cannot be written, "Drop" is deleted. The group that gains
+    // "Keep" fails first; the source group is not rewritten without it and the other deletion waits.
     s.tools.presets.retain(|p| p.name != "Drop");
     for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
         p.group = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
@@ -1208,6 +1208,18 @@ fn a_failed_group_write_does_not_keep_unrelated_deleted_groups() {
     s.brush_presets_changed();
     s.sync_preset_store();
     let (t, _) = session(&dir);
-    assert!(photocraft_paint::presets::find(&t.tools.presets, "Keep").is_some(), "the old copy of the unsaved preset stays");
-    assert!(photocraft_paint::presets::find(&t.tools.presets, "Drop").is_none(), "the unrelated deleted group is gone after a restart");
+    for name in ["Keep", "Stay", "Drop"] {
+        assert!(photocraft_paint::presets::find(&t.tools.presets, name).is_some(), "{name}: the old files are all still there");
+    }
+    // Once the move can be written, the next sync finishes everything.
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "New".into();
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let (t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(photocraft_paint::presets::find(&t.tools.presets, "Keep").map(|p| p.group.clone()), Some("New".into()));
+    assert!(photocraft_paint::presets::find(&t.tools.presets, "Stay").is_some());
+    assert!(photocraft_paint::presets::find(&t.tools.presets, "Drop").is_none(), "the deferred deletion happened");
 }

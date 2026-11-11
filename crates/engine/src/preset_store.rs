@@ -921,8 +921,17 @@ impl PresetStore {
                 None => order.push((p.group.clone(), vec![i])),
             }
         }
-        // Names of the presets in groups that could not be written: the old files that hold them stay.
-        let mut unsaved: HashSet<String> = HashSet::new();
+        // Groups that take presets they don't hold yet are written first, so a preset moved out of
+        // one group is never dropped from its old file before its new group is safely written.
+        order.sort_by_key(|(group, idx)| {
+            let held = self.groups.get(&group_file_name(group)).map(|s| &s.presets);
+            let gains = idx.iter().filter_map(|&i| presets.get(i)).any(|p| !held.is_some_and(|h| h.iter().any(|q| q.name == p.name)));
+            !gains
+        });
+        // After a write that fails (a name the file system refuses, a full disk) nothing more is
+        // changed on disk: the old files may be the only copy of the presets that failed, and the
+        // next sync retries the rest.
+        let mut failed = false;
         let mut files = Vec::with_capacity(order.len());
         for (group, idx) in &order {
             let file = group_file_name(group);
@@ -931,10 +940,11 @@ impl PresetStore {
                 .groups
                 .get(&file)
                 .is_some_and(|s| !s.stale && s.presets.len() == idx.len() && s.presets.iter().zip(idx).all(|(a, &i)| presets.get(i) == Some(a)));
-            if unchanged {
+            if unchanged || failed {
                 continue;
             }
             if self.skipped.contains(&file) {
+                failed = true;
                 self.warnings.push(format!(
                     "Couldn't save brush presets `{}`: {file} could not be read, so it was left unchanged",
                     if group.is_empty() { "(ungrouped)" } else { group }
@@ -942,17 +952,13 @@ impl PresetStore {
                 continue;
             }
             let mut items: Vec<&mut BrushPreset> = presets.iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
-            let names: Vec<String> = items.iter().map(|p| p.name.clone()).collect();
             if let Err(e) = self.write_group(&file, group, &mut items) {
-                unsaved.extend(names);
+                failed = true;
                 self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
             }
         }
-        // Groups that are gone. When a group could not be written (a rename to a name that failed,
-        // say), the old files holding its presets stay: they may be the only copy of those presets and
-        // their tips. Other removed groups are still deleted.
-        let gone: Vec<String> =
-            self.groups.iter().filter(|(f, g)| !files.contains(f) && !g.presets.iter().any(|p| unsaved.contains(&p.name))).map(|(f, _)| f.clone()).collect();
+        // Groups that are gone, unless a write failed above.
+        let gone: Vec<String> = self.groups.keys().filter(|f| !failed && !files.contains(f)).cloned().collect();
         for f in gone {
             match self.backend.remove(&f) {
                 Ok(()) => drop(self.groups.remove(&f)),
